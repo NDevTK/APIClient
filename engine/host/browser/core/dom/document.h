@@ -75,6 +75,14 @@ const char *document_base_url(JSContext *ctx);
 /* §4.2.3's STEPS RUN IN THE NODE'S DOCUMENT'S REALM — see document.c. `document_realm_of` answers NULL for a
    document no record was ever built for (a solver scratch parse), which is a caller's business to assert. */
 JSContext *document_realm_of(const lxb_dom_node_t *n);
+/* AND THE REALM WHOSE **ACTIVE** DOCUMENT `doc` IS — a different question, and the one every algorithm stated
+   over "the active document of a navigable" is asking. A realm can hold SEVERAL Documents: `createHTMLDocument`,
+   a DOMParser parse and XHR's `responseXML` each build one, each gets a record, and each answers
+   document_realm_of with the realm that created it — but none of them is that realm's active document, so none
+   of them has a §6.6.2 focused area, appears in §6.6.7's autofocus candidates, or is §7.3.1 fully active. NULL
+   is the real answer for those, and it is what makes `implementation.createHTMLDocument("").hasFocus()` false.
+   `doc` must be a DOCUMENT node; anything else answers NULL. */
+JSContext *document_active_realm_of(const lxb_dom_node_t *doc);
 /* HTML's "the document's relevant global object" — what DOM §2.9's get the parent puts above a Document in the
    event path, and JS_NULL for a document with no browsing context. BORROWED: a realm owns its global. It is a
    fact about THAT DOCUMENT and not about whoever is running, which a caller reading the realm's global instead

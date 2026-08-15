@@ -1,5 +1,6 @@
 /* See realm.h. */
 #include <stdlib.h>
+#include <string.h>
 
 #include "check.h"
 #include "core/realm.h"
@@ -79,4 +80,42 @@ JSValue realm_value_get(JSContext *ctx, int slot)
     v = JS_GetClassProto(ctx, (JSClassID)slot);
     DCHECK(!JS_IsNull(v), "a per-realm value was read in a realm that never ran the install that sets it");
     return v;
+}
+
+void realm_awaits(JSContext *ctx, const char *path, const char *what)
+{
+    JSValue cur = JS_GetGlobalObject(ctx);
+    const char *p = path;
+    bool present = false;
+
+    DCHECK(path != NULL && *path, "a producer assertion named no producer");
+    for (;;) {
+        const char *dot = strchr(p, '.');
+        size_t n = dot ? (size_t)(dot - p) : strlen(p);
+        char name[64];
+        JSAtom atom;
+        int has;
+
+        DCHECK(n > 0 && n < sizeof(name), "a producer assertion named a path this cannot read");
+        if (!JS_IsObject(cur)) break;            /* the path died on the way; the producer is absent */
+        memcpy(name, p, n);
+        name[n] = 0;
+
+        atom = JS_NewAtomLen(ctx, name, n);
+        has = JS_HasProperty(ctx, cur, atom);
+        CHECK(has >= 0, "a producer probe threw — [[HasProperty]] over an engine global runs no page code and "
+                        "has nothing to throw with");
+        if (!has) { JS_FreeAtom(ctx, atom); break; }
+        if (!dot) { JS_FreeAtom(ctx, atom); present = true; break; }   /* the member exists: producer is built */
+
+        {
+            JSValue next = JS_GetProperty(ctx, cur, atom);
+            JS_FreeAtom(ctx, atom);
+            JS_FreeValue(ctx, cur);
+            cur = next;
+        }
+        p = dot + 1;
+    }
+    JS_FreeValue(ctx, cur);
+    DCHECK(!present, what);
 }

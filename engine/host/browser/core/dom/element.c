@@ -34,6 +34,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/events/event_target.h"
+#include "core/html/autofocus.h"
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
 #include "core/html/html_iframe.h"
@@ -1605,6 +1606,13 @@ static bool element_tree_steps_step(JSContext *ctx, void *vb)
                execution", beside the <script> preparation right above it. The upgrade is ENQUEUED, never run:
                it constructs the page's class, and this walk is C that cannot park. */
             custom_elements_element_connected(ctx, el);
+            /* HTML §6.6.7's insertion steps: an element carrying the `autofocus` content attribute becomes a
+               CANDIDATE on the top-level traversable's active document, to be flushed at the next rendering
+               opportunity (§8.1.7.3 step 7). It does NOT focus anything here — the standard's whole point is
+               that the decision is deferred and then taken once, over the whole queue. Last of the per-node
+               effects because an `<iframe autofocus>` is a candidate whose focusable area is the content
+               navigable created three lines above. */
+            autofocus_element_inserted(el);
         } else {
             /* §4.8.5's removing steps, the pair of the insertion steps above: an <iframe> that LEAVES a
                document destroys its child navigable. Without it a removed frame kept answering as a live one —

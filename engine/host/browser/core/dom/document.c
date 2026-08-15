@@ -41,6 +41,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
 #include "core/dom/page_visibility.h"
+#include "core/html/autofocus.h"
 #include "core/html/focus.h"
 #include "core/dom/document_fragment.h"
 #include "core/dom/shadow_root.h"
@@ -1729,6 +1730,10 @@ void document_init(JSContext *ctx)
        document_install_proto below for the same reason page_visibility_install does — so its declaration is
        paired with it here rather than copied into each host's own init list. */
     focus_init(ctx);
+    /* HTML §6.6.7's AUTOFOCUS CANDIDATES and its processed flag are a Document's state too, filled by the
+       insertion steps and drained by §8.1.7.3's step 7 — declared here with the focused area they end up
+       designating, and for the same reason. */
+    autofocus_init(ctx);
     realm_declare_intrinsic(document_install_proto);
 }
 
@@ -1757,6 +1762,9 @@ void document_install_proto(JSContext *ctx)
     /* HTML §6.6.6's `activeElement` (DocumentOrShadowRoot) and `hasFocus()`, and this realm's INITIAL FOCUSED
        AREA — the viewport, built with the realm so it is baseline rather than whichever flow read first. */
     focus_install_document_members(ctx, proto);
+    /* HTML §6.6.7's per-document autofocus candidates and processed flag, built with the realm so an element
+       inserted by the FIRST flow to run does not find a list that flow created. */
+    autofocus_install_document(ctx);
     JS_SetClassProto(ctx, g_document_class, proto);
     /* THIS REALM'S DOCUMENT READINESS, built with the realm so it belongs to the pre-boot BASELINE — the same
        reason §8.9's map and §7.4.6.3's flag are built here. It exists before this realm has a Document at all,
@@ -2113,6 +2121,11 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     declarative_shadow_parsed(ctx, lxb_dom_interface_node(dom),
                               lxb_dom_interface_node(dom->dom_document.element), /*allow*/ true);
     iframe_document_parsed(ctx);
+    /* HTML §6.6.7 FOR THE TREE THE PARSER BUILT, for the reason the line above it exists: a browser runs the
+       insertion steps during tree construction, so `<input autofocus>` in the page's own markup is a candidate
+       before the first script runs. AFTER the iframe walk, because an `<iframe autofocus>` is a candidate whose
+       focusable area is its content navigable's active document. */
+    autofocus_document_parsed(ctx);
     engine_set_document_done_hook(document_lifecycle_step);
 }
 
@@ -2140,6 +2153,18 @@ JSContext *document_realm_of(const lxb_dom_node_t *n)
 {
     Document *d = n ? doc_rec(n->owner_document) : NULL;
     return d ? d->realm : NULL;
+}
+
+/* THE REALM WHOSE ACTIVE DOCUMENT THIS DOCUMENT IS, or NULL — see document.h for who asks and why it is not
+   document_realm_of. */
+JSContext *document_active_realm_of(const lxb_dom_node_t *doc)
+{
+    JSContext *realm;
+
+    if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT) return NULL;
+    realm = document_realm_of(doc);
+    if (!realm) return NULL;
+    return node_of(document_object(realm)) == (lxb_dom_node_t *)doc ? realm : NULL;
 }
 
 void document_free(JSContext *ctx)

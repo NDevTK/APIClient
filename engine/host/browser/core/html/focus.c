@@ -74,7 +74,7 @@ enum { FA_NONE = 0, FA_ELEMENT, FA_VIEWPORT, FA_DOCUMENT, FA_NAVIGABLE };
 
 static int g_focus_slot = -1;
 static int g_id_el_focus = -1, g_id_el_blur = -1, g_id_win_focus = -1, g_id_has_focus = -1;
-static int g_id_viewport = -1;
+static int g_id_viewport = -1, g_id_autofocus = -1;
 static int g_ready;
 
 /* ---- §6.6.2's data model: the focused area of the document -------------------------------------------------
@@ -85,18 +85,10 @@ static int g_ready;
  * WITHOUT one has no realm record at all, which is how §6.6.6's getter answers null for
  * `implementation.createHTMLDocument("")`. */
 
-/* THE REALM WHOSE ACTIVE DOCUMENT `doc` IS, or NULL. A second Document in a realm (createHTMLDocument, a
-   DOMParser parse) has a record but is not the realm's active document, and §6.6.2's focused area is the ACTIVE
-   document's — so a receiver that is not it has none, which is a real answer and not a missing one. */
-static JSContext *active_document_realm(const lxb_dom_node_t *doc)
-{
-    JSContext *realm;
-
-    if (!doc || doc->type != LXB_DOM_NODE_TYPE_DOCUMENT) return NULL;
-    realm = document_realm_of(doc);
-    if (!realm) return NULL;
-    return node_of(document_object(realm)) == (lxb_dom_node_t *)doc ? realm : NULL;
-}
+/* THE REALM WHOSE ACTIVE DOCUMENT `doc` IS, or NULL — `document_active_realm_of`, and it is the DOM's answer
+   rather than this file's. It stood here as a static because §6.6.2's focused area was its first caller; §6.6.7's
+   autofocus candidates is the second, and a second copy of "is this document the realm's active one" is the
+   one-fact-two-answers defect. It moved to core/dom/document.c, which owns both halves it reads. */
 
 /* This realm's focused area. `*pkind` is FA_ELEMENT or FA_VIEWPORT; the value is OWNED (the element's wrapper,
    or the Document's for the viewport). */
@@ -432,7 +424,7 @@ static void focusable_area_here(JSContext *ctx, int kind, JSValueConst v, int *p
        of a layout this engine does not compute, so no focus target ever matches them. */
     /* "If focus target is the DOCUMENT ELEMENT of its Document: return the Document's VIEWPORT." */
     if (n->owner_document && n == document_document_element_of(lxb_dom_interface_node(n->owner_document))) {
-        JSContext *realm = active_document_realm(lxb_dom_interface_node(n->owner_document));
+        JSContext *realm = document_active_realm_of(lxb_dom_interface_node(n->owner_document));
         if (realm) {
             *pk = FA_VIEWPORT;
             *pv = JS_DupValue(realm, document_object(realm));
@@ -635,7 +627,7 @@ static void focus_chain_build(JSContext *ctx, JSValueConst chain, uint32_t *pn, 
             lxb_dom_node_t *doc = k == FA_VIEWPORT ? n
                                                    : (n && n->owner_document
                                                           ? lxb_dom_interface_node(n->owner_document) : NULL);
-            realm = active_document_realm(doc);
+            realm = document_active_realm_of(doc);
             if (!realm) break;
             JS_FreeValue(ctx, cur);
             cur = JS_DupValue(realm, document_object(realm));
@@ -643,7 +635,7 @@ static void focus_chain_build(JSContext *ctx, JSValueConst chain, uint32_t *pn, 
             continue;
         }
         DCHECK(k == FA_DOCUMENT, "a focus chain walked into an entry that is neither an area nor a Document");
-        realm = active_document_realm(n);
+        realm = document_active_realm_of(n);
         if (!realm) break;
         {
             JSValue container = navigable_container_of(realm);
@@ -743,7 +735,7 @@ static JSValue js_active_element(JSContext *ctx, JSValueConst this_val, int magi
        document is the document of the tree it is in, which is where the focused area lives. */
     doc = n->type == LXB_DOM_NODE_TYPE_DOCUMENT
               ? n : (n->owner_document ? lxb_dom_interface_node(n->owner_document) : NULL);
-    realm = active_document_realm(doc);
+    realm = document_active_realm_of(doc);
     if (!realm) return JS_NULL;   /* a Document with no focused area — one createHTMLDocument built */
     candidate = focused_area_of(realm, &kind);
     DCHECK(kind == FA_ELEMENT || kind == FA_VIEWPORT,
@@ -775,7 +767,7 @@ static JSValue js_has_focus(JSContext *ctx, JSValueConst this_val, int argc, JSV
     (void)argc; (void)argv; (void)magic;
     if (!n || n->type != LXB_DOM_NODE_TYPE_DOCUMENT)
         return JS_ThrowTypeError(ctx, "this is not a Document");
-    target = active_document_realm(n);
+    target = document_active_realm_of(n);
     /* A Document with no browsing context has no node navigable and therefore no top-level traversable, so
        step 1's condition cannot be met: `implementation.createHTMLDocument("").hasFocus()` is false. */
     if (!target) return JS_FALSE;
@@ -830,12 +822,13 @@ static JSValue js_has_focus(JSContext *ctx, JSValueConst this_val, int argc, JSV
 enum { IDL_STEP_STAGE_BASE(FOCUS_STAGES) FOCUS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FOCUS_STEPS[] = { FOCUS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* The entry points, as the magic each declaration carries. FOCUS_VIEWPORT is not a §6.6.6 member and is on no
-   prototype: it is HTML §8.1.7.3 step 17's "run the focusing steps for doc's viewport", reached through the
-   internal door at the foot of this file. It is an ENTRY POINT rather than a second machine for the reason the
-   other three are — the focusing steps it needs are these, and a copy of them would be a copy of the chains,
-   the pops and the four events. */
-enum { FOCUS_EL_FOCUS = 0, FOCUS_EL_BLUR, FOCUS_WIN_FOCUS, FOCUS_VIEWPORT };
+/* The entry points, as the magic each declaration carries. FOCUS_VIEWPORT and FOCUS_AUTOFOCUS are not §6.6.6
+   members and are on no prototype: one is HTML §8.1.7.3 step 17's "run the focusing steps for doc's viewport"
+   and the other HTML §6.6.7 flush autofocus candidates step 5.11.3's "run the focusing steps for target", each
+   reached through an internal door at the foot of this file. They are ENTRY POINTS rather than second machines
+   for the reason the other three are — the focusing steps they need are these, and a copy of them would be a
+   copy of the chains, the pops and the four events. */
+enum { FOCUS_EL_FOCUS = 0, FOCUS_EL_BLUR, FOCUS_WIN_FOCUS, FOCUS_VIEWPORT, FOCUS_AUTOFOCUS };
 
 typedef struct {
     uint8_t  fphase;                 /* the fire request's own phase */
@@ -907,8 +900,10 @@ static bool focus_state_init(JSContext *ctx, FocusState *s)
      "If target's relevant global object has TRANSIENT ACTIVATION, return true."  Asked of §6.4.1's real state
    (core/html/user_activation.c), never assumed: it answers false today only because this engine dispatches no
    trusted activation triggering input event, and it starts answering true the moment one exists — which is the
-   whole reason that component is a state machine rather than the constant it replaced. */
-static bool allow_focus_steps(JSContext *target)
+   whole reason that component is a state machine rather than the constant it replaced.
+     IT IS EXPORTED because §6.6.7's insertion steps run it too (their step 5), by that name, over the same
+   Document — see focus.h. */
+bool focus_allow_focus_steps(JSContext *target)
 {
     JSValue top = window_proxy_top_navigable(target, document_window_proxy(target));
     bool same = JS_IsObject(top) && window_proxy_same_origin_of(top);
@@ -960,7 +955,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                 /* §6.6.6's Window focus() steps: the navigable, the allow focus steps over its ACTIVE
                    DOCUMENT, then the focusing steps with the navigable itself. There is no notification to
                    trigger — step 5's is a user-agent presentation with no scriptable result. */
-                if (!allow_focus_steps(ctx)) return 0;
+                if (!focus_allow_focus_steps(ctx)) return 0;
                 s->kind = FA_NAVIGABLE;
                 s->target = JS_DupValue(ctx, document_window_proxy(ctx));
                 hdr->stage = FOC_AREA;
@@ -979,6 +974,34 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                        "for §6.6.4's focusing steps to be given");
                 s->kind = FA_VIEWPORT;
                 s->target = JS_DupValue(ctx, document_object(ctx));
+                hdr->stage = FOC_AREA;
+                continue;
+            }
+            if (magic == FOCUS_AUTOFOCUS) {
+                /* HTML §6.6.7's flush autofocus candidates, step 5.11.3: "Run the focusing steps for target."
+                   THE TARGET IS THE CANDIDATE ELEMENT ITSELF, and step 1 below re-derives the focusable area
+                   from it — which is the same derivation §6.6.7 step 5.10 already made to decide that target
+                   was non-null, and necessarily the same answer, because §6.6.7's steps 5.11.1 and 5.11.2 are
+                   two writes to its own list and its own flag and run not one line of the page's code.
+                   THERE ARE NO ALLOW FOCUS STEPS HERE. §6.6.7 runs them at INSERTION (its own step 5), on the
+                   document the candidate was inserted into and at the moment it was; by the time the rendering
+                   algorithm flushes, the decision has been taken and this is the user agent carrying it out. */
+                DCHECK(argc == 1,
+                       "§6.6.7 step 5.11.3's door was entered with something other than its one focus target");
+                n = node_of(argv[0]);
+                DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+                       "§6.6.7 step 5.11.3 was given a focus target that is not an element — an autofocus "
+                       "candidate is an element carrying the `autofocus` content attribute, and nothing else "
+                       "reaches this door");
+                DCHECK(n != NULL && n->owner_document != NULL &&
+                           document_active_realm_of(lxb_dom_interface_node(n->owner_document)) == ctx,
+                       "§6.6.7 step 5.11.3's door was minted in a realm that is not the candidate's own node "
+                       "document — the focus chain, the events' globals and the viewport are all read off this "
+                       "machine's ctx, so a candidate in a CHILD document must be focused through the CHILD's "
+                       "door (§6.6.7 step 5.4 lets a candidate belong to any document under topDocument's "
+                       "top-level traversable, so this is the ordinary case and not the exotic one)");
+                s->kind = FA_ELEMENT;
+                s->target = JS_DupValue(ctx, argv[0]);
                 hdr->stage = FOC_AREA;
                 continue;
             }
@@ -1025,8 +1048,8 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                adopted into another same-origin document is focused under that document's policy. A document
                with no browsing context has neither the feature nor an activation, so its elements are not
                focusable through this member at all. */
-            doc = n->owner_document ? active_document_realm(lxb_dom_interface_node(n->owner_document)) : NULL;
-            if (!doc || !allow_focus_steps(doc)) return 0;
+            doc = n->owner_document ? document_active_realm_of(lxb_dom_interface_node(n->owner_document)) : NULL;
+            if (!doc || !focus_allow_focus_steps(doc)) return 0;
             hdr->stage = FOC_AREA;
             continue;
         }
@@ -1086,7 +1109,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                        "§6.6.4's unfocusing steps step 7 reached an old chain whose last entry is not a "
                        "Document — the chain is built up to the top-level traversable's Document by "
                        "construction");
-                doc_realm = active_document_realm(node_of(last));
+                doc_realm = document_active_realm_of(node_of(last));
                 DCHECK(doc_realm != NULL, "§6.6.4's topDocument is not the active document of any realm");
                 DCHECK(traversable_has_system_focus(ctx),
                        "§6.6.4's unfocusing steps step 7 reached its SECOND branch: topDocument's navigable "
@@ -1247,7 +1270,7 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                 lxb_dom_node_t *doc = kind == FA_VIEWPORT
                                           ? n : (n && n->owner_document
                                                      ? lxb_dom_interface_node(n->owner_document) : NULL);
-                JSContext *realm = active_document_realm(doc);
+                JSContext *realm = document_active_realm_of(doc);
 
                 DCHECK(realm != NULL, "§6.6.4 step 4.1.2 designates the focused area of a document that is no "
                                       "realm's active document");
@@ -1313,6 +1336,34 @@ static const IdlStepDecl VIEWPORT_STEP = {
     "HTML §8.1.7.3 update the rendering step 17, over §6.6.4's focusing and focus update steps",
     FOCUS_STEPS
 };
+static const IdlStepDecl AUTOFOCUS_STEP = {
+    focus_step, sizeof(FocusState), focus_state_visit, focus_state_release,
+    "HTML §6.6.7 flush autofocus candidates step 5.11.3, over §6.6.4's focusing and focus update steps",
+    FOCUS_STEPS
+};
+
+/* ---- THE INTERNAL DOORS INTO §6.6.4 ------------------------------------------------------------------------
+ *
+ * MINTED IN THE DOCUMENT'S OWN REALM — event_target.c's dispatcher, for its reason: a step function carries its
+ * DEFINING realm, and this machine reads the viewport, the focus chain and the events' globals off that ctx, so
+ * the one a child document is reached through has to be the child's. It costs one function object per
+ * invocation, which is a cold path (a focused area only stops being focusable when the page changed the tree
+ * under it; a document's autofocus candidates are flushed once) and buys the absence of a runtime-lifetime
+ * object that would have to be per-realm and freed. It is minted through idl_step_function like every other
+ * declared member, which is what keeps the pool's name for it — a hand-written JS_NewCFunction2 leaves the
+ * member anonymous in every diagnostic.
+ * OWNED by the caller. */
+static JSValue focus_door_new(JSContext *ctx, const char *name, int length, int stepid)
+{
+    JSValue fn;
+
+    DCHECK(stepid >= 0,
+           "a C caller reached §6.6.4's focusing steps before focus_init declared them — an internal door is "
+           "the only way one reaches them, and there is one focus machine");
+    fn = idl_step_function(ctx, name, length, stepid);
+    CHECK(!JS_IsException(fn), "focus: an internal door into §6.6.4's focusing steps could not be allocated");
+    return fn;
+}
 
 /* ---- HTML §8.1.7.3 step 17's focus fixup rule -------------------------------------------------------------- */
 
@@ -1337,26 +1388,6 @@ bool focus_focused_area_is_focusable(JSContext *ctx)
     return ok;
 }
 
-/* THE INTERNAL DOOR, MINTED IN THE DOCUMENT'S OWN REALM — event_target.c's dispatcher, for its reason: a step
-   function carries its DEFINING realm, and this machine reads the viewport, the focus chain and the events'
-   globals off that ctx, so the one a child document is fixed up through has to be the child's. It costs one
-   function object per fixup, which is a cold path (a focused area only stops being focusable when the page
-   changed the tree under it) and buys the absence of a runtime-lifetime object that would have to be per-realm
-   and freed. It is minted through idl_step_function like every other declared member, which is what keeps the
-   pool's name for it — a hand-written JS_NewCFunction2 leaves the member anonymous in every diagnostic.
-   OWNED by the caller. */
-static JSValue viewport_fixup_fn_new(JSContext *ctx)
-{
-    JSValue fn;
-
-    DCHECK(g_id_viewport >= 0,
-           "the rendering algorithm reached §6.6.4's focusing steps before focus_init declared them — this is "
-           "the only way a C caller reaches them, and there is one focus machine");
-    fn = idl_step_function(ctx, "focusingStepsForViewport", 0, g_id_viewport);
-    CHECK(!JS_IsException(fn), "focus: §8.1.7.3 step 17's focusing-steps door could not be allocated");
-    return fn;
-}
-
 /* The step's ACTION — §6.6.4's focusing steps given doc's viewport, as a request the calling machine parks on.
    Same two-leg shape as event_target_fire_run, and for the same reason: the algorithm runs the page's `blur`,
    `focusout`, `focus` and `focusin` listeners, so it cannot be a call from C. */
@@ -1372,7 +1403,7 @@ int focus_viewport_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, 
            "§8.1.7.3 step 17's focusing-steps request was handed a buffer narrower than step_call_run's "
            "[this, func] shape");
     if (*phase == 0) {
-        JSValue fn = viewport_fixup_fn_new(ctx);
+        JSValue fn = focus_door_new(ctx, "focusingStepsForViewport", 0, g_id_viewport);
 
         /* step_call_run DUPS the callee into the request buffer, which is what holds it across the suspension —
            so this realm's door is released here and the parked call still owns one. */
@@ -1382,6 +1413,87 @@ int focus_viewport_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, 
         return r;
     }
     r = step_call_run(ctx, phase, cb, cb_cap, JS_UNDEFINED, JS_UNDEFINED, 0, NULL, in, &out, out_cb, out_argc);
+    DCHECK(r == 0, "§6.6.4's focusing steps resumed into something other than their answer");
+    DCHECK(JS_IsUndefined(out),
+           "§6.6.4's focusing steps answered with a value — the algorithm has no result, so a value here is a "
+           "member's return leaking through the door");
+    JS_FreeValue(ctx, out);
+    return 0;
+}
+
+/* ---- HTML §6.6.7's three calls into §6.6 ------------------------------------------------------------------- */
+
+/* §6.6.7 flush step 4's first disjunct, negated: "topDocument's focused area is topDocument ITSELF". §6.6.2's
+   focused area of a Document in this engine is either an ELEMENT or the VIEWPORT, and the viewport's DOM anchor
+   IS the Document — which is exactly the state the standard's sentence describes and the state a page that has
+   focused nothing is in (the file header states why the initial designation is the viewport rather than null).
+   So the disjunct is "the focused area is not the viewport", and it is what stops an autofocus from stealing a
+   focus the page or a `#fragment` already placed somewhere else. */
+bool focus_focused_area_is_viewport(JSContext *ctx)
+{
+    JSValue area;
+    int kind;
+
+    DCHECK(g_ready, "§6.6.7 asked for a focused area before focus_init declared §6.6's members");
+    area = focused_area_of(ctx, &kind);
+    JS_FreeValue(ctx, area);
+    DCHECK(kind == FA_ELEMENT || kind == FA_VIEWPORT,
+           "§6.6.7 read a focused area that is neither an element nor a viewport — those are the two §6.6.2 "
+           "designations this engine models, and the record holds nothing else");
+    return kind == FA_VIEWPORT;
+}
+
+/* §6.6.7 flush steps 5.9-5.10, as the verdict they exist to reach: "let target be element; if target is not a
+   focusable area, then set target to the result of getting the focusable area for target" — and step 5.11 then
+   branches on whether that target is null. Both halves are §6.6.4's, so both are answered here.
+   IT RUNS NONE OF THE PAGE'S CODE, which is why it is a question and not a request: §6.6.4's delegate search is
+   a tree walk over content attributes and shadow roots, with no accessor and no callback in it. */
+bool focus_focusable_area_exists(JSContext *ctx, JSValueConst el)
+{
+    lxb_dom_node_t *n = node_of(el);
+    JSValue v;
+    int k;
+
+    DCHECK(g_ready, "§6.6.7 asked for a focusable area before focus_init declared §6.6's members");
+    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "§6.6.7 step 5.9 was given a candidate that is not an element — the autofocus candidates list holds "
+           "elements the insertion steps appended and nothing else");
+    if (el_is_focusable_area(ctx, el)) return true;                                     /* step 5.10's test */
+    get_focusable_area(ctx, FA_ELEMENT, el, &k, &v);
+    JS_FreeValue(ctx, v);
+    return k != FA_NONE;
+}
+
+/* §6.6.7 flush step 5.11.3's ACTION — the focusing steps given the candidate, as a request the calling machine
+   parks on. Same two-leg shape and same reason as focus_viewport_run above.
+   THE ARGUMENT COUNT IS PASSED ON BOTH LEGS AND IT IS LOAD-BEARING: step_call_run places [this, func, args…]
+   on the first leg and releases `2 + argc` slots on the resume, so a resume that forwarded 0 would leak the
+   candidate's reference and, with it, the whole tree it is in. */
+int focus_element_run(JSContext *ctx, JSValueConst el, uint8_t *phase, JSValue *cb, int cb_cap, JSValue in,
+                      JSValue **out_cb, int *out_argc)
+{
+    JSValue out = JS_UNDEFINED;
+    int r;
+
+    /* ASKED ON BOTH LEGS, because the resume leg forwards the same capacity and a caller that got the first
+       one right by accident must not get the second one wrong in silence. */
+    DCHECK(cb_cap >= FOCUS_ELEMENT_CB_SLOTS,
+           "§6.6.7 step 5.11.3's focusing-steps request was handed a buffer narrower than step_call_run's "
+           "[this, func, target] shape");
+    if (*phase == 0) {
+        JSValue fn = focus_door_new(ctx, "focusingStepsForTarget", 1, g_id_autofocus);
+        JSValueConst argv[1];
+
+        DCHECK(node_of(el) != NULL, "§6.6.7 step 5.11.3 was handed a focus target that is not a node");
+        argv[0] = el;
+        /* step_call_run DUPS both the callee and the argument into the request buffer, which is what holds them
+           across the suspension — so this realm's door is released here and the parked call still owns one. */
+        r = step_call_run(ctx, phase, cb, cb_cap, fn, JS_UNDEFINED, 1, argv, in, &out, out_cb, out_argc);
+        JS_FreeValue(ctx, fn);
+        DCHECK(r == JS_STEP_CALL, "§6.6.7 step 5.11.3's focusing-steps request answered without parking");
+        return r;
+    }
+    r = step_call_run(ctx, phase, cb, cb_cap, JS_UNDEFINED, JS_UNDEFINED, 1, NULL, in, &out, out_cb, out_argc);
     DCHECK(r == 0, "§6.6.4's focusing steps resumed into something other than their answer");
     DCHECK(JS_IsUndefined(out),
            "§6.6.4's focusing steps answered with a value — the algorithm has no result, so a value here is a "
@@ -1405,6 +1517,11 @@ void focus_init(JSContext *ctx)
         { "preventScroll", IDL_BOOLEAN,            false, NULL, 0 },
     };
     static const IdlArgType ONE_DICT[1] = { IDL_DICT };
+    /* §6.6.7 step 5.11.3's focus target, handed to the internal door as its one argument. IDL_ANY because it is
+       an element WRAPPER passing between two pieces of this engine and not a value a page ever supplies — the
+       args machine converts nothing and runs none of the page's code on it, and focus_step's own entry asserts
+       what it is. */
+    static const IdlArgType ONE_ANY[1] = { IDL_ANY };
 
     DCHECK(!g_ready, "focus_init ran twice — the members are declared once per agent");
     g_focus_slot = realm_value_declare(ctx, "HTML §6.6.2 focused area of the document");
@@ -1414,10 +1531,12 @@ void focus_init(JSContext *ctx)
     idl_optional_from(0);
     g_id_el_blur = idl_method_id_step(ctx, NULL, 0, NULL, 0, &EL_BLUR_STEP, FOCUS_EL_BLUR);
     g_id_win_focus = idl_method_id_step(ctx, NULL, 0, NULL, 0, &WIN_FOCUS_STEP, FOCUS_WIN_FOCUS);
-    /* HTML §8.1.7.3 step 17's entry. Declared with the members although it is installed on nothing, because
-       what a declaration buys — the stage labels, the pool's name, the one mint — is what makes a parked fixup
-       say where it is parked, and that has nothing to do with a page being able to see it. */
+    /* HTML §8.1.7.3 step 17's and §6.6.7 step 5.11.3's entries. Declared with the members although they are
+       installed on nothing, because what a declaration buys — the stage labels, the pool's name, the one mint —
+       is what makes a parked fixup say where it is parked, and that has nothing to do with a page being able to
+       see it. */
     g_id_viewport = idl_method_id_step(ctx, NULL, 0, NULL, 0, &VIEWPORT_STEP, FOCUS_VIEWPORT);
+    g_id_autofocus = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &AUTOFOCUS_STEP, FOCUS_AUTOFOCUS);
     g_id_has_focus = idl_method_id(ctx, NULL, 0, js_has_focus, 0);
     g_ready = 1;
 }

@@ -62,4 +62,37 @@ bool focus_focused_area_is_focusable(JSContext *docctx);
 int  focus_viewport_run(JSContext *docctx, uint8_t *phase, JSValue *cb, int cb_cap, JSValue in,
                         JSValue **out_cb, int *out_argc);
 
+/* ---- HTML §6.6.7's three calls into §6.6 --------------------------------------------------------------------
+ *
+ * THE AUTOFOCUS ATTRIBUTE is core/html/autofocus.c: it owns §6.6.7's own state (a Document's autofocus
+ * candidates list and its autofocus processed flag) and the two algorithms stated over it — the insertion steps
+ * that fill the list and the flush that drains it. But every DECISION those algorithms make is one of §6.6's,
+ * named by the standard at the step that makes it, so each is answered HERE and the step reads as the sentence
+ * it implements. The alternative is a second copy of "what a focusable area is" in autofocus.c — the same
+ * one-fact-two-answers defect the rendering step above avoids for the same reason. */
+
+/* §6.6.6's ALLOW FOCUS STEPS given a Document, which §6.6.7's insertion steps run as their step 5. */
+bool focus_allow_focus_steps(JSContext *docctx);
+
+/* §6.6.7 flush step 4's first disjunct, negated — "topDocument's focused area is topDocument itself". §6.6.2's
+   focused area is either an element or the VIEWPORT, whose DOM anchor IS the Document, so the spec's sentence
+   is exactly "the focused area is the viewport" here (focus.c's header states why this engine designates the
+   viewport where the standard's prose leaves the initial designation to the user agent). */
+bool focus_focused_area_is_viewport(JSContext *docctx);
+
+/* §6.6.7 flush steps 5.9-5.10's verdict: target is the candidate, and if that is not a focusable area then the
+   result of GETTING THE FOCUSABLE AREA for it — is that target non-null? A question rather than a request,
+   because §6.6.4's delegate search walks content attributes and shadow roots and runs no page code. */
+bool focus_focusable_area_exists(JSContext *docctx, JSValueConst el);
+
+/* §6.6.7 flush step 5.11.3's "run the focusing steps for target", as a request the calling machine parks on —
+   the same two-leg shape and the same reason as focus_viewport_run. `docctx` must be the realm whose ACTIVE
+   DOCUMENT is the candidate's node document (§6.6.7 step 5.4 admits candidates from any document under
+   topDocument's top-level traversable, so that is routinely a CHILD realm), which focus.c asserts at the door.
+   The ELEMENT is the algorithm's own focus target: §6.6.4 step 1 re-derives the focusable area from it, which
+   is the identical answer focus_focusable_area_exists just gave, since nothing between them runs page code. */
+#define FOCUS_ELEMENT_CB_SLOTS (2 + 1)
+int  focus_element_run(JSContext *docctx, JSValueConst el, uint8_t *phase, JSValue *cb, int cb_cap, JSValue in,
+                       JSValue **out_cb, int *out_argc);
+
 #endif

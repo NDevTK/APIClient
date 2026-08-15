@@ -19,6 +19,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_REALM_H
 #define ENGINE_HOST_BROWSER_CORE_REALM_H
 
+#include <stdbool.h>
+
 #include "quickjs.h"
 
 typedef void (*RealmIntrinsic)(JSContext *ctx);
@@ -46,5 +48,40 @@ void realm_intrinsics_free(void);
 int     realm_value_declare(JSContext *ctx, const char *what);
 void    realm_value_set(JSContext *ctx, int slot, JSValue v);   /* CONSUMES v */
 JSValue realm_value_get(JSContext *ctx, int slot);              /* OWNED: the caller frees */
+
+/* A STEP OF A STANDARD WHOSE PRODUCER IS NOT IN THIS BUILD — the two-sided assertion, and the reason it is a
+ * function rather than a comment at each site.
+ *
+ * A great many algorithm steps drain a work-set that some OTHER interface fills: update-the-rendering's resize
+ * steps drain a viewport's change, its step 23 drains the top layer `dialog.showModal()` fills, §6.6.7's flush
+ * reads the target element §7.4.6.4's scroll-to-the-fragment sets. Where this engine has none of that
+ * interface, the work-set is EMPTY BY CONSTRUCTION and the step has nothing to do — but writing that down as a
+ * comment states it once and never checks it again. This asserts it: `path` names the MEMBER whose arrival
+ * would give the step work, and the moment somebody lands it, the DCHECK fires AT the step that must then be
+ * written, with `what` naming the standard, the step number and the shape of the work.
+ *
+ * `path` is resolved from this realm's GLOBAL, dot by dot — `ResizeObserver`, `Document.prototype.activeElement`,
+ * `HTMLDialogElement.prototype.showModal`. A dotted path rather than a bare name because the INTERFACE OBJECT is
+ * often not the producer: `HTMLDialogElement` exists in this build while `showModal`, the member that puts an
+ * element in the top layer, does not. A path names the INTERFACE OBJECT rather than an instance
+ * (`Document.prototype.activeElement`, not `document.activeElement`) because that is where the member is
+ * declared, and because resolving through an instance means traversing whatever accessors the instance carries.
+ *
+ * THE LAST SEGMENT IS ASKED WITH [[HasProperty]], NOT [[Get]], and that is the whole of the difference between a
+ * probe and a call. Walking to the end with a property GET runs an ACCESSOR — the page's code in a C activation
+ * with no flow base, which the engine aborts on by design — and `document.activeElement` became an accessor the
+ * moment HTML §6.6's focus model landed, so a probe that only ever wanted a yes or no took the entire run down
+ * with it. And a value is the wrong evidence anyway: a member whose getter legitimately answers `undefined`
+ * reads as ABSENT, so the check would go on believing a step had nothing to do long after its producer existed.
+ * INTERMEDIATE segments still need their value to be traversed, and every one on every path is an interface
+ * object or a `prototype` — both plain data properties. Should an intermediate ever become an accessor, the
+ * engine's own getter abort names the property it stopped on.
+ *
+ * IT LIVES HERE because "is this member installed in THIS realm" is a question about a realm, and because it was
+ * about to be answered in two places at once: it was a static of core/rendering/rendering.c, written for the
+ * twelve update-the-rendering steps whose standards are absent, and HTML §6.6.7's flush autofocus candidates has
+ * two conditions of its own with the same shape. A second copy of a two-sided assertion is worse than a second
+ * copy of ordinary code, because the copy that is not maintained goes on being SILENT. */
+void realm_awaits(JSContext *ctx, const char *path, const char *what);
 
 #endif
