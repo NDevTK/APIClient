@@ -90,6 +90,15 @@ const Origin *origin_of_url(const UrlRecord *u);
    origin_of_url; that is why it is here rather than in url.c, which used to hold a second copy of the rule. */
 char *origin_serialize_of_url(const UrlRecord *u);   /* OWNED */
 
+/* URL §4.7's TUPLE, WITHOUT MINTING AN IDENTITY — the record whose scheme, host and port ARE this URL's tuple
+   origin, or NULL when §4.7 gives it an opaque one. It answers `u` itself for a URL that carries its own
+   origin and `scratch` for a `blob:`, whose origin is the URL its path spells; `scratch` is INITIALISED on
+   every path and is the caller's to url_record_free whatever the answer was.
+   IT EXISTS FOR THE ALGORITHM THAT READS COMPONENTS AND DECIDES NOTHING ABOUT IDENTITY (Secure Contexts §3.1
+   over a URL), which would otherwise mint one origin per [SecureContext] member check — a record per call,
+   kept for the agent, for a question that never compares two origins. */
+const UrlRecord *origin_tuple_url(const UrlRecord *u, UrlRecord *scratch);
+
 /* HTML §7.3.1's DETERMINE THE ORIGIN, verbatim, and the reason this file exists:
      1. If sandboxFlags has its sandboxed origin browsing context flag set, then return a new opaque origin.
      2. If url is null, then return a new opaque origin.

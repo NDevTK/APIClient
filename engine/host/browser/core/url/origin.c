@@ -14,7 +14,13 @@
 struct Origin {
     uint64_t nonce;
     char    *scheme;      /* §7.1.1's scheme (an ASCII string) — tuple only */
-    char    *host;        /* §7.1.1's host, SERIALIZED (see origin_same) — tuple only */
+    /* §7.1.1's HOST, WHICH IS "a host" AND NOT A STRING — URL §4.2's parsed value: a domain, an IPv4 NUMBER,
+       an IPv6 address, an opaque host or the empty host. Kept as the parsed value because that is what the
+       record IS, because step 2's "their hosts are identical" is then a comparison of HOSTS rather than of
+       text, and because the algorithms defined over an origin read it that way — Secure Contexts §3.1 step 4
+       matches against 127.0.0.0/8 and ::1/128 (so `http://0x7f.1/`, which url.c resolves to the NUMBER
+       127.0.0.1, is loopback) and step 5 matches `localhost` BY NAME. Tuple only. */
+    UrlHost  host;
     int      port;        /* §7.1.1's port; -1 is the spec's null — tuple only */
     /* §7.1.1's DOMAIN: "null unless stated otherwise", and §7.1.1.2's `document.domain` setter is the only
        thing in the platform that states otherwise. This engine does not have that member — a web API it has
@@ -71,14 +77,37 @@ static char *origin_strdup(const char *s)
     return c;
 }
 
-/* §7.1.1's TUPLE ORIGIN. `host` is taken (owned by the record from here on). NOT INTERNED — see the `domain`
-   field for why two equal tuples must stay two records. */
-static const Origin *origin_tuple_new(const char *scheme, char *host, int port)
+/* §4.2's HOST, COPIED — the record owns its own, because the URL record it came from is a local of whoever
+   parsed it. Only the domain/opaque spelling carries memory; the rest is POD. */
+static void origin_host_copy(UrlHost *dst, const UrlHost *src)
+{
+    *dst = *src;
+    dst->domain = src->domain ? origin_strdup(src->domain) : NULL;
+}
+
+/* URL §4.2's HOST EQUALITY, which §7.1.1 step 2 means by "their hosts … are identical". By VALUE, over the
+   parsed host: two hosts of different KINDS are different however they spell, an IPv4 is a number, an IPv6 is
+   eight of them, and a domain is already lowercased ASCII by domain-to-ASCII when the parser built it. */
+static bool origin_host_equal(const UrlHost *a, const UrlHost *b)
+{
+    if (a->kind != b->kind) return false;
+    switch (a->kind) {
+    case URL_HOST_DOMAIN:
+    case URL_HOST_OPAQUE: return a->domain && b->domain && !strcmp(a->domain, b->domain);
+    case URL_HOST_IPV4:   return a->ipv4 == b->ipv4;
+    case URL_HOST_IPV6:   return memcmp(a->ipv6, b->ipv6, sizeof a->ipv6) == 0;
+    default:              return true;   /* the null and empty hosts carry no payload to compare */
+    }
+}
+
+/* §7.1.1's TUPLE ORIGIN. NOT INTERNED — see the `domain` field for why two equal tuples must stay two
+   records. */
+static const Origin *origin_tuple_new(const char *scheme, const UrlHost *host, int port)
 {
     Origin *o = origin_alloc();
 
     o->scheme = origin_strdup(scheme);
-    o->host = host;
+    origin_host_copy(&o->host, host);
     o->port = port;
     return o;
 }
@@ -94,17 +123,14 @@ bool origin_is_opaque(const Origin *o)
      1. If A and B are the same opaque origin, then return true.
      2. If A and B are both tuple origins and their schemes, hosts, and port are identical, then return true.
      3. Return false."
-   STEP 1 IS THE NONCE, and it is why this file exists. STEP 2's hosts are compared through their
-   SERIALIZATIONS, which is exact here rather than an approximation: a tuple origin exists only for the five
-   schemes URL §4.7 names, all of them special, so both hosts came out of the same host parser — a domain is
-   already lowercased and ASCII, an IPv4 is already canonical dotted-decimal, an IPv6 is already the compressed
-   bracketed form — and two hosts are equal exactly when those agree. */
+   STEP 1 IS THE NONCE, and it is why this file exists. STEP 2's hosts are compared as HOSTS (by value, over
+   the parsed host), never as text. */
 bool origin_same(const Origin *a, const Origin *b)
 {
     DCHECK(a != NULL && b != NULL, "§7.1.1's same origin was asked about a NULL origin");
     if (a->nonce || b->nonce)
         return a->nonce == b->nonce;      /* step 1, and step 2's "both tuple origins" failing */
-    return !strcmp(a->scheme, b->scheme) && !strcmp(a->host, b->host) && a->port == b->port;
+    return !strcmp(a->scheme, b->scheme) && origin_host_equal(&a->host, &b->host) && a->port == b->port;
 }
 
 /* §7.1.1: "Two origins, A and B, are said to be same origin-domain if the following algorithm returns true:
@@ -129,21 +155,28 @@ bool origin_same_domain(const Origin *a, const Origin *b)
    origin's scheme. 3. Append `://` to result. 4. Append origin's host, serialized, to result. 5. If origin's
    port is non-null, append U+003A COLON and origin's port, serialized, to result. 6. Return result."
    Computed once and kept, because the record is immutable and every caller wants BYTES to hand outwards. */
+static char *tuple_serialize(const char *scheme, const UrlHost *host, int port)
+{
+    char *h = url_serialize_host(host), *s;
+    size_t n;
+
+    CHECK(h != NULL, "origin: OOM serializing a tuple origin's host");
+    n = strlen(scheme) + strlen(h) + 16;
+    s = malloc(n);
+    CHECK(s != NULL, "origin: OOM serializing an origin");
+    if (port >= 0) snprintf(s, n, "%s://%s:%d", scheme, h, port);   /* step 5 */
+    else           snprintf(s, n, "%s://%s", scheme, h);
+    free(h);
+    return s;
+}
+
 const char *origin_serialized(const Origin *o)
 {
     DCHECK(o != NULL, "the serialization of a NULL origin was asked for");
     if (!o->serialized) {
         Origin *m = (Origin *)o;   /* a pure function of an immutable record, memoized */
-        if (o->nonce) {
-            m->serialized = origin_strdup("null");
-        } else {
-            size_t n = strlen(o->scheme) + strlen(o->host) + 16;
-            char *s = malloc(n);
-            CHECK(s != NULL, "origin: OOM serializing an origin");
-            if (o->port >= 0) snprintf(s, n, "%s://%s:%d", o->scheme, o->host, o->port);
-            else              snprintf(s, n, "%s://%s", o->scheme, o->host);
-            m->serialized = s;
-        }
+        m->serialized = o->nonce ? origin_strdup("null")                       /* step 1 */
+                                 : tuple_serialize(o->scheme, &o->host, o->port);
     }
     return o->serialized;
 }
@@ -170,86 +203,68 @@ bool origin_is_serialized_tuple(const Origin *o, const char *serialized)
  *               opaque origin.
  *    Otherwise — Return a new opaque origin."
  *
- * THE TUPLE HALF IS COMPUTED ONCE, HERE, and both public entry points read it: one builds a RECORD out of it
- * and the other builds BYTES. url.c used to hold a second copy of this rule for the bytes; a second copy of a
- * spec sentence is the second answer that is always subtly wrong, and it is now one. */
-static bool url_origin_tuple(const UrlRecord *u, const char **scheme, char **host, int *port);
+ * THE TUPLE HALF IS COMPUTED ONCE, HERE, and every entry point reads it: one builds a RECORD, one builds
+ * BYTES, and one hands the components to an algorithm that reads them and decides nothing about identity.
+ * url.c used to hold a second copy of this rule for the bytes; a second copy of a spec sentence is the second
+ * answer that is always subtly wrong, and it is now one. */
 
-/* §4.7's `blob` case, split out for the reason url.c's version was: expressing it as a self-call makes §4.7 a C
-   recursion whose depth the call graph cannot see, and the recursion is a fiction — the inner URL is
-   constrained to http/https/file, none of which is blob, so there is no depth. */
-static bool url_origin_tuple_blob(const UrlRecord *u, const char **scheme, char **host, int *port)
+/* §4.7's SCHEMES WITH A TUPLE ORIGIN, and only these five. `file` is deliberately absent — §4.7's file case
+   says "when in doubt, return a new opaque origin" — which is also what makes the blob case below compose
+   rather than needing a second list. */
+static bool scheme_has_tuple_origin(const char *scheme)
 {
-    UrlRecord inner;
-    char *path = url_serialize_path(u);
-    bool ok = false;
-
-    url_record_init(&inner);
-    /* §4.7 names THREE schemes here and only those: a `blob:` whose path spells ftp, ws, wss or another blob
-       has an opaque origin. `file` is named and still comes out opaque below, because §4.7's `file` case says
-       so — the two rules compose, and short-circuiting `file` here would state the same answer for the wrong
-       reason. */
-    if (path && url_parse(&inner, path, strlen(path), NULL) && inner.scheme &&
-        (!strcmp(inner.scheme, "http") || !strcmp(inner.scheme, "https") || !strcmp(inner.scheme, "file"))) {
-        const char *inner_scheme;
-
-        if (url_origin_tuple(&inner, &inner_scheme, host, port)) {
-            /* THE SCHEME IS RE-STATED AS A LITERAL rather than passed through: url_origin_tuple borrows it
-               from the record it read, and `inner` is the one record that does not outlive the answer. §4.7
-               constrains it to these two — `file` runs the file case and comes back opaque. */
-            *scheme = !strcmp(inner_scheme, "https") ? "https" : "http";
-            ok = true;
-        }
-    }
-    url_record_free(&inner);
-    free(path);
-    return ok;
+    return !strcmp(scheme, "http") || !strcmp(scheme, "https") || !strcmp(scheme, "ftp") ||
+           !strcmp(scheme, "ws") || !strcmp(scheme, "wss");
 }
 
-/* Answers false for an origin that is OPAQUE. On true, `*scheme` is BORROWED from `u` and `*host` is OWNED. */
-static bool url_origin_tuple(const UrlRecord *u, const char **scheme, char **host, int *port)
+const UrlRecord *origin_tuple_url(const UrlRecord *u, UrlRecord *scratch)
 {
-    if (!u->scheme) return false;
-    if (!strcmp(u->scheme, "blob")) return url_origin_tuple_blob(u, scheme, host, port);
-    if (strcmp(u->scheme, "http") && strcmp(u->scheme, "https") && strcmp(u->scheme, "ftp") &&
-        strcmp(u->scheme, "ws") && strcmp(u->scheme, "wss"))
-        return false;   /* §4.7: `file` and every other scheme has an opaque origin */
-    *scheme = u->scheme;
-    *host = url_serialize_host(&u->host);
-    CHECK(*host != NULL, "origin: OOM serializing a tuple origin's host");
-    *port = u->port;
-    return true;
+    DCHECK(u != NULL && scratch != NULL, "URL §4.7 was asked for the origin of no URL");
+    url_record_init(scratch);   /* initialised on EVERY path: the caller frees it whatever the answer is */
+    if (!u->scheme) return NULL;
+    /* §4.7's `blob` case, and there is no recursion in it: the inner URL is constrained to http/https/file,
+       none of which is blob, so a self-call would have expressed a depth that cannot exist. `file` parses
+       through and comes back opaque below, because §4.7's file case says so — the two rules compose. */
+    if (!strcmp(u->scheme, "blob")) {
+        char *path = url_serialize_path(u);
+        const UrlRecord *r = NULL;
+
+        /* §4.7 NAMES THREE INNER SCHEMES AND ONLY THOSE, and the list is not the same as the five above:
+           returning the inner origin for any scheme that has a tuple one would make `blob:ws://example.org/`
+           same origin with a WebSocket endpoint. `file` is named here and still comes back opaque, because the
+           second test is §4.7's file case. */
+        if (path && url_parse(scratch, path, strlen(path), NULL) && scratch->scheme &&
+            (!strcmp(scratch->scheme, "http") || !strcmp(scratch->scheme, "https") ||
+             !strcmp(scratch->scheme, "file")) &&
+            scheme_has_tuple_origin(scratch->scheme))
+            r = scratch;
+        free(path);
+        return r;
+    }
+    return scheme_has_tuple_origin(u->scheme) ? u : NULL;
 }
 
 const Origin *origin_of_url(const UrlRecord *u)
 {
-    const char *scheme = NULL;
-    char *host = NULL;
-    int port = -1;
+    UrlRecord scratch;
+    const UrlRecord *t;
+    const Origin *o;
 
     DCHECK(u != NULL, "URL §4.7 was asked for the origin of no URL — the spec's null URL is §7.3.1 step 2's "
                       "case and is spelled by passing NULL to origin_determine, not to this");
-    if (!url_origin_tuple(u, &scheme, &host, &port))
-        return origin_opaque_new();
-    return origin_tuple_new(scheme, host, port);
+    t = origin_tuple_url(u, &scratch);
+    o = t ? origin_tuple_new(t->scheme, &t->host, t->port) : origin_opaque_new();
+    url_record_free(&scratch);
+    return o;
 }
 
 char *origin_serialize_of_url(const UrlRecord *u)
 {
-    const char *scheme = NULL;
-    char *host = NULL, *s;
-    int port = -1;
-    size_t n;
+    UrlRecord scratch;
+    const UrlRecord *t = origin_tuple_url(u, &scratch);
+    char *s = t ? tuple_serialize(t->scheme, &t->host, t->port) : origin_strdup("null");
 
-    DCHECK(u != NULL, "URL §4.7 was asked for the origin of no URL");
-    if (!url_origin_tuple(u, &scheme, &host, &port))
-        return origin_strdup("null");
-    n = strlen(scheme) + strlen(host) + 16;
-    s = malloc(n);
-    CHECK(s != NULL, "origin: OOM serializing a URL's origin");
-    if (port >= 0) snprintf(s, n, "%s://%s:%d", scheme, host, port);
-    else           snprintf(s, n, "%s://%s", scheme, host);
-    free(host);
+    url_record_free(&scratch);
     return s;
 }
 
@@ -362,7 +377,7 @@ void origin_release(void)
     while (o) {
         Origin *n = o->next;
         free(o->scheme);
-        free(o->host);
+        free(o->host.domain);   /* the only part of a parsed host that carries memory */
         free(o->domain);
         free(o->serialized);
         free(o);

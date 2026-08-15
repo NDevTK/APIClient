@@ -6,34 +6,36 @@
 #include "quickjs.h"
 #include "core/frame/secure_context.h"
 #include "core/realm.h"
+#include "core/url/origin.h"
 #include "core/url/url.h"
 
-/* §3.1 STEPS 3 THROUGH 8, OVER A TUPLE ORIGIN. Split out from the algorithm below because step 1's opaque
-   case reaches them by TWO routes — a URL that has a tuple origin of its own, and a `blob:` URL whose origin
-   is the one its path spells — and the alternative was a self-call whose depth would be a fact about the
-   input. Depth is not a thing a page gets to choose in this engine. */
-static bool tuple_origin_trustworthy(const UrlRecord *u)
+/* §3.1 STEPS 3 THROUGH 8, OVER A TUPLE ORIGIN'S COMPONENTS — the scheme and the HOST, which is URL §4.2's
+   parsed value and not a string (see secure_context.h). They are the components rather than a URL record
+   because that is what the algorithm reads, and because §4.7 answers a `blob:` URL with ANOTHER URL's tuple:
+   both routes reach these steps with the same three things, and neither is a self-call whose depth would be a
+   fact about the input. Depth is not a thing a page gets to choose in this engine. */
+static bool tuple_origin_trustworthy(const char *scheme, const UrlHost *h)
 {
     const char *host;
     size_t n;
 
-    DCHECK(u->scheme != NULL, "a tuple origin with no scheme — §3.1 step 2 asserts this is a tuple origin, and "
-                              "a record with no scheme has no origin at all");
+    DCHECK(scheme != NULL, "a tuple origin with no scheme — §3.1 step 2 asserts this is a tuple origin, and an "
+                           "origin with no scheme is not one");
 
     /* STEP 3: "If origin's scheme is either `https` or `wss`, return Potentially Trustworthy." NEITHER the
        port NOR the host has any say — the spec's own closing note says so, which is why a `https://` on a
        non-default port is still trustworthy. */
-    if (!strcmp(u->scheme, "https") || !strcmp(u->scheme, "wss")) return true;
+    if (!strcmp(scheme, "https") || !strcmp(scheme, "wss")) return true;
 
     /* STEP 4: "If origin's host matches one of the CIDR notations 127.0.0.0/8 or ::1/128". A CIDR match over
        the parsed host, not a string compare against "127.0.0.1": url.c's parser resolves `http://0x7f.1/` to
        the IPv4 NUMBER 127.0.0.1 and `http://[0:0::1]/` to the IPv6 address ::1, and a text test would call
        both of those untrusted while a browser calls them loopback. */
-    if (u->host.kind == URL_HOST_IPV4 && (u->host.ipv4 >> 24) == 127) return true;
-    if (u->host.kind == URL_HOST_IPV6) {
+    if (h->kind == URL_HOST_IPV4 && (h->ipv4 >> 24) == 127) return true;
+    if (h->kind == URL_HOST_IPV6) {
         int i;
-        bool is_loopback = u->host.ipv6[7] == 1;
-        for (i = 0; i < 7; i++) if (u->host.ipv6[i] != 0) is_loopback = false;
+        bool is_loopback = h->ipv6[7] == 1;
+        for (i = 0; i < 7; i++) if (h->ipv6[i] != 0) is_loopback = false;
         if (is_loopback) return true;
     }
 
@@ -45,8 +47,8 @@ static bool tuple_origin_trustworthy(const UrlRecord *u)
        The host must be a DOMAIN: `http://localhost/` parses to one, and an opaque host carrying the same
        bytes belongs to a non-special scheme whose origin step 1 already refused. url.c's parser has already
        lowercased a domain (domain-to-ASCII), so this compares against the one case that can arrive. */
-    if (u->host.kind == URL_HOST_DOMAIN) {
-        host = u->host.domain;
+    if (h->kind == URL_HOST_DOMAIN) {
+        host = h->domain;
         DCHECK(host != NULL, "a URL_HOST_DOMAIN host with no domain string — url.c's parser produces the kind "
                              "and the bytes together");
         n = strlen(host);
@@ -58,7 +60,7 @@ static bool tuple_origin_trustworthy(const UrlRecord *u)
     /* STEP 6: "If origin's scheme is `file`, return Potentially Trustworthy." The spec's own note is that a
        user agent MAY be stricter; this one is not, because a file document is exactly the case a developer
        runs a bundle from before deploying it, and refusing it would hide that bundle's gated code. */
-    if (!strcmp(u->scheme, "file")) return true;
+    if (!strcmp(scheme, "file")) return true;
 
     /* STEPS 7 AND 8 have no answer to give here, and that is a statement rather than an omission. Step 7 is
        "a scheme the user agent considers authenticated" — §7.1's packaged applications, `app:` and
@@ -70,40 +72,27 @@ static bool tuple_origin_trustworthy(const UrlRecord *u)
 
 bool secure_context_origin_potentially_trustworthy(const UrlRecord *u)
 {
+    UrlRecord scratch;
+    const UrlRecord *t;
+    bool r;
+
     DCHECK(u != NULL, "§3.1 was asked about no origin at all");
 
-    /* STEP 1: "If origin is an opaque origin, return Not Trustworthy." An origin is a TUPLE exactly for the
-       URL Standard's special schemes (§4.2: ftp, file, http, https, ws, wss) — every other scheme has an
-       opaque origin, which is what makes `about:`, `javascript:` and a bare `data:` untrusted here. `file` is
-       in that set because §3.1 STEP 6 names it, and a step that could never be reached would not have been
-       written.
-       `blob:` IS THE ONE URL WHOSE ORIGIN IS SOMEBODY ELSE'S — URL §4.7 gives it the origin of the URL its
-       path spells, which is precisely why §3.2's note says a blob created in a trustworthy origin is itself
-       trustworthy. WHICH inner schemes count is §4.7's rule and url.c is the component that states it, so
-       this asks url.c for the origin and reads the answer back rather than keeping a second scheme list that
-       could disagree with the first. */
-    if (!u->scheme) return false;
-    if (!url_scheme_is_special(u->scheme)) {
-        char *serialized = url_serialize_origin(u);
-        UrlRecord tuple;
-        bool r = false;
-
-        if (serialized && strcmp(serialized, "null") != 0) {
-            url_record_init(&tuple);
-            CHECK(url_parse(&tuple, serialized, strlen(serialized), NULL),
-                  "a serialized TUPLE origin did not parse back — §4.7 serializes one as scheme://host[:port], "
-                  "which the same parser produced it from");
-            DCHECK(tuple.scheme && url_scheme_is_special(tuple.scheme),
-                   "a tuple origin serialized with a scheme that is not special — §4.7 gives a tuple origin "
-                   "only to a special scheme, and anything else here would send this back through the opaque "
-                   "branch it just came out of");
-            r = tuple_origin_trustworthy(&tuple);
-            url_record_free(&tuple);
-        }
-        free(serialized);
-        return r;
-    }
-    return tuple_origin_trustworthy(u);   /* STEP 2's assert holds: a special scheme has a tuple origin */
+    /* STEP 1: "If origin is an opaque origin, return Not Trustworthy." WHICH URLs HAVE ONE IS URL §4.7'S RULE
+       AND core/url/origin.c OWNS IT — this asks for the TUPLE and takes NULL as step 1's answer, rather than
+       keeping a scheme list of its own that could disagree with the one §4.7 is implemented from.
+       IT USED TO ASK BY SERIALIZING AND RE-PARSING: an origin was a string here, so the only way to reach the
+       parsed host steps 4 and 5 need was to serialize §4.7's answer and run the URL parser over the bytes
+       again. That was the last site where the lossy serialization was load-bearing, and it was correct for the
+       same reason the old same-origin check was correct until it was not — it never compared two origins.
+       `blob:` IS THE ONE URL WHOSE ORIGIN IS SOMEBODY ELSE'S — §4.7 gives it the origin of the URL its path
+       spells, which is precisely why §3.2's note says a blob created in a trustworthy origin is itself
+       trustworthy — and that is the case `scratch` carries. */
+    t = origin_tuple_url(u, &scratch);
+    /* STEP 2's assert holds by construction: what came back is a tuple origin or nothing. */
+    r = t != NULL && tuple_origin_trustworthy(t->scheme, &t->host);
+    url_record_free(&scratch);
+    return r;
 }
 
 /* §3.2 STEP 1's two literals. "If url is `about:blank` or `about:srcdoc`" means the URL RECORD is that one and

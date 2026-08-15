@@ -34,7 +34,12 @@
  * already thrown away: step 4 wants the host as a NUMBER (`127.0.0.0/8` matches `http://0x7f.1/`, which
  * url.c's parser resolves to 127.0.0.1) and as an IPv6 ADDRESS (`::1/128`), and step 5 wants the host as a
  * NAME (`localhost` and `*.localhost` are trusted BY NAME, never by what they resolve to — RFC6761 §6.3, and
- * §5.2's whole point). A `char *` origin would make every one of those a substring test. */
+ * §5.2's whole point). A `char *` origin would make every one of those a substring test.
+ *
+ * WHICH URLs HAVE AN OPAQUE ORIGIN IS URL §4.7's RULE, and core/url/origin.c owns it — this asks that
+ * component for the tuple (origin_tuple_url) and reads step 1's answer off "there is none". It used to
+ * serialize §4.7's answer and run the URL parser over the bytes to get the parsed host back, which was the
+ * last place in the engine where a lossy serialization stood between an algorithm and the thing it reads. */
 bool secure_context_origin_potentially_trustworthy(const UrlRecord *u);
 
 /* SECURE CONTEXTS §3.2 "Is url potentially trustworthy?" over a serialized URL. False for input that is not a
