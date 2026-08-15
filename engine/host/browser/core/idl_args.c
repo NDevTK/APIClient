@@ -290,8 +290,10 @@ static const char *const IDL_EPILOGUE_STEPS[] = {
  * stages, and answering the runtime with "none" was never true of any member.
  *
  * Built once, joined from the same two lists by the same loops rather than restated as a third literal — the
- * drift this file avoids everywhere else. A step member overwrites both fields with its own longer list once
- * its declaration is in hand; until then this is the truthful answer, not a placeholder. */
+ * drift this file avoids everywhere else. This is the answer for a member that HAS no algorithm of its own, and
+ * for no other member: a step member is built with its own joined list from the start and never wears this one
+ * even briefly. It used to — the two were assigned here and replaced after the registration — which meant the
+ * runtime checked this list and never saw the one the member would actually rest against. */
 static const char *const *idl_plain_steps(void)
 {
     static const char *joined[IDL_STEP_FIRST + IDL_EPILOGUE_NSTEPS + 1];
@@ -1956,8 +1958,13 @@ int idl_method_id_ext(JSContext *ctx, const IdlArgType *types, int nargs, bool v
     return id;
 }
 
-int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
-                       const IdlDictMember *members, int nmembers, IdlBody body, int magic)
+/* THE ONE BUILDER EVERY DECLARED MEMBER GOES THROUGH, plain and step alike — because a definition must be
+   COMPLETE at the single moment it is handed to the runtime, and the two entries below differ only in whether
+   there is a step declaration to finish it with. `body` and `decl` are the two halves of "what runs once the
+   conversions are done", and exactly one of them is given. */
+static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
+                             const IdlDictMember *members, int nmembers, IdlBody body,
+                             const IdlStepDecl *decl, int magic)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
     int idx, k;
@@ -2026,8 +2033,9 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
         idl_member(idx)->dict_n = nmembers;
         idl_member(idx)->conv_depth = (uint8_t)idl_members_depth(members, nmembers);
     }
-    idl_member(idx)->step = NULL;
+    idl_member(idx)->step = decl;
     idl_member(idx)->steps = NULL;
+    idl_member(idx)->nsteps = 0;
     idl_member(idx)->variadic = false;
     idl_member(idx)->iface = 0;
     idl_member(idx)->enum_values = NULL;
@@ -2051,12 +2059,57 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
        Nowhere ELSE does this machine catch — an argument coercion's throw and the member body's own request
        propagate exactly as before, which js_idl_args_step_inner re-raises at its top. */
     idl_def(idx)->catches_abrupt = 1;
-    /* DECLARED BEFORE THE REGISTRATION, WHICH IS THE WHOLE POINT — the runtime is handed this definition on the
-       next line and refuses one that names no algorithm. Both fields used to be written after, by
-       idl_method_id_step, which is to say after this call had already returned; a step member's real list
-       overwrites these below, and a plain member keeps them. */
-    idl_def(idx)->algorithm = IDL_PLAIN_ALGORITHM;
-    idl_def(idx)->steps     = idl_plain_steps();
+    /* THE WHOLE DECLARATION, FINISHED BEFORE THE REGISTRATION — and "finished" has to mean the list the machine
+       will actually rest against, not a placeholder that reads like one.
+       This said "DECLARED BEFORE THE REGISTRATION, WHICH IS THE WHOLE POINT" while admitting in its own next
+       sentence that "a step member's real list overwrites these below" — which is to say the runtime was handed
+       IDL_PLAIN_ALGORITHM and the plain step list, checked THOSE, and then idl_method_id_step replaced both
+       after the check had passed. Every step member's joined list therefore entered the runtime unexamined:
+       js_step_def_check saw a list that no flow would ever rest against, and the one it would rest against was
+       seen by nothing. That is worse than an unchecked join, because the check that ran reads as if it had
+       covered it.
+       So the declaration is completed HERE, in the one function every member is built by, and the state where a
+       registered definition's declaration is later rewritten no longer exists to get wrong. */
+    if (decl) {
+        /* THE OWNERSHIP DECLARATION IS MANDATORY, asserted where the member enters the pool. It is the ONE
+           list: the fork clones through it, the teardown releases through it, and the teardown's assert folds
+           it to check that `release` left it alone. A member without one has a state whose values are invisible
+           to all three at once, which is not "it owns nothing" — a member that owns nothing writes a visit that
+           visits nothing, and that is one line. */
+        DCHECK(decl->visit != NULL,
+               "an IDL member declared a step body with no `visit` — the visit is the one list of what its "
+               "state owns, so without it a deep fork hands two flows one state and the teardown frees none "
+               "of it");
+        DCHECK(decl->algorithm != NULL && decl->steps != NULL,
+               "an IDL member declared a step body with no algorithm or no steps — a stage the driver asserts "
+               "against needs both halves, and half a declaration names a resume point nothing can report");
+        idl_def(idx)->size += decl->state_size;   /* after this machine's state AND its conversion frames */
+        /* THE MEMBER'S STAGES, JOINED TO THIS MACHINE'S TWO ENDS — the one place a member's declaration and its
+           definition are both in hand, so no member restates the prologue and none can index its own steps from
+           the wrong base. A label colliding across the join is caught by js_step_labels_check on the line
+           below, which is the first point the whole list exists. */
+        {
+            int n = 0, j;
+            const char **all;
+
+            while (decl->steps[n]) n++;
+            all = malloc(sizeof(*all) * (size_t)(IDL_STEP_FIRST + n + IDL_EPILOGUE_NSTEPS + 1));
+            CHECK(all != NULL, "idl: OOM joining a member's declared steps to the prologue's — a member whose "
+                               "stages cannot be named is a resume point nothing can check");
+            for (j = 0; j < IDL_STEP_FIRST; j++) all[j] = IDL_PROLOGUE_STEPS[j];
+            for (j = 0; j < n; j++) all[IDL_STEP_FIRST + j] = decl->steps[j];
+            /* §4.13.6 steps 3-4, which every member ends through — one stage per arm of its invoke's switch. */
+            for (j = 0; j < IDL_EPILOGUE_NSTEPS; j++) all[IDL_STEP_FIRST + n + j] = IDL_EPILOGUE_STEPS[j];
+            all[IDL_STEP_FIRST + n + IDL_EPILOGUE_NSTEPS] = NULL;
+            idl_member(idx)->steps  = all;
+            idl_member(idx)->nsteps = n;
+            idl_def(idx)->algorithm = decl->algorithm;
+            idl_def(idx)->steps     = all;
+        }
+    } else {
+        idl_def(idx)->algorithm = IDL_PLAIN_ALGORITHM;
+        idl_def(idx)->steps     = idl_plain_steps();
+    }
     {
         int sid = JS_RegisterStepDef(rt, idl_def(idx));
         idl_map_step(sid, idx);   /* the one place the runtime's id and this pool's index are both in hand */
@@ -2064,49 +2117,25 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     }
 }
 
+int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
+                       const IdlDictMember *members, int nmembers, IdlBody body, int magic)
+{
+    return idl_method_id_all(ctx, types, nargs, members, nmembers, body, NULL, magic);
+}
+
 int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
                        const IdlDictMember *members, int nmembers,
                        const IdlStepDecl *decl, int magic)
 {
-    int id = idl_method_id_dict(ctx, types, nargs, members, nmembers, NULL, magic);
-    int idx = g_n - 1;
-    /* the pool entry idl_method_id_dict just filled — a step member differs only in WHAT runs once the
-       conversions are done, and in needing room after this machine's state for that thing to run in. */
-    /* THE OWNERSHIP DECLARATION IS MANDATORY, asserted where the member enters the pool — the same place and
-       the same reason the algorithm and its steps are. It is the ONE list: the fork clones through it, the
-       teardown releases through it, and the teardown's assert folds it to check that `release` left it alone.
-       A member without one has a state whose values are invisible to all three at once, which is not "it owns
-       nothing" — a member that owns nothing writes a visit that visits nothing, and that is one line. */
-    DCHECK(decl->visit != NULL,
-           "an IDL member declared a step body with no `visit` — the visit is the one list of what its state "
-           "owns, so without it a deep fork hands two flows one state and the teardown frees none of it");
-    idl_member(idx)->step = decl;
-    idl_def(idx)->size += decl->state_size;   /* after this machine's state AND its conversion frames */
-    /* THE MEMBER'S STAGES, JOINED TO THIS MACHINE'S, ONTO THE DEFINITION THE DRIVER ALREADY ASSERTS ON. The
-       two lists are concatenated here — the one place a member's declaration and its definition are both in
-       hand — so no member restates the prologue and no member can index its own steps from the wrong base. */
-    DCHECK((decl->algorithm != NULL) == (decl->steps != NULL),
-           "an IDL member declared an algorithm with no steps, or steps belonging to no algorithm — a stage "
-           "the driver asserts against needs both halves, and half a declaration names a resume point nothing "
-           "can report");
-    if (decl->steps) {
-        int n = 0, k;
-        const char **all;
-        while (decl->steps[n]) n++;
-        all = malloc(sizeof(*all) * (size_t)(IDL_STEP_FIRST + n + IDL_EPILOGUE_NSTEPS + 1));
-        CHECK(all != NULL, "idl: OOM joining a member's declared steps to the prologue's — a member whose "
-                           "stages cannot be named is a resume point nothing can check");
-        for (k = 0; k < IDL_STEP_FIRST; k++) all[k] = IDL_PROLOGUE_STEPS[k];
-        for (k = 0; k < n; k++) all[IDL_STEP_FIRST + k] = decl->steps[k];
-        /* §4.13.6 steps 3-4, which every member ends through — one stage per arm of its invoke's switch. */
-        for (k = 0; k < IDL_EPILOGUE_NSTEPS; k++) all[IDL_STEP_FIRST + n + k] = IDL_EPILOGUE_STEPS[k];
-        all[IDL_STEP_FIRST + n + IDL_EPILOGUE_NSTEPS] = NULL;
-        idl_member(idx)->steps = all;
-        idl_member(idx)->nsteps = n;
-        idl_def(idx)->algorithm = decl->algorithm;
-        idl_def(idx)->steps = all;
-    }
-    return id;
+    /* A STEP MEMBER DIFFERS FROM A PLAIN ONE ONLY IN WHAT RUNS once the conversions are done, and in needing
+       room after this machine's state for that thing to run in — so it is the same builder, handed the
+       declaration instead of a body. Nothing is written to the pool entry AFTER it is built: the joined step
+       list and the algorithm it belongs to are part of the definition the runtime is handed, which is the only
+       way js_step_def_check can be asked about the list a flow will actually rest against. */
+    DCHECK(decl != NULL,
+           "an IDL member was declared as a step machine with no declaration — the state size, the ownership "
+           "list and the stages all come off it, so there is nothing to build a machine out of");
+    return idl_method_id_all(ctx, types, nargs, members, nmembers, NULL, decl, magic);
 }
 
 /* A SETTER THAT NAMES THE LAST DECLARATION MAY ONLY BE CALLED FROM A DECLARATION. All three of these

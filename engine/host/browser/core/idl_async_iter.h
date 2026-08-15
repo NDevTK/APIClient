@@ -149,8 +149,11 @@ typedef struct {
        and joined onto §3.7.10's member; `steps` is ONE list for the OTHER TWO, numbered from
        IDL_ASYNC_ITER_STEP_FIRST and joined onto §3.7.10.2's machine — one, because `next` and `return` share
        that machine and therefore share its step list, so their stages are numbered in one space and no two of
-       them may name the same step (idl_async_iter.c asserts that at the join, and quickjs.c's step_stage_check
-       asserts the round trip again at every rest).
+       them may name the same step. That last part is asserted where the JOINED list enters the runtime
+       (quickjs.c's js_step_labels_check, at JS_RegisterStepDef), over every stage rather than only the ones a
+       flow happens to park at — so a component's label colliding with Web IDL's here, or with the argument
+       prologue's and custom-element epilogue's that idl_args.c wraps around `init_steps`, is caught at the
+       declaration rather than by whichever build first runs a flow that rests there.
        NULL is for an algorithm that never rests at a step of its OWN: the File System Standard's
        initialization steps are one assignment and make no request, so the hosting stage is the only rest point
        there is. An algorithm that PARKS with no stage of its own is refused where it parks — its rest point

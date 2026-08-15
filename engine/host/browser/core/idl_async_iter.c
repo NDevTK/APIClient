@@ -695,39 +695,19 @@ static int js_idl_async_make(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 
 /* ---- declaration and per-realm install --------------------------------------------------------------------- */
 
-/* TWO STAGES MAY NOT NAME ONE STEP, asserted at the JOIN — which is where the two lists first stand beside each
-   other and therefore where a collision is BORN. quickjs.c's step_stage_check asserts the same round trip at
-   every rest, but only for the stages a flow happens to park at: a duplicate between this file's list and a
-   component's would sit there silently until the one flow that rests at it, and what it costs then is a resume
-   in a later build continuing at the FIRST of the two, which nothing downstream can tell from the right one. */
-static void ait_steps_distinct(const char *const *all, const char *iface)
-{
-#if APICLIENT_DEV
-    int i, k;
-
-    for (i = 0; all[i]; i++)
-        for (k = i + 1; all[k]; k++)
-            if (!strcmp(all[i], all[k])) {
-                char why[640];   /* the tail names what to fix; a truncated DFAIL loses it */
-
-                snprintf(why, sizeof why,
-                         "%s's asynchronous iteration declares the step \"%s\" at both stage %d and stage %d — "
-                         "a parked machine holds its LABEL, so a resume resolves that one label to two stages "
-                         "and continues at the first. Name the two steps apart: the component's stages are "
-                         "joined onto Web IDL's, so a component's label must name ITS standard's step",
-                         iface, all[i], i, k);
-                DFAIL(why);
-            }
-#else
-    (void)all; (void)iface;
-#endif
-}
-
 /* JOIN a component's own stage labels onto the hosting algorithm's — the one place a rest point inside a
    component's algorithm gets its number, so no component restates this file's stages and none can index its own
    from the wrong base. `own` is NULL for an algorithm that rests at no step of its own, which joins nothing.
-   OWNED by the caller; borrowed by the definitions it is handed to. */
-static const char **ait_join_steps(const char *const *base, const char *const *own, const char *iface)
+   OWNED by the caller; borrowed by the definitions it is handed to.
+   TWO STAGES MAY NOT NAME ONE STEP, and this file no longer asks that itself. It did — a pairwise walk over the
+   array below — and the check was in the right spirit and the wrong place twice over: it could only see the
+   half of the list it had built, so a component label colliding with the argument prologue's or the
+   custom-element epilogue's (which idl_args.c joins on AFTERWARDS, around the list this returns) was invisible
+   to it, and every other joiner in the tree would have had to grow a copy of the same loop. The question
+   belongs to the DEFINITION rather than to any joiner: js_step_labels_check now asks it of the whole list where
+   a definition enters the runtime, which is the one point every join's output has arrived and nothing can
+   bypass. */
+static const char **ait_join_steps(const char *const *base, const char *const *own)
 {
     int nb = 0, no = 0, k;
     const char **all;
@@ -740,7 +720,6 @@ static const char **ait_join_steps(const char *const *base, const char *const *o
     for (k = 0; k < nb; k++) all[k] = base[k];
     for (k = 0; k < no; k++) all[nb + k] = own[k];
     all[nb + no] = NULL;
-    ait_steps_distinct(all, iface);
     return all;
 }
 
@@ -776,8 +755,8 @@ int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops)
     /* THE COMPONENT'S STAGES, JOINED ONTO THE TWO MACHINES THAT HOST ITS ALGORITHMS, before either definition
        is registered — so the runtime's own declaration check (js_step_def_check, which refuses a definition
        whose labels argue from the page) sees the joined list rather than this file's half of it. */
-    f->steps = ait_join_steps(AIT_STEP_LABELS, ops->steps, ops->iface);
-    f->init_steps = ait_join_steps(AIM_STEP_LABELS, ops->init_steps, ops->iface);
+    f->steps = ait_join_steps(AIT_STEP_LABELS, ops->steps);
+    f->init_steps = ait_join_steps(AIM_STEP_LABELS, ops->init_steps);
 
     /* §2.5.10's END OF ITERATION, minted with the first declaration: agent-level, so every interface's
        algorithms speak the same marker and it belongs to no realm. */

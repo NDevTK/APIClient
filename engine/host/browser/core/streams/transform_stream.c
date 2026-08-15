@@ -439,13 +439,21 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             s->ctrl = JS_DupValue(ctx, hdr->this_val);
             s->ts = JS_DupValue(ctx, tc_of(s->ctrl)->stream);
         } else if (op == OP_FINISH_OK || op == OP_FINISH_ERR) {
+            /* THE ACCESSOR IS CALLED ONCE, OUTSIDE THE ASSERT, and that is not a style preference: tc_of
+               CAPTURES its record into the running flow's COW delta, and a DCHECK's condition is not evaluated
+               in release — so an accessor reached only from inside one is a delta entry the release build never
+               makes. It survived here only by the accident that the line after it called tc_of again, which is
+               one edit away from not being true. The function's own `t`/`c` hold the answer rather than a local
+               pair, because a shadowing declaration would leave the outer ones stale at the same time. */
             s->ctrl = JS_DupValue(ctx, JS_StepClosureData(hdr, 0));
-            DCHECK(tc_of(s->ctrl) != NULL, "a §6 finish reaction captured something that is not a controller");
-            s->ts = JS_DupValue(ctx, tc_of(s->ctrl)->stream);
+            c = tc_of(s->ctrl);
+            DCHECK(c != NULL, "a §6 finish reaction captured something that is not a controller");
+            s->ts = JS_DupValue(ctx, c->stream);
         } else {
             s->ts = JS_DupValue(ctx, JS_StepClosureData(hdr, 0));
-            DCHECK(ts_of(s->ts) != NULL, "a §6 algorithm captured something that is not a TransformStream");
-            s->ctrl = JS_DupValue(ctx, ts_of(s->ts)->controller);
+            t = ts_of(s->ts);
+            DCHECK(t != NULL, "a §6 algorithm captured something that is not a TransformStream");
+            s->ctrl = JS_DupValue(ctx, t->controller);
         }
         t = ts_of(s->ts);
 
