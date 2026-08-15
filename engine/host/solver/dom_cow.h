@@ -56,8 +56,15 @@ uint64_t dom_cow_version(void);
    tree ONLY through these, never through raw lxb_dom_* mutators + a separate capture, so a DOM write cannot
    bypass time-travel capture (the browser engineer's "one place to reason about"). This is the fork-free answer
    to unbypassable capture: rather than fork Lexbor to hook its internal write primitives, we OWN the mutation
-   API on top of Lexbor and funnel every write through here — enforced structurally by engine/check_dom_chokepoint.mjs,
-   which fails the build if a browser component names a raw Lexbor mutator at all. */
+   API on top of Lexbor and funnel every write through here.
+   THIS IS NOW A CONVENTION, NOT AN ENFORCEMENT, and saying so is the point. The line here used to claim it was
+   "enforced structurally by engine/check_dom_chokepoint.mjs, which fails the build if a browser component names
+   a raw Lexbor mutator at all" — that gate was deleted, and a header that goes on citing a removed check is
+   worse than one that admits the gap, because it is what a reader consults INSTEAD of looking. An audit read
+   every browser component and found no bypass today: the raw insert/remove/destroy mutators appear only in
+   dom_cow.c, and the raw attribute mutators only in attr_list.c, the declared raw layer beneath this one, whose
+   single exported entry is the documented parse boundary. That is a measurement of one moment, not a property
+   of the build — the first component to reach past this file will do so silently. */
 /* VALUE AND TAINT ARE ONE WRITE, and the identity that keys both is resolved HERE. They were two calls every
    caller made in agreement over a key each computed for itself: a caller that made one and not the other left a
    stale taint on a fresh value or dropped the provenance of a stored source, and `toggleAttribute(name, true)`
