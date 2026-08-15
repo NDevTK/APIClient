@@ -38,6 +38,7 @@
 #include "core/dom/attr_list.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
+#include "core/dom/document_metadata.h"
 #include "solver/world.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
@@ -1085,10 +1086,12 @@ void document_set_url(JSContext *ctx, const char *url)
     snprintf(d->url, sizeof d->url, "%s", url);
 }
 
-/* HTML's CURRENT DOCUMENT READINESS, and the reason it is not simply `readyState`. §3.1.1 declares readyState
-   a READONLY attribute; this engine has it as a data property, so a page can assign it — and the load
-   lifecycle and §8.1.7.3 step 3's render-blocked test both READ it, which would let
-   `document.readyState = "complete"` skip a document's DOMContentLoaded and unblock its rendering.
+/* HTML §3.1.5's CURRENT DOCUMENT READINESS, which is the internal slot and NOT the member. `readyState` is a
+   READONLY accessor on Document.prototype (core/dom/document_metadata.c) that RETURNS this, so there is one
+   statement of the fact. It was a data property on the `document` object, RE-WRITTEN here every time the
+   readiness moved — two statements with a window between them, and one a page could assign: the load lifecycle
+   and §8.1.7.3 step 3's render-blocked test both read the readiness, so `document.readyState = "complete"` let
+   a page skip its own DOMContentLoaded and unblock its rendering.
  *
  * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the same shape §8.9's map of animation frame callbacks and
  * §7.4.6.3's has-been-revealed use, and for the same two reasons: the record is unreachable from the page, so
@@ -1099,19 +1102,38 @@ void document_set_url(JSContext *ctx, const char *url)
  * navigable.c's realm sweep), which is one document dropping the key the others still read through. */
 static int g_ready_slot = -1;
 
+/* HTML §3.1.5's THREE READINESS VALUES, in the order the enum declares them — the strings `readyState` answers
+   with and the only place they are written down. */
+static const char *const DOC_READINESS[3] = { "loading", "interactive", "complete" };
+
+static int document_readiness(JSContext *ctx);
+
+/* HTML §3.1.5's UPDATE THE CURRENT DOCUMENT READINESS, all four of its steps.
+   STEP 1 IS NOT BOOKKEEPING: "if document's current document readiness equals readinessValue, then return" is
+   what stops a `readystatechange` firing for a readiness that did not change, and it is also what makes step 4
+   below reachable only where there IS a document — a realm's record is built at "loading" before its Document
+   exists, and a re-statement of "loading" for it is exactly the no-change case.
+   STEP 4 FIRES `readystatechange` AT THE DOCUMENT, which nothing did: §3.1.1 declares `onreadystatechange` and
+   the corpus registers it, so a page waiting for "interactive" through the event rather than through the
+   property waited for ever. Step 3's load timing info is HONESTLY ABSENT — its two fields belong to
+   §Navigation-Timing's `PerformanceNavigationTiming`, which this build does not have, so there is nothing here
+   to write them onto and no member that could read them back. */
 static void document_set_ready(JSContext *ctx, int stage)
 {
     Document *d = doc_here(ctx);
-    static const char *const NAMES[3] = { "loading", "interactive", "complete" };
     JSValue rec;
 
     DCHECK(stage >= 0 && stage <= 2, "a document readiness HTML does not define");
+    if (document_readiness(ctx) == stage) return;                                 /* STEP 1 */
     rec = realm_value_get(ctx, g_ready_slot);
     DCHECK(JS_IsObject(rec), "a realm answered for its document readiness with no record");
-    JS_SetPropertyStr(ctx, rec, "stage", JS_NewInt32(ctx, stage));
+    JS_SetPropertyStr(ctx, rec, "stage", JS_NewInt32(ctx, stage));                /* STEP 2 */
     JS_FreeValue(ctx, rec);
-    if (JS_IsObject(d->doc_obj))   /* `readyState` REFLECTS it, for the page that missed the event */
-        JS_SetPropertyStr(ctx, d->doc_obj, "readyState", JS_NewString(ctx, NAMES[stage]));
+    DCHECK(JS_IsObject(d->doc_obj),
+           "a document's readiness moved before its `document` object existed — §3.1.5 step 4 fires "
+           "`readystatechange` AT the document, so there would be no target for the event the page listens for");
+    event_target_fire(ctx, d->doc_obj,                                            /* STEP 4 */
+                      event_new(ctx, "readystatechange", /*bubbles*/ false, /*cancelable*/ false), JS_UNDEFINED);
 }
 
 /* This document's readiness: 0 loading, 1 interactive, 2 complete. */
@@ -1127,6 +1149,20 @@ static int document_readiness(JSContext *ctx)
     JS_FreeValue(ctx, rec);
     DCHECK(r >= 0 && r <= 2, "a document's readiness record holds a stage HTML does not define");
     return r;
+}
+
+/* §3.1.5's readyState getter steps — "return this's current document readiness" — as a fact about ONE DOCUMENT,
+   which is what the member's RECEIVER names.
+   §3.1.5 states the default in the same paragraph: "Each Document has a current document readiness, a string,
+   initially 'complete'", and only a Document that the create-and-initialize algorithm produced is reset to
+   "loading" before any script can see it. In this engine that algorithm is document_install, and the document
+   it installs is the realm's ACTIVE one — so a createHTMLDocument, a DOMParser parse or an XHR responseXML
+   answers "complete", which is both the standard's default and the truth about a tree that has no parser. */
+const char *document_readiness_of(const lxb_dom_node_t *doc)
+{
+    JSContext *realm = document_active_realm_of(doc);
+
+    return realm ? DOC_READINESS[document_readiness(realm)] : DOC_READINESS[2];
 }
 
 /* HTML §7.5.9's PAGE SHOWING, which is a Document's and lives where its readiness does.
@@ -1435,6 +1471,245 @@ static JSValue js_doc_strings(JSContext *ctx, JSValueConst this_val, int magic)
     }
 }
 
+/* §3.1.5's `title` AND §3.2.6.4's `dir`, AND WHY NEITHER IS A STORED STRING.
+ *
+ * `title` was one: install read `lxb_html_document_title` once and wrote the answer onto the `document` object.
+ * That is wrong in all three of the ways §3.1.5's algorithm is an algorithm. It is wrong in TIME — the getter is
+ * defined as a walk of the tree AS IT IS, so `document.querySelector("title").textContent = "x"` did not change
+ * `document.title`, and neither did inserting a `<title>` into a document that had none. It is wrong in SUBJECT
+ * — a value on one object cannot answer for a second Document. And it has no SETTER at all, so
+ * `document.title = "x"` stored a string where the standard CREATES A TITLE ELEMENT AND APPENDS IT TO THE HEAD:
+ * a page that sets its title and then reads its own `<head>` markup back saw markup it never got.
+ *
+ * `dir` is §3.2.6.4's reflection of the html element's `dir` content attribute LIMITED TO ONLY KNOWN VALUES,
+ * which is what makes the getter a filter rather than a read: `<html dir=sideways>` answers the empty string,
+ * and so does a document with no html element. */
+
+/* The first ELEMENT of `root`'s subtree, in TREE ORDER, whose namespace is `ns` and whose qualified name is
+   `name` — the lookup "the title element of a document is the first title element in the document" is. */
+static lxb_dom_node_t *doc_first_in_tree(lxb_dom_node_t *root, lxb_ns_id_t ns, const char *name)
+{
+    lxb_dom_node_t *n;
+    size_t nlen = strlen(name);
+
+    for (n = root ? node_next_in(root, root) : NULL; n; n = node_next_in(n, root)) {
+        size_t qn = 0;
+        const lxb_char_t *q;
+        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != ns) continue;
+        q = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &qn);
+        if (q && qn == nlen && !memcmp(q, name, qn)) return n;
+    }
+    return NULL;
+}
+
+/* The same in ONE generation — §3.1.5's SVG arm says "the first SVG title element that is a CHILD OF the
+   document element", which is a different lookup and not a narrowing of the one above. */
+static lxb_dom_node_t *doc_first_child_ns(lxb_dom_node_t *parent, lxb_ns_id_t ns, const char *name)
+{
+    lxb_dom_node_t *n;
+    size_t nlen = strlen(name);
+
+    for (n = parent ? parent->first_child : NULL; n; n = n->next) {
+        size_t qn = 0;
+        const lxb_char_t *q;
+        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != ns) continue;
+        q = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &qn);
+        if (q && qn == nlen && !memcmp(q, name, qn)) return n;
+    }
+    return NULL;
+}
+
+/* §3.1.5's `title` GETTER, whose two remaining steps are DOM §4.4's CHILD TEXT CONTENT ("the concatenation of
+   the data of all the Text node CHILDREN of node, in tree order" — children, never descendants) and
+   Infra's STRIP AND COLLAPSE ASCII WHITESPACE (every run of TAB/LF/FF/CR/SPACE becomes one U+0020, and the
+   leading and trailing ones go). Both are done into one buffer because a collapse is a copy either way.
+   Returns an owned JS string; `el` may be NULL, which is the "or the empty string if the title element is null"
+   arm rather than a guard. */
+static JSValue doc_child_text_stripped(JSContext *ctx, lxb_dom_node_t *el)
+{
+    lxb_dom_node_t *n;
+    char *acc = NULL;
+    size_t len = 0;
+    bool pending_space = false, any = false;
+    JSValue out;
+
+    for (n = el ? el->first_child : NULL; n; n = n->next) {
+        const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
+        size_t dn, i;
+        const lxb_char_t *d;
+        if (n->type != LXB_DOM_NODE_TYPE_TEXT) continue;
+        d = cd->data.data;
+        dn = cd->data.length;
+        if (!d) continue;
+        for (i = 0; i < dn; i++) {
+            char c = (char)d[i];
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r') {
+                pending_space = any;      /* leading whitespace is dropped, not collapsed to a space */
+                continue;
+            }
+            {
+                char *grown = realloc(acc, len + 2);
+                CHECK(grown != NULL, "document.title: OOM collapsing the title's text");
+                acc = grown;
+            }
+            if (pending_space) { acc[len++] = ' '; pending_space = false; }
+            acc[len++] = c;
+            any = true;
+        }
+    }
+    out = JS_NewStringLen(ctx, acc ? acc : "", len);
+    free(acc);
+    CHECK(!JS_IsException(out), "document.title: the title could not be allocated");
+    return out;
+}
+
+/* magic 0 = title, 1 = dir, 2 = defaultView. */
+enum { DOC_TITLE = 0, DOC_DIR, DOC_DEFAULT_VIEW };
+
+static JSValue js_doc_html_members(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    Document *d = doc_receiver(ctx, this_val);
+    lxb_dom_node_t *doc, *de;
+
+    if (!d) return JS_EXCEPTION;
+    /* §7.2.2's defaultView getter steps: "If this's browsing context is null, then return null. Return this's
+       browsing context's WindowProxy object." A §4.5 Document has no browsing context and so no view — which is
+       the same `proxy` absence `location` answers null for, asked of the same field. */
+    if (magic == DOC_DEFAULT_VIEW)
+        return JS_IsUndefined(d->proxy) ? JS_NULL : JS_DupValue(ctx, d->proxy);
+
+    doc = lxb_dom_interface_node(d->dom);
+    de = document_document_element_of(doc);
+    if (magic == DOC_DIR) {
+        /* §3.2.6.4: the html element's `dir`, LIMITED TO ONLY KNOWN VALUES — an unknown or absent one is the
+           empty string, and so is a document with no html element. The comparison is ASCII case-insensitive
+           because `dir` is an enumerated attribute, whose keywords are matched that way. */
+        static const char *const KNOWN[3] = { "ltr", "rtl", "auto" };
+        size_t vl = 0;
+        const lxb_char_t *v;
+        int i;
+
+        if (!de || de->ns != LXB_NS_HTML) return JS_NewStringLen(ctx, "", 0);
+        v = lxb_dom_element_get_attribute(lxb_dom_interface_element(de), (const lxb_char_t *)"dir", 3, &vl);
+        for (i = 0; v && i < 3; i++) {
+            size_t k, kl = strlen(KNOWN[i]);
+            if (vl != kl) continue;
+            for (k = 0; k < kl; k++) {
+                char c = (char)v[k];
+                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                if (c != KNOWN[i][k]) break;
+            }
+            if (k == kl) return JS_NewString(ctx, KNOWN[i]);
+        }
+        return JS_NewStringLen(ctx, "", 0);
+    }
+    DCHECK(magic == DOC_TITLE, "a Document HTML-member getter was declared with a magic this table does not name");
+    /* §3.1.5 STEP 1: an SVG document element answers from the first SVG `title` that is a CHILD of it. */
+    if (de && de->ns == LXB_NS_SVG)
+        return doc_child_text_stripped(ctx, doc_first_child_ns(de, LXB_NS_SVG, "title"));
+    /* STEP 2: otherwise the TITLE ELEMENT, which is the first `title` in the document in tree order. */
+    return doc_child_text_stripped(ctx, doc_first_in_tree(doc, LXB_NS_HTML, "title"));
+}
+
+/* DOM §4.4's STRING REPLACE ALL, which is where both of §3.1.5's setter branches end: remove every child
+   through the per-flow chokepoint, then append ONE Text node — and only if the string is not empty, because
+   "string replace all" with the empty string adds no node and a page reading `firstChild` can tell. */
+static void doc_string_replace_all(JSContext *ctx, lxb_dom_node_t *el, const char *s, size_t len)
+{
+    lxb_dom_node_t *n, *next;
+
+    (void)ctx;
+    for (n = el->first_child; n; n = next) {
+        next = n->next;
+        dom_cow_remove_child(n);
+    }
+    if (len) {
+        lxb_dom_text_t *t = lxb_dom_document_create_text_node(el->owner_document,
+                                                              (const lxb_char_t *)s, len);
+        CHECK(t != NULL, "document.title=: the title's Text node could not be allocated");
+        dom_cow_note_created(lxb_dom_interface_node(t));
+        dom_cow_append_child(el, lxb_dom_interface_node(t));
+    }
+}
+
+/* §3.1.5's `title` SETTER and §3.2.6.4's `dir` SETTER — "the steps corresponding to the FIRST MATCHING
+   CONDITION", in the standard's own order, with its own "Otherwise: do nothing" as the last arm rather than as
+   a guard in front. magic 0 = title, 1 = dir. */
+static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    Document *d = doc_receiver(ctx, this_val);
+    lxb_dom_node_t *doc, *de, *el;
+    const char *s;
+    size_t len = 0;
+
+    if (!d) return JS_EXCEPTION;
+    DCHECK(JS_IsString(val) || concolic_is(val),
+           "a Document string setter reached its body unconverted — the IDL declaration is what converts it, "
+           "and running the page's toString from here is the drive-to-completion the flow machinery avoids");
+    doc = lxb_dom_interface_node(d->dom);
+    de = document_document_element_of(doc);
+    /* UNKNOWN EXTERNAL INPUT has no bytes: the SHAPE is what the tree carries, exactly as it is for
+       `textContent =`, so a title set from attacker input reads back as the source it came from. */
+    if (concolic_is(val)) {
+        s = concolic_shape_c(val);
+        if (!s) s = "";
+        len = strlen(s);
+    } else {
+        s = JS_ToCStringLen(ctx, &len, val);
+        if (!s) return JS_EXCEPTION;
+    }
+
+    if (magic == DOC_DIR) {
+        /* §3.2.6.4: "If there is no such element, then the attribute must return the empty string and DO
+           NOTHING ON SETTING." A reflection limited to known values does not validate what it is given — the
+           filter is the getter's — so the content attribute takes the string as written. */
+        if (de && de->ns == LXB_NS_HTML)
+            dom_cow_set_attribute(lxb_dom_interface_element(de), "dir", s, len, JS_UNDEFINED);
+        goto done;
+    }
+    DCHECK(magic == DOC_TITLE, "a Document string setter was declared with a magic this table does not name");
+    if (de && de->ns == LXB_NS_SVG) {
+        /* The SVG arm: reuse the first SVG `title` child, or CREATE one and insert it as the document
+           element's FIRST child — the position is the standard's, and an append would put the title after the
+           graphics that a renderer reads it in front of. */
+        el = doc_first_child_ns(de, LXB_NS_SVG, "title");
+        if (!el) {
+            lxb_dom_element_t *made =
+                lxb_dom_element_create(lxb_dom_interface_document(d->dom),
+                                       (const lxb_char_t *)"title", 5,
+                                       (const lxb_char_t *)"http://www.w3.org/2000/svg", 26,
+                                       NULL, 0, NULL, 0, false);
+            CHECK(made != NULL, "document.title=: the SVG title element could not be created");
+            el = lxb_dom_interface_node(made);
+            dom_cow_note_created(el);
+            if (de->first_child) dom_cow_insert_before(de->first_child, el);
+            else dom_cow_append_child(de, el);
+        }
+        doc_string_replace_all(ctx, el, s, len);
+        goto done;
+    }
+    if (de && de->ns == LXB_NS_HTML) {
+        lxb_dom_node_t *head = doc_child_named(de, "head", NULL);
+        el = doc_first_in_tree(doc, LXB_NS_HTML, "title");
+        /* "If the title element is null AND the head element is null, then return" — a `<frameset>` document
+           is exactly that, and a title it is given is dropped rather than given a head to live in. */
+        if (!el && !head) goto done;
+        if (!el) {
+            lxb_dom_element_t *made = lxb_dom_document_create_element(lxb_dom_interface_document(d->dom),
+                                                                      (const lxb_char_t *)"title", 5, NULL);
+            CHECK(made != NULL, "document.title=: the title element could not be created");
+            el = lxb_dom_interface_node(made);
+            dom_cow_note_created(el);
+            dom_cow_append_child(head, el);
+        }
+        doc_string_replace_all(ctx, el, s, len);
+    }
+    /* "Otherwise: do nothing" — a document element in neither namespace, or none at all. */
+done:
+    if (!concolic_is(val)) JS_FreeCString(ctx, s);
+    return JS_UNDEFINED;
+}
+
 /* §4.5's TWO TRAVERSER FACTORIES. `createNodeIterator(root, whatToShow, filter)` and `createTreeWalker(...)`
    are the same five-line construction with a different object at the end, so they are one body with a magic —
    and neither runs a line of the page's code once its arguments are converted, which is why they are plain C
@@ -1498,7 +1773,8 @@ static JSClassID g_document_class;   /* §3.1.1's prototype slot, per realm */
 static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment = -1,
            g_id_create_fragment = -1, g_id_create_element_ns = -1, g_id_create_iterator = -1,
            g_id_create_walker = -1, g_id_create_range = -1, g_id_create_event = -1,
-           g_id_create_cdata = -1, g_id_create_pi = -1, g_id_doc_ctor = -1, g_id_adopt_node = -1;
+           g_id_create_cdata = -1, g_id_create_pi = -1, g_id_doc_ctor = -1, g_id_adopt_node = -1,
+           g_id_title_set = -1, g_id_dir_set = -1;
 
 static void document_declare_members(JSContext *ctx)
 {
@@ -1556,6 +1832,11 @@ static void document_declare_members(JSContext *ctx)
         g_id_adopt_node = idl_method_id(ctx, ONE_NODE, 1, js_doc_adopt_node, 0);
         idl_iface_brand(node_class_id());
     }
+    /* §3.1.1's `[CEReactions] attribute DOMString title` and `[CEReactions] attribute DOMString dir`. The
+       `[CEReactions]` half is the args machine's own epilogue, which drains the reactions the element creation
+       and the insertions below enqueue before the setter returns. */
+    g_id_title_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_doc_set_html_member, DOC_TITLE);
+    g_id_dir_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_doc_set_html_member, DOC_DIR);
 }
 
 static void document_install_members(JSContext *ctx, JSValueConst proto)
@@ -1605,6 +1886,15 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "charset",        js_doc_strings, 3, -1);
     idl_install_accessor(ctx, proto, "inputEncoding",  js_doc_strings, 3, -1);
     idl_install_accessor(ctx, proto, "implementation", js_doc_implementation, 0, -1);
+    /* §3.1.5's `title`, §3.2.6.4's `dir` and §7.2.2's `defaultView` — the first two READ-WRITE, which is what
+       makes them accessors rather than a value: `title` was a string latched at install with no setter at all,
+       so `document.title = "x"` stored a property where the standard creates a `<title>` element. */
+    idl_install_accessor(ctx, proto, "title",       js_doc_html_members, DOC_TITLE, g_id_title_set);
+    idl_install_accessor(ctx, proto, "dir",         js_doc_html_members, DOC_DIR,   g_id_dir_set);
+    idl_install_accessor(ctx, proto, "defaultView", js_doc_html_members, DOC_DEFAULT_VIEW, -1);
+    /* §3.1.4's resource metadata members and §3.1.5's `readyState` — their own component, because `cookie` and
+       `referrer` are ATTACKER SOURCES with their own browser delivery and a cookie store behind them. */
+    document_metadata_install(ctx, proto);
 }
 
 /* HTML §7.2.6's container for THIS document, from BOTH halves of the policy list.
@@ -1756,6 +2046,10 @@ void document_init(JSContext *ctx)
        that move the readiness ("the end" sets it, unloading clears it) — so it is declared beside it. */
     g_showing_slot = realm_value_declare(ctx, "HTML §7.5.9 page showing");
     document_declare_members(ctx);
+    /* §3.1.4's resource metadata members declare their own setter and their own per-realm cookie store, and
+       document_metadata_install runs from document_install_proto below — so the declaration is paired with it
+       HERE for the reason page_visibility_init's is, rather than copied into each host's own init list. */
+    document_metadata_init(ctx);
     document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
     shadow_root_init(ctx);         /* §4.8, whose prototype chains to §4.7's — declared after it */
     slot_init(ctx);                /* §4.2.2's slots, which only exist inside a §4.8 tree */
@@ -2078,25 +2372,15 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        see js_doc_tree and js_doc_strings — because a value latched onto one object is wrong in TIME (each is
        defined as a lookup in the tree AS IT IS) and wrong in SUBJECT (it cannot answer for a second document). */
 
-    /* 3.1.1 title: the document's title, which Lexbor already computed from the tree — a pure read, no page
-       code, and the real answer rather than a placeholder. */
-    {
-        size_t n = 0;
-        const lxb_char_t *t = lxb_html_document_title(dom, &n);
-        JS_SetPropertyStr(ctx, doc, "title",
-                          t ? JS_NewStringLen(ctx, (const char *)t, n) : JS_NewString(ctx, ""));
-    }
-
-    /* INPUT. A cookie jar this engine was not handed and a referrer the visitor arrived with: unknown, not
-       empty. `document.cookie` is how a session reaches a request URL, so "" would make every cookie-gated
-       path unreachable — the same mistake as a concrete `undefined` for absent app state. */
-    JS_SetPropertyStr(ctx, doc, "cookie",   concolic_new(ctx, "{document.cookie}",   "document.cookie",   JS_UNDEFINED));
-    JS_SetPropertyStr(ctx, doc, "referrer", concolic_new(ctx, "{document.referrer}", "document.referrer", JS_UNDEFINED));
+    /* `title`, `cookie`, `referrer` and `readyState` were SET HERE TOO, as own data properties — and the first
+       three of them are worse than the tree members above, because each is an ALGORITHM and not a lookup:
+       §3.1.5's title getter walks the tree and its setter creates an element, and `cookie` is an ATTACKER SOURCE
+       whose whole point is that it is minted PER READ so a candidate run can substitute it. They are accessors
+       on Document.prototype now — `title` and `dir` beside the other tree members below, the three resource
+       metadata members in core/dom/document_metadata.c. */
 
     /* §4.4 a Document is an EventTarget through Node, so addEventListener comes down the prototype chain now
-       rather than being installed here. "loading" until its scripts have run. */
-    /* The readiness is set through its ONE writer below, once `doc_obj` is in place, so the internal slot and
-       the reflecting `readyState` cannot disagree — which is the whole reason the slot exists. */
+       rather than being installed here. */
 
     JS_SetPropertyStr(ctx, (JSValue)global, "document", JS_DupValue(ctx, doc));
     /* HELD, not borrowed: `doc` is this function's own reference and the global got a DUP of it, so the
@@ -2105,9 +2389,14 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        window — alive: JS_FreeRuntime's gc_obj_list walk counted 751 surviving objects, one per object in the
        page, from these two lines. */
     d->doc_obj = doc;
-    /* HTML: a Document's readiness starts at "loading" — its parser has not finished. Written through the one
-       writer so the record and the reflecting `readyState` cannot disagree. */
-    document_set_ready(ctx, 0);
+    /* HTML §3.1.5: a Document created by "create and initialize a Document object" is at "loading" before any
+       script can observe it — which the REALM's record already says, because document_install_proto builds it
+       there. This was a document_set_ready(ctx, 0) call, and with §3.1.5 step 1 in place it is provably a
+       no-op; the fact it was stating is stated here as the two-sided assertion instead. */
+    DCHECK(document_readiness(ctx) == 0,
+           "a Document was installed into a realm whose readiness had already moved — the readiness record is "
+           "built at \"loading\" with the realm and only §3.1.5's update writes it, so a realm that is past "
+           "\"loading\" before it has a Document has run a lifecycle for a document it did not have");
     d->win_obj = JS_DupValue(ctx, global);
     /* HTML §7.4.1's FIRST SESSION HISTORY ENTRY for this navigable — the entry §7.4.5 populates and §7.4.6
        activates for a document a load produced, reached directly because the load is what built this document
