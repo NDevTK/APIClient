@@ -209,6 +209,13 @@ int permission_state_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const Per
  * then its own question, and which of them a parked flow is at cannot live in a C local. It starts at zero and
  * an answered request leaves it at zero. THE CALLER STILL OWES THIS ONE A STAGE OF ITS OWN: a stage holding
  * this and any other request would restart one of the two phases on every re-entry.
+ *   AND THIS ALGORITHM'S OWN PHASE IS NUMBERED ABOVE §5.1's WHOLE SPACE, because it DELEGATES into that chain
+ * through this same byte. Sharing a value with it does not merely confuse a label: §5.1 parks at its second
+ * question, this algorithm reads that value as its own, step 1 is abandoned, the driver's answer to §5.1's
+ * question is consumed by step 3's ask — a real arm, in range, recorded under the other question's key — and
+ * step 2 never gets to return the decision the user had already taken, so step 7 overwrites it. A delegating
+ * chain's phases begin where the delegated one's stop; see the enum in permission_store.c, and see
+ * quickjs-step.h's `fork_ask_key` for the assert that now catches the general shape of this at the seam.
  *   Returns JS_STEP_FORK (the caller returns it and is re-entered at this same call site) or 0 with *out set to
  * PERMISSION_GRANTED or PERMISSION_DENIED — never PERMISSION_PROMPT, which is what "returns either granted or
  * denied" means and what the assert at the end of it states. */

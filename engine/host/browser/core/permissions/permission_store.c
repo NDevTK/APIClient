@@ -578,8 +578,11 @@ JSValue permission_state(JSContext *ctx, const PermissionDescriptor *din)
 }
 
 /* THE CHAIN'S TWO QUESTIONS, as the caller's phase byte spells them. Zero is "ask the first", which is what a
-   zeroed byte already reads as and what every answered chain leaves behind. */
-enum { PS_ASK_DEFAULT = 0, PS_ASK_WHICH };
+   zeroed byte already reads as and what every answered chain leaves behind.
+     PS_ASK_N IS THE WHOLE OF THE SPACE THIS CHAIN OCCUPIES while it is outstanding, and it is exported to §5.2
+   below rather than left implicit: an algorithm that DELEGATES to this one shares the caller's one byte with
+   it, so its own phases have to start where these stop. */
+enum { PS_ASK_DEFAULT = 0, PS_ASK_WHICH, PS_ASK_N };
 #define PS_OP_DEFAULT "Permissions §5.1 step 8 (is the user's decision this feature's default permission state)"
 #define PS_OP_WHICH   "Permissions §5.1 step 8 (which of the two non-default permission states it is)"
 
@@ -636,11 +639,25 @@ int permission_state_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const Per
 
 /* ---- §5.2's REQUEST -----------------------------------------------------------------------------------------
  *
- * See permission_store.h for the algorithm and for why step 3 is a fork and step 7 is what ends it. Two phases,
- * because two questions are asked in sequence and which of them a parked flow is at cannot live in a C local:
- * §5.1's chain (which is itself two, separated by ITS own phase byte, kept here in the same byte because the
- * two chains are never outstanding at the same moment) and then step 3's own. */
-enum { PR_ASK_STATE = 0, PR_ASK_EXPRESS };
+ * See permission_store.h for the algorithm and for why step 3 is a fork and step 7 is what ends it. The caller's
+ * one byte carries BOTH chains — §5.1's (itself two questions) and then step 3's own — because which of them a
+ * parked flow is at cannot live in a C local. They are not "never outstanding at the same moment": step 1 IS
+ * §5.1's chain, so while that chain is parked this algorithm is parked inside it, which is exactly why the two
+ * cannot share a value. */
+/* §5.2's OWN QUESTION IS NUMBERED ABOVE §5.1's WHOLE PHASE SPACE, and that is not tidiness — a shared value
+ * space here makes two different outstanding questions the same byte. §5.1's chain parks at PS_ASK_WHICH while
+ * its second question is in flight; numbering step 3's express-permission question 1 as well made that value
+ * mean both, and the re-entry then read "§5.1 is parked at its second question" as "§5.2 is at its own". Three
+ * things follow from that one re-entry and every one of them is silent:
+ *   — step 1's chain is ABANDONED mid-question, so the state §5.1 was resolving is never produced;
+ *   — the answer the driver is holding for §5.1's "which of the two non-default states" is consumed by step 3's
+ *     ask, which is a real arm, in range, and recorded in the flow's decision vector under the OTHER question's
+ *     key — one question's world filed as another's;
+ *   — step 2 never runs, so a permission this flow's world says the user already granted or denied is asked
+ *     for again and OVERWRITTEN by step 7's store write.
+ * The byte holds ONE chain's phase at a time, §5.1 leaves it at zero when it answers, and a delegating chain's
+ * phases therefore begin at PS_ASK_N. quickjs-step.h's fork_ask_key is what now crashes on the general case. */
+enum { PR_ASK_EXPRESS = PS_ASK_N };
 #define PR_OP_EXPRESS "Permissions §5.2 step 3 (ask the user for express permission for the calling algorithm " \
                       "to use the powerful feature described by descriptor)"
 
@@ -649,12 +666,20 @@ int permission_request_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const P
     int rc, arm = 0, current;
 
     DCHECK(g_ready, "§5.2 was asked to request a permission before permission_store_init built the model");
-    if (*phase == PR_ASK_STATE) {
+    DCHECK(*phase < PS_ASK_N || *phase == PR_ASK_EXPRESS,
+           "§5.2 was re-entered on a phase neither it nor §5.1's chain parks in — the byte is the CALLER's and "
+           "a stage that holds this request and any other one would hand this algorithm the other's phase");
+    /* §5.1's CHAIN STILL HOLDS THE BYTE while any of its own phases is the value in it. */
+    if (*phase < PS_ASK_N) {
         /* STEP 1: "Let current state be the descriptor's permission state." The read may itself FORK — the
            user's decision is unknown until something has learned it — and §5.1's chain owns the phase byte
            while it does. */
         rc = permission_state_run(ctx, h, phase, d, &current);
         if (rc) return rc;
+        DCHECK(*phase == PS_ASK_DEFAULT,
+               "§5.1's chain delivered an answer without releasing the caller's byte — an answered chain leaves "
+               "it at zero, so a byte still holding one of that chain's phases means a question is outstanding "
+               "that this algorithm is about to step over");
         /* STEP 2: "If current state is not prompt, return current state and abort these steps." A decision
            already taken is not asked again, which is what makes a second requestPermission() in the same flow
            answer the first one's arm rather than forking a world that contradicts it. */
@@ -676,7 +701,7 @@ int permission_request_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const P
                answer is the one a user agent gives a request nobody answered: §5.2 returns granted or denied,
                never prompt, and a prompt nobody responded to is not permission given. */
             JS_FreeValue(ctx, over);
-            *phase = PR_ASK_STATE;
+            *phase = PS_ASK_DEFAULT;       /* the chain is finished; the byte is back to zero for the next one */
             *out = PERMISSION_DENIED;
             return 0;
         }
@@ -688,7 +713,7 @@ int permission_request_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, const P
     /* STEPS 5-7: the key is this agent's one key (asserted at the store touch), and the entry is set — which is
        what turns the answer from a decision this flow took into a fact every later read in it answers with. */
     permission_store_set(ctx, d, current);
-    *phase = PR_ASK_STATE;                 /* the chain is finished; the byte is ready for the next question */
+    *phase = PS_ASK_DEFAULT;               /* the chain is finished; the byte is ready for the next question */
     DCHECK(current == PERMISSION_GRANTED || current == PERMISSION_DENIED,
            "§5.2 answered with something other than granted or denied — the algorithm's own contract is those "
            "two, and a `prompt` here is a request that decided nothing being reported as one that did");
