@@ -262,16 +262,39 @@ int64_t flow_service_notch(const Flow *f);
 Flow *flow_worst(const Flow *exclude);
 
 /* THIS FLOW ANSWERED FLOW_STEP_OWED. It stays in the frontier at its own weight and keeps every work item it
-   holds — nothing is dropped, removed or reordered; it is simply not PICKED again for the rest of this slice. */
+   holds — nothing is dropped, removed or reordered; it is simply not PICKED again until the HOST does something
+   that could have answered it. Asserts that the flow was not already marked, which is the two-sided half of
+   that sentence: a marked flow is out of the pick, so a second report means its mark was laundered. */
 void  flow_set_host_owed(Flow *f);
 
-/* EVERY MEMBER IS ASKABLE AGAIN — called at the top of every slice, and NOWHERE ELSE, which is exactly what
-   makes the mark safe. Nothing INSIDE a slice can answer a host-owed flow: a fetch reply, a document script's
-   text, a synchronous request's answer, a routed record and a cross-agent operation all arrive through the
-   host, which runs only between slices. So a mark cannot outlive the slice that made it, and the worst a
-   mistaken one can cost is that the flow is re-asked one quantum later — never that it is skipped, which is
-   what §scheduler's razor forbids. */
-void  flow_clear_host_owed(void);
+/* HOW MANY MEMBERS HAVE REPORTED THEMSELVES HOST-OWED — the scheduler stating a fact about itself, beside the
+   census's `blocked` (which asks the REGISTER whether the host owes this flow anything). The two answer
+   different questions and the gap between them is the diagnostic: `blocked: 512, owed: 59` is a frontier whose
+   marks are being cleared faster than the sweep can lay them down, which is exactly the state that made a
+   fully-blocked document swap COW deltas 1.76 million times instead of reporting STALLED. Equal numbers on a
+   stalled frontier is the healthy reading. */
+int   flow_host_owed_count(void);
+
+/* THE HOST ANSWERED THIS FLOW, so it is askable again. ONE CLEAR PER EVENT, ON THE FLOW THE EVENT REACHED —
+ * a reply provided into its register, an answer delivered to its request, a record or an operation the host
+ * attached to it. Those are the only things that can change a host-owed flow's answer, and each of them names
+ * the flow it changes.
+ *
+ * IT USED TO BE CLEARED AT THE TOP OF EVERY SLICE, on the reasoning that "between two slices the host ran".
+ * That is true of a slice that ended because the engine had nothing left to do, and FALSE of one that ended on
+ * its CPU QUANTUM — the cooperative yield is about thread-sharing, and the host it hands the thread to has
+ * nothing to answer. So the mark was being laundered by the one slice exit that means nothing: measured on a
+ * document whose entire frontier was blocked (512 of 512), a slice marked the ~59 flows it had time for, the
+ * quantum cut it short, and the next slice re-admitted all of them. The sweep never reached the end of the
+ * frontier, the STALL was unreachable BY CONSTRUCTION, and the engine swapped COW deltas 1.76 million times
+ * with not one flow finishing. Tying the lifetime to the EVENT rather than to the slice is what makes "every
+ * member is waiting on the host" a state the scheduler can actually arrive at. */
+void  flow_clear_host_owed(Flow *f);
+
+/* …AND THE ONE EVENT THAT NAMES NO FLOW: an external document script's text is the DOCUMENT's, so the flow
+   that drains that reply fills a slot every other flow parked on the same script index was waiting for. It is
+   the only unblocking that happens inside a slice, which is why it is the only clear that is not per flow. */
+void  flow_clear_host_owed_all(void);
 
 /* A counter bumped on every frontier membership change (add/remove). The value-yield recomputes its rival
    only when this changes (or the running flow switches), never per-opcode. */

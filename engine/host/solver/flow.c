@@ -408,14 +408,44 @@ static unsigned g_owed_gen = 1;   /* NEVER 0: a fresh (calloc'd) flow must read 
 
 static int flow_host_owed(const Flow *f) { return f->owed_gen == g_owed_gen; }
 
+int flow_host_owed_count(void) {
+    int n = 0;
+    for (int i = 0; i < g_flows_n; i++) if (flow_host_owed(g_flows[i])) n++;
+    return n;
+}
+
 void flow_set_host_owed(Flow *f) {
     DCHECK(f != NULL, "a host-owed report arrived with no flow — the scheduler marks the flow it just stepped, "
                       "so this is a report about nobody, and the flow that made it is picked again immediately");
+    /* A FLOW CANNOT ANSWER HOST-OWED TWICE WITH NO HOST EVENT IN BETWEEN, AND THAT IS THE WHOLE MECHANISM SAID
+       AS A CHECK. A marked flow is out of the pick (flow_pick skips it as a candidate and refuses it as the
+       seed), so the only way it can be stepped again — and therefore the only way it can report again — is if
+       something CLEARED its mark. The clears are the host's own events, and nothing else may spell one.
+       IT IS THE ASSERTION THIS SUBSYSTEM WAS MISSING WHEN IT WAS MEASURED. The clear used to run at the top of
+       every slice, on the reasoning that "between two slices the host ran" — true of a slice that ended because
+       the engine had nothing left to do, and FALSE of one that ended because its CPU quantum expired, which
+       hands the thread to a host with nothing to answer. On a document whose whole frontier was blocked (512 of
+       512), a slice marked the ~59 flows it had time for, the quantum cut it short, and the next slice
+       re-admitted all of them: the sweep could never reach the end of the frontier, so the STALL was
+       unreachable by construction and the engine swapped COW deltas 1.76 MILLION times without one flow
+       finishing. Nothing said so — the frontier looked busy, and `blocked: 512` had to be read off a census
+       and reasoned about. This line states it at the moment it happens, and names the laundering. */
+    DCHECK(!flow_host_owed(f),
+           "a flow reported host-owed AGAIN with no host event in between — a marked flow is out of the pick, "
+           "so it can only have been stepped because its mark was cleared by something that cannot have "
+           "answered it. The frontier can then never be fully marked, the STALL is unreachable, and the "
+           "scheduler re-asks members it has already asked for as long as the run lasts");
     f->owed_gen = g_owed_gen;
 }
 
-void flow_clear_host_owed(void) {
-    /* THE WRAP IS HANDLED, NOT ARGUED AWAY. Four billion clears is a slice boundary each and it is not
+/* THE HOST ANSWERED THIS FLOW — see flow.h for why the clear is per flow and per EVENT. */
+void flow_clear_host_owed(Flow *f) {
+    DCHECK(f != NULL, "a host event cleared the mark of no flow at all");
+    f->owed_gen = 0;   /* never equal to g_owed_gen, which starts at 1 and only ever moves forward */
+}
+
+void flow_clear_host_owed_all(void) {
+    /* THE WRAP IS HANDLED, NOT ARGUED AWAY. Four billion clears is a document-wide event each and it is not
        impossible, and a stamp that aliased the new generation would read as owed on a flow that is runnable —
        an exclusion lasting until the next clear, which is precisely the "skips ANY flow" §scheduler's razor
        forbids. Resetting the stamps costs one walk per wrap. */

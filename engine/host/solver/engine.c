@@ -352,6 +352,12 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
             pending_set(p, PEND_COMPLETION, JS_NewInt32(ctx, completion));
             pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
             JS_FreeValue(ctx, p);
+            /* AND THE FLOW IS ASKABLE AGAIN. This is the event a flow parked on a synchronous request is
+               waiting for — the one thing that can change the answer it gave the scheduler — so the mark comes
+               off HERE, on the flow the answer reached, and not on a slice boundary that means nothing to it
+               (flow.h). Without this line the answer would sit on the register while the pick kept skipping the
+               flow that asked for it. */
+            flow_clear_host_owed(f);
             return 1;
         }
     }
@@ -576,6 +582,11 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
         f->deliver = strdup(record);
         f->deliver_origin = strdup(sender_origin);
         CHECK(f->deliver && f->deliver_origin, "engine: OOM attaching a routed record to a flow");
+        /* AND IT IS ASKABLE AGAIN. A flow that reported host-owed is out of the pick until the host does
+           something for it, and this IS that something: the record is work only the trusted zone could hand it
+           (flow.h). A delivery attached to a flow the scheduler will not pick is a message the document never
+           receives, which is indistinguishable from a page with no listener. */
+        flow_clear_host_owed(f);
     }
 }
 
@@ -744,6 +755,11 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
         f->perform = strdup(record);
         f->answer_token = strdup(token);
         CHECK(f->perform && f->answer_token, "engine: OOM attaching a cross-agent operation to a flow");
+        /* AND IT IS ASKABLE AGAIN — the same sentence as the delivery above, and here it is load-bearing for
+           engine_set_referenced: a referenced document's last timeline reports host-owed INSTEAD of finishing,
+           precisely so it is waiting when an operation arrives. This is the arrival. Without the clear, the
+           flow that was kept alive to answer peers would never be picked to answer one. */
+        flow_clear_host_owed(f);
     }
 }
 
@@ -839,6 +855,11 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
                 }
                 pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
                 pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
+                /* AND THIS FLOW IS ASKABLE AGAIN — the reply it parked on is on its register now, which is the
+                   event its host-owed mark was waiting for and the only kind of thing that can change the
+                   answer it gave the scheduler (flow.h). Cleared per flow, here, because this is where the
+                   host reached that flow. */
+                flow_clear_host_owed(f);
                 n++;
             }
             JS_FreeValue(ctx, p);
@@ -905,6 +926,13 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                 CHECK(g_sess_bodies[si], "engine: OOM storing an external document script");
                 if (body) JS_FreeCString(ctx, body);
                 JS_FreeValue(ctx, bv);
+                /* THE ONE UNBLOCKING THAT HAPPENS INSIDE A SLICE, AND THE ONE CLEAR THAT NAMES NO FLOW. This
+                   text is the DOCUMENT's, not this flow's: every flow parked at the same script index was
+                   waiting for exactly this slot, and their own register entries are not what changed. So every
+                   member is askable again — the whole-frontier clear exists for this case and for no other
+                   (flow.h). Inside the `if`, because only the flow that actually FILLS the slot has unblocked
+                   anyone; a second drainer of the same URL changes nothing. */
+                flow_clear_host_owed_all();
             }
         } else if (kind == FLOW_PENDING_SCRIPT) {
             /* the reply is PROGRAM: it joins this flow's script sequence, and the one BFS runs it */
@@ -2137,7 +2165,16 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
 static int (*g_stall_hook)(void);
 void engine_set_stall_hook(int (*owed)(void)) { g_stall_hook = owed; }
 
-void engine_set_referenced(int referenced) { g_referenced = referenced; }
+void engine_set_referenced(int referenced) {
+    g_referenced = referenced;
+    /* AND EVERY MEMBER IS ASKABLE AGAIN, because this flag is one of the answers. A flow with nothing left to
+       run reports host-owed INSTEAD of finishing while this is set (flow_step's last branch), so clearing it
+       means those flows can now FINISH — a change to what they would answer, made by the host, naming no flow.
+       That is exactly the whole-frontier clear (flow.h). Unconditional rather than on the 1→0 edge: a mark
+       cleared a step early costs one step, and a mark kept after the fact it rested on has gone costs the flow
+       its ending. */
+    flow_clear_host_owed_all();
+}
 
 static double g_yield_floor = -1.0 / 0.0;
 void engine_set_yield_floor(double w) { g_yield_floor = w; }
@@ -2209,13 +2246,19 @@ static int engine_sched_slice(void) {
         engine_session_close();
         return ENGINE_STEP_DONE;
     }
-    /* EVERY MEMBER IS ASKABLE AGAIN, AND THIS IS THE ONLY PLACE THAT SAYS SO. Between two slices the HOST ran:
-       it provided fetch replies, filled document script slots, answered synchronous requests and routed records
-       onto the flows — every one of them exactly what a flow that reported itself host-owed is waiting for, and
-       none of them reachable from inside a slice. So the mark cannot outlive the slice that made it, the first
-       pick of every slice is identical to an unfiltered one, and the worst a mistaken mark can cost is that its
-       flow is re-asked one quantum later. Never that it is skipped, which is what the razor forbids. */
-    flow_clear_host_owed();
+    /* NOTHING IS RE-ADMITTED HERE, AND THE LINE THAT DID IT IS DELETED. A `flow_clear_host_owed()` stood at the
+       top of every slice, reasoned as "between two slices the HOST ran". That is true of a slice that ended
+       because the engine had nothing left to do — and FALSE of one that ended on its CPU QUANTUM, which is
+       thread-sharing and hands the thread to a host with nothing to answer. Since the quantum is the exit a
+       busy slice always takes, the mark was being laundered by the one exit that means nothing.
+       WHAT IT COST, MEASURED: a document whose entire frontier was blocked on the host (512 of 512) marked the
+       ~59 flows one 12 ms slice had time for, was cut short, and re-admitted all of them at the next slice. The
+       sweep could never reach the end of the frontier, so "every member is waiting" — the STALL — was
+       unreachable BY CONSTRUCTION, and the engine swapped COW deltas 1.76 MILLION times with not one flow
+       finishing, not one candidate found and the heap unchanged. The marks now live until the HOST does
+       something that could have answered them, and each of those events clears the flow it reached
+       (engine_provide, engine_host_answer, engine_deliver, engine_perform, and the shared document-script slot
+       inside flow_drain_pending). */
     for (;;) {
         /* WFQ: highest value-of-information among the members that can still make progress — a fresh fork
            (UCB) can preempt. The filter is the ONE order with the flows that have told the scheduler they are
@@ -2701,14 +2744,21 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
             {
                 ColdCensus c;
                 cold_census(&c);
-                printf("@COLD {\"flows\":%ld,\"framed\":%ld,\"blocked\":%ld,"
+                /* `owed` BESIDE `blocked`, because the two answer different questions and the GAP between them
+                   is the diagnostic. `blocked` asks each flow's REGISTER whether the host owes it anything;
+                   `owed` counts the flows that have told the SCHEDULER they cannot progress, which is what the
+                   pick actually reads. A fully blocked frontier reporting `blocked: 512, owed: 59` is one whose
+                   marks are being cleared faster than the sweep can lay them down — the state that made this
+                   document swap COW deltas 1.76 million times instead of reporting STALLED, and which had to be
+                   inferred from a switch count because no number named it. On a healthy stall the two agree. */
+                printf("@COLD {\"flows\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
                        "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                        "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
                        "\"dynKiB\":%ld,\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
                        "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
                        "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                        "\"sharedKiB\":%ld,\"stepMachines\":%d}\n",
-                       c.flows, c.framed, c.blocked,
+                       c.flows, c.framed, c.blocked, flow_host_owed_count(),
                        c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                        c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
                        c.pend_bytes / 1024, c.dyn_bytes / 1024, c.misc_bytes / 1024,
