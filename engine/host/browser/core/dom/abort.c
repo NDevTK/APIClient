@@ -40,6 +40,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/idl_slots.h"
+#include "core/idl_args.h"
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "solver/decide.h"
@@ -1094,6 +1095,11 @@ void abort_install_protos(JSContext *ctx)
        anything at all does, and `abort_signal_new` is reachable from §5.4 the moment this returns. */
     sig_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(sig_p), "the AbortSignal.prototype allocation failed");
+    /* Web IDL §3.7.3: the interface prototype object carries the interface's identifier as its @@toStringTag,
+       which is what makes `Object.prototype.toString.call(controller.signal)` answer "[object AbortSignal]" —
+       the brand check a page performs without `instanceof`, and the one wpt asserts about every interface it
+       touches. These two were the last interface prototypes in the engine without it. */
+    idl_interface_tag(ctx, sig_p, "AbortSignal");
     /* §3.2: AbortSignal INHERITS EventTarget, so `addEventListener` and the `onabort` handler attribute are
        reached through the chain rather than copied onto each signal. */
     event_target_chain(ctx, sig_p);   /* §3.2: `AbortSignal : EventTarget` */
@@ -1115,6 +1121,7 @@ void abort_install_protos(JSContext *ctx)
 
     ctrl_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(ctrl_p), "the AbortController.prototype allocation failed");
+    idl_interface_tag(ctx, ctrl_p, "AbortController");
     {
         JSAtom a = JS_NewAtom(ctx, "signal");
         JS_DefinePropertyGetSet(ctx, ctrl_p, a,

@@ -14,6 +14,17 @@
  * whose member name cannot be resolved statically is reported UNRESOLVED with its file and line rather than
  * being dropped (a gap that is not there) or counted (a gap that is filled and is not).
  *
+ * AND EACH MEMBER IS FILED UNDER THE INTERFACE ITS TARGET IS, not under the file it was written in. The audit
+ * was FILE-granular one level below the construct scan: a row credited every member any of its files installed,
+ * so html_form.c's `value` — installed on HTMLTextAreaElement.prototype — counted for HTMLInputElement, and
+ * element_internals.c could not be named in a row at all because its `validity`, `labels` and `form` land on
+ * ElementInternals. Web IDL §3.7.3 already makes every interface prototype object carry the interface's
+ * identifier as its @@toStringTag, so the fact is in the components; idl_installed.mjs solves which object each
+ * install lands on and reads the tag off it. A row's FILE LIST is therefore no longer what decides the count —
+ * it is a CROSS-CHECK, and a row naming a file whose members all land on other interfaces now says so. An
+ * install whose target's interface cannot be decided is UNATTRIBUTED: named with file, line and member, never
+ * credited back to its file, which is the false COMPLETE this exists to remove.
+ *
  * IT ALSO GENERATES THE ONE THING THE IDL — AND ONLY THE IDL — CAN ANSWER: WHICH GLOBAL NAMES THE PLATFORM OWNS.
  * absent.c has to tell a Web API this engine has not built (whose ReferenceError is the forcing function that
  * names the next component) from server-injected app state (which is unknown INPUT and must fork). That question
@@ -39,9 +50,15 @@ const BROWSER = join(HOST, "browser");
 
 // interface -> the component .c that implements it, or the componentS: one interface's surface can be split
 // across components when the spec puts unrelated capabilities on one object. Window is the case that forces it —
-// its members are installed by window.c (browsing context), document.c, location.c, fetch.c and
-// event_target.c — and scanning only one of them reported every member the others install as ABSENT, which is
-// the audit lying in the direction that gets a real gap ignored.
+// its members are installed by window.c (browsing context), document.c, location.c, fetch.c and event_target.c.
+// SINCE ATTRIBUTION, THIS LIST NO LONGER DECIDES WHAT COUNTS: a member belongs to the interface its target is
+// tagged with, wherever that is written, so a missing file can no longer make a shipping member read ABSENT.
+// What the list still says is which components this interface is BELIEVED to be built out of, and the audit
+// checks that belief: a file here whose members all land on other interfaces is reported (CROSS-CHECK), and the
+// UNRESOLVED and UNATTRIBUTED constructs of these files are the ones reported against this row. The many
+// comments below explaining why a base's or a mixin's file had to be named are now history rather than
+// mechanism — inheritance is read from the IDL, and a mixin's members are tagged with the interface they are
+// installed on.
 /* Every HTML interface is built on the same four files: its own table in html_element.c, the reflection and
    attribute machinery in element.c, the Node base, and EventTarget. */
 const HTML_BASE = ["core/html/html_element.c", "core/dom/element.c", "core/dom/node.c",
@@ -204,9 +221,10 @@ const INTERFACES = {
      table declares it, and not because the string appears. §4.10.22's `submit`/`requestSubmit`/`elements` are
      html_form.c's, §4.10.5.4's `value`/`checked`/`files` are html_form.c's and input_value.c's, and
      §4.10.21.3's `willValidate` and `setCustomValidity` are constraint_validation.c's. element_internals.c is
-     NOT named: it installs `validity`, `validationMessage`, `checkValidity`, `labels` and `form` on
-     ElementInternals.prototype, which is a different interface — naming it here would credit HTMLInputElement
-     with five members that are not on it, which is the file-granular version of the same lie. */
+     STILL not named, and the reason is no longer that it would lie: `validity`, `validationMessage`,
+     `checkValidity`, `labels` and `form` land on ElementInternals.prototype, attribution files them there, and
+     naming the file here would now change nothing but the cross-check. The row says what this interface is
+     BUILT OUT OF, and ElementInternals is not part of it. */
   HTMLFormElement:     [...HTML_BASE, "core/html/html_form.c"],
   HTMLInputElement:    [...HTML_BASE, "core/html/html_form.c", "core/html/input_value.c",
                         "core/html/input_picker.c", "core/html/constraint_validation.c"],
@@ -303,6 +321,33 @@ function members(name) {
    installs on it), and because a macro or a table is followed to the header it is defined in. */
 const env = loadEnvironment(HOST);
 
+/* EVERY INSTALL IN THE PROGRAM, READ ONCE AND FILED UNDER THE INTERFACE ITS TARGET IS — not under the file it
+   was written in. Which interface a member belongs to is a fact about the OBJECT it is installed on, so the
+   scan is over the whole corpus and the row's file list stops being "which files to believe": it becomes a
+   CROSS-CHECK, and a row naming a file whose members all land on other interfaces says so. */
+const world = installedMembers([...env.sources.keys()].filter((p) => p.endsWith(".c")), env);
+const installedBy = new Map(), stubbedBy = new Map(), landsIn = new Map();
+const unattributed = [];
+const addTo = (map, iface, name) => {
+  if (!map.has(iface)) map.set(iface, new Set());
+  map.get(iface).add(name);
+};
+for (const r of world.records) {
+  if (!r.ifaces.length) { unattributed.push(r); continue; }
+  for (const iface of r.ifaces) {
+    addTo(r.stubbed ? stubbedBy : installedBy, iface, r.name);
+    addTo(landsIn, r.file, iface);
+  }
+}
+/* A member installed on a BASE prototype really is reachable on everything that inherits it, which is what the
+   hand-written file lists were spelling out one row at a time — `getBoundingClientRect` on Element.prototype is
+   an HTMLInputElement member because HTMLInputElement inherits Element, not because a row named element.c. */
+const chainOf = (iface) => {
+  const out = [], seen = new Set();
+  for (let n = iface; n && !seen.has(n); n = inheritanceOf.get(n)) { seen.add(n); out.push(n); }
+  return out;
+};
+
 let totalMissing = 0;
 /* The DISTINCT names, because the per-interface counts legitimately repeat an inherited gap: HTMLElement's
    getBoundingClientRect is absent on every one of the twelve HTML interfaces that inherit it, and one
@@ -320,10 +365,34 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
   }
   if (missing.length === paths.length) { console.warn(`[idl-audit] ${iface}: component ${file} not found`); continue; }
   if (missing.length) console.warn(`[idl-audit] ${iface}: ${missing.join(", ")} not found — audited without it`);
-  /* WHAT THE COMPONENT INSTALLS, from the install constructs — see engine/idl_installed.mjs. A member wired to
-     js_noop is STUBBED (present but does nothing — the banned lazy stub the audit exists to expose), and an
-     install whose member name cannot be decided statically is UNRESOLVED rather than assumed either way. */
-  const { installed, stubbed, unresolved, offInstaller, excluded } = installedMembers(present, env);
+  /* WHAT THIS INTERFACE HAS, from the install constructs and the interface each install TARGET is — see
+     engine/idl_installed.mjs. Its own members plus everything it INHERITS, because a member on a base
+     prototype really is reachable on a derived object. A member wired to js_noop is STUBBED (present but does
+     nothing — the banned lazy stub the audit exists to expose), and an install whose member name cannot be
+     decided statically is UNRESOLVED rather than assumed either way. */
+  const chain = chainOf(iface);
+  const installed = new Set(), stubbed = new Set();
+  for (const base of chain) {
+    for (const n of installedBy.get(base) || []) installed.add(n);
+    for (const n of stubbedBy.get(base) || []) stubbed.add(n);
+  }
+  const inRow = (list) => list.filter((x) => present.includes(x.file));
+  const unresolved = inRow(world.unresolved);
+  const offInstaller = inRow(world.offInstaller);
+  const excluded = world.excluded;
+  /* THE ROW IS NOW A CROSS-CHECK. It no longer decides what counts — it says which components this interface is
+     believed to be built out of, and attribution answers whether that is true. A file whose members all land on
+     other interfaces is a row that was wrong (or a component that moved), and it used to be invisible. */
+  const strangers = present.filter((p) => {
+    const lands = landsIn.get(p);
+    return !lands || ![...lands].some((n) => chain.includes(n));
+  }).map((p) => {
+    const lands = [...(landsIn.get(p) || [])];
+    return `${p.replace(BROWSER + "/", "")} (${lands.length ? "installs for " + lands.join(", ") : "installs nothing this can attribute"})`;
+  });
+  /* An install in one of this row's files whose target's interface could not be decided. Neither credited to
+     the row (the false COMPLETE this attribution removes) nor dropped — named, with its member and line. */
+  const rowUnattributed = inRow(unattributed);
   // The g_opaque-as-prototype fallback is a BANNED shrug: it silently serves EVERY unbuilt member as an opaque
   // value, hiding a missing browser feature (it is not our choice which features to omit — a browser has them
   // all). A component must implement its real surface and DFAIL loud on an unbuilt member, never opaque-shrug it.
@@ -363,6 +432,13 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
                                        `${condInstalled.map((e) => e.name).join(", ")} is declared excluded and ` +
                                        `installed anyway`);
   if (unresolved.length) parts.push(`UNRESOLVED ${unresolved.length}`);
+  if (rowUnattributed.length) {
+    const named = rowUnattributed.filter((r) => spec.includes(r.name));
+    parts.push(`UNATTRIBUTED ${rowUnattributed.length}${named.length ? `, ${named.length} of them members of this ` +
+      `interface — ${[...new Set(named.map((r) => `${r.name} at ${r.file.replace(BROWSER + "/", "")}:${r.line}`))].join(", ")}` : ""}`);
+  }
+  if (strangers.length) parts.push(`CROSS-CHECK ${strangers.length} of this row's files install nothing ` +
+                                   `${iface} or its bases have — ${strangers.join("; ")}`);
   if (bannedShrug) parts.push(`BANNED g_opaque-prototype shrug (silently serves unbuilt members as opaque — remove it, build the features or DFAIL)`);
   if (parts.length) console.log(`[idl-audit] ${iface} (${file}): ${parts.join(" | ")}`);
   else console.log(`[idl-audit] ${iface}: complete`);
@@ -380,6 +456,54 @@ if (unresolvedAll.size) {
   for (const u of unresolvedAll.values())
     console.log(`[idl-audit]   ${u.file.replace(BROWSER + "/", "")}:${u.line}  ${u.form}(… ${u.expr} …)`);
 }
+/* The same constructs in components no row names. The scan is over the whole program now, so these exist and
+   are counted; hiding them behind "no row asked" would be the audit choosing what to know about itself. */
+const elsewhere = world.unresolved.filter((u) => !unresolvedAll.has(`${u.file}:${u.line}:${u.expr}`));
+if (elsewhere.length) {
+  const byFile = new Map();
+  for (const u of elsewhere) byFile.set(u.file, (byFile.get(u.file) || 0) + 1);
+  console.log(`[idl-audit] ${elsewhere.length} more unresolved install construct(s) in components no row ` +
+              `names: ${[...byFile].sort((a, b) => b[1] - a[1])
+                .map(([f, n]) => `${f.replace(BROWSER + "/", "")}×${n}`).join(", ")}`);
+}
+
+/* THE OTHER HALF OF THE AUDIT'S GAP REPORT ON ITSELF — an install whose member name IS decided but whose
+   TARGET's interface is not. It is the same rule one level down: counted, it credits a member to whichever row
+   happened to name the file (the file-granular lie); dropped, it opens a gap that is filled. So it is named,
+   grouped by the file that wrote it, and the work is either to give the prototype its §3.7.3 tag or to teach
+   this detector the construct that carries the object. */
+if (unattributed.length) {
+  const byFile = new Map();
+  for (const r of unattributed) {
+    if (!byFile.has(r.file)) byFile.set(r.file, []);
+    byFile.get(r.file).push(r);
+  }
+  console.log(`[idl-audit] ${unattributed.length} installed member(s) in ${byFile.size} file(s) could not be ` +
+              `attributed to an interface — neither credited to their file nor dropped:`);
+  for (const [f, rs] of [...byFile].sort((a, b) => b[1].length - a[1].length)) {
+    const why = [...new Set(rs.map((r) => r.why || (r.candidates.length ? `one of ${r.candidates.join("/")}` : "?")))];
+    console.log(`[idl-audit]   ${f.replace(BROWSER + "/", "")}: ${rs.length} — ` +
+                `${rs.map((r) => `${r.name}@${r.line}`).join(", ")}  [${why.join(" | ")}]`);
+  }
+}
+/* THE TAG READ BACK AGAINST THE CORPUS. A tag is a hand-written string, so it can name an interface Web IDL
+   does not have — a typo, a rename, or a class string the spec states in prose without an interface behind it.
+   Reading it one way only would make that silent, and the whole point of reading a declaration is that reality
+   can contradict it. */
+const tagged = new Set([...installedBy.keys(), ...stubbedBy.keys()]);
+const unknownTags = [...tagged].filter((n) => !byName.has(n)).sort();
+if (unknownTags.length)
+  console.log(`[idl-audit] ${unknownTags.length} interface tag(s) name something the IDL corpus does not ` +
+              `declare — ${unknownTags.join(", ")}`);
+for (const t of env.tagIssues)
+  console.log(`[idl-audit] ${t.file.replace(BROWSER + "/", "")}:${t.line}  ${t.form}(… ${t.expr} …) — the ` +
+              `interface this tags cannot be decided statically, so nothing installed on it is attributed`);
+for (const c of env.tagChecks)
+  console.log(`[idl-audit] ${c.file.replace(BROWSER + "/", "")}:${c.line}  ` + (c.kind === "contradicted"
+    ? `CONTRADICTED INTERFACE IDENTITY — §3.7.1's interface object is built for ${c.ifaces.join("/")} over a ` +
+      `prototype §3.7.3 tags ${c.have.join("/")}; one of the two names the wrong interface`
+    : `the prototype §3.7.1's ${c.ifaces.join("/")} interface object is built over reaches no interface tag ` +
+      `from here — this detector could not follow the object, so its members are unattributed`));
 
 /* ---------------------------------------------------------------------------------------------------------
  * THE PLATFORM SURFACE — every global name a browser exposes on Window, straight out of the IDL.

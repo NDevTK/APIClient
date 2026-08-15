@@ -42,6 +42,25 @@
  * with the IDL installer, which is what makes the global a target; the fact reaches `fetch_install`,
  * `document_install` and `node_install_interface_ctor` through the calls that hand the global to them, and it
  * reaches a listener record through nothing, because nothing ever installs a member on one.
+ *
+ * AND WHICH INTERFACE THAT TARGET IS, which is the same question one level down. Reading the install construct
+ * fixed WHAT is installed and left WHERE untouched: the audit was FILE-granular, so a row credited every member
+ * any of its files installed, and html_form.c's `value` — installed on HTMLTextAreaElement.prototype — counted
+ * for HTMLInputElement. That is a false COMPLETE, which HIDES a gap rather than burying it in noise. So a
+ * member is attributed to the interface its TARGET is, read out of Web IDL §3.7.3's @@toStringTag that the
+ * component already installs on every interface prototype object (`idl_interface_tag`) and §3.7.3's [Global]
+ * statement for the object a [Global] interface puts its members on directly (`idl_global_object`). A target
+ * this cannot decide is UNATTRIBUTED — named with its file, line and member, never credited to its file, which
+ * is the fallback the whole mechanism exists to remove.
+ *
+ * WHAT IS STILL COARSER THAN THE INTERFACE, so that nobody reads a silence as an answer: a shared installer
+ * selecting a SUBSET of its names from a parameter. `event_target_install_handlers(ctx, target, EH_GLOBAL)`
+ * installs the ninety handler attributes whose mask bit the caller asked for, and this reads the whole table
+ * and attributes all ninety to every prototype any caller hands it — the same over-approximation the
+ * file-granular audit made, no worse and no better, because the guard is a `continue` at the top of the loop
+ * rather than a condition over the site, which is what guardAt() reads. It is honest on the corpus as it stands (a name
+ * over-credited to a prototype is only a false COMPLETE when the IDL puts that name on that interface, and the
+ * masks and the mixins agree today) and it is the next thing to make exact.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
@@ -543,9 +562,39 @@ const ENTRY_RE = /\b(JS_C(?:FUNC|GETSET)\w*_DEF|JS_PROP_\w+_DEF|JS_ALIAS\w*_DEF|
 const EXCLUDED_FORM = { fn: "idl_members_excluded", iface: 2, table: 3, why: 5 };
 
 const TABLE_FORMS = [
-  { declare: "element_declare_reflections", install: "element_install_reflections", arg: 1, field: "idl" },
-  { declare: "byte_reader_declare", install: "byte_reader_install", arg: 1, via: "readers", field: "name" },
+  { declare: "element_declare_reflections", install: "element_install_reflections", arg: 1, field: "idl",
+    target: 1, handle: 2 },
+  { declare: "byte_reader_declare", install: "byte_reader_install", arg: 1, via: "readers", field: "name",
+    target: 1, handle: 2 },
 ];
+
+/* ---- which INTERFACE an object is ------------------------------------------------------------------------ */
+
+/* THE MEMBER IS THE INTERFACE'S, NOT THE FILE'S. Reading installation out of the install construct fixed WHAT
+   is installed and left WHERE untouched: the audit credited every member any of a row's files installed to that
+   row's interface, so html_form.c's `value` — installed on HTMLTextAreaElement.prototype — counted for
+   HTMLInputElement, and element_internals.c could not be named in any row at all because its `validity`,
+   `labels` and `form` land on ElementInternals. A false ABSENT buries a real gap in noise; a false COMPLETE
+   HIDES one, which is strictly worse.
+   The interface-scoped fact is already in the components, because Web IDL §3.7.3 makes every interface
+   prototype object carry an @@toStringTag whose value is the interface's identifier — `idl_interface_tag(ctx,
+   proto, "Element")` is that member, installed because the spec says so and not for this auditor's benefit.
+   §3.7.3's [Global] rule puts a [Global] interface's members on the global OBJECT instead, which is an instance
+   and therefore carries no tag of its own — the statement for it is already in the code and needs no second
+   spelling: `JS_SetGlobalClass(ctx, g_window_class)` says the global IS that class, and the class's prototype
+   slot holds the object window.c tagged "Window". Without that edge every member of the largest interface in
+   the engine — `fetch`, `location`, `setTimeout`, the ninety handler attributes — would be unattributed.
+   Two more forms carry the fact without stating it: `idl_interface_object(ctx, "Response", proto)` builds
+   §3.7.1's interface OBJECT — where the STATIC members go — for a named interface, and `JS_SetConstructor(ctx,
+   ctor, proto)` says two objects are the two halves of one interface. Neither is read as a NAME: they LINK the
+   two objects, so the ctor's statics are attributed through the prototype's tag, and the name
+   idl_interface_object was given is then a CHECK against it (see `tagChecks`) rather than a second source of
+   truth that could disagree in silence. */
+const IFACE_SEEDS = [
+  { fn: "idl_interface_tag",  obj: 1, iface: 2 },
+];
+const IFACE_OBJECT = { fn: "idl_interface_object", iface: 1, obj: 2 };
+const CTOR_LINK = { fn: "JS_SetConstructor", ctor: 1, proto: 2 };
 
 /* ---- the scan ------------------------------------------------------------------------------------------- */
 
@@ -618,22 +667,49 @@ function functions(masked) {
    `JSAtom a = JS_NewAtom(ctx, "aborted"), r = JS_NewAtom(ctx, "reason");` is two initialisations and reading it
    as one gave `a` a value with `r`'s whole declarator glued to the end of it. Every assignment to an identifier
    is kept, so a name built two ways resolves to both or to nothing. */
-function localAssignments(body) {
+/* EVERY ASSIGNMENT WITH ITS OFFSET, because a variable is not one object. `element_internals_install_protos`
+   spells `proto` three times over — ElementInternals.prototype, then CustomStateSet.prototype, then
+   ValidityState.prototype — and one node per NAME made those one object carrying three interface tags, which
+   credits every member of each to all three. That is the file-granular lie one level further down, so a
+   variable is keyed by the ASSIGNMENT that produced the value: a use at offset X belongs to the last definition
+   at or before X (version -1 is the value the variable arrived with, which for a parameter is the caller's). */
+function localDefs(body) {
   const map = new Map();
   /* Statements at ANY depth — a `{ … }` block inside a function is still this function's code, and counting
      braces hid html_element.c's `JSAtom a = JS_NewAtom(ctx, "content")` inside the block that installs it. */
-  for (const stmt of splitTop(body, ";", false))
+  const stmts = splitTop(body, ";", false);
+  let stmtAt = 0;
+  for (const stmt of stmts) {
     /* The declarator list, split on commas — but NOT when the statement is an aggregate initialiser, whose
        commas separate ELEMENTS. Braces are not counted here either: a statement that opens a block carries an
        unmatched `{`, and counting it hid the second declarator of `JSAtom a = …, r = …` inside such a block. */
-    for (const decl of (/=\s*\{/.test(stmt) ? [stmt] : splitTop(stmt, ",", false))) {
+    const decls = /=\s*\{/.test(stmt) ? [stmt] : splitTop(stmt, ",", false);
+    let declAt = stmtAt;
+    for (const decl of decls) {
       const eq = decl.indexOf("=");
-      if (eq < 0 || "=!<>+-*/&|^%".includes(decl[eq + 1]) || "=!<>+-*/&|^%".includes(decl[eq - 1])) continue;
-      const lhs = decl.slice(0, eq).trim().match(/([A-Za-z_]\w*)$/);
-      if (!lhs) continue;
-      if (!map.has(lhs[1])) map.set(lhs[1], []);
-      map.get(lhs[1]).push(decl.slice(eq + 1));
+      if (eq >= 0 && !"=!<>+-*/&|^%".includes(decl[eq + 1]) && !"=!<>+-*/&|^%".includes(decl[eq - 1])) {
+        const lhs = decl.slice(0, eq).trim().match(/([A-Za-z_]\w*)$/);
+        if (lhs) {
+          if (!map.has(lhs[1])) map.set(lhs[1], []);
+          map.get(lhs[1]).push({ at: declAt + eq, rhs: decl.slice(eq + 1) });
+        }
+      }
+      declAt += decl.length + 1;                  /* the comma splitTop removed */
     }
+    stmtAt += stmt.length + 1;                    /* the semicolon splitTop removed */
+  }
+  for (const defs of map.values()) defs.sort((a, b) => a.at - b.at);
+  return map;
+}
+
+/* `ident = expr` inside one function body — the single hop that carries a name from where it is built to where
+   it is installed (`a = JS_NewAtom(ctx, EH_NAME[i])`). Read by statement and then by DECLARATOR, because
+   `JSAtom a = JS_NewAtom(ctx, "aborted"), r = JS_NewAtom(ctx, "reason");` is two initialisations and reading it
+   as one gave `a` a value with `r`'s whole declarator glued to the end of it. Every assignment to an identifier
+   is kept, so a name built two ways resolves to both or to nothing. */
+function localAssignments(body) {
+  const map = new Map();
+  for (const [name, defs] of localDefs(body)) map.set(name, defs.map((d) => d.rhs));
   return map;
 }
 
@@ -645,6 +721,97 @@ function stripCast(e) {
     if (s.startsWith("(") && matchAt(s, 0) === s.length) s = s.slice(1, -1).trim();
     if (s === before) return s;
   }
+}
+
+/* `JS_DupValue(ctx, x)` IS x — a reference count is not a different object, and `JS_SetClassProto(ctx, cls,
+   JS_DupValue(ctx, html_p))` is the realm taking its own reference to the prototype it was just handed. */
+function stripDup(e) {
+  const s = stripCast(e);
+  const m = s.match(/^JS_DupValue\s*\(/);
+  if (!m) return s;
+  const end = matchAt(s, s.indexOf("("));
+  if (end !== s.length) return s;
+  const args = splitTop(s.slice(s.indexOf("(") + 1, end - 1));
+  return args.length === 2 ? stripDup(args[1]) : s;
+}
+
+/* String and char literals blanked to spaces WITHOUT moving a byte, so a brace inside a message ("a <template>
+   element {…}") cannot be mistaken for a block. Every offset into this is an offset into the original, which is
+   what lets the guard's own literals be read back out of the unblanked text. */
+function blankLiterals(text) {
+  const out = text.split("");
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c !== '"' && c !== "'") continue;
+    let j = i + 1;
+    while (j < text.length && text[j] !== c) { if (text[j] === "\\") j++; j++; }
+    for (let k = i + 1; k < Math.min(j, text.length); k++) out[k] = " ";
+    i = j;
+  }
+  return out.join("");
+}
+
+/* WHAT GUARDS THIS SITE. A member installed UNCONDITIONALLY on a target that is several tagged prototypes (a
+   shared installer's parameter, a loop variable over the element-interface table) really does land on all of
+   them, so crediting each is the truth. Under a condition it lands on SOME of them — html_element.c installs
+   `relList` on four of the sixty prototypes its loop walks and `sizes` on one — and crediting all sixty would
+   put `sizes` on HTMLImageElement, which is the false COMPLETE this whole mechanism exists to remove.
+   So the guard is READ rather than merely noticed, the same way an install construct is: a condition made
+   entirely of POSITIVE string equalities (`!strcmp(HTML_IFACE[i].iface, "HTMLAnchorElement") ||
+   !strcmp(…, "HTMLAreaElement")`) names exactly which of them, and those names are the answer. A NEGATED
+   comparison means every interface EXCEPT the one it names, so narrowing to it would be precisely backwards —
+   a guard with one of those in it yields no names and the site is reported UNATTRIBUTED instead of guessed.
+   Literals that are not interface names (a tag name, an enum value) simply intersect with nothing, which is
+   the same answer.
+   Returns null when nothing guards the site, otherwise `{ only }` — the names, or null for a guard whose
+   subject this cannot read. A guard the ENCLOSING LOOP applies with a `continue` (`if (!(EH_MASK[i] & mask))
+   continue;`) is not one of these, and is the coarseness the module header names. */
+const PLAIN = new WeakMap();
+const plainOf = (f) => {
+  if (!PLAIN.has(f)) PLAIN.set(f, blankLiterals(f.body));
+  return PLAIN.get(f);
+};
+
+function guardAt(body, plain, at) {
+  const heads = [];
+  let i = at;
+  for (;;) {
+    let s = i;
+    while (s > 0 && !";{}".includes(plain[s - 1])) s--;
+    heads.push(body.slice(s, i));
+    if (s === 0) break;
+    /* out to the enclosing block: back over balanced braces to the `{` that opened it */
+    i = s - 1;
+    if (plain[i] !== "{") {
+      let d = 0, k = i;
+      for (; k >= 0; k--) {
+        if (plain[k] === "}") d++;
+        else if (plain[k] === "{") { if (d === 0) break; d--; }
+      }
+      if (k < 0) break;
+      i = k;
+    }
+    if (heads.length > 8) break;
+  }
+  const guard = heads.find((h) => /\bif\s*\(/.test(h));
+  if (guard === undefined) return null;
+  const only = [];
+  let usable = false;
+  const RE = /(!\s*)?\bstrcmp\s*\(/g;
+  let m;
+  while ((m = RE.exec(guard))) {
+    const open = m.index + m[0].length - 1;
+    const end = matchAt(guard, open);
+    if (end < 0) return { only: null };
+    const args = splitTop(guard.slice(open + 1, end - 1));
+    const after = guard.slice(end).match(/^\s*([=!]=)\s*0/);
+    if (!m[1] && !(after && after[1] === "==")) return { only: null };   /* a NEGATED comparison */
+    const lit = (args[1] || "").trim().match(STRING_RE);
+    if (!lit) return { only: null };
+    only.push(lit[1]);
+    usable = true;
+  }
+  return { only: usable ? only : null };
 }
 
 /* ---- the public answer ------------------------------------------------------------------------------------ */
@@ -801,13 +968,217 @@ export function loadEnvironment(root) {
           if (/^\s*JS_(?:NewObject(?:Proto)?|NewArray|NewObjectFromCtor)\s*\(/.test(rhs) &&
               !targets.has(key(path, f.name, lhs)))
             records.add(key(path, f.name, lhs));
-  return { macros, typedefs, sources, resolver, forms, fnsOf, targets, records, targetKey: key };
+
+  /* ---- WHICH INTERFACE EACH OBJECT IS, solved over the whole program ------------------------------------- */
+
+  /* The same shape as the target solve above and a DIFFERENT graph, because the two facts travel differently.
+     Targethood is symmetric — the object on each side of an edge is the same object, so if either is a target
+     both are. An interface NAME is not: a shared installer's parameter is EVERY object its callers hand it, so
+     the tags of those objects flow INTO it (and the members it installs land on all of them), but the union it
+     accumulates must never flow back OUT to one particular caller's object, which would tell window.c's global
+     that it is also an HTMLElement. So the argument edge is FORWARD ONLY, and a tag that crossed a CONDITIONAL
+     call carries that with it.
+     A variable is keyed by the ASSIGNMENT that produced its value (see localDefs), so `proto` reused for three
+     prototypes in one function is three objects and not one object with three interfaces. */
+  const defsOf = new Map();                       /* path::fn -> Map(var -> [{at, rhs}]) */
+  const defsFor = (path, f) => {
+    const k = `${path}::${f.name}::${f.start}`;
+    if (!defsOf.has(k)) defsOf.set(k, localDefs(f.body));
+    return defsOf.get(k);
+  };
+  /* version -1 is the value the variable arrived with (a parameter's caller-supplied object) */
+  const versionAt = (defs, v, at) => {
+    const d = defs.get(v);
+    if (!d) return -1;
+    let i = -1;
+    while (i + 1 < d.length && d[i + 1].at <= at) i++;
+    return i;
+  };
+  const tagKey = (path, f, v, at) => key(path, f.name, `${v}#${versionAt(defsFor(path, f), v, at)}`);
+  const paramKey = (fnName, p) => key("", fnName, p);
+  const classKey = (path, c) => key(path, "@class", c);
+  const GLOBAL_OBJECT = key("", "@global", "object");
+
+  const tedges = new Map();
+  /* `guard` is null for an unconditional edge, `{only}` for a conditional one — `only` naming the interfaces
+     the condition pins, or null when this could not read the condition's subject. */
+  const tarrow = (a, b, guard) => {
+    if (a === b) return;
+    if (!tedges.has(a)) tedges.set(a, []);
+    tedges.get(a).push({ to: b, guard: guard || null });
+  };
+  const tlink = (a, b) => { tarrow(a, b, null); tarrow(b, a, null); };
+  const tagSeeds = [];            /* {node, ifaces} */
+  const tagIssues = [];           /* a tag whose interface name is not statically decidable */
+  const ifaceObjects = [];        /* {node, ifaces, file, line} — checked back against the tag once solved */
+  const interfaceTables = new Map();   /* table -> the field whose cells are interface identifiers */
+
+  for (const [path, { orig }] of sources) {
+    for (const f of fnsOf.get(path)) {
+      const R = resolver.for(path, f.name);
+      const defs = defsFor(path, f);
+      const locals = localAssignments(f.body);
+      const at = (v, off) => tagKey(path, f, v, off);
+      const named = (e) => /^[A-Za-z_]\w*$/.test(e);
+      const lineAt = (off) => lineOf(orig, f.start + off);
+
+      /* THE STATEMENT ITSELF: this object is that interface. */
+      for (const spec of IFACE_SEEDS)
+        for (const site of callSites(f.body, spec.fn)) {
+          const obj = stripDup(site.args[spec.obj] || "");
+          const expr = site.args[spec.iface] || "";
+          const names = R.strings(expr, locals);
+          if (!names) { tagIssues.push({ file: path, line: lineAt(site.at), form: spec.fn, expr: expr.trim() }); continue; }
+          /* A tag read out of a COLUMN says the table's rows ARE interfaces — html_element.c tags sixty
+             prototypes from HTML_IFACE[i].iface — which is what lets a per-row reflection table be attributed
+             to the interface of ITS row rather than to all sixty. */
+          const col = stripCast(expr).match(/^([A-Za-z_]\w*)\s*\[[^\]]*\]\s*\.\s*([A-Za-z_]\w*)$/);
+          if (col) interfaceTables.set(col[1], col[2]);
+          if (!named(obj)) { tagIssues.push({ file: path, line: lineAt(site.at), form: spec.fn, expr: obj }); continue; }
+          tagSeeds.push({ node: at(obj, site.at), ifaces: names });
+        }
+      /* §3.7.1's interface OBJECT — linked to its prototype, and its NAME kept as a check on the tag. */
+      for (const site of callSites(f.body, IFACE_OBJECT.fn)) {
+        const obj = stripDup(site.args[IFACE_OBJECT.obj] || "");
+        const names = R.strings(site.args[IFACE_OBJECT.iface] || "", locals);
+        if (named(obj) && names) ifaceObjects.push({ node: at(obj, site.at), ifaces: names, file: path, line: lineAt(site.at) });
+      }
+      for (const site of callSites(f.body, CTOR_LINK.fn)) {
+        const c = stripDup(site.args[CTOR_LINK.ctor] || ""), p = stripDup(site.args[CTOR_LINK.proto] || "");
+        if (named(c) && named(p)) tlink(at(c, site.at), at(p, site.at));
+      }
+      /* quickjs's own per-realm class-prototype slot: what a component puts in it is what every later
+         JS_GetClassProto of that class hands back, which is how element.c's `element_proto()` answers with the
+         object element.c tagged. An INDEXED slot (`g_iface_class[i]`) is read as the whole array, so the slot
+         carries every interface the loop put in it — which is exactly what the caller's own name then picks
+         one of (see the literal-narrowed return edge below). */
+      for (const site of callSites(f.body, "JS_SetClassProto")) {
+        const c = (stripCast(site.args[1] || "").match(/^([A-Za-z_]\w*)/) || [])[1];
+        const v = stripDup(site.args[2] || "");
+        if (c && named(v)) tarrow(at(v, site.at), classKey(path, c), null);
+      }
+      /* §3.7.3's [Global] rule, read off the statement the engine already makes: the global object is an
+         INSTANCE of this class, so the interface whose prototype the class's slot holds is the interface whose
+         members go directly on it. */
+      for (const site of callSites(f.body, "JS_SetGlobalClass")) {
+        const c = stripCast(site.args[1] || "");
+        if (named(c)) tarrow(classKey(path, c), GLOBAL_OBJECT, null);
+      }
+      /* WHERE AN EXPRESSION'S OBJECT COMES FROM. Three sources answer with an object that is somewhere else's:
+         a name, a class's per-realm prototype slot, and the one global object. */
+      const sourceOf = (expr, off) => {
+        const e = stripDup(expr);
+        if (named(e)) return at(e, off);
+        const cp = e.match(/^JS_GetClassProto\s*\(\s*[^,]+,\s*([A-Za-z_]\w*)/);
+        if (cp) return classKey(path, cp[1]);
+        /* one realm, one global object — every JS_GetGlobalObject in the program answers with it, so the
+           [Global] fact reaches the `global` every component installs on. */
+        if (/^JS_GetGlobalObject\s*\(/.test(e)) return GLOBAL_OBJECT;
+        return null;
+      };
+      for (const [lhs, ds] of defs)
+        for (const d of ds) {
+          const r = stripDup(d.rhs);
+          /* the RHS is read at the value the variable had BEFORE this definition */
+          const src = sourceOf(d.rhs, d.at - 1);
+          if (src) { if (named(r)) tlink(at(lhs, d.at), src); else tarrow(src, at(lhs, d.at), null); }
+          const io = r.match(/^idl_interface_object\s*\(\s*[^,]+,\s*([^,]+),\s*([^)]*)\)/);
+          if (io && named(stripDup(io[2]))) tlink(at(lhs, d.at), tagKey(path, f, stripDup(io[2]), d.at - 1));
+          const call = r.match(/^([A-Za-z_]\w*)\s*\(/);
+          if (call && byName.has(call[1])) {
+            /* A CALL THAT NAMES AN INTERFACE GETS THAT INTERFACE'S OBJECT. `html_iface_proto(ctx,
+               "HTMLInputElement")` hands back one of the sixty prototypes its table holds, and which one is
+               the argument — so the literal picks it out of what the callee's return carries. Without this the
+               four prototypes html_element.c hands the forms component are one undecidable blur, and
+               html_form.c's `value` on HTMLTextAreaElement.prototype is exactly the member this whole
+               attribution exists to stop crediting to HTMLInputElement. The contract is asserted from the
+               other side too: html_iface_proto DFAILs on a name its table does not list. */
+            const open = r.indexOf("("), end = matchAt(r, open);
+            const lits = end < 0 ? [] : splitTop(r.slice(open + 1, end - 1))
+              .map((a) => (a.trim().match(STRING_RE) || [])[1]).filter(Boolean);
+            tarrow(key("", call[1], "@return"), at(lhs, d.at), lits.length ? { only: lits } : null);
+          }
+        }
+      for (const m of f.body.matchAll(/\breturn\s+([^;]+);/g)) {
+        const src = sourceOf(m[1], m.index);
+        if (src) tarrow(src, key("", f.name, "@return"), null);
+      }
+      for (const p of f.params) tarrow(paramKey(f.name, p), tagKey(path, f, p, -1), null);
+      const CALL_RE = /\b([A-Za-z_]\w*)\s*\(/g;
+      let cm;
+      while ((cm = CALL_RE.exec(f.body))) {
+        const callee = cm[1];
+        const params = byName.get(callee);
+        if (!params || forms.has(callee) || callee === f.name) continue;
+        if (IFACE_SEEDS.some((s) => s.fn === callee) || callee === IFACE_OBJECT.fn) continue;
+        const open = f.body.indexOf("(", cm.index);
+        const end = matchAt(f.body, open);
+        if (end < 0) continue;
+        const args = splitTop(f.body.slice(open + 1, end - 1));
+        /* A CONDITIONAL CALL CARRIES ITS CONDITION. The object a shared installer is handed under
+           `if (!strcmp(HTML_IFACE[i].iface, "HTMLAnchorElement") || …)` is not every prototype the loop walks,
+           it is those two — so hyperlink.c's twelve members reach HTMLAnchorElement and HTMLAreaElement and
+           nothing else, which neither the old file-granular audit nor a plain "conditional, give up" could say. */
+        const guard = guardAt(f.body, plainOf(f), cm.index);
+        args.forEach((a, k) => {
+          const v = stripDup(a);
+          if (k < params.length && named(v))
+            tarrow(at(v, cm.index), paramKey(callee, params[k]), guard ? { only: guard.only } : null);
+        });
+      }
+    }
+  }
+  /* The closure. A tag that crossed a CONDITIONAL edge arrives UNCERTAIN — the object may be that interface,
+     so the candidate is kept and named — EXCEPT where the condition NAMES it, which pins it as firmly as an
+     unconditional edge would. */
+  const tags = new Map();
+  const put = (node, iface, certain) => {
+    let m = tags.get(node);
+    if (!m) tags.set(node, m = new Map());
+    if (m.get(iface) === true || (m.has(iface) && !certain)) return false;
+    m.set(iface, !!certain);
+    return true;
+  };
+  const tqueue = [];
+  for (const s of tagSeeds) for (const n of s.ifaces) if (put(s.node, n, true)) tqueue.push(s.node);
+  while (tqueue.length) {
+    const v = tqueue.pop();
+    const outs = tedges.get(v) || [];
+    if (!outs.length) continue;
+    for (const [iface, certain] of [...tags.get(v)])
+      for (const e of outs) {
+        const through = !e.guard ? certain : !!(e.guard.only && e.guard.only.includes(iface));
+        if (put(e.to, iface, through)) tqueue.push(e.to);
+      }
+  }
+
+  /* THE CHECK BACK. §3.7.1's interface object was built for a NAMED interface; §3.7.3's tag says what the
+     prototype behind it IS. They are two statements about one interface, made in two places, so either one can
+     catch the other being wrong: a DISAGREEMENT means one of them names the wrong interface, which nothing else
+     in the build would notice. A prototype this reaches no tag from is NOT an accusation that the tag is
+     missing — it is this detector saying it could not follow the object, the same admission the UNRESOLVED list
+     makes, and it is reported as such rather than as a gap in the component. */
+  const tagChecks = [];
+  for (const o of ifaceObjects) {
+    const m = tags.get(o.node);
+    const have = m ? [...m.keys()] : [];
+    if (!have.length) tagChecks.push({ kind: "unreached", ifaces: o.ifaces, have, file: o.file, line: o.line });
+    else if (!o.ifaces.some((n) => have.includes(n)))
+      tagChecks.push({ kind: "contradicted", ifaces: o.ifaces, have, file: o.file, line: o.line });
+  }
+
+  return { macros, typedefs, sources, resolver, forms, fnsOf, targets, records, targetKey: key,
+           tags, tagKey: (path, f, v, at) => tagKey(path, f, v, at), tagIssues, tagChecks, interfaceTables };
 }
 
-/* The members one component installs, the ones it stubs, and every install construct whose name this could not
-   decide. `paths` are absolute. */
+/* EVERY INSTALLED MEMBER, ATTRIBUTED TO THE INTERFACE ITS TARGET IS — one record per (member, site), carrying
+   the interfaces it lands on or, when the target's interface cannot be decided, nothing and the reason. A
+   record with no interface is NOT credited to the file it was written in: that fallback is exactly the false
+   COMPLETE this attribution exists to remove, and the caller reports it as its own category instead.
+   `paths` are absolute; pass the whole program, since which interface a member belongs to is a fact about the
+   object it is installed on and not about which row named the file. */
 export function installedMembers(paths, env) {
-  const installed = new Set(), stubbed = new Set(), unresolved = [], offInstaller = [], excluded = [];
+  const records = [], unresolved = [], offInstaller = [], excluded = [];
   const { forms } = env;
 
   for (const path of paths) {
@@ -829,6 +1200,74 @@ export function installedMembers(paths, env) {
 
     const report = (off, form, expr) =>
       unresolved.push({ file: path, line: lineOf(orig, off), form, expr: expr.trim().replace(/\s+/g, " ") });
+
+    /* WHICH INTERFACE THIS TARGET IS. `off` is a FILE offset; the tag graph is keyed by the assignment that
+       produced the value, so the answer is the one that holds at this line and not at the end of the function. */
+    const interfacesOf = (f, targetExpr, off) => {
+      const v = stripDup(targetExpr || "");
+      if (!/^[A-Za-z_]\w*$/.test(v))
+        return { ifaces: [], candidates: [], why: `the install target \`${(targetExpr || "").trim()}\` is not a named object` };
+      const m = env.tags.get(env.tagKey(path, f, v, off - f.start));
+      if (!m || !m.size)
+        return { ifaces: [], candidates: [], why: `no interface tag reaches \`${v}\`` };
+      const certain = [...m].filter(([, c]) => c).map(([n]) => n);
+      const all = [...m.keys()];
+      /* ONE interface is one interface however the site was reached — a conditional call changes WHETHER the
+         member is installed, which is not what this asks; it asks WHICH interface it lands on. */
+      const one = certain.length ? certain : all;
+      if (one.length === 1) return { ifaces: one, candidates: [], why: null };
+      if (!certain.length)
+        return { ifaces: [], candidates: all, why: `\`${v}\` is reached conditionally from ${all.length} tagged prototype(s)` };
+      /* SEVERAL tagged prototypes and a conditional site: the member lands on some of them, not on all. The
+         guard is read (see guardAt) — where it names them, those are the answer; where it does not, this is
+         named UNATTRIBUTED rather than guessed, because crediting all of them is the false COMPLETE. */
+      const guard = guardAt(f.body, plainOf(f), off - f.start);
+      if (guard) {
+        const named = guard.only ? certain.filter((n) => guard.only.includes(n)) : [];
+        if (named.length) return { ifaces: named, candidates: [], why: null };
+        return { ifaces: [], candidates: certain,
+                 why: `\`${v}\` is ${certain.length} tagged prototypes and this install is under a condition ` +
+                      `that does not name which` };
+      }
+      return { ifaces: certain, candidates: [], why: null };
+    };
+    const emitWith = (names, stub, a, off, form) => {
+      const line = lineOf(orig, off);
+      for (const name of names)
+        records.push({ name, stubbed: !!stub, file: path, line, form,
+                       ifaces: a.ifaces, candidates: a.candidates, why: a.why });
+    };
+    const emit = (names, stub, f, targetExpr, off, form) =>
+      emitWith(names, stub, interfacesOf(f, targetExpr, off), off, form);
+
+    /* The member names one DECLARATION of a two-halved registry carries — a table of rows whose `field` column
+       is the member's IDL name, reached either directly or (the byte readers) through the interface record that
+       names the table. */
+    const membersOfDeclare = (R, form, expr) => {
+      let refs = R.tableRefs(expr);
+      if (refs && form.via) {
+        const inner = [];
+        for (const ref of refs) {
+          const cells = R.column(ref, form.via);
+          const got = cells && cells.map((c) => R.tableRefs(c));
+          if (!got || got.some((g) => !g)) return null;
+          for (const g of got) inner.push(...g);
+        }
+        refs = inner;
+      }
+      if (!refs) return null;
+      const names = [];
+      for (const ref of refs) {
+        const cells = R.column(ref, form.field);
+        if (!cells) return null;
+        for (const c of cells) {
+          const v = R.strings(c, null);
+          if (!v) return null;
+          names.push(...v);
+        }
+      }
+      return names;
+    };
 
     /* 1. the call forms */
     for (const [callee, form] of forms) {
@@ -878,7 +1317,7 @@ export function installedMembers(paths, env) {
           }
         }
         if (!names) { report(site.at, callee, site.args[pos]); continue; }
-        for (const n of names) (noop ? stubbed : installed).add(n);
+        emit(names, noop, f, target, site.at, callee);
       }
     }
 
@@ -900,40 +1339,63 @@ export function installedMembers(paths, env) {
         const names = R.strings(args[0] || "", null);
         if (!names) { report(site.at, `${m[1]} in ${tableExpr}`, args[0] || ""); continue; }
         const noop = /\bjs_noop\b/.test(row);
-        for (const n of names) (noop ? stubbed : installed).add(n);
+        emit(names, noop, f, stripCast(site.args[1] || ""), site.at, `JS_SetPropertyFunctionList/${tableExpr}`);
       }
     }
 
-    /* 3. the two-halved registries: reflections and byte readers */
-    for (const form of TABLE_FORMS)
-      for (const site of callSites(masked, form.declare)) {
+    /* 3. THE TWO-HALVED REGISTRIES: reflections and byte readers. The DECLARE half carries the names and no
+       object; the INSTALL half carries the object and a handle. So the interface comes from joining the halves,
+       two ways, in this order:
+         (a) THE TABLE'S OWN ROW. `element_declare_reflections(ctx, HTML_IFACE[i].refl, …)` declares one table
+             per row of a table whose `iface` column is what html_element.c tags each prototype with — so row
+             r's reflections are row r's interface, and the sixty element interfaces get exactly their own
+             members instead of all sixty getting all of them.
+         (b) THE HANDLE. `g_html_refl_base = element_declare_reflections(ctx, R_HTML, …)` and
+             `element_install_reflections(ctx, html_p, g_html_refl_base, …)` are the same registration named by
+             the same identifier, so the declaration's members belong to the object the install names. Where
+             the handle is not an identifier (body.c keeps it in a per-interface record) a file with exactly
+             ONE declaration of that registry has only one thing its installs can be installing.
+       Anything left is UNATTRIBUTED, named, and not credited to the file. */
+    for (const form of TABLE_FORMS) {
+      const declares = callSites(masked, form.declare).filter((s) => fnAt(s.at));
+      const installs = callSites(masked, form.install).filter((s) => fnAt(s.at));
+      for (const site of declares) {
         const f = fnAt(site.at);
-        if (!f) continue;
         const R = scoped(f);
         const arg = site.args[form.arg] || "";
-        let refs = R.tableRefs(arg);
-        /* `byte_reader_declare(ctx, &IFACE)` names a RECORD whose `readers` field names the member table */
-        if (refs && form.via) {
-          const inner = [];
-          for (const ref of refs) {
-            const cells = R.column(ref, form.via);
-            const got = cells && cells.map((c) => R.tableRefs(c));
-            if (!got || got.some((g) => !g)) { inner.length = 0; refs = null; break; }
-            for (const g of got) inner.push(...g);
+        const col = stripCast(arg).match(/^([A-Za-z_]\w*)\s*\[[^\]]*\]\s*\.\s*([A-Za-z_]\w*)$/);
+        const ifaceField = col ? env.interfaceTables.get(col[1]) : null;
+        if (ifaceField) {
+          const tables = R.column(col[1], col[2]), ifaces = R.column(col[1], ifaceField);
+          if (!tables || !ifaces || tables.length !== ifaces.length) { report(site.at, form.declare, arg); continue; }
+          for (let r = 0; r < tables.length; r++) {
+            const cell = tables[r].trim();
+            if (/^(NULL|0)$/.test(cell)) continue;      /* a row that declares no members */
+            const names = membersOfDeclare(R, form, cell);
+            const iname = R.strings(ifaces[r], null);
+            if (!names || !iname) { report(site.at, `${form.declare}/${col[1]}[${r}]`, cell); continue; }
+            emitWith(names, false, { ifaces: iname, candidates: [], why: null }, site.at, form.declare);
           }
-          if (refs) refs = inner;
+          continue;
         }
-        if (!refs) { report(site.at, form.declare, arg); continue; }
-        for (const ref of refs) {
-          const cells = R.column(ref, form.field);
-          if (!cells) { report(site.at, `${form.declare}/${ref}`, `.${form.field}`); continue; }
-          for (const c of cells) {
-            const names = R.strings(c, null);
-            if (!names) { report(site.at, `${form.declare}/${ref}`, c); continue; }
-            for (const n of names) installed.add(n);
-          }
-        }
+        const names = membersOfDeclare(R, form, arg);
+        if (!names) { report(site.at, form.declare, arg); continue; }
+        /* the handle this declaration was stored in, if it was stored in a name at all */
+        const stmt = masked.slice(Math.max(0, site.at - 200), site.at);
+        const lhs = (stmt.match(/([A-Za-z_]\w*)\s*=\s*$/) || [])[1];
+        let chosen = lhs ? installs.filter((s) => stripCast(s.args[form.handle] || "") === lhs) : [];
+        if (!chosen.length && declares.length === 1) chosen = installs;
+        const parts = chosen.map((s) => interfacesOf(fnAt(s.at), stripCast(s.args[form.target] || ""), s.at));
+        const a = parts.length
+          ? { ifaces: [...new Set(parts.flatMap((p) => p.ifaces))],
+              candidates: [...new Set(parts.flatMap((p) => p.candidates))],
+              why: parts.some((p) => !p.why) ? null : parts[0].why }
+          : { ifaces: [], candidates: [],
+              why: `nothing in this file installs the ${form.declare} registration` +
+                   (lhs ? ` held in \`${lhs}\`` : " (it is not held in a named handle)") };
+        emitWith(names, false, a, site.at, form.declare);
       }
+    }
 
     /* 4. the conditional members this user agent must NOT have */
     for (const site of callSites(masked, EXCLUDED_FORM.fn)) {
@@ -959,5 +1421,5 @@ export function installedMembers(paths, env) {
       }
     }
   }
-  return { installed, stubbed, unresolved, offInstaller, excluded };
+  return { records, unresolved, offInstaller, excluded };
 }
