@@ -190,10 +190,15 @@ enum {
     X(S_OP_ABORT, "Observable §2.3.3 (signal abort the operator's own controller, after its promise settled — " \
                   "every()'s false, first()'s value, find()'s hit, and every predicate that threw)") \
     X(S_DONE, "Observable §2.1/§2.2 (the operation is complete)")
-/* THE X-LIST IS SHARED; ITS EXPANSIONS ARE NOT. Each translation unit expands the constants for itself, which
-   is what keeps `engine/check_step_visits.mjs` able to see, in the file that declares the definition, that the
-   labels and the constants come from the ONE list. A header that expanded the enum instead would put the
-   constants somewhere the gate does not read, which is the excluded-check shape. */
+/* THE X-LIST IS SHARED; ITS EXPANSIONS ARE NOT. Each translation unit expands the constants for itself, so the
+   labels and the constants provably come from the ONE list in the file that declares the definition — which is
+   what JSTrampStepDef.steps requires of every machine, since a stage's identity is its label and a second list
+   of them beside the first is the drift that makes a resume continue at the wrong step.
+   This used to justify the arrangement by what `engine/check_step_visits.mjs` could read. That gate has been
+   deleted, and the reason survives it: what is being prevented is two statements of one fact, not a scanner
+   losing sight of one of them. The runtime now asserts the same thing from the other side — js_step_def_check
+   refuses a definition declaring no steps at all, and step_stage_check refuses a rest at a stage the list does
+   not name. */
 
 typedef struct JSObsState {
     JSStepHdr hdr;        /* FIRST — the driver writes the def and the operand bounds through it */

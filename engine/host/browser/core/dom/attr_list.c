@@ -1,9 +1,15 @@
 /* DOM §4.9's ATTRIBUTE LIST — the raw operations, and the only place they exist.
  *
  * This is the layer BELOW the per-flow chokepoint, and it is its own file for the reason dom_cow.c is: it is
- * the one place allowed to call Lexbor's attribute mutators, so `engine/check_dom_chokepoint.mjs` can ban them
- * everywhere else. Put in attr.c beside the Attr interface, the ban would have had to exempt a component file,
- * and the next `lxb_dom_element_set_attribute` written there would have been legal.
+ * the one place that calls Lexbor's attribute mutators. Put in attr.c beside the Attr interface, a component
+ * file would have had to be exempt, and the next `lxb_dom_element_set_attribute` written there would have
+ * looked like it belonged.
+ * `engine/check_dom_chokepoint.mjs` used to make that a BAN rather than a boundary; it has been deleted, and
+ * this file's isolation is now the whole of the enforcement. What that costs is stated rather than left to be
+ * discovered: a mutator called from a component compiles, and the write it performs is invisible to the
+ * running flow's DOM delta — a sibling flow sees it and an unapply leaks it, with nothing to say so. The
+ * structural replacement is not another scanner but the mutators having no declaration a component can reach;
+ * until that is built, this paragraph is the enforcement.
  *
  * AN ATTRIBUTE'S IDENTITY IS (NAMESPACE, LOCAL NAME) — see attr_list.h. */
 #include <string.h>

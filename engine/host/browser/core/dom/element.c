@@ -1351,7 +1351,9 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
    `href` ATTRIBUTE, which is a read and a write of the same attribute rather than a mirror of it.
    BOTH GO THROUGH THE SAME CHOKEPOINT the reflection uses, so the write is captured into the running flow's
    DOM delta like every other attribute write — a mixin reaching for lxb_dom_element_set_attribute directly
-   would be invisible to time travel, which is exactly what check_dom_chokepoint.mjs exists to prevent.
+   would be invisible to time travel. There was a gate that banned exactly that call outside attr_list.c
+   (check_dom_chokepoint.mjs); it has been deleted, so the chokepoint is a convention now — held by attr_list.c
+   being the only file that includes Lexbor's attribute mutators, and by nothing else.
    Returns an OWNED string, or NULL when the attribute is absent. */
 char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name)
 {
