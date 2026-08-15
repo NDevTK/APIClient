@@ -35,4 +35,16 @@
   g.DFAIL  = function (msg)       { if (g.APICLIENT_DEV) fail("@WHY DFAIL:", msg); };
   g.CHECK  = function (cond, msg) { if (!cond) fail("@E CHECK failed:", msg); };
   g.CHECK_FAIL = function (msg)   { fail("@E CHECK_FAIL:", msg); };
+
+  // RETHROW_FATAL(e) — THE ONE PRIMITIVE C DOES NOT NEED, and the reason this mirror was only half a mirror.
+  // check.h aborts the process, so a C `if (err) goto fail` CANNOT swallow a DCHECK; on this side an assertion
+  // is a THROW, so every legitimate `catch` in the zone is also a place an invariant abort silently becomes a
+  // plausible answer. That is not hypothetical: the DCHECK on safeFetch's URL list sat inside the reply
+  // builder's `catch (_) { return null; }`, and null is the engine's NETWORK ERROR — a broken host contract
+  // would have been delivered to the engine as a page whose request simply failed.
+  //
+  // A catch that HAS a real job (a network error IS a Fetch §5.6 outcome, not a bug) opens with this line: an
+  // invariant failure travels ON through it, everything else is handled as the catch intends. It is not a
+  // second assertion mechanism — it is what keeps the ONE mechanism from being locally disabled.
+  g.RETHROW_FATAL = function (e) { if (e && e.apiclientFatal) throw e; };
 })(self);

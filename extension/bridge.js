@@ -27,9 +27,35 @@ const hasHole = (s) => HOLE.test(s || "");
    The ENGINE builds + DEDUPS the whole result (endpoints/params/headers/body, @S sinks, chunkUrls,
    errors, park recipes) and JSON.stringifies it; the host does ONE JSON.parse and relays — NO per-line
    @H/@Q/@HDR/@BODY parsing, NO host identity/dedup (all DELETED, the engine owns it like a browser).
-   @E lines (host-side protocol errors) are still surfaced so a zero-result never fails silently. Every
-   sibling field the brain reads unconditionally is present (empty) so it never throws. */
-function linesToAnalysis(lines, msg) {
+   @E lines (host-side protocol errors) are still surfaced so a zero-result never fails silently.
+
+   `expectResult` IS THE CONTRACT, STATED BY THE CALLER. A finalize and a partial snapshot both READ the one
+   result document the engine builds, so its absence there is a broken engine↔JS contract; a CRASH record has
+   no document by construction (the instance aborted before it could answer), and that is the only caller that
+   passes false. Without the parameter the two cases were indistinguishable and the missing document took the
+   `|| {}` path below — which is how an engine that answered nothing at all became a successful analysis
+   reporting no endpoints and no sinks. */
+/* WHAT THE ENGINE GUARANTEES IN THAT DOCUMENT — solver/result.c's composition, field for field. Asserted at
+   the seam rather than trusted, because every one of these is read below and a missing one becomes an EMPTY
+   FINDING SET reported to the user as a clean page. The sibling fields the brain reads that the engine does
+   NOT emit are host-side empties (see the map) and are not part of this. */
+function assertResultDocument(r) {
+  DCHECK(r && typeof r === "object" && !Array.isArray(r),
+         "the engine's @RESULT line is not a JSON object — result_json emits one document per session");
+  DCHECK(Array.isArray(r.fetchCallSites),
+         "the engine's result document carries no fetchCallSites array — endpoint.c serializes its deduped " +
+         "endpoints into that field, so its absence is the whole learned API surface arriving as nothing");
+  DCHECK(Array.isArray(r.securitySinks),
+         "the engine's result document carries no securitySinks array — solve.c serializes its fire-verified " +
+         "PoCs into that field, and a missing one reports an exploitable page as clean");
+  DCHECK(Array.isArray(r.pageErrors),
+         "the engine's result document carries no pageErrors array — it is the engine's own record of what " +
+         "went wrong while running the page, and the analysis reports it as the run's resolverErrors");
+  DCHECK(typeof r._switches === "number",
+         "the engine's result document carries no _switches count — it is the one OBSERVABLE that the single " +
+         "BFS actually context-switches rather than running its flows FIFO");
+}
+function linesToAnalysis(lines, msg, expectResult) {
   let result = null;
   const extraErrors = [];
   let resumed = 0;
@@ -38,7 +64,14 @@ function linesToAnalysis(lines, msg) {
     if (ln.startsWith("@RESUMED ")) { resumed = parseInt(ln.slice(9), 10) || 0; continue; }
     if (ln.startsWith("@RESULT ")) {
       try { result = JSON.parse(ln.slice(8)); }
-      catch (e) { extraErrors.push({ context: "result-parse", message: String(e && e.message || e), snippet: null, replyExample: null }); }
+      catch (e) {
+        /* result.c ASSERTS its own document against buffer truncation before handing it over, so text that
+           will not parse here is the engine's output being wrong — not a page that did something unusual.
+           Dev aborts; release keeps the parse error in the run's errors, because in release there is no
+           document to read and a zero-result must still say why. */
+        DFAIL("the engine emitted an @RESULT line that is not JSON: " + String(e && e.message || e));
+        extraErrors.push({ context: "result-parse", message: String(e && e.message || e), snippet: null, replyExample: null });
+      }
     } else if (ln.startsWith("@E ")) {
       extraErrors.push({ context: "engine", message: ln.slice(3), snippet: null, replyExample: null });
     } else if (ln.startsWith("@WHY ")) {
@@ -48,23 +81,42 @@ function linesToAnalysis(lines, msg) {
       catch (_) { extraErrors.push({ context: "why", message: ln.slice(5), snippet: null, replyExample: null }); }
     }
   }
+  /* THE DOCUMENT IS EITHER THERE OR THIS CALLER SAID IT WOULD NOT BE. `result || {}` on its own is the exact
+     shape the rule forbids: a malformed (here, ABSENT) engine answer defaulted into a plausible one, and the
+     plausible one is "this page has no API surface and no XSS" — a wrong FINDING shown to the user rather than
+     a crash. The default survives only as the release path under the assert. */
+  DCHECK(!expectResult || result !== null,
+         "an engine session produced no @RESULT document at all — the one result document is what every " +
+         "finding for this page travels in, and reporting its absence as an empty page is a false clean bill");
+  if (expectResult && result) assertResultDocument(result);
   result = result || {};
-  // Surface the scheduler's interleave counter so fairness/deep-preemption is OBSERVABLE (verification +
-  // a real signal that the single BFS actually context-switches, not just runs FIFO). A cumulative global
-  // across steps; the mapped field carries the per-result value.
-  try {
-    const m = { switches: result._switches || 0, orphans: result._orphans || 0, park: (result._park || []).length, resumed: resumed, work: result._work || 0, parked: result._parked || 0, url: (msg && msg.sourceUrl) || "" };
-    self._engineMeta = m;
-    // A per-run LOG (not a single overwritten global): concurrent cold-kick engines each report here, so the
-    // full park->persist->rehydrate->resume SEQUENCE across all engines is observable, not just the last one.
-    (self._engineLog = self._engineLog || []).push(m);
-    if (self._engineLog.length > 200) self._engineLog.shift();
-  } catch (_) {}
+  /* THE SCHEDULER'S OWN COUNTERS, so fairness/deep-preemption is OBSERVABLE (a real signal that the single BFS
+     context-switches rather than running FIFO) — and they are the fields solver/result.c ACTUALLY emits. This
+     read `_orphans`, `_work` and `_parked`, which nothing on the engine side has ever written, so the whole
+     diagnostic reported three zeroes forever and the `|| 0` beside each is what made that invisible. NOT
+     wrapped in a swallowing try/catch: every value here is a number off a document already asserted above. */
+  const m = { switches: result._switches || 0, flows: result._flows || 0, candidates: result._candidates || 0,
+              jobsQueued: result._jobsQueued || 0, jobsRun: result._jobsRun || 0,
+              worldSegments: result._worldSegments || 0, park: (result._park || []).length,
+              resumed: resumed, url: (msg && msg.sourceUrl) || "" };
+  self._engineMeta = m;
+  // A per-run LOG (not a single overwritten global): concurrent cold-kick engines each report here, so the
+  // full park->persist->rehydrate->resume SEQUENCE across all engines is observable, not just the last one.
+  (self._engineLog = self._engineLog || []).push(m);
+  if (self._engineLog.length > 200) self._engineLog.shift();
   return {
     _switches: result._switches || 0,
     fetchCallSites: result.fetchCallSites || [],
-    resolverErrors: (result.resolverErrors || []).concat(extraErrors),
-    chunkUrls: result.chunkUrls || [],
+    /* THE ENGINE'S OWN PAGE ERRORS, WHICH IT CALLS `pageErrors`. This line read `resolverErrors` — a name
+       nothing on the engine side has ever written — so every error the engine recorded while running the page
+       was dropped here, and the `|| []` beside it is precisely what made the drop invisible: the field the
+       brain reads existed, held the host's own errors, and looked complete. The consumer (popup.js,
+       analyze.js) reads {context, message, snippet}; the engine's are strings. */
+    resolverErrors: (result.pageErrors || []).map((e) => ({ context: "page", message: String(e), snippet: null, replyExample: null })).concat(extraErrors),
+    /* The engine does NOT carry chunk URLs in the result document — they cross on their own ABI edge
+       (qjs_chunks, drained and fetched every service round), so this is a host-side empty like the block
+       below and never a defaulted engine field. */
+    chunkUrls: [],
     securitySinks: result.securitySinks || [],
     // sibling fields the brain reads unconditionally, present + empty so it never throws:
     protoEnums: [], protoFieldMaps: [], dangerousPatterns: [],
@@ -117,17 +169,36 @@ function idbOpen() {
 /* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, topLevelUrl, html, code,
    recipes: "idx,dec;...", emit, visits, ts, credentialed }. Rehydration re-runs (html,code) + resumes
    recipes -- so a parked flow on ANY site can be advanced later, even when that page isn't open. */
+/* THE COLD TIER'S THREE EDGES, AND WHAT THEIR ERRORS USED TO MEAN. Each was `catch (_) { return <empty> }`
+   plus an `onerror` that RESOLVED with an empty answer, so an IndexedDB that refused a read reported the same
+   thing an unvisited origin reports — no parked frontier — and an IndexedDB that refused a WRITE reported
+   nothing at all. That is the ONE continuous cross-session frontier silently becoming a per-session one: the
+   defect has no symptom, because "this page had no parked residue" is exactly what the first visit looks like.
+   The failure is surfaced instead. It is a DCHECK rather than a CHECK: in release the user is not crashed
+   because their profile's storage is unavailable — they lose cross-session resume, which is degraded, not
+   wrong — but in dev this is our own edge failing and it aborts at the line that failed. */
+function frontierFail(op, err) {
+  DFAIL("the cross-session frontier's IndexedDB " + op + " failed (" + String((err && err.message) || err) +
+        ") — the ONE continuous frontier is persisted there, and an empty answer from this edge is " +
+        "indistinguishable from a page that has never been visited");
+}
 async function frontierGet(key) {
-  try { const db = await idbOpen(); return await new Promise((res) => { const t = db.transaction("frontier").objectStore("frontier").get(key); t.onsuccess = () => res(t.result || null); t.onerror = () => res(null); }); }
-  catch (_) { return null; }
+  try {
+    const db = await idbOpen();
+    return await new Promise((res, rej) => { const t = db.transaction("frontier").objectStore("frontier").get(key); t.onsuccess = () => res(t.result || null); t.onerror = () => rej(t.error); });
+  } catch (e) { RETHROW_FATAL(e); frontierFail("read", e); return null; }
 }
 async function frontierPut(key, entry) {
-  try { const db = await idbOpen(); await new Promise((res) => { const s = db.transaction("frontier", "readwrite").objectStore("frontier"); const t = (entry && entry.recipes) ? s.put(entry, key) : s.delete(key); t.onsuccess = () => res(); t.onerror = () => res(); }); }
-  catch (_) {}
+  try {
+    const db = await idbOpen();
+    await new Promise((res, rej) => { const s = db.transaction("frontier", "readwrite").objectStore("frontier"); const t = (entry && entry.recipes) ? s.put(entry, key) : s.delete(key); t.onsuccess = () => res(); t.onerror = () => rej(t.error); });
+  } catch (e) { RETHROW_FATAL(e); frontierFail("write", e); }
 }
 async function frontierAll() {
-  try { const db = await idbOpen(); return await new Promise((res) => { const t = db.transaction("frontier").objectStore("frontier").getAll(); t.onsuccess = () => res(t.result || []); t.onerror = () => res([]); }); }
-  catch (_) { return []; }
+  try {
+    const db = await idbOpen();
+    return await new Promise((res, rej) => { const t = db.transaction("frontier").objectStore("frontier").getAll(); t.onsuccess = () => res(t.result || []); t.onerror = () => rej(t.error); });
+  } catch (e) { RETHROW_FATAL(e); frontierFail("scan", e); return []; }
 }
 /* HOST-level value-of-information for a PARKED frontier's rehydration order. It shares the engine's WFQ
    POLICY (rank by value + an exploration bonus, never drop a work item) but NOT the engine's exact formula:
@@ -215,10 +286,27 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   // a page at /app/dashboard calling fetch("api/users") was reported as /api/users. The engine derives the
   // origin from the address itself (§4.7's serialization, which its own url.c implements), so the principal
   // and the address are one fact from one place instead of two that can disagree.
-  M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number"],
+  /* qjs_init ANSWERS, and this discarded the answer. Its C body is a wall of CHECKs whose failures abort the
+     instance, so the only value it can return is 0 — which is exactly why reading it costs nothing and why a
+     non-zero would be an entry that started reporting a failure this zone was not listening for. */
+  const _initrc = M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number"],
     [arg(html || ""), arg((msg && msg.sourceUrl) || ""), arg(_docId), arg(_csp), arg(_tlu)]);
-  const _bid = (M.ccall("qjs_bundle_id", "number", [], []) >>> 0).toString(36);
-  const fkey = originOf(msg && msg.sourceUrl) + "|" + _bid;
+  DCHECK(_initrc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
+                        "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
+  /* NEVER 0 — document_bundle_id folds an empty scan to 1 precisely so that a 0 cannot mean two things. A 0
+     here would key every unidentifiable document to the SAME frontier entry, so one page's parked residue
+     would resume in another's engine. */
+  const _bidRaw = M.ccall("qjs_bundle_id", "number", [], []) >>> 0;
+  DCHECK(_bidRaw !== 0, "the engine answered a bundle id of 0 — document_bundle_id never returns one, and a 0 " +
+                        "collides every document's frontier key with every other's");
+  const _bid = _bidRaw.toString(36);
+  /* THE FRONTIER KEY'S ORIGIN HALF. originOf answers "" for an address that does not parse, and "" is a key
+     every such document would share — but qjs_init has already CHECKed that this address parses, so an empty
+     one here means the two parsers disagree rather than that the page had no origin. */
+  const _fkeyOrigin = originOf(msg && msg.sourceUrl);
+  DCHECK(_fkeyOrigin !== "", "this zone could not serialize an origin from a document address the engine's own " +
+                             "url.c accepted — the frontier key's origin half would be empty for every such page");
+  const fkey = _fkeyOrigin + "|" + _bid;
   const prior = persist ? await frontierGet(fkey) : null;
   // PHASE 2 — seed the frontier (fresh, or resume parked recipes). The host sets a VALUE yield-floor per
   // step (the runner-up engine's weight), so this engine yields when it's outranked — no fixed slice.
@@ -268,7 +356,14 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
       const opts = asScript ? { pageUrl: msg.sourceUrl, as: "script" }
                             : { pageUrl: msg.sourceUrl, credentialed: !!(msg && msg.credentialed) };
       const r = await self.safeFetch(abs, opts);
-      if (!r || typeof r.body !== "string") return null;
+      /* THE CHOKEPOINT'S RECORD IS FIXED — safe-fetch.js returns {ok,status,statusText,headers,body,urlList}
+         on every path it has, including every blocked one. `if (!r || typeof r.body !== "string") return null`
+         was a malformed answer being turned into a NETWORK ERROR, which is a real Fetch outcome the engine
+         acts on: the page's request would report as having failed on the wire when what actually happened is
+         that this zone's own chokepoint answered something it never answers. */
+      DCHECK(r && typeof r === "object" && typeof r.body === "string" && typeof r.status === "number",
+             "safeFetch answered with something other than its reply record — the engine builds a Response " +
+             "out of this and a page reads status/headers/body off it");
       /* §2.2.6's URL list, straight from the chokepoint that performed the fetch. safeFetch always reports at
          least the URL it requested — §4.1's "If internalResponse's URL list is empty, then set it to a clone of
          request's URL list" — and the engine DCHECKs that at both ends, so an empty one is a bug here rather
@@ -276,9 +371,23 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
       DCHECK(Array.isArray(r.urlList) && r.urlList.length >= 1,
              "safeFetch answered a reply with no URL list — response.url and response.redirected are read off " +
              "nothing else, and the engine would report every redirect as none");
-      return { status: r.status, statusText: r.statusText || "", headers: Object.entries(r.headers || {}),
+      DCHECK(r.headers && typeof r.headers === "object",
+             "safeFetch answered a reply with no header map — the engine's Headers record is built from it");
+      /* STATUS 0 IS NOT A REPLY. It is the one status no HTTP response has, and it is exactly what the
+         chokepoint answers when the request never went on the wire at all (bad URL, blocked scheme, blocked
+         private target, CORB). This comment's own rule — «`null` is a NETWORK ERROR, which is what a URL this
+         zone must not or cannot fetch honestly is» — names that case, and the record was crossing anyway: the
+         page saw a real reply whose status was a number no server returns, instead of §5.6's TypeError. */
+      if (r.status === 0) return null;
+      return { status: r.status, statusText: r.statusText || "", headers: Object.entries(r.headers),
                body: r.body, urlList: r.urlList };
-    } catch (_) { return null; }
+    } catch (e) {
+      /* A THROWN fetch IS §5.6's network error and `null` is how it crosses. AN INVARIANT ABORT IS NOT: the
+         asserts above throw through this same catch, and returning null for one would deliver a broken host
+         contract to the engine disguised as a page whose request failed on the wire. */
+      RETHROW_FATAL(e);
+      return null;
+    }
   };
   // §7.4 STEP 14's RESPONSE, which is the SAME safeFetch and a DIFFERENT answer: a Document is judged against
   // the policy its response carried, so the header travels with the bytes. `fetched` above cannot serve this —
@@ -292,9 +401,15 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
       // Never `as:"script"` — these bytes are PARSED as a document, not run as code — and never credentialed:
       // §7.4's fetch is a navigation this engine initiated, not a learned GET being replayed for its reply.
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl });
-      if (!r || !r.ok || typeof r.body !== "string") return { body: null, csp: null };
-      return { body: r.body, csp: (r.headers && r.headers["content-security-policy"]) || null };
-    } catch (_) { return { body: null, csp: null }; }
+      DCHECK(r && typeof r === "object" && typeof r.body === "string" && r.headers && typeof r.headers === "object",
+             "safeFetch answered a document load with something other than its reply record — §7.4 step 14 " +
+             "reads the BODY and the POLICY off it, and a Document judged under no policy is how a page whose " +
+             "CSP kills a sink gets reported as exploitable");
+      /* NOT OK IS A LOAD THAT DID NOT LOAD — the navigable still exists and shows an error page, which is what
+         `{body:null}` means to the engine's child_document. That is a real §7.4 outcome, not a softening. */
+      if (!r.ok) return { body: null, csp: null };
+      return { body: r.body, csp: r.headers["content-security-policy"] || null };
+    } catch (e) { RETHROW_FATAL(e); return { body: null, csp: null }; }
   };
   /* THE ROUTING TABLE IS THE POOL. `docId` is which document this instance holds and `origin` is the value
      this zone stamps on everything it sends — both are read only by the notice router below, which is the
@@ -304,8 +419,17 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   // JSON record — method, url, headers, body — and the answer is the reply shape the engine's fetch_reply_new
   // builds, so a null body is the network error §3.5.6's "handle errors" turns into an `error` event.
   const fetchedXhr = async (rec) => {
-    let q;
-    try { q = JSON.parse(rec); } catch (_) { return { body: null, status: 0, statusText: "", headers: [] }; }
+    let q = null;
+    /* THE REQUEST RECORD IS THE ENGINE'S, and it crosses as JSON so it carries its types — a header list is a
+       list and a body is a string or null. Text that will not parse is xml_http_request.c writing something
+       other than the record it declares, so it aborts here rather than becoming an `error` event on the page's
+       XHR: the page would see a server that refused it, which is a lie about whose code was wrong. */
+    try { q = JSON.parse(rec); }
+    catch (e) { DFAIL("the engine's xhr.send record is not JSON: " + String(e && e.message || e)); }
+    DCHECK(q && typeof q === "object" && typeof q.url === "string" && q.url,
+           "the engine's xhr.send record names no URL — the chokepoint decides SOP, CORS, method and " +
+           "credentials, and cannot decide about a request it was never told");
+    if (!q || typeof q.url !== "string") return { body: null, status: 0, statusText: "", headers: [] };
     if (!canFetch) return { body: null, status: 0, statusText: "", headers: [] };
     try {
       const abs = new URL(q.url, msg.sourceUrl).href;
@@ -322,10 +446,18 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
          safeFetch's "analyzer probe headers only" comment is no longer the whole truth. */
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, method: q.method, headers: q.headers,
                                             body: q.body, credentials: q.credentials });
-      if (!r || typeof r.body !== "string") return { body: null, status: 0, statusText: "", headers: [] };
-      return { body: r.body, status: r.status || 200, statusText: r.statusText || "",
-               headers: Object.entries(r.headers || {}) };
-    } catch (_) { return { body: null, status: 0, statusText: "", headers: [] }; }
+      DCHECK(r && typeof r === "object" && typeof r.body === "string" && typeof r.status === "number" &&
+             r.headers && typeof r.headers === "object",
+             "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
+             "built from it and the page reads status, statusText and every header off that");
+      return { body: r.body, status: r.status, statusText: r.statusText || "",
+               headers: Object.entries(r.headers) };
+    } catch (e) {
+      /* §3.5.6's "handle errors": a THROWN fetch is the network error that becomes the page's `error` event.
+         An invariant abort is not one and travels on. */
+      RETHROW_FATAL(e);
+      return { body: null, status: 0, statusText: "", headers: [] };
+    }
   };
   /* THE PRINCIPAL IS BROWSER-STATED, NEVER PARSED OFF THE ADDRESS. This read `originOf(msg.sourceUrl)`, and a
      document's address does not determine its origin: a page that sandboxes its own iframe
@@ -342,19 +474,39 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   return { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, fetchedXhr, code, html, state: "hot",
            docId: _docId, origin: (msg && msg.origin) || "", _forceparkSteps };
 }
-function engineWeight(eng) { return eng.state === "hot" ? +eng.M.ccall("qjs_top_weight", "number", [], []) : -Infinity; }
+/* THE LEVEL-1 WFQ'S ONE INPUT. A NaN would order this engine against every other by a comparison that is
+   false in both directions, so the pool's pick would depend on array order — a fairness invariant silently
+   replaced by whichever engine happened to be first. */
+function engineWeight(eng) {
+  if (eng.state !== "hot") return -Infinity;
+  const w = +eng.M.ccall("qjs_top_weight", "number", [], []);
+  DCHECK(Number.isFinite(w), "the engine answered a top-flow weight that is not a finite number — every " +
+                             "Level-1 ranking comparison against it is false, so the pool would pick by " +
+                             "array order and call it value-of-information");
+  return w;
+}
 async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
   const M = eng.M;
   /* THE REPLY CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer does. A bare
      string could not say `null` for a network error without it being the four characters "null", and could not
      carry the URL list, the status or the headers at all. */
-  const replies = String(M.ccall("qjs_pending", "string", [], [])).split("\n").filter(Boolean);
+  const replies = engineOwedList(M, "qjs_pending");
   for (const u of replies)
     M.ccall("qjs_provide", "void", ["string", "string"], [u, JSON.stringify(await eng.fetched(u, false))]);
-  const chunks = String(M.ccall("qjs_chunks", "string", [], [])).split("\n").filter(Boolean);
+  const chunks = engineOwedList(M, "qjs_chunks");
   for (const u of chunks)
     M.ccall("qjs_provide", "void", ["string", "string"], [u, JSON.stringify(await eng.fetched(u, true))]);
   await engineServiceHostRequests(eng);
+}
+/* EVERY OWED LIST CROSSES THE SAME WAY — newline-joined records, or "" for none — so it is read in one place
+   that says so. `String(x)` on its own would turn a NULL pointer (an entry answering before its list exists)
+   into the four characters "null" and then into one bogus record: a URL nothing is parked on, which the
+   engine's own qjs_provide DFAILs on one call later, naming the wrong side. */
+function engineOwedList(M, entry) {
+  const s = M.ccall(entry, "string", [], []);
+  DCHECK(typeof s === "string", entry + " answered with something that is not text — every owed list crosses " +
+                                "as newline-joined records and an empty list is the empty string");
+  return String(s == null ? "" : s).split("\n").filter(Boolean);
 }
 
 /* THE INSTANCE HOLDING A DOCUMENT, by exact name. A child's name is PREFIXED by its creator's ("<creator>.<n>")
@@ -453,7 +605,7 @@ async function engineServiceHostRequests(eng) {
   // nothing runs and a message nothing delivers, with every later read through them parked forever. They were
   // being read and discarded. Handled IN ORDER and one at a time: a page opens a window and posts to it in the
   // same turn, so the create must have finished provisioning before the post that names it is routed.
-  for (const line of String(M.ccall("qjs_host_notices", "string", [], [])).split("\n").filter(Boolean))
+  for (const line of engineOwedList(M, "qjs_host_notices"))
     await hostNotice(eng, line);
   // ONE BRANCH, AND ONLY BECAUSE THIS ZONE CAN GENUINELY ANSWER IT. The rule that deleted every other branch
   // stands: a loop that walks the owed requests is a place to be tempted into GUESSING an answer, which is what
@@ -465,11 +617,23 @@ async function engineServiceHostRequests(eng) {
   // AND IT HAS TO BE ANSWERED, not merely answerable. A flow parked on a request this host never satisfies
   // leaves the engine stalled forever, and the step loop above has no other reason to stop — the same shape the
   // WPT pump was spinning on. Answering is what lets a navigation finish.
-  const reqs = String(M.ccall("qjs_host_requests", "string", [], [])).split("\n").filter(Boolean);
+  const reqs = engineOwedList(M, "qjs_host_requests");
   for (const line of reqs) {
+    /* `id<TAB>op`, which engine_host_requests writes with a snprintf of a counter it CHECKs against wrapping.
+       `if (tab < 0) continue` dropped a record that did not have that shape — and dropping it is the one
+       outcome with no symptom anywhere: the asking flow stays parked on an answer nobody will ever send, its
+       siblings keep running, and the engine reports the same unanswerable request every step forever. */
     const tab = line.indexOf("\t");
-    if (tab < 0) continue;
+    DCHECK(tab > 0, "an owed host request is not `id<TAB>op` — the id is what an answer is routed by, so a " +
+                    "record without one names a call site this zone can never reach");
+    if (tab < 0) continue;   // release: an unanswerable record leaves its flow parked, which is visible
     const id = +line.slice(0, tab), op = line.slice(tab + 1);
+    /* THE ID IS THE WHOLE ROUTING TABLE for an answer — engine_host_answer walks every flow's register for
+       exactly this number and the engine's own counter starts at 1, so a 0 or a NaN answers a call site that
+       does not exist and the answer is silently dropped on the other side (its `return 0` means "the asking
+       flow is gone", which would be a lie). */
+    DCHECK(Number.isInteger(id) && id > 0,
+           "an owed host request carries no usable id — an answer is routed by that number alone");
     // XHR §3.5.6's fetch is the SECOND thing this zone can genuinely answer, and for the identical reason: it
     // is a network fetch, and safeFetch is the one chokepoint SECURITY.md allows it through. The record carries
     // the whole request — method, headers and body — because the chokepoint decides SOP, CORS, method and
@@ -492,10 +656,30 @@ async function engineServiceHostRequests(eng) {
   }
 }
 function engineFinalize(eng) {
+  /* ASK THE ENGINE FOR ITS RESULT — the ABI entry that exists for exactly this and had NO CALLER anywhere in
+     the extension. The only place the production engine ever printed an @RESULT was qjs_emit_partial, and
+     streamPartial CONSUMES that line as it merges it, so a session's findings reached this function only when
+     a partial happened to be left over: a page that finished before the first 750 ms cadence produced a
+     result with no document in it at all, which `result || {}` then turned into a successful analysis
+     reporting no endpoints and no sinks. It is asked BEFORE teardown, because the document is built out of
+     the context teardown frees, and it is the same call qjs_emit_partial makes.
+     A CRASHED instance is not asked: its memory is what aborted, every finding in it is discarded below, and
+     re-entering it would only produce a second abort. */
+  if (!eng._crashed) {
+    let json = null;
+    try { json = eng.M.ccall("qjs_result", "string", [], []); }
+    catch (e) { engineCrash(eng, "result", e); }
+    if (!eng._crashed) {
+      DCHECK(typeof json === "string" && json.length > 0,
+             "qjs_result answered with no document — result_json returns nothing only when the composition " +
+             "itself could not be allocated, which is this page's entire finding set being dropped");
+      if (json) eng.lines.push("@RESULT " + json);
+    }
+  }
   try { eng.M.ccall("qjs_teardown", "void", [], []); }
   catch (e) { engineCrash(eng, "teardown", e); }
   for (const p of eng.ptrs) { try { eng.M._free(p); } catch (_) {} }
-  const result = linesToAnalysis(eng.lines, eng.msg);
+  const result = linesToAnalysis(eng.lines, eng.msg, !eng._crashed);
   result._fkey = eng.fkey; result._prior = eng.prior;   // engine-computed key + parked entry -> persisted below
   if (eng._crashed) {
     // NEVER BUILD ON AN UNCERTAIN ARCHITECTURE. A WASM abort means this engine crashed — every finding it
@@ -539,7 +723,9 @@ function engineCrash(eng, stage, e) {
 function crashResult(stage, e, msg) {
   const m = String((e && e.message) || e);
   crashBanner(stage, m);
-  const r = linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg);
+  /* NO RESULT DOCUMENT IS EXPECTED HERE, and this is the only caller that may say so: the instance aborted
+     before it could answer, so its absence is the crash rather than a broken contract. */
+  const r = linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, false);
   r._engineCrashed = true;
   r.fetchCallSites = []; r.securitySinks = []; r.chunkUrls = []; r.domEndpoints = [];
   r.esmImportUrls = []; r.inRunModuleUrls = []; r.protoEnums = []; r.protoFieldMaps = []; r.dangerousPatterns = []; r._park = []; r._prior = null;
@@ -590,26 +776,43 @@ async function hostSchedule(pool, ops) {
       ops.requestPark(target);
     }
     const st = ops.step(target);
+    /* THE STEP CODE IS TWO VALUES, AND THIS SPOKE THREE. qjs_step answers ENGINE_STEP_DONE (0) or
+       ENGINE_STEP_YIELD (2) and nothing else — it folds the scheduler's STALLED into a yield deliberately,
+       "the bridge speaks two values". The third branch here tested for 1, a NEED_FETCH code no version of
+       engine_sched_step has ever returned, and it was the ONLY caller of ops.serviceFetch: the entire reply
+       path (qjs_pending -> safeFetch -> qjs_provide) was unreachable in the shipped extension, so every flow
+       a page's `fetch()` parked stayed parked, the engine answered STALLED forever, and the analysis promise
+       for that document never resolved. The `else` that caught everything not 0 or 1 is what made a value the
+       engine cannot produce look like a branch someone had thought about. */
+    DCHECK(st === 0 || st === 2,
+           "qjs_step answered with a code outside {DONE, YIELD} — the engine folds STALLED into YIELD itself, " +
+           "so a third value is an ABI that changed under a host still speaking the old one");
     // DEV __forcepark: request the park only after N dispatches, so it captures MID-EXPLORATION residue
     // (recipes with real decvecs + handler-driven async flows), mirroring a production RAM-pressure park.
     if (target._forceparkSteps > 0 && --target._forceparkSteps === 0) ops.requestPark(target);
-    // INCREMENTAL MERGE (both hot AND fetch-parked): a lone UNBOUNDED engine never reaches st===0, so without
-    // this its already-emitted breadth never surfaces (@RESULT is teardown-only). A FETCH-HEAVY engine (lazy
-    // chunks / a reply loop) is perpetually st===1, never st===2 — so surfacing ONLY on st===2 leaves it at
-    // zero (the realish symptom). Snapshot + merge on a coarse cadence on every non-final step.
+    // INCREMENTAL MERGE: a lone UNBOUNDED engine never reaches st===0, so without this its already-emitted
+    // breadth surfaces only at finalize. Snapshot + merge on a coarse cadence on every non-final step.
     if (st !== 0 && ops.streamPartial) ops.streamPartial(target);
-    if (st === 1) {   // NEED_FETCH: service asynchronously (non-blocking) so other engines keep advancing
-      target.state = "fetching";
-      target._fetchP = ops.serviceFetch(target).then(() => { target.state = "hot"; }, () => { target.state = "hot"; });
-    } else if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
+    if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
       await ops.finish(target);
-    } else {   // st === 2: engine yielded HOT on its cooperative quantum (frontier intact).
-      // AND A STALL LOOKS EXACTLY LIKE THIS. qjs_step reports a stall as a yield on purpose — the bridge
-      // speaks two values — so the one place that can tell them apart is the owed list itself, and asking is
-      // an empty ccall on every ordinary quantum. Without it a flow parked on a host-owed answer is never
-      // serviced at all: NEED_FETCH is the only branch that services, and a stall is not one. The engine would
-      // yield, be resumed, stall again, forever — the same shape the WPT pump was spinning on, one layer up.
-      await ops.serviceHostRequests(target);
+    } else {   // ENGINE_STEP_YIELD — a cooperative quantum, or a STALL the engine reports as one.
+      /* PAY EVERYTHING THE ENGINE SAYS IT IS OWED, in ONE round: the replies parked flows wait on, the lazy
+         chunks, the notices this zone must act on and the synchronous requests only it can answer. A stall is
+         indistinguishable from an ordinary quantum here on purpose, so asking is the only way to tell — and
+         asking costs an empty ccall on a quantum that owes nothing. Servicing only the REQUESTS (which is
+         what this did) left the fetch half of the same owed list unpaid forever.
+         NON-BLOCKING, the way the unreachable branch was: the engine drops out of the hot set while its round
+         runs, so a slow reply on this document never stalls another's. */
+      target.state = "fetching";
+      target._fetchP = ops.serviceFetch(target).then(
+        () => { target.state = "hot"; },
+        (e) => {
+          /* A THROW OUT OF A SERVICE ROUND IS AN INVARIANT FAILURE — every assert in the reply builders, the
+             notice router and the request loop lands here. It was being discarded into a state reset. */
+          target.state = "hot";
+          crashBanner("service", String((e && e.stack) || e));
+          if (self.APICLIENT_DEV) throw e;
+        });
       // Then RETURN TO THE EVENT LOOP via a MACROtask so the ONE thread services its message port (evals,
       // postMessage, timers) before we re-enter and RESUME the byte-identical frontier — the anti-freeze yield.
       await macroYield();
@@ -624,9 +827,22 @@ let _hostDriving = false;
 let _engineFactory = engineCreate;   // injectable for tests
 const _hostOps = {
   weight: engineWeight,
-  setFloor: (eng, floor) => { try { eng.M.ccall("qjs_set_yield_floor", "void", ["number"], [floor]); } catch (_) {} },   // value yield: run until outranked by the runner-up
+  /* THE VALUE YIELD FLOOR — run until outranked by the runner-up. The `try {} catch (_) {}` around it is gone
+     with the two below it: a ccall into the engine either returns or ABORTS, and an abort is the WASM
+     instance crashing. Swallowing that leaves a dead engine in the pool being stepped, ranked and finalized
+     as if it were alive, which is the one outcome engineCrash exists to make impossible. */
+  setFloor: (eng, floor) => {
+    DCHECK(Number.isFinite(floor) || floor === -Infinity,
+           "the pool set a yield floor that is not a number — the engine compares its top flow's weight " +
+           "against it, and a NaN floor makes every comparison false so the flow never yields");
+    eng.M.ccall("qjs_set_yield_floor", "void", ["number"], [floor]);
+  },
   underPressure: () => _residentBytes() >= HOT_RAM_BUDGET,   // summed live wasm memory over the working-set floor
-  requestPark: (eng) => { try { eng.M.ccall("qjs_request_park", "void", [], []); } catch (_) {} },   // cold-tier park under RAM pressure (resource-driven)
+  /* THE COLD-TIER PARK, whose engine half is an unbuilt capability that says so: qjs_request_park is a bare
+     DFAIL naming the serializer to write. The catch here swallowed exactly that — the abort a DFAIL exists to
+     produce was turned into a no-op, so the host went on believing it had evicted an engine that never parked
+     and the missing capability had no symptom at all. It is the forcing function; it is not caught. */
+  requestPark: (eng) => { eng.M.ccall("qjs_request_park", "void", [], []); },
   /* INCREMENTAL MERGE (coarse cadence): snapshot a HOT engine's current findings + merge to the cumulative
      moat WITHOUT waiting for a finalize that an unbounded engine never reaches. First sight starts the clock,
      so short analyses (finalize before PARTIAL_MS) never pay for it. qjs_emit_partial appends a fresh @RESULT
@@ -637,28 +853,46 @@ const _hostOps = {
     if (!eng._lastPartial) { eng._lastPartial = now; return; }
     if (now - eng._lastPartial < PARTIAL_MS) return;
     eng._lastPartial = now;
-    try {
-      eng.M.ccall("qjs_emit_partial", "void", [], []);
-      let idx = -1;
-      for (let i = eng.lines.length - 1; i >= 0; i--) if (String(eng.lines[i]).startsWith("@RESULT ")) { idx = i; break; }
-      if (idx < 0) return;
-      const partial = linesToAnalysis([eng.lines[idx]], eng.msg);   // parse only the snapshot line
-      eng.lines.splice(idx, 1);                                     // consume it
-      // Merge on EITHER surface: an XSS-only page (verified @S PoCs, no endpoints) must surface incrementally
-      // too — gating the merge on fetchCallSites alone dropped every sink from a live/looping engine.
-      const hasWork = partial.fetchCallSites.length || (partial.securitySinks && partial.securitySinks.length);
-      if (hasWork && typeof self.onFrontierAdvance === "function") self.onFrontierAdvance(eng.msg.sourceUrl, partial);
-    } catch (_) {}
+    /* A WASM ABORT IS THE ENGINE CRASHING — the only failure this ccall has. It was inside the same swallowing
+       catch as everything below it, so a crash mid-analysis left the engine in the pool to be stepped again. */
+    try { eng.M.ccall("qjs_emit_partial", "void", [], []); }
+    catch (e) { engineCrash(eng, "partial", e); return; }
+    let idx = -1;
+    for (let i = eng.lines.length - 1; i >= 0; i--) if (String(eng.lines[i]).startsWith("@RESULT ")) { idx = i; break; }
+    /* qjs_emit_partial PRINTS ONE, unconditionally. No line here means the print sink between the engine and
+       this zone dropped it, and returning quietly would report the engine as having found nothing. */
+    DCHECK(idx >= 0, "qjs_emit_partial produced no @RESULT line — it prints the one result document every time " +
+                     "it is called, so its absence is this zone's own capture of the engine's output failing");
+    if (idx < 0) return;   // release
+    const partial = linesToAnalysis([eng.lines[idx]], eng.msg, true);   // parse only the snapshot line
+    eng.lines.splice(idx, 1);                                           // consume it
+    // Merge on EITHER surface: an XSS-only page (verified @S PoCs, no endpoints) must surface incrementally
+    // too — gating the merge on fetchCallSites alone dropped every sink from a live/looping engine.
+    const hasWork = partial.fetchCallSites.length || (partial.securitySinks && partial.securitySinks.length);
+    if (!hasWork) return;
+    /* THE MERGE CALLBACK IS THE OTHER HALF OF THIS EDGE. `typeof … === "function"` guarding the call meant a
+       zone that had not installed it dropped every incremental finding silently; offscreen-brain.js installs
+       it before this file is even loaded, so its absence is a broken load order, not an optional feature. */
+    DCHECK(typeof self.onFrontierAdvance === "function",
+           "the trusted zone has no onFrontierAdvance to merge an engine's findings into — every incremental " +
+           "finding this engine emits has nowhere to go");
+    self.onFrontierAdvance(eng.msg.sourceUrl, partial);
   },
   step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { engineCrash(eng, "step", e); return 0; } },   // crashed instance -> finalize (loud), don't keep stepping a dead engine
+  /* ONE SERVICE ROUND, and there is no second op beside it. `serviceHostRequests` was a separate injected op
+     because the yield branch paid half the owed list; it is a strict subset of this one (engineServiceFetch
+     ends by calling it), so keeping both would be two names for one round with a caller free to pick the
+     half that skips the replies. */
   serviceFetch: engineServiceFetch,
-  serviceHostRequests: engineServiceHostRequests,
   admit: async () => {   // gate CREATION to the RAM budget: build an instance only under memory pressure headroom
     // 1) seat waiting LIVE documents (the user's open tabs) first
     while (_waiting.length && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {
       const job = _waiting.shift();
       try { const eng = await _engineFactory(job.code, job.html, job.msg, job.persist); eng._resolve = job.resolve; _pool.push(eng); }
-      catch (e) { job.resolve(crashResult("create", e, job.msg)); }   // boot/creation abort: LOUD failure, not a quiet degenerate result
+      // boot/creation abort: LOUD failure, not a quiet degenerate result. An invariant abort from the creation
+      // path (the init return code, the bundle id, the frontier key's origin) is NOT a boot abort and must not
+      // be reported as one — it is this zone's own contract with the engine breaking.
+      catch (e) { RETHROW_FATAL(e); job.resolve(crashResult("create", e, job.msg)); }
     }
     // 2) ONE frontier: when no LIVE work is pending/running and RAM has headroom, rehydrate the highest-value
     //    COLD recipes into the SAME pool so they interleave with (and by) the one WFQ — not a second scheduler.
@@ -678,7 +912,7 @@ const _hostOps = {
                         topLevelUrl: c.topLevelUrl, credentialed: c.credentialed, persist: true };
           const eng = await engineCreate(c.code || "", c.html || "", msg, true);   // a rehydrated cold recipe always participates in the frontier
           eng._cold = true; _pool.push(eng);
-        } catch (e) { crashBanner("create-cold", String((e && e.message) || e)); }   // was silently swallowed — a cold-rehydration abort must be LOUD too
+        } catch (e) { RETHROW_FATAL(e); crashBanner("create-cold", String((e && e.message) || e)); }   // was silently swallowed — a cold-rehydration abort must be LOUD too
       }
     }
   },
@@ -701,14 +935,33 @@ const _hostOps = {
         emit: ((prior && prior.emit) || 0) + (result.fetchCallSites || []).length, visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
       });
     }
-    if (eng._cold) { try { if (typeof self.onFrontierAdvance === "function") self.onFrontierAdvance(eng.msg.sourceUrl, result); } catch (_) {} }   // no live caller -> merge to the moat here
+    if (eng._cold) {
+      /* NO LIVE CALLER — a child document or a rehydrated cold recipe merges its findings to the moat here.
+         The `try {} catch (_) {}` around this swallowed the merge's OWN assertions: _mergeFrontierResult
+         DCHECKs the engine↔JS contract on the result it is handed, and that abort was landing in this catch
+         and being discarded, which is the one place it could not be seen. */
+      DCHECK(typeof self.onFrontierAdvance === "function",
+             "the trusted zone has no onFrontierAdvance to merge a finalized engine's findings into — a child " +
+             "document's and a resumed frontier's entire output has nowhere to go");
+      self.onFrontierAdvance(eng.msg.sourceUrl, result);
+    }
     if (eng._resolve) eng._resolve(result);
   },
 };
 function _hostKick() {
   if (_hostDriving) return;
   _hostDriving = true;
-  hostSchedule(_pool, _hostOps).catch((e) => console.debug("[host-wfq] %s", e && e.message)).finally(() => { _hostDriving = false; if (_pool.length || _waiting.length) _hostKick(); });
+  /* THE ONE LOOP'S FAILURE IS NOT A DEBUG LINE. Every assertion in the bridge — the notice router's field
+     counts and its DFAIL on an op this zone does not act on, the owed-request checks, the result document's
+     shape, the merge's own contract check — is thrown from inside this loop, and `.catch(console.debug)` took
+     the whole class and printed one line of it at a level nothing reads. Worse, it did so while the analysis
+     promise for the document being stepped was still unresolved, so a violated invariant surfaced as a page
+     that simply never finished. A LOUD banner, then rethrow in dev: an unhandled rejection is the honest
+     shape of "the scheduler died", and it is impossible to overlook. */
+  hostSchedule(_pool, _hostOps).catch((e) => {
+    crashBanner("host-wfq", String((e && e.stack) || e));
+    if (self.APICLIENT_DEV) throw e;
+  }).finally(() => { _hostDriving = false; if (_pool.length || _waiting.length) _hostKick(); });
 }
 /* The offscreen kicks the pool on idle so parked COLD recipes get pulled in (admit re-checks the frontier)
    even when no new document arrives — the single ATTENTION keeps advancing across sessions. */
@@ -720,10 +973,19 @@ self.kickHostPool = _hostKick;
 
 self.astDispatch = async function astDispatch(msg) {
   try {
+    /* FINDING, LEFT AT THE SITE RATHER THAN ASSERTED: the trusted zone still SENDS types this entry answers
+       "unknown type" to — offscreen-brain.js dispatches SET_ANALYSIS_OPTS at brain boot and popup-handlers.js
+       sends it when the user changes an option, and both land here and are refused. That is a real unbuilt
+       edge (an option the user sets reaches nothing), but it is not one an assert can be put on from this
+       side: the senders wrap the call in their own catch, so a DFAIL here would abort the dev extension at
+       boot into a swallow rather than at the missing capability. It belongs with whoever owns the analysis
+       options — either the bridge answers the type or the senders go. */
     if (!msg || msg.type !== "AST_ANALYZE") return { success: false, error: "unknown type " + (msg && msg.type) };
     const html = msg.pageHtml || "";
     const code = msg.code || "";           // any brain-assembled scripts (usually empty); the DOM carries the page
-    if (!html && !code) return { success: true, result: linesToAnalysis([], msg) };
+    // NOTHING TO RUN, so no engine runs and there is no result document to expect — this is the one analysis
+    // that legitimately has none, and it says so rather than sharing the absent-document path with a real run.
+    if (!html && !code) return { success: true, result: linesToAnalysis([], msg, false) };
 
     /* ENQUEUE this document into the LIVE host WFQ pool. Its wasm instance interleaves in SLICES with every
        other open document by value-of-information — no run-to-completion, no recency monopoly. The per-doc
@@ -733,6 +995,11 @@ self.astDispatch = async function astDispatch(msg) {
     const result = await new Promise((resolve) => { _waiting.push({ code, html, msg, persist, resolve }); _hostKick(); });
     return { success: true, result };   // result.fetchCallSites is already deduped by the engine
   } catch (e) {
+    /* AN INVARIANT ABORT IS NOT AN ANALYSIS FAILURE. This catch reports a failed dispatch to the brain, which
+       records it as `_astError` and moves on — the right handling for a page that could not be analysed, and
+       the wrong handling for a DCHECK, which would arrive as a string in a debug line and let the zone carry
+       on with a contract it has already proved is broken. */
+    RETHROW_FATAL(e);
     return { success: false, error: String(e && e.message || e), stack: e && e.stack };
   }
 };

@@ -341,6 +341,14 @@ QJS_EXPORT int qjs_step(void)
     r = engine_sched_step();
     if (r == ENGINE_STEP_STALLED)
         return ENGINE_STEP_YIELD;   /* the bridge speaks two values; a stall is "call me again", same as a slice */
+    /* TWO VALUES, AND THIS ENTRY IS WHERE THAT IS TRUE. The scheduler has three codes and the fold above is
+       what makes them two, so a fourth code added there would arrive at a host whose branches are written
+       against this ABI — and the bridge's own third branch (a NEED_FETCH that no version of the scheduler has
+       ever returned) is what a host does with a value it was never given: it writes a plausible one and the
+       path behind it is never taken. */
+    DCHECK(r == ENGINE_STEP_DONE || r == ENGINE_STEP_YIELD,
+           "the scheduler answered a step with a code this ABI does not carry — the host branches on DONE and "
+           "YIELD alone, so a third value reaches it as whichever branch happens to be the fallback");
     g_done = (r == ENGINE_STEP_DONE);
     return r;
 }
@@ -579,8 +587,18 @@ QJS_EXPORT double qjs_top_weight(void)
     return engine_top_weight();
 }
 
+/* THE VALUE YIELD FLOOR — the runner-up engine's weight, so the running flow yields the moment it is
+   outranked ACROSS documents. It was the one entry in this ABI with no contract on it at all, which is how an
+   edge stops being an edge: every other entry states what it may be handed and aborts when it is handed
+   something else, and this one accepted anything a host could put in a double. A NaN is the case that matters
+   and it is silent by construction — every comparison against it is false, so the top flow simply never
+   yields and the host's Level-1 interleave stops happening with nothing to say so. */
 QJS_EXPORT void qjs_set_yield_floor(double floor)
 {
+    DCHECK(g_begun, "a yield floor was set on an engine whose frontier was never seeded — there is no flow to "
+                    "rank against it");
+    DCHECK(!(floor != floor), "the host set a yield floor of NaN — every weight comparison against it is false, "
+                              "so the running flow is never outranked and the Level-1 interleave silently stops");
     engine_set_yield_floor(floor);
 }
 
