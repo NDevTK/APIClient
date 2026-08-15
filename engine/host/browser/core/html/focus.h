@@ -12,6 +12,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
+#include "quickjs-step.h"
 
 /* THE AGENT'S HALF: the realm slot §6.6.2's focused area lives in, and the three declared members. Reached from
    document_init, beside §6.6's visibility state and for the same reason it is paired there rather than copied
@@ -71,8 +72,22 @@ int  focus_viewport_run(JSContext *docctx, uint8_t *phase, JSValue *cb, int cb_c
  * it implements. The alternative is a second copy of "what a focusable area is" in autofocus.c — the same
  * one-fact-two-answers defect the rendering step above avoids for the same reason. */
 
-/* §6.6.6's ALLOW FOCUS STEPS given a Document, which §6.6.7's insertion steps run as their step 5. */
-bool focus_allow_focus_steps(JSContext *docctx);
+/* §6.6.6's ALLOW FOCUS STEPS given a Document, which §6.6.7's insertion steps run as their step 5.
+   A REQUEST, not a `bool`: its second clause is §6.4.1's transient activation, which is unknown external state
+   (core/html/user_activation.h), so the answer FORKS — this flow takes one and a sibling is snapshotted
+   holding the other. `h` is the calling step machine's header and `phase` a byte that machine owns on its own
+   state, exactly as user_activation.h's own questions take one. Returns JS_STEP_FORK (the caller returns it
+   and is re-entered at the same call site) or 0 with *out set. The first clause short-circuits, so a document
+   that is same origin with its top-level document is answered without asking anything. */
+int focus_allow_focus_steps_run(JSContext *docctx, JSStepHdr *h, uint8_t *phase, bool *out);
+
+/* THE FIRST OF THE ALLOW FOCUS STEPS' TWO CLAUSES ON ITS OWN — "if target is allowed to use the
+   `focus-without-user-activation` feature, return true". It is exported separately because it is the half that
+   DECIDES WITHOUT ASKING, and a caller that cannot ask needs to know which half it is standing on: §6.6.7's
+   insertion steps run inside DOM §4.2.3's tree-steps walk, which has no flow base to fork at, so they answer
+   this clause and CRASH on the other rather than picking one of its two arms silently. Nothing may use this as
+   a cheaper spelling of the whole algorithm — the second clause is the one that reaches the activated world. */
+bool focus_allow_without_user_activation(JSContext *docctx);
 
 /* §6.6.7 flush step 4's first disjunct, negated — "topDocument's focused area is topDocument itself". §6.6.2's
    focused area is either an element or the VIEWPORT, whose DOM anchor IS the Document, so the spec's sentence

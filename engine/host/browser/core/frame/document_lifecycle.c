@@ -171,13 +171,17 @@ static bool document_sandboxes_modals(JSContext *ctx)
     X(BU_EVENT, "HTML §7.4.2.4 fire beforeunload steps 1-3 (the BeforeUnloadEvent, cancelable, whose " \
                 "returnValue is the empty string)") \
     X(BU_FIRE,  "HTML §7.4.2.4 fire beforeunload steps 4-9 (fire it at the document's relevant global object " \
-                "with the legacy target override flag, then the unload-prompt conjunction)")
+                "with the legacy target override flag, then the first two conjuncts of the unload prompt)") \
+    X(BU_PROMPT, "HTML §7.4.2.4 step 6's third conjunct (the document's relevant global object has STICKY " \
+                 "ACTIVATION — unknown external state, so this is where the flow forks and only one of the " \
+                 "two worlds shows an unload prompt)")
 enum { BEFOREUNLOAD_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const BEFOREUNLOAD_STEPS[] = { BEFOREUNLOAD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSStepHdr hdr;
     uint8_t   fphase;   /* the fire request's own phase */
+    uint8_t   ua_phase; /* the sticky-activation question's own phase (core/html/user_activation.h) */
     JSValue   ev;       /* the BeforeUnloadEvent, minted once and read back after the dispatch (owned) */
     EventFireCb   cb;    /* the fire request's buffer — event_target_fire_run needs four slots */
 } BeforeUnloadState;
@@ -416,6 +420,7 @@ static int js_beforeunload_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         s->ev = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         s->fphase = 0;
+        s->ua_phase = 0;
         s->hdr.stage = BU_FIRE;
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
@@ -424,8 +429,7 @@ static int js_beforeunload_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         if (cctx)
             s->ev = before_unload_event_new(cctx);   /* steps 1-3, and §7.2.7.7's empty returnValue */
     }
-    DCHECK(s->hdr.stage == BU_FIRE, "§7.4.2.4's beforeunload task resumed at a stage it does not have");
-    if (cctx && !JS_IsUndefined(s->ev)) {
+    if (s->hdr.stage == BU_FIRE && cctx && !JS_IsUndefined(s->ev)) {
         JSValue g = JS_GetGlobalObject(cctx);
         int r;
 
@@ -438,15 +442,28 @@ static int js_beforeunload_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         cb_result = JS_UNDEFINED;                     /* the fire consumed it */
         /* STEP 6's CONJUNCTION — the unload prompt. Four of its five parts are decided here and the fifth is
            the user agent's own judgement ("showing an unload prompt is unlikely to be annoying, deceptive, or
-           pointless"), which is not reached while the third part answers false.
-           THE THIRD PART IS REAL STATE NOW, not a constant: §6.4.1's sticky activation is a comparison against
-           this Window's own last activation timestamp, and the reason it still answers false everywhere is
-           that this engine dispatches no TRUSTED input event for §6.4.2's notification to run before — a
-           property of the engine's inputs, which is where it belongs, rather than of this conjunct. The day
-           one exists, this line starts saying yes and the DFAIL below is the work it names. */
+           pointless"), which is not reached while an earlier part answers false.
+           THE FIRST TWO ARE DECIDED HERE AND THE THIRD IS A QUESTION, which is why it is a stage below rather
+           than a third `&&`. §6.4.1's sticky activation is a comparison against this Window's own last
+           activation timestamp, and that timestamp is UNKNOWN EXTERNAL STATE for a Window this engine has
+           dispatched no trusted input event into (core/html/user_activation.h): both answers are feasible, so
+           the question FORKS and only one of the two worlds reaches the prompt. Written as one conjunction it
+           would have been a C `if` over a value the solver had not decided — the arm-picking this whole
+           mechanism exists to prevent — and the fire above would have been re-run on every re-entry, because a
+           machine may have exactly one request outstanding and this stage already spends it on the dispatch. */
         if (before_unload_event_asks_to_cancel(cctx, s->ev)          /* the event's own two-part answer */
-            && !document_sandboxes_modals(cctx)
-            && user_activation_sticky(cctx)) {
+            && !document_sandboxes_modals(cctx))
+            s->hdr.stage = BU_PROMPT;
+    }
+    if (s->hdr.stage == BU_PROMPT) {
+        bool sticky = false;
+        int r;
+
+        DCHECK(cctx != NULL, "§7.4.2.4 step 6 resumed at the sticky-activation conjunct with no realm to ask "
+                             "it of — the stage is only ever set inside the branch that has one");
+        r = user_activation_sticky_run(cctx, &s->hdr, &s->ua_phase, &sticky);
+        if (r) return r;
+        if (sticky) {
             DFAIL("§7.4.2.4 reached the unload prompt — BUILD the two things it needs: an unload prompt (the "
                   "user agent asks the user to confirm and PAUSES, so it is a suspension of this flow and not "
                   "a call), and the accumulator its answer feeds — unloadPromptShown and finalStatus are "
@@ -456,6 +473,8 @@ static int js_beforeunload_step(JSContext *ctx, void *st, JSValue cb_result, JSV
                   "only status this can produce");
         }
     }
+    DCHECK(s->hdr.stage == BU_FIRE || s->hdr.stage == BU_PROMPT,
+           "§7.4.2.4's beforeunload task resumed at a stage it does not have");
     JS_FreeValue(ctx, cb_result);
     subtree_report(ctx, proxy, LC_BEFOREUNLOAD, after);
     return JS_STEP_DONE;

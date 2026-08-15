@@ -801,7 +801,11 @@ static JSValue js_has_focus(JSContext *ctx, JSValueConst this_val, int argc, JSV
  * chains and its cursors intact. It also rests once per chain entry, so a chain of nested documents cannot be
  * walked to completion inside one opcode. */
 #define FOCUS_STAGES(X) \
-    X(FOC_ENTER,    "HTML §6.6.6 focus()/blur() step 1 (the allow focus steps; the algorithm's focus target)") \
+    X(FOC_ENTER,    "HTML §6.6.6 focus()/blur() step 1 (the algorithm's focus target, and the Document the " \
+                    "allow focus steps are given)") \
+    X(FOC_ALLOW,    "HTML §6.6.6 focus() step 1 → the ALLOW FOCUS STEPS' second clause (target's relevant " \
+                    "global object has TRANSIENT ACTIVATION — unknown external state, so the flow forks here " \
+                    "and the refused arm and the focusing arm are two worlds)") \
     X(FOC_UNFOCUS,  "HTML §6.6.4 unfocusing steps steps 1-7 (the delegating host, inert, the old chain, and " \
                     "the branch on the top document's system focus)") \
     X(FOC_AREA,     "HTML §6.6.4 focusing steps steps 1-5 (get the focusable area over the focus delegate " \
@@ -832,8 +836,15 @@ enum { FOCUS_EL_FOCUS = 0, FOCUS_EL_BLUR, FOCUS_WIN_FOCUS, FOCUS_VIEWPORT, FOCUS
 
 typedef struct {
     uint8_t  fphase;                 /* the fire request's own phase */
+    uint8_t  ua_phase;               /* the allow focus steps' activation question's own phase */
     uint8_t  kind;                   /* the current focus target's kind */
     JSValue  target;                 /* the current focus target (owned) */
+    /* THE DOCUMENT THE ALLOW FOCUS STEPS ARE GIVEN, as its WindowProxy (owned; JS_UNDEFINED where the entry
+       point has no step 1 to run). It is CARRIED rather than re-derived at the stage that asks, because that
+       stage is a rest point: the question it asks is over unknown state, so the flow can park there and
+       another flow can run, and an operation that becomes a work item takes its inputs with it. A raw
+       JSContext * would say the same thing and say it in a form no snapshot can carry across a session. */
+    JSValue  allow_win;
     JSValue  old_chain, new_chain;   /* Arrays of alternating (kind, value) (owned) */
     uint32_t old_n, new_n;           /* how many ENTRIES of each are live — step 1's pop shortens both */
     uint32_t i, j;                   /* step 2's cursor, and step 4's count of entries already visited */
@@ -852,6 +863,7 @@ static void focus_state_visit(JSContext *ctx, void *st, JSStepVisit *v)
     int k;
 
     v->val(ctx, &s->target);
+    v->val(ctx, &s->allow_win);
     v->val(ctx, &s->old_chain);
     v->val(ctx, &s->new_chain);
     v->val(ctx, &s->ev);
@@ -864,10 +876,11 @@ static void focus_state_release(JSContext *ctx, void *st)
     int k;
 
     JS_FreeValue(ctx, s->target);
+    JS_FreeValue(ctx, s->allow_win);
     JS_FreeValue(ctx, s->old_chain);
     JS_FreeValue(ctx, s->new_chain);
     JS_FreeValue(ctx, s->ev);
-    s->target = s->old_chain = s->new_chain = s->ev = JS_UNDEFINED;
+    s->target = s->allow_win = s->old_chain = s->new_chain = s->ev = JS_UNDEFINED;
     STEP_CB_FOREACH(s->cb, k) {
         JS_FreeValue(ctx, s->cb[k]);
         s->cb[k] = JS_UNDEFINED;
@@ -880,11 +893,12 @@ static bool focus_state_init(JSContext *ctx, FocusState *s)
 {
     int k;
 
-    s->target = s->ev = JS_UNDEFINED;
+    s->target = s->ev = s->allow_win = JS_UNDEFINED;
     s->old_chain = s->new_chain = JS_UNDEFINED;
     s->kind = FA_NONE;
     s->old_n = s->new_n = s->i = s->j = 0;
     s->fphase = 0;
+    s->ua_phase = 0;
     STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
     s->old_chain = JS_NewArray(ctx);
     s->new_chain = JS_NewArray(ctx);
@@ -898,18 +912,33 @@ static bool focus_state_init(JSContext *ctx, FocusState *s)
    `Permissions-Policy` header and no `allow` attribute, so nothing narrows or widens the default and the
    default IS the answer.
      "If target's relevant global object has TRANSIENT ACTIVATION, return true."  Asked of §6.4.1's real state
-   (core/html/user_activation.c), never assumed: it answers false today only because this engine dispatches no
-   trusted activation triggering input event, and it starts answering true the moment one exists — which is the
-   whole reason that component is a state machine rather than the constant it replaced.
+   (core/html/user_activation.c), never assumed — and asked THROUGH THE FORK SEAM, which is why this is a
+   request and not a `bool` function. Whether a user has interacted with the page is unknown external state
+   (user_activation.h says why it is a source and not a constant), so the second clause has two feasible
+   answers and both reach code worth running: `el.focus()` refused, and `el.focus()` running the whole of
+   §6.6.4 with its four events. A C `if` here would pick one of those and delete the other, which is the one
+   thing a solver exists to prevent.
+     THE FIRST CLAUSE STILL SHORT-CIRCUITS, and it does the work: a same-origin-with-top document is allowed to
+   use the feature outright, so nothing is asked and nothing forks — which is every document in an ordinary
+   page. The question is reached only where the feature's default allowlist does not already answer it.
      IT IS EXPORTED because §6.6.7's insertion steps run it too (their step 5), by that name, over the same
    Document — see focus.h. */
-bool focus_allow_focus_steps(JSContext *target)
+bool focus_allow_without_user_activation(JSContext *target)
 {
     JSValue top = window_proxy_top_navigable(target, document_window_proxy(target));
     bool same = JS_IsObject(top) && window_proxy_same_origin_of(top);
 
     JS_FreeValue(target, top);
-    return same || user_activation_transient(target);
+    return same;
+}
+
+int focus_allow_focus_steps_run(JSContext *target, JSStepHdr *h, uint8_t *phase, bool *out)
+{
+    if (focus_allow_without_user_activation(target)) {
+        *out = true;
+        return 0;
+    }
+    return user_activation_transient_run(target, h, phase, out);
 }
 
 /* The event target for a chain entry — §6.6.4 steps 2.2 and 4.2, which are the same three cases twice: an
@@ -954,11 +983,14 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
             if (magic == FOCUS_WIN_FOCUS) {
                 /* §6.6.6's Window focus() steps: the navigable, the allow focus steps over its ACTIVE
                    DOCUMENT, then the focusing steps with the navigable itself. There is no notification to
-                   trigger — step 5's is a user-agent presentation with no scriptable result. */
-                if (!focus_allow_focus_steps(ctx)) return 0;
+                   trigger — step 5's is a user-agent presentation with no scriptable result.
+                   THE DOCUMENT THE ALLOW FOCUS STEPS ARE GIVEN IS CARRIED to the stage that asks, as its
+                   WindowProxy: that stage is a rest point, so the operand travels with the work item instead
+                   of being read back off the running realm after other flows have run. */
                 s->kind = FA_NAVIGABLE;
                 s->target = JS_DupValue(ctx, document_window_proxy(ctx));
-                hdr->stage = FOC_AREA;
+                s->allow_win = JS_DupValue(ctx, document_window_proxy(ctx));
+                hdr->stage = FOC_ALLOW;
                 continue;
             }
             if (magic == FOCUS_VIEWPORT) {
@@ -1049,7 +1081,29 @@ static int focus_step(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSV
                with no browsing context has neither the feature nor an activation, so its elements are not
                focusable through this member at all. */
             doc = n->owner_document ? document_active_realm_of(lxb_dom_interface_node(n->owner_document)) : NULL;
-            if (!doc || !focus_allow_focus_steps(doc)) return 0;
+            if (!doc) return 0;
+            s->allow_win = JS_DupValue(ctx, document_window_proxy(doc));
+            hdr->stage = FOC_ALLOW;
+            continue;
+        }
+
+        case FOC_ALLOW: {
+            /* §6.6.6 step 1's ALLOW FOCUS STEPS, over the Document FOC_ENTER handed this stage. The second of
+               their two clauses is §6.4.1's transient activation, which is unknown external state, so this is
+               where the flow forks: one arm is `focus()` refused and the page's fallback, the other runs the
+               whole of §6.6.4 and its four events. A stage of its own because a machine may have exactly one
+               request outstanding, and re-entering a stage that asks twice would re-ask the first forever. */
+            bool allowed = false;
+            JSContext *doc;
+            int r;
+
+            DCHECK(window_proxy_is(s->allow_win),
+                   "§6.6.6 step 1 reached the allow focus steps with no Document to run them over — every "
+                   "entry point that sets this stage sets the WindowProxy beside it");
+            doc = window_proxy_realm(ctx, s->allow_win);
+            r = focus_allow_focus_steps_run(doc, hdr, &s->ua_phase, &allowed);
+            if (r) return r;
+            if (!allowed) return 0;
             hdr->stage = FOC_AREA;
             continue;
         }

@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
@@ -11,6 +12,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/user_activation.h"
 #include "core/timing/timer.h"
+#include "solver/concolic.h"
 
 /* §6.4.1's TWO PER-WINDOW VALUES, and the initial value of each is the whole of what "never activated" means.
  *
@@ -40,6 +42,24 @@
    sentence above, and five seconds is the largest value that still reads as "a few". */
 #define UA_TRANSIENT_ACTIVATION_DURATION_MS 5000.0
 
+/* THE UNKNOWN, AND THE TWO PREDICATES OVER IT — see the header for why the initial timestamp is a source and
+   not a constant. The shape is what an @H record would display it as; the source identity is what the flow's
+   path constraint is keyed by, so every Window of this agent shares ONE fact ("did the user interact with this
+   page") rather than one per frame, which is also what a real interaction does: §6.4.2's notification activates
+   an ancestor chain and a same-origin subtree in one go.
+   The OPERATION strings are the other half of the key (decide.c keys an outcome fork by source-then-operation),
+   so the two questions stay independent facts about the one source. */
+#define UA_SHAPE       "{user has interacted}"
+#define UA_SRC         "window.userActivation"
+#define UA_OP_STICKY    "HTML §6.4.1 sticky activation"
+#define UA_OP_TRANSIENT "HTML §6.4.1 transient activation"
+#define UA_OP_HISTORY   "HTML §6.4.1 history-action activation"
+
+/* THE TWO QUESTIONS user_activation_transient_run ASKS IN SEQUENCE, as the caller's phase byte spells them.
+   Zero is "ask the first", which is what a zeroed byte already reads as and what every answered question
+   leaves behind. */
+enum { UA_PH_STICKY = 0, UA_PH_RECENT };
+
 static int g_slot = -1;
 
 /* THIS REALM'S §6.4.1 RECORD. Owned — the caller frees. */
@@ -51,29 +71,75 @@ static JSValue ua_record(JSContext *ctx)
     return rec;
 }
 
-static double ua_get(JSContext *ctx, const char *field)
+/* ONE OF THE TWO TIMESTAMPS, OWNED. Either a real number — a DOMHighResTimeStamp this engine's own §6.4.2
+   notification wrote, or one of the two infinities — or the CONCOLIC the record was born holding, which is
+   "the user may or may not have interacted and this engine has no way to see which". */
+static JSValue ua_ts(JSContext *ctx, const char *field)
 {
     JSValue rec = ua_record(ctx), v = JS_GetPropertyStr(ctx, rec, field);
+
+    JS_FreeValue(ctx, rec);
+    DCHECK(JS_IsNumber(v) || concolic_is(v),
+           "a §6.4.1 activation timestamp is neither a number nor the unknown it was born as — the record holds "
+           "two DOMHighResTimeStamps, the two infinities and the source the initial value is, and nothing else "
+           "ever writes it");
+    return v;
+}
+
+/* A TIMESTAMP THIS ENGINE KNOWS THE VALUE OF. Every caller has already established that the value is not the
+   unknown — by testing concolic_is, or by having written it itself — so a non-number here is a caller that
+   skipped that test and would otherwise coerce a source object to NaN and compare against it. */
+static double ua_number(JSContext *ctx, JSValueConst v)
+{
     double d = 0;
 
-    DCHECK(JS_IsNumber(v), "a §6.4.1 activation timestamp is not a number — the record holds two "
-                           "DOMHighResTimeStamps and the two infinities, and nothing else ever writes it");
+    DCHECK(!concolic_is(v), "a §6.4.1 activation timestamp that is UNKNOWN was read as a number — the "
+                            "comparison would be against NaN, which answers every one of §6.4.1's three "
+                            "questions false without asking the solver any of them");
     JS_ToFloat64(ctx, &d, v);
-    JS_FreeValue(ctx, v);
-    JS_FreeValue(ctx, rec);
     return d;
 }
 
 /* WRITTEN INTO THE REALM WHOSE WINDOW IT IS, which is why every writer below takes a realm rather than acting
    on the asking one: §6.4.2's notification and consumptions each set the timestamps of a SET of Windows, and
    every one of them is a different realm in this agent. The write is an ordinary property write, so the heap
-   COW captures it into the running flow's delta — one arm consuming an activation leaves its sibling's. */
-static void ua_set(JSContext *rctx, const char *field, double v)
+   COW captures it into the running flow's delta — one arm consuming an activation leaves its sibling's.
+   `v` is CONSUMED. */
+static void ua_set(JSContext *rctx, const char *field, JSValue v)
 {
     JSValue rec = ua_record(rctx);
 
-    JS_SetPropertyStr(rctx, rec, field, JS_NewFloat64(rctx, v));
+    JS_SetPropertyStr(rctx, rec, field, v);
     JS_FreeValue(rctx, rec);
+}
+
+/* §6.4.1's INITIAL LAST ACTIVATION TIMESTAMP — positive infinity, "indicating that W has never been
+   activated", carried as the EXAMPLE of the source it actually is. concolic_source_wrap is the seam: a host
+   with no source overlay (a conformance run) gets the bare positive infinity back and every question below is
+   plain arithmetic, so test262 sees the standard's own answers and forks nothing. */
+static JSValue ua_never_activated(JSContext *ctx)
+{
+    return concolic_source_wrap(ctx, UA_SHAPE, UA_SRC, JS_NewFloat64(ctx, INFINITY));
+}
+
+/* ONE QUESTION OVER THE UNKNOWN, through the seam a step machine forks at. The operand is BORROWED for the
+   length of the request and the REALM'S RECORD is what owns it — the driver reads h->fork_over on the line
+   after this machine returns, with nothing running in between, and the record the value came from holds its own
+   reference for the life of the realm. So the local reference is released here on both paths.
+   OUTCOME 0 IS THE EXAMPLE'S ANSWER (no activation), which is what a run with no forking policy — the @S
+   candidate re-fire — must take. */
+static int ua_ask(JSContext *ctx, JSStepHdr *h, JSValue last, const char *op, bool *out)
+{
+    int arm = 0, rc;
+
+    DCHECK(concolic_is(last), "§6.4.1's fork seam was asked about a timestamp this engine knows the value of — "
+                              "a known state has one feasible answer and forking it would park a sibling flow "
+                              "exploring a world that cannot happen");
+    rc = step_fork_run(ctx, h, last, op, 2, &arm);
+    JS_FreeValue(ctx, last);
+    if (rc) return rc;
+    *out = (arm == 1);
+    return 0;
 }
 
 /* §6.4.1's "current high resolution time given W" — the event loop's one virtual clock (timer.h). A second
@@ -84,27 +150,105 @@ static double ua_now(void)
     return timer_now();
 }
 
-bool user_activation_sticky(JSContext *ctx)
+int user_activation_sticky_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, bool *out)
 {
     /* "When the current high resolution time given W is greater than or equal to the last activation timestamp
        in W, W is said to have sticky activation." */
-    return ua_now() >= ua_get(ctx, UA_LAST);
+    JSValue last = ua_ts(ctx, UA_LAST);
+
+    DCHECK(*phase == UA_PH_STICKY,
+           "§6.4.1's sticky-activation question was asked on a phase byte the transient chain left mid-question "
+           "— the two questions would then answer each other, since the second is only ever asked inside the "
+           "first's true arm");
+    if (!concolic_is(last)) {
+        *out = ua_now() >= ua_number(ctx, last);
+        JS_FreeValue(ctx, last);
+        return 0;
+    }
+    return ua_ask(ctx, h, last, UA_OP_STICKY, out);
 }
 
-bool user_activation_transient(JSContext *ctx)
+int user_activation_transient_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, bool *out)
 {
     /* "... greater than or equal to the last activation timestamp in W, and less than the last activation
-       timestamp in W plus the transient activation duration". */
-    double last = ua_get(ctx, UA_LAST), now = ua_now();
+       timestamp in W plus the transient activation duration" — a CONJUNCTION, and evaluating it left to right
+       is what keeps the two worlds it opens consistent. The first conjunct is sticky activation exactly; the
+       second is only asked where the first said yes, so no flow ever holds "recently but never". */
+    JSValue last = ua_ts(ctx, UA_LAST);
+    int rc;
 
-    return now >= last && now < last + UA_TRANSIENT_ACTIVATION_DURATION_MS;
+    if (!concolic_is(last)) {
+        double l = ua_number(ctx, last), now = ua_now();
+
+        JS_FreeValue(ctx, last);
+        DCHECK(*phase == UA_PH_STICKY,
+               "§6.4.1's transient-activation question resumed mid-chain over a timestamp that is no longer "
+               "unknown — the second conjunct's answer is owed to a flow that is standing inside the first's "
+               "true arm, and arithmetic cannot deliver it");
+        *out = now >= l && now < l + UA_TRANSIENT_ACTIVATION_DURATION_MS;
+        return 0;
+    }
+    if (*phase == UA_PH_STICKY) {
+        bool sticky = false;
+
+        rc = ua_ask(ctx, h, JS_DupValue(ctx, last), UA_OP_STICKY, &sticky);
+        if (rc) { JS_FreeValue(ctx, last); return rc; }
+        if (!sticky) {                      /* the first conjunct is false, so the second is never asked */
+            JS_FreeValue(ctx, last);
+            *out = false;
+            return 0;
+        }
+        *phase = UA_PH_RECENT;
+    }
+    DCHECK(*phase == UA_PH_RECENT, "§6.4.1's transient-activation question resumed in a phase it never parks in");
+    rc = ua_ask(ctx, h, last, UA_OP_TRANSIENT, out);
+    if (rc) return rc;
+    *phase = UA_PH_STICKY;                  /* the chain is finished; the byte is ready for the next question */
+    return 0;
 }
 
-bool user_activation_history_action(JSContext *ctx)
+int user_activation_history_action_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, bool *out)
 {
     /* "When the last history-action activation timestamp of W is not equal to the last activation timestamp of
        W, then W is said to have history-action activation." */
-    return ua_get(ctx, UA_HISTORY) != ua_get(ctx, UA_LAST);
+    JSValue last = ua_ts(ctx, UA_LAST), hist = ua_ts(ctx, UA_HISTORY);
+    int rc;
+
+    if (!concolic_is(last) && !concolic_is(hist)) {
+        *out = ua_number(ctx, hist) != ua_number(ctx, last);
+        JS_FreeValue(ctx, last);
+        JS_FreeValue(ctx, hist);
+        return 0;
+    }
+    /* THE HISTORY-ACTION CONSUMPTION COPIED ONE ONTO THE OTHER, so the two hold the IDENTICAL value and the
+       question is answered by identity rather than by a fork: equal, so no history-action activation. This is
+       the whole reason that consumption needs to decide nothing — the copy is correct in every world. */
+    if (JS_VALUE_GET_TAG(last) == JS_VALUE_GET_TAG(hist) && JS_VALUE_GET_PTR(last) == JS_VALUE_GET_PTR(hist)) {
+        JS_FreeValue(ctx, last);
+        JS_FreeValue(ctx, hist);
+        *out = false;
+        return 0;
+    }
+    /* THE UNCONSUMED CASE, and it is not a new question. The only writer of the history-action timestamp is the
+       consumption above, so a Window that has not had one still holds §6.4.1's initial positive infinity, and
+       "the last activation timestamp is not positive infinity" is sticky activation said the other way round —
+       a timestamp is never in the future, so "not positive infinity" and "now is at or past it" are one test.
+       Asking it as sticky is what stops this from opening a fourth world contradicting the other three. */
+    if (concolic_is(last) && !concolic_is(hist) && ua_number(ctx, hist) == INFINITY) {
+        JS_FreeValue(ctx, last);
+        JS_FreeValue(ctx, hist);
+        return user_activation_sticky_run(ctx, h, phase, out);
+    }
+    /* A CONSUMED history-action timestamp against a LATER real activation: one of the two is the unknown and
+       they are different values, so this is its own question over that unknown. */
+    {
+        JSValue unknown = concolic_is(last) ? last : hist;
+        JSValue known = concolic_is(last) ? hist : last;
+
+        JS_FreeValue(ctx, known);
+        rc = ua_ask(ctx, h, unknown, UA_OP_HISTORY, out);   /* ua_ask consumes `unknown` */
+    }
+    return rc;
 }
 
 /* ---- §6.4.2's PROCESSING MODEL ------------------------------------------------------------------------------
@@ -126,7 +270,10 @@ bool user_activation_history_action(JSContext *ctx)
    The day CloseWatcher lands it brings its manager, and its manager brings this line. */
 static void ua_activate(JSContext *rctx, double now)
 {
-    ua_set(rctx, UA_LAST, now);   /* step 5.1 */
+    /* Step 5.1 — and this is the write that turns the unknown into a fact. Once a trusted input event has
+       reached this Window, this engine has OBSERVED the activation and its timestamp is an ordinary number, so
+       every one of §6.4.1's three questions is arithmetic from here and nothing forks over it again. */
+    ua_set(rctx, UA_LAST, JS_NewFloat64(rctx, now));
 }
 
 /* THE ACTIVE DOCUMENT'S REALM OF A NAVIGABLE IN THE SET — with the two states that are not realms named at the
@@ -240,14 +387,18 @@ void user_activation_notify(JSContext *ctx)
    `history` picks which of the two fields step 5 writes, because the two algorithms differ in that one line
    and writing the walk twice would be two chances to get the SET wrong — and the set is the half of this that
    is a security property.
-   AN UNMATERIALIZED NAVIGABLE IS A COMPUTED NO-OP HERE, not a skipped step, and that is a different answer
-   from the notification's. Its Window has never been activated — the only writer of a last activation
-   timestamp is the notification, which crashes rather than reach one — so its timestamp is positive infinity
-   and step 5 does nothing to it either way: the consumption's own condition is "if the last activation
-   timestamp is not positive infinity", and the history-action consumption's write copies positive infinity
-   onto the positive infinity that is already there. */
-static void ua_consume_page(JSContext *ctx, bool history)
+   `sticky` IS THE ANSWER §6.4.1's STICKY-ACTIVATION QUESTION WAS GIVEN, asked ONCE by the caller before the
+   walk begins. Step 5's condition — "if window's last activation timestamp is not positive infinity" — is that
+   question said the other way round for a Window whose timestamp is UNKNOWN, and every Window in this agent
+   shares the one source, so one answer serves the whole walk and the walk itself asks nothing and cannot
+   suspend. A Window whose timestamp this engine WROTE is decided by the arithmetic instead, because there is
+   nothing unknown left about it.
+   `probe` reports whether any Window in the set still holds the unknown, WITHOUT writing anything — it is how
+   the caller knows whether the question is worth asking at all, so a page every Window of which has a real
+   timestamp forks nothing. */
+static bool ua_consume_page(JSContext *ctx, bool history, bool sticky, bool probe)
 {
+    bool any_unknown = false;
     JSValueConst self = document_window_proxy(ctx);
     JSValue stack, top;
     uint32_t ntop = 0;
@@ -271,9 +422,20 @@ static void ua_consume_page(JSContext *ctx, bool history)
             JS_FreeValue(ctx, nav);
             continue;
         }
-        if (!window_proxy_materialized(nav)) {   /* step 5 is a no-op on it, and it has no children — see above */
-            JS_FreeValue(ctx, nav);
-            continue;
+        if (!window_proxy_materialized(nav)) {
+            /* THIS USED TO BE A SKIP, AND ITS JUSTIFICATION DIED WITH THE CONSTANT. It read "step 5 is a no-op
+               on it": the Window had never been activated, so its timestamp was positive infinity and neither
+               write changed anything. That is no longer true — a Window whose realm has not been built yet has
+               no record, and the record it will be BORN with holds the unknown, so a consumption that skips it
+               leaves it answering §6.4.1's transient question out of the arm this very flow committed to when
+               it decided to consume. That is the deep-iframe abuse §6.4.2's note names the exhaustive walk to
+               prevent, arriving by the one door the walk does not cover. */
+            DFAIL("§6.4.2's consumption reached a navigable whose realm is still DEFERRED, and its Window's "
+                  "activation state has nowhere to be spent — BUILD what ua_window_realm's own assert names: "
+                  "carry §6.4.1's two timestamps on the NAVIGABLE and hand them to the realm when it "
+                  "materializes, so a consumption reaches a Window that has not run any code yet. Never "
+                  "materialize a realm from this walk (window_proxy.h: materializing every navigable a frontier "
+                  "ever created in order to look at it is the heap exhaustion the deferral exists to avoid)");
         }
         DCHECK(!window_proxy_is_remote(nav),
                "§6.4.2's consumption reached a navigable whose ACTIVE WINDOW is a PEER instance's — the walk "
@@ -282,13 +444,22 @@ static void ua_consume_page(JSContext *ctx, bool history)
                "instance holding that document exactly as a cross-instance read is posted");
         nctx = window_proxy_realm(ctx, nav);
         if (history) {
-            /* "set window's last history-action activation timestamp to window's last activation timestamp" */
-            ua_set(nctx, UA_HISTORY, ua_get(nctx, UA_LAST));
-        } else if (ua_get(nctx, UA_LAST) != INFINITY) {
+            /* "set window's last history-action activation timestamp to window's last activation timestamp" —
+               a COPY, which is correct in every world at once: whatever the last activation timestamp turns
+               out to have been, the two are afterwards the identical value and §6.4.1's history-action question
+               is answered by that identity rather than by a decision this walk had to take. */
+            if (!probe) ua_set(nctx, UA_HISTORY, ua_ts(nctx, UA_LAST));
+        } else {
             /* "if window's last activation timestamp is not positive infinity, then set it to negative
                infinity" — a Window that was never activated STAYS never-activated, so a consumption cannot
                hand a page sticky activation it never earned. */
-            ua_set(nctx, UA_LAST, -INFINITY);
+            JSValue last = ua_ts(nctx, UA_LAST);
+            bool unknown = concolic_is(last);
+            bool activated = unknown ? sticky : (ua_number(nctx, last) != INFINITY);
+
+            JS_FreeValue(nctx, last);
+            if (unknown) any_unknown = true;
+            if (!probe && activated) ua_set(nctx, UA_LAST, JS_NewFloat64(nctx, -INFINITY));
         }
         n = iframe_child_navigable_count(nctx);
         for (i = n - 1; i >= 0; i--)
@@ -296,16 +467,29 @@ static void ua_consume_page(JSContext *ctx, bool history)
         JS_FreeValue(ctx, nav);
     }
     JS_FreeValue(ctx, stack);
+    return any_unknown;
 }
 
-void user_activation_consume(JSContext *ctx)
+int user_activation_consume_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase)
 {
-    ua_consume_page(ctx, false);
+    bool sticky = false;
+
+    /* THE PROBE FIRST, AND ONLY THEN THE QUESTION. A page whose every Window carries a timestamp this engine
+       wrote has nothing unknown in it, and asking §6.4.1's sticky question there would park a sibling flow
+       exploring a world the known state contradicts. The probe runs the same walk with the same set — one
+       algorithm, not a second one that could disagree about which navigables are in it — and writes nothing. */
+    if (ua_consume_page(ctx, false, false, /*probe*/ true)) {
+        int rc = user_activation_sticky_run(ctx, h, phase, &sticky);
+
+        if (rc) return rc;
+    }
+    ua_consume_page(ctx, false, sticky, /*probe*/ false);
+    return 0;
 }
 
 void user_activation_consume_history_action(JSContext *ctx)
 {
-    ua_consume_page(ctx, true);
+    ua_consume_page(ctx, true, /*sticky, unread by the copy*/ false, /*probe*/ false);
 }
 
 /* ---- §6.4.4's UserActivation INTERFACE -----------------------------------------------------------------------
@@ -355,25 +539,63 @@ static void ua_assert_this_window(JSContext *ctx, JSValueConst this_val)
                  "has built one, resolve it with window_proxy_realm, and read the timestamps out of THAT realm");
 }
 
-/* "The hasBeenActive getter steps are to return true if this's relevant global object has sticky activation,
-   and false otherwise." */
-static JSValue js_ua_has_been_active(JSContext *ctx, JSValueConst this_val, int magic)
+/* §6.4.4's TWO GETTERS, AND THEY ARE STEP MACHINES — which for a getter that takes no arguments and runs none
+ * of the page's code needs saying, because the reason is neither of those. It is that the answer may be
+ * UNKNOWN, and a question over an unknown FORKS: the getter has to be able to hand this flow one answer while
+ * a sibling flow is snapshotted holding the other, and step_fork_run is the seam that does it. A plain C getter
+ * cannot — it would take one arm silently, and `if (navigator.userActivation.isActive)` would then explore one
+ * of its two branches and delete the other.
+ *   IT IS ALSO WHAT KEEPS THE PAGE'S ANSWER AND THE ENGINE'S THE SAME ONE. `showPicker()` asks §6.4.1's
+ * transient question through this same seam, so both are the one predicate in the flow's path constraint: a
+ * page that reads `isActive` and then calls `showPicker()` cannot be told yes and then throw NotAllowedError.
+ * Handing the page a concolic instead would have keyed its own `if` by the bare source, which is a DIFFERENT
+ * predicate from the engine's, and the two would disagree in half the worlds.
+ *
+ *   "The hasBeenActive getter steps are to return true if this's relevant global object has sticky activation,
+ *    and false otherwise."
+ *   "The isActive getter steps are to return true if this's relevant global object has transient activation,
+ *    and false otherwise." */
+#define UA_GET_STAGES(X) \
+    X(UA_GET_ASK, "HTML §6.4.4 the hasBeenActive / isActive getter steps (this's relevant global object's " \
+                  "§6.4.1 sticky / transient activation state)")
+enum { IDL_STEP_STAGE_BASE(UA_GET_STAGES) UA_GET_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const UA_GET_STEPS[] = { UA_GET_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* WHICH OF THE TWO GETTERS, as the magic one declaration carries — they are one algorithm over §6.4.1's two
+   boolean states, and a second machine would be a second copy of the brand check and the realm assert. */
+enum { UA_GET_STICKY = 0, UA_GET_TRANSIENT };
+
+/* THE ONLY STATE EITHER GETTER HOLDS: which of the transient chain's two questions is outstanding. It holds no
+   JSValue at all, so there is nothing for the visit to trace and nothing for a teardown to release — declared
+   rather than omitted, because a machine with no `visit` is refused at registration. */
+typedef struct { uint8_t phase; } UaGetState;
+
+static void ua_get_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+static int ua_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                       JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    (void)magic;
-    if (!ua_brand(ctx, this_val)) return JS_EXCEPTION;
-    ua_assert_this_window(ctx, this_val);
-    return JS_NewBool(ctx, user_activation_sticky(ctx));
+    UaGetState *s = st;
+    int magic = idl_step_magic(hdr);
+    bool state = false;
+    int rc;
+
+    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    DCHECK(hdr->stage == UA_GET_ASK, "a UserActivation getter resumed into a stage §6.4.4 does not have");
+    if (!ua_brand(ctx, hdr->this_val)) return -1;
+    ua_assert_this_window(ctx, hdr->this_val);
+    rc = (magic == UA_GET_TRANSIENT) ? user_activation_transient_run(ctx, hdr, &s->phase, &state)
+                                     : user_activation_sticky_run(ctx, hdr, &s->phase, &state);
+    if (rc) return rc;
+    *presult = JS_NewBool(ctx, state);
+    return JS_STEP_DONE;
 }
 
-/* "The isActive getter steps are to return true if this's relevant global object has transient activation, and
-   false otherwise." */
-static JSValue js_ua_is_active(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    (void)magic;
-    if (!ua_brand(ctx, this_val)) return JS_EXCEPTION;
-    ua_assert_this_window(ctx, this_val);
-    return JS_NewBool(ctx, user_activation_transient(ctx));
-}
+static const IdlStepDecl UA_GET_DECL = { ua_get_step, sizeof(UaGetState), ua_get_visit, NULL,
+                                         "HTML §6.4.4 UserActivation.hasBeenActive / .isActive",
+                                         UA_GET_STEPS };
+static int g_id_has_been_active = -1, g_id_is_active = -1;
 
 JSValue user_activation_object(JSContext *ctx)
 {
@@ -393,7 +615,12 @@ static void user_activation_install_realm(JSContext *ctx)
     JSValue proto, prev, global, obj;
 
     CHECK(!JS_IsException(rec), "user activation: OOM building a realm's §6.4.1 record");
-    JS_SetPropertyStr(ctx, rec, UA_LAST, JS_NewFloat64(ctx, INFINITY));
+    /* THE UNKNOWN IS BAKED INTO THE BASELINE, which is where it belongs: whether the user has interacted with
+       this page is not a fact any flow established, so a value minted on the first READ would make whichever
+       flow asked first the source of every sibling's answer. The history-action timestamp is NOT unknown —
+       its only writer is §6.4.2's history-action consumption, so positive infinity here is a fact about what
+       this engine has done rather than about what the user has. */
+    JS_SetPropertyStr(ctx, rec, UA_LAST, ua_never_activated(ctx));
     JS_SetPropertyStr(ctx, rec, UA_HISTORY, JS_NewFloat64(ctx, INFINITY));
     realm_value_set(ctx, g_slot, rec);
 
@@ -404,8 +631,10 @@ static void user_activation_install_realm(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "UserActivation.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "UserActivation");
-    idl_install_accessor(ctx, proto, "hasBeenActive", js_ua_has_been_active, 0, -1);
-    idl_install_accessor(ctx, proto, "isActive", js_ua_is_active, 0, -1);
+    DCHECK(g_id_has_been_active >= 0 && g_id_is_active >= 0,
+           "§6.4.4's getters were installed on a realm's prototype before user_activation_init declared them");
+    idl_install_accessor_step(ctx, proto, "hasBeenActive", g_id_has_been_active, -1);
+    idl_install_accessor_step(ctx, proto, "isActive", g_id_is_active, -1);
     JS_SetClassProto(ctx, g_ua_class, JS_DupValue(ctx, proto));
 
     /* §3.7.1's INTERFACE OBJECT, on THIS realm's global. §6.4.4 declares no constructor, so `new
@@ -435,6 +664,11 @@ void user_activation_init(JSContext *ctx)
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_ua_class, &d) == 0,
           "UserActivation: the per-realm prototype slot could not be declared");
     g_obj_slot = realm_value_declare(ctx, "HTML §6.4.4 the Window's associated UserActivation");
+    /* THE TWO GETTERS ARE ONE DECLARATION WITH TWO MAGICS — declared once per AGENT, like every other member,
+       because the id a declaration returns is the RUNTIME's and a per-realm declaration would mint the machine
+       once per document. */
+    g_id_has_been_active = idl_getter_id_step(ctx, &UA_GET_DECL, UA_GET_STICKY);
+    g_id_is_active = idl_getter_id_step(ctx, &UA_GET_DECL, UA_GET_TRANSIENT);
     realm_declare_intrinsic(user_activation_install_realm);
 }
 
@@ -445,4 +679,6 @@ void user_activation_free(void)
        a runtime that is going away with it. */
     g_slot = -1;
     g_obj_slot = -1;
+    g_id_has_been_active = -1;
+    g_id_is_active = -1;
 }

@@ -209,7 +209,7 @@ const INTERFACES = {
      with five members that are not on it, which is the file-granular version of the same lie. */
   HTMLFormElement:     [...HTML_BASE, "core/html/html_form.c"],
   HTMLInputElement:    [...HTML_BASE, "core/html/html_form.c", "core/html/input_value.c",
-                        "core/html/constraint_validation.c"],
+                        "core/html/input_picker.c", "core/html/constraint_validation.c"],
   HTMLButtonElement:   [...HTML_BASE],
   HTMLLinkElement:     [...HTML_BASE],
   HTMLMetaElement:     [...HTML_BASE],

@@ -251,7 +251,25 @@ void autofocus_element_inserted(lxb_dom_element_t *el)
     target = n->owner_document ? document_active_realm_of(lxb_dom_interface_node(n->owner_document)) : NULL;
     if (!target || !document_fully_active(target)) return;
     if (sandboxes_automatic_features(target)) return;                                       /* step 4 */
-    if (!focus_allow_focus_steps(target)) return;                                           /* step 5 */
+    /* STEP 5's ALLOW FOCUS STEPS, and only their FIRST clause can be answered here. The second is §6.4.1's
+       TRANSIENT ACTIVATION, which is UNKNOWN EXTERNAL STATE (core/html/user_activation.h): asking it FORKS,
+       and a fork is a request the step driver answers by SNAPSHOTTING the flow. These steps do not run in a
+       step machine — they run inside DOM §4.2.3's tree-steps walk, which is plain C with no flow base, so a
+       JS_STEP_FORK returned into it would be dropped or driven to completion, and both are what §scheduler
+       forbids. So the clause that decides without asking is answered, and the one that cannot be asked from
+       here CRASHES at its origin naming the mechanism, rather than quietly picking one of its two arms.
+       A document that is same origin with its top-level document is allowed to use the feature outright, so
+       this is reached only by an `autofocus` element inserted into a CROSS-ORIGIN-embedded document. */
+    if (!focus_allow_without_user_activation(target)) {
+        DFAIL("§6.6.7's insertion steps reached the ALLOW FOCUS STEPS' second clause — §6.4.1's TRANSIENT "
+              "ACTIVATION, which is unknown external state and therefore a FORK, inside DOM §4.2.3's "
+              "tree-steps walk, which is plain C and cannot park. BUILD the request: IdlTreeSteps.step takes "
+              "the driving machine's JSStepHdr and returns a step code instead of a bool, idl_tree_drain "
+              "forwards JS_STEP_FORK the way it already forwards JS_STEP_YIELD, element.c's per-node body "
+              "gains a phase of its own so a re-entry does not re-run the <script> preparation and the "
+              "navigable creation it already performed for that node, and this line becomes "
+              "focus_allow_focus_steps_run — which is what §6.6.6's own two members already call");
+    }
     topctx = top_document_realm(target);                                                    /* step 6 */
     if (!topctx) return;
     /* STEP 7: "if topDocument's autofocus processed flag is false, then REMOVE the element from topDocument's

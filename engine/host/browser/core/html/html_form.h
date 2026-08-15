@@ -58,6 +58,19 @@ JSValue html_form_labels_of(JSContext *ctx, JSValueConst wrap);
    legend child. §4.13.5 step 10.2's condition. */
 bool html_form_control_is_disabled(JSContext *ctx, JSValueConst wrap);
 
+/* HTML §4.10.5.1's "an input element can be MUTABLE" — "Except where otherwise specified, an input element is
+   always mutable", and the standard specifies otherwise exactly twice: "when an input element is disabled, it
+   is not mutable", and §4.10.5.3.6's `readonly` — "when specified, the element is not mutable", in the states
+   that attribute APPLIES to. Those are the text-entry states and nothing else ("Only text controls can be made
+   read-only, since for other controls ... there is no useful distinction between being read-only and being
+   disabled, so the readonly attribute does not apply"), which is why File Upload and Color read as mutable with
+   the attribute sitting on them.
+   It is here rather than beside one of its readers because it has several — §4.10.5.4's showPicker() step 1
+   throws an InvalidStateError on it, "show the picker, if applicable" step 2 returns on it, and §4.10.5.1.17's
+   drag-and-drop selection is only allowed while it holds — and a second copy is the one-fact-two-answers defect
+   that lets a readonly date control open a picker in one algorithm and not the other. */
+bool html_form_input_is_mutable(JSContext *ctx, JSValueConst wrap);
+
 /* ---- §4.10.2's CATEGORIES, and what the entry list asks of them --------------------------------------------
  *
  * §4.10.2 lists the form-associated categories by ELEMENT, and every consumer of one asks the same question of

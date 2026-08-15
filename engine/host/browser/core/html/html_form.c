@@ -39,6 +39,7 @@
 #include "core/html/form_data_event.h"
 #include "core/html/form_entry_list.h"
 #include "core/html/html_form.h"
+#include "core/html/input_picker.h"
 #include "core/html/input_value.h"
 #include "core/html/submit_event.h"
 #include "core/html/user_activation.h"
@@ -1318,6 +1319,37 @@ bool html_form_control_is_disabled(JSContext *ctx, JSValueConst wrap)
     return false;
 }
 
+/* THE STATES §4.10.5.3.6's `readonly` ATTRIBUTE APPLIES TO — the twelve text-entry states, which is the
+   standard's own list and not a summary of it: the attribute is declared in the bookkeeping of Text, Search,
+   Telephone, URL, Email, Password, Date, Month, Week, Time, Local Date and Time and Number, and in no other.
+   Hidden, Range, Color, Checkbox, Radio Button, File Upload and the four button states do not have it, so a
+   `readonly` written on one of those is an attribute with no meaning rather than one that immobilises it. */
+static bool input_readonly_applies(HtmlInputState st)
+{
+    switch (st) {
+    case INPUT_STATE_TEXT: case INPUT_STATE_SEARCH: case INPUT_STATE_TEL: case INPUT_STATE_URL:
+    case INPUT_STATE_EMAIL: case INPUT_STATE_PASSWORD: case INPUT_STATE_DATE: case INPUT_STATE_MONTH:
+    case INPUT_STATE_WEEK: case INPUT_STATE_TIME: case INPUT_STATE_DATETIME_LOCAL: case INPUT_STATE_NUMBER:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool html_form_input_is_mutable(JSContext *ctx, JSValueConst wrap)
+{
+    lxb_dom_node_t *n = node_of(wrap);
+    HtmlInputState st = html_form_input_state(n);
+
+    DCHECK(st != INPUT_STATE_NONE,
+           "§4.10.5.1's mutability was asked of something that is not an `input` element — every other form "
+           "control's editability is its own section's question (a `textarea` has its own readonly, a `select` "
+           "has none at all), and answering it from this one would be that section's algorithm in the wrong "
+           "file");
+    if (html_form_control_is_disabled(ctx, wrap)) return false;
+    return !(input_readonly_applies(st) && has_attr(lxb_dom_interface_element(n), "readonly"));
+}
+
 /* ---- what the entry list reads off a control ---------------------------------------------------------------
  * §4.10.22.4 walks controls it never received as a receiver, so the two pieces of state a control's entry is
  * made of are reachable by ELEMENT rather than only through the IDL accessor installed on its prototype. The
@@ -1628,6 +1660,10 @@ void html_form_declare(JSContext *ctx)
        to the file that owns the value. Without this line the whole of input_value.c's file half was code no
        realm installed — an interface member reporting itself built and not existing. */
     input_value_declare(ctx);
+    /* §4.10.5.4's showPicker(), declared here for the same reason `files` is — its member goes on
+       HTMLInputElement.prototype and §4.10 owns that prototype — and it must come AFTER the line above,
+       because the algorithm it ends in is input_value.c's update the file selection. */
+    input_picker_declare(ctx);
     /* §6.4's USER ACTIVATION STATE — declared here because §6.4.1's per-Window record has to exist BEFORE the
        first realm is built (a realm that missed it answers §7.4.2.4's sticky-activation conjunct out of a
        record that is not there), and this is the declaration point core/html reaches the agent through. It is
@@ -1662,6 +1698,7 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     idl_install_accessor(ctx, input_proto, "checked", js_ctrl_get_checked, 0, g_id_checked);
     constraint_validation_install(ctx, input_proto, textarea_proto);
     input_value_install(ctx, input_proto);   /* §4.10.5.4's `files`, on the prototype §4.10 owns */
+    input_picker_install(ctx, input_proto);  /* §4.10.5.4's `showPicker()`, on the same prototype */
 }
 
 void html_form_free(JSContext *ctx)
@@ -1671,6 +1708,7 @@ void html_form_free(JSContext *ctx)
     form_entry_list_free(ctx);
     constraint_validation_free(ctx);
     input_value_free();
+    input_picker_free();
     user_activation_free();
     /* The slot keys are the AGENT's, so they are released with the agent — a Symbol nobody frees is a live GC
        object the runtime's own walk counts as a leak. */

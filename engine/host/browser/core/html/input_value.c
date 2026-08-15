@@ -831,9 +831,11 @@ uint32_t input_files_pick(JSContext *ctx, JSValueConst wrap)
 
     if (!el) return 0;
     /* §4.10.5.1.17: "If the element is not mutable, the user agent must not allow the user to change the
-       element's selection." An input is mutable unless it is disabled — `readonly` does not apply to this
-       state, which §4.10.5.3.6 says by listing the states it does apply to. */
-    if (html_form_control_is_disabled(ctx, wrap)) return 0;
+       element's selection." Asked as §4.10.5.1's own predicate rather than as `disabled` alone: the two answer
+       identically for this state (`readonly` does not apply to File Upload, which §4.10.5.3.6 says by listing
+       the states it does apply to), and that identity is exactly why the second speller had to go — it is one
+       sentence of the standard, and §4.10.5.4's showPicker reads the same one. */
+    if (!html_form_input_is_mutable(ctx, wrap)) return 0;
     accept = (const char *)lxb_dom_element_get_attribute(el, (const lxb_char_t *)"accept", 6, &alen);
     files = file_device_select(ctx, accept, alen, iv_has_attr(el, "multiple"));
     n = file_list_length(ctx, files);
