@@ -433,8 +433,11 @@ void location_init(JSContext *ctx)
        encodes the apostrophe and `#` and NOT the backtick. That difference is the whole reason these are two
        sources rather than one — the same candidate is a live JS-context breakout through the fragment and a
        dead one through the query, and vice versa for a template-literal context. */
-    concolic_declare_source("location.hash", " \"<>`", '#');
-    concolic_declare_source("location.search", " \"#<>'", '?');
+    /* BOTH ARE CARRIED IN THE VICTIM'S OWN ADDRESS, which is what makes them the two single-navigation sources
+       — the attacker writes one URL and the victim's load of it is the whole PoC. The component each rides is
+       the `prefix` already declared, so the reproduction needs nothing this line does not already say. */
+    concolic_declare_source("location.hash", " \"<>`", '#', SRC_DELIVER_ADDRESS);
+    concolic_declare_source("location.search", " \"#<>'", '?', SRC_DELIVER_ADDRESS);
 
     JS_NewClassID(JS_GetRuntime(ctx), &g_loc_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_loc_class, &d) == 0,

@@ -731,77 +731,106 @@ function _pruneProbeSessions() {
   }
 }
 
-// Register an exploit-probe session keyed by the finding's crypto.randomUUID for hit-correlation. The
-// PoC ARTIFACT itself is no longer compiled here — the Z3 pocPlan compiler was deleted (best-design:
-// forced execution is the whole engine). session.pocJs stays null until the forced-exec PoC (provenance
-// inversion + forced-exec search + concrete-replay verify) lands and populates it.
-// Reverse a captured @S taint SHAPE into a WORKING PoC for the EXISTING verifier. The payload calls
-// apiclientsink('<marker>') — intercept.js defines that hook and relays it (content.js → PROBE_HIT),
-// so the SAME correlation path that verifies any probe confirms REAL EXPLOIT here; no parallel checker.
-// Template-FREE: the payload is COMPUTED from the sink's PARSE CONTEXT (scanned from the concrete text
-// around the hole), and the DELIVERY vector comes from the hole's SOURCE tag ({hash}/{search}/{pm}).
-// Returns {pocJs, payload, context, source, delivery} or null (with why) when the shape lacks a source.
-// ENGINE AGREEMENT: the live PoC is the ENGINE's exact solved breakout input (its `poc` field) — the input
-// a candidate-replay flow drove through the REAL page code+branches+filters to the sink where it broke out.
-// We do NOT re-derive a payload from the shape (that second solver would diverge: it wouldn't carry the
-// gate-guided prefix like `cmd:`, a filter bypass, or the exact transform-surviving form the engine found).
-// We only (a) map the engine's fire-marker X9 -> the verifier's proof hook apiclientsink(marker), and
-// (b) DELIVER it to the REAL page via the source (hash/search/pm), so real Chrome — not the model — is the
-// ground truth. Disagreement (engine says breakout, Chrome doesn't fire) is a precise engine-fidelity bug.
-function buildPocFromShape(sinkName, poc, shape, pageUrl, marker, srcpath, gatefields) {
-  if (!poc || !pageUrl) return { pocJs: null, why: "missing engine poc / pageUrl" };
-  if (!shape) return { pocJs: null, why: "missing source shape" };
-  var m = /\{(hash|search|pm|reply)\}/.exec(shape);   // which attacker-controlled source the engine's poc rides
-  if (!m) return { pocJs: null, why: "hole source unknown (generic {}) — no delivery vector; complete source-tagging first" };
-  var source = m[1];
-  // STRUCTURED attacker input: srcpath ("{pm}.html", "{pm}.a.b") means the sink read a FIELD of the source
-  // object, so the payload must ride in that field (post {html:payload}), not the bare value. The field path
-  // is everything after the source token; empty = whole-value use (unchanged).
-  var fieldPath = null;
-  if (srcpath) { var fm = /^\{(?:hash|search|pm|reply)\}\.(.+)$/.exec(srcpath); if (fm) fieldPath = fm[1].split("."); }
+// PERFORM the delivery the ENGINE declared. This layer owns MECHANISM — window.open, a real user gesture, the
+// sandboxed attacker page — and owns NO vocabulary: which source is reached how is declared in C beside that
+// source's other browser constraints (`concolic_declare_source` in the component that owns it), and arrives on
+// the @S record as `delivery` + `deliveryPrefix`.
+//
+// WHAT THIS REPLACES, and why it could never have worked. The old builder matched
+// `/\{(hash|search|pm|reply)\}/` against a `shape` field — a second, host-side statement of the attacker-source
+// taxonomy, in a spelling the engine has never emitted (it says `location.hash`, `location.search`,
+// `document.cookie`, `document.referrer`), against a field that is not on the record at all. So every finding
+// this engine has ever produced failed at the first regex, and the taxonomy had a `pm` arm for a source no
+// component declares. CLAUDE.md puts each source's intrinsic browser constraints in the engine — the WHATWG
+// per-component encode sets, the fragment/query difference, the delivery prefix — so a second table of them
+// here is a copy that drifts, and this one had already drifted into being non-functional.
+//
+// ENGINE AGREEMENT: the live PoC is the ENGINE's exact solved breakout input (its `poc` field) — the input a
+// candidate-replay flow drove through the REAL page code+branches+filters to the sink where it broke out. We do
+// NOT re-derive a payload (a second solver would diverge: no gate-guided prefix, no filter bypass, not the
+// transform-surviving form the engine found). The ONLY edit is (a) mapping the engine's fire-marker X9 to the
+// verifier's proof hook apiclientsink(marker) — intercept.js defines it and relays it (content.js → PROBE_HIT),
+// the same correlation path that verifies any probe — and (b) placing it through the declared mechanism, so
+// real Chrome, not the model, is ground truth. Disagreement is a precise engine-fidelity bug.
+//
+// Returns {pocJs, payload, context, source, delivery} — or pocJs:null with `why` when the declared mechanism is
+// one this layer cannot PERFORM. That is an answer, not a failure: the finding stands (the engine fire-verified
+// the breakout), and `why` names the mechanism rather than a missing field.
+function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, pageUrl, marker) {
+  DCHECK(typeof poc === "string" && poc.length > 0,
+         "an @S live-verify was started with no engine poc — solve_json_array emits `poc` on every fire-verified "
+         + "entry and only on those, so a probe without one is being built for a PARKED search (sink=" + sinkName + ")");
+  DCHECK(typeof marker === "string" && marker.length > 0,
+         "an @S live-verify was started with no correlation marker — the marker rides INSIDE the payload as "
+         + "apiclientsink('<id>') and is the only thing that ties a real Chrome hit back to this session");
+  if (!pageUrl) return { pocJs: null, why: "no page url recorded for this finding — a live delivery navigates the page the sink was observed on" };
   var call = "apiclientsink('" + marker + "')";           // the verifier's proof hook (marker = crypto.randomUUID)
-  // The engine's X9 is a bare fire-marker: `onerror=X9`, `javascript:X9`, `1;X9();//`. Map every X9 (call or
-  // ref form) to the apiclientsink CALL so the real sink, on firing, relays the proof. This is the ONLY edit
-  // to the engine's payload — its structure (breakout + gate prefix + surviving transforms) is untouched.
+  // The engine's X9 is a bare fire-marker: `onerror=X9`, `javascript:X9`, `';X9();//`. Map every X9 (call or
+  // ref form) to the apiclientsink CALL so the real sink, on firing, relays the proof. Its structure (breakout
+  // + gate prefix + surviving transforms) is untouched.
   var payload = String(poc).split("X9()").join(call).split("X9").join(call);
   var context = "engine:" + (sinkName || "?");
-  // Delivery: how the attacker gets `payload` into the source hole. pocJs is eval'd in the sandbox (real user
-  // gesture), so window.open is allowed; it navigates to the REAL page with the payload in the real source.
-  var base, delivery, pocJs;
-  if (source === "hash") {
-    base = pageUrl.split("#")[0] + "#" + payload;
-    delivery = "navigate victim to a URL whose fragment is the payload";
-    pocJs = "window.open(" + JSON.stringify(base) + ', "_blank");';
-  } else if (source === "search") {
-    // location.search consumed whole → the query string IS the payload (no known param name).
-    base = pageUrl.split("#")[0].split("?")[0] + "?" + payload;
-    delivery = "navigate victim to a URL whose query string is the payload";
-    pocJs = "window.open(" + JSON.stringify(base) + ', "_blank");';
-  } else if (source === "pm") {
-    // The message value: the bare payload for whole-value use, else an OBJECT nesting the payload at the read
-    // field path (`{html}=e.data; sink(html)` -> post {html:payload}; `e.data.a.b` -> {a:{b:payload}}).
-    var msgVal;
-    if (!fieldPath) { msgVal = payload; }
-    else {
-      // Structured object: the sink field carries the payload, PLUS every sibling GATE field the real handler
-      // requires (`if(e.data.type==='render')` -> set type:'render'), or the gate blocks the sink live.
-      msgVal = {};
-      var setPath = function (obj, path, v) { var o = obj; for (var i = 0; i < path.length - 1; i++) { if (typeof o[path[i]] !== "object" || o[path[i]] === null) o[path[i]] = {}; o = o[path[i]]; } o[path[path.length - 1]] = v; };
-      setPath(msgVal, fieldPath, payload);
-      if (gatefields && typeof gatefields === "object") { for (var gk in gatefields) if (Object.prototype.hasOwnProperty.call(gatefields, gk)) setPath(msgVal, gk.split("."), gatefields[gk]); }
-    }
-    delivery = "open the victim, then postMessage the " + (fieldPath ? "object " + JSON.stringify(msgVal).replace(/"/g, "") : "payload") + " from the attacker window";
-    pocJs = "var w = window.open(" + JSON.stringify(pageUrl.split("#")[0]) + ', "_blank");' +
-            " setTimeout(function(){ try { w && w.postMessage(" + JSON.stringify(msgVal) + ', "*"); } catch (e) {} }, 800);';
-  } else {   // reply: server-reflected — needs the server to echo attacker input; can't be delivered client-side alone
-    return { pocJs: null, why: "source is a server reply (reflected) — PoC needs server-side reflection, not client delivery", source: source, payload: payload, context: context };
+  var out = { pocJs: null, payload: payload, context: context, source: source || null };
+  if (!delivery) {
+    // The engine declared no delivery for this source — which is itself the statement, not a missing field:
+    // server-injected page state is written by the attacker directly and no component carries or transforms
+    // it, so there is nothing for this layer to perform. Never guess a vector here.
+    out.why = "the engine declares no browser delivery for source `" + (source || "?") + "` — nothing carries or "
+            + "transforms these bytes on the way into the page, so there is no navigation this layer can perform. "
+            + "The sink and its breakout are still fire-verified.";
+    return out;
   }
-  return { pocJs: pocJs, payload: payload, context: context, source: source, delivery: delivery };
+  if (delivery === "address") {
+    // The payload rides the VICTIM'S OWN address, at the component the engine's prefix names. A third component
+    // would mean the engine grew an address source this layer has no placement for — a contract drift, not a
+    // page state, so it asserts rather than degrading to one of the two it knows.
+    DCHECK(deliveryPrefix === "#" || deliveryPrefix === "?",
+           "the engine declared an `address` delivery whose component is neither `#` nor `?` (got "
+           + JSON.stringify(deliveryPrefix) + ") — a URL has no third place an attacker-controlled component "
+           + "lives, so this is either a declaration with no prefix or a component this layer cannot place");
+    var frag = deliveryPrefix === "#";
+    out.pocJs = "window.open(" + JSON.stringify(frag ? pageUrl.split("#")[0] + "#" + payload
+                                                     : pageUrl.split("#")[0].split("?")[0] + "?" + payload) + ', "_blank");';
+    out.delivery = "navigate the victim to a URL whose " + (frag ? "fragment" : "query string") + " is the payload";
+    return out;
+  }
+  if (delivery === "plant") {
+    // §S(b)'s two-stage PoC. Stage one writes the value on the VICTIM'S origin (a cookie), which an attacker
+    // page cannot do from outside it — so the sandbox can perform stage two and never stage one.
+    out.delivery = "two-stage: plant the value on the victim's origin, then load the page";
+    out.why = "this source is a PLANTED one (§S(b) two-stage): the attacker must place the value on the victim's "
+            + "own origin before the load that fires it, and a sandboxed attacker page has no way to perform that "
+            + "first stage. The second stage is just loading the page.";
+    return out;
+  }
+  if (delivery === "referring-address") {
+    // The payload rides the ATTACKER's address, not the victim's, and Chrome's default referrer policy sends
+    // only the origin cross-origin — so reproducing it needs an attacker-hosted page serving
+    // `Referrer-Policy: unsafe-url`, which is not a page this extension can host.
+    out.delivery = "the payload rides the address the victim arrives from";
+    out.why = "this source is carried by the NAVIGATION, not by the victim's URL: the payload has to be part of "
+            + "an address the attacker serves, and Chrome's default referrer policy strips everything but the "
+            + "origin cross-origin — so reproducing it needs an attacker-hosted page sending "
+            + "`Referrer-Policy: unsafe-url`, which the sandbox cannot be.";
+    return out;
+  }
+  if (delivery === "user-file") {
+    out.delivery = "the user hands the document an attacker-supplied file";
+    out.why = "this source is a FILE the user gives the page. No navigation delivers it, so reproducing it means "
+            + "opening the page and selecting the attacker's file by hand.";
+    return out;
+  }
+  DFAIL("the engine declared a delivery mechanism this layer has no arm for: " + JSON.stringify(delivery)
+        + " — the token vocabulary is solve.h's `delivery` field (address / plant / referring-address / "
+        + "user-file), so "
+        + "either a mechanism was added in C without its delivery arm here, or this record did not come from "
+        + "solve_json_array");
+  return out;
 }
 function startExploitProbe(msg) {
   _pruneProbeSessions();
-  const { waitMs, findingId, sinkName, shape, poc, srcpath, gatefields } = msg || {};
-  if (!poc || !shape) throw new Error("need the engine's poc + source shape (from the @S finding)");
+  const { waitMs, findingId, sinkName, poc, source, delivery, deliveryPrefix } = msg || {};
+  if (!poc) throw new Error("need the engine's poc (the fire-verified breakout input from the @S finding)");
 
   // pageUrl: the page the finding was observed on (recorded in securityFindings). The caller may pass it;
   // else resolve from the finding. Never guessed.
@@ -823,13 +852,13 @@ function startExploitProbe(msg) {
     sinkName: sinkName || null, waitMs: wait,
     hits: [], createdAt: Date.now(), finishedAt: null, error: null,
   };
-  // ENGINE AGREEMENT: build the delivery from the engine's EXACT poc (X9 -> apiclientsink) via its source.
+  // ENGINE AGREEMENT: perform the delivery the ENGINE declared, carrying its EXACT poc (X9 -> apiclientsink).
   // The user runs it by clicking Run in the sandboxed attacker page (poc-sandbox.html) — that real click is
   // the user activation window.open needs. When the real page's sink fires, intercept.js → content.js →
   // PROBE_HIT lands on this marker and EXPLOIT_PROBE_STATUS reports REAL EXPLOIT (Chrome-confirmed).
-  var _poc = buildPocFromShape(sinkName, poc, shape, session.pageUrl, marker, srcpath, gatefields);
+  var _poc = buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, session.pageUrl, marker);
   session.pocJs = (_poc && _poc.pocJs) || null;
-  session.pocWhy = _poc && !_poc.pocJs ? _poc.why : null;   // @WHY when the source isn't client-deliverable
+  session.pocWhy = _poc && !_poc.pocJs ? _poc.why : null;   // which declared mechanism this layer cannot perform
   session.status = "prepared";
   _probeSessions.set(marker, session);
   return session;
