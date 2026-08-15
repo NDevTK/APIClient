@@ -364,8 +364,35 @@ int timer_run_due(JSContext *ctx)
            interval never stops on its own, and the WFQ deprioritises one that stops emitting rather than a
            counter cutting it off. It needs no re-enqueue now: it is simply the earliest entry again when the
            driver next has nothing to do. Its insertion order is REFRESHED, because the re-arm is a new task on
-           the source and a timer set in the meantime for the same moment was set first. */
-        JS_SetPropertyUint32(docctx, e, TE_WHEN, JS_NewFloat64(docctx, when + (every > 0 ? every : 1)));
+           the source and a timer set in the meantime for the same moment was set first.
+           §8.6 does not re-arm by adding a period: the task's last step "perform the timer initialization steps
+           AGAIN, given global, handler, timeout, arguments, true, and id" — the SAME algorithm, so step 5 runs
+           on the re-arm exactly as it ran on the `setInterval` call. */
+        DCHECK(every >= 4,
+               "§8.6's TIMER NESTING LEVEL is not built, and a repeating timer whose `timeout` is under 4ms is "
+               "the case whose answer it decides. Step 3 reads the level off the currently running task ("
+               "\"if the surrounding agent's event loop's currently running task is a task that was created by "
+               "this algorithm, then let nesting level be the task's timer nesting level; otherwise 0\"), the "
+               "task's last step re-runs the WHOLE algorithm for a repeat, and step 15 increments the level for "
+               "the task it queues — so an interval's re-arms walk 1,2,3,... and step 5 (\"if nesting level is "
+               "greater than 5, and timeout is less than 4, then set timeout to 4\") takes over from the sixth. "
+               "The same three steps govern a RECURSIVE `setTimeout(f,0)`, which is the more common spelling and "
+               "which this component gets wrong in the same way and cannot assert here: with no clamp its chain "
+               "re-arms at the same virtual moment for ever, so `timer_earliest` picks it every time and a "
+               "`setTimeout(g,1)` set beside it NEVER RUNS — a livelock real Chrome does not have, on the "
+               "ordering that is the whole point of a virtual clock. THE LEVEL BELONGS TO THE TASK, which is why "
+               "it cannot be a field of this component: Blink keeps it on the DOMTimer and sets the context's "
+               "current level around the fire, and this engine's timer task is a FlowJob (solver/flow.h) that "
+               "runs after this function has returned. So carry it there — JS_EnqueueCallTask takes the level, "
+               "the drainer publishes it as the running task's, `js_set_timer` reads it (0 when the running job "
+               "is not a timer task) and applies steps 4-5, and this re-arm passes its own plus one. Then the "
+               "substitute below deletes with this assert.");
+        /* THE RE-ARM USES §8.6's OWN NUMBER, not a number of this component's. `1` stood here and appears
+           nowhere in §8.6 — it was doing the job step 5 does, badly: it is wrong for every re-arm of a
+           zero-period interval, where the spec says 0 for the first five and 4 for every one after. 4 is the
+           steady state of an interval that outlives its nesting level, so a release build (where the assert
+           above is compiled out) is the spec for the unbounded tail rather than for a finite prefix. */
+        JS_SetPropertyUint32(docctx, e, TE_WHEN, JS_NewFloat64(docctx, when + (every >= 4 ? every : 4)));
         JS_SetPropertyUint32(docctx, e, TE_SEQ, JS_NewFloat64(docctx, event_loop_task_seq(docctx)));
     } else {
         JS_SetPropertyUint32(docctx, q, (uint32_t)idx, JS_UNDEFINED);
