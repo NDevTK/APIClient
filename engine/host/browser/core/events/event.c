@@ -39,6 +39,7 @@
 #include "core/events/message_event.h"
 #include "core/events/error_event.h"
 #include "core/events/page_transition_event.h"
+#include "core/events/navigate_event.h"
 #include "core/events/navigation_current_entry_change_event.h"
 #include "core/events/pop_state_event.h"
 #include "core/events/hash_change_event.h"
@@ -819,6 +820,12 @@ static void event_declare_subclasses(JSContext *ctx)
        reason: its prototype chains to this realm's Event.prototype. Its `from` member brands against
        core/frame/navigation_history_entry.c's class, which core/platform.c declares before this row. */
     navigation_current_entry_change_event_init(ctx);
+    /* HTML §7.2.6.10.1 — the event a NAVIGATION fires before it commits. Declared here for the same reason and
+       with a second one of its own: its `destination` member brands against core/frame/navigation_destination.c's
+       class and its `signal` against core/dom/abort.c's, and core/platform.c declares the first of those before
+       this row while the second comes AFTER it — which is why NavigateEvent reads both class ids at its
+       PER-REALM install rather than here. A class id is agent-scoped, so reading it later reads the same one. */
+    navigate_event_init(ctx);
     before_unload_event_init(ctx);
     /* THE ORDER IS THE CHAIN. Each of these declares a per-realm install and realm.h runs them in declaration
        order, so an interface must declare AFTER the one it extends or its prototype chains to a slot no realm
@@ -838,6 +845,7 @@ static void event_free_subclasses(JSContext *ctx)
     pop_state_event_free(ctx);
     hash_change_event_free(ctx);
     navigation_current_entry_change_event_free(ctx);
+    navigate_event_free(ctx);
     before_unload_event_free(ctx);
     ui_event_free(ctx);
     mouse_event_free(ctx);

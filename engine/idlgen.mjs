@@ -187,11 +187,14 @@ const INTERFACES = {
   Navigation:               ["core/frame/navigation.c", "core/events/event_target.c"],
   NavigationHistoryEntry:   ["core/frame/navigation_history_entry.c", "core/events/event_target.c"],
   NavigationCurrentEntryChangeEvent: "core/events/navigation_current_entry_change_event.c",
-  /* §7.2.6.10 and its three neighbours, DECLARED UNBUILT below and given the paths their components will take
-     — which is what makes the declaration checkable from both sides: the day one of these files exists, the
-     audit reports the exemption as STALE instead of going on believing it. */
-  NavigateEvent:            "core/events/navigate_event.c",
+  /* §7.2.6.10.1's event and §7.2.6.10.3's destination — BUILT. NavigateEvent's row names event_target.c too
+     because §7.2.6.10.1 inherits Event, whose `composedPath` and the rest come off the shared component, the
+     same rule VisualViewport's row states. */
+  NavigateEvent:            ["core/events/navigate_event.c", "core/events/event.c"],
   NavigationDestination:    "core/frame/navigation_destination.c",
+  /* §7.2.6.10.2 and the two §7.2.6.8/§7.2.6.9 objects, DECLARED UNBUILT below and given the paths their
+     components will take — which is what makes the declaration checkable from both sides: the day one of these
+     files exists, the audit reports the exemption as STALE instead of going on believing it. */
   NavigationPrecommitController: "core/frame/navigation_precommit_controller.c",
   NavigationTransition:     "core/frame/navigation_transition.c",
   NavigationActivation:     "core/frame/navigation_activation.c",
@@ -417,17 +420,17 @@ const UNBUILT = {
   ResizeObserver:       "no layout, so no box to observe — rendering.c's realm_awaits names it",
   PerformanceObserver:  "no performance timeline to observe — rendering.c's realm_awaits names it",
   Notification:         "no notification surface; nothing in the tree constructs one",
-  /* HTML §7.2.6.10 and its neighbours — the NAVIGATE EVENT half of the navigation API. The entry list, the
-     entries and the events that maintain it are built (core/frame/navigation.c); what is not is the event a
-     navigation fires before it commits, the interception that converts one into a same-document navigation,
-     and the two objects that report an ongoing or a completed one. Each is named at the step that would fire
-     it: core/frame/history.c's shared push/replace state steps 7-9 and core/frame/session_history.c's
-     §7.4.6.1 traverse both carry a realm_awaits over `NavigateEvent`, and §7.4.6.2 step 7's DCHECK names
-     NavigationActivation. */
-  NavigateEvent:        "the navigate event is not fired yet — history.c and session_history.c realm_awaits it",
-  NavigationDestination: "the navigate event carries it; absent with the event — history.c realm_awaits it",
-  NavigationPrecommitController: "intercept()'s precommit half; absent with the navigate event",
-  NavigationTransition: "reports an ONGOING navigation, which only the navigate event creates",
+  /* HTML §7.2.6.10's REMAINING neighbours. §7.2.6.10.1's NavigateEvent and §7.2.6.10.3's NavigationDestination
+     have LEFT this list — both are built, and NavigateEvent's row above reports its two operations as the
+     honest ABSENT it now is. What is still unbuilt is what only INTERCEPTION creates: `intercept()` is what
+     moves a NavigateEvent's interception state off "none", and until it exists no transition is ever created,
+     no precommit controller is ever handed to a handler, and §7.2.6.10.4's commit switch has no arm to take.
+     Each remaining one is named at the step that would build it: core/frame/history.c's shared push/replace
+     state steps 7-9 and core/frame/session_history.c's §7.4.6.1 step 5 both carry a realm_awaits over
+     `Navigation.prototype.onnavigate` — the observable of the navigate event being FIRED, which the interface
+     merely existing is not — and §7.4.6.2 step 7's DCHECK names NavigationActivation. */
+  NavigationPrecommitController: "intercept()'s precommit half; absent with the interception state",
+  NavigationTransition: "reports an ONGOING navigation, which only an INTERCEPTED navigate event creates",
   NavigationActivation: "written by §7.4.6.2 step 7, whose branch is unreachable without a cross-document "
                         + "traversal or a reload — session_history.c's DCHECK names it",
 };

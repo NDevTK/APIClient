@@ -346,17 +346,24 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
        result of FIRING A PUSH/REPLACE/RELOAD NAVIGATE EVENT at navigation with navigationType set to
        historyHandling, isSameDocument set to true, destinationURL set to newURL, and classicHistoryAPIState set
        to serializedData; if continue is false, then return."
-       §7.2.6 exists now, but its NAVIGATE EVENT does not (core/frame/navigation.h names what has to land), so
-       the step is asserted against the interface's arrival rather than written down as a comment: the moment
-       NavigateEvent is in this realm, this is where it must be fired and where a page's `preventDefault()` on
-       it must stop a `pushState` from ever reaching step 10. */
-    realm_awaits(ctx, "NavigateEvent",
+       §7.2.6.10.1's NavigateEvent AND §7.2.6.10.3's NavigationDestination BOTH EXIST NOW, which is why this
+       assertion no longer probes for them: the interfaces are built and the step still cannot run, because what
+       is missing is §7.2.6.10.4 — the three wrapper algorithms and the INNER NAVIGATE EVENT FIRING ALGORITHM
+       that dispatches one. A probe over the interface would have been satisfied by an interface nothing fires,
+       which is the failure mode CLAUDE.md's §DFAIL paragraph describes: an assertion that stays true about the
+       SPEC and goes wrong about THIS TREE.
+       SO IT PROBES THE OBSERVABLE OF THE FIRING ITSELF. `onnavigate` is §7.2.6.2's event handler IDL attribute
+       on Navigation, and core/frame/navigation.c installs it only when an algorithm dispatches the event — an
+       event handler attribute for an event nothing fires is the shape-only member the IDL audit exists to
+       expose, so its presence and the firing are the same fact. */
+    realm_awaits(ctx, "Navigation.prototype.onnavigate",
                  "HTML §7.2.5's shared history push/replace state steps 7-9 fire a PUSH/REPLACE/RELOAD NAVIGATE "
-                 "EVENT before the URL and history update steps — this build now has a NavigateEvent. Fire it "
-                 "here with navigationType set to historyHandling, isSameDocument TRUE, destinationURL newURL "
+                 "EVENT before the URL and history update steps — this build now fires the navigate event. Fire "
+                 "it here with navigationType set to historyHandling, isSameDocument TRUE, destinationURL newURL "
                  "and classicHistoryAPIState serializedData, and RETURN when the inner navigate event firing "
                  "algorithm answers false: a canceled or intercepted navigate event means step 10 must not run "
-                 "at all, because commit-a-navigate-event runs the URL and history update steps itself");
+                 "at all, because commit-a-navigate-event runs the URL and history update steps itself. The "
+                 "dispatch is a rest point, so it is a stage of its own between HPR_CHECKS and HPR_UPDATE");
 
     /* STEP 10 — §7.4.4's two halves. _begin runs its steps 1-10 and touches none of the page's code, which is
        what lets every allocation above be released here rather than carried across a suspension. */

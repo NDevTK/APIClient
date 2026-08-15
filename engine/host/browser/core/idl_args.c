@@ -1480,10 +1480,19 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 else if (mt == IDL_INTERFACE) {
                     /* §3.2.16 on a dictionary member, which is where StaticRangeInit's four live: the brand
                        test is the TYPE's, so the member does not cross as itself and the body performs no
-                       check of its own. */
-                    DCHECK(m->iface != 0, "a dictionary declared an interface-typed member with no class to "
-                                          "brand against — idl_iface_brand is the other half of that type");
-                    if (!idl_is_iface(s->dict_v, m->iface)) {
+                       check of its own.
+                       WHICH CLASS IS THE MEMBER'S OWN WHEN IT STATES ONE. A declaration states one class
+                       (idl_iface_brand) and that is all a dictionary needs while every interface-typed member
+                       of it is the same interface; NavigateEventInit's four are four DIFFERENT interfaces, so
+                       the member carries its own and the declaration's is not consulted. Neither stated is the
+                       assert below and not a read past a missing class. */
+                    JSClassID want = dm->iface ? dm->iface : m->iface;
+
+                    DCHECK(want != 0, "a dictionary declared an interface-typed member with no class to brand "
+                                      "against — IdlDictMember::iface states it per member, and "
+                                      "idl_iface_brand states it once for a dictionary whose interface-typed "
+                                      "members are all one interface");
+                    if (!idl_is_iface(s->dict_v, want)) {
                         JS_ThrowTypeError(ctx, "dictionary member `%s` does not implement the declared "
                                           "interface", dm->name);
                         return JS_STEP_ABRUPT;

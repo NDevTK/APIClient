@@ -901,8 +901,19 @@ static void sh_apply_history_step_begin(JSContext *ctx, SHApply *a, uint32_t ste
        is because those checks are done earlier in the navigation algorithm", and §7.4.3's delta traverse passes
        one only for a traversal initiated by a document that is not this navigable's own — which is the
        cross-navigable case sh_entries already asserts against.
-       STEP 5's CHECKING IF UNLOADING IS CANCELED is likewise reached only for a navigable that goes
-       CROSS-DOCUMENT, and there are none: every entry here shares one document state, asserted below. */
+       STEP 5's CHECKING IF UNLOADING IS CANCELED IS NOT SKIPPED FOR THE SAME REASON, AND THIS SAID IT WAS. The
+       claim was that it is "reached only for a navigable that goes CROSS-DOCUMENT, and there are none", which
+       is true of the LIST it is handed (navigablesCrossingDocuments, empty for a same-document traversal) and
+       false of the ALGORITHM: check-if-unloading-is-canceled takes that list AND the TRAVERSABLE, and its
+       traverse-navigate-event branch is guarded by "if traversable was given" — which apply-the-history-step
+       always does, whatever the list holds. So a `history.back()` on a top-level traversable takes that branch
+       with an EMPTY beforeunload list and fires a TRAVERSE NAVIGATE EVENT the page can cancel. That is the
+       third time in this file's neighbourhood a guard has been right about the case it was written for and
+       wrong about the case that arrived, and it is the same shape as the two STEP_DISPATCH now makes
+       unwritable — the difference being that this one was a claim in prose, which no macro can refuse.
+       WHICH ENTRY POINT REACHES IT IS `checkForCancelation`, and the two differ: apply-the-push/replace-history
+       -step passes FALSE and apply-the-traverse-history-step passes TRUE. So the assertion for it belongs to
+       the TRAVERSAL machine rather than here, where both entry points meet — see js_sh_traverse_step. */
     /* §7.4.6.1's "for each navigable of changingNavigables: SET NAVIGABLE'S CURRENT SESSION HISTORY ENTRY to
        targetEntry". It is set for BOTH exits — the update-only test below is about the ACTIVE entry, not this
        one — which is what makes §7.4.1.4's get-all-navigables-whose-current-entry-will-change answer correctly
@@ -946,21 +957,18 @@ static void sh_apply_history_step_begin(JSContext *ctx, SHApply *a, uint32_t ste
                "history entry's document IN PARALLEL, then §7.4.6.1's DEACTIVATE (pageswap, unload-a-document-"
                "and-its-descendants, pagehide), then activate-history-entry over the new Document. Build it in "
                "this file beside the same-document path, driven from the same machine");
-        /* "If navigable is not traversable, and targetEntry is not navigable's current session history entry,
-           and oldOrigin is the same as … then FIRE A TRAVERSE NAVIGATE EVENT" — §7.2.6.10.4's, and the first
-           conjunct is FALSE here for the reason sh_entries states: this navigable IS its own traversable, so
-           the branch is not taken and the traversal is not cancelable from a nested navigable.
-           THE OTHER PLACE A TRAVERSE NAVIGATE EVENT FIRES IS §7.4.6.1's own traversal entry, which reaches a
-           TOP-LEVEL traversable and would fire it here — so the arrival of the event is asserted against
-           rather than written down, and the assert names the algorithm to write. */
-        realm_awaits(ctx, "NavigateEvent",
-                     "HTML §7.4.6.1's traversal fires a TRAVERSE NAVIGATE EVENT before it changes a "
-                     "navigable's entry — this build now has one. §7.2.6.10.4's fire-a-traverse-navigate-event "
-                     "takes the destination session history entry, builds a NavigationDestination over its "
-                     "URL and its navigation API state, and runs the inner navigate event firing algorithm; a "
-                     "FALSE result means the page canceled the traversal and this per-navigable job must "
-                     "abort instead of activating targetEntry, and an intercept() converts it into the "
-                     "resume-applying-the-traverse-history-step path");
+        /* "If navigable is NOT TRAVERSABLE, and targetEntry is not navigable's current session history entry,
+           and oldOrigin is the same as … then FIRE A TRAVERSE NAVIGATE EVENT" — §7.2.6.10.4's, and the FIRST
+           CONJUNCT IS FALSE here for the reason sh_entries states: this navigable IS its own traversable. So
+           the branch is not taken, and that is a fact about this build rather than a gap in it — the branch
+           exists to let a NESTED navigable's traversal be canceled from its own document.
+           THIS SITE CARRIED THE ASSERTION FOR THE TRAVERSE NAVIGATE EVENT AND IT WAS THE WRONG SITE. Its own
+           text said the top-level fire "would fire it here", and it would not: §7.4.6.1 step 8 is where the
+           NESTED fire lives, and the one a traversable performs for ITSELF is step 5's CHECK IF UNLOADING IS
+           CANCELED — see sh_apply_history_step_begin, whose step-5 comment made the matching mistake. An
+           assertion at a branch that is never taken is an assertion that never fires, which is why the
+           misplacement was invisible. */
+        sh_assert_is_traversable(ctx);
     }
     /* "Let (scriptHistoryLength, scriptHistoryIndex) be the result of GETTING THE HISTORY OBJECT LENGTH AND
        INDEX given traversable and targetStep." */
@@ -1384,8 +1392,30 @@ static int js_sh_traverse_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             return JS_STEP_DONE;
         }
         /* STEP 4.5: "APPLY THE TRAVERSE HISTORY STEP allSteps[targetStepIndex] to traversable" — which is
-           §7.4.6.1's apply-the-history-step "given true, sourceSnapshotParams, initiatorToCheck,
-           userInvolvement, and \"traverse\"". */
+           §7.4.6.1's apply-the-history-step "given TRUE, sourceSnapshotParams, initiatorToCheck,
+           userInvolvement, and \"traverse\"". THAT FIRST ARGUMENT IS `checkForCancelation`, and this is the
+           only entry point in this file that passes it true — apply-the-push/replace-history-step passes false
+           and says why ("those checks are done earlier in the navigation algorithm").
+           SO §7.4.6.1 STEP 5 BELONGS HERE, and it is the step that fires the TRAVERSE NAVIGATE EVENT for a
+           top-level traversable: check-if-unloading-is-canceled's own branch is "if traversable was given",
+           which is satisfied whatever navigablesCrossingDocuments holds, so a same-document `history.back()`
+           reaches it. A FALSE answer is "canceled-by-navigate" and the traversal must not apply at all.
+           THE DISPATCH IS A REST POINT, so building it adds a stage to SH_APPLY_STAGES ahead of SH_APPLY_STEP
+           and this call moves behind it. §7.2.6.10.1's NavigateEvent and §7.2.6.10.3's NavigationDestination
+           both exist now, which is why the probe is no longer over either of them: what is missing is
+           §7.2.6.10.4's fire-a-traverse-navigate-event and the inner navigate event firing algorithm, and the
+           observable of a navigate event being fired at all is §7.2.6.2's `onnavigate` — core/frame/navigation.c
+           installs that handler attribute only when an algorithm dispatches the event. */
+        realm_awaits(ctx, "Navigation.prototype.onnavigate",
+                     "HTML §7.4.6.1 step 5 CHECKS IF UNLOADING IS CANCELED before it applies a traverse history "
+                     "step, and this build now fires the navigate event. Run it here: §7.2.6.10.4's "
+                     "fire-a-traverse-navigate-event takes the entry sh_target_history_entry resolved for "
+                     "`target`, builds a NavigationDestination over its URL, its navigation API state and its "
+                     "NavigationHistoryEntry, and runs the inner navigate event firing algorithm. A FALSE "
+                     "answer is \"canceled-by-navigate\": return JS_STEP_DONE without calling "
+                     "sh_apply_history_step_begin at all, so `history.back()` cancelled by a `navigate` "
+                     "listener leaves the traversable's current step where it was. An intercept() instead "
+                     "converts it into §7.2.6.10.4's resume-applying-the-traverse-history-step path");
         sh_apply_history_step_begin(ctx, &s->apply, target, "traverse");
     }
     /* THE SAME SHARED TAIL AS THE HALF IT DRIVES, for the same reason: §7.4.6.1's second half owns all three

@@ -213,9 +213,17 @@ static JSValue signal_new(JSContext *ctx, JSValue aborted, JSValue reason)
 
     {
         /* abort_signal_proto ASSERTS that this realm ran its install — the members live on that prototype, so
-           a signal minted before it exists would have none of them. */
+           a signal minted before it exists would have none of them.
+           IT WEARS THE CLASS, and that is what makes `AbortSignal` a DECLARABLE type. This was a plain
+           JS_NewObjectProto, so the only brand an AbortSignal had was its private slot record — which a body
+           can test and a DECLARATION cannot, since Web IDL's §3.2.16 conversion in core/idl_args.c compares
+           class ids. HTML §7.2.6.10.1's `required AbortSignal signal` is a declared dictionary member, so
+           without this the type would have had to be re-stated as a hand-written check in NavigateEvent's
+           constructor — the exact duplication a declared type exists to remove. The class already existed for
+           its per-realm prototype slot; giving it to the instances too is what every other interface in this
+           engine does (core/frame/navigation_history_entry.c mints through the same pair). */
         JSValue sp = abort_signal_proto(ctx);
-        sig = JS_NewObjectProto(ctx, sp);
+        sig = JS_NewObjectProtoClass(ctx, sp, g_sig_class);
         JS_FreeValue(ctx, sp);
     }
     CHECK(!JS_IsException(sig), "the AbortSignal allocation failed");
@@ -473,6 +481,14 @@ bool abort_signal_is(JSContext *ctx, JSValueConst v)
     JS_FreeValue(ctx, flag);
     JS_FreeValue(ctx, slots);
     return ok;
+}
+
+JSClassID abort_signal_class(void)
+{
+    DCHECK(g_sig_class != 0, "AbortSignal's class was asked for before abort_init declared it — a DECLARATION "
+                             "that brands against it (HTML §7.2.6.10.1's NavigateEventInit) is made at agent "
+                             "init, so core/platform.c's order is what puts this component ahead of it");
+    return g_sig_class;
 }
 
 bool abort_signal_aborted(JSContext *ctx, JSValueConst sig)

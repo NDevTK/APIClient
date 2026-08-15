@@ -227,6 +227,16 @@ typedef struct {
     const struct IdlDictDecl *dict;
     IdlDictDefault dflt;
     const char *dflt_str;
+    /* THIS MEMBER'S OWN §3.2.16 INTERFACE CLASS, for a dictionary that declares MORE THAN ONE interface type.
+       `idl_iface_brand` states ONE class per DECLARATION, which is everything a dictionary whose interface-typed
+       members are all the same interface needs — StaticRangeInit's two are both Nodes, FormDataEventInit's one
+       is a FormData — and it is exactly what HTML §7.2.6.10.1's NavigateEventInit walks past: its four are a
+       NavigationDestination, an AbortSignal, a FormData and an Element, so one class per declaration would have
+       branded `signal` against NavigationDestination and refused every correct construction.
+       ZERO IS A STATEMENT AND NOT A HOLE: it says this dictionary states its interface once, at the declaration,
+       and the conversion asserts that one of the two was stated rather than reading past a missing class. It is
+       therefore not the `x || 0` §Consumer-defaults forbids — there is no producer that could have written it. */
+    JSClassID   iface;
 } IdlDictMember;
 
 /* A DICTIONARY, DECLARED — its member list in §3.2.17's read order, and the identifier its IDL gives it. A

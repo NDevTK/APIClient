@@ -563,8 +563,11 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     JS_FreeValue(ctx, passive_v);
     signal = idl_dict_get(ctx, opts, "signal");
     /* `AbortSignal signal` is an INTERFACE-typed member, so a value that is not one is a TypeError before the
-       algorithm's step 1. The brand test is not the declaration's here because §3.2's brand is a private SLOT
-       RECORD rather than a class opaque — IDL_INTERFACE tests the opaque, which an AbortSignal does not carry. */
+       algorithm's step 1. The brand test is not the declaration's here for the reason the paragraph below
+       gives and NOT because the type is undeclarable: an AbortSignal now wears core/dom/abort.c's class, so
+       IDL_INTERFACE could brand it — what IDL_INTERFACE cannot express is this member's treatment of NULL,
+       which §2.7 makes a TypeError while the declaration surface has no non-nullable-with-explicit-null arm.
+       The rule performed here is that whole rule. */
     /* NULL IS NOT AN ABSENT MEMBER HERE. `AbortSignal signal` is NOT nullable, so `{signal: null}` is a
        TypeError and not "no signal" — the corpus asks for exactly that, twice, and it asks for it even when the
        CALLBACK is null, which is why the conversion has to happen before §2.7's "if callback is null, return".

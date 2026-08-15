@@ -30,6 +30,7 @@
  * to its sibling and travels with the flow that made it. It matters here more than for most: §7.2.6.4 mints a
  * NavigationHistoryEntry on every push and every replace, so two forked routers hold two entry lists. */
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "check.h"
 #include "quickjs.h"
@@ -118,6 +119,60 @@ JSValue navigation_history_entry_new(JSContext *ctx, JSValueConst she)
     return obj;
 }
 
+/* ---- §7.2.6.5's `key`, `id` AND `index` GETTER STEPS, AS ALGORITHMS -------------------------------------------
+ *
+ * THEY ARE FUNCTIONS BECAUSE A SECOND INTERFACE IS DEFINED IN TERMS OF THEM. §7.2.6.10.3 writes three of
+ * NavigationDestination's members as "return this's entry's key / ID / index" — the ENTRY'S GETTER, not the
+ * session history entry's field — so the three live here, once, and both interfaces reach the same body. Each
+ * opens with the same not-fully-active answer §7.2.6.5 gives it, which is exactly the part a re-derivation in
+ * the other component would have lost.
+ * The brand is NOT asked here: these are the getter STEPS, and Web IDL performs the brand check before the
+ * steps run. js_nhe_get asks it for the attribute reach; navigation_destination.c holds an entry it took out of
+ * this component's own list. Both are asserted below. */
+
+JSValue navigation_history_entry_key(JSContext *ctx, JSValueConst nhe)
+{
+    JSValue she, v;
+
+    DCHECK(JS_GetClassID(nhe) == g_nhe_class,
+           "§7.2.6.5's `key` steps ran on something that is not a NavigationHistoryEntry");
+    if (!document_fully_active(ctx)) return JS_NewStringLen(ctx, "", 0);
+    she = navigation_history_entry_she(ctx, nhe);
+    v = session_history_entry_nav_key(ctx, she);
+    JS_FreeValue(ctx, she);
+    return v;
+}
+
+JSValue navigation_history_entry_id(JSContext *ctx, JSValueConst nhe)
+{
+    JSValue she, v;
+
+    DCHECK(JS_GetClassID(nhe) == g_nhe_class,
+           "§7.2.6.5's `id` steps ran on something that is not a NavigationHistoryEntry");
+    if (!document_fully_active(ctx)) return JS_NewStringLen(ctx, "", 0);
+    she = navigation_history_entry_she(ctx, nhe);
+    v = session_history_entry_nav_id(ctx, she);
+    JS_FreeValue(ctx, she);
+    return v;
+}
+
+int64_t navigation_history_entry_index(JSContext *ctx, JSValueConst nhe)
+{
+    JSValue she;
+    int64_t i;
+
+    DCHECK(JS_GetClassID(nhe) == g_nhe_class,
+           "§7.2.6.5's `index` steps ran on something that is not a NavigationHistoryEntry");
+    if (!document_fully_active(ctx)) return -1;
+    /* "Return the result of getting the navigation API entry index of this's session history entry within
+       this's relevant global object's navigation API" — a SEARCH of the live entry list every time, which is
+       why −1 is a real answer here for an entry the list no longer holds. */
+    she = navigation_history_entry_she(ctx, nhe);
+    i = navigation_entry_index_of(ctx, she);
+    JS_FreeValue(ctx, she);
+    return i;
+}
+
 /* ---- the five attributes ------------------------------------------------------------------------------------
  *
  * `magic` IS the member, so the fully-active test and the brand are written once. What each member answers when
@@ -132,15 +187,21 @@ static JSValue js_nhe_get(JSContext *ctx, JSValueConst this_val, int magic)
     if (!nhe_brand(ctx, this_val)) return JS_EXCEPTION;
     DCHECK(magic >= NHE_URL && magic < NHE_N,
            "a NavigationHistoryEntry accessor was installed with a magic this interface has no member for");
+    /* THREE OF THE FIVE ARE ALGORITHMS OF THEIR OWN, because §7.2.6.10.3 defines NavigationDestination's `key`,
+       `id` and `index` as these members' steps — including the not-fully-active answers, which are inside the
+       three bodies rather than in a shared prologue here for exactly that reason. */
+    switch (magic) {
+    case NHE_KEY:   return navigation_history_entry_key(ctx, this_val);
+    case NHE_ID:    return navigation_history_entry_id(ctx, this_val);
+    case NHE_INDEX: return JS_NewInt64(ctx, navigation_history_entry_index(ctx, this_val));
+    default:        break;
+    }
     if (!document_fully_active(ctx)) {
         /* §7.2.6.5 answers each of these separately for a Document that is not fully active, and the five
            answers are not one default: "" for `url`, "" for `key`, "" for `id`, −1 for `index`, false for
-           `sameDocument`. */
+           `sameDocument`. The two remaining here are the two whose steps nothing else is defined in terms of. */
         switch (magic) {
-        case NHE_URL:
-        case NHE_KEY:
-        case NHE_ID:            return JS_NewStringLen(ctx, "", 0);
-        case NHE_INDEX:         return JS_NewInt32(ctx, -1);
+        case NHE_URL:           return JS_NewStringLen(ctx, "", 0);
         case NHE_SAME_DOCUMENT: return JS_FALSE;
         default:                break;
         }
@@ -162,15 +223,6 @@ static JSValue js_nhe_get(JSContext *ctx, JSValueConst this_val, int magic)
                "\"no-referrer\" and \"origin\", which is how a same-origin page is kept from reading a URL "
                "another Document is hiding");
         v = session_history_entry_url(ctx, she);
-        break;
-    case NHE_KEY:   v = session_history_entry_nav_key(ctx, she); break;
-    case NHE_ID:    v = session_history_entry_nav_id(ctx, she); break;
-    case NHE_INDEX:
-        /* "Return the result of getting the navigation API entry index of this's session history entry within
-           this's relevant global object's navigation API" — a SEARCH of the live entry list every time, which
-           is why −1 is a real answer here for an entry the list no longer holds. §7.2.6.5 declares it
-           `long long`, so the answer is a 64-bit integer and not an int32. */
-        v = JS_NewInt64(ctx, navigation_entry_index_of(ctx, she));
         break;
     case NHE_SAME_DOCUMENT:
         v = JS_NewBool(ctx, session_history_entry_is_this_document(ctx, she));

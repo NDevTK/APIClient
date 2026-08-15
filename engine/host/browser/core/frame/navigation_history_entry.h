@@ -2,6 +2,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_NAVIGATION_HISTORY_ENTRY_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_NAVIGATION_HISTORY_ENTRY_H
 
+#include <stdint.h>
+
 #include "quickjs.h"
 
 void navigation_history_entry_init(JSContext *ctx);          /* the slot key + the IDL declarations (agent) */
@@ -25,5 +27,16 @@ JSValue navigation_history_entry_she(JSContext *ctx, JSValueConst nhe);
    NavigationCurrentEntryChangeEventInit's `required NavigationHistoryEntry from` is declared against, so the
    member does not cross as itself and no body writes a check of its own. */
 JSClassID navigation_history_entry_class(void);
+
+/* §7.2.6.5's `key`, `id` AND `index` GETTER STEPS, REACHABLE FROM C — because §7.2.6.10.3 defines three of
+ * NavigationDestination's members AS them: "return this's entry's key", "…'s ID", "…'s index". A second
+ * derivation off the session history entry would be a second implementation of a member, and it would differ
+ * exactly where it matters: these three carry §7.2.6.5's NOT-FULLY-ACTIVE answers ("", "", −1), which a
+ * re-derivation would answer with the real key of a detached frame's entry.
+ * The two strings are OWNED. `index` is `long long` because §7.2.6.5 declares it one, and −1 is a real answer
+ * for an entry the live list no longer holds. */
+JSValue navigation_history_entry_key(JSContext *ctx, JSValueConst nhe);
+JSValue navigation_history_entry_id(JSContext *ctx, JSValueConst nhe);
+int64_t navigation_history_entry_index(JSContext *ctx, JSValueConst nhe);
 
 #endif

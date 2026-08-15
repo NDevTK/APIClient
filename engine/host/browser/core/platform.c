@@ -26,6 +26,7 @@
 #include "core/file/storage_manager.h"
 #include "core/frame/history.h"
 #include "core/frame/navigation.h"
+#include "core/frame/navigation_destination.h"
 #include "core/frame/navigation_history_entry.h"
 #include "core/frame/location.h"
 #include "core/frame/navigable.h"
@@ -105,6 +106,7 @@ static void d_session_history(JSContext *c, const PlatformAgent *a) { (void)a; s
 static void d_history(JSContext *c, const PlatformAgent *a) { (void)a; history_init(c); }
 static void d_navigation(JSContext *c, const PlatformAgent *a) { (void)a; navigation_init(c); }
 static void d_nav_history_entry(JSContext *c, const PlatformAgent *a) { (void)a; navigation_history_entry_init(c); }
+static void d_nav_destination(JSContext *c, const PlatformAgent *a) { (void)a; navigation_destination_init(c); }
 static void d_screen(JSContext *c, const PlatformAgent *a) { (void)a; screen_init(c); }
 static void d_navigable(JSContext *c, const PlatformAgent *a) { (void)a; navigable_init(c); }
 static void d_event_loop(JSContext *c, const PlatformAgent *a) { (void)a; event_loop_init(c); }
@@ -201,6 +203,10 @@ static const PlatformComponent PLATFORM[] = {
        §7.2.7.1's `required NavigationHistoryEntry from` brands against — so it is declared before `event`,
        which is where every Event subclass including that one is declared. */
     { "navigation_history_entry", d_nav_history_entry, NULL },
+    /* HTML §7.2.6.10.3's NavigationDestination, whose CLASS is what §7.2.6.10.1's `required NavigationDestination
+       destination` brands against — so it is declared before `event`, which is where every Event subclass
+       including NavigateEvent is declared. It inherits nothing, so its own prototype needs no earlier row. */
+    { "navigation_destination", d_nav_destination,   NULL },
     { "window",              d_window,              i_window },
     /* §8.10.1's Navigator, and with it Permissions §6 (navigator.permissions), Storage §2 and File System §3
        (navigator.storage) and §6.4.4's UserActivation. This row is the one whose absence from one host's copy
@@ -300,6 +306,8 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "history",               "history" },
     { "navigation",            "navigation" },
     { "NavigationHistoryEntry", "navigation_history_entry" },
+    { "NavigationDestination", "navigation_destination" },
+    { "NavigateEvent",         "event" },
     { "open",                  "navigable" },
     { "fetch",                 "fetch" },
     { "setTimeout",            "timer" },
