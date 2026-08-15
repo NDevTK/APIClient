@@ -63,6 +63,7 @@
 #include "core/fetch/headers.h"
 #include "core/fetch/fetch.h"
 #include "solver/endpoint.h"
+#include "solver/req2proto.h"
 #include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/dom_cow.h"   /* dom_attr_capture — the DOM write host-edge records into the per-flow DOM delta */
@@ -1893,6 +1894,7 @@ int main(int argc, char **argv) {
     flow_registry_init("fixture");   /* one document in this fixture; the world namespace is named by it */
     world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
     endpoint_init();
+    req2proto_init();
     solve_init(ctx);
 
     /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER.
@@ -2416,6 +2418,7 @@ int main(int argc, char **argv) {
     platform_agent_free();
     solve_free();
     endpoint_free();
+    req2proto_free();
 
     rendering_free(ctx);
     page_reveal_free(ctx);

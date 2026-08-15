@@ -11,7 +11,6 @@ const FILES = [
   "extension/lib/chains.js",
   "extension/lib/discovery.js",
   "extension/lib/protobuf.js",
-  "extension/lib/req2proto.js",
   "extension/lib/sourcemap.js",
   "extension/lib/stats.js",
   "extension/popup.js",

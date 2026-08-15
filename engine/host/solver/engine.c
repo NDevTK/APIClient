@@ -18,6 +18,7 @@
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
 #include "solver/cold.h"      /* what the frontier's parked snapshots are made of — the cold tier's census */
 #include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what THIS host can measure */
+#include "solver/req2proto.h" /* an API's own rejection is a description of the request it wanted — see engine_provide */
 #include "check.h"
 #include <time.h>
 #include <stdlib.h>
@@ -760,6 +761,13 @@ const char *engine_pending_urls(void) {
    a register beside it. Returns how many entries it filled. */
 int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
     int n = 0;
+    /* THE METHOD THE REPLY IS A REPLY TO, taken off the entry that parked on it rather than assumed. A schema
+       learned from an error envelope is filed under the endpoint identity `<METHOD> <host><path>`, and this is
+       the one place that holds both halves: the URL the host answered and the request record the flow kept.
+       A relative `char *` would dangle the moment the entry is freed, so it is copied — one small buffer, once
+       per reply, and the truncation is asserted rather than silently filing under a shortened verb. */
+    char method[16];
+    method[0] = 0;
     DCHECK(url != NULL, "a body was provided for no URL");
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, m = pending_count(f->pending); i < m; i++) {
@@ -770,6 +778,18 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
             if (u) JS_FreeCString(ctx, u);
             JS_FreeValue(ctx, uv);
             if (hit) {
+                if (!method[0]) {
+                    JSValue mv = pending_get(p, PEND_METHOD);
+                    const char *ms = JS_IsString(mv) ? JS_ToCString(ctx, mv) : NULL;
+                    if (ms) {
+                        size_t ml = strlen(ms);
+                        DCHECK(ml < sizeof method, "a request parked with a method longer than any HTTP verb — "
+                               "the learned-schema key is built from it and a truncated verb files one endpoint's "
+                               "schema under another's identity");
+                        if (ml < sizeof method) memcpy(method, ms, ml + 1);
+                        JS_FreeCString(ctx, ms);
+                    }
+                }
                 pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
                 pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
                 n++;
@@ -777,6 +797,15 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
             JS_FreeValue(ctx, p);
         }
     }
+    /* LEARNING FROM REPLIES IS THE POINT (CLAUDE.md §Solver), and an API's own REJECTION is the richest reply
+       there is: `google.rpc.Status` names the endpoint's fields, their types, its canonical service and method
+       and the OAuth scopes it wants. This is the one point every fetched reply crosses exactly once — a URL two
+       flows parked on is answered here once — so the learning happens here rather than in the per-flow drain,
+       where it would run once per waiter. The schema is a fact about the SERVER, not about a flow's world, so
+       it is not per-flow state and takes no COW capture, exactly as the endpoint surface does not.
+       A method-less entry is a park with no request record at all (a docscript or an injected <script src>);
+       those are code, never an error envelope, and GET is what the host performed for them. */
+    if (n) req2proto_learn(ctx, method[0] ? method : "GET", url, value);
     return n;
 }
 /* Resolve every pending fetch this flow issued (the network completed). Returns how many were drained. */

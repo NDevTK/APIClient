@@ -5,6 +5,7 @@
 #include "check.h"
 #include "solver/result.h"
 #include "solver/endpoint.h"
+#include "solver/req2proto.h"
 #include "solver/solve.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
@@ -142,11 +143,15 @@ char *result_json(JSContext *ctx) {
     char *eps = endpoint_json_array();
     char *sinks = solve_json_array(ctx);
     char *errs = errs_json_array();
+    /* THE SCHEMAS THE APIs' OWN REJECTIONS DESCRIBED — keyed by the endpoint identity the Send panel resolves a
+       body schema with, so nothing between here and there re-keys anything. It composes exactly as the other
+       surfaces do: each serializes itself and this decides only that they are ONE document. */
+    char *schemas = req2proto_json_object();
     size_t n;
     char *out;
 
-    if (!eps || !sinks || !errs) { free(eps); free(sinks); free(errs); return NULL; }
-    /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur: 155 bytes of literal and seven
+    if (!eps || !sinks || !errs || !schemas) { free(eps); free(sinks); free(errs); free(schemas); return NULL; }
+    /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur: 182 bytes of literal and seven
        counters whose full-width decimals are 104 more. It was 192 for a shape whose widest form was already
        197 — inside only because the real numbers are small — and the two added below would have taken it
        further past. The DCHECK under the snprintf is the second half of this, not a substitute for it. */
@@ -154,7 +159,7 @@ char *result_json(JSContext *ctx) {
        a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
        case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
        entry instead of leaving a stale residue that would be resumed forever. */
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(cold_park_json()) + 384;
+    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(schemas) + strlen(cold_park_json()) + 384;
     out = malloc(n);
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
@@ -166,14 +171,15 @@ char *result_json(JSContext *ctx) {
         int m;
         world_segment_stats(&seg, &segf);
         m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
+                             "\"probeResults\":%s,"
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
                              "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,"
                              "\"_worldSegments\":%d,\"_worldSegmentsForked\":%d,\"_park\":%s}",
-                     eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
+                     eps, sinks, errs, schemas, engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), seg, segf, cold_park_json());
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED. It was 192 bytes for three counters and is now carrying
-           five, whose widest form is 82 digits beside 115 bytes of literal — inside the slack only because the
-           real numbers are small. A truncation here does not lose a digit, it loses the closing brace: the host
+           seven, whose widest form is 104 digits beside 182 bytes of literal — inside the slack only because
+           the real numbers are small. A truncation here does not lose a digit, it loses the closing brace: the host
            gets a document that will not parse and reports NOTHING for the page, which is the loudest possible
            consequence arriving as the quietest possible bug. snprintf already told us; nothing was asking. */
         DCHECK(m > 0 && (size_t)m < n, "the result document did not fit its buffer — the host would be handed "
@@ -182,5 +188,6 @@ char *result_json(JSContext *ctx) {
     free(eps);
     free(sinks);
     free(errs);
+    free(schemas);
     return out;
 }

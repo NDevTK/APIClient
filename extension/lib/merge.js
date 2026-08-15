@@ -21,6 +21,20 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
       });
     }
 
+    /* THE SCHEMAS THE ENGINE LEARNED FROM THE APIs' OWN REJECTIONS (engine/host/solver/req2proto.c), relayed
+       into the doc model. A PURE RELAY and deliberately nothing more: the engine keys each record by the
+       endpoint identity `<METHOD> <host><path>`, which is exactly the key `lib/send.js` resolves a request
+       body schema by, so re-keying here would be this zone deciding structure the engine already decided.
+       NOT DEFAULTED — bridge.js asserts the map's presence at the seam, and a `|| {}` here would turn an
+       engine that emitted nothing into an API that describes no fields. */
+    DCHECK(analysis.probeResults && typeof analysis.probeResults === "object",
+           "an engine analysis reached the merge with no probeResults map — bridge.js relays req2proto.c's " +
+           "learned schemas verbatim, so its absence here is that relay broken rather than a page whose " +
+           "APIs never described themselves");
+    for (var _pk in analysis.probeResults)
+      if (Object.prototype.hasOwnProperty.call(analysis.probeResults, _pk))
+        tab.probeResults.set(_pk, analysis.probeResults[_pk]);
+
     // Proto field/enum merge — requires a matching doc
     if (doc) {
       console.debug("[AST:merge] Matched doc %s for host=%s", matchedSvc, sourceHost);

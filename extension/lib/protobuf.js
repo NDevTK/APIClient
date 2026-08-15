@@ -5,9 +5,13 @@
 // Wire format reference: https://protobuf.dev/programming-guides/encoding/
 //
 // Used by:
-//  - req2proto.js: binary protobuf probing for non-REST (gRPC/proto-only) endpoints
-//  - discoverServiceInfo: decoding binary error responses for service/method metadata
 //  - popup.js: inspecting intercepted protobuf traffic
+//
+// THE ERROR-PROBE HALF IS GONE WITH ITS CALLER. `pbEncodeProbePayload`, `pbEncodeNestedPayload` and
+// `pbDecodeRpcStatus` existed only for req2proto.js's binary probing, which fired a POST to learn — and
+// error-based schema learning is now the engine's (engine/host/solver/req2proto.c), which reads the
+// `google.rpc.Status` envelope off replies it already holds. Keeping three functions with no caller would
+// read as a live capability that has not run since that commit.
 
 // ─── Wire Types ───────────────────────────────────────────────────────────────
 
@@ -276,153 +280,6 @@ function pbEncodeFixed64Field(fieldNum, lo, hi) {
   dv.setUint32(0, lo, true);
   dv.setUint32(4, hi || 0, true);
   return concatBytes(pbTag(fieldNum, PB_64BIT), buf);
-}
-
-// ─── Google RPC Status Decoder ────────────────────────────────────────────────
-//
-// Decodes binary protobuf error responses from Google APIs.
-// Standard structure:
-//
-//   google.rpc.Status {
-//     int32 code = 1;
-//     string message = 2;
-//     repeated google.protobuf.Any details = 3;
-//   }
-//   google.protobuf.Any {
-//     string type_url = 1;
-//     bytes value = 2;
-//   }
-//   google.rpc.BadRequest {
-//     repeated FieldViolation field_violations = 1;
-//   }
-//   FieldViolation { string field = 1; string description = 2; }
-//   google.rpc.ErrorInfo { string reason = 1; string domain = 2; map<string,string> metadata = 3; }
-//
-
-/**
- * Decode a google.rpc.Status binary protobuf into a JSON-like object
- * matching the JSON error format, so it can be fed directly into parseJsonErrors.
- *
- * @param {Uint8Array|ArrayBuffer} buf
- * @returns {{ error: { code, message, details: [] } }} — same shape as JSON API errors
- */
-function pbDecodeRpcStatus(buf) {
-  if (!(buf instanceof Uint8Array)) buf = new Uint8Array(buf);
-
-  const result = { error: { code: 0, message: "", details: [] } };
-
-  try {
-    const status = pbDecodeRaw(buf);
-
-    result.error.code = pbGetVarint(status, 1) || 0;
-    result.error.message = pbGetString(status, 2) || "";
-
-    // Field 3: repeated google.protobuf.Any details
-    const anyMessages = pbGetRepeatedMessages(status, 3);
-
-    for (const anyFields of anyMessages) {
-      const typeUrl = pbGetString(anyFields, 1) || "";
-      const valueField = anyFields.find(
-        (f) => f.field === 2 && f.wire === PB_LEN,
-      );
-      if (!valueField) continue;
-
-      let innerFields;
-      try {
-        innerFields = pbDecodeRaw(valueField.data);
-      } catch (_) {
-        continue;
-      }
-
-      // google.rpc.BadRequest — has field_violations
-      if (typeUrl.includes("BadRequest")) {
-        const detail = { "@type": typeUrl, fieldViolations: [] };
-
-        // Field 1: repeated FieldViolation
-        const violations = pbGetRepeatedMessages(innerFields, 1);
-        for (const vFields of violations) {
-          detail.fieldViolations.push({
-            field: pbGetString(vFields, 1) || "",
-            description: pbGetString(vFields, 2) || "",
-          });
-        }
-
-        result.error.details.push(detail);
-      }
-
-      // google.rpc.ErrorInfo — has service/method metadata
-      else if (typeUrl.includes("ErrorInfo")) {
-        const detail = {
-          "@type": typeUrl,
-          reason: pbGetString(innerFields, 1) || "",
-          domain: pbGetString(innerFields, 2) || "",
-          metadata: {},
-        };
-
-        // Field 3: map<string,string> — encoded as repeated message { key(1), value(2) }
-        const mapEntries = pbGetRepeatedMessages(innerFields, 3);
-        for (const entry of mapEntries) {
-          const key = pbGetString(entry, 1);
-          const val = pbGetString(entry, 2);
-          if (key) detail.metadata[key] = val || "";
-        }
-
-        result.error.details.push(detail);
-      }
-
-      // Other detail types — decode generically
-      else {
-        const detail = { "@type": typeUrl, _raw: innerFields };
-        result.error.details.push(detail);
-      }
-    }
-  } catch (e) {
-    result.error._decodeError = e.message;
-  }
-
-  return result;
-}
-
-// ─── Probe Payload Encoding ──────────────────────────────────────────────────
-//
-// Binary equivalents of the JSON array payloads used by req2proto.
-// For endpoints that only accept application/x-protobuf.
-
-/**
- * Encode a binary protobuf probe payload with fields 1..size.
- *
- * @param {number} size - Number of fields (default 300)
- * @param {"int"|"str"} type - "str" → string fields, "int" → varint fields
- * @returns {Uint8Array}
- */
-function pbEncodeProbePayload(size, type) {
-  if (size == null) size = 300;
-  const parts = [];
-  for (let i = 1; i <= size; i++) {
-    if (type === "int") {
-      parts.push(pbEncodeVarintField(i, i));
-    } else {
-      parts.push(pbEncodeLenField(i, "x" + i));
-    }
-  }
-  return concatBytes.apply(null, parts);
-}
-
-/**
- * Encode a nested binary protobuf probe payload.
- * Wraps the probe message inside embedded message fields at the given indices.
- *
- * @param {number[]} indices - Field number path for nesting
- * @param {number} size
- * @param {"int"|"str"} type
- * @returns {Uint8Array}
- */
-function pbEncodeNestedPayload(indices, size, type) {
-  let payload = pbEncodeProbePayload(size, type);
-  for (let i = indices.length - 1; i >= 0; i--) {
-    payload = pbEncodeLenField(indices[i], payload);
-  }
-  return payload;
 }
 
 // ─── Generic Protobuf Inspector ──────────────────────────────────────────────

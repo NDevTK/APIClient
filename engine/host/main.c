@@ -87,6 +87,7 @@
 #include "solver/cow.h"
 #include "solver/endpoint.h"
 #include "solver/engine.h"
+#include "solver/req2proto.h"
 #include "solver/flow.h"
 #include "solver/world.h"
 #include "solver/result.h"
@@ -265,6 +266,7 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
                      "segments, so an unnamed document cannot take part in cross-document time travel");
     flow_registry_init(doc_id);
     endpoint_init();
+    req2proto_init();
     solve_init(g_ctx);
 
     /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
@@ -403,6 +405,7 @@ QJS_EXPORT void qjs_teardown(void)
     platform_agent_free();
     solve_free();
     endpoint_free();
+    req2proto_free();
     rendering_free(g_ctx);
     page_reveal_free(g_ctx);
     media_query_list_free(g_ctx);

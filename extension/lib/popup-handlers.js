@@ -41,49 +41,12 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       return;
     }
 
-    case "PROBE_ENDPOINT": {
-      const _pdoc = _docFromMsg(msg);
-      if (!_pdoc) { sendResponse(null); return; }
-      probeEndpoint(_pdoc.documentId, msg.endpointKey).then((result) => {
-        sendResponse(result);
-      });
-      return true;
-    }
-
-    case "DISCOVER_SERVICE": {
-      const tab = _docFromMsg(msg);
-      if (!tab) { sendResponse(null); return; }
-      const ep = tab.endpoints.get(msg.endpointKey);
-      if (!ep) {
-        sendResponse(null);
-        return;
-      }
-
-      const headers = {};
-      const discoverUrl = new URL(ep.url);
-      discoverUrl.searchParams.delete("key");
-      if (ep.apiKey) {
-        if (ep.apiKeySource === "url") {
-          discoverUrl.searchParams.set("key", ep.apiKey);
-        } else {
-          headers["X-Goog-Api-Key"] = ep.apiKey;
-        }
-      }
-      const fetchFn = makePageFetchFn(tab.tabId, tab.documentId);
-      discoverServiceInfo(discoverUrl.toString(), headers, { fetchFn }).then(
-        (result) => {
-          tab.probeResults.set(`svc:${msg.endpointKey}`, result);
-          if (result.scopes?.length) {
-            const svc = ep.service || extractInterfaceName(new URL(ep.url));
-            tab.scopes.set(svc, result.scopes);
-          }
-          mergeToGlobal(tab);
-          notifyPopup(tab.tabId);
-          sendResponse(result);
-        },
-      );
-      return true;
-    }
+    /* `PROBE_ENDPOINT` AND `DISCOVER_SERVICE` ARE GONE, AND NEITHER HAD A SENDER. Nothing in the popup has
+       ever posted either message — response-decode.js's own comment recorded that ("the bug was that it was a
+       message, never sent") — so these two cases were RPC backends for a UI that does not exist, wired to the
+       req2proto probe this zone is no longer allowed to fire. Error-based schema learning is the engine's
+       (engine/host/solver/req2proto.c) and reaches the popup through the result document's `probeResults`,
+       which `globalStore.probeResults` already feeds to the Send panel. */
 
     case "FETCH_DISCOVERY": {
       const tab = _docFromMsg(msg);

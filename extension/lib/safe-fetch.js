@@ -48,8 +48,12 @@
 // browser fetch exposes to US (the requested href and resp.url), so this list is
 // [requested] when nothing redirected and [requested, final] when something did —
 // the whole of what any caller may ever observe. A blocked or failed read reports
-// [requested]: the request URL is a fact even when the reply is not. Loaded in both: offscreen-brain.js via <script> (ast-worker.html) and
-// ast-thread.js via importScripts.
+// [requested]: the request URL is a fact even when the reply is not.
+// LOADED IN EXACTLY ONE PLACE — ast-worker.html, the offscreen document, after check.js. This line named a
+// second one ("ast-thread.js via importScripts") for a file that is not on disk and has no jsaudit row, which
+// is the stale-pointer failure mode: it reads as authoritative while describing a tree that no longer exists,
+// and here it also describes the wrong ENVIRONMENT — the DCHECK below is only defined because check.js is the
+// FIRST script that page loads, and a worker reached by importScripts would have had none.
 // CORB/ORB for a SCRIPT load (opts.as==="script"): a chunk/import becomes
 // executable code under QuickJS control, so the response must be JS-typed (or
 // same-origin) — never a cross-origin HTML/JSON/etc. DATA body read as code.
@@ -104,14 +108,45 @@ function _corbAllowsScript(mime, nosniff, body, scriptUrl, pageOrigin) {
 // for the origin-relative SSRF rule: a request is blocked ONLY when the TARGET is
 // private but the PAGE origin is not — a public page reaching the intranet.
 // localhost->localhost and any->public are allowed (normal web rules).
+//
+// AN IPv4-MAPPED ADDRESS *IS* AN IPv4 ADDRESS, SO IT IS UNMAPPED BEFORE IT IS CLASSIFIED — never matched a
+// second time as text. Every host that reaches here comes out of the WHATWG URL parser (`parsed.hostname`,
+// `new URL(resp.url).hostname`), so it is already CANONICAL: an IPv4 literal is dotted-quad (the URL
+// Standard's IPv4 parser folds the decimal/octal/hex spellings, which is why `http://2130706433/` cannot
+// slip past `/^127\./`), and an IPv6 literal is the IPv6 SERIALIZER's output — each piece "represented as
+// the shortest possible lowercase hexadecimal number", with no dotted tail anywhere in it.
+// This function carried an `::ffff:(127|10|192\.168|169\.254)` alternative, and that is a spelling the
+// serializer CANNOT produce: `http://[::ffff:127.0.0.1]:8080/` arrives as `[::ffff:7f00:1]`. So the branch
+// was dead, and the address it was written to stop was classified PUBLIC — a public page's bundle naming
+// that URL walked straight through the origin-relative SSRF guard into the user's loopback, and safeFetch
+// handed the response bytes back to the untrusted engine. SECURITY.md's attack table calls that case
+// mitigated; it was not. RFC 4291 §2.5.5.2's IPv4-mapped form and §2.5.5.1's deprecated IPv4-compatible
+// form both DENOTE an IPv4 address and are routed to it by the stack, so both are converted to that address
+// and classified ONCE, by the v4 rules — rather than a growing list of ways to spell the same host.
+function _v4OfIPv6(h) {
+  var m = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+  if (!m) return null;
+  var hi = parseInt(m[1], 16), lo = parseInt(m[2], 16);
+  return ((hi >> 8) & 255) + "." + (hi & 255) + "." + ((lo >> 8) & 255) + "." + (lo & 255);
+}
 function _isPrivateHost(host) {
   if (!host) return false;
   host = String(host).toLowerCase().replace(/^\[|\]$/g, "");
-  return host === "localhost" || host === "0.0.0.0" || host === "::1" ||
+  /* THE CANONICAL FORM IS THE CONTRACT, so a host that is not in it is an unclassifiable input rather than a
+     public one. A literal holding BOTH a colon and a dot is the dotted IPv4-in-IPv6 text form, which no URL
+     parser ever emits — its arrival means a caller handed this chokepoint a raw string instead of
+     `URL.hostname`, and every rule below is written for the form the parser produces. */
+  DCHECK(!(host.indexOf(":") >= 0 && host.indexOf(".") >= 0),
+         "a host reached the SSRF classifier as an IPv4-in-IPv6 literal with a dotted tail (" + host + ") — " +
+         "the WHATWG IPv6 serializer emits hex pieces only, so this host did not come from URL.hostname and " +
+         "is about to be classified by rules written for the form that one produces");
+  var v4 = _v4OfIPv6(host);
+  if (v4) host = v4;
+  return host === "localhost" || host === "0.0.0.0" || host === "::" || host === "::1" ||
     host.endsWith(".local") || host.endsWith(".localhost") ||
     /^127\./.test(host) || /^169\.254\./.test(host) || /^10\./.test(host) ||
     /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    /^(::1|fe80:|fc[0-9a-f][0-9a-f]:|fd[0-9a-f][0-9a-f]:|::ffff:(127|10|192\.168|169\.254))/i.test(host);
+    /^(fe80:|fc[0-9a-f][0-9a-f]:|fd[0-9a-f][0-9a-f]:)/.test(host);
 }
 
 // @security-contract  ENFORCEMENT POINT (the single network chokepoint)

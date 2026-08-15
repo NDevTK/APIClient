@@ -51,6 +51,12 @@ function assertResultDocument(r) {
   DCHECK(Array.isArray(r.pageErrors),
          "the engine's result document carries no pageErrors array — it is the engine's own record of what " +
          "went wrong while running the page, and the analysis reports it as the run's resolverErrors");
+  DCHECK(r.probeResults && typeof r.probeResults === "object" && !Array.isArray(r.probeResults),
+         "the engine's result document carries no probeResults map — req2proto.c serializes the schemas the " +
+         "APIs' own rejections described into that field, keyed by the `<METHOD> <host><path>` identity the " +
+         "Send panel resolves a request body with. An absent one is every learned field, service, method and " +
+         "OAuth scope arriving as nothing, and the Send panel offering an empty body for an endpoint the " +
+         "server has already described");
   DCHECK(typeof r._switches === "number",
          "the engine's result document carries no _switches count — it is the one OBSERVABLE that the single " +
          "BFS actually context-switches rather than running its flows FIFO");
@@ -123,6 +129,12 @@ function linesToAnalysis(lines, msg, expectResult) {
        below and never a defaulted engine field. */
     chunkUrls: [],
     securitySinks: result.securitySinks || [],
+    /* THE SCHEMAS THE ENGINE LEARNED FROM THE APIs' OWN REJECTIONS — engine/host/solver/req2proto.c. Relayed
+       VERBATIM, keyed exactly as the engine keyed it, because the key IS the endpoint identity `lib/send.js`
+       looks a body schema up by: a host that re-keyed here would be the host owning structure again. NOT
+       defaulted — the field is asserted above, and `|| {}` here would turn "the engine emitted nothing" into
+       "this API describes no fields", which is a finding rather than a hole. */
+    probeResults: result.probeResults,
     // sibling fields the brain reads unconditionally, present + empty so it never throws:
     protoEnums: [], protoFieldMaps: [], dangerousPatterns: [],
     esmImportUrls: [], inRunModuleUrls: [], domEndpoints: [],
@@ -893,6 +905,7 @@ function engineFinalize(eng) {
     // popup, moat) ever consumes a crashed engine's output. Experimental stage: fail hard, then fix the ROOT.
     result._engineCrashed = true;
     result.fetchCallSites = []; result.securitySinks = []; result.chunkUrls = []; result.domEndpoints = [];
+    result.probeResults = {};
     result.esmImportUrls = []; result.inRunModuleUrls = []; result.protoEnums = []; result.protoFieldMaps = [];
     result.dangerousPatterns = []; result._park = []; result._prior = null;
   }
@@ -933,6 +946,7 @@ function crashResult(stage, e, msg) {
   const r = linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, false);
   r._engineCrashed = true;
   r.fetchCallSites = []; r.securitySinks = []; r.chunkUrls = []; r.domEndpoints = [];
+  r.probeResults = {};
   r.esmImportUrls = []; r.inRunModuleUrls = []; r.protoEnums = []; r.protoFieldMaps = []; r.dangerousPatterns = []; r._park = []; r._prior = null;
   return r;
 }

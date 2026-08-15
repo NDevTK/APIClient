@@ -510,20 +510,6 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     }
   }
 
-  // Protobuf probing trigger — skip for boring asset fetches.
-  if (!_isBoringFetch && isProtobuf && msg.method === "POST") {
-    const discoveryStatus = tab.discoveryDocs.get(service);
-    const doc = discoveryStatus?.doc;
-    const match = doc ? findDiscoveryMethod(doc, url.pathname, msg.method) : null;
-    const isLearnedOnly = match &&
-      discoveryStatus.doc.resources?.learned?.methods[match.method.id.split(".").pop()];
-    if (!match || isLearnedOnly) {
-      const keysForService = collectKeysForService(tab, service, url.hostname);
-      if (apiKey && !keysForService.includes(apiKey)) keysForService.push(apiKey);
-      performProbeAndPatch(documentId, service, msg.url, apiKey || keysForService[0] || null);
-    }
-  }
-
   // Automatic background discovery — skip for boring fetches. Probing
   // /.well-known/openapi.json on a CDN is wasted traffic.
   const notFoundCooldown = preLearnDiscovery?.status === "not_found" &&
@@ -540,45 +526,14 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url);
   }
 
-  // Error-based service-info probe (req2proto; README "Error-Based Schema
-  // Probing"). An intentionally-malformed POST to the endpoint provokes a gapi
-  // error envelope, learning its CANONICAL service/method + OAuth scopes, merged
-  // into the discovery doc — EVEN when a real doc exists, since the probe can
-  // surface a HIDDEN service/method/scope the doc omits. This is the automatic
-  // form of the old DISCOVER_SERVICE message (the bug was that it was a message,
-  // never sent, instead of a background step). Bounded: once per endpoint, POST
-  // endpoints only (the probe's own method, so it introduces no new method).
-  if (!_isBoringFetch && msg.method === "POST") {
-    // Probe the POST request URL DIRECTLY. handleResponseBody sees EVERY captured
-    // POST; the request need NOT be a "learned" endpoint in globalStore.endpoints
-    // (Google batchexecute / $rpc calls are logged + classified into a service but
-    // are not endpoint-keyed). Cache per host+path (module-global, across docs).
-    const _siUrl = new URL(url.href);
-    _siUrl.searchParams.delete("key");
-    const _siKey = _siUrl.hostname + _siUrl.pathname;
-    if (!_svcInfoProbedUrls.has(_siKey)) {
-      _svcInfoProbedUrls.add(_siKey);
-      const _siHeaders = {};
-      if (apiKey) _siHeaders["X-Goog-Api-Key"] = apiKey;
-      const _siPath = _siUrl.pathname;
-      discoverServiceInfo(_siUrl.toString(), _siHeaders, { fetchFn: makePageFetchFn(tab.tabId, documentId) }).then((result) => {
-        if (!result) return;
-        let _merged = false;
-        const _scopes = Array.isArray(result.scopes) ? result.scopes.filter(Boolean) : [];
-        if (_scopes.length) { tab.scopes.set(service, _scopes); _merged = true; }
-        const _doc = globalStore.discoveryDocs.get(service)?.doc;
-        if (_doc) {
-          const _m = findDiscoveryMethod(_doc, _siPath, "POST")?.method;
-          if (_m) {
-            if (_scopes.length && (!Array.isArray(_m.scopes) || !_m.scopes.length)) { _m.scopes = _scopes; _merged = true; }
-            if (result.service && _m._probedService !== result.service) { _m._probedService = result.service; _merged = true; }
-            if (result.method && _m._probedMethod !== result.method) { _m._probedMethod = result.method; _merged = true; }
-          }
-        }
-        if (_merged) { tab.probeResults.set(`svcinfo:POST ${_siPath}`, result); mergeToGlobal(tab); notifyPopup(tab.tabId); }
-      }).catch((e) => { if (typeof console !== "undefined") console.debug("[brain] @WHY {phase:'svcinfo-probe',reason:'" + (e && e.message || e) + "'}"); });
-    }
-  }
+  /* THE ERROR-BASED SERVICE-INFO PROBE IS THE ENGINE'S — engine/host/solver/req2proto.c.
+     What stood here fired an intentionally-malformed POST at every captured POST URL through the page-context
+     relay, kept a module-global seen-set of the ones it had already hit, and parsed the `google.rpc.Status`
+     envelope in this zone. Three things were wrong with it and only one was the layer: it FIRED a request to
+     learn (§Attacker sources forbids exactly that for a state-mutating method), the seen-set was a bound
+     (§NO BOUNDS — "never a seen-set"), and it was a sniffer trigger, firing off what the page HAPPENED to send
+     rather than off what forced execution learned the bundle CAN send. The engine now reads the same envelope
+     off the replies it already holds and emits the schema in `probeResults`. */
 
   // Extract OAuth scopes from 403 www-authenticate response header
   if (msg.status === 403 && msg.responseHeaders) {

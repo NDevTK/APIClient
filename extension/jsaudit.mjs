@@ -63,8 +63,6 @@ const LEDGER = [
   // ── LOGIC / MIXED — the queue ────────────────────────────────────────────────────────────────────────
   { f: "lib/analyze.js", zone: "MIXED", step: 0, dest: "engine/host/solver/result.c + bridge.js",
     split: "the second scheduler (_reviewQueue/_analysisInflight, a per-document recency queue with its own in-flight register) and the content-hash seen-set (globalStore.scriptCache/_replayCachedAST, whose hit skipped the engine entirely on a revisit) are DELETED: a delivered document now goes straight to the ONE host WFQ and a revisit resumes its parked flows. What is LEFT is the dispatch, which is bridge.js's, and the per-script finding attribution (_findScriptForLine, the combined→per-script line shift, _markSecurityFindingChanges), which is LOGIC — the engine already knows which script each sink came from, so result.c emits script-local locations and the new/existing/fixed diff instead of the host re-deriving both from line offsets." },
-  { f: "lib/req2proto.js", zone: "LOGIC", step: 1, dest: "engine/host/solver/req2proto.c",
-    why: "named in CLAUDE.md §Architecture by name. A leaf producer: its only input is a reply the engine already fetches through safeFetch, so nothing it calls stays in JS." },
   { f: "lib/discovery.js", zone: "LOGIC", step: 1, dest: "engine/host/solver/discovery.c",
     why: "candidate discovery-doc URLs + fetch strategies. §Active discovery is REQUIRED and is the engine's." },
   { f: "lib/discovery-probe.js", zone: "LOGIC", step: 1, dest: "engine/host/solver/discovery.c",

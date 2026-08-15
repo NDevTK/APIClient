@@ -1,8 +1,13 @@
-// lib/discovery-probe.js — Active API-documentation discovery: diff discovery docs, fetch OpenAPI/Google
-// Discovery at well-known paths, error-based schema probing (req2proto), and build/patch virtual discovery
-// docs from probe results. Extracted from the offscreen-brain.js monolith (one problem per file); loaded
-// before it, functions resolve their callers (makePageFetchFn, extractInterfaceName, generateSchemaFromJson,
-// safeFetch) at call-time. KEEPS the discovery-document-learning feature, just relocated.
+// lib/discovery-probe.js — Active API-documentation discovery: diff discovery docs and fetch
+// OpenAPI/Google Discovery at well-known paths. Extracted from the offscreen-brain.js monolith (one problem
+// per file); loaded before it, functions resolve their callers (makePageFetchFn, extractInterfaceName,
+// generateSchemaFromJson, safeFetch) at call-time.
+//
+// ERROR-BASED SCHEMA PROBING IS NO LONGER HERE. It moved to engine/host/solver/req2proto.c, which reads the
+// `google.rpc.Status` envelope off replies the engine already holds instead of firing an intentionally
+// malformed POST to provoke one — CLAUDE.md §Architecture (the semantics are the engine's) and §Attacker
+// sources (a state-mutating request is NEVER fired to learn). What is LEFT in this file is the document
+// FETCH, which is a GET of a published URL and stays JS until discovery.c exists.
 
 // ─── Discovery Document Diffing ──────────────────────────────────────────────
 
@@ -181,18 +186,6 @@ async function fetchDiscoveryForService(
           });
           mergeToGlobal(tab);
 
-          // Check if the seedUrl method is actually in the doc.
-          // If not, trigger immediate hybrid probe to patch it.
-          if (seedUrl) {
-            const seedUrlObj = new URL(seedUrl);
-            const match = findDiscoveryMethod(doc, seedUrlObj.pathname, "POST");
-            if (!match) {
-              notifyPopup(tabId);
-              await performProbeAndPatch(documentId, service, seedUrl, apiKey);
-              return;
-            }
-          }
-
           notifyPopup(tabId);
           return;
         }
@@ -202,357 +195,28 @@ async function fetchDiscoveryForService(
     }
   }
 
-  // All keys (including null) failed.
-  // FALLBACK: Try req2proto probing if we have a seed URL.
-  const currentStatus = tab.discoveryDocs.get(service);
-  const finalSeedUrl = seedUrl || currentStatus?.seedUrl;
-
-  if (finalSeedUrl) {
-    // Pick a key to try probing with (use the first available one if any)
-    const probeKey = keysToTry[0] || null;
-    await performProbeAndPatch(documentId, service, finalSeedUrl, probeKey);
-  } else {
-    // If we get here, truly not found — record timestamp for cooldown
-    var _prevDiscoveryNF = tab.discoveryDocs.get(service);
-    tab.discoveryDocs.set(service, {
-      status: "not_found",
-      _triedKeys: triedKeys,
-      _failedAt: Date.now(),
-      pageUrls: _prevDiscoveryNF?.pageUrls || new Set(),
-      frameOrigins: _prevDiscoveryNF?.frameOrigins || new Set(),
-    });
-    mergeToGlobal(tab);
-    notifyPopup(tabId);
-  }
-}
-
-// Track in-flight probes to prevent concurrent duplicates
-const _inflight = new Set();
-
-/**
- * Perform req2proto probing and patch the discovery document.
- */
-async function performProbeAndPatch(documentId, service, targetUrl, apiKey) {
-  // Deduplicate: skip if already probing this service+url combo
-  const probeKey = `${service}::${targetUrl}`;
-  if (_inflight.has(probeKey)) return;
-  _inflight.add(probeKey);
-
-  const tab = _docForLearning(documentId);
-  const tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing — derived from the doc
-
-  if (typeof probeApiEndpoint === "undefined") {
-    console.error("[Debug] CRITICAL: probeApiEndpoint is not defined!");
-    _inflight.delete(probeKey);
-    return;
-  }
-
-  const fetchFn = makePageFetchFn(tabId, documentId);
-
-  const probeHeader = apiKey ? { "x-goog-api-key": apiKey } : {};
-
-  // Add #_internal_probe fragment to avoid interception loop
-  const safeTargetUrl = targetUrl + "#_internal_probe";
-
-  try {
-    const probeResult = await probeApiEndpoint(safeTargetUrl, probeHeader, {
-      fetchFn,
-    });
-
-    if (probeResult && probeResult.fields) {
-      // Save raw probe result for observability. Previously only the
-      // UI-triggered on-demand probe stored into tab.probeResults — the
-      // auto-probe kept its output only in the synthesized virtual doc,
-      // so consumers auditing "what did probing learn" saw an empty map.
-      // Keyed by service::url so repeat probes overwrite cleanly.
-      tab.probeResults.set(`auto:${service}::${targetUrl}`, probeResult);
-
-      // Convert probe result to a "Virtual" Discovery Doc
-      // Merge with existing if available
-      const currentStatus = tab.discoveryDocs.get(service);
-      const existingDoc = currentStatus?.doc ? currentStatus.doc : null;
-
-      const virtualDoc = updateOrCreateVirtualDoc(
-        service,
-        targetUrl,
-        probeResult,
-        existingDoc,
-      );
-
-      var _prevProbed = tab.discoveryDocs.get(service);
-      tab.discoveryDocs.set(service, {
-        status: "found", // Treat as found so it shows up in UI
-        doc: virtualDoc,
-        apiKey: apiKey,
-        fetchedAt: Date.now(),
-        method: existingDoc ? currentStatus.method || "HYBRID" : "PROBE",
-        isVirtual: existingDoc ? currentStatus.isVirtual || false : true,
-        pageUrls: _prevProbed?.pageUrls || new Set(),
-        frameOrigins: _prevProbed?.frameOrigins || new Set(),
-      });
-      mergeToGlobal(tab);
-      notifyPopup(tabId);
-    }
-  } catch (probeErr) {
-    console.error("Probe fallback failed:", probeErr);
-  } finally {
-    _inflight.delete(probeKey);
-  }
-}
-
-function updateOrCreateVirtualDoc(service, seedUrl, probeResult, existingDoc) {
-  const u = new URL(seedUrl);
-  const origin = `${u.protocol}//${u.host}`;
-  const fullPath = u.pathname.substring(1); // remove leading /
-
-  const { methodName, methodId } = calculateMethodMetadata(u, service);
-  const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Request`;
-  const responseSchemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Response`;
-
-  let doc = existingDoc
-    ? JSON.parse(JSON.stringify(existingDoc))
-    : {
-        kind: "discovery#restDescription",
-        name: service,
-        version: "v1",
-        title: `${service} (Probed)`,
-        description: "Auto-generated from req2proto probe",
-        rootUrl: origin + "/",
-        servicePath: "",
-        baseUrl: origin + "/", // We use root as base, and full paths for methods
-        resources: {},
-        schemas: {},
-      };
-
-  // Ensure resources structure
-  if (!doc.resources) doc.resources = {};
-  if (!doc.resources.probed) {
-    doc.resources.probed = { methods: {} };
-  }
-
-  // Ensure schemas structure
-  if (!doc.schemas) doc.schemas = {};
-
-  // Heuristic for response schema: try GetAsyncDataResponse, AsyncDataResponse, etc.
-  const responseCandidates = [
-    responseSchemaName,
-    schemaName.replace("Request", "Response"),
-    methodName.charAt(0).toUpperCase() + methodName.slice(1) + "Response",
-    methodName.replace(/^Get/, "") + "Response",
-    methodName.replace(/^BatchGet/, "") + "Response",
-  ];
-
-  let actualResponseRef = responseSchemaName;
-  if (doc.schemas) {
-    for (const cand of responseCandidates) {
-      if (doc.schemas[cand]) {
-        actualResponseRef = cand;
-
-        break;
-      }
-    }
-  }
-
-  // Add/Update Method
-  doc.resources.probed.methods[methodName] = {
-    id: methodId,
-    path: fullPath,
-    httpMethod: "POST", // Assumed
-    description: `Probed endpoint: ${fullPath}`,
-    parameters: {},
-    request: { $ref: schemaName },
-    response: { $ref: actualResponseRef },
-  };
-
-  // Create/Merge Schema for Request recursively
-  const newProperties = convertProbeFieldsToSchema(
-    probeResult.fields,
-    doc.schemas,
-    schemaName,
-  );
-
-  // Merge probe properties into request and response schemas.
-  // Probe data has verified field numbers/types — prefer it over learned data,
-  // but always preserve user's customName renames.
-  function mergeProbeInto(target, probeProps) {
-    if (!target.properties) target.properties = {};
-    // Build field-number → key index for deduplication
-    const numToKey = {};
-    for (const [k, p] of Object.entries(target.properties)) {
-      const n = p.number ?? p.id;
-      if (n != null) numToKey[n] = k;
-    }
-    for (const [key, probeProp] of Object.entries(probeProps)) {
-      const fieldNum = probeProp.number ?? probeProp.id;
-      const matchKey = target.properties[key] ? key
-        : (fieldNum != null && numToKey[fieldNum]) ? numToKey[fieldNum]
-        : null;
-      const existing = matchKey ? target.properties[matchKey] : null;
-      if (!existing) {
-        target.properties[key] = probeProp;
-        if (fieldNum != null) numToKey[fieldNum] = key;
-      } else {
-        // Re-key: probe has the real name, replace generic fieldN key
-        if (matchKey !== key && !existing.customName && !/^field\d+$/.test(key)) {
-          target.properties[key] = existing;
-          delete target.properties[matchKey];
-          numToKey[fieldNum] = key;
-        }
-        // Probe has authoritative field numbers and types
-        if (probeProp.id != null) existing.id = probeProp.id;
-        if (probeProp.number != null) existing.number = probeProp.number;
-        if (probeProp.type && existing.type === "string" && probeProp.type !== "string") {
-          existing.type = probeProp.type;
-        }
-        if (probeProp.$ref && !existing.$ref) existing.$ref = probeProp.$ref;
-        if (probeProp.children && !existing.children) existing.children = probeProp.children;
-        if (probeProp.description && !existing.description) existing.description = probeProp.description;
-        // Preserve user renames
-        if (existing.customName) {
-          // keep existing.name
-        } else if (probeProp.name) {
-          existing.name = probeProp.name;
-        }
-      }
-    }
-  }
-
-  if (!doc.schemas[schemaName]) {
-    doc.schemas[schemaName] = {
-      id: schemaName,
-      type: "object",
-      properties: newProperties,
-    };
-  } else {
-    mergeProbeInto(doc.schemas[schemaName], newProperties);
-  }
-
-  if (!doc.schemas[actualResponseRef]) {
-    doc.schemas[actualResponseRef] = {
-      id: actualResponseRef,
-      type: "object",
-      properties: newProperties,
-    };
-  } else {
-    mergeProbeInto(doc.schemas[actualResponseRef], newProperties);
-  }
-
-  return doc;
-}
-
-function convertProbeFieldsToSchema(rootFieldsObj, schemas, rootPrefix = "") {
-  // Iterative: build a properties{} map for each fields list. Nested
-  // fields (message with children) get a placeholder schemas[name] entry
-  // up-front so later refs can attach .children pointers without waiting
-  // for recursion to finish; the queue then populates each placeholder's
-  // properties in BFS order. Visited-set on nestedName prevents infinite
-  // expansion for cyclic schemas.
-  const rootProperties = {};
-  const visited = new Set();
-  const queue = [{ fieldsObj: rootFieldsObj, prefix: rootPrefix, dst: rootProperties }];
-  // Track deferred .children attachments — populated once nested
-  // properties land in schemas[nestedName].
-  const pendingAttach = [];
-  while (queue.length > 0) {
-    const job = queue.shift();
-    const { fieldsObj, prefix, dst } = job;
-    const fields = Array.isArray(fieldsObj)
-      ? fieldsObj
-      : fieldsObj instanceof Map
-        ? [...fieldsObj.values()]
-        : Object.values(fieldsObj || {});
-    for (const field of fields) {
-      const prop = {
-        id: field.number,
-        number: field.number,
-        name: field.name,
-        type: field.type || "string",
-        description: `Field ${field.number} (${field.type || "unknown"})`,
-      };
-      if (field.label === "repeated") {
-        prop.type = "array";
-        prop.items = { type: field.type || "string" };
-        if (field.type === "message" && field.children) {
-          const nestedName = field.messageType ||
-            `${prefix}${field.name.charAt(0).toUpperCase() + field.name.slice(1)}Entry`;
-          if (!schemas[nestedName] && !visited.has(nestedName)) {
-            visited.add(nestedName);
-            const nestedProperties = {};
-            schemas[nestedName] = { id: nestedName, type: "object", properties: nestedProperties };
-            queue.push({ fieldsObj: field.children, prefix: nestedName, dst: nestedProperties });
-          }
-          prop.items.$ref = nestedName;
-          delete prop.items.type;
-          pendingAttach.push({ target: prop.items, key: "children", schemaName: nestedName });
-        }
-      } else if (field.type === "message" && field.children) {
-        const nestedName = field.messageType ||
-          `${prefix}${field.name.charAt(0).toUpperCase() + field.name.slice(1)}`;
-        if (!schemas[nestedName] && !visited.has(nestedName)) {
-          visited.add(nestedName);
-          const nestedProperties = {};
-          schemas[nestedName] = { id: nestedName, type: "object", properties: nestedProperties };
-          queue.push({ fieldsObj: field.children, prefix: nestedName, dst: nestedProperties });
-        }
-        prop.$ref = nestedName;
-        delete prop.type;
-        pendingAttach.push({ target: prop, key: "children", schemaName: nestedName });
-      }
-      const fieldKey = field.name || `field_${field.number}`;
-      dst[fieldKey] = prop;
-    }
-  }
-  // All nested schemas are now populated; resolve deferred .children refs.
-  for (const a of pendingAttach) {
-    if (schemas[a.schemaName] && schemas[a.schemaName].properties) {
-      a.target[a.key] = schemas[a.schemaName].properties;
-    }
-  }
-  return rootProperties;
-}
-
-// ─── req2proto Fallback Probing ──────────────────────────────────────────────
-
-async function probeEndpoint(documentId, endpointKey) {
-  const tab = _docForLearning(documentId);
-  const tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing — derived from the doc
-  const ep = tab.endpoints.get(endpointKey);
-  if (!ep || ep.method !== "POST") return null;
-
-  // Pass the API key the same way it was originally sent (URL param vs header).
-  // Cookie, Origin, Referer are handled by the browser via the content script relay.
-  const headers = {};
-  const probeUrl = new URL(ep.url);
-  probeUrl.searchParams.delete("key");
-
-  if (ep.apiKey) {
-    if (ep.apiKeySource === "url") {
-      probeUrl.searchParams.set("key", ep.apiKey);
-    } else {
-      headers["X-Goog-Api-Key"] = ep.apiKey;
-    }
-  }
-
-  const fetchFn = makePageFetchFn(tabId, documentId);
-  const result = await probeApiEndpoint(probeUrl.toString(), headers, {
-    fetchFn,
+  // Every candidate URL failed: the service publishes no discovery document at any well-known path.
+  // THERE IS NO req2proto FALLBACK HERE ANY MORE. Error-based schema learning is the ENGINE's
+  // (engine/host/solver/req2proto.c): it reads the `google.rpc.Status` envelope off replies the engine already
+  // holds, so a second implementation in this zone would be the JS orchestration layer CLAUDE.md §Architecture
+  // says to delete — and this one additionally FIRED the probe, which §Attacker sources forbids doing to learn.
+  var _prevDiscoveryNF = tab.discoveryDocs.get(service);
+  tab.discoveryDocs.set(service, {
+    status: "not_found",
+    _triedKeys: triedKeys,
+    _failedAt: Date.now(),
+    pageUrls: _prevDiscoveryNF?.pageUrls || new Set(),
+    frameOrigins: _prevDiscoveryNF?.frameOrigins || new Set(),
   });
-  tab.probeResults.set(endpointKey, result);
-
-  // Store scopes if the probe discovered them
-  if (result.scopes?.length) {
-    const svc = ep.service || extractInterfaceName(new URL(ep.url));
-    tab.scopes.set(svc, result.scopes);
-  }
-
   mergeToGlobal(tab);
   notifyPopup(tabId);
-  return result;
 }
 
-// ─── Request/Response Handling (from intercept.js via content.js relay) ──────
-
-// Host+path of POST URLs already error-probed by discoverServiceInfo (the
-// automatic service-info probe below). Module-global so it dedupes across
-// documents/tabs; resets on offscreen reload (a re-probe is harmless).
-const _svcInfoProbedUrls = new Set();
+/* THE PROBE-RESULT -> VIRTUAL-DISCOVERY-DOC CONVERTER IS GONE WITH ITS PRODUCER.
+   `updateOrCreateVirtualDoc` + `convertProbeFieldsToSchema` turned a req2proto probe's field map into a
+   synthetic discovery document, and their only caller was `performProbeAndPatch`, which fired the probe from
+   this zone. The schema is now the engine's (engine/host/solver/req2proto.c) and arrives in the result document
+   as `probeResults`, keyed by the same `<METHOD> <host><path>` identity the Send panel already resolves a body
+   schema with — so there is nothing here to convert. Synthesising a discovery doc from it is discovery.c's when
+   discovery moves; leaving the converter behind with no caller would read as a live capability that has not run
+   since this commit. */
