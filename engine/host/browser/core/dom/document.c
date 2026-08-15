@@ -238,11 +238,22 @@ static lxb_status_t qs_hit_cb(lxb_dom_node_t *node, lxb_css_selector_specificity
 static void qs_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     QsState *s = st;
-    /* A FORK CANNOT REACH A SELECTOR WALK. It runs none of the page's code, so no concolic branch can happen
-       under it — which is what lets the compiled list be held as a bare pointer: there is no such thing as half
-       a selector context to hand a second flow. */
-    DCHECK(s->parser == NULL, "a selector walk was forked mid-walk");
     v->val(ctx, &s->arr);
+}
+
+/* WHAT LETS THE COMPILED SELECTOR LIST BE HELD AS A BARE POINTER — there is no such thing as half a selector
+   context to hand a second flow, so a fork mid-walk is refused rather than served.
+   IT IS ASKED AT THE FORK, and it used to be a DCHECK inside qs_visit instead. That was correct while `visit`
+   had one consumer and became a false report the moment it had three: the teardown drives the same declaration
+   to release what the state owns, and the assert that fires there is an ordinary abandoned querySelector being
+   reported as a fork. A machine must never learn WHICH consumer is visiting it — this is the field that lets
+   it answer the fork's question without asking that. */
+static const char *qs_unforkable(const void *st)
+{
+    return ((const QsState *)st)->parser
+         ? "a selector walk cannot be forked mid-walk — it holds a live lexbor parser, a selectors context and "
+           "a compiled selector list, and a tokenizer standing at a position has no halves to give two arms"
+         : NULL;
 }
 
 /* THE LEXBOR HALF, WHICH IS ALL A `release` MAY OWN. The collected-matches array is a REFERENCE and is named
@@ -361,7 +372,7 @@ static int js_document_qs(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 
 static const IdlStepDecl QS_STEP = { js_document_qs, sizeof(QsState), qs_visit, qs_release,
                                      "DOM §1.3 scope-match a selectors string / §4.9 Element.matches, closest",
-                                     QS_STEPS };
+                                     QS_STEPS, .unforkable = qs_unforkable };
 
 const IdlStepDecl *document_qs_decl(void) { return &QS_STEP; }
 

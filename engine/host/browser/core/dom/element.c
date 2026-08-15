@@ -556,14 +556,24 @@ static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     FragState *s = st;
     v->val(ctx, &s->compliant);
-    /* A FORK CANNOT REACH A PARSE IN FLIGHT. A fork is a concolic branch, which is bytecode, and this machine
-       runs none — the tree builder cannot reach the page's code. Two flows handed one lexbor parser would
-       corrupt both, so it is asserted rather than trusted; if it ever fires, the parser needs a real ownership
-       declaration and there is no such thing as half a tokenizer to clone. */
-    DCHECK(s->parser == NULL, "a fragment parse was forked mid-parse");
     v->buf(ctx, (void **)&s->html, s->len ? s->len + 1 : 0);
     v->val(ctx, &s->san_config);
     sanitizer_walk_visit(ctx, &s->san, v);
+}
+
+/* THERE IS NO SUCH THING AS HALF A TOKENIZER — a lexbor html parser holds an open-element stack, an insertion
+   mode and a position in the source, and two arms handed one of them corrupt both.
+   IT IS ASKED AT THE FORK, and it used to be a DCHECK inside frag_visit instead, whose comment sent the next
+   reader to "give the parser a real ownership declaration" if it ever fired. That instruction was wrong twice
+   over: `visit` now has three consumers, so the assert fires on a TEARDOWN where nothing is being cloned, and
+   no ownership declaration would have helped there because a tokenizer has nothing to declare. A machine must
+   never learn which consumer is visiting it; this is how it answers the fork alone. */
+static const char *frag_unforkable(const void *st)
+{
+    return ((const FragState *)st)->parser
+         ? "a fragment parse cannot be forked mid-parse — it holds a live lexbor parser standing at a position "
+           "in the source, with an open-element stack and an insertion mode, and none of that has halves"
+         : NULL;
 }
 
 /* WHAT NO DECLARATION NAMES: a lexbor element, a lexbor parser, and two plain buffers. `compliant`, the
@@ -964,7 +974,7 @@ static const char *const EL_SET_HTML_STEPS[] = {
 static const IdlStepDecl EL_SET_HTML_STEP = { js_el_set_html, sizeof(FragState), frag_visit, frag_release,
                                               "HTML §8.5.4/§8.5.5 innerHTML/outerHTML setter, §8.5.2 "
                                               "setHTMLUnsafe (over §8.6.4's set and filter HTML)",
-                                              EL_SET_HTML_STEPS };
+                                              EL_SET_HTML_STEPS, .unforkable = frag_unforkable };
 
 const IdlStepDecl *element_set_html_decl(void)
 {
@@ -1109,7 +1119,7 @@ static const char *const EL_ADJACENT_HTML_STEPS[] = { FRAG_STAGES(JS_STEP_STAGE_
 
 static const IdlStepDecl EL_ADJACENT_HTML_STEP = {
     js_el_insert_adjacent_html, sizeof(FragState), frag_visit, frag_release,
-    "HTML §8.5.6 Element.insertAdjacentHTML", EL_ADJACENT_HTML_STEPS
+    "HTML §8.5.6 Element.insertAdjacentHTML", EL_ADJACENT_HTML_STEPS, .unforkable = frag_unforkable
 };
 
 /* §4.9 insertAdjacentElement / insertAdjacentText — the two that take a node the caller already has, or a

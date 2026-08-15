@@ -649,6 +649,14 @@ static void *idl_body_state(const IdlMember *m, void *st)
     return (char *)st + idl_off_body(m->nargs, m->conv_depth);
 }
 
+/* THE SAME OFFSET FOR A READ-ONLY CALLER — the fork asks a member whether it may be cloned and hands it a state
+   it must not write. Written beside its twin, and derived from the same idl_off_body, so the two cannot name
+   different places; a caller that needs to WRITE the body uses the one above. */
+static const void *idl_body_state_const(const IdlMember *m, const void *st)
+{
+    return (const char *)st + idl_off_body(m->nargs, m->conv_depth);
+}
+
 /* HOW MANY POSITIONS THE IDL LISTS AS ORDINARY ARGUMENTS. A VARIADIC member's last declared type is the type of
    "every argument from here on" and not a position of its own, which is why the count differs — and why §3.6.2's
    absent-optional rule stops there: each value a page passes to a `T...` tail is CONVERTED, so
@@ -907,6 +915,24 @@ static void js_idl_args_visit(JSContext *ctx, void *st, JSStepVisit *v)
        values would be invisible to the fork AND to the teardown at once — which is the same state the pool
        refuses at the declaration rather than tolerating here. */
     if (m->step) m->step->visit(ctx, idl_body_state(m, st), v);
+}
+
+/* MAY THIS MEMBER'S MACHINE BE FORKED RIGHT NOW — asked by the fork, forwarded to the member's own answer.
+   It is installed on EVERY member's definition rather than only on the two that declare one, for the reason
+   every other edge here is: a per-member install is a line to forget on the member that first needs it, and
+   the forwarding already answers NULL for a member that declares nothing.
+   The machine this pool builds owns nothing a fork cannot copy — its argument vector, its cursors and its
+   queues are all declared — so the only possible answer is the member body's. */
+static const char *js_idl_args_unforkable(const void *st)
+{
+    const JSIdlArgsState *s = st;
+    const IdlMember *m;
+
+    DCHECK(s->hdr.arg >= 0 && s->hdr.arg < g_n,
+           "an IDL member was asked whether it may fork with no pool entry behind it");
+    m = idl_member(s->hdr.arg);
+    if (!m->step || !m->step->unforkable) return NULL;
+    return m->step->unforkable(idl_body_state_const(m, st));
 }
 
 static void idl_free_vec(JSContext *ctx, JSValue *vec, int n)
@@ -2012,6 +2038,7 @@ int idl_method_id_dict(JSContext *ctx, const IdlArgType *types, int nargs,
     idl_def(idx)->fini  = idl_args_result;
     idl_def(idx)->arg   = idx;
     idl_def(idx)->visit = js_idl_args_visit;
+    idl_def(idx)->unforkable = js_idl_args_unforkable;
     /* EVERY DECLARED MEMBER CATCHES, AND IT CATCHES IN EXACTLY ONE PLACE. §4.13.6 step 1.3.1 says an upgrade
        reaction's throw is CAUGHT AND REPORTED and a callback reaction is invoked "with \"report\"" — so the
        epilogue every member ends through has an abrupt completion that is its own VALUE, and without this

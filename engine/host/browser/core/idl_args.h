@@ -367,6 +367,12 @@ typedef struct {
        it makes: re-issuing the request instead is an infinite re-ask, because a keyed read's own two-phase
        cursor is reset by the abrupt delivery. */
     uint8_t     catches_abrupt;
+    /* WHY THIS MEMBER'S STATE MUST NOT BE FORKED RIGHT NOW — the reason, or NULL when it may be. Forwarded onto
+       the pool's definition, so the fork asks the MEMBER through the same one door it asks everything else; see
+       JSTrampStepDef.unforkable for the capability this restores and for why the question belongs at the fork
+       rather than inside the member's `visit`. NULL for a member that may always be forked, which is nearly all
+       of them: the two that declare one hold a live lexbor parser, which has no halves. */
+    const char *(*unforkable)(const void *state);
 } IdlStepDecl;
 /* DECLARE WHERE THE OPTIONAL ARGUMENTS START. §3.6.2 makes an `undefined` passed for an optional argument with
    no default mean the argument is ABSENT — `new URL("aaa:b", undefined)` is a one-argument call, and
