@@ -55,6 +55,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
+#include "core/dom/element_view.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
@@ -287,24 +288,10 @@ static bool node_is_inert(const lxb_dom_node_t *n)
 }
 
 /* §6.6.2 row 1's last criterion, "the element is BEING RENDERED, or delegating its rendering to its children,
-   or being used as relevant canvas fallback content". Being rendered is "has any associated CSS layout boxes",
-   and this engine computes no layout — so what decides it here are the two facts the TREE carries: the element
-   is CONNECTED (a node whose root is not a document has no boxes in any user agent), and neither it nor an
-   ancestor carries the `hidden` content attribute, whose UA-stylesheet rule
-   (§15.3.1) is `display: none`. A `display:none` written in author CSS or in an inline style is a computed
-   value the CSSOM in this build exposes to no C caller, so it does not participate; that is a narrower answer
-   than a laying-out browser's, never a wider one — an element this says is being rendered may not be, and one
-   it says is not never is. */
-static bool el_is_being_rendered(const lxb_dom_node_t *n)
-{
-    const lxb_dom_node_t *a;
-    size_t len = 0;
-
-    if (!node_is_connected(n)) return false;
-    for (a = n; a; a = a->parent)
-        if (a->type == LXB_DOM_NODE_TYPE_ELEMENT && el_attr(a, "hidden", &len)) return false;
-    return true;
-}
+   or being used as relevant canvas fallback content", is asked of core/dom/element_view.h — see the ONE
+   answer there. It used to be a private walk here, and CSSOM VIEW §6's "has an associated box" is the SAME
+   predicate under the other of its two names (HTML defines being rendered AS having layout boxes), so a second
+   copy would have been one fact with two answers the day either moved. */
 
 /* §6.6.3's "MODULO PLATFORM CONVENTIONS, it is SUGGESTED that the following elements should be considered as
    focusable areas" — the standard's own list, which is what "determined by the user agent to be focusable"
@@ -352,7 +339,7 @@ static bool el_is_focusable_area(JSContext *ctx, JSValueConst el)
     if (sr && shadow_root_flag(ctx, sr, SHADOW_ROOT_DELEGATES_FOCUS)) return false;
     if (html_form_control_is_disabled(ctx, el)) return false;   /* "not actually disabled" */
     if (node_is_inert(n)) return false;
-    return el_is_being_rendered(n);
+    return element_view_has_box(n);
 }
 
 /* §6.6.2's SEQUENTIALLY FOCUSABLE, as this user agent determines it: a focusable area is in its Document's

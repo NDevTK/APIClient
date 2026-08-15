@@ -106,12 +106,35 @@ double viewport_height(JSContext *ctx);
 double viewport_device_pixel_ratio(JSContext *ctx);
 
 /* CSSOM VIEW §4's `scrollX`/`scrollY` — "the x-coordinate, relative to the initial containing block origin, of
-   the left of the viewport". DERIVED, not stored, and the derivation is in viewport.c: with no layout there
-   are no descendant boxes, so §2's scrolling area of a viewport is exactly the ICB, and a scrolling box whose
-   scrolling area is its own size has one valid scroll position. VisualViewport's `pageLeft`/`pageTop` are the
-   second reader, which is why this is exported rather than written into the member. */
+   the left of the viewport". DERIVED, not stored, and the derivation is in viewport.c: no box in this model has
+   GEOMETRY except the ICB itself (core/dom/element_view.h states the box model), so nothing extends §2's
+   scrolling area of a viewport past the ICB, and a scrolling box whose scrolling area is its own size has one
+   valid scroll position. VisualViewport's `pageLeft`/`pageTop` are the second reader, which is why this is
+   exported rather than written into the member. */
 double viewport_scroll_x(JSContext *ctx);
 double viewport_scroll_y(JSContext *ctx);
+
+/* CSSOM VIEW §2's SCROLLING AREA OF THIS REALM'S VIEWPORT — the ICB extended by the margin edges of all of the
+   viewport's descendants' boxes, which is the ICB itself while no box in the model has geometry (see
+   core/dom/element_view.h). Exported because THREE algorithms read it and none of them may state it for itself:
+   §4's `scroll()` clamps against it, `scrollX`/`scrollY`'s single valid position is derived from it, and §6's
+   `scrollWidth`/`scrollHeight` answer max(it, the viewport) for the root element. */
+double viewport_scrolling_area_width(JSContext *ctx);
+double viewport_scrolling_area_height(JSContext *ctx);
+
+/* CSSOM VIEW §4's `scroll()` STEPS OVER THIS REALM'S VIEWPORT — the INTERNAL algorithm, which §2 is explicit
+   that a member "said to call another method or attribute" must invoke rather than the page-visible member (so
+   a page overriding `window.scroll` cannot change what `el.scrollTop = 10` on the root element does).
+   `x`/`y` are the REQUESTED position, with §3.2's normalize-non-finite already applied by the caller whose IDL
+   type carries it. The steps clamp that request into the viewport's scrolling area and abort at step 11 when
+   the clamped position is the one the viewport already has — which is every request, while the scrolling area
+   is the ICB, and viewport.c asserts exactly that rather than assuming it. So the write is not ignored: it is
+   RUN, and the spec's own clamp is what makes it a no-op.
+   IT IS NOT `window.scroll` — that member is still absent, and four unwritten steps across three files assert
+   themselves against its arrival (rendering.c's update-the-rendering step 9, autofocus.c's §6.6.7 steps 4 and
+   5.8, focus.c's §6.6.6 step 4) because it is the member whose existence would mean a scrolling box can
+   actually be MOVED. Nothing here moves one. */
+void viewport_scroll(JSContext *ctx, double x, double y);
 
 /* CSSOM VIEW §13.1 step 1, as the one question the resize steps ask: "has doc's viewport had its width or
    height changed since the last time these steps were run". LATCHES what it saw, so a caller that asks twice

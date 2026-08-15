@@ -1,6 +1,7 @@
 /* THE VIEWPORT — CSS 2.1 §9.1.1 / §10.1, and CSSOM VIEW §4's Window extensions over it. See viewport.h for why
    this is a modelled UA choice, why it is a component of its own, why it is answered per realm, and why §4's
    members are installed here rather than in window.c. */
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -110,16 +111,26 @@ JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
  * COMPUTE that rather than guess it.
  *
  * §2 defines a VIEWPORT's scrolling area as the initial containing block extended by the margin edges of all of
- * the viewport's DESCENDANTS' BOXES. This engine generates no boxes — there is no layout — so the extension is
- * empty and the scrolling area is exactly the ICB; the ICB is exactly the viewport; and a scrolling box whose
- * scrolling area is its own size has one valid scroll position, its origin. The left of the viewport therefore
- * IS the ICB origin, for every flow at every moment, and 0 is a derived value rather than an absent one.
+ * the viewport's DESCENDANTS' BOXES. This engine gives GEOMETRY to exactly one box — the ICB — so no descendant
+ * has a margin edge to extend it by, the scrolling area is exactly the ICB, the ICB is exactly the viewport, and
+ * a scrolling box whose scrolling area is its own size has one valid scroll position, its origin. The left of
+ * the viewport therefore IS the ICB origin, for every flow at every moment, and 0 is a derived value rather than
+ * an absent one.
+ *
+ * WHAT STOOD HERE SAID "THIS ENGINE GENERATES NO BOXES", which is a claim about box EXISTENCE and was the wrong
+ * half: a user agent generates a box for the root element of a document it is presenting, this engine presents
+ * every document it holds, and core/html/focus.c's §6.6.2 row 1 had already committed to the opposite answer
+ * (a connected element that is not `hidden` IS being rendered). One fact with two answers — so the box model is
+ * now stated in ONE place, core/dom/element_view.h, which owns the predicate both files ask. Existence is
+ * decidable and geometry is not, and it is only geometry this derivation ever needed.
  *
  * THE MOMENT THERE IS A LAYOUT this stops being a derivation: the scrolling area becomes the union above, the
  * position becomes real state, and this becomes the read of what §3's perform-a-scroll wrote. The two-sided
  * assertion for that already exists and is in the right place — update-the-rendering step 9 (CSSOM VIEW §13.2's
  * SCROLL STEPS) is asserted against `scrollTo`, the member whose arrival means a scrolling box can be moved at
- * all, so the step that would have to drain doc's pending scroll events names itself first. */
+ * all, so the step that would have to drain doc's pending scroll events names itself first. §6's
+ * `scrollTop`/`scrollLeft` setter reaches `viewport_scroll` below and moves nothing: its clamp collapses to the
+ * position the viewport already has, which is asserted there. */
 double viewport_scroll_x(JSContext *ctx)
 {
     (void)ctx;
@@ -130,6 +141,56 @@ double viewport_scroll_y(JSContext *ctx)
 {
     (void)ctx;
     return 0.0;
+}
+
+/* §2's SCROLLING AREA OF A VIEWPORT — "the initial containing block extended by the margin edges of all of the
+   viewport's DESCENDANTS' BOXES". The ICB is the viewport, and no box in this model has the geometry to extend
+   it by (core/dom/element_view.h), so it is the viewport's own size.
+   IT IS A FUNCTION AND NOT A CONSTANT because it is the fact TWO derivations read — the scroll position above
+   and §4's clamp below, with CSSOM VIEW §6's `scrollWidth`/`scrollHeight` a third reader through viewport.h. The
+   day a layout gives a descendant a margin edge, this grows, the clamp stops collapsing, and step 11's assert
+   fires naming the perform-a-scroll steps that must then be written. Written as a constant in each place, that
+   day would arrive silently in two of the three. */
+double viewport_scrolling_area_width(JSContext *ctx)  { return viewport_width(ctx); }
+double viewport_scrolling_area_height(JSContext *ctx) { return viewport_height(ctx); }
+
+/* CSSOM VIEW §4's scroll() STEPS, as the internal algorithm §2 requires a caller to invoke — see viewport.h.
+   The steps are written in the spec's own order and the whole of the work is the CLAMP: it is what turns an
+   arbitrary requested position into one the viewport can actually have, and it is why a write that this engine
+   cannot honour is a no-op DECIDED BY THE SPEC rather than a write dropped on the floor. */
+void viewport_scroll(JSContext *ctx, double x, double y)
+{
+    double vw, vh, area_w, area_h;
+
+    /* step 3: "If there is no viewport, return a resolved Promise and abort the remaining steps." */
+    if (!viewport_exists(ctx)) return;
+    /* steps 4-5: the viewport EXCLUDING the scroll bar, of which this user agent renders none. */
+    vw = viewport_width(ctx);
+    vh = viewport_height(ctx);
+    area_w = viewport_scrolling_area_width(ctx);
+    area_h = viewport_scrolling_area_height(ctx);
+    /* STEPS 6-9 CLAMP, and this engine does not have to decide the OVERFLOW DIRECTIONS they are stated per:
+       a rightward direction gives max(0, min(x, area - viewport)) and a leftward one min(0, max(x, viewport -
+       area)), and with an area equal to the viewport both are the origin. The assert is what says the branch
+       need not be decided; the day the area is bigger, the two arms differ and the root element's computed
+       `writing-mode` and `direction` have to be read to tell them apart. */
+    DCHECK(area_w == vw && area_h == vh,
+           "CSSOM VIEW §4 scroll() steps 6-9 clamp per the viewport's OVERFLOW DIRECTIONS, and this engine "
+           "answers them without deciding which they are only because the scrolling area equals the viewport. "
+           "It no longer does, so read the root element's computed `writing-mode` and `direction` and write "
+           "both arms");
+    x = fmax(0.0, fmin(x, area_w - vw));
+    y = fmax(0.0, fmin(y, area_h - vh));
+    /* Step 11: "If position is the same as the viewport's current scroll position, and the viewport does not
+       have an ongoing smooth scroll, return a resolved Promise and abort these steps." Every request lands
+       here, which is the whole observable behaviour of a scroll in this engine — and the assert is the
+       two-sided half: the moment a clamped request is somewhere else, steps 12-13 must be written. */
+    DCHECK(x == viewport_scroll_x(ctx) && y == viewport_scroll_y(ctx),
+           "CSSOM VIEW §4 scroll() step 11 no longer aborts: the clamped position differs from the viewport's "
+           "current one, so steps 12-13 must PERFORM A SCROLL (§3.1) — make the viewport's scroll position "
+           "per-flow state in the COW delta, queue the scroll event on the Document's pending scroll event "
+           "targets, and write update-the-rendering step 9's SCROLL STEPS, which rendering.c asserts against "
+           "the arrival of a way to move a scrolling box");
 }
 
 /* The client window's size, in CSS pixels, and its position relative to §2.3's Web-exposed screen area origin.

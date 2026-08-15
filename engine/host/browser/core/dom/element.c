@@ -27,6 +27,7 @@
 #include "solver/engine.h"
 #include "solver/solve.h"
 #include "core/dom/element.h"
+#include "core/dom/element_view.h"
 #include "core/dom/node_iterator.h"
 #include "core/dom/tree_walker.h"
 #include "core/dom/node_filter.h"
@@ -1959,6 +1960,7 @@ void element_init(JSContext *ctx)
     idl_set_tree_steps(&ELEMENT_TREE_STEPS);
     dom_cow_set_attr_hook(element_attr_changed);
     realm_declare_intrinsic(element_install_proto);
+    element_view_init(ctx);   /* CSSOM VIEW §6's `partial interface Element`, installed on the prototype below */
     custom_elements_init(ctx);
     cssom_init(ctx);          /* CSSStyleDeclaration, which HTMLElement's `style` attribute names */
     html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */
@@ -2031,6 +2033,9 @@ void element_install_proto(JSContext *ctx)
     shadow_root_install_element_members(ctx, proto);
     /* §4.2.9: `Element includes Slottable`. */
     slot_install_slottable_mixin(ctx, proto);
+    /* CSSOM VIEW §6's `partial interface Element` — the scroll and client geometry. Per realm because its
+       answers are per realm: a child navigable's viewport is a different size from the traversable's. */
+    element_view_install(ctx, proto);
     /* GlobalEventHandlers is NOT on Element — the IDL mixes it into HTMLElement, which is where it is
        installed now that that interface exists. */
     JS_SetClassProto(ctx, g_element_class, proto);
@@ -2061,6 +2066,7 @@ void element_free(JSContext *ctx)
     free(g_ts);
     g_ts = NULL;
     g_ts_n = g_ts_cap = 0;
+    element_view_free();
     html_element_free(ctx);
     cssom_free(ctx);
     custom_elements_free(ctx);
