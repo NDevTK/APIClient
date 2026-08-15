@@ -1584,6 +1584,12 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
    set by the branch that is about to run, so a step with no seam names itself. */
 static const char *g_step_unit = "(none)";
 
+/* DECLARED ABOVE THE ONE FUNCTION THAT WRITES THEM, because flow_step is where a program is compiled and
+   where a flow is finished — the two events these count. The commentary on what each MEANS stays with the
+   accessors that publish them; this is the definition, and it has to precede its first use. */
+static long g_finished;
+static int  g_deepest = -1;
+
 static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
     /* A FLOW IS ABOUT TO RUN, SO THE TWO MARKS THAT SAY SO MUST BE ON. This is the ONE point a flow is driven
        (every JS_FlowNew / JS_FlowResume in this engine is below this line), which is why the claim is made
@@ -1856,8 +1862,6 @@ int engine_switch_count(void) { return g_switches; }
  * nothing about the document's coverage: a run reporting `script: 1` forever may be one where no flow has ever
  * reached the second <script>, or one where thousands have and the flow that happens to hold the thread is at
  * its first. Those need opposite fixes, and until now they read identically. */
-static long g_finished;
-static int  g_deepest = -1;
 
 /* THE WORK THIS ENGINE HAS PERFORMED — forks taken, flows created, jobs run, context switches. ONE definition,
    because two consumers ask the same question about it and they were asking two different ones.
