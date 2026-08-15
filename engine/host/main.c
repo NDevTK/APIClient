@@ -544,9 +544,17 @@ QJS_EXPORT void qjs_provide(const char *url, const char *reply)
         }
         n = engine_provide(g_ctx, url, v);
         JS_FreeValue(g_ctx, v);
-        if (n == 0)
-            DFAIL("a reply was provided for a URL no flow is parked on — the host's pending/provide pairing is "
-                  "off, and resolving nothing would leave the flow that IS parked waiting forever");
+        /* NOBODY IS PARKED ON IT, AND THERE ARE NOW TWO WAYS THAT HAPPENS. The one this asserts against is the
+           host naming a URL no flow ever asked for — its pending/provide pairing off by one, so the flow that
+           IS parked waits forever. The other is a SALE: the engine hit the RAM floor and paged the flow that
+           was waiting on this reply out to the cold tier (engine_take_paged_owed), which is the cheapest member
+           there is to page precisely because its recipe re-issues the request next session and gets today's
+           answer. A sale is consumed here, one per reply it made unnecessary, so the assert stays exact for the
+           case it exists for instead of aborting on the mechanism working. */
+        if (n == 0 && !engine_take_paged_owed())
+            DFAIL("a reply was provided for a URL no flow is parked on and none was paged out — the host's "
+                  "pending/provide pairing is off, and resolving nothing would leave the flow that IS parked "
+                  "waiting forever");
     }
 }
 

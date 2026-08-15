@@ -394,7 +394,7 @@ void flow_clear_host_owed(void) {
    ONE WFQ policy at both levels). Written out per question, the order would have a place to drift per copy and
    the monopolizer assertion below would guard whichever copy happened to carry it; written once, every pick is
    made under it. */
-static Flow *flow_pick(const Flow *exclude, int runnable_only) {
+static Flow *flow_pick(const Flow *exclude, int runnable_only, int worst) {
     Flow *best = NULL; double bw = 0.0;
     /* A MEMBER WITH ZERO SERVICE: never run, or just emitted (flow_credit_emit zeroes cpu). Either way it
        carries the full optimism bonus and no aging, so its weight is its reward + 1.0 and hence at least 1.0 —
@@ -408,7 +408,12 @@ static Flow *flow_pick(const Flow *exclude, int runnable_only) {
         if (runnable_only && flow_host_owed(g_flows[i])) continue;
         w = flow_weight(g_flows[i]);
         if (g_flows[i]->cpu == 0) unrun = 1;
-        if (!best || w > bw) { best = g_flows[i]; bw = w; }
+        /* THE TAIL IS THIS SCAN READ THE OTHER WAY, which is the whole of why the pager has no ranking of its
+           own. The flow the cold tier gives up first must be the flow the WFQ would have run last, or the
+           engine would page out a member the scheduler still wanted and keep one it was starving; a size
+           estimate, an age or a "cheapest to rebuild" score would be exactly that disagreement. One comparator,
+           one scan, one direction bit. */
+        if (!best || (worst ? w < bw : w > bw)) { best = g_flows[i]; bw = w; }
     }
     /* §scheduler'S SENTENCE, ASSERTED WHERE THE CHOICE IS MADE — "CPU-AGING so a monopolizer that burns CPU
        without emitting sinks below productive+unrun flows". This is the one line in the engine that decides
@@ -417,16 +422,37 @@ static Flow *flow_pick(const Flow *exclude, int runnable_only) {
        above was re-picked at every iteration for 227 seconds with unrun siblings waiting. It fires again on any
        future edit that clamps the aging term, caps it, or lets the reward grow with the CPU it is weighed
        against — which is exactly the shape a "fix" for the thrash this quantum handles would take. */
-    DCHECK(!best || !unrun || best->cpu < flow_cpu_to_sink(best),
+    DCHECK(worst || !best || !unrun || best->cpu < flow_cpu_to_sink(best),
            "the WFQ re-picked a flow that has burned more thread time since its last emit than its entire "
            "accumulated reward is worth, while a never-run flow was waiting — the aging term is no longer "
            "commensurate with the reward it is subtracted from, so a monopolizer cannot sink");
     return best;
 }
 
-/* The two questions, each a filter over the one scan above. */
-Flow *flow_best(void) { return flow_pick(NULL, 0); }
-Flow *flow_best_runnable(const Flow *exclude) { return flow_pick(exclude, 1); }
+/* The three questions, each a filter or a direction over the one scan above. */
+Flow *flow_best(void) { return flow_pick(NULL, 0, 0); }
+Flow *flow_best_runnable(const Flow *exclude) { return flow_pick(exclude, 1, 0); }
+
+Flow *flow_worst(const Flow *exclude) {
+    Flow *tail = flow_pick(exclude, 0, 1);
+    /* EVERY MEMBER, RUNNABLE OR NOT — and that is not an oversight in the filter, it is what eviction is about.
+       A flow waiting on the host cannot use the thread, which is why the PICK skips it; it is still a snapshot
+       occupying RAM, and it is the CHEAPEST thing in the frontier to page, because its recipe re-issues the
+       request it is waiting on and gets today's answer instead. Filtering the tail by runnability would leave
+       exactly the flows that cannot run holding the memory the flows that can need.
+       ONE ORDERING, ASSERTED. The tail may never outrank the head: if it ever does, the pager and the scheduler
+       have come to disagree about what this frontier is worth, and the flow written to disk is one the WFQ was
+       about to run. Costs a second scan on the reclaim path, which runs only at the RAM floor.
+       THE ONE INVERSION THIS ALLOWS IS `exclude` ITSELF and it is unavoidable rather than tolerated: the flow
+       the scheduler is switched into cannot be written out (its decision state is live in decide.c, its delta
+       applied to the heap), so if IT is the lowest-weight member the tail taken is one that outranks it. It
+       corrects itself at the next context switch, when that flow is parked like any other. */
+    DCHECK(!tail || flow_weight(tail) <= flow_weight(flow_best()),
+           "the flow the pager chose to page out outranks the flow the scheduler would run — the tail and the "
+           "head are two readings of ONE comparator, so this means a second ranking has appeared and the "
+           "engine is evicting the work it was about to do");
+    return tail;
+}
 
 void flow_remove(JSContext *ctx, Flow *f) {
     /* WHAT THIS FUNCTION DOES NOT FREE, ASSERTED RATHER THAN ASSUMED. A Flow owns fourteen things and this

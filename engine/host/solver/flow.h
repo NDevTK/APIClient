@@ -232,6 +232,17 @@ Flow *flow_best(void);
  * the STALL, decided by asking each member rather than by counting a run of unproductive picks. */
 Flow *flow_best_runnable(const Flow *exclude);
 
+/* THE LOWEST-PRIORITY MEMBER OTHER THAN `exclude` — the TAIL the cold tier gives up first at the RAM floor, and
+ * the SAME comparator as flow_best read in the other direction. Not a second ranking: the flow that is paged
+ * out has to be the flow the WFQ would have run last, or the engine evicts what it was about to do and keeps
+ * what it was starving. Asserted against flow_best where it is computed.
+ * EVERY MEMBER, not only the runnable ones — a flow waiting on the host is the cheapest thing here to page (its
+ * recipe re-issues the request and gets today's answer), and filtering it out would leave the flows that cannot
+ * run holding the RAM the flows that can need.
+ * `exclude` is the flow the scheduler is switched into, which is the one member that can be neither written out
+ * nor released: its decision state is live in decide.c and its delta is applied to the live heap. */
+Flow *flow_worst(const Flow *exclude);
+
 /* THIS FLOW ANSWERED FLOW_STEP_OWED. It stays in the frontier at its own weight and keeps every work item it
    holds — nothing is dropped, removed or reordered; it is simply not PICKED again for the rest of this slice. */
 void  flow_set_host_owed(Flow *f);

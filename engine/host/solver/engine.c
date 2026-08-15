@@ -948,6 +948,11 @@ void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *c
     g_genfork_n++;
 }
 
+/* THE RECLAIM SAFEPOINT'S SWITCH, declared here and defined with the partial self-park below. Two operations in
+   this file hold a position in the frontier while allocating — the sibling being assembled just below, and the
+   job-drop walk — and both close the safepoint around themselves with it. */
+static int engine_reclaim_set(int v);
+
 static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     Flow *parent = flow_running();
     DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
@@ -972,6 +977,14 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     DCHECK(parent->perform == NULL, "a flow forked while still holding an unstarted cross-agent operation — the "
                                     "sibling would inherit the record and perform the peer's one operation a "
                                     "second time under the same token");
+    /* THE SIBLING IS A MEMBER OF THE FRONTIER BEFORE IT IS A FLOW, so nothing may page it out while this
+       assembles it. flow_add publishes it into the registry on its first line and everything below is the
+       CONSTRUCTION — a dozen allocations, any one of which can reach the allocator's refusal edge. A newborn
+       flow carries the full optimism bonus and so is near the TOP of the ranking rather than the tail, which
+       makes this a hazard that would fire rarely and read as a corrupt frontier when it did: the reclaim would
+       free `sib` and every line after it would write through a dangling pointer. Same primitive, same reason
+       and same shape as the job-drop walk: the engine is holding a position in its own frontier. */
+    int prev_reclaim = engine_reclaim_set(0);
     /* THE SIBLING'S WORLD IS A CHILD OF THE PARENT'S, and the edge is recorded so another instance that
    already holds a segment for the parent can materialize the sibling's by forking it — the same O(1)
    shared-base-segment fork this line performs locally, performed there. */
@@ -1079,6 +1092,7 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
         }
         JS_FreeValue(ctx, p);
     }
+    engine_reclaim_set(prev_reclaim);   /* the sibling is fully assembled: it may be paged like any other member */
     /* THE HANDOFFS ARE DRAINED, SAID AT THE END OF THE ONE OPERATION THAT DRAINS THEM. Both are module statics
        filled by somebody else and emptied here, which is the shape where an arm added later takes an early
        return and leaves one behind — a leaked decision blob keeps the whole frozen prefix chain under it alive,
@@ -1368,6 +1382,13 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
    queue alone would drop the ones that happen to be there and silently keep the rest. */
 static int engine_drop_jobs(JSContext *ctx) {
     int dropped = 0;
+    /* NOT WHILE THIS WALK HOLDS AN INDEX. It runs inside a flow step, where the allocator's refusal edge is
+       armed to page a member of the frontier out — and the registry removes by swapping its last member into
+       the hole, so a removal here would move a flow the walk has not reached yet to a position it has already
+       passed. That flow's destroyed-document jobs would stay queued and run against a Document whose browsing
+       context is null: a silently skipped work item, which is what §scheduler's razor forbids. A refusal across
+       this walk is simply a refusal; the step's next allocation is armed again. */
+    int prev_reclaim = engine_reclaim_set(0);
     for (int k = 0; ; k++) {
         Flow *f = flow_at(k);
         if (!f) break;
@@ -1379,6 +1400,7 @@ static int engine_drop_jobs(JSContext *ctx) {
             dropped++;
         }
     }
+    engine_reclaim_set(prev_reclaim);
     return dropped;
 }
 
@@ -1555,43 +1577,25 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
 
                 /* OOM IS A `CHECK`, in dev and in release alike: a dropped flow corrupts the frontier, and
                    there is no version of this the engine may proceed past.
-                   THE COLD TIER NOW EXISTS AND STILL DOES NOT CARRY THIS CASE, which is worth stating exactly
-                   rather than leaving the older sentence ("this build has no cold tier") to go quietly false.
-                   What exists is a WHOLE-ENGINE park: the host sees the pressure across documents, asks this
-                   engine to give up its residue (engine_request_park), and the whole frontier leaves as recipes
-                   at the next step boundary. That is Level-1 eviction and it is what frees RAM when several
-                   documents compete. It cannot help HERE, because reaching this line means ONE engine could not
-                   hold one more flow — and a lone engine is never asked to park (there is no other document to
-                   free the RAM for, and paging the whole frontier out to page it straight back in is not
-                   progress). What that needs is the PARTIAL self-park §scheduler names: the lowest-value TAIL
-                   of this frontier written out and REMOVED while the engine keeps running on its top flows.
-                   THE PLUMBING FOR THAT IS NOW BUILT, and this says which parts rather than going on naming
-                   them — a crash that asks for what already exists sends the next reader to write it twice.
-                   The per-flow RELEASE exists: flow_release (solver/flow.h) takes a flow the scheduler is not
-                   switched into out of the frontier and gives its RAM back, walking the heap and the document
-                   down only as far as the segments the release actually frees (cow_delta_release /
-                   dom_base_release), so a tail can be dropped while another flow holds the thread. It is the
-                   path every finishing flow already takes, so it is exercised rather than merely written. The
-                   per-flow WRITE exists beside it: cold_park_flow appends ONE flow's recipe to a document that
-                   is appended to all session, so a park may take a subset and may take several; and the read
-                   back is a MERGE — cold_resume appends a residue to a frontier that already has members, and
-                   asserts that nothing live was displaced and nothing parked was dropped.
-                   WHAT IS STILL MISSING IS THE DECISION ITSELF, in two halves that must arrive together. The
-                   SELECTION: which flows go, which is ascending flow_weight — flow_best's own order read from
-                   the other end, never a second ranking, never a count and never a watermark — and how far
-                   down to go, which is not a number at all but this floor: park and release the lowest-value
-                   flow, retry the allocation, and stop when it succeeds. The TRIGGER: a NULL out of JS_FlowNew
-                   is ONE allocation site among all of them, so a selector driven only from here would leave
-                   every other allocation on the path still fatal; what it has to hang off is the runtime's own
-                   allocation-failure edge, so that the first refusal anywhere runs the tail park and retries. */
-                CHECK(!oom, "the frontier could not hold another flow — this is the physical RAM floor. Every "
-                            "part of the partial self-park now exists except the decision: cold_park_flow writes "
-                            "one flow's recipe, flow_release drops it while the engine keeps running, and "
-                            "cold_resume merges a tail back into a live frontier. What carries past THIS is the "
-                            "TAIL SELECTOR — ascending flow_weight (flow_best's own order), parking and "
-                            "releasing until the allocation succeeds — hung off the runtime's allocation-failure "
-                            "edge rather than off this one call site, which is only one of the places the "
-                            "frontier can refuse to grow");
+                   AND REACHING IT NOW MEANS SOMETHING NARROWER THAN IT USED TO, because the partial self-park
+                   is built and this allocation is INSIDE its safepoint. The refusal that produced this NULL
+                   already went through the runtime's reclaim edge (quickjs.h's JSMemoryReclaimFunc, answered by
+                   engine_reclaim_tail below), which paged the lowest-weight member out to the cold tier and
+                   retried — and it did that for as long as it had a member to give. So a NULL here is not "the
+                   frontier could not hold another flow"; it is "the frontier is down to the flow that is
+                   RUNNING and one more allocation would not fit". That is the physical floor with nothing left
+                   to sell, and the only thing carrying past it is the host: a whole-engine park (Level-1
+                   eviction) frees the RAM of a document this instance should not be holding at all.
+                   WHAT IS STILL NOT COVERED, so that a reader standing here knows where to look: the reclaim is
+                   armed only inside a flow step (engine_reclaim_allow), because that is the one region in which
+                   the engine holds no position in its own frontier. An allocation refused at HOST time — in a
+                   walk over the flows, in the result document, in a reply being routed — is refused with the
+                   tail still unsold, and its failure is reported by whoever asked for it rather than here. */
+                CHECK(!oom, "the frontier could not hold another flow after the cold tier had already paged out "
+                            "every member it could — this is the physical RAM floor with the tail already sold. "
+                            "The engine is down to the flow that is running; what carries past this is the "
+                            "HOST's Level-1 eviction (engine_request_park), which gives up this whole document's "
+                            "residue for a document worth more");
                 /* AN @S CANDIDATE THAT DOES NOT PARSE is a dead candidate and nothing more — the search tries
                    several breakouts per sink precisely because most do not fit most contexts. A `javascript:`
                    URL that does not parse is HTML §7.4.2.3.2's abrupt evaluation, which produces no Document and
@@ -1822,6 +1826,11 @@ static void engine_session_close(void) {
        still applied, and the teardown freed the head as if it were parked — leaving that flow's writes standing
        in the shared baseline with nothing left that could ever unapply them. flow_release asserts it now. */
     if (g_sess_cur) { flow_switch_out(g_sess_ctx, g_sess_cur); g_sess_cur = NULL; }
+    /* AND THE FRONTIER IS NO LONGER FOR SALE. The reclaim hook pages a member out at the allocator's refusal;
+       past this line there is no scheduler to page for, and the teardown that follows allocates (the result
+       document, the leak walk) — an allocation there must fail as an allocation, not reach into a frontier that
+       is being torn down. */
+    JS_SetMemoryReclaimHook(JS_GetRuntime(g_sess_ctx), NULL, NULL);
     JS_SetJobEnqueueHook(NULL);
     JS_SetJobDropHook(NULL);
     JS_SetFlowControlHooks(&FC_OFF);
@@ -1852,10 +1861,88 @@ void engine_request_park(void) {
 
 int engine_frontier_paged(void) { return g_parked; }
 
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+   THE PARTIAL SELF-PARK — the engine selling its own tail at the RAM floor, which is the OTHER half of the
+ * paragraph above. Level-1 eviction is the host giving up a whole DOCUMENT for a document worth more; this is
+ * a LONE engine, which no host will ever ask to park (there is no other document to free the RAM for), meeting
+ * the floor on its own and staying alive by paging its least valuable flows.
+ *
+ * IT IS DRIVEN BY THE ALLOCATOR'S REFUSAL AND BY NOTHING ELSE. There is no watermark, no budget and no
+ * high-water mark to compare against: any of those is a number someone picked, and a number that fires early
+ * truncates work while memory remains, while a number that fires late is the OOM it was supposed to prevent.
+ * The runtime asks (quickjs.h's JSMemoryReclaimFunc) at the moment an allocation cannot be satisfied, and it
+ * asks again after each flow this gives up, so the STOPPING CONDITION is the allocation succeeding and the
+ * frontier's floor is "there is no member left that is not the running flow". Both ends are physical.
+ *
+ * THE SAFEPOINT. This runs INSIDE a failing allocation, and what it does — removing a member from the frontier
+ * — is unsafe wherever the engine is holding a position in that frontier: a walk over flow_at that allocates
+ * would have a member swapped into the hole behind it and would silently skip one, which is a dropped work
+ * item and the exact thing §scheduler's razor forbids. So the reclaim is ARMED only across the flow step,
+ * which is the region in which the engine holds no such position and in which essentially every allocation of
+ * a run happens, and the one frontier walk that runs inside a step disarms it around itself. This is quickjs's
+ * version of what V8 spells `DisallowGarbageCollection`: not a fallback (there is no second reclaimer to fall
+ * back to) but a declaration of where the operation is legal, and outside it an allocation fails exactly as it
+ * did before this existed. */
+static int g_reclaim_allowed;
+
+static int engine_reclaim_set(int v) { int prev = g_reclaim_allowed; g_reclaim_allowed = v; return prev; }
+
+/* THE REPLIES THAT DIED WITH A PAGED FLOW. A flow BLOCKED on the host is the cheapest member to page — its
+   recipe re-issues the request in the session that resumes it and gets today's answer, which is §Time-travel's
+   whole point — so the tail is very often a flow the host is still fetching for. The reply then arrives for a
+   URL nobody is parked on any more, and that is not the host mispairing its list: it is a park that happened
+   between the ask and the answer. Counted rather than assumed, so the pairing assert stays armed for the case
+   it was written for (a host that names a URL no flow ever parked on) and is answered exactly once per reply
+   the sale made unnecessary. It is the same event engine_host_answer already drops for a vanished asker; this
+   is the fetch side of it, with the difference that the fetch side had an assert to keep honest. */
+static long g_paged_owed;
+
+int engine_take_paged_owed(void) {
+    if (g_paged_owed <= 0)
+        return 0;
+    g_paged_owed--;
+    return 1;
+}
+
+static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
+    Flow *tail;
+
+    (void)opaque; (void)wanted;
+    if (!g_reclaim_allowed)
+        return 0;
+    /* THE HOOK IS INSTALLED WITH THE SESSION AND REMOVED WITH IT, so reaching here without one would mean the
+       runtime kept a pointer into a scheduler that no longer has a frontier to sell. */
+    DCHECK(g_sess_live, "the runtime asked this engine to page out a flow with no live session — the hook is "
+                        "installed by engine_sched_begin and removed by engine_session_close, so this is a "
+                        "reclaim against a frontier that is gone");
+    DCHECK(rt == JS_GetRuntime(g_sess_ctx),
+           "a reclaim was asked of this engine by a runtime that is not its session's — one instance is one "
+           "runtime, so paging this frontier would not free the memory the other one is short of");
+    /* THE RUNNING FLOW IS THE ONE MEMBER THAT CANNOT GO: its decision state is live in decide.c rather than in
+       its blob and its delta is applied to the heap, which is exactly what cold_park_flow and flow_release both
+       refuse. Everything else in the frontier is a snapshot and can be written down. */
+    tail = flow_worst(flow_running());
+    if (!tail)
+        return 0;   /* the floor: nothing here but the flow that is running */
+    /* WRITE IT DOWN, THEN GIVE ITS RAM BACK — in that order, because the release is what makes the recipe the
+       only remaining copy of this flow. cold_park_flow appends one record to the session's park document (the
+       host stores it under this bundle's key and the next session MERGES it back in); flow_release unapplies
+       nothing that is live, frees the flow's suspended frame chain, its heap delta, its DOM head and the nodes
+       it created, and walks the shared heap and document chains down only as far as the segments this flow held
+       the last reference on. A tail flow's dying prefix cannot be a segment the RUNNING flow stands on — a
+       shared segment has a second reference by definition — so at this size the release moves nothing in the
+       live heap or document and is pure free. */
+    g_paged_owed += pending_count(tail->pending);
+    cold_park_flow(tail);
+    flow_release(g_sess_ctx, tail);
+    return 1;
+}
+
 void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking, const char *recipes) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
     g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_srcs = srcs; g_sess_n = n; g_sess_cur = NULL; g_sess_live = 1;
     g_parked = 0;
+    g_paged_owed = 0;   /* replies owed to flows this session paged out — see engine_take_paged_owed */
     /* WHAT AN UNCANCELLED REJECTION MEANS is this half's answer: the browser half fires the event and honours
        preventDefault, and a reason that survives that is a page error exactly like a script that threw. */
     unhandled_rejection_set_report_hook(result_page_error_value);
@@ -1886,6 +1973,10 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
     JS_SetFlowControlHooks(forking ? &FC_EXPLORE : &FC_VERIFY);   /* preempt ALWAYS on; fork only when exploring */
     JS_SetJobEnqueueHook(engine_enqueue_job);   /* ASYNC-AS-FLOW: reactions route to the enqueuing flow's queue */
     JS_SetJobDropHook(engine_drop_jobs);        /* …and §7.5.10 step 7 takes them back off it */
+    /* THE FRONTIER IS THE ENGINE'S RESERVE, and this is what lets the runtime spend it. Installed with the
+       session because that is exactly when there is a frontier to page: the allocator's refusal edge asks
+       engine_reclaim_tail, which sells the lowest-weight member to the cold tier and answers "retry". */
+    JS_SetMemoryReclaimHook(JS_GetRuntime(ctx), engine_reclaim_tail, NULL);
 }
 
 /* One QUANTUM. Returns ENGINE_STEP_DONE when the frontier is empty (the session is closed and its hooks are
@@ -2041,7 +2132,16 @@ static int engine_sched_slice(void) {
             g_max_gap = 0; g_last_ask = wall0_ms;   /* this step's gaps, measured from the moment it starts */
             idl_slowest_reset();              /* ...and this step's slowest single Web API member step */
 #endif
+            /* THE RECLAIM SAFEPOINT, and it is this ONE region for a structural reason rather than a
+               performance one: across the step the engine holds no position in its own frontier, so a member
+               removed by the allocator's refusal edge cannot be removed out from under a walk. It is also where
+               essentially every allocation of a run happens — the page's own objects, its frames, its deltas —
+               so arming it here is what makes "the engine pages its tail at the RAM floor" true in general
+               rather than at one hand-picked call site. Restored rather than cleared, because the step can
+               reach this loop again through a nested driver. */
+            int prev_reclaim = engine_reclaim_set(1);
             int r = flow_step(ctx, cur, bodies, n);
+            engine_reclaim_set(prev_reclaim);
             /* THE CHARGE, AND IT IS CHARGED TO THE FLOW THAT RAN. `flow_age_running` bills whoever the registry
                says is running, and that is only the flow this step advanced while nothing between the switch-in
                above and here has changed it — a step that returned with a different flow running would bill the

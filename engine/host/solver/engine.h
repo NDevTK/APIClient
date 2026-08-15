@@ -134,6 +134,13 @@ void engine_request_park(void);
    and flow_release asks that one. */
 int  engine_frontier_paged(void);
 
+/* WAS A REPLY OWED TO A FLOW THIS ENGINE PAGED OUT? Answers once per such reply and consumes it, which is why
+   it is a `take` and never a predicate: the partial self-park sells the lowest-weight member at the RAM floor,
+   and a BLOCKED flow is the cheapest thing there is to sell (its recipe re-issues the request next session and
+   gets today's answer). The reply the host is already fetching then lands with nobody parked on it. That is a
+   sale, not the mispairing the provide edge asserts against, and this is what tells the two apart. */
+int  engine_take_paged_owed(void);
+
 /* The same park, with the URL only the TRUSTED HOST can fetch. The value arrives later through engine_provide;
    until it does the flow cannot finish, which is what keeps reply-gated code reachable. ONE register — the
    flow's own — because the reaction the resolve enqueues belongs to that flow and to its COW delta. */
