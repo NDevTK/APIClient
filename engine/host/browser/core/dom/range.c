@@ -556,22 +556,17 @@ static void rstr_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->buf(ctx, (void **)&s->buf, s->cap);
 }
 
-static void rstr_release(JSContext *ctx, void *st)
-{
-    RangeStrState *s = st;
-    (void)ctx;
-    free(s->buf);
-    s->buf = NULL;
-    s->len = s->cap = 0;
-}
-
-static void rstr_append(RangeStrState *s, const char *p, size_t n)
+/* THE RUNTIME'S ALLOCATOR, BECAUSE THE DECLARATION'S IS. `v->buf` hands the sibling a copy made with
+   js_malloc and the teardown discharges it with js_free, so a buffer grown with the C library's realloc is one
+   the fork frees through the wrong allocator — the runtime's accounting goes backwards by a block it never
+   issued. It is invisible today only because nothing has forked mid-stringification. */
+static void rstr_append(JSContext *ctx, RangeStrState *s, const char *p, size_t n)
 {
     if (s->len + n > s->cap) {
         size_t want = s->cap ? s->cap * 2 : 64;
         char *nb;
         while (want < s->len + n) want *= 2;
-        nb = realloc(s->buf, want);
+        nb = js_realloc(ctx, s->buf, want);
         CHECK(nb != NULL, "the Range stringifier's buffer could not grow");
         s->buf = nb;
         s->cap = want;
@@ -651,7 +646,7 @@ static int js_range_to_string(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         }
         if (node_is_text(sn)) {                                              /* STEP 3 */
             text_slice(sn, b->start_off, node_length(sn), &p, &len);
-            rstr_append(s, p, len);
+            rstr_append(ctx, s, p, len);
         }
         /* THE WALK IS BOUNDED BY THE COMMON ANCESTOR, not by the document and not by the end node. Every
            CONTAINED node is a descendant of the common ancestor, so that subtree is exactly what has to be
@@ -671,7 +666,7 @@ static int js_range_to_string(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
         if (!s->cursor) { hdr->stage = RSTR_TAIL; return JS_STEP_YIELD; }
         if (node_is_text(s->cursor) && range_contains(b, s->cursor)) {
             text_bytes(s->cursor, &p, &len);
-            rstr_append(s, p, len);
+            rstr_append(ctx, s, p, len);
         }
         s->cursor = node_next_in(s->cursor, s->root);
         return JS_STEP_YIELD;
@@ -680,13 +675,14 @@ static int js_range_to_string(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
     DCHECK(hdr->stage == RSTR_TAIL, "the Range stringifier resumed into a stage §5.5 does not have");
     if (node_is_text(en)) {                                                  /* STEP 5 */
         text_slice(en, 0, b->end_off, &p, &len);
-        rstr_append(s, p, len);
+        rstr_append(ctx, s, p, len);
     }
     *presult = JS_NewStringLen(ctx, s->buf ? s->buf : "", s->len);           /* STEP 6 */
     return JS_STEP_DONE;
 }
 
-static const IdlStepDecl RANGE_TO_STRING = { js_range_to_string, sizeof(RangeStrState), rstr_visit, rstr_release,
+/* No release: the accumulator is rstr_visit's and the teardown discharges that one list. */
+static const IdlStepDecl RANGE_TO_STRING = { js_range_to_string, sizeof(RangeStrState), rstr_visit, NULL,
                                              "DOM §5.5 Range stringification behavior", RSTR_STEPS };
 
 /* ---- §5.5's CONTENT-MOVING MEMBERS ----------------------------------------------------------------------
@@ -888,25 +884,16 @@ static void rx_visit(JSContext *ctx, void *st, JSStepVisit *v)
     node_clone_visit_state(ctx, &s->nc, v);   /* the delegated algorithm's own allocation is its to declare */
 }
 
-static void rx_release(JSContext *ctx, void *st)
-{
-    RxState *s = st;
-    int i;
-
-    for (i = 0; i < s->sp; i++) free(s->f[i].contained);
-    free(s->f);
-    s->f = NULL;
-    s->sp = s->cap = 0;
-    node_clone_release_state(ctx, &s->nc);
-}
-
-static RxFrame *rx_push(RxState *s)
+/* THE RUNTIME'S ALLOCATOR, BECAUSE THE DECLARATION'S IS — see rstr_append. `v->array` copies this stack with
+   js_malloc for the sibling and frees it with js_free, and each frame's `contained` goes the same way through
+   rx_frame_visit, so the growth has to come from the same allocator the fork and the teardown use. */
+static RxFrame *rx_push(JSContext *ctx, RxState *s)
 {
     RxFrame *f;
 
     if (s->sp == s->cap) {
         int want = s->cap ? s->cap * 2 : 4;
-        RxFrame *a = realloc(s->f, sizeof(RxFrame) * (size_t)want);
+        RxFrame *a = js_realloc(ctx, s->f, sizeof(RxFrame) * (size_t)want);
         CHECK(a != NULL, "§5.5's extract could not grow its frame stack — the spine between a boundary point "
                          "and the common ancestor is the page's depth, and dropping a level would silently "
                          "extract part of a subtree");
@@ -918,11 +905,11 @@ static RxFrame *rx_push(RxState *s)
     return f;
 }
 
-static void rx_contained_add(RxFrame *f, lxb_dom_node_t *n)
+static void rx_contained_add(JSContext *ctx, RxFrame *f, lxb_dom_node_t *n)
 {
     if (f->nc == f->ccap) {
         int want = f->ccap ? f->ccap * 2 : 8;
-        lxb_dom_node_t **a = realloc(f->contained, sizeof(*a) * (size_t)want);
+        lxb_dom_node_t **a = js_realloc(ctx, f->contained, sizeof(*a) * (size_t)want);
         CHECK(a != NULL, "§5.5's extract could not grow its contained-children list");
         f->contained = a;
         f->ccap = want;
@@ -944,7 +931,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
            stated over the four values step 3 snapshots. */
         RangeBounds *b = range_here(ctx, hdr->this_val);
         if (!b) return JS_STEP_ABRUPT;
-        f = rx_push(s);
+        f = rx_push(ctx, s);
         f->sn = bounds_start(b);
         f->so = b->start_off;
         f->en = bounds_end(b);
@@ -995,7 +982,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
             for (c = ca->first_child; c; c = c->next)
                 if (bp_partially_contains(f->sn, f->en, c)) f->last_pcc = c;
         for (c = ca->first_child; c; c = c->next)                       /* STEP 10 */
-            if (bp_contains(f->sn, f->so, f->en, f->eo, c)) rx_contained_add(f, c);
+            if (bp_contains(f->sn, f->so, f->en, f->eo, c)) rx_contained_add(ctx, f, c);
         for (i = 0; i < f->nc; i++)                                     /* STEP 11 */
             if (f->contained[i]->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)
                 return JS_ThrowDOMException(ctx, "HierarchyRequestError",
@@ -1042,7 +1029,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
         {                                                                     /* STEPS 17.2-17.3 */
             RxFrame *sub;
             node_insert_at(f->frag, s->nc.copy, NULL);
-            sub = rx_push(s);
+            sub = rx_push(ctx, s);
             f = &s->f[s->sp - 2];   /* rx_push may have moved the array */
             sub->sn = f->sn;
             sub->so = f->so;
@@ -1097,7 +1084,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
         {                                                                     /* STEPS 20.2-20.3 */
             RxFrame *sub;
             node_insert_at(f->frag, s->nc.copy, NULL);
-            sub = rx_push(s);
+            sub = rx_push(ctx, s);
             f = &s->f[s->sp - 2];
             sub->sn = f->last_pcc;
             sub->so = 0;
@@ -1119,7 +1106,7 @@ static int rx_run(JSContext *ctx, JSStepHdr *hdr, RxState *s, int move, int base
            is finished. The fragment itself is left empty and unreferenced, which is what appending one does. */
         node_insert_at(f->into, f->frag, NULL);
         hdr->stage = f->after;
-        free(f->contained);
+        js_free(ctx, f->contained);   /* the allocator rx_contained_add grew it with, and the one v->buf uses */
         f->contained = NULL;
         f->nc = f->ccap = 0;
         s->sp--;
@@ -1138,7 +1125,9 @@ static int rx_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     return rx_run(ctx, hdr, st, idl_step_magic(hdr) == RX_EXTRACT, RX_ENTER, presult);
 }
 
-static const IdlStepDecl RANGE_EXTRACT = { rx_step, sizeof(RxState), rx_visit, rx_release,
+/* No release: the frame stack, each frame's contained-children list and the clone's own level stack are all
+   rx_visit's, and the teardown discharges that one list. */
+static const IdlStepDecl RANGE_EXTRACT = { rx_step, sizeof(RxState), rx_visit, NULL,
                                            "DOM §5.5 extract a live range / clone the contents of a live range",
                                            RX_STEPS };
 
@@ -1171,15 +1160,6 @@ static void rd_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     RdState *s = st;
     v->buf(ctx, (void **)&s->list, sizeof(lxb_dom_node_t *) * (size_t)s->cap);
-}
-
-static void rd_release(JSContext *ctx, void *st)
-{
-    RdState *s = st;
-    (void)ctx;
-    free(s->list);
-    s->list = NULL;
-    s->n = s->cap = 0;
 }
 
 static int rd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -1218,7 +1198,7 @@ static int rd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
             !(s->cursor->parent && bp_contains(s->sn, s->so, s->en, s->eo, s->cursor->parent))) {
             if (s->n == s->cap) {
                 int want = s->cap ? s->cap * 2 : 8;
-                lxb_dom_node_t **a = realloc(s->list, sizeof(*a) * (size_t)want);
+                lxb_dom_node_t **a = js_realloc(ctx, s->list, sizeof(*a) * (size_t)want);
                 CHECK(a != NULL, "§5.5's deleteContents could not grow its removal list — a dropped entry is a "
                                  "node the page asked to delete and still has");
                 s->list = a;
@@ -1262,7 +1242,8 @@ static int rd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     }
 }
 
-static const IdlStepDecl RANGE_DELETE = { rd_step, sizeof(RdState), rd_visit, rd_release,
+/* No release: the removal list is rd_visit's, discharged with the rest. */
+static const IdlStepDecl RANGE_DELETE = { rd_step, sizeof(RdState), rd_visit, NULL,
                                           "DOM §5.5 Range.deleteContents()", RD_STEPS };
 
 /* ---- insertNode ----------------------------------------------------------------------------------------- */
@@ -1404,7 +1385,6 @@ typedef struct RsState {
 } RsState;
 
 static void rs_visit(JSContext *ctx, void *st, JSStepVisit *v) { rx_visit(ctx, &((RsState *)st)->rx, v); }
-static void rs_release(JSContext *ctx, void *st) { rx_release(ctx, &((RsState *)st)->rx); }
 
 static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -1478,7 +1458,7 @@ static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     return JS_STEP_DONE;
 }
 
-static const IdlStepDecl RANGE_SURROUND = { rs_step, sizeof(RsState), rs_visit, rs_release,
+static const IdlStepDecl RANGE_SURROUND = { rs_step, sizeof(RsState), rs_visit, NULL,
                                             "DOM §5.5 Range.surroundContents(newParent)", RS_STEPS };
 
 /* ---- DECLARATION AND INSTALL ---------------------------------------------------------------------------- */

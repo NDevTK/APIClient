@@ -512,7 +512,7 @@ typedef struct {
     JSValue dismissed;   /* step 7.4's unknown (owned) */
     /* THE PICKED ENTRY'S PATH, held from step 7.9's selection to step 7.10's remember. It became a field when
        those two stopped being one stage: a value that survives a rest point cannot live in a C local, and it is
-       owned here, so it is in `visit` (a fork mid-selection gives each arm its own) and in `release`. */
+       owned here, so it is in `visit` — the one list a fork copies and a teardown discharges. */
     JSValue picked;
     JSValue cb[3];
 } PickerState;
@@ -534,28 +534,6 @@ static void fpk_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->dismissed);
     v->val(ctx, &s->picked);
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
-}
-
-static void fpk_release(JSContext *ctx, void *st)
-{
-    PickerState *s = st;
-    int k;
-
-    if (!s->started)
-        return;
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->funcs[0]);
-    JS_FreeValue(ctx, s->funcs[1]);
-    JS_FreeValue(ctx, s->value);
-    JS_FreeValue(ctx, s->start_path);
-    JS_FreeValue(ctx, s->id);
-    JS_FreeValue(ctx, s->suggested);
-    JS_FreeValue(ctx, s->dismissed);
-    JS_FreeValue(ctx, s->picked);
-    s->promise = s->funcs[0] = s->funcs[1] = s->value = JS_UNDEFINED;
-    s->start_path = s->id = s->suggested = s->dismissed = s->picked = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-    s->started = 0;
 }
 
 static JSValue fpk_dom_error(JSContext *ctx, const char *name, const char *msg)
@@ -878,7 +856,10 @@ reject:
 }
 
 static const IdlStepDecl FPK_DECL = {
-    fpk_step, sizeof(PickerState), fpk_visit, fpk_release,
+    /* No release. This WAS fpk_visit's list a second time, ending in `started = 0` — which lowered the very
+       condition the visit reads, so the discharge that runs next walked away from a state holding all of it.
+       The declaration is the one list; the teardown reads it after the completion is stated. */
+    fpk_step, sizeof(PickerState), fpk_visit, NULL,
     "File System Access §3.3-§3.5 the local file system handle factories", FPK_STEPS
 };
 

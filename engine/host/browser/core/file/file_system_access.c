@@ -180,23 +180,6 @@ static void fsa_visit(JSContext *ctx, void *st, JSStepVisit *v)
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
 
-static void fsa_release(JSContext *ctx, void *st)
-{
-    FsAccessState *s = st;
-    int k;
-
-    if (!s->started)
-        return;
-    JS_FreeValue(ctx, s->promise);
-    JS_FreeValue(ctx, s->funcs[0]);
-    JS_FreeValue(ctx, s->funcs[1]);
-    JS_FreeValue(ctx, s->value);
-    JS_FreeValue(ctx, s->handle);
-    s->promise = s->funcs[0] = s->funcs[1] = s->value = s->handle = JS_UNDEFINED;
-    STEP_CB_FOREACH(s->cb, k) { JS_FreeValue(ctx, s->cb[k]); s->cb[k] = JS_UNDEFINED; }
-    s->started = 0;
-}
-
 /* THE DESCRIPTOR STEPS 1-4 BUILD, which are the same four in both algorithms and are rebuilt at each stage
    rather than stored: a descriptor is (feature, aspect, subject) and all three are facts this state already
    holds, so a second copy of it on the state would be a second thing to keep in step with the handle. */
@@ -395,7 +378,10 @@ settle:
 }
 
 static const IdlStepDecl FSA_DECL = {
-    fsa_step, sizeof(FsAccessState), fsa_visit, fsa_release,
+    /* No release. This WAS fsa_visit's list a second time, ending in `started = 0` — which lowered the very
+       condition the visit reads, so the discharge that runs next walked away from a state holding all of it.
+       The declaration is the one list; the teardown reads it after the completion is stated. */
+    fsa_step, sizeof(FsAccessState), fsa_visit, NULL,
     "File System Access §2.3 the FileSystemHandle permission members", FSA_STEPS
 };
 

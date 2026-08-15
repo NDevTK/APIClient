@@ -99,7 +99,7 @@ typedef struct {
     lxb_dom_node_t *limit;    /* the container `cur` is a child of; NULL only for outerHTML's fictional parent */
     SerLevel       *stack;
     int             sp, scap;
-    char           *out;      /* the accumulator: malloc'd, because a fork gives each arm its own */
+    char           *out;      /* the accumulator: js_malloc'd, because a fork gives each arm its own copy */
     size_t          out_len, out_cap;
     /* §13.3's TWO ARGUMENTS. `shadow_roots` is step 4.2's list — an engine-built Array of ShadowRoot wrappers
        the DECLARATION converted (IDL_SEQUENCE_INTERFACE), so nothing of the page's is left on it and reading it
@@ -108,32 +108,45 @@ typedef struct {
     JSValue         shadow_roots;
 } FragSerState;
 
-static lxb_status_t ser_append(const lxb_char_t *data, size_t len, void *vctx)
+/* THE RUNTIME'S ALLOCATOR, BECAUSE THE DECLARATION'S IS. js_frag_ser_visit hands a forked arm a js_malloc'd
+   copy of this accumulator and the teardown discharges it with js_free, so growing it through the C library
+   would hand the runtime a block it never issued to free. That is also why the context is a PARAMETER: the
+   pair below is what lexbor's one-pointer callback carries, rather than a JSContext stored on a state whose
+   whole purpose is to be copied to a sibling and parked to the cold tier. */
+static void ser_append(JSContext *ctx, FragSerState *s, const lxb_char_t *data, size_t len)
 {
-    FragSerState *s = vctx;
-
     if (s->out_len + len + 1 > s->out_cap) {
         size_t want = s->out_cap ? s->out_cap * 2 : 256;
         char *n;
         while (want < s->out_len + len + 1) want *= 2;
-        n = realloc(s->out, want);
+        n = js_realloc(ctx, s->out, want);
         CHECK(n != NULL, "the HTML fragment serializer could not grow its accumulator");
         s->out = n;
         s->out_cap = want;
     }
     memcpy(s->out + s->out_len, data, len);
     s->out_len += len;
+}
+
+/* WHAT LEXBOR'S SERIALIZER IS HANDED — the accumulator and the runtime that owns it, as one context. */
+typedef struct { JSContext *ctx; FragSerState *s; } SerSink;
+
+static lxb_status_t ser_sink_cb(const lxb_char_t *data, size_t len, void *vctx)
+{
+    SerSink *k = vctx;
+
+    ser_append(k->ctx, k->s, data, len);
     return LXB_STATUS_OK;
 }
 
-static void ser_str(FragSerState *s, const char *lit)
+static void ser_str(JSContext *ctx, FragSerState *s, const char *lit)
 {
-    ser_append((const lxb_char_t *)lit, strlen(lit), s);
+    ser_append(ctx, s, (const lxb_char_t *)lit, strlen(lit));
 }
 
 /* `</name>`, which lexbor emits from a static function. A void element has none, and neither does anything
    that is not an element — the same two conditions lexbor's own ascent tests, and §13.3 step 5.2's own. */
-static void ser_close(FragSerState *s, lxb_dom_node_t *n)
+static void ser_close(JSContext *ctx, FragSerState *s, lxb_dom_node_t *n)
 {
     const lxb_char_t *name;
     size_t len = 0;
@@ -141,9 +154,9 @@ static void ser_close(FragSerState *s, lxb_dom_node_t *n)
     if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || lxb_html_node_is_void(n)) return;
     name = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &len);
     DCHECK(name != NULL, "an element in the tree has no qualified name to close");
-    ser_str(s, "</");
-    ser_append(name, len, s);
-    ser_str(s, ">");
+    ser_str(ctx, s, "</");
+    ser_append(ctx, s, name, len);
+    ser_str(ctx, s, ">");
 }
 
 /* HTML §13.3's TEXT CASE, WRITTEN HERE BECAUSE THE ALGORITHM DECIDES BY INTERFACE AND LEXBOR DECIDES BY
@@ -167,13 +180,13 @@ static bool ser_parent_is_raw_text(const lxb_dom_node_t *n)
            lxb_html_tree_node_is(p, LXB_TAG_PLAINTEXT) || lxb_html_tree_node_is(p, LXB_TAG_NOSCRIPT);
 }
 
-static void ser_text_node(FragSerState *s, lxb_dom_node_t *n)
+static void ser_text_node(JSContext *ctx, FragSerState *s, lxb_dom_node_t *n)
 {
     const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
     const lxb_char_t *d = cd->data.data;
     size_t len = cd->data.length, i, run = 0;
 
-    if (ser_parent_is_raw_text(n)) { ser_append(d, len, s); return; }
+    if (ser_parent_is_raw_text(n)) { ser_append(ctx, s, d, len); return; }
     for (i = 0; i < len; i++) {
         const char *rep = NULL;
         size_t skip = 1;
@@ -183,35 +196,36 @@ static void ser_text_node(FragSerState *s, lxb_dom_node_t *n)
         else if (d[i] == '>') rep = "&gt;";
         else if (d[i] == 0xC2 && i + 1 < len && d[i + 1] == 0xA0) { rep = "&nbsp;"; skip = 2; }  /* U+00A0 */
         if (!rep) { run++; continue; }
-        if (run) ser_append(d + i - run, run, s);
+        if (run) ser_append(ctx, s, d + i - run, run);
         run = 0;
-        ser_append((const lxb_char_t *)rep, strlen(rep), s);
+        ser_append(ctx, s, (const lxb_char_t *)rep, strlen(rep));
         i += skip - 1;
     }
-    if (run) ser_append(d + len - run, run, s);
+    if (run) ser_append(ctx, s, d + len - run, run);
 }
 
 /* §13.3 step 5.2's KIND SWITCH for ONE node — its start tag with its attributes, or its character data, or its
    comment/PI/doctype form. Lexbor's callback serializer is exactly this switch and nothing more: it emits the
    node itself and never descends, which is what makes it usable one node at a time. */
-static void ser_one_node(FragSerState *s, lxb_dom_node_t *n)
+static void ser_one_node(JSContext *ctx, FragSerState *s, lxb_dom_node_t *n)
 {
     if (n->type == LXB_DOM_NODE_TYPE_CDATA_SECTION) {
-        ser_text_node(s, n);   /* §13.3's Text case — see ser_text_node */
+        ser_text_node(ctx, s, n);   /* §13.3's Text case — see ser_text_node */
         return;
     }
     {
-        lxb_status_t status = lxb_html_serialize_cb(n, ser_append, s);
+        SerSink sink = { ctx, s };
+        lxb_status_t status = lxb_html_serialize_cb(n, ser_sink_cb, &sink);
         DCHECK(status == LXB_STATUS_OK, "lexbor refused to serialize a node kind this tree contains");
         (void)status;
     }
 }
 
-static void ser_push(FragSerState *s, lxb_dom_node_t *node, lxb_dom_node_t *limit, int kind)
+static void ser_push(JSContext *ctx, FragSerState *s, lxb_dom_node_t *node, lxb_dom_node_t *limit, int kind)
 {
     if (s->sp == s->scap) {
         int want = s->scap ? s->scap * 2 : 8;
-        SerLevel *n = realloc(s->stack, sizeof(SerLevel) * (size_t)want);
+        SerLevel *n = js_realloc(ctx, s->stack, sizeof(SerLevel) * (size_t)want);
         CHECK(n != NULL, "the HTML fragment serializer could not grow its level stack");
         s->stack = n;
         s->scap = want;
@@ -268,20 +282,20 @@ static bool ser_shadow_included(JSContext *ctx, const FragSerState *s, lxb_dom_n
    are for. Every attribute is the BOOLEAN spelling (`=""`) except slot assignment, which is enumerated. */
 static void ser_shadow_start_tag(JSContext *ctx, FragSerState *s, lxb_dom_node_t *shadow)
 {
-    ser_str(s, "<template shadowrootmode=\"");
-    ser_str(s, shadow_root_is_open(shadow) ? "open" : "closed");
-    ser_str(s, "\"");
-    if (shadow_root_flag(ctx, shadow, SHADOW_ROOT_DELEGATES_FOCUS)) ser_str(s, " shadowrootdelegatesfocus=\"\"");
-    if (shadow_root_flag(ctx, shadow, SHADOW_ROOT_SERIALIZABLE))    ser_str(s, " shadowrootserializable=\"\"");
-    if (shadow_root_slot_assignment_is_manual(ctx, shadow))         ser_str(s, " shadowrootslotassignment=\"manual\"");
-    if (shadow_root_flag(ctx, shadow, SHADOW_ROOT_CLONABLE))        ser_str(s, " shadowrootclonable=\"\"");
+    ser_str(ctx, s, "<template shadowrootmode=\"");
+    ser_str(ctx, s, shadow_root_is_open(shadow) ? "open" : "closed");
+    ser_str(ctx, s, "\"");
+    if (shadow_root_flag(ctx, shadow, SHADOW_ROOT_DELEGATES_FOCUS)) ser_str(ctx, s, " shadowrootdelegatesfocus=\"\"");
+    if (shadow_root_flag(ctx, shadow, SHADOW_ROOT_SERIALIZABLE))    ser_str(ctx, s, " shadowrootserializable=\"\"");
+    if (shadow_root_slot_assignment_is_manual(ctx, shadow))         ser_str(ctx, s, " shadowrootslotassignment=\"manual\"");
+    if (shadow_root_flag(ctx, shadow, SHADOW_ROOT_CLONABLE))        ser_str(ctx, s, " shadowrootclonable=\"\"");
     /* Step 4.2.9's `shouldAppendRegistryAttribute` is DECIDED here rather than absent: it asks whether the
        shadow root's custom element registry differs from its node document's, and this engine has exactly one
        registry — the document's — which shadow_root.c records by name as the reason `ShadowRootInit`'s
        `customElementRegistry` member does not exist. Both reads therefore answer the same global registry and
        step 4.2.9.2 returns false, so the attribute is never appended. It becomes a real read in the diff that
        makes a scoped registry attachable. */
-    ser_str(s, ">");
+    ser_str(ctx, s, ">");
 }
 
 /* ---- the machine ----------------------------------------------------------------------------------------- */
@@ -359,10 +373,10 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (!shadow->first_child) {
             /* Step 4.2.11's recursion over an empty shadow root is the empty string; the level would be
                pushed and popped with nothing between, so the close is written here instead. */
-            ser_str(s, "</template>");
+            ser_str(ctx, s, "</template>");
             return JS_STEP_YIELD;
         }
-        ser_push(s, s->cur, s->limit, SER_LEVEL_SHADOW);
+        ser_push(ctx, s, s->cur, s->limit, SER_LEVEL_SHADOW);
         s->limit = shadow;
         s->cur = shadow->first_child;
         hdr->stage = FRAGSER_EMIT;
@@ -384,7 +398,7 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
            what "serializes the CHILDREN of the node" means), so there is nothing to resume into and an
            exhausted stack IS the end of the walk. */
         if (!(s->cur == s->top && s->sp == 0))
-            ser_push(s, s->cur, s->limit, SER_LEVEL_ELEMENT);
+            ser_push(ctx, s, s->cur, s->limit, SER_LEVEL_ELEMENT);
         s->limit = container;
         s->cur = container->first_child;
         hdr->stage = s->cur ? FRAGSER_EMIT : FRAGSER_POP;
@@ -393,7 +407,7 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 
     case FRAGSER_EMIT:
         DCHECK(s->cur != NULL, "the fragment serializer resumed at step 5.2 with no child to append");
-        ser_one_node(s, s->cur);
+        ser_one_node(ctx, s, s->cur);
         /* §13.3 step 5.2: an element that serializes as void "continues on to the next child node at this
            point" — no recursion and no end tag — and nothing that is not an element has children to recurse
            into. Everything else reaches step 4 and then step 5 for itself. */
@@ -402,7 +416,7 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         return JS_STEP_YIELD;
 
     case FRAGSER_CLOSE:
-        ser_close(s, s->cur);
+        ser_close(ctx, s, s->cur);
         if (!s->limit) {
             DCHECK(s->sp == 0 && magic == FRAGMENT_SERIALIZE_SELF,
                    "a level with no container appeared inside the walk — only §8.5.5's fictional parent has "
@@ -427,7 +441,7 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (lv.kind == SER_LEVEL_SHADOW) {
             /* Step 4.2.12, and then step 5 for the host: its own light children follow its shadow tree. The
                host's step 4 has already run, which is why this resumes at ENTER and not at SHADOW. */
-            ser_str(s, "</template>");
+            ser_str(ctx, s, "</template>");
             hdr->stage = FRAGSER_ENTER;
         } else {
             hdr->stage = FRAGSER_CLOSE;
@@ -454,19 +468,10 @@ static void js_frag_ser_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->shadow_roots);
 }
 
-static void js_frag_ser_release(JSContext *ctx, void *st)
-{
-    FragSerState *s = st;
-
-    (void)ctx;   /* `shadow_roots` is a reference js_frag_ser_visit names; the declaration releases it */
-    free(s->out);
-    free(s->stack);
-    s->out = NULL;
-    s->stack = NULL;
-}
-
 static const IdlStepDecl FRAGMENT_SERIALIZER_STEP = {
-    js_frag_ser_step, sizeof(FragSerState), js_frag_ser_visit, js_frag_ser_release,
+    /* No release: the accumulator, the level stack and `shadow_roots` are all js_frag_ser_visit's, and the
+       teardown discharges that one list. */
+    js_frag_ser_step, sizeof(FragSerState), js_frag_ser_visit, NULL,
     "HTML §13.3 the HTML fragment serialization algorithm (§8.5.3 getHTML, §8.5.4 innerHTML getter, "
     "§8.5.5 outerHTML getter)",
     FRAGSER_STEPS

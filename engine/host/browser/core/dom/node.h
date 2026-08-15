@@ -141,9 +141,9 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
  *
  * A CALLER PERFORMS IT INSIDE ITS OWN MACHINE, which is what makes it parkable at every node of a subtree the
  * page chose the depth of: declare the six stages inside the caller's own stage block with
- * NODE_CLONE_ALGO_STAGES, embed a NodeCloneState, chain node_clone_visit_state / node_clone_release_state into
- * the caller's visit and release, and hand node_clone_run the base of that block. Stage identity is the LABEL,
- * so the list is expanded once per caller with that caller's own leading text and its own prefix.
+ * NODE_CLONE_ALGO_STAGES, embed a NodeCloneState, chain node_clone_visit_state into the caller's visit, and hand
+ * node_clone_run the base of that block. Stage identity is the LABEL, so the list is expanded once per caller
+ * with that caller's own leading text and its own prefix.
  *
  * THIS IS THE `parent`-NULL FORM. §4.4's step 4 ("if parent is non-null, then append copy to parent") is what
  * the walk does for every DESCENDANT; both callers of the entry are stated over a null parent and append the
@@ -203,9 +203,10 @@ void node_clone_start(JSStepHdr *hdr, NodeCloneState *s, lxb_dom_node_t *node, b
 /* ONE STAGE of it. JS_STEP_YIELD to rest, JS_STEP_ABRUPT having thrown; the finish sets `hdr->stage` to the
    caller's `after`, so a caller never tests for completion. */
 int  node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base);
-/* The caller's own visit and release chain into these — the level stack is this state's allocation. */
+/* The caller's own visit chains into this — the level stack is this state's allocation, and declaring it here
+   is the WHOLE of owning it: the fork copies it and the teardown discharges it through this one list, so a
+   caller has no release half to write and no second allocator to grow it with. */
 void node_clone_visit_state(JSContext *ctx, NodeCloneState *s, JSStepVisit *v);
-void node_clone_release_state(JSContext *ctx, NodeCloneState *s);
 /* An ELEMENT's interface is decided by its TAG — HTML's element-interface table, which is the html layer's
    knowledge. It registers the answer here; node_wrap asks it and stays the one place a wrapper is built. */
 void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el));

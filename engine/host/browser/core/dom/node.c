@@ -1649,31 +1649,21 @@ void node_clone_visit_state(JSContext *ctx, NodeCloneState *s, JSStepVisit *v)
     v->buf(ctx, (void **)&s->stack, sizeof(NodeCloneFrame) * (size_t)s->scap);
 }
 
-void node_clone_release_state(JSContext *ctx, NodeCloneState *s)
-{
-    (void)ctx;
-    free(s->stack);
-    s->stack = NULL;
-}
-
 static void node_clone_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     NodeCloneState *s = st;
     node_clone_visit_state(ctx, s, v);
 }
 
-static void node_clone_release(JSContext *ctx, void *st)
-{
-    NodeCloneState *s = st;
-    node_clone_release_state(ctx, s);
-}
-
-/* Leave this level for one below it, remembering the stage this one resumes at. */
-static void clone_push(NodeCloneState *s, int resume_stage)
+/* Leave this level for one below it, remembering the stage this one resumes at.
+   THE RUNTIME'S ALLOCATOR, BECAUSE THE DECLARATION'S IS: node_clone_visit_state declares this stack to the
+   fork, which copies it with js_malloc and whose teardown discharges it with js_free, so a stack grown with
+   the C library's realloc is one a forked arm hands to the wrong allocator. */
+static void clone_push(JSContext *ctx, NodeCloneState *s, int resume_stage)
 {
     if (s->sp == s->scap) {
         int want = s->scap ? s->scap * 2 : 4;
-        NodeCloneFrame *n = realloc(s->stack, sizeof(NodeCloneFrame) * (size_t)want);
+        NodeCloneFrame *n = js_realloc(ctx, s->stack, sizeof(NodeCloneFrame) * (size_t)want);
         CHECK(n != NULL, "cloneNode could not grow its level stack");
         s->stack = n;
         s->scap = want;
@@ -1851,7 +1841,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
             /* Leave this tree for the template's, on both sides at once. The frame is everything to come back
                to; the copy's fragment is its own private tree, made by clone_interface a moment ago. The
                template ELEMENT's own children are step 5's and still to come, so that is where it resumes. */
-            clone_push(s, base + NODE_CLONE_PHASE_CHILDREN);
+            clone_push(ctx, s, base + NODE_CLONE_PHASE_CHILDREN);
             s->root = content;
             s->src = content->first_child;
             s->dst = s->croot = clone_template_content(s->cnode);
@@ -1894,7 +1884,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
                 /* The second tree reached other than through child links, and the same descent the template
                    content level makes. `subtree` is TRUE here whatever the caller asked for, and the host
                    resumes at step 7: steps 5 and 6 are both behind it. */
-                clone_push(s, base + NODE_CLONE_PHASE_LEAVE);
+                clone_push(ctx, s, base + NODE_CLONE_PHASE_LEAVE);
                 s->root = from;
                 s->src = from->first_child;
                 s->dst = s->croot = shadow;
@@ -1993,7 +1983,8 @@ static int js_node_clone(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
 }
 
 static const IdlStepDecl NODE_CLONE_STEP = {
-    js_node_clone, sizeof(NodeCloneState), node_clone_visit, node_clone_release,
+    /* No release: the level stack is node_clone_visit_state's, and the teardown discharges that one list. */
+    js_node_clone, sizeof(NodeCloneState), node_clone_visit, NULL,
     "DOM §4.4 Node.cloneNode (over the `clone a node` concept)", NODE_CLONE_STEPS
 };
 
@@ -2218,14 +2209,6 @@ static void node_byid_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->buf(ctx, (void **)&s->id, s->id ? s->idlen + 1 : 0);
 }
 
-static void node_byid_release(JSContext *ctx, void *st)
-{
-    NodeByIdState *s = st;
-    (void)ctx;
-    free(s->id);
-    s->id = NULL;
-}
-
 static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                                      JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
@@ -2244,7 +2227,7 @@ static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, i
         id = concolic_name_cstr(ctx, argv[0]);   /* the declaration passes UNKNOWN input through as itself, so an unknown name denotes its SHAPE */
         if (!id) return JS_STEP_ABRUPT;
         s->idlen = strlen(id);
-        s->id = malloc(s->idlen + 1);
+        s->id = js_malloc(ctx, s->idlen + 1);
         CHECK(s->id != NULL, "getElementById could not copy the id it was asked for");
         memcpy(s->id, id, s->idlen + 1);
         JS_FreeCString(ctx, id);
@@ -2271,7 +2254,8 @@ static int js_node_get_element_by_id(JSContext *ctx, JSStepHdr *hdr, void *st, i
 }
 
 static const IdlStepDecl NODE_BYID_STEP = {
-    js_node_get_element_by_id, sizeof(NodeByIdState), node_byid_visit, node_byid_release,
+    /* No release: the id copy is node_byid_visit's, discharged with the rest. */
+    js_node_get_element_by_id, sizeof(NodeByIdState), node_byid_visit, NULL,
     "DOM §4.2.4 NonElementParentNode.getElementById", NODE_BYID_STEPS
 };
 
@@ -2487,13 +2471,15 @@ typedef struct {
     size_t  out_len, out_cap;
 } NodeTextState;
 
-static void node_text_append(NodeTextState *s, const char *data, size_t len)
+/* THE RUNTIME'S ALLOCATOR, BECAUSE THE DECLARATION'S IS — node_text_visit hands the sibling a js_malloc'd copy
+   of this accumulator and the teardown discharges it with js_free. */
+static void node_text_append(JSContext *ctx, NodeTextState *s, const char *data, size_t len)
 {
     if (s->out_len + len + 1 > s->out_cap) {
         size_t want = s->out_cap ? s->out_cap * 2 : 128;
         char *n;
         while (want < s->out_len + len + 1) want *= 2;
-        n = realloc(s->out, want);
+        n = js_realloc(ctx, s->out, want);
         CHECK(n != NULL, "textContent could not grow its accumulator");
         s->out = n;
         s->out_cap = want;
@@ -2508,14 +2494,6 @@ static void node_text_visit(JSContext *ctx, void *st, JSStepVisit *v)
     /* The cursors are Lexbor nodes, which belong to the document. The accumulator is this machine's own: two
        forked arms each append their own remaining text, so neither can share the other's buffer. */
     v->buf(ctx, (void **)&s->out, s->out_cap);
-}
-
-static void node_text_release(JSContext *ctx, void *st)
-{
-    NodeTextState *s = st;
-    (void)ctx;
-    free(s->out);
-    s->out = NULL;
 }
 
 static int js_node_get_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -2560,14 +2538,15 @@ static int js_node_get_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, in
     }
     if (s->cursor->type == LXB_DOM_NODE_TYPE_TEXT) {
         lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(s->cursor);
-        node_text_append(s, (const char *)cd->data.data, cd->data.length);
+        node_text_append(ctx, s, (const char *)cd->data.data, cd->data.length);
     }
     s->cursor = node_next_in(s->cursor, s->root);
     return JS_STEP_YIELD;
 }
 
 static const IdlStepDecl NODE_TEXT_STEP = {
-    js_node_get_text_content, sizeof(NodeTextState), node_text_visit, node_text_release,
+    /* No release: the accumulator is node_text_visit's, discharged with the rest. */
+    js_node_get_text_content, sizeof(NodeTextState), node_text_visit, NULL,
     "DOM §4.4 Node.textContent getter (over `get text content`)", NODE_TEXT_STEPS
 };
 

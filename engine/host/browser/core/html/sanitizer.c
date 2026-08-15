@@ -1755,11 +1755,13 @@ static JSValue js_san_pi(JSContext *ctx, JSValueConst this_val, int argc, JSValu
    own base and hands that base to `begin`, so neither file can renumber without the other. */
 enum { SANITIZE_STAGES(JS_STEP_STAGE_ENUM) };
 
-static void san_push(SanitizerWalk *w, lxb_dom_node_t *node, lxb_dom_node_t *root, int after)
+/* THE RUNTIME'S ALLOCATOR, BECAUSE THE DECLARATION'S IS: sanitizer_walk_visit declares this stack to the fork,
+   which copies it with js_malloc, and the holding machine's teardown discharges it with js_free. */
+static void san_push(JSContext *ctx, SanitizerWalk *w, lxb_dom_node_t *node, lxb_dom_node_t *root, int after)
 {
     if (w->sp == w->scap) {
         int want = w->scap ? w->scap * 2 : 8;
-        SanLevel *n = realloc(w->stack, sizeof(SanLevel) * (size_t)want);
+        SanLevel *n = js_realloc(ctx, w->stack, sizeof(SanLevel) * (size_t)want);
 
         CHECK(n != NULL, "the sanitizer walk could not grow its level stack");
         w->stack = n;
@@ -1792,15 +1794,6 @@ void sanitizer_walk_visit(JSContext *ctx, SanitizerWalk *w, JSStepVisit *v)
     /* The level stack is plain storage a forked arm must not share — each arm unwinds its own. The DOM
        pointers in it are per-flow COW nodes, which every arm reaches by the same address. */
     v->buf(ctx, (void **)&w->stack, sizeof(SanLevel) * (size_t)w->scap);
-}
-
-/* THE LEVEL STACK ALONE. `config` is a reference sanitizer_walk_visit names, so the machine that holds this
-   record discharges it through its own declaration; freeing it here as well would be the second list. */
-void sanitizer_walk_free_stack(SanitizerWalk *w)
-{
-    free(w->stack);
-    w->stack = NULL;
-    w->scap = w->sp = 0;
 }
 
 /* An element's name and namespace as §8.6.4's `elementName` — the two members of a SanitizerElementNamespace,
@@ -1975,7 +1968,7 @@ int sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w)
 
             DCHECK(t->content != NULL, "a <template> element has no template contents — §4.12.3 establishes "
                                        "them when the element is created");
-            san_push(w, w->cur, w->tree_root, SAN_AFTER_TEMPLATE);
+            san_push(ctx, w, w->cur, w->tree_root, SAN_AFTER_TEMPLATE);
             w->tree_root = &t->content->node;
             w->cur = t->content->node.first_child;
             hdr->stage = w->stage_base + SAN_CHILD;
@@ -1989,7 +1982,7 @@ int sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w)
         lxb_dom_node_t *shadow = shadow_root_of_element(ctx, lxb_dom_interface_element(w->cur));  /* 1.5.6 */
 
         if (shadow && shadow->first_child) {
-            san_push(w, w->cur, w->tree_root, SAN_AFTER_SHADOW);
+            san_push(ctx, w, w->cur, w->tree_root, SAN_AFTER_SHADOW);
             w->tree_root = shadow;
             w->cur = shadow->first_child;
             hdr->stage = w->stage_base + SAN_CHILD;
@@ -2096,7 +2089,7 @@ int sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w)
     }
 
     case SAN_DESCEND:                                                                /* step 1.5.10 */
-        san_push(w, w->cur, w->tree_root, SAN_AFTER_CHILDREN);
+        san_push(ctx, w, w->cur, w->tree_root, SAN_AFTER_CHILDREN);
         w->cur = w->cur->first_child;
         hdr->stage = w->stage_base + SAN_CHILD;
         return JS_STEP_YIELD;
@@ -2121,7 +2114,7 @@ int sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w)
 
             DCHECK(t->content != NULL, "a <template> element being removed has no template contents");
             if (t->content->node.first_child) {
-                san_push(w, n, w->dead_root, SAN_AFTER_TEMPLATE);
+                san_push(ctx, w, n, w->dead_root, SAN_AFTER_TEMPLATE);
                 w->dead_depth++;
                 w->dead_root = &t->content->node;
                 w->dead = t->content->node.first_child;
