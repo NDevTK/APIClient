@@ -227,19 +227,41 @@ if (NATIVE) {
   process.exit(0);
 }
 
-// The exports the bridge ccalls. Emscripten drops anything not named here, so a function missing from this
-// list is a runtime "no such symbol" in the extension rather than a link error — the list IS the ABI.
-/* AND AN ENTRY MISSING FROM IT IS AN ENTRY THAT DOES NOT EXIST, which is the excluded-translation-unit defect
-   one layer in: main.c COMPILES and LINKS a body nothing can reach, so every gate that builds the entry stays
-   green while the shipped ABI is short of it. `qjs_perform` and `qjs_host_answer_remote` — the peer's half of
-   the cross-instance seam, the only entries by which one instance is ASKED to perform another's operation —
-   were written, linked and dropped here: emscripten internalises what this list does not name, so the two-
-   instance driver's ccall failed on a missing symbol before it reached a single assertion of its own. */
+/* THE EXPORTS THE BRIDGE ccalls — and the previous sentence here ("emscripten drops anything not named") is
+   DELETED, because it is not the mechanism and stating a wrong one is how a check gets skipped as redundant.
+   `QJS_EXPORT` is `EMSCRIPTEN_KEEPALIVE`, which is `__attribute__((used))`, and EXPORT_KEEPALIVE defaults to 1
+   outside MINIMAL_RUNTIME — so an entry left off this list may well reach `Module` anyway, by the accident of a
+   default that another setting flips. AN ABI REACHED BY ACCIDENT IS NOT AN ABI: what this list decides is
+   `--export=` on wasm-ld and `Module._x` on purpose, and the entry that is only there when the toolchain feels
+   like it is the entry that vanishes in the build nobody re-checked. So the list is ENFORCED rather than
+   asserted about — `qjs_perform` and `qjs_host_answer_remote` (the peer's half of the cross-instance seam, the
+   only entries by which one instance is ASKED to perform another's operation) were written, linked and left
+   off it, and no gate said a word. */
 const QJS_ABI = ["qjs_init", "qjs_bundle_id", "qjs_begin", "qjs_step", "qjs_result", "qjs_teardown",
                  "qjs_pending", "qjs_chunks", "qjs_provide", "qjs_top_weight", "qjs_set_yield_floor",
                  "qjs_request_park", "qjs_emit_partial",
                  "qjs_host_requests", "qjs_host_answer", "qjs_host_notices", "qjs_route",
                  "qjs_perform", "qjs_host_answer_remote"];
+
+/* THE LIST IS THE ABI, SO THE ENTRY POINT AND THE LIST ARE ONE FACT AND ARE CHECKED AGAINST EACH OTHER. Both
+   directions are a real defect and neither has a symptom at build time: an entry main.c defines and this omits
+   is a capability the extension cannot call (or can, until a setting changes); a name here that main.c does not
+   define is `--export=` of a symbol that does not exist, which wasm-ld reports as an undefined export only
+   because ERROR_ON_UNDEFINED_SYMBOLS happens to be on. Read from the source rather than restated: `QJS_EXPORT`
+   is exactly the marker main.c puts on every ABI body. */
+{
+  const _mainSrc = readFileSync(join(HOST, "main.c"), "utf8");
+  const _defined = [...new Set([..._mainSrc.matchAll(/QJS_EXPORT\s+[\w \t*]+?\b(qjs_\w+)\s*\(/g)].map((m) => m[1]))];
+  const _missing = _defined.filter((f) => !QJS_ABI.includes(f));
+  const _phantom = QJS_ABI.filter((f) => !_defined.includes(f));
+  if (_missing.length || _phantom.length) {
+    console.error("[build] the ABI list and main.c's QJS_EXPORT entries disagree — the list IS the ABI, so a\n" +
+                  "[build] disagreement is either an entry nothing can call or an export of nothing:\n" +
+                  (_missing.length ? "[build]   defined in main.c, missing from QJS_ABI: " + _missing.join(", ") + "\n" : "") +
+                  (_phantom.length ? "[build]   named in QJS_ABI, defined nowhere:       " + _phantom.join(", ") + "\n" : ""));
+    process.exit(1);
+  }
+}
 
 /* COMPILE FLAGS AND LINK FLAGS ARE SEPARATED, and that separation is what lets both entries be verified.
    They used to be one list handed to one emcc invocation that compiled and linked together, which forced two
