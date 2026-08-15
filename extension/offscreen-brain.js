@@ -47,7 +47,7 @@ function swRpc(api) {
 // External fetches go through the single safeFetch (lib/safe-fetch.js, loaded
 // before this file): direct, GET only, cookies omitted, http(s) only. There is no
 // swFetch / SW relay any more — the offscreen document fetches cross-origin itself.
-// Credentialed same-origin requests (schema.verify) still use pageContextFetch.
+// Credentialed same-origin requests (schema.verify) still use the page-context relay (lib/schema.js).
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -223,7 +223,7 @@ function getDoc(documentId) {
       // ── identity / routing ──
       documentId: documentId,   // storage key (also a field)
       tabId: null,              // UI filter (network tab) + Chrome routing ONLY — never a key
-      frameId: 0,               // Chrome routing ONLY (tabs.sendMessage / pageContextFetch)
+      frameId: 0,               // Chrome routing ONLY (tabs.sendMessage / the page-context relay)
       origin: "",               // MessageSender principal (set at CONTENT_HTML) — NEVER url-derived
       url: "",                  // the document's OWN url (display + relative TARGET resolution)
       title: "",                // multi-tab log label
@@ -462,10 +462,15 @@ function _hexToBytes(hex) {
 // (VDD passive learning -- learnFromAstCallSite/learnFromRequest/learnFromResponse + stats + templated-
 // method matching -- extracted to lib/learn.js, loaded first. One problem per file.)
 
-function makePageFetchFn(tabId, documentId = null) {
-  // Bind the DOCUMENT (stable) so page-context discovery/probe reads hit the
-  // exact document's own origin/credentials. Routed by documentId only.
-  return (url, opts) => pageContextFetch(tabId, url, opts, documentId);
+/* THE LEARNING FETCH, BOUND TO ONE DOCUMENT. It binds the DOCUMENT (stable) so a page-context read hits the
+   exact document's own origin/credentials; routed by documentId only.
+   IT IS A GET FUNCTION AND CANNOT BE ANYTHING ELSE. It returned `(url, opts) => pageContextFetch(…opts…)`, so
+   `opts.method` decided the verb and discovery passed `POST` with `X-Http-Method-Override: GET` — a request
+   fired automatically by passive learning, which SECURITY.md §Network ("GET only") and CLAUDE.md §Attacker
+   sources ("a state-mutating request is NEVER fired to learn") both forbid. There is now no parameter in which
+   a caller could express a method: the second argument is HEADERS. */
+function makePageGetFn(tabId, documentId = null) {
+  return (url, headers) => pageContextGet(tabId, url, headers, documentId);
 }
 
 // ─── Discovery Document Fetching ─────────────────────────────────────────────

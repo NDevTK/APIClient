@@ -1,13 +1,17 @@
 // lib/discovery-probe.js — Active API-documentation discovery: diff discovery docs and fetch
 // OpenAPI/Google Discovery at well-known paths. Extracted from the offscreen-brain.js monolith (one problem
-// per file); loaded before it, functions resolve their callers (makePageFetchFn, extractInterfaceName,
+// per file); loaded before it, functions resolve their callers (makePageGetFn, extractInterfaceName,
 // generateSchemaFromJson, safeFetch) at call-time.
 //
 // ERROR-BASED SCHEMA PROBING IS NO LONGER HERE. It moved to engine/host/solver/req2proto.c, which reads the
 // `google.rpc.Status` envelope off replies the engine already holds instead of firing an intentionally
 // malformed POST to provoke one — CLAUDE.md §Architecture (the semantics are the engine's) and §Attacker
 // sources (a state-mutating request is NEVER fired to learn). What is LEFT in this file is the document
-// FETCH, which is a GET of a published URL and stays JS until discovery.c exists.
+// FETCH, which is a GET of a published URL and stays JS until discovery.c exists — and it is a GET
+// STRUCTURALLY now: a candidate is `{url, headers}` with no method field, and the relay entry this file can
+// reach (`pageContextGet`) has no method parameter. One candidate used to be a POST carrying
+// `X-Http-Method-Override: GET`, issued automatically by passive learning, which is the same rule this header
+// already cites being broken by a parameter rather than by a missing check.
 
 // ─── Discovery Document Diffing ──────────────────────────────────────────────
 
@@ -116,9 +120,12 @@ async function fetchDiscoveryForService(
   seedUrl,
 ) {
   const tab = _docForLearning(documentId);
-  const tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing (makePageFetchFn/notifyPopup) — derived from the doc
+  const tabId = (tab && tab.tabId != null) ? tab.tabId : null; // Chrome routing (makePageGetFn/notifyPopup) — derived from the doc
 
-  const fetchFn = makePageFetchFn(tabId, documentId);
+  /* A GET FUNCTION, AND THERE IS NO PARAMETER HERE IN WHICH TO ASK FOR ANYTHING ELSE — the candidate carries a
+     URL and headers, and the relay's learning entry (lib/schema.js `pageContextGet`) takes exactly those. This
+     loop used to hand the relay a `method` off each candidate, one of which was a POST. */
+  const getFn = makePageGetFn(tabId, documentId);
   const triedKeys = new Set();
 
   // Build a deduplicated candidate list across all keys
@@ -132,9 +139,9 @@ async function fetchDiscoveryForService(
     if (apiKey) triedKeys.add(apiKey);
     const candidates = buildDiscoveryUrls(hostname, apiKey);
 
-    for (const { url, headers, method } of candidates) {
+    for (const { url, headers } of candidates) {
       try {
-        const resp = await fetchFn(url, { method: method || "GET", headers });
+        const resp = await getFn(url, headers);
 
         if (resp.error || !resp.ok) continue;
 
@@ -163,9 +170,13 @@ async function fetchDiscoveryForService(
           if (existingEntry?.doc) {
             var diff = _diffDiscoveryDocs(existingEntry.doc, unifiedDoc);
             if (diff) {
+              /* THE WHOLE HISTORY. `if (dcList.length > 20) dcList = dcList.slice(-20)` stood here and dropped
+                 the OLDEST change record once a service had accumulated twenty — §NO BOUNDS: a cap truncates
+                 distinct work, and the first time an API's surface changed is exactly the record a reader
+                 wants. The natural size is the number of times this service's document actually changed
+                 between two fetches, which is small and is not ours to decide. */
               var dcList = globalStore.discoveryChanges.get(service) || [];
               dcList.push({ timestamp: Date.now(), fetchUrl: url, changes: diff });
-              if (dcList.length > 20) dcList = dcList.slice(-20);
               globalStore.discoveryChanges.set(service, dcList);
               console.debug("[Discovery:diff] %d changes detected for %s", diff.length, service);
             }
@@ -178,7 +189,6 @@ async function fetchDiscoveryForService(
             status: "found",
             doc: mergedDoc,
             url,
-            method: method || "GET",
             apiKey: apiKey || null,
             fetchedAt: Date.now(),
             pageUrls: _prevDiscovery?.pageUrls || new Set(),
@@ -200,11 +210,14 @@ async function fetchDiscoveryForService(
   // (engine/host/solver/req2proto.c): it reads the `google.rpc.Status` envelope off replies the engine already
   // holds, so a second implementation in this zone would be the JS orchestration layer CLAUDE.md §Architecture
   // says to delete — and this one additionally FIRED the probe, which §Attacker sources forbids doing to learn.
+  /* NO TIMESTAMP ON THE FAILURE. `_failedAt` was here and response-decode.js read it as a 300-second COOLDOWN
+     before this service could be asked again — a clock deciding when work may happen, which §NO BOUNDS bans by
+     name. What the record keeps is the FACT (this key set found nothing) and WHICH KEYS produced it, which is
+     what makes a later attempt with a newly-learned key a different question rather than the same one. */
   var _prevDiscoveryNF = tab.discoveryDocs.get(service);
   tab.discoveryDocs.set(service, {
     status: "not_found",
     _triedKeys: triedKeys,
-    _failedAt: Date.now(),
     pageUrls: _prevDiscoveryNF?.pageUrls || new Set(),
     frameOrigins: _prevDiscoveryNF?.frameOrigins || new Set(),
   });

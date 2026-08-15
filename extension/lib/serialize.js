@@ -139,7 +139,6 @@ function serializeTabData(tab) {
       mergedDiscovery[k] = {
         status: v.status,
         url: v.url,
-        method: v.method,
         apiKey: v.apiKey || null,
         fetchedAt: v.fetchedAt,
         doc: v.doc || null,
@@ -163,7 +162,6 @@ function serializeTabData(tab) {
       mergedDiscovery[k] = {
         status: v.status,
         url: v.url,
-        method: v.method,
         apiKey: v.apiKey || null,
         fetchedAt: v.fetchedAt,
         doc: v.doc || null,

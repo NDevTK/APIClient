@@ -1,7 +1,7 @@
 // lib/send.js — Send-panel replay backend: resolve an endpoint's request schema, coerce the form field values
 // to their declared types, and EXECUTE the request in the target page's context (PAGE_FETCH relay -- cookies +
 // session state attached). Extracted from the offscreen-brain.js monolith (one problem per file); loaded before
-// it, resolves the encode fns (lib/encode.js) + makePageFetchFn at call-time. The manual testing workbench.
+// it, resolves the encode fns (lib/encode.js) + pageContextSend at call-time. The manual testing workbench.
 
 function resolveEndpointSchema(endpointKey, service, methodId) {
   // GLOBAL — endpoints/discovery/probes live in the cumulative store keyed by
@@ -265,7 +265,7 @@ function coerceValue(value, type) {
 
 /**
  * Execute a request from the Send panel.
- * Encodes form data, sends via pageContextFetch, decodes response.
+ * Encodes form data, sends via pageContextSend, decodes response.
  */
 async function executeSendRequest(documentId, msg) {
   const startTime = Date.now();
@@ -295,7 +295,7 @@ async function executeSendRequest(documentId, msg) {
 
   // API key: user override → endpoint → service keys → discovery doc key
   const tab = _docForLearning(documentId);
-  const tabId = (tab && tab.tabId != null) ? tab.tabId : msg.tabId; // Chrome routing for pageContextFetch — the doc's tab; fall back to msg.tabId for cross-tab replay
+  const tabId = (tab && tab.tabId != null) ? tab.tabId : msg.tabId; // Chrome routing for pageContextSend — the doc's tab; fall back to msg.tabId for cross-tab replay
   const epKey = msg.endpointKey;
   const ep = epKey ? tab.endpoints.get(epKey) : null;
   let apiKey = null;
@@ -465,7 +465,7 @@ async function executeSendRequest(documentId, msg) {
   // Send request via page context (session-aware)
   let resp;
   try {
-    resp = await pageContextFetch(
+    resp = await pageContextSend(
       tabId,
       url,
       {

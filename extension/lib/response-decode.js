@@ -510,11 +510,24 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     }
   }
 
-  // Automatic background discovery — skip for boring fetches. Probing
-  // /.well-known/openapi.json on a CDN is wasted traffic.
-  const notFoundCooldown = preLearnDiscovery?.status === "not_found" &&
-    preLearnDiscovery._failedAt && (Date.now() - preLearnDiscovery._failedAt < 300000);
-  if (!_isBoringFetch && !notFoundCooldown && (!preLearnDiscovery || preLearnDiscovery.status === "not_found")) {
+  /* AUTOMATIC BACKGROUND DISCOVERY — skip for boring fetches (probing /.well-known/openapi.json on a CDN is
+     wasted traffic).
+
+     THE 300-SECOND COOLDOWN IS DELETED. `preLearnDiscovery._failedAt && Date.now() - _failedAt < 300000`
+     stood in this condition and suppressed every discovery attempt for five minutes after one came up empty.
+     §NO BOUNDS names the shape: "Never a depth/step/TIME/run/memory/recursion cap … Only EMITTED OUTPUT —
+     never identity — proves a flow is done." A clock deciding when a service may be asked again is a bound in
+     both directions — it suppresses an attempt that would now succeed (an API key learned two seconds later
+     unlocks documents the first sweep could not read) and it re-fires an identical sweep once the timer
+     expires. `_failedAt` went with it; nothing else read it.
+
+     WHAT REMAINS IS NOT A BOUND. `!preLearnDiscovery || status === "not_found"` is §Attacker sources'
+     "one-per-endpoint (no method is universally safe …), never a blind sweep": a service whose document is
+     already `found` has nothing to re-ask, and one that is `pending` has the same GETs in flight this instant.
+     A `not_found` service is asked AGAIN precisely because the second ask is a DIFFERENT request — the key set
+     below has grown since the first, and a candidate carrying a key the page had not yet used is a URL that
+     has never been fetched. */
+  if (!_isBoringFetch && (!preLearnDiscovery || preLearnDiscovery.status === "not_found")) {
     const discoveryStatus = tab.discoveryDocs.get(service);
     if (discoveryStatus) {
       discoveryStatus.status = "pending";

@@ -85,6 +85,21 @@ There is no raw `fetch` on any analyzer path. `safeFetch` guarantees, in one aud
 A cross-origin script/source-map uses the **page's** origin, never the asset's own host (gstatic.com
 JS in google.com acts as google.com) — exactly what the principal encodes.
 
+**`pageContextFetch` carries the GET-only rule in its SHAPE, because a check could not live at the far end.**
+The relay ends in `content.js handlePageFetch`, which takes `msg.method` verbatim — and content.js is an
+UNTRUSTED zone, so a method check written there checks nothing. The trusted sender is the only place the rule
+can hold, and a single entry taking `opts.method` cannot hold it either: the two callers are different
+operations (discovery LEARNS and may never mutate; the popup's Send REPLAYS A REQUEST THE USER TYPED, any
+method by definition), so one shared parameter degenerates into whatever each caller passes. It did: discovery
+sent `method:"POST"` with `X-Http-Method-Override: GET` — the documented trick for a service that 405s a
+GET — fired automatically by passive learning with no user action, against both this section's "GET only" and
+CLAUDE.md's "a state-mutating request is NEVER fired to learn". So there are **two entries** (`lib/schema.js`):
+`pageContextGet(tabId, url, headers, documentId)` for learning, which has **no method parameter at all**, and
+`pageContextSend` for the popup's manual replay, where the human chose the method. A discovery candidate is
+correspondingly `{url, headers}` with no method field. The rule is structural — there is no place to express a
+POST — which is the same shape `req2proto.c` has (no entry that issues a request) rather than a check someone
+has to remember.
+
 ## The QuickJS/WASM sandbox is attacker-controlled
 
 The bundle runs inside QuickJS (WASM linear memory), reaching the host only through fixed edges.

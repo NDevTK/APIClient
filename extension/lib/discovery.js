@@ -1,12 +1,21 @@
 // Discovery document fetcher and parser.
 // Tries multiple URL patterns and auth strategies to locate
-// the REST discovery document for a given Google API service.
+// the REST discovery document for a given API service.
+//
+// EVERY CANDIDATE IS A GET, AND A CANDIDATE HAS NO FIELD IN WHICH TO SAY OTHERWISE.
+// One of them used to be `{method:"POST", headers:{"X-Http-Method-Override":"GET"}}` — the documented trick
+// for prising a discovery document out of a service that 405s a plain GET — and `fetchDiscoveryForService`
+// issued it through the page-context relay, reached automatically from response-decode.js's passive learning
+// with no user action. SECURITY.md §Network states the rule ("GET only … POST/PUT/DELETE endpoints are
+// RECORDED by forced exec, never issued") and CLAUDE.md §Attacker sources states it again ("a state-mutating
+// request … is NEVER fired to learn"); a `method` on a candidate is the parameter that let a caller break
+// both. The record is now `{url, headers}` and lib/schema.js's learning entry (`pageContextGet`) takes
+// headers, not options — so there is no longer a place to express a POST rather than a check against one.
 //
 // Strategies from the research:
 //  - Plain GET (public APIs)
 //  - ?labels=PANTHEON (visibility label expansion, "Decoding Google" article)
 //  - With API key in URL param or X-Goog-Api-Key header
-//  - POST + X-Http-Method-Override: GET (bypasses 405 on some services like youtubei)
 //  - Staging sandbox variant (staging-<svc>.sandbox.googleapis.com)
 //  - clients6.google.com variant
 
@@ -14,7 +23,7 @@
  * Build candidate discovery URLs for a given hostname.
  * @param {string} hostname - e.g. "people-pa.googleapis.com"
  * @param {string|null} apiKey
- * @returns {Array<{url: string, headers: object, method: string}>}
+ * @returns {Array<{url: string, headers: object}>}
  */
 function buildDiscoveryUrls(hostname, apiKey) {
   const candidates = [];
@@ -34,11 +43,7 @@ function buildDiscoveryUrls(hostname, apiKey) {
   ];
 
   for (const path of genericPaths) {
-    candidates.push({
-      url: `https://${hostname}${path}#_internal_probe`,
-      headers: {},
-      method: "GET",
-    });
+    candidates.push({ url: `https://${hostname}${path}#_internal_probe`, headers: {} });
   }
 
   // 2. Google-Specific Patterns
@@ -64,49 +69,22 @@ function buildDiscoveryUrls(hostname, apiKey) {
   for (const host of hosts) {
     const base = `https://${host}/$discovery/rest`;
 
-    // Plain GET
-    candidates.push({
-      url: `${base}#_internal_probe`,
-      headers: {},
-      method: "GET",
-    });
+    // Plain
+    candidates.push({ url: `${base}#_internal_probe`, headers: {} });
 
     // Visibility label expansion
-    candidates.push({
-      url: `${base}?labels=PANTHEON#_internal_probe`,
-      headers: {},
-      method: "GET",
-    });
+    candidates.push({ url: `${base}?labels=PANTHEON#_internal_probe`, headers: {} });
 
     // Versions
     for (const ver of versions) {
-      candidates.push({
-        url: `${base}?version=${ver}#_internal_probe`,
-        headers: {},
-        method: "GET",
-      });
+      candidates.push({ url: `${base}?version=${ver}#_internal_probe`, headers: {} });
     }
 
     // With API key
     if (apiKey) {
-      candidates.push({
-        url: `${base}?key=${apiKey}#_internal_probe`,
-        headers: {},
-        method: "GET",
-      });
-      candidates.push({
-        url: `${base}#_internal_probe`,
-        headers: { "X-Goog-Api-Key": apiKey },
-        method: "GET",
-      });
+      candidates.push({ url: `${base}?key=${apiKey}#_internal_probe`, headers: {} });
+      candidates.push({ url: `${base}#_internal_probe`, headers: { "X-Goog-Api-Key": apiKey } });
     }
-
-    // POST override
-    candidates.push({
-      url: `${base}#_internal_probe`,
-      headers: { "X-Http-Method-Override": "GET" },
-      method: "POST",
-    });
   }
 
   return candidates;
@@ -267,21 +245,10 @@ function resolveDiscoverySchema(doc, schemaName) {
   return fields;
 }
 
-/**
- * Map a single discovery document property to a unified field descriptor.
- *
- * Iterative driver — same queue and step functions as
- * resolveDiscoverySchema. The entry-point pre-allocates the root
- * field shell, seeds the queue with a PROP frame targeting it, and
- * drains the queue before returning.
- */
-function mapDiscoveryProperty(doc, name, prop, requiredList) {
-  var root = _buildDiscoveryFieldShell(name, prop, requiredList);
-  var queue = [{ kind: "PROP", doc: doc, field: root, prop: prop,
-                  visited: new Set() }];
-  _drainDiscoveryQueue(queue);
-  return root;
-}
+/* `mapDiscoveryProperty` DELETED — it mapped one discovery property to a field descriptor through the same
+   queue `resolveDiscoverySchema` drives, and NOTHING CALLED IT: not this file, not the popup, not send.js.
+   A public-looking entry point with no caller reads as a capability the surface has, and the next reader
+   builds on it. The queue and its two step functions below have a live caller and stay. */
 
 function _buildDiscoveryFieldShell(name, prop, requiredList) {
   var isRequired = (requiredList || []).indexOf(name) >= 0;
