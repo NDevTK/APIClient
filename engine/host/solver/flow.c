@@ -276,3 +276,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
 }
 
 int flow_count(void) { return g_flows_n; }
+
+int flow_is_member(const Flow *f) {
+    for (int i = 0; i < g_flows_n; i++) if (g_flows[i] == f) return 1;
+    return 0;
+}

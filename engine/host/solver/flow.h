@@ -169,6 +169,10 @@ void  flow_age_running(long units); /* CPU burned this step without emitting */
 void  flow_remove(JSContext *ctx, Flow *f);
 
 int   flow_count(void);
+/* IS THIS POINTER STILL A MEMBER OF THE FRONTIER? Pure and side-effect-free, so a DCHECK may ask it. A Flow* is
+   held across a return to the host (engine.c's g_sess_cur) and across a switch-out, and nothing else can say
+   whether the thing it names is still there — a removed flow is freed, so the next read is of freed memory. */
+int   flow_is_member(const Flow *f);
 /* The i'th flow in registry order, or NULL past the end — a WALK over the frontier's members, which is what a
    register living on the flows needs. flow_best answers which one to RUN; this answers who exists. */
 Flow *flow_at(int i);

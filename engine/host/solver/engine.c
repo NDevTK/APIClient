@@ -886,9 +886,15 @@ void engine_queue_javascript_url(const char *body) { engine_queue(body, DYN_JAVA
    only thing that ever parked it. A count cannot bound a slice when the work between two suspend points is
    ~78ms; only the clock can. Reading it per consultation is the point — a stride would reintroduce exactly the
    count this replaces, and at any stride worth having the same five seconds fit inside it. */
+/* AND THE LINE IT DESCRIBES WAS THE COUNT. The paragraph above was written when the clock replaced
+   `(++g_qtick % FLOW_QUANTUM) == 0`; the tree this file now lives in was rebuilt from a restore point that
+   carried the prose and not the code, so the comment was accurate about §scheduler and wrong about the line
+   under it — authoritative-sounding text over the banned counter, which is the failure mode a stale DFAIL has.
+   The slice's start is set by engine_sched_step, the one place that knows when a slice begins, and the hook
+   already reads the clock on every consultation for the gap census below, so asking it costs nothing. */
 static int64_t engine_now_ms(void);   /* the gap clock below; defined with the session */
-static unsigned g_qtick = 0;
-#define FLOW_QUANTUM 64
+static int64_t g_slice_start = 0;
+static void engine_slice_begin(void) { g_slice_start = engine_now_ms(); }
 static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static int g_outranked = 0;
 /* SUSPEND POINTS REACHED — every call to this hook IS one, which is the number the seam assertion needs and
    the one quickjs's counters do not give. g_flow_preempt_requested is incremented only where the hook returns
@@ -924,7 +930,10 @@ static int preempt_hook(int kind) {
        only asked between steps. Deciding this by weight would re-enter it immediately and spin. */
     if (cur && flow_blocked(cur)) return 1;
     if (g_outranked) return 1;                        /* value yield */
-    return (++g_qtick % FLOW_QUANTUM) == 0;           /* (2) quantum floor */
+    /* (2) COOPERATIVE-QUANTUM floor — thread-sharing, not value, and measured on the clock the slice is bounded
+       by. Nothing is dropped, starved or reordered across it: the flow parks and the SAME flow resumes
+       byte-identically unless the WFQ says otherwise. */
+    return now - g_slice_start >= ENGINE_QUANTUM_MS;
 }
 
 /* Advance flow `f` by up to one quantum. Returns 1 when the flow has FINISHED all its scripts + lazy chunks,
@@ -1385,7 +1394,18 @@ int engine_sched_step(void) {
     Flow *cur = g_sess_cur;
     int64_t deadline = engine_now_ms() + ENGINE_QUANTUM_MS;
     int owed = 0;   /* consecutive picks that could not progress; == flow_count() means every member is waiting */
+    engine_slice_begin();   /* the hook's floor measures THIS slice, so it starts when the slice does */
     DCHECK(g_sess_live, "engine_sched_step with no live session");
+    /* THE FLOW CARRIED ACROSS A QUANTUM BOUNDARY IS STILL A MEMBER OF THE FRONTIER. §scheduler's razor says the
+       cooperative yield resumes "the SAME top flow on the byte-identical frontier", and the whole of what makes
+       that true here is a raw `Flow *` held in a static across a RETURN TO THE HOST — during which the host
+       routes records, provides replies and answers requests. If any of those ever removed a flow, this pointer
+       would be read (`best != cur`, then flow_switch_out) after its free, and the corruption would look like a
+       scheduling bug rather than a lifetime one. Asserted where the pointer is picked back up, which is the one
+       place the claim is made. */
+    DCHECK(cur == NULL || flow_is_member(cur),
+           "the flow this quantum resumes is no longer in the frontier — it was removed while the scheduler was "
+           "returned to the host, so the resume is neither the same flow nor a byte-identical frontier");
     for (;;) {
         Flow *best = flow_best();           /* WFQ: highest value-of-information — a fresh fork (UCB) can preempt */
         if (!best) break;
