@@ -1683,12 +1683,15 @@ static void clone_push(JSContext *ctx, NodeCloneState *s, int resume_stage)
    markup, which is exactly what this did before the case was added: `<template><b>tc</b></template>` cloned to
    `<template></template>` and the page got an empty one with no error anywhere. §4.4 states the contents are
    cloned too. A shallow clone of a template already HAS its own empty fragment, because lexbor's
-   clone_interface builds the template interface, so both sides have somewhere to go. */
-static lxb_dom_node_t *clone_template_content(lxb_dom_node_t *n)
+   clone_interface builds the template interface, so both sides have somewhere to go.
+   EXPORTED, because a second tree walk needed the same question: core/html/tree_construction.c copies a
+   partial parse and has to descend into the same second tree for the same reason. Two spellings of "where a
+   template's markup actually is" is how one of them silently stops covering it. */
+lxb_dom_node_t *node_template_content(const lxb_dom_node_t *n)
 {
     lxb_html_template_element_t *t;
     if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || !lxb_html_tree_node_is(n, LXB_TAG_TEMPLATE)) return NULL;
-    t = lxb_html_interface_template(n);
+    t = lxb_html_interface_template((lxb_dom_node_t *)(uintptr_t)n);
     return t->content ? &t->content->node : NULL;
 }
 
@@ -1828,7 +1831,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
 
     if (phase == NODE_CLONE_PHASE_TEMPLATE) {
         /* HTML §4.12.3's cloning steps, step 1: "If subtree is false, then return." */
-        lxb_dom_node_t *content = s->deep ? clone_template_content(s->src) : NULL;
+        lxb_dom_node_t *content = s->deep ? node_template_content(s->src) : NULL;
         /* STEP 3 IS EVERY ELEMENT'S CLONING STEPS AND NOT ONLY `<template>`'s. HTML §4.12.1 states another
            pair on this same step — "the cloning steps for script elements given node, copy, and subtree are to
            set copy's already started to node's already started" — and it is not bookkeeping: a script the
@@ -1844,7 +1847,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
             clone_push(ctx, s, base + NODE_CLONE_PHASE_CHILDREN);
             s->root = content;
             s->src = content->first_child;
-            s->dst = s->croot = clone_template_content(s->cnode);
+            s->dst = s->croot = node_template_content(s->cnode);
             s->deep = true;         /* §4.12.3: "subtree set to true" for every content child */
             DCHECK(s->dst != NULL, "a cloned <template> has no content fragment to copy into — lexbor's "
                                    "clone_interface built something other than a template interface");

@@ -553,56 +553,79 @@ static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
     sanitizer_walk_visit(ctx, &s->san, v);
 }
 
-/* THE ONE CAPABILITY LEFT, AND ITS NAME. Everything else this machine holds between two FRAG_FEED steps is
-   already engine-owned and already parks: the markup is `html`, the position in it is `off`, the placement is
-   `where`/`anchor`, the partial tree is `frag` (which frag_release now owns — see there), and frag_visit
-   declares the references. What does not park is `parser` — and the sentence the fork prints is the
-   specification of what to build, because the reader of a @WHY is standing at the clone with nothing else to
-   go on.
+/* THE TWO CAPABILITIES LEFT, AND THEIR NAMES. Between two FRAG_FEED steps the markup is `html`, the position
+   in it is `off`, the placement is `where`/`anchor` and frag_visit declares the references — all of that parks
+   already. What does not is `parser`, and the sentence the fork prints is the specification of what to build,
+   because the reader of a @WHY is standing at the clone with nothing else to go on.
+
+   AND THE SECOND ONE WAS SAYING NOTHING AT ALL, which is worse than the first. This predicate tested `parser`
+   and only `parser`, so the instant the feed ended and the parser was destroyed the machine reported itself
+   FORKABLE — while still OWNING the whole tree the parse had produced (`frag`, deep-destroyed by frag_release,
+   with `node` the cursor into it and §8.6.4's sanitizer walk standing inside it) and, for §8.5.5 step 5, an
+   `own_context` element that is in no tree and that frag_release also destroys. Neither is in frag_visit,
+   because JSStepVisit has no operation for a private DOM tree — so a fork taken at a FRAG_PLACE or FRAG_CLEAR
+   or SAN_* rest point handed two arms ONE tree: both would place the same nodes into their own documents and
+   both frag_releases would destroy it. Those rest points are reachable, because the placement's §4.2.3
+   insertion steps run page code (a custom element's connectedCallback), which is where a concolic branch
+   forks. Nothing said so, and a fork that silently shares an owned tree is precisely the corruption a fork
+   abort exists to prevent — so this now answers for the whole machine and not for one of its fields.
    IT IS ASKED AT THE FORK, and it used to be a DCHECK inside frag_visit instead, whose comment sent the next
    reader to "give the parser a real ownership declaration" if it ever fired. That instruction was wrong twice
    over: `visit` now has three consumers, so the assert fires on a TEARDOWN where nothing is being cloned, and
    no ownership declaration would have helped there because a tokenizer has nothing to declare. A machine must
    never learn which consumer is visiting it; this is how it answers the fork alone.
 
-   AND THE SENTENCE IT PRINTED WAS WRONG ABOUT WHAT TO BUILD, which is the failure mode a @WHY has: it stays
-   accurate about the goal and goes wrong about THIS tree, so it reads as authoritative while sending the next
-   reader to write the wrong thing. It said to copy "the partially built fragment and its TEMPORARY DOCUMENT".
-   There is no such unit. lxb_html_parse_fragment_chunk_begin builds the temporary document with
-   lxb_html_document_interface_create(document), and lxb_dom_document_init with a non-NULL owner INHERITS
-   mraw, text, tags, attrs, ns, prefix, css and parser from the document it was given and sets
-   node.owner_document to it — so the temporary document is allocated INSIDE the real document's arena, every
-   node the parse builds belongs to the REAL document (which is what makes the placement legal with no §4.5
-   adopt, and which frag_step asserts at the parse boundary), and every custom tag name and attribute name the
-   parse interns goes into the REAL document's hashes. A "copy of the temporary document" would therefore be a
-   second partial subtree in the SAME shared arena, and what the clone actually needs is that subtree plus a
-   node->node map to remap the tree builder's arrays onto it.
-   WHAT THE MESSAGE SAYS NOW IS ORDERED, because the two halves are not equally reachable and the order decides
-   which one is written first. See the header above frag_step for the rest of the ordering. */
+   THE FIRST OF THE TWO HALVES IS BUILT, AND THE MESSAGE NO LONGER ASKS FOR IT. That is not bookkeeping: a
+   @WHY's failure mode is that it stays accurate about the SPEC and goes wrong about THIS tree, so a sentence
+   still naming the tree-builder copy would read as authoritative while sending the next reader to write
+   core/html/tree_construction.c a second time. This message has already been wrong that way once — it said to
+   copy "the partially built fragment and its TEMPORARY DOCUMENT", and there is no such unit, because
+   lxb_dom_document_init with a non-NULL owner inherits the real document's arenas and hashes and stamps every
+   parsed node with the REAL document. What the fork needs is the SUBTREE plus a node->node map to move the tree
+   builder's arrays onto it, which is what that component now is.
+   WHAT IS LEFT IS ORDERED, and the two clauses below are in that order: the private-tree declaration first,
+   because it is the one a fork reaches TODAY and the one whose clone half is already written, and §13.2.5's
+   tokenizer second. See the header above frag_step for the rest of the ordering. */
 static const char *frag_unforkable(const void *st)
 {
-    return ((const FragState *)st)->parser
-         ? "a fragment parse cannot be forked mid-parse — BUILD THE TREE-BUILDER COPY FIRST and then the "
-           "tokenizer's. (1) lxb_html_tree: deep-copy the partial subtree under `frag` into the same document "
-           "arena, building a node->node map, then copy mode, original_mode, open_elements, active_formatting, "
-           "template_insertion_modes, pending_table, form, fragment, foster_parenting, frameset_ok and "
-           "scripting, remapping every node pointer through the map. Every one of those is reachable: "
-           "lxb_html_tree is a public struct and all 26 insertion modes are declared in tree/insertion_mode.h, "
-           "so this half needs no change to lexbor — which cannot be changed, being a pinned pristine clone "
-           "engine/build.mjs re-clones. (2) lxb_html_tokenizer: state and state_return, the start/pos/end temp "
-           "buffer, the begin/last/markup/temp cursors — which point into THIS machine's `html`, and frag_visit "
-           "hands the sibling a COPY of that buffer, so they are rebased by offset and not copied — the token "
-           "under construction with its dobj_token/dobj_token_attr pools and mraw temp strings, the entity SBST "
-           "cursor, and the `tree` back-pointer its own header calls a leak abstraction (foreign-content and "
-           "RCDATA/RAWTEXT tokenization read the tree through it, so it is repointed at the copy from (1) and "
-           "the two halves cannot be cloned separately). (3) THAT STILL DOES NOT PARK. A snapshot crosses a "
-           "session, so every field must have a NAME, and `state`/`state_return` have none: tokenizer/state*.c "
-           "define 182 state functions and 172 of them are static, behind the 12 entry points declared in "
-           "tokenizer/state*.h — a raw code pointer means nothing to the build that resumes the snapshot, and "
-           "the file that would have to export them cannot be edited. Cloning buys the FORK and not the cold "
-           "tier; the tier needs HTML §13.2.5's "
-           "tokenizer as an engine component whose state is a spec-named enum, feeding this tree builder "
-           "through lxb_html_tree_construction_dispatcher"
+    const FragState *s = st;
+
+    if (s->frag != NULL || s->own_context != NULL)
+        return "a fragment parse cannot be forked between its parse and its placement — this machine OWNS the "
+               "tree the parse produced (`frag`, which frag_release deep-destroys, with `node` the cursor into "
+               "it and §8.6.4's sanitizer walk standing inside it) and, for §8.5.5 step 5, an `own_context` "
+               "element that is in no tree and that frag_release destroys too. frag_visit declares neither, "
+               "because JSStepVisit has no operation for a PRIVATE DOM TREE, so the sibling arm would share one "
+               "tree with the original: two arms placing the same nodes and two frag_releases destroying them. "
+               "BUILD THAT OPERATION — a `v->tree` whose three consumers do different work the way v->reexec's "
+               "do: the CLONE deep-copies the subtree into the same document arena and re-points every cursor "
+               "through a node->node map, which is copy_subtree in core/html/tree_construction.c (written for "
+               "the tree-builder copy and needing only to be exported with its map); the TEARDOWN is "
+               "dom_cow_destroy_private; the FINGERPRINT folds the node addresses. Then frag_visit declares "
+               "`frag` with `node`, `own_context`, and the sanitizer walk declares its own cursors, and this "
+               "clause deletes";
+    return s->parser
+         ? "a fragment parse cannot be forked mid-parse — the TREE-BUILDER half is built "
+           "(core/html/tree_construction.c: html_tree_construction_copy deep-copies the partial subtree into "
+           "the same document arena and moves mode, original_mode, open_elements, active_formatting, "
+           "template_insertion_modes, pending_table, parse_errors, form, fragment, foster_parenting, "
+           "frameset_ok and scripting onto the copy through a node->node map), and it takes the COPY'S "
+           "TOKENIZER as an argument because lxb_html_tree_init binds the two. BUILD THAT: lxb_html_tokenizer's "
+           "state and state_return, the start/pos/end temp buffer, the begin/last/markup/temp cursors — which "
+           "point into THIS machine's `html`, and frag_visit hands the sibling a COPY of that buffer, so they "
+           "are rebased by offset and not copied, which is also the HtmlInputRebase the tree half already asks "
+           "for — the token under construction with its dobj_token/dobj_token_attr pools and mraw temp "
+           "strings, the entity SBST cursor, and the `tree` back-pointer its own header calls a leak "
+           "abstraction (foreign-content and RCDATA/RAWTEXT tokenization read the tree through it, so it is "
+           "repointed at the tree copy and the two halves cannot be cloned separately). Then the fork assembles "
+           "an lxb_html_parser_t from the pair, taking `root` and `form` from the copy. AND THAT STILL DOES "
+           "NOT PARK. A snapshot crosses a session, so every field must have a NAME, and `state`/`state_return` "
+           "have none: tokenizer/state*.c define 182 state functions and 172 of them are static, behind the 12 "
+           "entry points declared in tokenizer/state*.h — a raw code pointer means nothing to the build that "
+           "resumes the snapshot, and the file that would have to export them cannot be edited (lexbor is a "
+           "pinned pristine clone engine/build.mjs re-clones). Cloning buys the FORK and not the cold tier; "
+           "the tier needs HTML §13.2.5's tokenizer as an engine component whose state is a spec-named enum, "
+           "feeding this tree builder through lxb_html_tree_construction_dispatcher"
          : NULL;
 }
 
@@ -627,7 +650,8 @@ static void frag_release(JSContext *ctx, void *st)
            element §13.4 step 8 created — the whole partially built fragment hangs under it — and the value was
            discarded here, so a flow abandoned between the first byte and the placement leaked every node the
            parse had produced. Nothing else can ever collect them: they are allocated out of the REAL document's
-           arena (see frag_unforkable for why the temporary document is not an arena of its own) and they are in
+           arena (see core/html/tree_construction.c for why §13.4's temporary document is not an arena of its
+           own — lxb_dom_document_init INHERITS the real document's) and they are in
            no tree, so no delta, no discard and no document destroy names them.
            A machine cannot COPY what it does not OWN, so this is also the fork's first subproblem, discharged:
            the sibling arm's copy of the partial tree is exactly the object this statement frees. */
@@ -749,7 +773,8 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
            placement moves them into that document's tree with no §4.5 adopt, and their tag ids and attribute
            names are only meaningful against that document's hashes. It holds because §13.4's temporary
            document is created against this one and lxb_dom_document_init INHERITS its arenas — see
-           frag_unforkable, where the same fact is what decides the shape of the copy a fork needs. */
+           core/html/tree_construction.c, where the same fact is what makes a fork's copy of this parse need no
+           §4.5 adopt and re-intern no name, and where it is asserted per copied node. */
         DCHECK(s->frag->owner_document == lxb_dom_interface_node(s->context)->owner_document,
                "a fragment parse produced nodes belonging to a document other than its context element's — the "
                "placement below inserts them with no adopt, so their node document would be wrong for every "

@@ -131,6 +131,13 @@ void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *docume
    the fragment rule is how fragments quietly stop working. `ref` NULL appends. */
 void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref);
 
+/* HTML §4.12.3's TEMPLATE CONTENTS — a `<template>`'s content fragment, or NULL for every other node. It is
+   here rather than inside one walk because a `<template>`'s markup is NOT under the element (§4.10: only the
+   parser and `t.content` reach the fragment), so EVERY tree walk that means "all of this node's markup" has to
+   ask it, and a walk that forgets copies a template and none of its contents with nothing to say so. Two
+   callers ask today: §4.4's clone (node.c) and the fragment-parse copy (core/html/tree_construction.c). */
+lxb_dom_node_t *node_template_content(const lxb_dom_node_t *n);
+
 /* DOM §4.4 "CLONE A NODE" — THE ALGORITHM, DELEGATABLE, so the one implementation is the one every caller runs.
  *
  * §5.5's extract and clone-the-contents are stated over it in six places ("let clone be a clone of
