@@ -6,9 +6,41 @@
  * CSS says the viewport is "a window or other viewing area on the screen through which users consult a
  * document" and that its size is the UA's; it does not say what the size IS, and a UA running with no display
  * still has to answer, because the ICB is what `width: auto` resolves against. §Headless's missing piece is a
- * physical device, and the size of the area a document is laid out in exists without one. So every member below
- * answers with a CONCRETE number: the UA knows its own viewport, and a concolic there would model an ignorance
- * this engine does not have.
+ * physical device, and the size of the area a document is laid out in exists without one.
+ *
+ * SO EVERY MEMBER HAS A REAL COMPUTED ANSWER — AND THE ONES REPORTING THE CHOICE CARRY IT AS THE EXAMPLE OF A
+ * CONCOLIC. What stood here said the opposite: that every member "answers with a CONCRETE number" because "a
+ * concolic there would model an ignorance this engine does not have". That is the collapse CLAUDE.md's
+ * §Headless line forbids in the same sentence that permits the example — "never collapse a modelable value to
+ * bare-concrete either; that deletes the fork and its coverage" — and it put ONE fact under two opposite
+ * policies, because media_query_list.c had already made it concolic: `matchMedia('(max-width: 768px)').matches`
+ * forked while `innerWidth < 768` did not, and both read `viewport_width` below. `innerWidth` is at least as
+ * common a mobile gate as `matchMedia`, and the arm a concrete answer deletes is a responsive bundle's entire
+ * mobile world — its router, its asset host, frequently its API base.
+ *
+ * WHICH MEMBERS, AND WHY NOT ALL OF THEM. The test is whether the model PICKED one point out of a range the
+ * environment leaves free, or DERIVED the only value the rest of the model permits:
+ *   - PICKED, so an environment SOURCE: the viewport's size (`innerWidth`/`innerHeight`); the client window's
+ *     size (`outerWidth`/`outerHeight` — a UA can present the same viewport inside more or less chrome, which
+ *     is exactly what makes `outerHeight - innerHeight` a question with two answers, and it is its own source
+ *     for the reason screen.c gives for `availHeight` beside `height`); and `devicePixelRatio`, where `> 1` is
+ *     the retina gate a bundle puts different assets and a different image host behind.
+ *   - DERIVED, so CONCRETE: `scrollX`/`scrollY`, whose domain is a single point — with no layout the scrolling
+ *     area IS the ICB, so the origin is the only valid scroll position, and forking it would run a page's
+ *     scrolled code in a document that cannot scroll. It is also the half of this file that acquires a WRITER
+ *     the moment there is a layout (CSSOM VIEW §3's perform-a-scroll), and a fact with a writer is per-flow
+ *     STATE in the COW delta, never an environment source; minting one now would leave the writer and the
+ *     source both answering it. And `screenX`/`screenY`, which are a POSITION derived from two facts already
+ *     forkable at their own members — screen.c's available area and the client window's size — so a third
+ *     independent source reaches no arm those two do not, while permitting a world where the window sits off
+ *     the screen, which is the state `viewport_client_screen_x` asserts a UA cannot present.
+ *
+ * THE C SIDE ANSWERS THE EXAMPLE, DELIBERATELY, and that is the media_query.h layering for the reason it gives:
+ * a C `if` over a concolic silently picks one arm. Every geometry function below answers a `double` — the
+ * modelled viewport — and the concolic is minted at the JS boundary, by `viewport_env_value`, which is the
+ * only function here that returns a JSValue and the only place a fork can be born. So every assert in this
+ * component is over the example, or over a property that holds for the whole domain (`vp_long`'s integrality
+ * is one: the members it guards are IDL `long`, so no member of the domain is fractional).
  *
  * WHY IT IS A COMPONENT OF ITS OWN rather than a constant inside whoever needed it first: FOUR standards read
  * this one fact and each would otherwise carry its own copy. Media Queries §4 evaluates `width`, `height`,
@@ -54,7 +86,18 @@ void viewport_free(void);
    none, and `frame.contentWindow.innerWidth` after the removal is 0 rather than the size it used to be. */
 bool viewport_exists(JSContext *ctx);
 
-/* THIS REALM's viewport, in CSS pixels. Answered for the realm passed, never for a remembered one. */
+/* THE ONE SEAM a viewport-derived value crosses to become what the PAGE reads, and the ONE place its source
+   key is spelled. `member` is the IDL name as a page writes it ("innerWidth", "visualViewport.width") and is
+   the finding's SHAPE; `computed` is the modelled answer and is CONSUMED, becoming the concolic's EXAMPLE.
+   THE DOCUMENT IS PART OF THE KEY, for media_query_list.c's reason: a child navigable's viewport is 300 CSS
+   pixels wide and the top-level traversable's is 1280, so `innerWidth` is a different question in each and one
+   key would let a branch taken in the parent decide the iframe's.
+   Where no source overlay is installed — a conformance host — it hands `computed` back unchanged, which is
+   what keeps these members testable against what CSSOM VIEW says a viewport of this size reports. */
+JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed);
+
+/* THIS REALM's viewport, in CSS pixels — the MODELLED ANSWER, which is the example the member above carries.
+   Answered for the realm passed, never for a remembered one. */
 double viewport_width(JSContext *ctx);
 double viewport_height(JSContext *ctx);
 /* CSSOM VIEW §4's `devicePixelRatio` — the ratio of device pixels to CSS pixels, which Media Queries §4.7's

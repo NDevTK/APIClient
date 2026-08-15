@@ -14,6 +14,18 @@
  * viewport's own scroll position, which viewport.c derives. Change the scale factor and every one of them moves,
  * which is what tells a derivation from a placeholder.
  *
+ * THREE OF THE SEVEN ARE CONCOLIC OVER THAT ANSWER, AND FOUR ARE NOT — viewport.h states the test and
+ * `vv_is_source` applies it. `width`, `height` and `scale` are points this model PICKED out of a range the
+ * environment leaves free, so each carries its computed answer as the EXAMPLE of a concolic keyed on this
+ * document and this member: `visualViewport.width < 768` must reach a responsive bundle's mobile world exactly
+ * as `matchMedia` does, and `scale !== 1` is the zoom gate. Each is its OWN source, separate from
+ * `innerWidth`/`innerHeight`, because `visualViewport.width < innerWidth` is the "is the user zoomed" question
+ * and one shared source would make that branch answer the size branch. The four POSITIONS —
+ * `offsetLeft`/`offsetTop`/`pageLeft`/`pageTop` — are derived and stay concrete: a pan exists only inside a
+ * scale that is not 1, the layout viewport's scroll position is a single point (viewport.h), and the gesture
+ * that would move either WRITES state rather than choosing an environment, so they belong in the COW delta the
+ * day it exists and not in a source now.
+ *
  * ITS EVENTS. §12 makes it an EventTarget with `onresize`, `onscroll` and `onscrollend`. The resize event has a
  * producer — §13.1 step 2, written in rendering.c, which asks `visual_viewport_resize_changed` — and the two
  * scroll events do not: §13.2 fires them when a visual viewport GETS SCROLLED, and nothing in this engine can

@@ -2,6 +2,8 @@
    this is a modelled UA choice, why it is a component of its own, why it is answered per realm, and why §4's
    members are installed here rather than in window.c. */
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
@@ -11,6 +13,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "solver/concolic.h"
 
 /* THE TOP-LEVEL TRAVERSABLE's viewport. A UA answering the question CSS hands it, exactly as rendering.c
    answers the refresh rate: 1280 x 720 is an ordinary desktop content area, and it is deliberately NOT
@@ -88,6 +91,20 @@ double viewport_device_pixel_ratio(JSContext *ctx)
     return VIEWPORT_DPPX;
 }
 
+/* See viewport.h: the one seam, and the one speller of the key. */
+JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
+{
+    JSValueConst self = document_window_proxy(ctx);
+    char src[128];
+
+    DCHECK(window_proxy_is(self),
+           "a viewport-derived member was read in a realm whose document has no WindowProxy — a viewport "
+           "belongs to a navigable, and every Document this agent holds is one's active document");
+    DCHECK(strlen(member) + 24 < sizeof(src), "a CSSOM VIEW member name longer than any in the IDL");
+    snprintf(src, sizeof(src), "{viewport#%u}%s", (unsigned)window_proxy_doc(self), member);
+    return concolic_source_wrap(ctx, member, src, computed);
+}
+
 /* CSSOM VIEW §4: "the x-coordinate, RELATIVE TO THE INITIAL CONTAINING BLOCK ORIGIN, of the left of the
  * viewport". So the question is where the viewport sits over its own scrolling area, and this engine can
  * COMPUTE that rather than guess it.
@@ -117,7 +134,12 @@ double viewport_scroll_y(JSContext *ctx)
 
 /* The client window's size, in CSS pixels, and its position relative to §2.3's Web-exposed screen area origin.
    The position is DERIVED and not a second UA choice: an ordinary desktop window sits in the middle of the
-   space the operating system leaves for it, and screen.c already states what that space is. */
+   space the operating system leaves for it, and screen.c already states what that space is. That derivation is
+   why `screenX`/`screenY` are the two §4 members that stay concrete — see viewport.h.
+   BOTH ASSERTS BELOW ARE OVER THE MODELLED EXAMPLE, which is the only value that reaches them: the size is a
+   `double` this file computes and screen.c's is a `double` it computes, so neither can be a concolic and a C
+   `if` here cannot pick an arm. What they assert is that the MODEL is coherent — a window a UA could actually
+   open — at the one place an incoherent one would produce a negative coordinate. */
 static double viewport_client_width(void)  { return VIEWPORT_TOP_WIDTH; }
 static double viewport_client_height(void) { return VIEWPORT_TOP_HEIGHT + VIEWPORT_CHROME_HEIGHT; }
 
@@ -179,12 +201,21 @@ static const int VP_MAGIC[] = {
 #define VP_NAMES ((int)(sizeof(VP_NAME) / sizeof(VP_NAME[0])))
 
 /* A member whose IDL type is `long`. Every length this component models is a whole number of CSS pixels, so a
-   fraction here is a derivation that produced something the type cannot carry rather than a value to round. */
+   fraction here is a derivation that produced something the type cannot carry rather than a value to round.
+   THE ASSERT HOLDS FOR THE WHOLE DOMAIN and not merely for the example: the members it guards are declared
+   `long`, so no viewport this UA could have picked makes one of them fractional. */
 static JSValue vp_long(JSContext *ctx, double v)
 {
     DCHECK(v == (double)(int32_t)v,
            "a CSSOM VIEW §4 Window member declared `long` computed a value that is not an integer");
     return JS_NewInt32(ctx, (int32_t)v);
+}
+
+/* A `long` member that reports the environment: the modelled answer as the EXAMPLE of a concolic keyed on this
+   document's answer for this member. */
+static JSValue vp_env_long(JSContext *ctx, const char *member, double v)
+{
+    return viewport_env_value(ctx, member, vp_long(ctx, v));
 }
 
 static JSValue js_vp_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -196,28 +227,41 @@ static JSValue js_vp_get(JSContext *ctx, JSValueConst this_val, int magic)
     bool presented = viewport_exists(ctx);
 
     (void)this_val;
+    /* WHICH OF THESE ARE SOURCES AND WHICH ARE DERIVED is viewport.h's paragraph, decided per member and shown
+       here at the member. "OR ZERO IF THERE IS NO VIEWPORT" IS NEVER A SOURCE: a document that is not being
+       presented has no viewport, the SPEC states the answer, and there is nothing for a UA to have chosen — so
+       the absent case is concrete even where the present one forks. */
     switch ((ViewportMember)magic) {
     /* "The innerWidth attribute must return the viewport width INCLUDING the size of a rendered scroll bar (if
        any), or zero if there is no viewport." Including the scrollbar is why no scrollbar question arises: the
        answer is the viewport, whether or not one is rendered. */
-    case VP_INNER_W:  return vp_long(ctx, presented ? viewport_width(ctx) : 0.0);
-    case VP_INNER_H:  return vp_long(ctx, presented ? viewport_height(ctx) : 0.0);
+    case VP_INNER_W:  return presented ? vp_env_long(ctx, "innerWidth", viewport_width(ctx)) : vp_long(ctx, 0.0);
+    case VP_INNER_H:  return presented ? vp_env_long(ctx, "innerHeight", viewport_height(ctx))
+                                       : vp_long(ctx, 0.0);
     /* "The outerWidth attribute must return the width of the client window. If there is no client window this
-       attribute must return zero." */
-    case VP_OUTER_W:  return vp_long(ctx, presented ? viewport_client_width() : 0.0);
-    case VP_OUTER_H:  return vp_long(ctx, presented ? viewport_client_height() : 0.0);
+       attribute must return zero." A SEPARATE source from the viewport's own size, which is what makes
+       `outerHeight - innerHeight` — how much chrome this UA wears — a question with two answers. */
+    case VP_OUTER_W:  return presented ? vp_env_long(ctx, "outerWidth", viewport_client_width())
+                                       : vp_long(ctx, 0.0);
+    case VP_OUTER_H:  return presented ? vp_env_long(ctx, "outerHeight", viewport_client_height())
+                                       : vp_long(ctx, 0.0);
     /* "The scrollX attribute must return the x-coordinate, relative to the initial containing block origin, of
-       the left of the viewport, or zero if there is no viewport." An `unrestricted double`, not a `long`. */
+       the left of the viewport, or zero if there is no viewport." An `unrestricted double`, not a `long`.
+       CONCRETE: the derivation below leaves one valid scroll position, and the layout that would give it a
+       range would also give it a WRITER — see viewport.h. */
     case VP_SCROLL_X: return JS_NewFloat64(ctx, presented ? viewport_scroll_x(ctx) : 0.0);
     case VP_SCROLL_Y: return JS_NewFloat64(ctx, presented ? viewport_scroll_y(ctx) : 0.0);
     /* "The screenX and screenLeft attributes must return the x-coordinate, relative to the origin of the
        Web-exposed screen area, of the left of the client window as number of CSS pixels, or zero if there is
-       no such thing." */
+       no such thing." CONCRETE: a position derived from screen.c's available area and the client window's
+       size, both of which a page can already explore at their own members. */
     case VP_SCREEN_X: return vp_long(ctx, presented ? viewport_client_screen_x() : 0.0);
     case VP_SCREEN_Y: return vp_long(ctx, presented ? viewport_client_screen_y() : 0.0);
     /* §4's DETERMINE THE DEVICE PIXEL RATIO: with no output device return 1; otherwise the CSS pixel size
-       divided by the device pixel size. This engine models an output device (screen.c), so it is the ratio. */
-    case VP_DPPX:     return JS_NewFloat64(ctx, viewport_device_pixel_ratio(ctx));
+       divided by the device pixel size. This engine models an output device (screen.c), so it is the ratio —
+       and it is a source, because `devicePixelRatio > 1` is the retina gate. */
+    case VP_DPPX:     return viewport_env_value(ctx, "devicePixelRatio",
+                                                JS_NewFloat64(ctx, viewport_device_pixel_ratio(ctx)));
     }
     DFAIL("a CSSOM VIEW §4 Window member was read with a magic no member of this file declares — the magic IS "
           "the member, so an unknown one means a name was installed without a case to answer it");
@@ -228,7 +272,12 @@ static JSValue js_vp_get(JSContext *ctx, JSValueConst this_val, int magic)
 
 /* The record's three fields ARE the spec sentence: what the viewport measured the last time the steps ran, and
    whether there HAS been a last time. See viewport.h for why the second one cannot be replaced by seeding the
-   first at install. */
+   first at install.
+   WHAT IT LATCHES IS THE MODELLED GEOMETRY, never what a flow decided about it. §13.1 asks whether the VIEWPORT
+   changed, and a flow that took the true arm of `innerWidth < 768` did not resize anything — it recorded what
+   it believes, and there is no solve-back that hands the model a different width. So the comparison is over the
+   `double` this component computes, and the `JS_IsNumber` asserts below are two-sided: they fire if a concolic
+   ever reaches the latch, which is what would say the seam had moved to the wrong side of the boundary. */
 #define VP_RESIZE_RAN "hasBeenRun"
 #define VP_RESIZE_W   "width"
 #define VP_RESIZE_H   "height"

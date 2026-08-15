@@ -1,6 +1,9 @@
 /* THE VISUAL VIEWPORT — CSSOM VIEW §12. See visual_viewport.h for what this component owns (one fact: the
    scale factor), why every other member is a derivation over viewport.c's layout viewport, and why it is per
    realm. */
+#include <stdio.h>
+#include <string.h>
+
 #include "check.h"
 #include "quickjs.h"
 #include "core/events/event_target.h"
@@ -80,7 +83,10 @@ static void vv_assert_this_realm(JSContext *ctx, JSValueConst this_val)
 
 /* §12's `offsetLeft`/`offsetTop`: "the offset of the left edge of the visual viewport from the left edge of the
    LAYOUT viewport". At scale 1 the visual viewport covers the layout viewport exactly, so there is no offset to
-   have — which is a fact about the scale factor, and the assert says so at the one place that would go wrong. */
+   have — which is a fact about the scale factor, and the assert says so at the one place that would go wrong.
+   THE ASSERT READS THE MODELLED SCALE, which is a compile-time constant and therefore the EXAMPLE the `scale`
+   member's concolic carries. That is deliberate and it is also the reason the four positions stay concrete:
+   they are not a free parameter of their own, they are what the pinned scale forces — see visual_viewport.h. */
 static double vv_offset(void)
 {
     DCHECK(VISUAL_VIEWPORT_SCALE == 1.0,
@@ -119,11 +125,56 @@ static double vv_value(JSContext *ctx, VisualViewportMember m)
     return 0.0;
 }
 
+/* WHICH OF §12's SEVEN REPORT THE ENVIRONMENT AND WHICH ARE DERIVED FROM IT — viewport.h's test, applied here.
+   The WIDTH, the HEIGHT and the SCALE are points this model picked out of a range the environment leaves free:
+   a UA presents a page at whatever scale a gesture (or a `<meta name=viewport content="initial-scale=2">`)
+   left it at, and
+   `visualViewport.scale !== 1` is the zoom gate a bundle puts zoom-aware layout behind. They are SEPARATE
+   sources from `innerWidth`/`innerHeight` for screen.c's reason — `visualViewport.width < innerWidth` is the
+   "is the user zoomed in" question, and one shared source would make that branch answer the size branch.
+   THE FOUR POSITIONS ARE NOT FREE. A pan exists only inside a scale that is not 1 (at scale 1 the visual
+   viewport covers the layout viewport, so there is nowhere to pan to), and `pageLeft`/`pageTop` add the layout
+   viewport's scroll position, which viewport.h derives to a single point. Their domain here is that single
+   point, and the gesture that would widen it WRITES state — so they are per-flow state in the COW delta the day
+   that gesture exists, never an environment source. */
+static bool vv_is_source(VisualViewportMember m)
+{
+    switch (m) {
+    case VV_WIDTH:
+    case VV_HEIGHT:
+    case VV_SCALE:
+        return true;
+    case VV_OFFSET_LEFT:
+    case VV_OFFSET_TOP:
+    case VV_PAGE_LEFT:
+    case VV_PAGE_TOP:
+        return false;
+    }
+    DFAIL("a VisualViewport member was classified with a magic no member of this file declares — the magic IS "
+          "the member, so an unknown one means a name was installed without a case to answer it");
+    return false;
+}
+
 static JSValue js_vv_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
+    VisualViewportMember m = (VisualViewportMember)magic;
+    char member[64];
+    JSValue v;
+
     if (!vv_brand(ctx, this_val)) return JS_EXCEPTION;
     vv_assert_this_realm(ctx, this_val);
-    return JS_NewFloat64(ctx, vv_value(ctx, (VisualViewportMember)magic));
+    v = JS_NewFloat64(ctx, vv_value(ctx, m));
+    /* The not-fully-active zero every §12 attribute opens with is the SPEC's answer rather than a geometry this
+       UA chose, so it stays concrete for the same reason viewport.c's does. */
+    if (!vv_is_source(m) || !viewport_exists(ctx)) return v;
+    DCHECK(magic >= 0 && magic < VV_NAMES && VV_MAGIC[magic] == magic,
+           "the VisualViewport member list is no longer in enum order, so a member's source identity would "
+           "name a different member and two attributes would share one branch");
+    DCHECK(strlen(VV_NAME[magic]) + 16 < sizeof member,
+           "a VisualViewport member name longer than any in the IDL — a truncated one would key two members' "
+           "branches together");
+    snprintf(member, sizeof member, "visualViewport.%s", VV_NAME[magic]);
+    return viewport_env_value(ctx, member, v);
 }
 
 JSValue visual_viewport_object(JSContext *ctx)
@@ -146,7 +197,10 @@ static JSValue js_win_visual_viewport(JSContext *ctx, JSValueConst this_val, int
 /* ---- CSSOM VIEW §13.1 step 2 ------------------------------------------------------------------------------ */
 
 /* The record's four fields ARE the spec sentence — the three properties §13.1 step 2 names, and whether the
-   steps have run at all. See viewport.h for why the second cannot be replaced by seeding the first three. */
+   steps have run at all. See viewport.h for why the second cannot be replaced by seeding the first three.
+   IT LATCHES `vv_value`, the modelled geometry, and not what a flow decided about the members that report it —
+   for viewport.c's reason: a flow that branched on `visualViewport.scale` did not zoom anything. The
+   `JS_IsNumber` assert below fires if a concolic ever reaches the latch. */
 #define VV_RESIZE_RAN   "hasBeenRun"
 #define VV_RESIZE_SCALE "scale"
 #define VV_RESIZE_W     "width"

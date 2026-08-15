@@ -207,6 +207,13 @@ typedef struct {
     int    color_bits;
 } MqEnv;
 
+/* THE ENVIRONMENT AS `double`s — THE EXAMPLE — AND THAT IS WHERE THE TWO PATHS AGREE. viewport.c answers the
+   modelled viewport as a number and mints the concolic at the JS boundary (`viewport_env_value`); screen.c does
+   the same for the output device. This file evaluates the real predicate against those numbers, and
+   media_query_list.c wraps the RESULT. So one fact is opaque for control flow through
+   `matchMedia('(max-width: 768px)').matches` and through `innerWidth < 768` alike, and neither path ever puts a
+   concolic in front of a C `if`. A value read here that was already concolic would be the seam on the wrong
+   side of the boundary — see media_query.h for why the mint belongs to the reader and not to the language. */
 static void mq_env(JSContext *ctx, MqEnv *e)
 {
     e->width = viewport_width(ctx);
