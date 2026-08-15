@@ -32,6 +32,7 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/events/message_event.h"
+#include "core/url/origin.h"
 #include "core/events/broadcast_channel.h"
 #include "solver/cow.h"
 
@@ -58,7 +59,6 @@ static JSValue   g_deliver_fn = JS_UNDEFINED;
 static JSRuntime *g_bc_rt;
 static int       g_ctor_stepid = -1;
 static int       g_id_post = -1, g_id_close = -1;   /* the agent's pool entries; the objects are each realm's */
-static char     *g_origin;
 
 /* NO OWNED JSValues: the name is an atom, which is not a GC object, and it is written once at construction and
    never again — so the byte capture is the whole of what a flow can change here, which is `closed`. */
@@ -120,11 +120,15 @@ static JSValue js_chan_deliver(JSContext *ctx, JSValueConst this_val, int argc, 
     data = structured_deserialize(rctx, &sd);
     if (JS_IsException(data)) {
         JS_FreeValue(rctx, JS_GetException(rctx));
-        ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, g_origin, JS_UNDEFINED, JS_UNDEFINED);
+        ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, origin_serialized(origin_agent()),
+                               JS_UNDEFINED, JS_UNDEFINED);
     } else {
         /* §9.5: the origin is the SENDER'S, and a broadcast has no source and no ports — the bus is named, not
            addressed, so there is nothing to reply to. */
-        ev = message_event_new(rctx, "message", data, g_origin, JS_UNDEFINED, JS_UNDEFINED);
+        /* §9.4.4's `origin` is a STRING by IDL — the serialization of the SENDER's origin, which within one
+           origin-keyed agent is this agent's. One record, in core/url/origin.c, rather than a copy here. */
+        ev = message_event_new(rctx, "message", data, origin_serialized(origin_agent()), JS_UNDEFINED,
+                               JS_UNDEFINED);
         JS_FreeValue(rctx, data);
     }
     if (JS_IsException(ev)) return JS_EXCEPTION;
@@ -262,7 +266,7 @@ static const IdlStepDecl js_bc_ctor_decl = {
 
 /* ---- install -------------------------------------------------------------------------------------------- */
 
-void broadcast_channel_init(JSContext *ctx, const char *origin)
+void broadcast_channel_init(JSContext *ctx)
 {
     /* NO gc_mark: the record holds no JSValue, so there is nothing for the collector to trace through it. */
     JSClassDef d = { "BroadcastChannel", .finalizer = chan_finalizer };
@@ -272,9 +276,6 @@ void broadcast_channel_init(JSContext *ctx, const char *origin)
     DCHECK(g_bc_rt == NULL || g_bc_rt == rt, "BroadcastChannel was installed into a second runtime");
     if (g_bc_rt == rt) return;
     g_bc_rt = rt;
-    free(g_origin);
-    g_origin = strdup(origin ? origin : "null");
-    CHECK(g_origin != NULL, "broadcast channel: OOM recording this document's origin");
     JS_NewClassID(rt, &g_chan_class);
     JS_NewClass(rt, g_chan_class, &d);
 
@@ -338,8 +339,6 @@ void broadcast_channel_free(JSContext *ctx)
     JS_FreeValue(ctx, g_registry);
     JS_FreeValue(ctx, g_deliver_fn);
     g_registry = g_deliver_fn = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
-    free(g_origin);
-    g_origin = NULL;
     g_bc_rt = NULL;
     g_ctor_stepid = -1;
 }

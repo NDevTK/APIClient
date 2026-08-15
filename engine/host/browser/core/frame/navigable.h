@@ -38,6 +38,7 @@
 
 #include "quickjs.h"
 #include "core/frame/window_features.h"
+#include "core/url/origin.h"
 
 /* THE TWO HALVES OF §7.4, AND THEY ARE DECLARED SEPARATELY BECAUSE THEY BELONG TO DIFFERENT OWNERS.
  *
@@ -132,15 +133,20 @@ void navigable_set_realm_builder(RealmBuilder b);
    clone that is depends on the operation and only the caller knows: creating a navigable clones the CREATOR's
    (kept on the navigable, because a srcless child's realm is built later and by whichever document reads
    through it first), navigating one clones the INITIATOR's, the document whose script ran. */
+/* `origin` is §7.3.1's answer for THIS document — the RECORD, because the identity is what a same-origin check
+   compares and the host boundary below takes only its serialization (a host builds a realm; it does not decide
+   a principal). It is asserted to be same origin with the agent's, which is what makes that split sound. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
-                           const char *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
+                           const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
                            const char *csp);
 
-/* Install §7.4's scriptable entry point — `window.open`. `origin` is this document's, which the initial
-   about:blank child inherits along with the policy container. */
 /* THE AGENT'S HALF: §7.4's `open` member, declared once. */
 void navigable_init(JSContext *ctx);
 
+/* Install §7.4's scriptable entry point — `window.open`. The origin an initial about:blank child inherits is
+   THE AGENT'S (origin_agent), so it is not passed per document: an instance is an origin-keyed agent cluster,
+   and a per-document principal would be a second answer to a question the agent already answers. `origin` is
+   the serialization the host stated for this document, and it is here to be CHECKED against that one answer. */
 void navigable_install(JSContext *ctx, JSValueConst global, const char *origin);
 
 /* §7.4 STEP 14's NAVIGATE over a navigable that already has an active document — fetch the new document, build

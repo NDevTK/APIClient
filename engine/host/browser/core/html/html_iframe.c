@@ -241,9 +241,12 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
 
         /* §4.8.5: no navigable, no document. */
         if (JS_IsUndefined(nav)) { *presult = JS_NULL; return JS_STEP_DONE; }
-        /* §4.8.5 filters by origin BEFORE asking: a cross-origin child's document is null, and asking the peer
-           for it would both leak and suspend a flow on a question whose answer is already known. */
-        if (!window_proxy_same_origin_of(nav)) {
+        /* §7.3.1's content document step 3 filters BEFORE asking: a cross-origin child's document is null, and
+           asking the peer for it would both leak and suspend a flow on a question whose answer is already
+           known. THE FILTER IS SAME ORIGIN-DOMAIN, which is §7.1.1's other algorithm and the one this step
+           names — it is the same answer as same origin until `document.domain` has been set, and asking the
+           one the standard names is what keeps that member implementable in one place. */
+        if (!window_proxy_same_origin_domain_of(nav)) {
             JS_FreeValue(ctx, nav);
             *presult = JS_NULL;
             return JS_STEP_DONE;

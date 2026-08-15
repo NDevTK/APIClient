@@ -58,6 +58,7 @@
 #include "core/structured_clone.h"
 #include "core/timing/event_loop.h"
 #include "core/timing/timer.h"
+#include "core/url/origin.h"
 #include "core/url/url.h"
 #include "core/url/url_search_params.h"
 #include "core/xhr/xml_http_request.h"
@@ -113,11 +114,11 @@ static void d_screen(JSContext *c, const PlatformAgent *a) { (void)a; screen_ini
 static void d_navigable(JSContext *c, const PlatformAgent *a) { (void)a; navigable_init(c); }
 static void d_event_loop(JSContext *c, const PlatformAgent *a) { (void)a; event_loop_init(c); }
 static void d_timer(JSContext *c, const PlatformAgent *a) { (void)a; timer_init(c); }
-static void d_window_proxy(JSContext *c, const PlatformAgent *a) { window_proxy_init(c, a->origin); }
+static void d_window_proxy(JSContext *c, const PlatformAgent *a) { (void)a; window_proxy_init(c); }
 static void d_remote_object(JSContext *c, const PlatformAgent *a) { (void)a; remote_object_init(c); }
 static void d_remote_op(JSContext *c, const PlatformAgent *a) { (void)a; remote_op_init(c); }
 static void d_window_message(JSContext *c, const PlatformAgent *a) { (void)a; window_message_init(c); }
-static void d_broadcast_channel(JSContext *c, const PlatformAgent *a) { broadcast_channel_init(c, a->origin); }
+static void d_broadcast_channel(JSContext *c, const PlatformAgent *a) { (void)a; broadcast_channel_init(c); }
 static void d_unhandled_rejection(JSContext *c, const PlatformAgent *a) { (void)a; unhandled_rejection_init(c); }
 static void d_animation_frame(JSContext *c, const PlatformAgent *a) { (void)a; animation_frame_init(c); }
 static void d_page_reveal(JSContext *c, const PlatformAgent *a) { (void)a; page_reveal_init(c); }
@@ -405,6 +406,13 @@ void platform_agent_init(JSContext *ctx, const PlatformAgent *agent)
            "re-mints every class id the first realm's objects are already branded with");
     platform_check_table();
     g_declared_in = JS_GetRuntime(ctx);
+    /* THE PRINCIPAL BECOMES A RECORD BEFORE ANY COMPONENT IS DECLARED, and it is not a row on the list because
+       it is not a surface: no class, no member, nothing installed into a realm. It is the agent's ORIGIN
+       (core/url/origin.h) — the value §7.2.5.1's filter, §7.3.1's inheritance and Storage's key are all decided
+       against — and it must exist before the first declaration that asserts it does. ONE adopt per agent is
+       also what gives an opaque principal its IDENTITY: the host states "null", and the nonce minted here is
+       what every document of this agent then shares. */
+    origin_agent_adopt(agent->origin);
     for (i = 0; i < PLATFORM_N; i++)
         if (PLATFORM[i].declare)
             PLATFORM[i].declare(ctx, agent);
@@ -426,6 +434,10 @@ void platform_agent_free(void)
     for (i = PLATFORM_N - 1; i >= 0; i--)
         if (PLATFORM[i].release)
             PLATFORM[i].release();
+    /* THE ORIGINS GO LAST, AFTER EVERY COMPONENT THAT NAMES ONE. They are the agent's, not a realm's — a
+       WindowProxy holds one as a POD pointer inside the bytes its COW delta captures — so the whole table is
+       released here, once, when nothing is left that could read it. */
+    origin_release();
     g_declared_in = NULL;
 }
 

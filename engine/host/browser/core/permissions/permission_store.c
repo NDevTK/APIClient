@@ -467,6 +467,11 @@ JSValue permission_unknown(JSContext *ctx, int feature)
  * A default allowlist of 'self' means a document is allowed to use the feature exactly while it is same origin
  * with the top-level traversable's active document — which is why an `<iframe src="https://other.example">`
  * without an `allow` attribute gets "denied" for geolocation and a same-origin one does not.
+ *   'self' IS §7.1.1's SAME ORIGIN AND NOTHING MORE, so a top-level document is always allowed: it is its own
+ * top, and an origin is same origin with itself whether it is a tuple or opaque (step 1 compares identity).
+ * That answer changed when an origin became a record — a top-level document with an opaque origin used to be
+ * refused here, by a serialized comparison that could not express step 1 — and the change is the standard's:
+ * the feature this file gates is not the one an opaque origin is denied, which is Storage's key.
  *   THIS IS COMPUTED, NOT UNKNOWN. The document's position in the tree and its origin are facts this engine
  * holds, so there is no ignorance here and nothing to fork over. */
 static bool permission_allowed_to_use(JSContext *ctx, int feature)

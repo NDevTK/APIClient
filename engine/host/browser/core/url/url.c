@@ -27,6 +27,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/url/url.h"
+#include "core/url/origin.h"   /* §4.7's origin is a RECORD; this file only ever serializes one */
 #include "solver/concolic.h"   /* §4.1 over unknown input answers at the operator, not at the coercion */
 #include "core/file/blob.h"
 #include "core/url/idna.h"
@@ -650,60 +651,14 @@ char *url_serialize(const UrlRecord *u, bool exclude_fragment)
     return ustr_take(&o);
 }
 
-/* §4.7's TUPLE origin, and nothing else — every scheme that is not one of the five special ones with an
-   authority has an opaque origin, `file` INCLUDED (the spec leaves file's origin to the implementation and says
-   to return a new opaque origin when in doubt).
-   THIS IS THE WHOLE OF §4.7 EXCEPT `blob:`, and it is a separate function for exactly that reason: blob's origin
-   is the origin of the URL its path spells, and expressing that as a self-call made §4.7 a C recursion. The
-   recursion was only ever one level deep — the inner URL is constrained to http/https/file, none of which is
-   blob — so the depth was a fiction the call graph could not see. Splitting the non-blob half out states that
-   constraint in the code: there is no call from here back to the blob case, so there is no depth. */
-static char *url_serialize_tuple_origin(const UrlRecord *u)
-{
-    UStr o;
-    char *host;
-    if (!u->scheme) return xstrdup("null");
-    if (strcmp(u->scheme, "http") && strcmp(u->scheme, "https") && strcmp(u->scheme, "ftp") &&
-        strcmp(u->scheme, "ws") && strcmp(u->scheme, "wss"))
-        return xstrdup("null");   /* §4.7: every other scheme has an opaque origin */
-    ustr_init(&o);
-    ustr_puts(&o, u->scheme);
-    ustr_puts(&o, "://");
-    host = url_serialize_host(&u->host);
-    ustr_puts(&o, host);
-    free(host);
-    if (u->port >= 0) {
-        char buf[8];
-        snprintf(buf, sizeof buf, ":%d", u->port);
-        ustr_puts(&o, buf);
-    }
-    return ustr_take(&o);
-}
-
+/* §4.7's ORIGIN OF A URL, SERIALIZED. THE RULE ITSELF LIVES IN core/url/origin.c, WHICH OWNS THE TYPE — an
+   origin is a RECORD (a nonce for the opaque kind, a scheme/host/port/domain tuple otherwise) and this is one
+   operation over it, so this file no longer holds a second copy of §4.7's scheme switch. The copy mattered:
+   the two answers were the same only while nothing compared origins by IDENTITY, and every same-origin check
+   in the engine now does. */
 char *url_serialize_origin(const UrlRecord *u)
 {
-    if (!u->scheme) return xstrdup("null");
-    /* §4.7's `blob:` case: the origin is the one of the URL its PATH spells. `blob:https://example.com/uuid`
-       is same-origin with example.com — which is the entire security property of a blob URL, and answering
-       "null" for it would make a page's own origin check against its own blob fail. */
-    if (!strcmp(u->scheme, "blob")) {
-        UrlRecord inner;
-        char *path = url_serialize_path(u);
-        char *r = NULL;
-        url_record_init(&inner);
-        /* §4.7 names THREE schemes, and only those: a `blob:` whose path spells ftp, ws, wss or another blob
-           has an OPAQUE origin. Returning the inner origin for any parseable path would have made
-           `blob:ws://example.org/` same-origin with a WebSocket endpoint. `file` is named by the spec here and
-           still serializes to "null" below, because §4.7 gives `file` an opaque origin — the two rules compose,
-           and short-circuiting `file` to null here instead would state the same answer for the wrong reason. */
-        if (url_parse(&inner, path, strlen(path), NULL) && inner.scheme &&
-            (!strcmp(inner.scheme, "http") || !strcmp(inner.scheme, "https") || !strcmp(inner.scheme, "file")))
-            r = url_serialize_tuple_origin(&inner);
-        url_record_free(&inner);
-        free(path);
-        return r ? r : xstrdup("null");
-    }
-    return url_serialize_tuple_origin(u);
+    return origin_serialize_of_url(u);
 }
 
 /* ---- §4.4's basic URL parser ------------------------------------------------------------------------------ */

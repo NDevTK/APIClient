@@ -19,7 +19,6 @@
 #include "solver/engine.h"
 #include "solver/world.h"
 
-static char *g_origin;   /* this AGENT's origin — what an about:blank child inherits (owned) */
 static RealmBuilder g_realm_builder;
 
 /* THE CHILD REALMS THIS AGENT HAS LIVE, and it BORROWS every one of them. A realm is kept alive by its own
@@ -88,14 +87,31 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
 }
 
 
-/* THE CHILD'S ADDRESS AND ORIGIN, from ONE parse. An `about:blank` navigable — which is what `open()` with no
-   URL creates, and what an `<iframe>` with no `src` creates — inherits the CREATOR'S origin; that is the whole
-   reason a same-origin popup or frame can be scripted at all. Any other URL contributes its own.
+/* §7.1.5's SANDBOXED ORIGIN BROWSING CONTEXT FLAG for the document creating this navigable — §7.3.1 step 1's
+   condition, and the site that MINTS a fresh opaque origin when it is set. A document's sandboxing flags come
+   from §7.6.2's navigable container through §7.2.6's policy container, and this engine's policy container
+   carries a CSP and nothing else (policy_container.c), so no document it builds has the flag SET. It is
+   EVALUATED at the step that asks it rather than assumed away — the same shape core/html/autofocus.c and
+   core/html/html_form.c evaluate the other sandboxing flags with — and the day §7.1.5's flag set lands in the
+   policy container this is the one line that reads it. */
+static bool child_sandboxed_origin(JSContext *ctx)
+{
+    (void)ctx;
+    return false;
+}
+
+/* THE CHILD'S ADDRESS AND ORIGIN, from ONE parse. §7.3.1's DETERMINE THE ORIGIN decides the second: an
+   `about:blank` navigable — which is what `open()` with no URL creates, and what an `<iframe>` with no `src`
+   creates — gets the CREATOR'S ORIGIN RECORD, the same record and therefore the same identity, which is the
+   whole reason a same-origin popup or frame can be scripted at all AND the reason a `data:` document's
+   about:blank child is same origin with it (both hold one opaque origin, and §7.1.1 step 1 compares identity).
+   Any other URL contributes URL §4.7's answer for itself.
    IT IS RESOLVED HERE, not by the host. `open("/admin")` and `<iframe src=a.html>` are how most real uses are
    written, and a relative reference has neither an origin nor a meaning outside the document that wrote it —
    handing the host the raw text would make it resolve against something, and the only base it could pick is a
-   guess. Returns false when the reference does not parse; both outputs are owned on success. */
-static bool child_address(JSContext *ctx, const char *url, char **out_url, char **out_origin)
+   guess. Returns false when the reference does not parse; `*out_url` is owned and `*out_origin` is BORROWED
+   (an origin lives for the agent). */
+static bool child_address(JSContext *ctx, const char *url, char **out_url, const Origin **out_origin)
 {
     UrlRecord base, rec;
     const char *base_url;
@@ -107,8 +123,11 @@ static bool child_address(JSContext *ctx, const char *url, char **out_url, char 
        whose only sin was calling open(). */
     if (!url || !*url || !strcmp(url, "about:blank")) {
         *out_url = strdup("about:blank");
-        *out_origin = strdup(g_origin ? g_origin : "null");
-        CHECK(*out_url && *out_origin, "navigable: OOM naming an about:blank child");
+        CHECK(*out_url != NULL, "navigable: OOM naming an about:blank child");
+        /* §7.3.1 STEP 4, WITHOUT A PARSE: this IS `about:blank` with a non-null source origin, so the answer is
+           the source origin — this agent's — and no URL record is needed to say so. The sandbox flag is asked
+           first because §7.3.1's step 1 comes first and would mint instead of inherit. */
+        *out_origin = child_sandboxed_origin(ctx) ? origin_determine(NULL, true, NULL) : origin_agent();
         return true;
     }
     base_url = document_base_url(ctx);
@@ -117,8 +136,8 @@ static bool child_address(JSContext *ctx, const char *url, char **out_url, char 
     url_record_init(&rec);
     if (url_parse(&rec, url, strlen(url), have_base ? &base : NULL)) {
         *out_url = url_serialize(&rec, false);
-        *out_origin = url_serialize_origin(&rec);
-        ok = *out_url != NULL && *out_origin != NULL;
+        *out_origin = origin_determine(&rec, child_sandboxed_origin(ctx), origin_agent());
+        ok = *out_url != NULL;
     }
     url_record_free(&rec);
     url_record_free(&base);
@@ -129,15 +148,15 @@ static bool child_address(JSContext *ctx, const char *url, char **out_url, char 
    and why the host is told rather than asked. Both callers are here: `window.open` below, and §4.8.5's iframe
    insertion steps. They differed only in which fields they filled into the request, which is exactly the kind
    of duplication that lets two call sites drift into two protocols. */
-/* WHERE THE CHILD LIVES, and it is decided by its ORIGIN because an instance is an ORIGIN-KEYED AGENT. An
-   opaque origin is same-origin with NOTHING — not even with another opaque one — which is the same rule
-   §7.2.5.1's check states and SECURITY.md states for the credentialed-read principal, because it is one
-   concept: a sandboxed document must not end up sharing a heap with the document that sandboxed it. */
-static bool child_in_this_agent(const char *child_origin)
+/* WHERE THE CHILD LIVES, and it is decided by its ORIGIN because an instance is an ORIGIN-KEYED AGENT. It is
+   §7.1.1's SAME ORIGIN and nothing else — so two DISTINCT opaque origins are two instances (a sandboxed
+   document must not share a heap with the document that sandboxed it, the same rule SECURITY.md states for the
+   credentialed-read principal) while ONE opaque origin held by two Documents is ONE agent, which is what
+   §7.3.1's inheritance cases produce and what a serialized comparison could not express: it answered "another
+   instance" for a `data:` document's own about:blank child, and no host provisions that peer. */
+static bool child_in_this_agent(const Origin *child_origin)
 {
-    DCHECK(g_origin != NULL, "a child navigable was created before navigable_install named this agent's origin");
-    if (!strcmp(g_origin, "null") || !strcmp(child_origin, "null")) return false;
-    return !strcmp(g_origin, child_origin);
+    return origin_same(origin_agent(), child_origin);
 }
 
 /* THE CHILD'S DOCUMENT — the parse of what the address served, or §7.4's initial about:blank when it served
@@ -182,12 +201,19 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
    container is built from both and a builder handed only the tree would judge the document against its
    `<meta>` policies alone. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
-                           const char *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
+                           const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
                            const char *csp)
 {
     lxb_html_document_t *dom;
     JSContext *cctx;
 
+    /* A REALM THIS AGENT BUILDS IS A DOCUMENT OF THIS AGENT'S PRINCIPAL. §7.1.1's check says so here, at the
+       one place a second realm is made, which is what lets the host boundary below carry only a SERIALIZATION:
+       the identity never has to survive that round trip because it is already known to be this agent's. */
+    DCHECK(origin != NULL && origin_same(origin, origin_agent()),
+           "a realm was built for a document whose origin is not this agent's — an instance is an ORIGIN-KEYED "
+           "agent cluster, so a cross-origin document is a second INSTANCE the host provisions and never a "
+           "second realm in this heap");
     DCHECK(top_level_url != NULL && *top_level_url,
            "a child navigable's realm was asked for with no TOP-LEVEL CREATION URL — §8.1.3.5 reads it to "
            "decide whether the environment is a secure context, so the realm's platform surface depends on it "
@@ -197,7 +223,10 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "same-origin document is a second REALM in this heap, and only the host knows which platform "
            "surface a document of this build has; declare it with navigable_set_realm_builder");
     dom = child_document(body, body_len);
-    cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, top_level_url, origin, csp, doc, nav_proxy);
+    /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
+       principal — and because the identity it would have to carry is this agent's, asserted above. */
+    cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, top_level_url, origin_serialized(origin), csp, doc,
+                           nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
@@ -282,11 +311,13 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     NavLoadState *s = st;
     JSValueConst proxy = step_arg(&s->hdr, 0);
     JSValueConst answer = JS_UNDEFINED;
-    const char *addr, *origin, *csp = NULL, *body = NULL, *tlu;
+    const char *addr, *csp = NULL, *body = NULL, *tlu;
+    const Origin *origin;
     JSValue bodyv = JS_UNDEFINED, cspv = JS_UNDEFINED;
     size_t body_len = 0;
     JSContext *cctx;
-    uint32_t doc;
+    uint32_t doc, oid = 0;
+    int orc;
     bool fetches;
 
     (void)out_cb; (void)out_argc;
@@ -315,8 +346,16 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         JS_FreeCString(ctx, addr);
         return JS_STEP_YIELD;
     }
-    origin = JS_ToCString(ctx, step_arg(&s->hdr, 2));
-    if (!origin) { JS_FreeCString(ctx, addr); return JS_STEP_ABRUPT; }
+    /* THE ORIGIN THE OPERATION DECIDED, CARRIED AS A HANDLE. §7.3.1 answered it when the navigation was
+       enqueued — an about:blank destination INHERITS the initiator's origin record — and a handle is what
+       preserves that identity across a JSValue: re-deriving the origin here from `addr`, or carrying its
+       serialization, would mint a SECOND opaque origin for an inherited one and make the loaded document
+       cross-origin to the document that navigated it. */
+    orc = JS_ToUint32(ctx, &oid, step_arg(&s->hdr, 2));
+    (void)orc;
+    DCHECK(orc == 0 && oid != 0, "the document-load job carried no origin handle — §7.3.1's answer belongs to "
+                                 "the operation and travels with it");
+    origin = origin_by_id(oid);
     if (fetches) {
         bodyv = JS_GetPropertyStr(ctx, answer, "body");
         cspv  = JS_GetPropertyStr(ctx, answer, "csp");
@@ -364,7 +403,6 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         JS_FreeValue(ctx, taken);
         s->req = 0;
     }
-    JS_FreeCString(ctx, origin);
     JS_FreeCString(ctx, addr);
     return JS_STEP_DONE;
 }
@@ -391,7 +429,7 @@ static int g_nav_load_stepid = -1;
    INITIATOR's when §7.2.5.1 navigates one. So the caller states it and it travels with the job, which is the
    same sentence as the address travelling: everything about where this load is going belongs to the operation
    that started it, and nothing about it can be read back off the navigable being loaded. */
-static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const char *addr, const char *origin,
+static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const char *addr, const Origin *origin,
                                    const char *inherit_csp)
 {
     JSValueConst argv[4];
@@ -403,7 +441,10 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     CHECK(!JS_IsException(fn), "the document-load job's callee could not be allocated");
     url = JS_NewString(ctx, addr);
     CHECK(!JS_IsException(url), "the document-load job's address could not be allocated");
-    org = JS_NewString(ctx, origin ? origin : "null");
+    /* THE ORIGIN TRAVELS AS A HANDLE, NOT AS ITS SERIALIZATION — see the read in js_nav_load_step. */
+    DCHECK(origin != NULL, "a document load was enqueued with no origin — §7.3.1 decides one for every "
+                           "destination, including about:blank, and the answer belongs to this operation");
+    org = JS_NewUint32(ctx, origin_id(origin));
     CHECK(!JS_IsException(org), "the document-load job's origin could not be allocated");
     csp = inherit_csp ? JS_NewString(ctx, inherit_csp) : JS_NULL;
     CHECK(!JS_IsException(csp), "the document-load job's inherited policy could not be allocated");
@@ -428,11 +469,12 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
  * the job runs, the only document it could resolve against is the one being replaced. */
 JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
 {
-    char *addr = NULL, *origin = NULL;
+    char *addr = NULL;
+    const Origin *origin = NULL;
 
     DCHECK(window_proxy_is(proxy), "something that is not a WindowProxy was navigated");
     if (!child_address(ctx, url, &addr, &origin)) {
-        free(addr); free(origin);
+        free(addr);
         return JS_UNDEFINED;   /* §7.4 step 4: the caller turns this into a SyntaxError */
     }
     /* A CROSS-ORIGIN DESTINATION IS A PEER'S DOCUMENT. An instance is an ORIGIN-KEYED agent cluster, so
@@ -444,7 +486,6 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
     /* §7.2.6: a destination with no response inherits the INITIATOR's policy — this document's. */
     navigable_load_enqueue(ctx, proxy, addr, origin, policy_container_csp(document_policy(ctx)));
     free(addr);
-    free(origin);
     return JS_DupValue(ctx, proxy);
 }
 
@@ -634,7 +675,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                          const WindowFeatures *feat)
 {
     const char *csp = policy_container_csp(document_policy(ctx));
-    char *addr = NULL, *origin = NULL;
+    char *addr = NULL;
+    const Origin *origin = NULL;
     uint32_t child;
     JSValue proxy;
     char *op;
@@ -655,7 +697,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     if (!child_address(ctx, url, &addr, &origin)) {   /* the reference does not parse; the caller decides what that means */
         JS_FreeCString(ctx, creator_tlu_s);
         JS_FreeValue(ctx, creator_tlu);
-        free(addr); free(origin);
+        free(addr);
         return JS_UNDEFINED;
     }
     /* MINTED FROM THE CREATOR, not from the instance root: this agent holds one realm per same-origin
@@ -688,7 +730,13 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            realms, one navigable, and nothing to say so. With about:blank here that early read materializes
            the document §7.4 actually created (no response, no fetch) and the job supersedes it, which is both
            what the spec describes and the only version with one load in it. */
-        proxy = window_proxy_new(ctx, child, "about:blank", origin, name, feat && feat->is_popup,
+        /* §7.3.1 FOR THE DOCUMENT THIS NAVIGABLE IS CREATED WITH, WHICH IS THE INITIAL about:blank AND NOT THE
+           DESTINATION. Its address is `about:blank` two lines down for exactly that reason, and its origin is
+           the matching answer: about:blank with a non-null source origin returns the SOURCE origin, which is
+           this agent's. The destination's origin belongs to the LOAD and travels with the job (which is why
+           the job carries a handle); recording it here would give the initial Document a principal it never
+           had — the same "an operation takes its inputs with it" split the address already makes. */
+        proxy = window_proxy_new(ctx, child, "about:blank", origin_agent(), name, feat && feat->is_popup,
                                  /* §7.2.6/§7.4: a navigable created with no address has no response to carry a
                                     policy, so it CLONES THE CREATOR'S — the SAME `csp` this function already
                                     sends to a PEER instance for a cross-origin child, which is where the gap
@@ -753,12 +801,16 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            treats tab as source-list whitespace), so every reader of this record stops splitting at the policy
            and keeps the rest verbatim. A field after it would be swallowed by it. A URL cannot contain a tab —
            url_serialize percent-encodes one — so it is safe in a split field. */
+        /* THE ORIGIN CROSSES AS ITS SERIALIZATION, and that is not a lapse — a record crosses an instance no
+           more than a JSValue does, and what the peer needs is its own principal, which its host will state
+           back. A peer's opaque origin is same origin with nothing here, which is exactly right: two Documents
+           sharing ONE opaque origin share an agent cluster, so they are never on two sides of this line. */
         n = strlen(world_doc_name(child)) + strlen(world_doc_name(document_doc(ctx))) +
-            strlen(addr) + strlen(origin) + strlen(csp ? csp : "") + strlen(tlu) + 32;
+            strlen(addr) + strlen(origin_serialized(origin)) + strlen(csp ? csp : "") + strlen(tlu) + 32;
         op = malloc(n);
         CHECK(op != NULL, "navigable: OOM building the create notice");
         snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s", world_doc_name(child),
-                 world_doc_name(document_doc(ctx)), addr, origin, tlu, csp ? csp : "");
+                 world_doc_name(document_doc(ctx)), addr, origin_serialized(origin), tlu, csp ? csp : "");
         engine_host_notify(ctx, op);
         free(op);
         proxy = window_proxy_new_remote(ctx, child, origin, name,
@@ -770,7 +822,6 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     JS_FreeCString(ctx, creator_tlu_s);
     JS_FreeValue(ctx, creator_tlu);
     free(addr);
-    free(origin);
     return proxy;
 }
 
@@ -897,17 +948,18 @@ void navigable_init(JSContext *ctx)
 
 void navigable_install(JSContext *ctx, JSValueConst global, const char *origin)
 {
-    /* THE ORIGIN IS THE AGENT'S, NOT THE DOCUMENT'S. An agent is origin-keyed, so every document installed into
-       this instance has the same one and a second install is a second DOCUMENT, not a contradiction — but a
-       DIFFERENT origin arriving here would mean two principals behind one instance, which SECURITY.md's
-       one-principal-per-instance rule forbids and which would make an about:blank child inherit the wrong one. */
-    DCHECK(g_origin == NULL || !strcmp(g_origin, origin ? origin : "null"),
+    /* THE ORIGIN IS THE AGENT'S, NOT THE DOCUMENT'S — one record, held by core/url/origin.c, and this is where
+       the host's per-document statement is CHECKED against it rather than kept as a second answer. An agent is
+       origin-keyed, so every document installed into this instance has the same principal and a second install
+       is a second DOCUMENT; a DIFFERENT origin arriving here would be two principals behind one instance, which
+       SECURITY.md forbids and which would make an about:blank child inherit the wrong one.
+       IT IS A SERIALIZATION COMPARISON, and that is sound in exactly this direction: a host that states a tuple
+       origin states these bytes, and a host that states "null" is stating an opaque origin whose identity this
+       agent MINTED at adopt — so the check that matters (two different TUPLE origins in one agent) is the one
+       it can make, and the opaque case cannot arise because a second opaque document is a second instance. */
+    DCHECK(origin != NULL && !strcmp(origin_serialized(origin_agent()), origin),
            "a second document was installed into this agent with a DIFFERENT origin — an agent is origin-keyed, "
            "so a cross-origin document is a second INSTANCE and never a second realm in this one");
-    if (!g_origin) {
-        g_origin = strdup(origin ? origin : "null");
-        CHECK(g_origin != NULL, "navigable: OOM recording this agent's origin");
-    }
     /* HOW A REALM'S DEATH REACHES THIS AGENT. Declared here because this is where a realm of this agent is
        first known, and declared for the RUNTIME because that is what a realm belongs to — the same declaration
        from a second document is the same function and quickjs says so. It outlives navigable_free on purpose:
@@ -932,6 +984,4 @@ void navigable_free(JSContext *ctx)
     g_realms = NULL;
     g_realms_n = g_realms_cap = 0;
     g_realm_builder = NULL;
-    free(g_origin);
-    g_origin = NULL;
 }

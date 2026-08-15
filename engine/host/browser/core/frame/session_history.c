@@ -225,15 +225,18 @@ static void sh_serialize_primitive(JSContext *ctx, JSValueConst v, StructuredDat
 static JSValue sh_document_state_new(JSContext *ctx)
 {
     JSValueConst proxy = document_window_proxy(ctx);
-    const char *origin = window_proxy_origin(proxy);
+    const Origin *origin = window_proxy_origin(proxy);
     JSValue ds = JS_NewObjectProto(ctx, JS_NULL);
 
     CHECK(!JS_IsException(ds), "session history: a §7.4.1.2 document state could not be allocated");
     JS_SetPropertyStr(ctx, ds, SH_D_DOC, JS_NewUint32(ctx, document_doc(ctx)));
     /* §7.4.1.2's origin is "the origin that we set about:-schemed Documents' origin to … also used to compare
        the origin before and after the session history entry is repopulated". The navigable's active document's
-       origin IS that origin, and window_proxy is the one place this engine holds it. */
-    JS_SetPropertyStr(ctx, ds, SH_D_ORIGIN, JS_NewString(ctx, origin ? origin : "null"));
+       origin IS that origin, and window_proxy is the one place this engine holds it. IT IS STORED AS A HANDLE
+       — a §7.1.1 origin is a record whose first comparison step is IDENTITY, so an entry that kept only the
+       serialization could not tell one opaque origin from another and would break exactly the run of
+       about:-schemed entries this field exists for. */
+    JS_SetPropertyStr(ctx, ds, SH_D_ORIGIN, JS_NewUint32(ctx, origin_id(origin)));
     JS_SetPropertyStr(ctx, ds, SH_D_EVER, JS_TRUE);
     return ds;
 }
@@ -419,36 +422,36 @@ static JSValue sh_target_history_entry(JSContext *ctx, JSValueConst entries, uin
  *
  * The answer is a new JS Array holding the entries themselves. OWNED. */
 
-/* A §7.4.1.2 document state's origin, as a string. `hold` receives the JSValue the string is borrowed from and
-   is the caller's to free after the string. OWNED — released with JS_FreeCString. */
-static const char *sh_entry_origin(JSContext *ctx, JSValueConst e, JSValue *hold)
+/* A §7.4.1.2 document state's ORIGIN. The slot holds the origin's HANDLE rather than its serialization, for
+   the reason the standard's own wording gives — the field is "the origin that we set about:-schemed
+   Documents' origin to … also used to COMPARE the origin before and after the entry is repopulated", and a
+   comparison of origins is §7.1.1's algorithm, whose first step is identity. A serialization drops that.
+   BORROWED: an origin lives for the agent (core/url/origin.h), so there is nothing here for the caller to
+   free — which is why this no longer hands back a JSValue to hold. */
+static const Origin *sh_entry_origin(JSContext *ctx, JSValueConst e)
 {
     JSValue ds = JS_GetPropertyStr(ctx, e, SH_E_DOCSTATE);
-    const char *s;
+    JSValue ov;
+    uint32_t id = 0;
+    int rc;
 
     DCHECK(JS_IsObject(ds), "a session history entry held no §7.4.1.2 document state");
-    *hold = JS_GetPropertyStr(ctx, ds, SH_D_ORIGIN);
+    ov = JS_GetPropertyStr(ctx, ds, SH_D_ORIGIN);
     JS_FreeValue(ctx, ds);
-    s = JS_ToCString(ctx, *hold);
-    CHECK(s != NULL, "session history: a §7.4.1.2 document state's origin could not be read");
-    return s;
-}
-
-/* §7.2.5.1's SAME ORIGIN over two of those. An OPAQUE ORIGIN is same origin with NOTHING, not even another
-   opaque one — the same rule SECURITY.md states for the credentialed-read principal, and the reason this is
-   not a plain strcmp over the two serializations. */
-static bool sh_origin_same(const char *a, const char *b)
-{
-    if (!strcmp(a, "null") || !strcmp(b, "null")) return false;
-    return strcmp(a, b) == 0;
+    rc = JS_ToUint32(ctx, &id, ov);
+    (void)rc;
+    JS_FreeValue(ctx, ov);
+    DCHECK(rc == 0 && id != 0, "a §7.4.1.2 document state held no origin handle — every entry is built by "
+                               "sh_document_state_new, which writes one");
+    return origin_by_id(id);
 }
 
 JSValue session_history_entries_for_navigation_api(JSContext *ctx)
 {
     JSValue entries = sh_entries(ctx), trec = sh_traversable_record(ctx), out = JS_NewArray(ctx);
-    JSValue hold = JS_UNDEFINED, start;
+    JSValue start;
     uint32_t target_step, n, k = 0;
-    const char *start_origin;
+    const Origin *start_origin;
     int64_t i;
 
     CHECK(!JS_IsException(out), "session history: §7.4.1.4's navigation API entry list could not be allocated");
@@ -463,19 +466,19 @@ JSValue session_history_entries_for_navigation_api(JSContext *ctx)
        THAN OR EQUAL TO targetStep" — over the run 0..n-1 that is targetStep itself, which the assertion above
        keeps true. */
     start = JS_GetPropertyUint32(ctx, entries, target_step);
-    start_origin = sh_entry_origin(ctx, start, &hold);
+    start_origin = sh_entry_origin(ctx, start);
     JS_SetPropertyUint32(ctx, out, k++, start);   /* CONSUMES start */
     /* The BACKWARD walk. The standard's condition is `while i > 0`, so the entry at index 0 is reached by the
        body when i is 1 and index 0 itself is never tested — written here as the same bound rather than as
        `i >= 0`, because the difference is one entry and it is the FIRST one. */
     for (i = (int64_t)target_step - 1; i > 0; i--) {
-        JSValue e = JS_GetPropertyUint32(ctx, entries, (uint32_t)i), h = JS_UNDEFINED;
-        const char *o = sh_entry_origin(ctx, e, &h);
-        bool same = sh_origin_same(o, start_origin);
+        JSValue e = JS_GetPropertyUint32(ctx, entries, (uint32_t)i);
+        /* §7.1.1's SAME ORIGIN over two document states, decided on the RECORD — so two entries that share one
+           opaque origin (an about:blank document and the document that created it) stay in one run, which a
+           serialized comparison answered "different" for. */
+        bool same = origin_same(sh_entry_origin(ctx, e), start_origin);
         uint32_t j;
 
-        JS_FreeCString(ctx, o);
-        JS_FreeValue(ctx, h);
         if (!same) { JS_FreeValue(ctx, e); break; }
         /* PREPEND — the list stays in session-history order, which is what makes §7.2.6.5's `index` mean what
            a page reads it as. A shift is what a prepend over an Array is; its length is the session history's
@@ -487,17 +490,12 @@ JSValue session_history_entries_for_navigation_api(JSContext *ctx)
     }
     /* The FORWARD walk. */
     for (i = (int64_t)target_step + 1; i < (int64_t)n; i++) {
-        JSValue e = JS_GetPropertyUint32(ctx, entries, (uint32_t)i), h = JS_UNDEFINED;
-        const char *o = sh_entry_origin(ctx, e, &h);
-        bool same = sh_origin_same(o, start_origin);
+        JSValue e = JS_GetPropertyUint32(ctx, entries, (uint32_t)i);
+        bool same = origin_same(sh_entry_origin(ctx, e), start_origin);
 
-        JS_FreeCString(ctx, o);
-        JS_FreeValue(ctx, h);
         if (!same) { JS_FreeValue(ctx, e); break; }
         JS_SetPropertyUint32(ctx, out, k++, e);
     }
-    JS_FreeCString(ctx, start_origin);
-    JS_FreeValue(ctx, hold);
     JS_FreeValue(ctx, entries);
     return out;
 }

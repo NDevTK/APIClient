@@ -5,11 +5,12 @@
 #include <stdint.h>
 
 #include "quickjs.h"
+#include "core/url/origin.h"
 
-/* `origin` is THIS DOCUMENT'S, serialized — the ACCESSOR side of §7.2.5.1's same-origin check. Without it the
-   check cannot be made at all, which is the state this component was in: it carried the TARGET's origin and
-   compared it against nothing. */
-void window_proxy_init(JSContext *ctx, const char *origin);
+/* The ACCESSOR side of §7.2.5.1's same-origin check is THE AGENT'S OWN ORIGIN, and it is asked of the one
+   place that holds it (origin_agent) rather than passed in: an instance is an origin-keyed agent cluster, so a
+   caller-supplied one could only ever agree or be wrong. */
+void window_proxy_init(JSContext *ctx);
 void window_proxy_free(JSContext *ctx);
 
 /* A proxy over a navigable whose active Window is `window` and whose active document's origin is `origin`.
@@ -31,7 +32,7 @@ void window_proxy_free(JSContext *ctx);
    not be the creator. WHICH url it is, is §7.4 read from both ends — a CHILD navigable is nested, so it
    inherits its creator's (core/realm.h), while an AUXILIARY one is its own top-level traversable and its
    documents' top-level creation URL is its OWN address. Never NULL: every environment has one. */
-JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const char *origin, const char *name,
+JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
                          bool is_popup, const char *creator_csp, const char *top_level_url,
                          JSValueConst parent, JSValueConst opener);
 
@@ -57,7 +58,7 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name);
 /* `name` is the BROWSING CONTEXT's name (the iframe element's `name` attribute, or §7.4's target), NULL for
    none. `parent` is the parent navigable — this instance's own Window for a child navigable, JS_UNDEFINED for a
    top-level one — and `opener` is §7.2.5's, JS_NULL when the navigable was not opened by a script. */
-JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin, const char *name,
+JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origin *origin, const char *name,
                                 JSValueConst parent, JSValueConst opener);
 
 /* §7.2.5.2's IS CLOSING. The proxy a page is holding stays the object it was — the spec files check that it
@@ -188,35 +189,31 @@ JSValue window_proxy_opener(JSContext *ctx, JSValueConst proxy);
    delta, so a sibling arm that did not disown still has its opener. */
 void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy);
 
-/* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME-ORIGIN WITH THIS ONE? §7.2.5.1's check, exported because §4.8.5's
-   `contentDocument` makes the same decision one layer up — and must make it BEFORE asking the peer, since a
-   cross-origin answer is null and asking for it would both leak and suspend a flow on a settled question.
-
-   AN OPAQUE ORIGIN ANSWERS FALSE HERE, AND §7.5 SAYS TRUE FOR ONE OF THE TWO CASES THAT REACHES IT. The
-   standard's step 1 is "if A and B are THE SAME OPAQUE ORIGIN, then return true" — an identity comparison,
-   which this component cannot make because it holds SERIALIZATIONS and every opaque origin serializes to
-   "null". So false is right for two distinct opaque origins (two sandboxed frames must not script each other)
-   and wrong for one opaque origin asked about itself, which §7.3.1's determine-the-origin creates deliberately
-   by handing sourceOrigin to an about:srcdoc or about:blank Document. window_proxy.c's proxy_read_permitted
-   ASSERTS the case rather than leaving it silent, and the fix is a nonce on the opaque origin.
-   THAT ALSO MAKES THIS THE WRONG PREDICATE FOR A QUESTION FOUR CALLERS ASK THROUGH IT. §7.2.6.3's "has entries
-   and events disabled", File System Access's storage-manager and picker checks and Permissions §5.1 want "is
-   this origin OPAQUE", and they get it today only because this answers false for one. They are asking a
-   different question and must ask it directly — the day step 1 is decided on a nonce, every one of them
-   inverts. */
+/* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME ORIGIN WITH THIS ONE? §7.2.5.1's check — §7.1.1's SAME ORIGIN over
+   two origin RECORDS (core/url/origin.h), so its step 1 is a nonce comparison and an OPAQUE origin is same
+   origin with ITSELF and with nothing else. A `data:` document's `about:blank` child is that case, and §7.3.1
+   makes the pair on purpose.
+   IT IS NOT THE "IS THIS ORIGIN OPAQUE" QUESTION, and it used to be reached as one: a serialized comparison
+   answered false for every opaque origin, so §7.2.6.3's disabled clause, Storage's storage key and the file
+   picker's first check all got the answer they wanted from the wrong predicate. They ask origin_is_opaque
+   directly now — see each of those files. */
 bool window_proxy_same_origin_of(JSValueConst proxy);
+
+/* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME ORIGIN-DOMAIN WITH THIS ONE? §7.1.1's OTHER algorithm, and §7.3.1's
+   `content document` filters `iframe.contentDocument` by THIS one rather than by the check above. They differ
+   exactly where `document.domain` has been set; keeping them apart is what makes that member implementable
+   without revisiting every caller. */
+bool window_proxy_same_origin_domain_of(JSValueConst proxy);
 
 /* IS THIS ENVIRONMENT'S ORIGIN SAME ORIGIN WITH ITS TOP-LEVEL ORIGIN? — the question HTML §4.10.5.4's
    showPicker() step 2, Permissions §5.1 step 4's default 'self' allowlist and File System Access §2.2's and
    §3.1's SecurityError checks each ask of the CURRENT realm, and which each of them had written out for
    itself: fetch the top-level traversable's navigable and ask §7.2.5.1 of it. Three copies of one sentence is
-   three chances for the opaque-origin case to be read differently, and the opaque case is the one that decides
-   whether a sandboxed document reaches the local file system — window_proxy_same_origin_of answers false for a
-   navigable whose origin is opaque, so a top-level document with an opaque origin is NOT same origin with its
-   own top HERE. §7.5 step 1 says it IS (a document's origin is the same opaque origin as itself), so what
-   these callers actually want is the SANDBOXED bit and not §7.2.5.1 — see the note above. The answer they get
-   is the one they want; the route to it is a coincidence that ends when the nonce lands.
-   A TOP-LEVEL DOCUMENT IS ITS OWN TOP, so the answer is true for one unless its origin is opaque. */
+   three chances for one case to be read differently.
+   A TOP-LEVEL DOCUMENT IS ITS OWN TOP, so the answer is true for one — INCLUDING one whose origin is opaque,
+   because §7.1.1 step 1 says an opaque origin is same origin with itself. A caller that also wants the opaque
+   case refused asks for it, which is what File System Access §3.1's verify does: its steps 1 and 2 are two
+   checks, and they were one only while this predicate answered false for an opaque origin. */
 bool window_proxy_same_origin_with_top(JSContext *ctx);
 
 /* THE BROWSING CONTEXT'S NAME, as this flow sees it — "" when it has none. §7.3.3's named access on the Window
@@ -231,8 +228,10 @@ const char *window_proxy_name(JSValueConst proxy);
 JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy);
 JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueConst v);
 
-/* The active document's origin, as this flow sees it — what §7.2.5.1's same-origin check reads. BORROWED. */
-const char *window_proxy_origin(JSValueConst proxy);
+/* The active document's ORIGIN RECORD, as this flow sees it — what §7.2.5.1's same-origin check reads, and
+   what a caller asking "is this origin opaque" (Storage's storage key, §7.2.6.3's disabled clause) asks
+   origin_is_opaque of. BORROWED: an origin lives for the agent (core/url/origin.h). */
+const Origin *window_proxy_origin(JSValueConst proxy);
 
 /* NAVIGATE — REPLACE THE NAVIGABLE'S ACTIVE DOCUMENT while the proxy object stays the same, which is the whole
    reason a WindowProxy exists: a page holding `iframe.contentWindow` across a navigation holds the same object
@@ -249,7 +248,7 @@ const char *window_proxy_origin(JSValueConst proxy);
    down here: a flow parked inside it resumes there, which is what makes it a time-travel entity rather than a
    page a browser could throw away. */
 void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
-                           const char *url, const char *top_level_url, const char *origin);
+                           const char *url, const char *top_level_url, const Origin *origin);
 
 /* HAS THIS NAVIGABLE'S ACTIVE DOCUMENT BEEN REPLACED BY A NAVIGATION — HTML §7.4.4 step 4's "document's IS
    INITIAL about:blank", asked of the navigable because that is what can answer it. §7.4 creates every navigable

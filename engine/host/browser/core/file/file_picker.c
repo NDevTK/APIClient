@@ -17,8 +17,11 @@
  * step 4 is another, and the reason is not that the first two run none of the page's code: core/idl_args.h and
  * quickjs-step.h now state that the page decides nothing about where this engine may park, because what parks
  * a flow is RAM pressure, a cold-tier eviction, a cross-session resume or a flow that outranks it. Steps 1 and
- * 2 share a stage because they are ONE O(1) engine action — an opaque origin is same origin with nothing, so
- * §7.2.5.1's single comparison decides both — and every other step of these algorithms has a stage of its own.
+ * 2 share a stage because they are TWO O(1) engine actions and nothing can park between them. They were ONE,
+ * on the reading that an opaque origin is same origin with nothing so §7.2.5.1's comparison decided both —
+ * which was an artifact of comparing SERIALIZATIONS. §7.1.1 step 1 makes an origin same origin with ITSELF,
+ * opaque included, so step 2 says nothing about step 1's case and each is asked as itself (core/url/origin.h).
+ * Every other step of these algorithms has a stage of its own.
  *
  * THE ASYMMETRY IN THOSE FOUR STEPS IS THE STANDARD'S AND IT IS NOT OBSERVABLE. Steps 1 and 2 say "return a
  * promise rejected with", step 4 says "throw" — and the callers invoke this at their own step 5, BEFORE the
@@ -46,6 +49,7 @@
 #include "core/file/file_system.h"
 #include "core/file/file_system_access.h"
 #include "core/file/file_system_handle.h"
+#include "core/dom/document.h"        /* §3.1's verify step 1 reads THIS document's navigable's origin */
 #include "core/frame/window_proxy.h"
 #include "core/html/user_activation.h"
 #include "solver/concolic.h"
@@ -475,9 +479,9 @@ static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, const
                      "deemed too dangerous, user agents should ignore or sanitize the suggested file name\") — " \
                      "a walk of a string whose length the page chose")                                          \
     X(FPK_VERIFY,    "File System Access §3.3/§3.4/§3.5 step 5 -> §3.1's verify steps 1-2 (environment's "      \
-                     "origin is not opaque, and is same origin with its top-level origin) — ONE O(1) engine "   \
-                     "action, since an opaque origin is same origin with nothing and §7.2.5.1's single "        \
-                     "comparison therefore decides both")                                                       \
+                     "origin is not opaque, and is same origin with its top-level origin) — TWO O(1) engine "   \
+                     "actions with no park between them, and two because §7.1.1 step 1 makes an origin same "   \
+                     "origin with itself, so step 2 cannot answer step 1's case")                                \
     X(FPK_ACTIVE,    "File System Access §3.1's verify step 4 (global has TRANSIENT ACTIVATION — unknown "      \
                      "external state, so the SecurityError arm and the picker arm are two worlds and this is "  \
                      "where the flow forks)")                                                                   \
@@ -688,11 +692,15 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
 
     case FPK_VERIFY:
         JS_FreeValue(ctx, cb_result);
-        /* STEP 5 — §3.1's VERIFY, steps 1 and 2. An OPAQUE origin is same origin with NOTHING, not even with
-           itself, so window_proxy_same_origin_with_top answers false for one and the two checks are one test
-           through the one implementation of §7.2.5.1 — which is also why a second comparison here would be a
-           second chance to read the opaque case differently. */
-        if (!window_proxy_same_origin_with_top(ctx)) {
+        /* STEP 5 — §3.1's VERIFY, AND ITS STEPS 1 AND 2 ARE TWO CHECKS. "If environment's origin is an opaque
+           origin, return a promise rejected with a SecurityError"; "if environment's origin is not same origin
+           with environment's top-level origin, return a promise rejected with a SecurityError." They were one
+           test here, and only by accident: while an origin was a serialization, same-origin-with-top answered
+           false for an opaque origin, so step 2's predicate covered step 1's case. §7.1.1 step 1 makes an
+           origin same origin with ITSELF — opaque included — so step 2 now answers TRUE for a top-level
+           document with an opaque origin, and step 1 is the one that must refuse it. */
+        if (origin_is_opaque(window_proxy_origin(document_window_proxy(ctx))) ||
+            !window_proxy_same_origin_with_top(ctx)) {
             s->value = fpk_dom_error(ctx, "SecurityError",
                                      "a file picker may be shown only by a document whose origin is not opaque "
                                      "and is same origin with its top-level origin");

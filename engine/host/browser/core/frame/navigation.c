@@ -131,15 +131,16 @@ static void nav_set_current_index(JSContext *ctx, int64_t i)
  * traverse to — so the standard answers `entries()` with the empty list and `currentEntry` with null rather
  * than building wrappers nobody can use.
  *
- * THE OPAQUE-ORIGIN CLAUSE IS ASKED THROUGH §7.2.5.1, not through a string comparison of its own: an opaque
- * origin is same origin with NOTHING, not even another opaque one, so asking this navigable whether it is same
- * origin with ITSELF is false in exactly the one case where that origin is opaque. That is the same one
- * implementation core/file/storage_manager.c reaches for, rather than a second copy of the rule. */
+ * THE OPAQUE-ORIGIN CLAUSE ASKS WHETHER THE ORIGIN IS OPAQUE, which is a different question from §7.2.5.1's
+ * same-origin check and used to be routed through it: while an origin was a serialization, "is this navigable
+ * same origin with itself" was false in exactly the case where the origin was opaque, so the wrong predicate
+ * gave the right answer. §7.1.1 step 1 says an origin IS same origin with itself, opaque included, so that
+ * route now answers true and the clause asks the question it actually has (core/url/origin.h). */
 bool navigation_entries_and_events_disabled(JSContext *ctx)
 {
     if (!document_fully_active(ctx)) return true;
     if (session_history_is_initial_about_blank(ctx)) return true;
-    if (!window_proxy_same_origin_of(document_window_proxy(ctx))) return true;
+    if (origin_is_opaque(window_proxy_origin(document_window_proxy(ctx)))) return true;
     return false;
 }
 

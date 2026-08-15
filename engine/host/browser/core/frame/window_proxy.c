@@ -67,7 +67,14 @@ typedef struct {
        about:blank Document only when something reads through it. */
     JSContext *realm;
     char      *url;    /* the navigable's address, for a realm not yet materialized (owned) */
-    char   *origin;    /* the active document's origin, for §7.2.5.1's same-origin check (owned) */
+    /* THE ACTIVE DOCUMENT'S ORIGIN — §7.1.1's RECORD, for §7.2.5.1's same-origin check. BORROWED: an origin is
+       immutable and lives for the agent (core/url/origin.h), which is what lets it sit inside the bytes
+       proxy_of captures — a navigation REPLACES this pointer rather than mutating what it points at, so a
+       parked flow's saved copy still names the origin its world had. It is a RECORD and not a serialization
+       because §7.1.1's step 1 compares IDENTITY: every opaque origin serializes to "null", so a string could
+       not tell one opaque origin read twice from two distinct ones, and this component guessed "two" — which
+       made a `data:` document's own about:blank child cross-origin to it. */
+    const Origin *origin;
     /* THE NAVIGABLE'S OWN STATE — see the member table below for why it is here and not in the peer. All four
        are per-flow: a flow that closed the window or renamed it is the only one whose timeline contains that,
        and `parent`/`opener` are values a fork must carry. */
@@ -157,10 +164,6 @@ static bool wp_closed(const ProxyData *p) { return p->closing != 0 || p->destroy
 
 static JSClassID g_proxy_class;
 static JSRuntime *g_wp_rt;
-/* THIS DOCUMENT'S ORIGIN — the ACCESSOR side of §7.2.5.1's same-origin check, and the reason the check can
-   exist at all. A proxy carries the origin of the navigable's active document; the comparison needs the origin
-   of whoever is reading, which is this instance's, and there is exactly one of those. */
-static char *g_local_origin;
 /* §7.2.5.1's member surface. A WindowProxy has no own properties: it FORWARDS to its navigable, answering from
    the navigable's own state where that is what the member is, and suspending on the host where the member reads
    the active document. See the member table lower down for which is which.
@@ -192,35 +195,33 @@ static ProxyData *proxy_of(JSValueConst v)
     return p;
 }
 
-/* §7.2.5.1's SAME-ORIGIN CHECK, AND THE ONE PLACE THIS COMPONENT CANNOT ASK THE SPEC'S QUESTION.
+/* §7.2.5.1's SAME-ORIGIN CHECK — §7.1.1's algorithm over two RECORDS, which is the whole of it: step 1 is the
+ * nonce comparison and step 2 is the tuple comparison, both inside origin_same.
  *
- * §7.5's algorithm has TWO steps, and this is a string compare, so it answers the second and GUESSES the first:
- * "Two origins, A and B, are said to be same origin if the following algorithm returns true: 1. If A and B are
- * THE SAME OPAQUE ORIGIN, then return true. 2. If A and B are both tuple origins and their schemes, hosts, and
- * port are identical, then return true. 3. Return false."
+ * IT USED TO BE A STRING COMPARE, AND THAT COULD NOT RUN STEP 1. "If A and B are the same opaque origin, then
+ * return true" is an IDENTITY comparison, and identity is exactly what §7.1.1's serializer drops — every opaque
+ * origin serializes to "null" — so this component could not tell one opaque origin looked at twice from two
+ * distinct ones and guessed "two". That is right for two sandboxed frames and wrong for the case step 1 exists
+ * for: §7.3.1's determine-the-origin hands ONE opaque origin to several Documents on purpose, so a `data:`
+ * document's `about:blank` child was refused every member of its own navigable outside the fixed cross-origin
+ * list, and its `contentDocument` was null. The origin is a record now (core/url/origin.h) and the guess is
+ * gone with the assert that named it.
  *
- * Step 1 is an IDENTITY comparison, and an identity is exactly what a SERIALIZATION drops: §7.5's serializer
- * answers "null" for EVERY opaque origin, so the two facts this component would need to tell apart — one opaque
- * origin looked at twice, and two distinct opaque origins — arrive here as the same two bytes. It guesses
- * "distinct", which is right for two sandboxed frames (treating two "null"s as equal would let one script the
- * other, the rule SECURITY.md states for the credentialed-read principal) and WRONG for step 1's own case: a
- * document whose origin is opaque is same origin WITH ITSELF, and §7.3.1's determine-the-origin hands the same
- * opaque origin to more than one Document on purpose — "if url is about:srcdoc … return sourceOrigin", "if url
- * matches about:blank and sourceOrigin is non-null, then return sourceOrigin", with the standard's own note
- * that "the cases that return sourceOrigin result in two Documents that end up with the same underlying
- * origin". A `data:` document's `about:blank` child is that pair, and here its `contentDocument` is null.
- *
- * THE FIX IS AN ORIGIN WITH AN IDENTITY, not a better string compare: an opaque origin carries a nonce (Blink's
- * SecurityOrigin keeps one), it is COPIED by the inheritance cases above and MINTED fresh by the sandboxed
- * origin browsing context flag, and step 1 compares nonces. Until this component holds one, the guess is
- * ASSERTED where it decides rather than assumed everywhere — see proxy_same_origin_decides, which is the one
- * place that assert lives and which BOTH filters over this record go through. */
+ * THE ACCESSOR SIDE IS THE AGENT'S ORIGIN. An instance is an origin-keyed agent cluster, so the origin of
+ * whoever is reading is this agent's, and there is exactly one of those. */
 static bool proxy_same_origin(const ProxyData *p)
 {
-    DCHECK(g_local_origin != NULL, "the same-origin check ran before window_proxy_init named this document's "
-                                   "origin — the accessor side of §7.2.5.1 has no value to compare against");
-    if (!p->origin || !strcmp(p->origin, "null") || !strcmp(g_local_origin, "null")) return false;
-    return !strcmp(p->origin, g_local_origin);
+    DCHECK(p->origin != NULL, "a WindowProxy carries no origin — §7.4 gives every navigable's document one and "
+                              "§7.3.1 decides which, so a proxy without one was minted somewhere that did not");
+    return origin_same(p->origin, origin_agent());
+}
+
+/* §7.1.1's SAME ORIGIN-DOMAIN over the same pair — §7.3.1's `content document` filter, which is a DIFFERENT
+   algorithm from the one above and not a laxer spelling of it. */
+static bool proxy_same_origin_domain(const ProxyData *p)
+{
+    DCHECK(p->origin != NULL, "a WindowProxy carries no origin");
+    return origin_same_domain(p->origin, origin_agent());
 }
 
 bool window_proxy_is(JSValueConst v)
@@ -321,7 +322,7 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
 
 /* §7.2.5.1's NAVIGATE — see window_proxy.h. Reached from navigable.c, which owns the fetch and the realm. */
 void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
-                           const char *url, const char *top_level_url, const char *origin)
+                           const char *url, const char *top_level_url, const Origin *origin)
 {
     ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
 
@@ -338,7 +339,10 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
     /* THE OLD STRINGS ARE NOT FREED. A parked flow's saved bytes still name them (see proxy_of), so freeing
        here would resume that flow onto freed memory; they are the PROXY's and are released with it. */
     p->url    = proxy_strdup(url);
-    p->origin = proxy_strdup(origin ? origin : "null");
+    DCHECK(origin != NULL, "a navigable was navigated to a document with no origin — §7.3.1 answers for every "
+                           "Document, and a navigation's answer is the one the LOAD computed, never re-derived "
+                           "here from the address (that second answer is what loses an inherited identity)");
+    p->origin = origin;   /* BORROWED, and REPLACED rather than mutated — see the field */
     /* THE NEW DOCUMENT'S ENVIRONMENT MOVED WITH IT, and the caller states where to — a navigation of a
        TOP-LEVEL traversable puts the environment at the new address, while a nested navigable's stays where
        its creation put it (HTML §8.1.3.1). It is not re-derived here from `url`, because whether this
@@ -389,7 +393,7 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
     p->window = JS_GetGlobalObject(realm);
 }
 
-JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const char *origin, const char *name,
+JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
                          bool is_popup, const char *creator_csp, const char *top_level_url,
                          JSValueConst parent, JSValueConst opener)
 {
@@ -415,7 +419,10 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const ch
     p->window = JS_UNDEFINED;   /* materialized by proxy_realm — at creation, or on the first read */
     p->realm  = NULL;
     p->url    = url ? proxy_strdup(url) : NULL;   /* NULL only for the self proxy, whose realm is already built */
-    p->origin = proxy_strdup(origin ? origin : "null");
+    DCHECK(origin != NULL, "a navigable was created with no origin — §7.3.1's determine-the-origin answers for "
+                           "every Document, including the initial about:blank one §7.4 creates a navigable "
+                           "with, and the answer is a RECORD whose identity the same-origin check compares");
+    p->origin = origin;   /* BORROWED — an origin lives for the agent (core/url/origin.h) */
     p->name   = name && *name ? proxy_strdup(name) : NULL;
     /* §7.4 NAMED IT. This mint is the one §7.4's create-a-new-navigable reaches, so the name it was given is
        the navigable's name — including the empty one a `open(url)` with no target gives. */
@@ -459,7 +466,7 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
     ProxyData *p;
 
     CHECK(tlus != NULL, "the realm's top-level creation URL would not convert to a C string");
-    obj = window_proxy_new(ctx, doc, NULL, g_local_origin, name, false, NULL, tlus, JS_UNDEFINED, JS_NULL);
+    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, NULL, tlus, JS_UNDEFINED, JS_NULL);
     JS_FreeCString(ctx, tlus);
     JS_FreeValue(ctx, tlu);
 
@@ -474,7 +481,7 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
 }
 
 
-JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin, const char *name,
+JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origin *origin, const char *name,
                                 JSValueConst parent, JSValueConst opener)
 {
     JSValue obj;
@@ -491,7 +498,9 @@ JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const char *origin
     p = calloc(1, sizeof *p);
     CHECK(p != NULL, "window proxy: OOM building a remote WindowProxy");
     p->window = JS_UNDEFINED;   /* it lives in another instance; there is nothing local to hold */
-    p->origin = proxy_strdup(origin ? origin : "null");
+    DCHECK(origin != NULL, "a remote navigable was minted with no origin — the peer's principal is what every "
+                           "cross-origin filter over this proxy compares, and it is stated by the trusted zone");
+    p->origin = origin;   /* BORROWED, and never same origin with this agent's — see origin_parse */
     p->name   = name && *name ? proxy_strdup(name) : NULL;
     p->name_known = 1;   /* §7.4 named it, in this instance, before the notice crossed */
     p->parent = JS_DupValue(ctx, parent);
@@ -573,7 +582,7 @@ bool window_proxy_closing(JSValueConst proxy)
 }
 
 /* §7.3.2.2's FAMILIAR WITH — see window_proxy.h. A is the INCUMBENT realm's browsing context, which is this
-   agent's, so every "A's active document's origin" below is g_local_origin and every "is A" is this realm's
+   agent's, so every "A's active document's origin" below is origin_agent() and every "is A" is this realm's
    own Window or its proxy. */
 static bool proxy_is_incumbent_window(JSContext *ctx, JSValueConst v)
 {
@@ -587,15 +596,14 @@ static bool proxy_is_incumbent_window(JSContext *ctx, JSValueConst v)
 /* IS THIS LINK OF A NAVIGABLE CHAIN SAME ORIGIN WITH THE INCUMBENT? A link is either another navigable's proxy
    or this agent's own Window, which is where the chain ENDS — window_proxy_new is handed the creator's Window
    as a child or auxiliary navigable's parent. An agent is ORIGIN-KEYED, so its Window's origin IS the
-   incumbent's, and the comparison is then §7.2.5.1's one rule: an OPAQUE origin is same origin with nothing,
-   not even with itself, so a sandboxed document is not familiar with its own browsing context either. */
+   incumbent's, and §7.1.1 step 1 then answers the end of the chain TRUE whatever that origin is: an origin is
+   same origin with itself, opaque included, which is why this is `true` and not a test against "null". */
 static bool link_same_origin_as_incumbent(JSContext *ctx, JSValueConst v)
 {
     ProxyData *q = JS_GetOpaque(v, g_proxy_class);
 
     if (q) return proxy_same_origin(q);
-    if (!proxy_is_incumbent_window(ctx, v)) return false;
-    return strcmp(g_local_origin, "null") != 0;
+    return proxy_is_incumbent_window(ctx, v);
 }
 
 bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy)
@@ -733,6 +741,13 @@ bool window_proxy_same_origin_of(JSValueConst proxy)
     return proxy_same_origin(p);
 }
 
+bool window_proxy_same_origin_domain_of(JSValueConst proxy)
+{
+    ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
+    DCHECK(p != NULL, "the origin of something that is not a WindowProxy was compared");
+    return proxy_same_origin_domain(p);
+}
+
 bool window_proxy_same_origin_with_top(JSContext *ctx)
 {
     JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
@@ -810,10 +825,11 @@ bool window_proxy_is_popup(JSValueConst proxy)
     return p->is_popup != 0;
 }
 
-const char *window_proxy_origin(JSValueConst proxy)
+const Origin *window_proxy_origin(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "the origin of something that is not a WindowProxy was asked for");
+    DCHECK(p->origin != NULL, "a WindowProxy carries no origin");
     return p->origin;
 }
 
@@ -899,33 +915,6 @@ static const bool PROXY_CROSS_ORIGIN[WP_MEMBER_N] = {
     true,  /* location — §7.2.5.1 DOES list it; the filtering is the Location object's own, not this table's */
 };
 
-/* §7.5's SAME-ORIGIN, ASKED AT THE ONE MOMENT ITS ANSWER DECIDES SOMETHING — which is where the guess inside it
-   is worth asserting, and why this is a function rather than a call to proxy_same_origin at each site. TWO
-   filters consult it (the member's own permission below, and §7.2.3.5's [[GetOwnProperty]] further down), and
-   an assert written into only one of them is silent in whichever path the next read happens to take. */
-static bool proxy_same_origin_decides(const ProxyData *p)
-{
-    /* THE GUESS IS ASSERTED WHERE IT DECIDES. proxy_same_origin cannot run §7.5's step 1 — "if A and B are the
-       same opaque origin, then return true" is an identity comparison and this component holds serializations,
-       in which every opaque origin is the string "null". Both sides opaque is therefore the ONE case where the
-       answer below is a guess rather than a computation, and it is also the case where the guess is wrong: two
-       Documents sharing one opaque origin are what §7.3.1's determine-the-origin produces on purpose (about:
-       srcdoc, and about:blank with a non-null sourceOrigin), so this SecurityError is thrown at a read the
-       standard permits, and `contentDocument` next door answers null for a document the page owns. Give an
-       opaque origin a NONCE — copied by those two inheritance cases, minted fresh by the sandboxed origin
-       browsing context flag — and compare nonces here; the string compare below then only ever sees tuple
-       origins, which is the only thing it can decide. */
-    DCHECK(!(p->origin && g_local_origin && !strcmp(p->origin, "null") && !strcmp(g_local_origin, "null")),
-           "§7.2.5.1 asked whether two OPAQUE origins are same origin, and §7.5 step 1 answers that by IDENTITY "
-           "— \"if A and B are the same opaque origin, then return true\" — which a serialization cannot carry: "
-           "every opaque origin serializes to \"null\", so this component cannot tell one origin read twice from "
-           "two distinct ones and has been guessing \"two\". Build the opaque origin's nonce (§7.3.1 copies it "
-           "for about:srcdoc and for about:blank with a non-null sourceOrigin, and mints a new one for the "
-           "sandboxed origin browsing context flag) and decide step 1 on it here. Until then a document with an "
-           "opaque origin is refused every member of its OWN navigable outside §7.2.5.1's fixed list.");
-    return proxy_same_origin(p);
-}
-
 /* §7.2.5.1: a read the origins do not permit is a SecurityError, and it is thrown at the READ rather than
    answered with undefined — a page distinguishes the two, and undefined would say "this window has no such
    member" about one it cannot see. */
@@ -933,7 +922,7 @@ static bool proxy_read_permitted(const ProxyData *p, int magic)
 {
     if (PROXY_CROSS_ORIGIN[magic])
         return true;   /* the fixed list is answered whatever the origins are, so nothing below is asked */
-    return proxy_same_origin_decides(p);
+    return proxy_same_origin(p);
 }
 
 /* ---- §7.2.3.5's CROSS-ORIGIN BRANCH — the half of the filter that has no member to hang off ---------------
@@ -1079,13 +1068,12 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
 
     /* ASKED BEFORE THE ORIGINS ARE, and that order is the same one proxy_read_permitted uses for the same
        reason: a name on the standard's list is answered by the member that owns it whatever the origins are,
-       so the origin question is never put — which is what keeps the opaque-origin assert inside
-       proxy_same_origin_decides firing only where the answer actually turns on it. */
+       so the origin question is never put at all. */
     for (i = 0; i < CROSS_ORIGIN_NAME_N; i++)
         if (prop == g_xo_atom[i]) return 0;   /* the member that owns it answers — including no member at all */
 
     /* §7.2.3.5's SAME-ORIGIN BRANCH IS NOT THIS HOOK'S — see the block comment. */
-    if (proxy_same_origin_decides(p)) return 0;
+    if (proxy_same_origin(p)) return 0;
 
     for (i = 0; i < XO_FALLBACK_N; i++)
         if (prop == g_xo_fallback[i]) {
@@ -1455,7 +1443,7 @@ void window_proxy_install_proto(JSContext *ctx)
     JS_SetClassProto(ctx, g_proxy_class, proto);
 }
 
-void window_proxy_init(JSContext *ctx, const char *origin)
+void window_proxy_init(JSContext *ctx)
 {
     /* §7.2.3.5's cross-origin branch is the CLASS's, not the prototype's: it runs BEFORE the prototype walk,
        which is the whole reason a name that is not a member can be refused at all. */
@@ -1466,9 +1454,9 @@ void window_proxy_init(JSContext *ctx, const char *origin)
     DCHECK(g_wp_rt == NULL || g_wp_rt == rt, "WindowProxy was installed into a second runtime");
     if (g_wp_rt == rt) return;
     g_wp_rt = rt;
-    free(g_local_origin);
-    g_local_origin = strdup(origin ? origin : "null");
-    CHECK(g_local_origin != NULL, "window proxy: OOM recording this document's origin");
+    /* THE ACCESSOR SIDE OF THE CHECK IS READ, NOT KEPT — origin_agent() is the one record for this agent, and
+       asserting it exists HERE says so at the declaration rather than at the first read that decides. */
+    DCHECK(origin_agent() != NULL, "§7.2.5.1's surface was declared in an agent with no origin");
     JS_NewClassID(rt, &g_proxy_class);
     JS_NewClass(rt, g_proxy_class, &d);
     proxy_capture_names(ctx);
@@ -1498,8 +1486,7 @@ void window_proxy_free(JSContext *ctx)
     /* §7.2.1.3.1's and §7.2.1.3.2's names, released with the agent that interned them. */
     for (i = 0; i < CROSS_ORIGIN_NAME_N; i++) { JS_FreeAtom(ctx, g_xo_atom[i]); g_xo_atom[i] = JS_ATOM_NULL; }
     for (i = 0; i < XO_FALLBACK_N; i++) { JS_FreeAtom(ctx, g_xo_fallback[i]); g_xo_fallback[i] = JS_ATOM_NULL; }
-    /* the prototypes are the REALMS' — released with their contexts */
-    free(g_local_origin);
-    g_local_origin = NULL;
+    /* the prototypes are the REALMS' — released with their contexts, and the ORIGINS are the AGENT's, released
+       by origin_release with everything else that outlives a realm */
     g_wp_rt = NULL;
 }

@@ -50,6 +50,7 @@
 #include "core/dom/node.h"
 #include "core/idl_args.h"
 #include "core/loader/cookie_jar.h"
+#include "core/url/origin.h"
 #include "core/url/url.h"
 
 /* THE MEMBER LIST, IN ONE PLACE, in the order §3.1.1's partial interface declares them. The getter's magic is
@@ -114,16 +115,20 @@ static bool dm_cookie_request_uri(lxb_dom_document_t *dom, UrlRecord *rec)
 }
 
 /* §3.1.4's second condition, "the Document's origin is an OPAQUE ORIGIN" — a "SecurityError" from both the
-   getter and the setter. A document's origin is opaque when its navigable container sandboxes it (§7.6.2's
-   `<iframe sandbox>` without `allow-same-origin`), and this engine's §7.2.6 policy container carries a CSP and
-   nothing else, so no document it builds has a sandboxing flag set to read. Not a skipped step: a condition
-   whose state cannot exist, evaluated at the step that asks it — the same shape core/html/autofocus.c and
-   core/html/html_form.c evaluate the other two sandboxing flags with, and the same three sites the day the flag
-   set lands in the policy container. */
+   getter and the setter. IT IS ANSWERED NOW, and it used to be `return false` with a note that this engine
+   could not know: a document's origin is opaque when its navigable container sandboxes it, and also — which
+   is the case that was always reachable — whenever URL §4.7 gives its address an opaque origin, which is
+   every `data:`, `file:` and unknown-scheme document. §7.1.1's origin is a RECORD here (core/url/origin.h) and
+   the record says which kind it is, so the step is a computation.
+   READ OFF THE AGENT, not off `dom`, and that is exact rather than a shortcut: an instance is an ORIGIN-KEYED
+   agent cluster, so every document in this heap has this one principal — navigable.c asserts it at the one
+   place a second realm is built. `dom` stays in the signature because the RECEIVER is what names which
+   document the member is about, and the day two principals could share a heap this is where that would be
+   read from. */
 static bool dm_origin_is_opaque(lxb_dom_document_t *dom)
 {
     (void)dom;
-    return false;
+    return origin_is_opaque(origin_agent());
 }
 
 /* ---- the members ----------------------------------------------------------------------------------------- */

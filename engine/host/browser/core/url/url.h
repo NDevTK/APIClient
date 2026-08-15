@@ -74,7 +74,9 @@ char *url_serialize_host(const UrlHost *h);
    them — one serialization, because the two interfaces state the same one. */
 char *url_serialize_host_port(const UrlRecord *u);
 char *url_serialize_port(const UrlRecord *u);
-/* §4.7's `origin`: the tuple origin for a scheme that has one, and the string "null" for every other. */
+/* §4.7's `origin`, SERIALIZED: the tuple origin for a scheme that has one, and the string "null" for every
+   other. THE BYTES, never a principal — an origin is a record with an identity (core/url/origin.h) and every
+   same-origin decision is made on that record; this is what `URL.origin` and `location.origin` return. */
 char *url_serialize_origin(const UrlRecord *u);
 /* The path, as `pathname` reports it: the opaque path, or "/" joined segments. */
 char *url_serialize_path(const UrlRecord *u);

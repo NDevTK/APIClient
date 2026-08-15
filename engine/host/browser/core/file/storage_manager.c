@@ -119,14 +119,12 @@ static int sm_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         s->promise = JS_NewPromiseCapability(ctx, funcs);
         if (JS_IsException(s->promise)) return -1;
         /* STEP 2's failure: an OPAQUE ORIGIN has no storage key, so there is no bottle map to obtain and the
-           document must not reach this agent's filesystem. `window_proxy_same_origin_of` answers false for a
-           navigable whose origin is opaque, which is the same rule SECURITY.md states for the credentialed-read
-           principal — an opaque origin is same origin with NOTHING, not even another opaque one. */
-        /* Asked of THIS document's OWN navigable, where the two origins being compared are the same string —
-           so the answer is false in exactly one case, the one where that string is "null". That IS the opaque
-           test, expressed through the one implementation of §7.2.5.1 rather than through a second comparison
-           this file would then own a copy of. */
-        if (!window_proxy_same_origin_of(document_window_proxy(ctx))) {
+           document must not reach this agent's filesystem. IT IS THE OPAQUE TEST, ASKED AS ONE. It used to be
+           routed through §7.2.5.1's same-origin check — this document's navigable compared against itself,
+           which was false in exactly the case where the origin serialized to "null" — and that route inverted
+           the day an origin became a record: §7.1.1 step 1 makes an origin same origin with ITSELF, opaque
+           included, so the check would now pass and a sandboxed document would reach the filesystem. */
+        if (origin_is_opaque(window_proxy_origin(document_window_proxy(ctx)))) {
             JS_ThrowDOMException(ctx, "SecurityError",
                                  "a document with an opaque origin has no storage bottle map");
             s->value = JS_GetException(ctx);

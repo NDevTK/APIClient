@@ -48,7 +48,6 @@
    whichever document installed last and `e.source` from one document would have compared equal to the other's.
    The document handle is the identity, and window_proxy.c owns the mapping. */
 static JSValueConst win_proxy(JSContext *ctx) { return document_window_proxy(ctx); }
-static char   *g_origin;          /* this document's origin, serialized (owned) */
 static JSValue g_deliver_fn = JS_UNDEFINED;
 
 /* One queued post: the message, the origin check it still owes, and the target. Held as a JS Array for the
@@ -67,15 +66,16 @@ enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_SENDER_ORIGIN, P
 
 /* §9.4.4 step 7.1: the origin check happens IN THE TASK, not at the call — the target may have navigated
    between the post and the delivery, and the standard checks the origin it has THEN. `want` is the serialized
-   target origin, or NULL for "*". */
-static bool origin_matches(const char *want, const char *have)
+   target origin, or NULL for "*"; `have` is the target document's ORIGIN RECORD.
+   THE TWO SIDES ARE NOT THE SAME KIND OF THING, and that asymmetry is the standard's rather than a shortcut:
+   `targetOrigin` reaches this engine as a string — the page wrote one, or the trusted zone stamped one on a
+   routed message — and a string can only ever name a TUPLE origin, because §7.1.1's opaque origin has "no
+   serialization it can be recreated from". So the comparison is §7.1.1 step 2 with one side still in bytes,
+   which is what origin_is_serialized_tuple is; an opaque target refuses every `want`, "null" included. */
+static bool origin_matches(const char *want, const Origin *have)
 {
     if (!want) return true;                       /* "*" — any origin */
-    if (!have) return false;
-    /* §7.5's "same origin": for a tuple origin the serializations are equal, and an OPAQUE origin ("null") is
-       same-origin with nothing, not even itself — which is why this is not a plain string compare. */
-    if (!strcmp(want, "null") || !strcmp(have, "null")) return false;
-    return strcmp(want, have) == 0;
+    return origin_is_serialized_tuple(have, want);
 }
 
 static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -276,7 +276,10 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
     /* §7.2.5.1's proxy for the SENDER, minted remote because that document lives in the instance that sent
        this. Its origin is the stamped one — the same value `event.origin` reports, and the value a
        same-origin check inside the peer would be made against. */
-    source = window_proxy_new_remote(ctx, world_doc_intern(sender_doc), sender_origin, NULL,
+    /* THE STAMPED SERIALIZATION BECOMES A RECORD HERE, and it is the peer's own: origin_parse mints a fresh
+       opaque origin for "null", so a sandboxed peer is same origin with nothing on this side — which is right,
+       since two Documents sharing ONE opaque origin share an agent cluster and therefore an instance. */
+    source = window_proxy_new_remote(ctx, world_doc_intern(sender_doc), origin_parse(sender_origin), NULL,
                                      JS_UNDEFINED, JS_NULL);
     CHECK(!JS_IsException(source), "the sending document's WindowProxy could not be allocated");
     JS_SetPropertyUint32(ctx, entry, PQ_DATA, buf);
@@ -379,7 +382,20 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
        page's mistake and not the delivery's. */
     if (to && strcmp(to, "*") != 0) {
         if (!strcmp(to, "/")) {
-            want = JS_NewString(ctx, g_origin ? g_origin : "null");
+            /* "/" IS THE SENDER'S OWN ORIGIN, and the queue carries a SERIALIZATION because this entry may
+               cross an instance (window_message_send_remote reads this very slot). A serialization can name a
+               tuple origin and nothing else, so an OPAQUE sender writing "/" is a request this queue cannot
+               express — and it is a real page doing a legal thing (a `data:` document posting to itself), not
+               an invariant violation, so what is missing is a mechanism and not a check. */
+            if (origin_is_opaque(origin_agent()))
+                DFAIL("§9.4.4's `/` target origin was used by a document whose origin is OPAQUE. `/` means THE "
+                      "SENDER'S OWN ORIGIN, and §7.1.1 step 1 makes that origin same origin with itself, so the "
+                      "delivery must succeed — but the post queue carries the requested origin as a "
+                      "SERIALIZATION (it may cross an instance, where a record cannot go) and every opaque "
+                      "origin serializes to \"null\", which is same origin with nothing. Build the queue slot "
+                      "as a HANDLE for a local delivery and a serialization for a routed one, so §7.1.1 step "
+                      "1 decides the local case by identity — see core/url/origin.h");
+            want = JS_NewString(ctx, origin_serialized(origin_agent()));
         } else {
             UrlRecord rec;
             char *o;
@@ -418,7 +434,9 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     JS_SetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN, want);
     /* §9.4.4 step 7.3's source, read HERE where the caller's realm is the one running. */
     JS_SetPropertyUint32(ctx, entry, PQ_SOURCE, JS_DupValue(ctx, win_proxy(ctx)));
-    JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, g_origin ? g_origin : "null"));
+    /* §9.4.4's `origin` IS A STRING BY IDL — "the serialization of the origin of the incumbent settings
+       object" — so this is one of the places a serialization is the ANSWER rather than a lost identity. */
+    JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, origin_serialized(origin_agent())));
     structured_with_transfer_free(ctx, &swt);
 
     /* THE RESOLVED TARGET, not this window. A task in THIS instance can only deliver to a navigable this
@@ -487,15 +505,13 @@ void window_message_init(JSContext *ctx)
 void window_message_install(JSContext *ctx, JSValueConst global, const char *origin)
 {
 
-    /* THE ORIGIN IS THE AGENT'S — an agent is origin-keyed, so a second document installing here is ordinary
-       and a second ORIGIN would be two principals behind one instance, which SECURITY.md forbids. */
-    DCHECK(g_origin == NULL || !strcmp(g_origin, origin ? origin : "null"),
+    /* THE ORIGIN IS THE AGENT'S — one record, in core/url/origin.c, and this file keeps no copy of it: an
+       agent is origin-keyed, so a second document installing here is ordinary and a second ORIGIN would be two
+       principals behind one instance, which SECURITY.md forbids. The host's per-document statement is CHECKED
+       against the agent's rather than stored beside it. */
+    DCHECK(origin != NULL && !strcmp(origin_serialized(origin_agent()), origin),
            "a second document was installed into this agent with a DIFFERENT origin — an agent is origin-keyed, "
            "so a cross-origin document is a second INSTANCE and never a second realm in this one");
-    if (!g_origin) {
-        g_origin = strdup(origin ? origin : "null");
-        CHECK(g_origin != NULL, "window message: OOM recording this agent's origin");
-    }
     /* ONE DECLARATION, TWO PLACES IT IS REACHED — the global (`window.postMessage`) and every WindowProxy
        (`otherWindow.postMessage`). Declaring it twice would give the two spellings two members that can drift,
        and `window.postMessage === self.postMessage` would stop holding. The WindowProxy prototype is the
@@ -509,6 +525,4 @@ void window_message_free(JSContext *ctx)
 
     JS_FreeValue(ctx, g_deliver_fn);
     g_deliver_fn = JS_UNDEFINED;
-    free(g_origin);
-    g_origin = NULL;
 }
