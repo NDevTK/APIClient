@@ -703,7 +703,18 @@ function handleContentMessage(msg, sender) {
     _buf.tabId = tabId;
     _buf.docKey = _dk;
     _buf.origin = doc.origin;                                         // credentialed-read principal (per-document; = _senderOrigin(sender))
-    _buf.url = doc.url || (sender.tab && sender.tab.url) || "";       // SSRF origin + window.location (document's own url)
+    // THIS DOCUMENT'S OWN ADDRESS, WHICH IS THE SSRF PRINCIPAL — and a sub-frame must never analyse under the
+    // EMBEDDER's. This fell back to `sender.tab.url` when the frame's own address was missing, which is the
+    // one substitution that inverts safeFetch's origin-relative rule: SECURITY.md allows a private target
+    // "unless the page principal is itself private — a public page cannot use the extension's host
+    // permissions to reach the user's localhost/intranet". A frame in a tab whose top document is
+    // http://localhost/ would have inherited that PRIVATE classification and been allowed to fetch the user's
+    // intranet on its behalf. sender.url is browser-set and present on every content-script message, so its
+    // absence is a broken invariant, not a case to substitute a different document's address for — and ""
+    // is what the chokepoint already treats as unknown (public, private targets blocked).
+    DCHECK(!!doc.url, "a CONTENT_HTML arrived with no sender.url — the document's own address is the SSRF " +
+                      "principal and the engine's window.location, and no other document's address may stand in for it");
+    _buf.url = doc.url;                                               // SSRF origin + window.location (document's own url)
     // HTML §8.1.3.1's TOP-LEVEL CREATION URL for this document's environment — the address of the document at
     // the TOP of its navigable chain, which is the TAB's url and is browser-provided exactly like sender.url
     // (SECURITY.md already keys authorization on sender.tab.url for the same reason: a frame cannot state it
