@@ -128,6 +128,17 @@ const INTERFACES = {
   TransformStreamDefaultController: "core/streams/transform_stream.c",
   Blob:                ["core/file/blob.c", "core/byte_reader.c"],
   File:                ["core/file/blob.c", "core/byte_reader.c"],
+  /* File System Standard §2.2-§2.4. These three shipped with no row at all, so the audit said nothing about
+     them in either direction — the lying-by-omission this map's own comment names. Each names the component
+     plus File System Access §2.3's partial interface (queryPermission/requestPermission), whose members land
+     on the prototype file_system_handle.c builds.
+     §2.4.1's `async_iterable<USVString, FileSystemHandle>` is bound by the SHARED default asynchronous
+     iterator object, so idl_async_iter.c is where the audit finds `entries`, `keys` and `values` — naming only
+     the component would report three members absent that the interface has. */
+  FileSystemHandle:          ["core/file/file_system_handle.c", "core/file/file_system_access.c"],
+  FileSystemFileHandle:      ["core/file/file_system_handle.c", "core/file/file_system_access.c"],
+  FileSystemDirectoryHandle: ["core/file/file_system_handle.c", "core/file/file_system_access.c",
+                              "core/idl_async_iter.c"],
   /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission
      this map's own comment names, and it was silent from the moment the component landed. */
   /* An `iterable<>` interface's keys/values/entries/forEach are installed by the SHARED default iterator
@@ -295,9 +306,21 @@ function flatten(name, seen = new Set()) {
    report would never mention it. `maplike`/`setlike` carry the same rule and are expanded for the same
    reason. @@iterator is left out of the diff because the scan looks for property NAMES in the component and a
    symbol-keyed one has none — the four named members are what it can honestly check. */
+/* AND `async_iterable<>` IS THE SAME DEFECT ONE DECLARATION OVER. It was not in the list below, so
+   FileSystemDirectoryHandle's `entries`, `keys` and `values` — the whole of §2.4.1's directory iteration, and
+   the only way `for await (const [name, h] of dir)` is written — were invisible to the audit in both
+   directions: absent while nothing implemented them, and uncredited once something did. §3.7.10's member set
+   is NOT §3.7.9's: a pair async declaration defines `entries`, `keys` and `values`, a value one defines
+   `values` alone, and NEITHER defines `forEach` — an async iterable has no synchronous walk to hand a callback
+   to, so expecting one would report a member the spec does not define. */
 function iterationMembers(node) {
   const out = [];
   for (const m of node.members) {
+    if (m.type === "async_iterable") {
+      out.push("values");
+      if (m.idlType && m.idlType.length === 2) out.push("entries", "keys");
+      continue;
+    }
     if (m.type !== "iterable" && m.type !== "maplike" && m.type !== "setlike") continue;
     const pair = m.type === "maplike" || (m.idlType && m.idlType.length === 2);
     out.push("forEach", "values");
@@ -321,7 +344,7 @@ function members(name) {
   }
   /* the iteration members of this interface AND of everything it inherits from, which is what flatten walks */
   for (const m of flatten(name)) {
-    if (m.type === "iterable" || m.type === "maplike" || m.type === "setlike")
+    if (m.type === "iterable" || m.type === "maplike" || m.type === "setlike" || m.type === "async_iterable")
       for (const n of iterationMembers({ members: [m] })) add(n);
   }
   return out;

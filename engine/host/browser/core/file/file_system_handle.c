@@ -20,10 +20,13 @@
  * it: locate the entry, decide a completion, settle the promise. Written as seven machines that shape would be
  * copied seven times and the settle would be seven chances to drop a rejection.
  *
- * WHAT IS ABSENT AND WHY. §2.4.1's `async_iterable<USVString, FileSystemHandle>` needs Web IDL §3.7.11's
- * DEFAULT ASYNC ITERATOR OBJECT — an interface this engine does not have (core/idl_iter.c builds §3.7.10's
- * synchronous one), so `for await (const [name, h] of dir)` is honestly ABSENT rather than a `values()` that
- * answers with something that is not an async iterator. §2.6's FileSystemSyncAccessHandle is
+ * §2.4.1's DIRECTORY ITERATION is the same machine one layer down. `async_iterable<USVString,
+ * FileSystemHandle>` is Web IDL §3.7.10's declaration, whose whole binding — `entries`, `keys`, `values`,
+ * %Symbol.asyncIterator%, the iterator object and its `next` — is core/idl_async_iter.c's, and all this file
+ * supplies is §2.5.10's two hooks: the initialization steps that give the iterator its past-results set, and
+ * "get the next iteration result", which is a step machine for the same reason every member above is.
+ *
+ * WHAT IS ABSENT AND WHY. §2.6's FileSystemSyncAccessHandle is
  * `[Exposed=DedicatedWorker]` and this engine has no WorkerGlobalScope, so its exposure set is empty here. File
  * System Access §2.3's `queryPermission`/`requestPermission` are a PARTIAL interface of this one and live in
  * core/file/file_system_access.c beside the "file-system" powerful feature they are the two doors onto; they
@@ -35,6 +38,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/idl_async_iter.h"
 #include "core/realm.h"
 #include "core/frame/secure_context.h"
 #include "core/file/blob.h"
@@ -527,6 +531,204 @@ static const IdlStepDecl FSH_DECL = {
     "File System §2.2-§2.4 the FileSystemHandle members", FSH_STEPS
 };
 
+/* ---- §2.4.1's DIRECTORY ITERATION ---------------------------------------------------------------------------
+ *
+ * `async_iterable<USVString, FileSystemHandle>`. Web IDL §3.7.10 owns the whole JavaScript binding of that
+ * declaration — `entries`, `keys`, `values`, %Symbol.asyncIterator%, the default asynchronous iterator object
+ * and its `next` — and core/idl_async_iter.c is where it is written once. §2.5.10 requires the PROSE to define
+ * two things, and these are them.
+ *
+ * THE ITERATION IS STATEFUL AND THE STATE IS PER-ITERATOR. §2.4.1 does not walk an index: it takes "a file
+ * system entry in directory's children, such that child's name is not contained in iterator's past results",
+ * which is why a directory mutated mid-iteration is explicitly allowed to yield a different set ("Entries that
+ * are created or deleted while the iteration is in progress might or might not be included. No guarantees are
+ * given either way") and why the children are re-read at every step rather than snapshotted.
+ *
+ * THE PAST RESULTS ARE A JS OBJECT, never a malloc'd C list: a flow's appends are then property writes the COW
+ * delta already captures, so one flow's iteration cannot be seen by its sibling, and the set parks to the cold
+ * tier with the flow that owns it. Its [[Prototype]] is NULL, so a child named "__proto__" or "toString" is an
+ * ordinary key and membership is exactly own-property presence. */
+
+static int g_dir_iter_handle = -1;
+
+/* Web IDL §3.7.10 step 3.1.3's "implements definition", where the DEFINITION is FileSystemDirectoryHandle and
+   not FileSystemHandle: `FileSystemDirectoryHandle.prototype.values.call(fileHandle)` must be a TypeError, and
+   §2.2's brand is ONE class that both interfaces wear — so what tells them apart is the LOCATOR'S KIND, which
+   is what §2.4's own note says it is ("A FileSystemDirectoryHandle's associated locator's kind is
+   'directory'"). */
+static bool fsdir_is(JSValueConst v)
+{
+    const FsLocator *l = fsh_locator(v);
+
+    return l != NULL && l->directory;
+}
+
+/* §2.4.1: "The asynchronous iterator initialization steps for a FileSystemDirectoryHandle handle and its async
+   iterator iterator are: Set iterator's past results to an empty set." */
+static int fsdir_iter_init(JSContext *ctx, JSValueConst target, JSValueConst iter,
+                           int argc, JSValueConst *argv, JSValue *pstate)
+{
+    JSValue set = JS_NewObjectProto(ctx, JS_NULL);
+
+    (void)target; (void)iter; (void)argc; (void)argv;
+    if (JS_IsException(set)) return -1;
+    DCHECK(JS_IsUndefined(*pstate), "§2.4.1's initialization steps ran on an iterator that already had state — "
+                                    "Web IDL §3.7.10 step 3.1.6 runs them exactly once, at the mint");
+    *pstate = set;
+    return 0;
+}
+
+/* §2.4.1 steps 2.3.4-2.3.8: the first child whose name `past` does not already contain, appended to `past` and
+   turned into a child handle. Answers the two-element value pair a PAIR declaration resolves with — « child's
+   name, result » — or §2.5.10's end of iteration when there is no such child. OWNED, or JS_EXCEPTION. */
+static JSValue fsdir_iter_pick(JSContext *ctx, const FsLocator *l, JSValueConst dir, JSValueConst past)
+{
+    int n = file_system_child_count(ctx, dir), i;
+
+    DCHECK(JS_IsObject(past), "§2.4.1's iteration reached its steps with no past results set — Web IDL §3.7.10 "
+                              "step 3.1.6 runs the initialization steps that create it before the iterator is "
+                              "ever handed out");
+    for (i = 0; i < n; i++) {
+        JSValue name = JS_UNDEFINED;
+        JSValue child = file_system_child_at(ctx, dir, i, &name);
+        JSAtom a = JS_ValueToAtom(ctx, name);
+        const char *nm;
+        JSValue pair, handle;
+        int seen;
+
+        if (a == JS_ATOM_NULL) { JS_FreeValue(ctx, name); JS_FreeValue(ctx, child); return JS_EXCEPTION; }
+        /* The set is this engine's own null-prototype object, so the membership test reaches no prototype and
+           runs none of the page's code. */
+        seen = JS_HasProperty(ctx, past, a);
+        if (seen != 0) {
+            JS_FreeAtom(ctx, a);
+            JS_FreeValue(ctx, name);
+            JS_FreeValue(ctx, child);
+            if (seen < 0) return JS_EXCEPTION;
+            continue;
+        }
+        /* step 2.3.6: "Append child's name to iterator's past results." */
+        JS_DefinePropertyValue(ctx, past, a, JS_TRUE, JS_PROP_C_W_E);
+        JS_FreeAtom(ctx, a);
+        /* steps 2.3.7-2.3.8: a child FileSystemFileHandle for a file entry, a child FileSystemDirectoryHandle
+           for a directory entry — which is fsh_child, the same operation §2.4.2 and §2.4.3 reach. */
+        nm = file_system_name_cstr(ctx, child);
+        CHECK(nm != NULL, "§2.4.1's iteration reached a child entry with no name");
+        handle = fsh_child(ctx, l, nm, file_system_is_directory(child));
+        JS_FreeCString(ctx, nm);
+        JS_FreeValue(ctx, child);
+        if (JS_IsException(handle)) { JS_FreeValue(ctx, name); return handle; }
+        pair = JS_NewArray(ctx);
+        if (JS_IsException(pair)) { JS_FreeValue(ctx, name); JS_FreeValue(ctx, handle); return pair; }
+        /* Two defines and two checks, because each CONSUMES its value: folded into one `||` the handle is
+           never handed over when the name's define fails, and leaks. */
+        if (JS_DefinePropertyValueUint32(ctx, pair, 0, name, JS_PROP_C_W_E) < 0) {
+            JS_FreeValue(ctx, handle);
+            JS_FreeValue(ctx, pair);
+            return JS_EXCEPTION;
+        }
+        if (JS_DefinePropertyValueUint32(ctx, pair, 1, handle, JS_PROP_C_W_E) < 0) {
+            JS_FreeValue(ctx, pair);
+            return JS_EXCEPTION;
+        }
+        return pair;
+    }
+    /* step 2.3.5: "If child is null, resolve promise with undefined and abort these steps" — which is Web IDL
+       §2.5.10's END OF ITERATION rather than the JavaScript value `undefined`: the fulfilment of this promise
+       is read by §3.7.10.2's fulfillSteps, and `undefined` there is a value a declaration may legitimately
+       yield. The two say the same thing; only the marker outside the value space says it unambiguously. */
+    return idl_async_iter_end(ctx);
+}
+
+/* The iteration's own step storage. ONE StreamWork, because the only sub-sequence §2.4.1 has is the settle. */
+typedef struct {
+    StreamWork w;
+    JSValue    promise;   /* §2.4.1 step 1's "let promise be a new promise" (owned) */
+    uint8_t    started;   /* a zeroed state reads as the INTEGER 0, so this is what says "not yet" */
+} FsDirIterWork;
+
+static void fsdir_iter_visit(JSContext *ctx, void *work, JSStepVisit *v)
+{
+    FsDirIterWork *k = work;
+
+    stream_work_visit(ctx, &k->w, v);
+    v->val(ctx, &k->promise);
+}
+
+/* §2.4.1's "To get the next iteration result for a FileSystemDirectoryHandle handle and its async iterator
+   iterator". A STEP because its last act settles a promise, and a resolving function reaches 27.2.1.3.2 step
+   8's `then` read on what it is given — which for a value pair is an Array, one
+   `Object.defineProperty(Array.prototype, "then", …)` away from being the page's code. */
+static int fsdir_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst target, JSValueConst iter,
+                           JSValue *pstate, JSValue in, JSValue *ppromise, JSValue **out_cb, int *out_argc)
+{
+    FsDirIterWork *k = work;
+    JSValue settled = JS_UNDEFINED;
+    int r;
+
+    (void)hdr; (void)iter;
+    if (!k->started) {
+        const FsLocator *l = fsh_locator(target);
+        JSValue entry, funcs[2];
+        int reject = 0;
+
+        /* EVERY OWNED FIELD IN PLACE BEFORE THE FIRST THING THAT CAN THROW — the failure path tears the whole
+           machine down through the ownership declaration, which frees exactly what it names. */
+        stream_work_start(&k->w);
+        k->promise = JS_UNDEFINED;
+        k->started = 1;
+        DCHECK(l != NULL, "§2.4.1's iteration reached a target that is not a FileSystemHandle — the iterator's "
+                          "target is the receiver Web IDL §3.7.10 step 3.1.3 has already brand-checked");
+        k->promise = JS_NewPromiseCapability(ctx, funcs);   /* step 1: "Let promise be a new promise." */
+        if (JS_IsException(k->promise)) return -1;
+        entry = fsh_locate(ctx, l);                         /* step 2.1: locate an entry given handle's locator */
+        if (JS_IsNull(entry)) {
+            /* step 2.3.2: "If directory is null, reject result with a NotFoundError DOMException." A page can
+               remove a directory through one handle while another is iterating it, which is this rejection. */
+            k->w.value = fsh_dom_error(ctx, "NotFoundError", "this directory no longer exists");
+            reject = 1;
+        } else {
+            DCHECK(file_system_is_directory(entry),
+                   "§2.4.1's iteration located a FILE entry — a FileSystemDirectoryHandle's locator's kind is "
+                   "\"directory\", and §2.1's locate an entry answers a directory entry or null for one");
+            k->w.value = fsdir_iter_pick(ctx, l, entry, *pstate);
+        }
+        JS_FreeValue(ctx, entry);
+        if (JS_IsException(k->w.value)) {
+            k->w.value = JS_UNDEFINED;
+            JS_FreeValue(ctx, funcs[0]);
+            JS_FreeValue(ctx, funcs[1]);
+            return -1;
+        }
+        k->w.func = funcs[reject];
+        JS_FreeValue(ctx, funcs[reject ^ 1]);
+    }
+    r = step_call_run(ctx, &k->w.phase, STEP_CB(k->w.cb), k->w.func, JS_UNDEFINED, 1,
+                      (JSValueConst *)&k->w.value, in, &settled, out_cb, out_argc);
+    if (r > 0) return r;       /* parked ON THE SETTLE; the `then` read runs with a flow base under it */
+    JS_FreeValue(ctx, settled);
+    *ppromise = k->promise;    /* step 3: "Return promise." */
+    k->promise = JS_UNDEFINED;
+    return 0;
+}
+
+/* §2.4.1 defines NO asynchronous iterator return algorithm, so `ret` is NULL and Web IDL §3.7.10.2 gives the
+   iterator prototype no `return` at all — which is observable: breaking out of a `for await` loop over a
+   directory runs AsyncIteratorClose, whose GetMethod finds undefined and calls nothing. An iteration this
+   component had to unwind (a lock, a cursor) would be where that algorithm goes; this one holds neither. */
+static const IdlAsyncIterOps FS_DIR_ITER_OPS = {
+    "FileSystemDirectoryHandle",
+    /*pair*/ true,          /* `async_iterable<USVString, FileSystemHandle>` — two type parameters */
+    fsdir_is,
+    fsdir_iter_init,
+    fsdir_iter_next,
+    /*ret*/ NULL,
+    sizeof(FsDirIterWork), fsdir_iter_visit,
+    /* the declaration takes no arguments: "In the future we might want to add arguments ... to support for
+       example recursive iteration" is an open issue, not a member of the IDL this engine implements. */
+    NULL, 0, NULL, 0
+};
+
 /* ---- declaration and per-realm install --------------------------------------------------------------------- */
 
 /* §2.4's THREE DICTIONARIES. Each declares ONE boolean whose IDL writes `= false`, and an ABSENT member reads
@@ -577,6 +779,11 @@ static void fs_handle_install_realm(JSContext *ctx)
     idl_install_method(ctx, dir_p, "getDirectoryHandle", 1, g_id_get_directory_handle);
     idl_install_method(ctx, dir_p, "removeEntry", 1, g_id_remove_entry);
     idl_install_method(ctx, dir_p, "resolve", 1, g_id_resolve);
+    /* §2.4.1's `async_iterable<USVString, FileSystemHandle>` — Web IDL §3.7.10's four members and §3.7.10.2's
+       asynchronous iterator prototype object, both built for THIS realm. It is installed here, inside the
+       [SecureContext] gate above, because §3.3.13 removes every member of these interfaces in a non-secure
+       realm and an iterator prototype nothing can reach would be an object built for nobody. */
+    idl_async_iter_install(ctx, dir_p, g_dir_iter_handle);
     JS_SetClassProto(ctx, g_dir_handle_class, JS_DupValue(ctx, dir_p));
 
     /* §3.7.1's INTERFACE OBJECTS, on THIS realm's global. None of the three declares a constructor, so `new
@@ -633,6 +840,9 @@ void fs_handle_init(JSContext *ctx)
     idl_optional_from(1);
     g_id_remove_entry = idl_method_id_step(ctx, NAME_OPTS, 2, REMOVE_OPTIONS, 1, &FSH_DECL, M_REMOVE_ENTRY);
     idl_optional_from(1);
+    /* §2.4.1's asynchronous iteration, declared with the members it sits beside because the class, the three
+       method ids and the two step machines are the AGENT's, exactly as every id above is. */
+    g_dir_iter_handle = idl_async_iter_declare(ctx, &FS_DIR_ITER_OPS);
     realm_declare_intrinsic(fs_handle_install_realm);
 }
 
@@ -643,5 +853,6 @@ void fs_handle_free(void)
        away with them. */
     g_id_is_same_entry = g_id_get_file = g_id_create_writable = -1;
     g_id_get_file_handle = g_id_get_directory_handle = g_id_remove_entry = g_id_resolve = -1;
+    g_dir_iter_handle = -1;
     g_handle_class = g_file_handle_class = g_dir_handle_class = 0;
 }
