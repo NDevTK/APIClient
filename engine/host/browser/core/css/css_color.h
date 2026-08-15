@@ -14,20 +14,25 @@
  * is the input and reads the `lxb_css_value_color_t` back out: the entry lexbor exposes is the declaration
  * parser, and going through it is what makes the grammar lexbor's rather than a second one written here.
  * What is NOT lexbor's is the numeric part — HSL and HWB are converted to sRGB by CSS Color 4 §7.1 and §8.1's
- * own algorithms, and the named colours by §6.1's own table, both ported as data and arithmetic, not re-parsed.
+ * own algorithms, the named colours by §6.1's own table, and Lab, LCH, Oklab and OkLCh by §12's colour
+ * conversion in its own component (css_color_convert.c), all ported as data and arithmetic, not re-parsed.
  *
  * A COLOUR IS RESOLVED TO sRGB, because that is where every caller's serialization starts: §4.10.5.1.14
- * converts to 'srgb' before rounding, and §16.2.1's HTML-compatible form is defined only for sRGB values. The
- * components are in the [0, 1] reference range. A `none` component (CSS Color 4's missing components) is
- * resolved to 0 HERE, which is §16.2's own rule for a serialization form that cannot represent `none` — the
- * only form this component performs. */
+ * converts to 'srgb' before rounding, and §16.2.1's HTML-compatible form is defined only for sRGB values. A
+ * `none` component (CSS Color 4's missing components) is resolved to 0 HERE, which is both §4.4's rule for
+ * converting a colour to another colour space and §16.2's rule for a serialization form that cannot represent
+ * `none` — the only form this component performs. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_COLOR_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_COLOR_H
 #include <stdbool.h>
 #include <stddef.h>
 
-/* A `<color>` in the sRGB colour space. The three components are in the [0, 1] reference range and `a` in
-   [0, 1]; all four are already clamped, which is what CSS Color 4 does at parse time. */
+/* A `<color>` in the EXTENDED sRGB colour space. `a` is in [0, 1] — CSS Color 4 clamps alpha at parse time —
+   but `r`, `g` and `b` are NOT clamped into the [0, 1] reference range, because a colour that came from lab(),
+   lch(), oklab() or oklch() can legitimately lie outside the sRGB gamut and §12 preserves that: it gamut maps
+   only when the destination "is a physical output color space, such as a display", which a used value is not.
+   The clip is the SERIALIZATION's, and each caller's spec says where — HTML §4.10.5.1.14 step 4.2 rounds "into
+   the range 0 to 255 inclusive", while §16.5's `color()` form keeps the out-of-gamut number. */
 typedef struct {
     double r, g, b;
     double a;
@@ -41,7 +46,8 @@ extern const CssColor CSS_COLOR_OPAQUE_BLACK;
    control turns into opaque black and its constraint validation turns into SUFFERING FROM BAD INPUT.
    The optional context element is not a parameter because no caller has one to pass: §4.10.5.1.14 calls this
    algorithm with the string alone, so `currentcolor` and the system colours resolve against the initial values
-   of the properties rather than against an element. */
+   of the properties rather than against an element — `currentcolor` to the `color` property's initial value,
+   CanvasText, and each `<system-color>` to this UA's own theme in css_system_color.h. */
 bool css_color_parse(const char *text, size_t len, CssColor *out);
 
 /* CSS Color 4 §16.2.1's HTML-COMPATIBLE SERIALIZATION of an sRGB value: "#" followed by the two-digit lowercase

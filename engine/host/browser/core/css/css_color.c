@@ -12,10 +12,16 @@
  *
  * THE ARITHMETIC IS THE SPEC'S. Lexbor hands back the parsed FORM — hex digits, rgb() components, an hsl()
  * triple — and converting those to sRGB is CSS Color 4's own §7.1 and §8.1 sample algorithms and §6.1's named
- * colour table, ported as arithmetic and data. Everything lexbor's grammar accepts but this file cannot yet
- * resolve to sRGB — `lab()`, `lch()`, `oklab()`, `oklch()`, `currentcolor` and the system colours — CRASHES
- * naming the conversion to build, because answering one of those with a wrong colour is a value the page then
- * shows and submits. */
+ * colour table, ported as arithmetic and data. The four spaces whose conversion is a matrix pipeline rather
+ * than a formula — `lab()`, `lch()`, `oklab()` and `oklch()` — are §12's algorithm and live in their own
+ * component, css_color_convert.c; this file's job for them is the part that IS about the parsed value: which
+ * percentage reference range each component uses, §9.3/§9.4's parse-time clamping, and `none`.
+ *
+ * `currentcolor` AND THE `<system-color>`s ARE RESOLVED, NOT LOOKED UP. §4.5's parse algorithm resolves the
+ * parsed colour to a USED colour against a context element, "or the initial values of the properties if not" —
+ * and this entry has no context element to take (see css_color.h), so `currentcolor` is the initial value of
+ * the `color` property, which §3.2 gives as CanvasText. The nineteen `<system-color>` keywords are read from
+ * this UA's own colour theme in css_system_color.c. */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +30,8 @@
 
 #include "check.h"
 #include "core/css/css_color.h"
+#include "core/css/css_color_convert.h"
+#include "core/css/css_system_color.h"
 
 const CssColor CSS_COLOR_OPAQUE_BLACK = { 0.0, 0.0, 0.0, 1.0 };
 
@@ -176,6 +184,32 @@ static double css_hue_degrees(const lxb_css_value_hue_t *h)
     }
 }
 
+/* A lab()/lch()/oklab()/oklch() component, in the NUMBER its own space measures it in. Each of those functions
+   accepts `<percentage> | <number> | none` for its L, a, b and C, and each declares its own PERCENT REFERENCE
+   RANGE, so the only thing that differs between the eight of them is what 100% means — `pct100` — and a
+   percentage is that fraction of it. The ranges are symmetric where the component is signed, which is why the
+   a and b axes need no second parameter: §9.3 gives lab's as "-100% = -125, 100% = 125" and §9.4 gives
+   oklab's as "-100% = -0.4, 100% = 0.4", and -100% × pct100 / 100 is exactly the negative endpoint.
+   A `none` component is 0 here for the reason §4.4 gives, which is stronger than the serialization rule the
+   rgb() reader cites: "for all other purposes, a missing component behaves as a zero value ... This includes
+   rendering the color directly, CONVERTING IT TO ANOTHER COLOR SPACE", and a conversion is what happens next. */
+static double css_lab_component(const lxb_css_value_number_percentage_t *np, double pct100)
+{
+    switch (np->type) {
+    case LXB_CSS_VALUE_NONE:        return 0.0;
+    case LXB_CSS_VALUE__NUMBER:     return np->u.number.num;
+    case LXB_CSS_VALUE__PERCENTAGE: return np->u.percentage.num * pct100 / 100.0;
+    default:
+        DFAIL("a lab(), lch(), oklab() or oklch() component came back from lexbor as neither a number, a "
+              "percentage nor `none` — those are the three each of their component productions accepts");
+        return 0.0;
+    }
+}
+
+/* §9.3 and §9.4's parse-time clamp of a chroma: "If the provided value is negative, it is clamped to 0 at
+   parsed-value time." There is no upper bound to clamp against — the chroma is "theoretically unbounded". */
+static double css_clamp_chroma(double v) { return v < 0.0 ? 0.0 : v; }
+
 /* CSS Color 4 §7.1's CONVERTING HSL COLORS TO sRGB, its own algorithm. `hue` is in degrees and `sat` and
    `light` in the 0-100 reference range; the results are the sRGB components, in gamut in [0, 1]. The modulo is
    C's fmod because the algorithm's is JavaScript's `%`, and both truncate toward zero — a floored modulo would
@@ -220,6 +254,20 @@ static void css_hwb_to_srgb(double hue, double white, double black, double *rgb)
 }
 
 /* ---- a parsed `<color>`, RESOLVED TO sRGB -------------------------------------------------------------------- */
+
+/* The three components a §12 conversion produced, paired with the alpha this file resolved. They are written
+   through UNCLAMPED, which is the one thing that separates this from the hsl()/hwb() writers above: those two
+   spaces cannot leave the sRGB gamut and their clamp is only guarding float error, while Lab, LCH, Oklab and
+   OkLCh all can and routinely do. `true` is returned so a case can be one line — every caller of this is a
+   `<color>` that resolved, and the false answer belongs to the CSS-wide keywords alone. */
+static bool css_color_from_srgb(const double rgb[3], double alpha, CssColor *out)
+{
+    out->r = rgb[0];
+    out->g = rgb[1];
+    out->b = rgb[2];
+    out->a = alpha;
+    return true;
+}
 
 /* Answers false when the value lexbor produced is not a `<color>` at all — which is the CSS-wide keywords, the
    only other thing `lxb_css_property_state_color` writes into this record. `initial` is a valid value of the
@@ -302,29 +350,70 @@ static bool css_color_to_srgb(const lxb_css_value_color_t *c, CssColor *out)
         out->a = css_alpha(&c->u.hwb.a);
         return true;
 
-    case LXB_CSS_VALUE_LAB: case LXB_CSS_VALUE_OKLAB:
-    case LXB_CSS_VALUE_LCH: case LXB_CSS_VALUE_OKLCH:
-        DFAIL("a lab(), lch(), oklab() or oklch() colour was parsed and this component cannot convert it to "
-              "sRGB — CSS Color 4 §17's COLOR CONVERSION is the algorithm (Lab or LCH to CIE XYZ, the Bradford "
-              "chromatic adaptation between the D50 white point those spaces use and the D65 one sRGB does, the "
-              "linear-light sRGB matrix, and the sRGB transfer function); build it as this file's conversion "
-              "step, together with the out-of-gamut handling every one of those spaces can produce");
-        return false;
+    /* THE FOUR SPACES §12 CONVERTS. The lab and lch records are shared by their OK counterparts — lexbor
+       parses `oklab()` into `u.lab` and `oklch()` into `u.lch` — so what separates the pairs here is entirely
+       the percentage reference range and the parse-time clamp each function declares, which is why the four
+       cases are written out rather than folded. The result is EXTENDED sRGB and is deliberately not clamped:
+       see css_color_convert.h for why the gamut clip belongs to the serialization and not to this step. */
+    case LXB_CSS_VALUE_LAB:
+        /* §9.3: L is 0% = 0.0, 100% = 100.0, clamped to that range at parsed-value time; a and b are
+           -100% = -125, 100% = 125, signed and unbounded. */
+        css_lab_to_srgb(css_clamp(css_lab_component(&c->u.lab.l, 100.0), 0.0, 100.0),
+                        css_lab_component(&c->u.lab.a, 125.0),
+                        css_lab_component(&c->u.lab.b, 125.0), rgb);
+        return css_color_from_srgb(rgb, css_alpha(&c->u.lab.alpha), out);
 
+    case LXB_CSS_VALUE_OKLAB:
+        /* §9.4: L is 0% = 0.0, 100% = 1.0, clamped to that range; a and b are -100% = -0.4, 100% = 0.4. */
+        css_oklab_to_srgb(css_clamp(css_lab_component(&c->u.lab.l, 1.0), 0.0, 1.0),
+                          css_lab_component(&c->u.lab.a, 0.4),
+                          css_lab_component(&c->u.lab.b, 0.4), rgb);
+        return css_color_from_srgb(rgb, css_alpha(&c->u.lab.alpha), out);
+
+    case LXB_CSS_VALUE_LCH:
+        /* §9.3: L as in lab(); C is 0% = 0, 100% = 150, clamped below at 0; H is a <hue>, and 0deg points
+           along the positive a axis rather than at red — which is the conversion's business, not this one's. */
+        css_lch_to_srgb(css_clamp(css_lab_component(&c->u.lch.l, 100.0), 0.0, 100.0),
+                        css_clamp_chroma(css_lab_component(&c->u.lch.c, 150.0)),
+                        css_hue_degrees(&c->u.lch.h), rgb);
+        return css_color_from_srgb(rgb, css_alpha(&c->u.lch.a), out);
+
+    case LXB_CSS_VALUE_OKLCH:
+        /* §9.4: L as in oklab(); C is 0% = 0.0, 100% = 0.4, clamped below at 0. */
+        css_oklch_to_srgb(css_clamp(css_lab_component(&c->u.lch.l, 1.0), 0.0, 1.0),
+                          css_clamp_chroma(css_lab_component(&c->u.lch.c, 0.4)),
+                          css_hue_degrees(&c->u.lch.h), rgb);
+        return css_color_from_srgb(rgb, css_alpha(&c->u.lch.a), out);
+
+    /* §4.5 STEP 2's USED-COLOUR RESOLUTION, for the two kinds of value that need one. This entry point has no
+       context element to resolve against — §4.5 says "use element if it was passed, or the initial values of
+       the properties if not" — so `currentcolor` is the initial value of the `color` property, which §3.2
+       gives as CanvasText, and each `<system-color>` is §15.5's "corresponding color in its color space" read
+       from this UA's own theme. The keyword carries no alpha of its own in this grammar, so §15.5's "paired
+       with the specified alpha component" pairs it with the fully-opaque default the theme already answers. */
     case LXB_CSS_VALUE_CURRENTCOLOR:
-    case LXB_CSS_VALUE_CANVAS: case LXB_CSS_VALUE_CANVASTEXT: case LXB_CSS_VALUE_LINKTEXT:
-    case LXB_CSS_VALUE_VISITEDTEXT: case LXB_CSS_VALUE_ACTIVETEXT: case LXB_CSS_VALUE_BUTTONFACE:
-    case LXB_CSS_VALUE_BUTTONTEXT: case LXB_CSS_VALUE_BUTTONBORDER: case LXB_CSS_VALUE_FIELD:
-    case LXB_CSS_VALUE_FIELDTEXT: case LXB_CSS_VALUE_HIGHLIGHT: case LXB_CSS_VALUE_HIGHLIGHTTEXT:
-    case LXB_CSS_VALUE_SELECTEDITEM: case LXB_CSS_VALUE_SELECTEDITEMTEXT: case LXB_CSS_VALUE_MARK:
-    case LXB_CSS_VALUE_MARKTEXT: case LXB_CSS_VALUE_GRAYTEXT: case LXB_CSS_VALUE_ACCENTCOLOR:
-    case LXB_CSS_VALUE_ACCENTCOLORTEXT:
-        DFAIL("`currentcolor` or a <system-color> was parsed and this component cannot resolve it to a USED "
-              "colour — CSS Color 4's parse algorithm resolves both against the context element, or against "
-              "the INITIAL VALUES of the properties when there is none (which is what HTML §4.10.5.1.14 asks "
-              "for, so `currentcolor` there is the initial value of the `color` property, `canvastext`); build "
-              "the UA colour theme those nineteen keywords name and the used-value resolution that reads it");
-        return false;
+        *out = css_system_color(CSS_SYSTEM_COLOR_CANVASTEXT);
+        return true;
+
+    case LXB_CSS_VALUE_CANVAS:           *out = css_system_color(CSS_SYSTEM_COLOR_CANVAS);           return true;
+    case LXB_CSS_VALUE_CANVASTEXT:       *out = css_system_color(CSS_SYSTEM_COLOR_CANVASTEXT);       return true;
+    case LXB_CSS_VALUE_LINKTEXT:         *out = css_system_color(CSS_SYSTEM_COLOR_LINKTEXT);         return true;
+    case LXB_CSS_VALUE_VISITEDTEXT:      *out = css_system_color(CSS_SYSTEM_COLOR_VISITEDTEXT);      return true;
+    case LXB_CSS_VALUE_ACTIVETEXT:       *out = css_system_color(CSS_SYSTEM_COLOR_ACTIVETEXT);       return true;
+    case LXB_CSS_VALUE_BUTTONFACE:       *out = css_system_color(CSS_SYSTEM_COLOR_BUTTONFACE);       return true;
+    case LXB_CSS_VALUE_BUTTONTEXT:       *out = css_system_color(CSS_SYSTEM_COLOR_BUTTONTEXT);       return true;
+    case LXB_CSS_VALUE_BUTTONBORDER:     *out = css_system_color(CSS_SYSTEM_COLOR_BUTTONBORDER);     return true;
+    case LXB_CSS_VALUE_FIELD:            *out = css_system_color(CSS_SYSTEM_COLOR_FIELD);            return true;
+    case LXB_CSS_VALUE_FIELDTEXT:        *out = css_system_color(CSS_SYSTEM_COLOR_FIELDTEXT);        return true;
+    case LXB_CSS_VALUE_HIGHLIGHT:        *out = css_system_color(CSS_SYSTEM_COLOR_HIGHLIGHT);        return true;
+    case LXB_CSS_VALUE_HIGHLIGHTTEXT:    *out = css_system_color(CSS_SYSTEM_COLOR_HIGHLIGHTTEXT);    return true;
+    case LXB_CSS_VALUE_SELECTEDITEM:     *out = css_system_color(CSS_SYSTEM_COLOR_SELECTEDITEM);     return true;
+    case LXB_CSS_VALUE_SELECTEDITEMTEXT: *out = css_system_color(CSS_SYSTEM_COLOR_SELECTEDITEMTEXT); return true;
+    case LXB_CSS_VALUE_MARK:             *out = css_system_color(CSS_SYSTEM_COLOR_MARK);             return true;
+    case LXB_CSS_VALUE_MARKTEXT:         *out = css_system_color(CSS_SYSTEM_COLOR_MARKTEXT);         return true;
+    case LXB_CSS_VALUE_GRAYTEXT:         *out = css_system_color(CSS_SYSTEM_COLOR_GRAYTEXT);         return true;
+    case LXB_CSS_VALUE_ACCENTCOLOR:      *out = css_system_color(CSS_SYSTEM_COLOR_ACCENTCOLOR);      return true;
+    case LXB_CSS_VALUE_ACCENTCOLORTEXT:  *out = css_system_color(CSS_SYSTEM_COLOR_ACCENTCOLORTEXT);  return true;
 
     default:
         break;
@@ -411,11 +500,18 @@ bool css_color_parse(const char *text, size_t len, CssColor *out)
 
 /* HTML §4.10.5.1.14 step 4.2's rounding: into the range 0 to 255 inclusive, to the nearest integer with a tie
    going towards +infinity — CSS Values 4's rule, which is `floor(x + 0.5)` and NOT C's `round`, whose tie goes
-   away from zero and therefore answers -1.5 differently. */
+   away from zero and therefore answers -1.5 differently. This step is ALSO where the gamut clip happens, and
+   the only place it is allowed to: a lab() or oklch() colour outside the sRGB gamut arrives here with a real
+   component below 0 or above 1, and "in the range 0 to 255 inclusive" is what §4.10.5.1.14 does about it.
+   A NaN is the one input the two comparisons below cannot place — both are false for it and the cast is then
+   undefined — so it is asserted rather than silently becoming whatever the cast produced. */
 static int css_round_255(double v)
 {
-    double n = floor(v * 255.0 + 0.5);
+    double n;
 
+    DCHECK(!isnan(v), "a NaN colour component reached HTML §4.10.5.1.14 step 4.2's rounding — the range check "
+                      "below cannot place it and the conversion that produced it should have asserted first");
+    n = floor(v * 255.0 + 0.5);
     if (n < 0.0) return 0;
     if (n > 255.0) return 255;
     return (int)n;
