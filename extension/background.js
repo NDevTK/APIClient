@@ -12,6 +12,15 @@
 
 const EXT_ORIGIN = "chrome-extension://" + chrome.runtime.id;
 const OFFSCREEN_URL = "ast-worker.html";
+/* THE OFFSCREEN DOCUMENT'S ADDRESS, ASKED OF THE API THAT OWNS IT rather than concatenated here.
+   `chrome.runtime.getURL()` is documented as the conversion of a packaged resource's relative path to its
+   fully-qualified URL, and `MessageSender.url` is documented as "the URL of the page or frame that opened
+   the connection" — so these are the same string from the same authority, and the __rpc pin below can be an
+   EQUALITY. It was a `startsWith` of a hand-built `EXT_ORIGIN + "/" + OFFSCREEN_URL`, which is a prefix
+   standing where an identity belongs: every future packaged page whose name merely BEGINS with this one's
+   would inherit the most privileged surface this extension has (chrome.tabs.*, chrome.scripting in the MAIN
+   world of any tab), and nothing about adding such a file would say so. */
+const OFFSCREEN_HREF = chrome.runtime.getURL(OFFSCREEN_URL);
 
 // ─── Offscreen lifecycle ──────────────────────────────────────────────────────
 let _offscreenP = null;
@@ -207,7 +216,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // URL means even a popup-context compromise can't reach chrome.tabs.* /
   // chrome.scripting.exec / chrome.* fetch through this relay.)
   if (msg.__rpc) {
-    if (sender.url.startsWith(EXT_ORIGIN + "/" + OFFSCREEN_URL)) {
+    if (sender.url === OFFSCREEN_HREF) {
       _swRpc(msg).then((r) => sendResponse({ ok: true, result: r }))
         .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
       return true;
