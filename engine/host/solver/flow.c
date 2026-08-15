@@ -19,6 +19,19 @@ static unsigned g_gen = 0;   /* bumped whenever the frontier's membership change
                                 value-yield recompute the rival only on a change, never per-opcode */
 static Flow *g_running = NULL;   /* the flow currently holding the worker (the scheduler sets it) */
 
+/* THE RANKING CHANGED, SO THE RUNNING FLOW'S CLAIM ON THE THREAD MAY HAVE. §scheduler's VALUE YIELD fires "the
+   moment a parked flow outranks (or on an emit/fork/suspension that changes ranks)", and this is the moment: a
+   sibling landed on the frontier, a flow left it, or the running flow emitted. Bumping the generation alone made
+   the new answer AVAILABLE and left it unasked until the running flow happened to reach a suspend point — which,
+   before the interpreter polled at every opcode, meant until the page happened to execute a loop back-edge. So
+   the bump raises the engine's yield request: the running flow reaches its next opcode boundary, the poll asks
+   preempt_hook, and the WFQ decides there. Raising is not deciding — a flow that still outranks everything keeps
+   the thread and pays one declined hook call for the question. */
+static void frontier_rank_changed(void) {
+    g_gen++;
+    JS_RequestFlowYield();
+}
+
 /* THE FRONTIER'S MEMBERS, in registry order. A walk, not a rank: the pending-fetch register lives on the flows,
    so whoever asks what the host owes has to visit all of them. flow_best answers a different question. */
 Flow *flow_at(int i) { return (i >= 0 && i < g_flows_n) ? g_flows[i] : NULL; }
@@ -51,7 +64,7 @@ void flow_credit_emit(double v) {
     if (!g_running) return;
     g_running->val += v;
     g_running->cpu = 0;   /* emitted -> no longer a CPU-burning monopolizer */
-    g_gen++;              /* rank changed: let the value-yield recompute */
+    frontier_rank_changed();   /* rank changed: re-rank at this flow's next opcode */
 }
 
 /* Age the running flow by the MICROSECONDS of thread time its step just burned. A monopolizer that runs without
@@ -180,7 +193,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, signed char *dec, int dec
     f->last_compiled = -1;   /* nothing compiled yet; see the no-replay DCHECK at the compile site */
     f->world = w;
     g_flows[g_flows_n++] = f;
-    g_gen++;   /* frontier changed */
+    frontier_rank_changed();   /* frontier changed: the newcomer may outrank the flow holding the thread */
     return f;
 }
 
@@ -356,7 +369,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
             free(f->cand_src); free(f->cand_payload);
             free(f);
             g_flows[i] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */
-            g_gen++;   /* frontier changed */
+            frontier_rank_changed();   /* frontier changed */
             return;
         }
     }
