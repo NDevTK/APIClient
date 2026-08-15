@@ -34,6 +34,15 @@ bool        blob_is(JSValueConst v);
 const char *blob_file_name_of(JSValueConst v);
 int64_t     blob_last_modified_of(JSValueConst v);
 
+/* RECORD WHERE THIS BLOB'S BYTE SEQUENCE CAME FROM — the source identity of external input this engine did not
+   compute, which for a File read off the virtual filesystem is the file itself. `shape` is the @H/@S display
+   form and `src` is what a flow's path constraint and an @S candidate delivery are keyed by, exactly as
+   core/frame/location.c declares them for the two URL sources.
+   IT CHANGES NO BYTE. §3.3's `text()` mints the concolic AT THE READ (per read, so a candidate substitution can
+   reach it), and every other reader answers with the real bytes. Called once, at the mint, by the component
+   that knows the provenance; a second call is a byte sequence claiming two origins. */
+void blob_set_source(JSContext *ctx, JSValueConst v, const char *shape, const char *src);
+
 /* ---- File API §8's BLOB URL STORE ------------------------------------------------------------------------
  *
  * `URL.createObjectURL` and `URL.revokeObjectURL` are declared on the URL interface and defined by File API, so

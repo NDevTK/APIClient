@@ -267,7 +267,7 @@ static int picker_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
            completion — forking it would park a sibling flow that does the same thing this one does. (A device
            that holds files none of which this control's `accept` admits still forks, and both arms end in the
            cancel; narrowing that would mean running the filter twice, and the filter is the prompt.) */
-        if (file_device_count() == 0) {
+        if (file_device_count(ctx) == 0) {
             picker_fire_cancel(ctx, hdr->this_val);
             return JS_STEP_DONE;
         }

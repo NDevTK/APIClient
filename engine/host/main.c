@@ -35,6 +35,10 @@
 #include "browser/core/url/url_search_params.h"
 #include "browser/core/html/form_data.h"
 #include "browser/core/file/blob.h"
+#include "browser/core/file/file_system.h"
+#include "browser/core/file/file_system_handle.h"
+#include "browser/core/file/file_system_writable.h"
+#include "browser/core/file/storage_manager.h"
 #include "browser/core/streams/readable_stream.h"
 #include "browser/core/streams/queuing_strategy.h"
 #include "browser/core/streams/writable_stream.h"
@@ -134,6 +138,16 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
        its interface object and the Window's one Navigator are §3.7 per-realm objects, so there is no install
        for this entry to call at document time. */
     navigator_init(ctx);
+    /* THE ONE VIRTUAL FILESYSTEM, and the File System Standard over it. The MODEL goes first (its two roots are
+       built at this pre-boot baseline, so no flow's creation becomes every sibling's); §2.5's stream is
+       DECLARED after §5's WritableStream because its prototype chains to that one and core/realm.h runs the
+       per-realm installs in declaration order; §2.2-§2.4's handles after the stream because `createWritable()`
+       mints one; and §3's StorageManager after §8.10.1's Navigator, because `navigator.storage` is a partial
+       interface member installed on the object that component builds. */
+    file_system_init(ctx);
+    fs_writable_init(ctx);
+    fs_handle_init(ctx);
+    storage_manager_init(ctx);   /* Storage §2's `navigator.storage`, and File System §3's getDirectory() */
     event_init(ctx);
     report_exception_init(ctx);
     message_port_init(ctx);
@@ -498,6 +512,10 @@ QJS_EXPORT void qjs_teardown(void)
     queuing_strategy_free(g_ctx);
     readable_stream_free(g_ctx);
     blob_free(g_ctx);
+    fs_handle_free();
+    fs_writable_free();
+    storage_manager_free();
+    file_system_free(g_ctx);   /* the two roots are the agent's, and they outlive no agent */
     encoding_free(g_ctx);
     text_stream_free(g_ctx);
     form_data_free(g_ctx);        /* URLSearchParams.prototype */

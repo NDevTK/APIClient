@@ -1,21 +1,21 @@
-/* THE MOCK FILE DEVICE — the storage an `<input type=file>`'s picker chooses from.
+/* HTML §4.10.5.1.17's FILE CONTROL PICKER — the `accept` filter, and the selection it answers a prompt with.
  *
- * WHY IT EXISTS. HTML §4.10.5.1.17 gives a file control a LIST OF SELECTED FILES and says how it is filled:
- * the user is shown a prompt, picks files "from the filesystem or created on the fly", and the user agent then
- * updates the file selection. Everything in that sentence is defined behaviour EXCEPT the physical device, and
- * a missing device is not a missing algorithm — it is the same gap `storage.c` fills for a disk and the File
- * System Access spec fills with a mock filesystem. So the device is modelled: a list of files with names,
- * types and bytes, put there through one edge, and a SELECT that answers a control's prompt by the rules the
- * section states (`accept` filters, `multiple` bounds).
+ * WHAT IT IS NOW, AND WHAT IT WAS. This file used to BE the device: a malloc'd array of name/type/bytes
+ * triples with no directories, no writes and no per-flow isolation. That array is DELETED. The device is
+ * core/file/file_system.c's LOCAL FILE SYSTEM ROOT — one virtual filesystem for this engine, shared by the file
+ * control's prompt, File System Access's pickers and everything §2 of the File System Standard defines — and
+ * what remains here is the part that was always this section's and nobody else's: which of the files on that
+ * device a control with an `accept` attribute may offer, and how many of them a control without `multiple` may
+ * take.
  *
- * WHAT IS HONESTLY ABSENT: nothing puts a file on the device until something does. That is a device with no
- * files on it, which is a different statement from "this engine has no such thing" — the state exists, the
- * filter over it exists, and a caller that adds one file makes every path a bundle takes over a chosen file
- * reachable.
+ * WHY THAT SPLIT IS THE RIGHT ONE. §4.10.5.1.17's prompt is "the user is shown a list of files and picks from
+ * it"; the LIST is the device's and the FILTER is the control's. Keeping a second store here would have meant a
+ * file written through `createWritable()` being invisible to an `<input type=file>` on the same page, which is
+ * not a thing a real user agent does.
  *
- * IT HOLDS BYTES, NEVER JSValues. A device is BASELINE state shared by every flow, so a JS object held here
- * would be one realm's object answering another realm's read and one flow's object surviving another flow's
- * rewind. The Files are minted per selection, in the realm doing the selecting, and THOSE time-travel. */
+ * THE Files ARE MINTED PER SELECTION, in the realm doing the selecting, out of the entry the device holds — one
+ * constructor (file_system_file_new), so this door and §2.3.1's `getFile()` cannot disagree about a file's type
+ * or about the SOURCE its bytes carry. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,19 +23,9 @@
 #include "quickjs.h"
 #include "core/file/blob.h"
 #include "core/file/file_device.h"
+#include "core/file/file_system.h"
 #include "core/file/file_list.h"
 #include "core/mime/mime_type.h"
-
-typedef struct {
-    char   *name;    /* the file name, path components already stripped */
-    char   *type;    /* the MIME type the storage records, "" for none */
-    char   *bytes;   /* the file body; NULL only when `len` is 0 */
-    size_t  len;
-    int64_t last_modified;
-} DeviceFile;
-
-static DeviceFile *g_dev;
-static int         g_dev_n, g_dev_cap;
 
 static char ascii_lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c; }
 
@@ -49,47 +39,26 @@ static bool ascii_ci_eq(const char *a, size_t alen, const char *b, size_t blen)
     return true;
 }
 
-static char *dup_len(const char *s, size_t n)
+/* HOW MANY FILES THE DEVICE HOLDS — the local file system root's children, counted where they live. A
+   directory among them is not a file the prompt can offer, so it is not counted: §4.10.5.1.17's list of
+   selected files is a list of FILES. */
+uint32_t file_device_count(JSContext *ctx)
 {
-    char *p = malloc(n + 1);
+    JSValue root = file_system_root_entry(ctx, FS_ROOT_LOCAL);
+    int n = file_system_child_count(ctx, root), i;
+    uint32_t files = 0;
 
-    CHECK(p != NULL, "file-device: OOM copying a file's bytes");
-    if (n) memcpy(p, s, n);
-    p[n] = 0;
-    return p;
-}
+    for (i = 0; i < n; i++) {
+        JSValue name = JS_UNDEFINED;
+        JSValue child = file_system_child_at(ctx, root, i, &name);
 
-void file_device_add(const char *name, const char *type, const char *bytes, size_t len, int64_t last_modified)
-{
-    const char *base;
-    size_t nlen;
-
-    DCHECK(name != NULL, "a file was put on the device with no name — §4.10.5.1.17's file is a filename, a "
-                         "file type and a file body, and `files[0].name` has to answer with something");
-    /* §4.10.5.1.17: "Filenames must not contain path components, even in the case that a user has selected an
-       entire directory hierarchy ... Path components ... are those parts of filenames that are separated by
-       U+005C REVERSE SOLIDUS." Stripped HERE, at the one edge a name enters through, so no reader downstream
-       has to know the rule — and so §4.10.5.4's `C:\fakepath\` prefix can never be mistaken for one. */
-    base = strrchr(name, '\\');
-    base = base ? base + 1 : name;
-    nlen = strlen(base);
-    if (g_dev_n == g_dev_cap) {
-        int cap = g_dev_cap ? g_dev_cap * 2 : 4;
-        DeviceFile *g = realloc(g_dev, (size_t)cap * sizeof *g);
-
-        CHECK(g != NULL, "file-device: OOM growing the device's file list");
-        g_dev = g;
-        g_dev_cap = cap;
+        if (file_system_is_file(child)) files++;
+        JS_FreeValue(ctx, name);
+        JS_FreeValue(ctx, child);
     }
-    g_dev[g_dev_n].name = dup_len(base, nlen);
-    g_dev[g_dev_n].type = dup_len(type ? type : "", type ? strlen(type) : 0);
-    g_dev[g_dev_n].bytes = dup_len(bytes ? bytes : "", len);
-    g_dev[g_dev_n].len = len;
-    g_dev[g_dev_n].last_modified = last_modified;
-    g_dev_n++;
+    JS_FreeValue(ctx, root);
+    return files;
 }
-
-uint32_t file_device_count(void) { return (uint32_t)g_dev_n; }
 
 /* ---- §4.10.5.1.17's `accept` TOKENS -------------------------------------------------------------------------
  *
@@ -194,39 +163,37 @@ bool file_device_accepts(const char *accept, size_t accept_len, const char *name
 JSValue file_device_select(JSContext *ctx, const char *accept, size_t accept_len, bool multiple)
 {
     JSValue files = JS_NewArray(ctx);
-    uint32_t n = 0;
-    int i;
+    JSValue root = file_system_root_entry(ctx, FS_ROOT_LOCAL);
+    int n = file_system_child_count(ctx, root), i;
+    uint32_t taken = 0;
 
     CHECK(!JS_IsException(files), "file-device: a selection list could not be allocated");
-    for (i = 0; i < g_dev_n; i++) {
-        JSValue f;
+    for (i = 0; i < n; i++) {
+        JSValue name_v = JS_UNDEFINED;
+        JSValue child = file_system_child_at(ctx, root, i, &name_v);
+        const char *name, *type;
+        bool ok;
 
-        if (!file_device_accepts(accept, accept_len, g_dev[i].name, g_dev[i].type)) continue;
-        f = file_new(ctx, g_dev[i].bytes, g_dev[i].len, g_dev[i].type, strlen(g_dev[i].type),
-                     g_dev[i].name, strlen(g_dev[i].name), g_dev[i].last_modified);
-        CHECK(!JS_IsException(f), "file-device: a selected File could not be allocated");
-        /* DEFINED, not assigned — idl_slots.h's sibling rule: an engine-built list is creating OWN properties,
-           and `Object.defineProperty(Array.prototype, "0", {set(){}})` swallows an assignment outright. */
-        JS_DefinePropertyValueUint32(ctx, files, n++, f, JS_PROP_C_W_E);
+        JS_FreeValue(ctx, name_v);
+        if (!file_system_is_file(child)) { JS_FreeValue(ctx, child); continue; }
+        name = file_system_name_cstr(ctx, child);
+        type = file_system_type_cstr(ctx, child);
+        ok = file_device_accepts(accept, accept_len, name, type);
+        JS_FreeCString(ctx, name);
+        JS_FreeCString(ctx, type);
+        if (ok) {
+            /* DEFINED, not assigned — idl_slots.h's sibling rule: an engine-built list is creating OWN
+               properties, and `Object.defineProperty(Array.prototype, "0", {set(){}})` swallows an assignment
+               outright. */
+            JS_DefinePropertyValueUint32(ctx, files, taken++, file_system_file_new(ctx, child), JS_PROP_C_W_E);
+        }
+        JS_FreeValue(ctx, child);
         /* §4.10.5.1.17's own bound on the list, enforced where the SELECTION is made — it is a requirement on
            what the user agent may let be selected, not a check to run over a list a page hands over. */
-        if (!multiple) break;
+        if (taken && !multiple) break;
     }
-    DCHECK(multiple || n <= 1, "the device selected more than one file for a control with no `multiple` — "
-                               "§4.10.5.1.17 allows no more than one file in that control's list");
+    JS_FreeValue(ctx, root);
+    DCHECK(multiple || taken <= 1, "the device selected more than one file for a control with no `multiple` — "
+                                   "§4.10.5.1.17 allows no more than one file in that control's list");
     return file_list_new(ctx, files);
-}
-
-void file_device_free(void)
-{
-    int i;
-
-    for (i = 0; i < g_dev_n; i++) {
-        free(g_dev[i].name);
-        free(g_dev[i].type);
-        free(g_dev[i].bytes);
-    }
-    free(g_dev);
-    g_dev = NULL;
-    g_dev_n = g_dev_cap = 0;
 }

@@ -47,6 +47,12 @@ int writable_stream_start(JSContext *ctx, JSValueConst stream, JSValueConst star
 typedef enum { WS_WRITABLE = 0, WS_CLOSED, WS_ERRORING, WS_ERRORED } WritableStreamState;
 bool writable_stream_query(JSValueConst v, WritableStreamState *pstate, bool *plocked, bool *pclose_queued);
 
+/* THIS REALM'S WritableStream.prototype — for an interface that INHERITS from §5's, which File System §2.5's
+   `interface FileSystemWritableFileStream : WritableStream` does. Reached through this rather than through a
+   class id the other component would have to be handed, because the prototype is what inheritance is about and
+   the class id is an implementation detail of where §3.7's per-realm slot lives. OWNED. */
+JSValue writable_stream_proto(JSContext *ctx);
+
 /* §5.4's controller for a stream this component built. BORROWED. */
 JSValueConst writable_stream_controller(JSValueConst stream);
 

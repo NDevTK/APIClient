@@ -48,6 +48,11 @@ typedef enum {
     IDL_UNSIGNED_LONG,    /* `unsigned long` — 32, unsigned */
     IDL_UNSIGNED_SHORT,   /* `unsigned short` — 16, unsigned */
     IDL_LONG_LONG,        /* `long long` — 64, signed */
+    /* `unsigned long long` — 64, UNSIGNED, and it is a separate type because the sign is observable. File
+       System §2.5's `seek(unsigned long long position)` and `truncate(unsigned long long size)` are the members
+       that need it: `truncate(-1)` is 2**64-1 bytes in a browser (a QuotaExceededError), where the signed
+       conversion answers -1 and hands the algorithm a negative size no step of it is written for. */
+    IDL_UNSIGNED_LONG_LONG,
     /* `[Clamp] long long`. The extended attribute REPLACES the modulo with §3.2.4.2: clamp to the type's range
        and round to the NEAREST integer, choosing the even one at a half. Blob's `slice(start, end)` is the
        member that carries it, and `slice(1.5)` starting at byte 2 rather than byte 1 is the difference. */
@@ -250,6 +255,13 @@ int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody b
    `unsigned short`, so a filter answering 65537 accepts exactly as one answering 1 does. Written a second time
    in the component that needed it, that is a modulo somebody has to remember. */
 int64_t idl_integer_of(IdlArgType t, double x);
+
+/* §3.2.9's `unsigned long long`, as the MAGNITUDE rather than as the int64_t bit pattern the modulo leaves —
+   the half of that type's range above 2**63 is exactly the half a page reaches by writing a negative, and an
+   int64_t cannot express it. Public for the same reason idl_integer_of is: a conversion performed outside this
+   machine (File System §2.5's write algorithm reads its dictionary members with its own request) must not own
+   a second copy of the arithmetic. */
+double  idl_unsigned_long_long_of(double x);
 
 /* §3.2.10's ByteString RANGE over UTF-8 bytes: true when every code point is 0x00..0xFF. Public because a
    conversion that happens OUTSIDE this machine needs the same answer — Headers' fill converts a record's keys
@@ -597,6 +609,10 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
 /* Install a declared member on `target`. The coercion is a request, so a page's `toString` — loop, await and
    all — suspends and resumes at the exact argument it was on. */
 void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid);
+/* THE SAME INSTALL FOR A METHOD THAT STATES ITS IDL'S EXPOSURE — §3.3.13's [SecureContext] REMOVES the member,
+   for an operation exactly as for an attribute, and this is that one rule asked in the one place. */
+void idl_install_method_exposed(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid,
+                                IdlExposure exposure);
 /* The installer for a method whose algorithm is a step machine of its OWN (its own JSTrampStepDef) rather than
    a member of the args machine — `click` and `dispatchEvent` today. Separate from idl_install_method because
    they are separate things, and each asserts it was handed its own kind. */

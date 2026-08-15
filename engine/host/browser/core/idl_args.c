@@ -68,6 +68,10 @@ static int64_t idl_int_convert(double x, int width, bool is_signed, bool clamp)
     x = fmod(x, span);
     if (x < 0) x += span;
     if (is_signed && x >= half) x -= span;
+    /* A 64-BIT UNSIGNED RESULT AT OR ABOVE 2**63 IS NOT AN int64_t, and converting a double past that range to
+       a signed integer is undefined behaviour rather than a wrap — it has to go through the unsigned type,
+       whose conversion IS the modulo this function just performed. */
+    if (!is_signed && width == 64 && x >= half) return (int64_t)(uint64_t)x;
     return (int64_t)x;
 }
 
@@ -92,7 +96,7 @@ static bool idl_is_iface(JSValueConst v, JSClassID iface)
 static bool idl_is_integer(IdlArgType t)
 {
     return t == IDL_LONG || t == IDL_UNSIGNED_LONG || t == IDL_UNSIGNED_SHORT ||
-           t == IDL_LONG_LONG || t == IDL_LONG_LONG_CLAMP;
+           t == IDL_LONG_LONG || t == IDL_UNSIGNED_LONG_LONG || t == IDL_LONG_LONG_CLAMP;
 }
 
 
@@ -103,6 +107,7 @@ int64_t idl_integer_of(IdlArgType t, double x)
     case IDL_UNSIGNED_LONG:   return idl_int_convert(x, 32, false, false);
     case IDL_UNSIGNED_SHORT:  return idl_int_convert(x, 16, false, false);
     case IDL_LONG_LONG:       return idl_int_convert(x, 64, true,  false);
+    case IDL_UNSIGNED_LONG_LONG: return idl_int_convert(x, 64, false, false);
     default:
         DCHECK(t == IDL_LONG_LONG_CLAMP, "a non-integer type reached the integer conversion");
         return idl_int_convert(x, 64, true, true);
@@ -116,10 +121,27 @@ static bool idl_is_numeric(IdlArgType t)
     return idl_is_integer(t) || t == IDL_UNRESTRICTED_DOUBLE;
 }
 
+/* §3.2.9's `unsigned long long` AS THE MAGNITUDE IT IS. Public because a conversion that happens OUTSIDE this
+   machine needs the same answer: File System §2.5's write algorithm reads `position` and `size` off a page
+   dictionary with its own request and then converts what it got, and a second copy of this arithmetic is a
+   second chance to hand an algorithm a negative size the spec has no step for. */
+double idl_unsigned_long_long_of(double x)
+{
+    int64_t wrapped = idl_integer_of(IDL_UNSIGNED_LONG_LONG, x);
+
+    return wrapped < 0 ? (double)(uint64_t)wrapped : (double)wrapped;
+}
+
 /* The value a numeric type places, given the double ToNumber produced. */
 static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
 {
     if (t == IDL_UNRESTRICTED_DOUBLE) return JS_NewFloat64(ctx, x);
+    /* AN `unsigned long long` DOES NOT FIT IN AN int64_t, and the half of its range that does not is exactly
+       the half a page reaches by writing a negative: §3.2.9's conversion of -1 is 2**64-1, which as an int64_t
+       is the bit pattern -1 again, so handing it back through JS_NewInt64 would undo the whole conversion. The
+       value the member receives is a JS NUMBER either way, and a double holds the magnitude (to the same 53
+       bits of precision `Number(2n**64n-1n)` has), so the unsigned type places one. */
+    if (t == IDL_UNSIGNED_LONG_LONG) return JS_NewFloat64(ctx, idl_unsigned_long_long_of(x));
     return JS_NewInt64(ctx, idl_integer_of(t, x));
 }
 
@@ -2354,6 +2376,17 @@ JSValue idl_step_constructor(JSContext *ctx, const char *name, int length, int s
     DCHECK(name != NULL && *name, "a step constructor was minted with no name");
     idl_member(idx)->name = name;
     return JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step_ctor, stepid);
+}
+
+void idl_install_method_exposed(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid,
+                                IdlExposure exposure)
+{
+    /* §3.3.13: the member is simply NOT THERE — the same rule an attribute's install already states, asked at
+       the same one place. A method needed it the moment an interface whose whole partial is [SecureContext]
+       arrived (File System §3's `getDirectory`), and `'getDirectory' in navigator.storage` is exactly the
+       feature detection the removal exists to answer honestly. */
+    if (!idl_exposed(ctx, exposure)) return;
+    idl_install_method(ctx, target, name, length, stepid);
 }
 
 void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid)

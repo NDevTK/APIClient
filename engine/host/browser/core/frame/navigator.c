@@ -226,6 +226,15 @@ static JSValue js_win_navigator(JSContext *ctx, JSValueConst this_val, int magic
     return realm_value_get(ctx, g_obj_slot);   /* OWNED — realm_value_get asserts the realm ran its install */
 }
 
+/* THIS REALM'S Navigator, for a PARTIAL INTERFACE another component owns. Storage §2's `navigator.storage` is
+   declared on `partial interface Navigator` by a different standard, so the member belongs to that component
+   and the OBJECT belongs to this one — which is exactly the shape a partial interface has. It reads the one
+   realm slot, so a partial member is installed on the same object §7.2.5 hands the page. OWNED. */
+JSValue navigator_object(JSContext *ctx)
+{
+    return realm_value_get(ctx, g_obj_slot);
+}
+
 /* ---- the per-realm record ------------------------------------------------------------------------------- */
 
 static void nav_put(JSContext *ctx, JSValueConst rec, int idx, JSValue v)

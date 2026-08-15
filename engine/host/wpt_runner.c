@@ -33,6 +33,9 @@
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
+#include "core/file/file_system.h"
+#include "core/file/file_system_handle.h"
+#include "core/file/file_system_writable.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/writable_stream.h"
 #include "core/streams/transform_stream.h"
@@ -1122,6 +1125,15 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     writable_stream_init(ctx);
     transform_stream_init(ctx);
     blob_init(ctx);
+    /* THE ONE VIRTUAL FILESYSTEM, and the File System Standard over it. The MODEL goes first (its two roots are
+       built at this pre-boot baseline, so no flow's creation becomes every sibling's); §2.5's stream is
+       DECLARED after §5's WritableStream because its prototype chains to that one and core/realm.h runs the
+       per-realm installs in declaration order; §2.2-§2.4's handles after the stream because `createWritable()`
+       mints one. §3's StorageManager is not here: this host builds no Navigator for `navigator.storage` to be a partial
+       interface member of, so the interfaces exist and the bucket file system has no door in this entry. */
+    file_system_init(ctx);
+    fs_writable_init(ctx);
+    fs_handle_init(ctx);
     encoding_init(ctx);
     /* §7.5 and §7.6 are the same codecs driven by a TransformStream, so they install AFTER §6 — the
        constructors reach it through transform_stream_op the moment a page builds one. */
@@ -1903,6 +1915,9 @@ int main(int argc, char **argv)
     queuing_strategy_free(ctx);
     readable_stream_free(ctx);
     blob_free(ctx);
+    fs_handle_free();
+    fs_writable_free();
+    file_system_free(ctx);
     encoding_free(ctx);
     text_stream_free(ctx);
     idl_args_free(ctx);

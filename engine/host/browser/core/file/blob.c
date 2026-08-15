@@ -21,8 +21,8 @@
 #include "quickjs-step.h"
 #include "cutils.h"
 #include "core/byte_reader.h"
+#include "solver/concolic.h"
 #include "core/file/blob.h"
-#include "core/file/file_device.h"
 #include "core/file/file_list.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -42,6 +42,18 @@ typedef struct {
     char   *type;      /* §3.1's normalised MIME type, never NULL — "" is "no type" */
     char   *name;      /* §4.1's file name — NULL for a plain Blob, which is what tells the two apart */
     int64_t last_modified;
+    /* WHERE THE BYTE SEQUENCE CAME FROM, when this engine did not compute it — NULL for every Blob a page
+       built out of its own strings and buffers, and the source identity of the external input otherwise.
+       A FILE'S CONTENTS ARE EXTERNAL INPUT IN THE SAME SENSE `location.hash` IS: the bytes are chosen by
+       whoever put the file on the device, not by the page and not by this engine, so a page that reads one and
+       puts it in a sink has an attacker-controlled path there. Carrying the identity on the Blob rather than
+       minting a concolic for the bytes is what keeps the two halves separate: the BYTES stay real bytes (a
+       `slice`, a multipart body and a `blob:` fetch all need them), and the READ that turns them into a value
+       the page computes with is where the source is minted — per read, never once, because a candidate run
+       substitutes a source at MINT time and a value minted once could never receive one (core/frame/location.c
+       states the same rule for the same reason). */
+    char   *src;
+    char   *shape;
 } BlobObj;
 
 static JSClassID g_blob_class;
@@ -62,7 +74,7 @@ static void blob_finalizer(JSRuntime *rt, JSValue val)
 {
     BlobObj *b = JS_GetOpaque(val, g_blob_class);
     (void)rt;
-    if (b) { free(b->bytes); free(b->type); free(b->name); free(b); }
+    if (b) { free(b->bytes); free(b->type); free(b->name); free(b->src); free(b->shape); free(b); }
 }
 
 bool blob_is(JSValueConst v)
@@ -89,6 +101,24 @@ int64_t blob_last_modified_of(JSValueConst v)
 {
     BlobObj *b = g_blob_class ? JS_GetOpaque(v, g_blob_class) : NULL;
     return b ? b->last_modified : 0;
+}
+
+void blob_set_source(JSContext *ctx, JSValueConst v, const char *shape, const char *src)
+{
+    BlobObj *b = g_blob_class ? JS_GetOpaque(v, g_blob_class) : NULL;
+
+    (void)ctx;
+    DCHECK(b != NULL, "a byte sequence's SOURCE was recorded on something that is not a Blob");
+    DCHECK(shape != NULL && src != NULL, "a byte sequence's SOURCE was recorded with no identity — the shape is "
+                                         "what an @H record displays and the src is what the flow's constraint "
+                                         "and a candidate delivery are keyed by, and neither is optional");
+    DCHECK(b == NULL || b->src == NULL,
+           "a Blob's byte sequence was given a SECOND source identity — a byte sequence comes from one place, "
+           "and a slice of a sourced Blob is a new Blob that must be given the source at its own mint");
+    if (!b) return;
+    b->shape = strdup(shape);
+    b->src = strdup(src);
+    CHECK(b->shape && b->src, "blob: OOM recording a byte sequence's source identity");
 }
 
 /* §3.1's TYPE NORMALISATION, which both the constructor and `slice` perform: a type carrying any character
@@ -304,8 +334,28 @@ static JSValue js_blob_stream(JSContext *ctx, JSValueConst this_val, int argc, J
     return readable_stream_from_bytes(ctx, bytes, len);
 }
 
+/* §3.3's `text()`, THROUGH THE SOURCE THE BYTE SEQUENCE CARRIES. This is the reader that turns a byte sequence
+   into a VALUE the page computes with — a string it concatenates, tests, and hands to a sink — so it is where a
+   file's contents become the attacker input they are. The three byte-shaped readers below it answer with the
+   real bytes: an ArrayBuffer is a buffer of bytes and not a value the solver's domain is over, and handing back
+   a concolic in its place would break `new Uint8Array(await f.arrayBuffer())`, which is the ordinary way a page
+   reads one.
+   THE SEAM IS concolic_source_wrap, so a host with no source overlay (a conformance run) gets exactly the
+   string File API §3.3 says to return and nothing forks. */
+static JSValue blob_read_text(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
+{
+    BlobObj *b = g_blob_class ? JS_GetOpaque(recv, g_blob_class) : NULL;
+    JSValue text = byte_reader_text(ctx, recv, bytes, len);
+
+    DCHECK(b != NULL, "File API §3.3's `text()` ran on something that is not a Blob — the reader machine's own "
+                      "receiver check has already answered for that, so a NULL here is this interface's `is` "
+                      "and its opaque disagreeing");
+    if (!b || !b->src || JS_IsException(text)) return text;
+    return concolic_source_wrap(ctx, b->shape, b->src, text);
+}
+
 static const ByteReader BLOB_READERS[] = {
-    { "text",        byte_reader_text },
+    { "text",        blob_read_text },
     { "arrayBuffer", byte_reader_array_buffer },
     { "bytes",       byte_reader_bytes },
 };
@@ -701,7 +751,6 @@ void blob_free(JSContext *ctx)
         return;
     blob_url_store_free(ctx);
     file_list_free(ctx);
-    file_device_free();   /* the device's bytes are the agent's, and they outlive no agent */
     /* the prototypes are the REALMS' — released with their contexts */
     g_blob_rt = NULL;
     g_blob_ctor_stepid = g_file_ctor_stepid = -1;

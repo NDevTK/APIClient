@@ -1745,6 +1745,19 @@ static const IdlStepDecl js_ws_ctor_decl = {
    THE START ALGORITHM IS NOT HERE. Starting is a separate operation because the caller decides what the start
    promise is and when it settles; see writable_stream_start. Until it runs the controller is not started, which
    is exactly the state §5.4 wants a stream to be in while its start algorithm is outstanding. */
+JSValue writable_stream_proto(JSContext *ctx)
+{
+    JSValue proto;
+
+    DCHECK(g_ws_class != 0, "WritableStream.prototype was asked for before writable_stream_init declared the "
+                            "class");
+    proto = JS_GetClassProto(ctx, g_ws_class);
+    DCHECK(!JS_IsNull(proto), "a realm asked for WritableStream.prototype before it ran its §5 install — an "
+                              "interface that inherits from WritableStream has to install AFTER §5 does "
+                              "(core/realm.h: the ORDER is the declaration order)");
+    return proto;
+}
+
 JSValue writable_stream_create(JSContext *ctx, JSValueConst write_fn, JSValueConst close_fn,
                                JSValueConst abort_fn, double hwm, JSValueConst size_fn)
 {
