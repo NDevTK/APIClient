@@ -205,9 +205,13 @@ async function child(docPath, schedName) {
     if (first._park.length === 0)
       gateFail("the park wrote an EMPTY residue over a frontier that had a seeded flow in it — an empty park " +
                "document tells the host this engine was fully explored, so the whole frontier would be deleted");
-    for (const surface of ["fetchCallSites", "securitySinks", "pageErrors"])
-      if (first[surface].length !== 0)
-        gateFail(`the session parked before its first pick still emitted ${first[surface].length} ` +
+    /* ASKED OF THE ONE SURFACE LIST, never of a second copy of it. This loop named three surfaces literally
+       while SURFACES named four, so a `probeResults` emitted before the first pick would have satisfied a
+       precondition that had never looked at it — the same field, unclassified in one place and invisible in
+       the other. `surfaceSet` answers for either shape, so the emptiness question is asked once. */
+    for (const surface of SURFACES.keys())
+      if (surfaceSet(first, surface).length !== 0)
+        gateFail(`the session parked before its first pick still emitted ${surfaceSet(first, surface).length} ` +
                  `${surface} — this gate compares the RESUMED session against the reference on its own, which ` +
                  "is sound only while the parking session emits nothing. It emitted something, so the two " +
                  "sessions' findings now have to be FOLDED, and that fold is endpoint.c's merge rule (see the " +
@@ -243,9 +247,28 @@ function canonStr(v, path) {
   }
   return JSON.stringify(v);
 }
-/* Per SURFACE, so a failure names WHICH of the three disagreed and by which elements. One canonical string for
-   the whole document would say only that something differs, which is the report nobody can act on. */
-const SURFACES = ["fetchCallSites", "securitySinks", "pageErrors"];
+/* Per SURFACE, so a failure names WHICH one disagreed and by which elements. One canonical string for the
+   whole document would say only that something differs, which is the report nobody can act on.
+   EACH SURFACE DECLARES ITS SHAPE, because assuming one is how this list went wrong. `probeResults` is a MAP
+   (req2proto.c's learned schemas, keyed by the `<METHOD> <host><path>` identity the Send panel resolves a
+   request body with) and every other surface is an ARRAY — and the first run of this gate reported
+   `probeResults` as an unclassified field on all five corpus documents, because the coverage check asked
+   `Array.isArray` of a surface that is not one. That is the check working: it is the same defect on both
+   sides at once, a finding surface nobody compared AND a shape nobody stated.
+   IT IS A FINDING, NOT A COST. What it holds is what an API's own rejection DESCRIBED — services, methods,
+   fields, OAuth scopes learned from a reply — so §Learning-from-replies' "the reply is the same reply whenever
+   it lands" applies to it exactly as it applies to an endpoint: the schedule decides WHEN the probe's reply is
+   consumed and nothing about what the server said. extension/bridge.js already DCHECKs it as a required map
+   for the same reason, and a schedule that loses one loses "every learned field, service, method and OAuth
+   scope" in that file's own words. */
+const SURFACES = new Map([
+  ["fetchCallSites", "array"],
+  ["securitySinks",  "array"],
+  ["pageErrors",     "array"],
+  ["probeResults",   "map"],
+]);
+const shapeOk = (v, kind) => kind === "array" ? Array.isArray(v)
+                                              : (!!v && typeof v === "object" && !Array.isArray(v));
 /* AND THE TWO LISTS ARE CHECKED AGAINST THE DOCUMENT, which is what makes "compared by default" a mechanism
    rather than a claim in a comment. A field result.c adds that is in NEITHER list is a finding surface nobody
    compares or a cost nobody named, and both are silent: the gate would keep passing while measuring less than
@@ -258,8 +281,9 @@ const SURFACES = ["fetchCallSites", "securitySinks", "pageErrors"];
    than defended against there. */
 function checkCoverage(doc, sched, result) {
   const cost = DROP.get("");
-  const unknown = Object.keys(result).filter((k) => !SURFACES.includes(k) && !cost.has(k));
-  const absent = SURFACES.filter((k) => !Array.isArray(result[k]));
+  const unknown = Object.keys(result).filter((k) => !SURFACES.has(k) && !cost.has(k));
+  const absent = [...SURFACES].filter(([k, kind]) => !shapeOk(result[k], kind))
+                              .map(([k, kind]) => `${k} (${kind})`);
   if (!unknown.length && !absent.length) return true;
   if (unknown.length)
     console.log(`  FAILED ${doc} [${sched}]\n         the result document carries ${unknown.join(", ")}, which ` +
@@ -268,13 +292,21 @@ function checkCoverage(doc, sched, result) {
                 "schedules; a COST goes in DROP[\"\"] with the reason it legitimately differs. Until then the " +
                 "gate is measuring less than it claims to.");
   if (absent.length)
-    console.log(`  FAILED ${doc} [${sched}]\n         the result document has no ${absent.join(", ")} array — ` +
-                "result.c composes all three, so an absent one is a contract this gate and the engine no " +
-                "longer share, and comparing it would compare nothing and call that agreement.");
+    console.log(`  FAILED ${doc} [${sched}]\n         the result document has no ${absent.join(", ")} — ` +
+                "result.c composes every one of them in a single snprintf, so an absent one is a contract this " +
+                "gate and the engine no longer share, and comparing it would compare nothing and call that " +
+                "agreement. The shape is named beside the field because a surface of the wrong shape is the " +
+                "same silence as an absent one.");
   return false;
 }
+/* THE SET, WHATEVER THE CONTAINER. An array surface's element is its entry; a MAP surface's element is its
+   (key, value) PAIR, because the key is half the finding — a schema filed under the wrong endpoint identity is
+   a different finding, not the same one moved. Both come back as a sorted list of canonical strings, so the
+   comparison below is one operation over both and never asks which it is holding. */
 function surfaceSet(result, surface) {
-  return result[surface].map((e) => canonStr(e, "." + surface + "[]"));
+  const v = result[surface];
+  if (SURFACES.get(surface) === "array") return v.map((e) => canonStr(e, "." + surface + "[]"));
+  return Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonStr(v[k], "." + surface + "{}"));
 }
 
 /* ─── the driver ────────────────────────────────────────────────────────────────────────────────────────────*/
@@ -398,7 +430,7 @@ for (const doc of docs) {
   let doc_bad = 0;
   for (const [sched, result] of runs) {
     if (sched === REFERENCE) continue;
-    for (const surface of SURFACES) {
+    for (const surface of SURFACES.keys()) {
       const a = surfaceSet(ref, surface), b = surfaceSet(result, surface);
       const onlyRef = a.filter((x) => !b.includes(x));
       const onlyThis = b.filter((x) => !a.includes(x));
