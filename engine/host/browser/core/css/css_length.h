@@ -1,4 +1,4 @@
-/* CSS VALUES AND UNITS §5 — the `<length>`, and the CSS PIXEL every geometric answer in this engine is
+/* CSS VALUES AND UNITS §6 — the `<length>`, and the CSS PIXEL every geometric answer in this engine is
  * measured in.
  *
  * WHY IT IS A COMPONENT AND NOT A HELPER INSIDE WHOEVER NEEDED IT FIRST. Four standards already turn a CSS
@@ -9,23 +9,35 @@
  * viewport (core/css/media_query.c already had its own, and says why its font-relative answer differs — see
  * below). One fact answered from four places is the defect CLAUDE.md §per-realm names.
  *
- * THE ABSOLUTE UNITS ARE ARITHMETIC AND ARE COMPUTED. CSS Values §5.2 anchors all six of them to the CSS pixel
+ * THE ABSOLUTE UNITS ARE ARITHMETIC AND ARE COMPUTED. CSS Values §6.2 anchors all six of them to the CSS pixel
  * — 1in = 96px by definition, and cm, mm, Q, pt and pc are exact fractions of the inch — so there is no device
  * to consult and nothing to model. §Headless is not the reason any of these would be missing.
  *
- * THE RELATIVE UNITS ARE A MISSING COMPONENT AND THEY CRASH BY NAME, which is the whole point of this file
- * being the one place that knows. A font-relative unit (`em`, `ex`, `ch`, `rem`, `cap`, `ic`, `lh`, `rlh`)
- * resolves against a COMPUTED FONT SIZE, and this engine's cascade has no font-size chain at all — no
- * inheritance step (css_computed_value.c's CSS-wide-keyword DFAIL states that gap), so no element has a
- * computed `font-size` for one to resolve against. media_query.c resolves `em` against the INITIAL font size
- * and is right to: Media Queries §4 evaluates a query before any element exists to have a font size, so the
- * initial value is the spec's own answer there and is NOT a stand-in for the missing chain. On an ELEMENT it
- * would be one, which is why this file crashes instead of borrowing that number.
+ * THE RELATIVE UNITS ARE ABSOLUTIZED HERE, AT COMPUTED-VALUE TIME, WHICH IS WHY THE PARSE TAKES A REALM. CSS
+ * 2.1 §4.3.2 makes a relative length's computed value the absolute length it resolves to, so the resolution
+ * happens once, before any used value is asked for — and each family resolves against a different thing:
  *
- * A VIEWPORT-RELATIVE UNIT IS A DIFFERENT MISSING PIECE and crashes separately, because the fix is not the
- * same: `vw` resolves against a viewport this engine DOES model (core/frame/viewport.h) but that is answered
- * PER REALM, and it absolutizes at COMPUTED-VALUE time, where this engine's entry still answers TEXT. Naming
- * them with one message would send the next reader to build the wrong thing — see the arm's own crash.
+ *   A FONT-RELATIVE unit (`em`, `ex`, `ch`, `rem`, `cap`, `ic`, `lh`, `rlh`) resolves against a COMPUTED FONT
+ *   SIZE, and this engine's cascade has no font-size chain at all — no inheritance step (css_computed_value.c's
+ *   CSS-wide-keyword DFAIL states that gap), so no element has a computed `font-size` for one to resolve
+ *   against. It CRASHES by name. media_query.c resolves `em` against the INITIAL font size and is right to:
+ *   Media Queries §4 evaluates a query before any element exists to have a font size, so the initial value is
+ *   the spec's own answer there and is NOT a stand-in for the missing chain. On an ELEMENT it would be one,
+ *   which is why this file crashes instead of borrowing that number.
+ *
+ *   A VIEWPORT-PERCENTAGE unit RESOLVES, against the rectangle core/frame/viewport.h models. §6.1.2's own first
+ *   sentence is the whole rule — "the viewport-percentage lengths are relative to the size of the INITIAL
+ *   CONTAINING BLOCK" — so `50vw` is half of `viewport_icb_width` and inherits the ICB's environment fact,
+ *   which is the entire reason the computed-value path had to stop being text. §6.1.2.1 adds one divergence
+ *   (where the root element's `overflow` forces scrollbars unconditionally the units follow the reduced ICB,
+ *   and otherwise they assume scrollbars do not exist EVEN IF that diverges from the ICB) and this user agent
+ *   renders no scroll bar, so the two rectangles are one — asserted at the resolution rather than assumed, so
+ *   the day a scroll bar reduces the ICB the crash stands where `vw` would have to stop following it.
+ *   `vi`/`vb` still crash: they are stated in the BOX'S INLINE AXIS, which is `writing-mode` and `direction`,
+ *   both inherited. So does every `sv*`/`lv*`/`dv*` variant, and NOT because their number would differ here —
+ *   §6.1.2.1's three viewport sizes are separate FACTS the moment a UA interface expands and retracts, and
+ *   answering all four families out of one source key would decide `100dvh === 100lvh` on the example and
+ *   delete the arm a mobile bundle wrote the comparison for.
  *
  * AND `calc()` IS A THIRD. css-values §10 makes a math function a value in its own right whose result depends
  * on every unit above; lexbor parses it and serializes it back as text, so it arrives here as a string that is
@@ -35,9 +47,9 @@
  * ONE. CSS 2.1 §10.1 makes the ROOT ELEMENT's containing block the INITIAL CONTAINING BLOCK, "it has the
  * dimensions of the viewport", and core/frame/viewport.h states what the viewport is: a PICKED environment
  * fact, carried to a page as the EXAMPLE of a concolic, because `innerWidth < 768` is a responsive bundle's
- * mobile gate and a bare 1280 deletes the whole arm behind it. Every used value derived from that width
- * inherits the same domain — `parseInt(getComputedStyle(el).width) < 768` is the SAME gate, asked through a
- * different member — so a length that reaches a page either carries the fact it came from or the fork is lost
+ * mobile gate and a bare 1280 deletes the whole arm behind it. Every computed and used value derived from that
+ * width inherits the same domain — `parseInt(getComputedStyle(el).width) < 768` is the SAME gate, asked through
+ * a different member — so a length that reaches a page either carries the fact it came from or the fork is lost
  * between the two.
  *
  * IT CARRIES THE FACT AND NOT THE CONCOLIC, which is media_query.h's layering rather than a weaker form of it.
@@ -48,27 +60,17 @@
  * Threading a JSValue through a layout instead would put a concolic exactly where C compares, which is the one
  * thing viewport.h forbids: a C `if` over a concolic silently picks one arm and says nothing about the other.
  *
- * AND TWO FACTS IN ONE LENGTH ARE A DOMAIN THIS SEAM CANNOT SPELL, so the sum CRASHES rather than picking one.
- * A `width: 50vh` inside a percentage-margined box derives from both viewport axes at once, and the concolic
- * that reported it would need a domain over the PAIR — one source key cannot say that, and a length that
- * silently kept only the first fact would report a narrowing the page never made. */
+ * AND TWO FACTS IN ONE LENGTH ARE A DOMAIN THIS SEAM CANNOT SPELL, so the combination CRASHES rather than
+ * picking one. A `width: 50vh` inside a percentage-margined box derives from both viewport axes at once, `100vmin`
+ * derives from both in one token, and a `width: auto` box with a real border derives from the ICB and from the
+ * DEVICE PIXEL RATIO the border width was snapped to — each would need a domain over a PAIR of facts, one
+ * source key cannot say that, and a length that silently kept only the first fact would report a narrowing the
+ * page never made. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_LENGTH_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_LENGTH_H
 #include <stdbool.h>
 
 #include "quickjs.h"
-
-typedef enum {
-    CSS_LENGTH_ABSOLUTE = 0,   /* an absolute `<length>`; `px` carries it in CSS pixels */
-    CSS_LENGTH_PERCENTAGE,     /* a `<percentage>`; `pct` carries the number, with the `%` removed */
-    CSS_LENGTH_KEYWORD         /* not a length at all: `auto`, `none`, `min-content`, `normal`, … */
-} CssLengthKind;
-
-typedef struct {
-    CssLengthKind kind;
-    double        px;    /* CSS_LENGTH_ABSOLUTE only */
-    double        pct;   /* CSS_LENGTH_PERCENTAGE only */
-} CssLength;
 
 /* THE ENVIRONMENT FACT A LENGTH DERIVES FROM. Every entry is a fact core/frame/viewport.h has already decided
    is PICKED rather than DERIVED — the test is that component's, not this one's, and a fact that fails it (a
@@ -78,13 +80,18 @@ typedef struct {
 typedef enum {
     CSS_ENV_NONE = 0,      /* a number the cascade and the layout determined */
     CSS_ENV_ICB_WIDTH,     /* CSS 2.1 §10.1's initial containing block, whose dimensions are the viewport's */
-    CSS_ENV_ICB_HEIGHT
+    CSS_ENV_ICB_HEIGHT,
+    /* CSSOM VIEW §4's `devicePixelRatio`, which css-values §6's SNAP A LENGTH AS A LINE WIDTH divides a
+       border width by. `devicePixelRatio > 1` is the retina gate a bundle puts a second image host behind, and
+       it reaches a length as well as a member: a `border: 1px solid` is one device pixel at every ratio, so it
+       is 1 CSS pixel at 1x and two thirds of one at 1.5x. */
+    CSS_ENV_DEVICE_PIXEL_RATIO
 } CssEnvFact;
 
 typedef struct {
     double      px;      /* THE EXAMPLE — the modelled number, always present, and what C compares */
     CssEnvFact  env;
-    JSContext  *realm;   /* the realm whose ICB `env` names; NULL exactly when `env` is CSS_ENV_NONE */
+    JSContext  *realm;   /* the realm whose environment `env` names; NULL exactly when `env` is CSS_ENV_NONE */
 } CssPx;
 
 /* A length the cascade and the layout determined. */
@@ -100,46 +107,79 @@ CssPx css_px_add(CssPx a, CssPx b);
 CssPx css_px_sub(CssPx a, CssPx b);
 /* `k` is a pure ratio — a percentage divided by 100 — so it changes no fact. */
 CssPx css_px_scale(CssPx a, double k);
-/* THE LARGER EXAMPLE OF TWO LENGTHS, carrying BOTH their facts. Two spec algorithms need it and both are
-   stated as a comparison against a length that may itself be viewport-derived: css-sizing §5's floor of a
-   content box at zero, and CSS 2.1 §10.4 step 3's clamp of a tentative used width by `min-width`. Deciding
-   WHICH is larger on the modelled viewport is media_query.h's layering — §4 answers `(max-width: 768px)`
-   against the same modelled number — and the result carries the fact either operand had, because the operand
-   that lost at this viewport is the one that wins at another. */
+/* THE LARGER AND THE SMALLER EXAMPLE OF TWO LENGTHS, each carrying BOTH their facts. Three spec algorithms need
+   one of them and every one is stated as a comparison against a length that may itself be viewport-derived:
+   css-sizing §5's floor of a content box at zero, CSS 2.1 §10.4 step 3's clamp of a tentative used width by
+   `min-width`, and css-values §6.1.2.2's `vmin`/`vmax`, which are the smaller and larger of `vw` and `vh`.
+   Deciding WHICH is larger on the modelled viewport is media_query.h's layering — §4 answers
+   `(max-width: 768px)` against the same modelled number — and the result carries the fact either operand had,
+   because the operand that lost at this viewport is the one that wins at another. */
 CssPx css_px_max(CssPx a, CssPx b);
+CssPx css_px_min(CssPx a, CssPx b);
 
-/* Classify a length-valued property's value, as the cascade serialized it. A dimension in a unit this engine
-   cannot absolutize CRASHES here rather than being reported as a third kind — see the header: each of the
-   three groups names a DIFFERENT missing component, and a caller handed "unresolvable" could only guess which.
-   A UNITLESS ZERO is a `<length>` (CSS Values §5.1 permits the unit to be omitted for zero, and it is how
+typedef enum {
+    CSS_LENGTH_ABSOLUTE = 0,   /* an absolute `<length>`; `px` carries it in CSS pixels */
+    CSS_LENGTH_PERCENTAGE,     /* a `<percentage>`; `pct` carries the number, with the `%` removed */
+    CSS_LENGTH_KEYWORD         /* not a length at all: `auto`, `none`, `min-content`, `normal`, … */
+} CssLengthKind;
+
+/* THE KEYWORD IS CARRIED AS TEXT AND NOT AS AN ENUM, deliberately: every caller that cares compares it against
+   the one or two spellings ITS property's grammar admits (`auto` for a margin, `none` for a `max-width`), and
+   an enum of every keyword every length-valued property admits would be a second copy of lexbor's own grammar.
+   It is carried BY VALUE so a `CssLength` needs no free, and the buffer is asserted rather than truncated: the
+   longest keyword any length-valued property's grammar admits is css-sizing's `-webkit-fill-available`, and a
+   longer one is a value lexbor validated against a grammar this engine does not know it has. */
+#define CSS_LENGTH_KEYWORD_MAX 32
+
+typedef struct {
+    CssLengthKind kind;
+    CssPx         px;                             /* CSS_LENGTH_ABSOLUTE only */
+    double        pct;                            /* CSS_LENGTH_PERCENTAGE only */
+    char          keyword[CSS_LENGTH_KEYWORD_MAX];/* CSS_LENGTH_KEYWORD only */
+} CssLength;
+
+/* CLASSIFY AND ABSOLUTIZE a length-valued property's value, as the cascade serialized it — CSS 2.1 §4.3.2's
+   computed value for a `<length>`, which is why this is the step core/css/css_computed_value.c performs and
+   the only caller it has. A dimension in a unit this engine cannot absolutize CRASHES here rather than being
+   reported as a fourth kind — see the header: each group names a DIFFERENT missing component, and a caller
+   handed "unresolvable" could only guess which.
+   `realm` IS THE REALM THE VIEWPORT IS ANSWERED PER — the ELEMENT's document's active realm, never the running
+   one, because an iframe's ICB is 300 CSS pixels wide and its parent's is 1280. It may be NULL for a document
+   no navigable presents; only a viewport-percentage unit needs it, and that is the arm that crashes.
+   A UNITLESS ZERO is a `<length>` (CSS Values §6 permits the unit to be omitted for zero, and it is how
    lexbor serializes every box-model property's initial value). */
-CssLength css_length_parse(const char *value);
+CssLength css_length_parse(JSContext *realm, const char *value);
 
-/* IS THIS TEXT A `<length>` AT ALL — CSS Values §5's production, answered WITHOUT crashing, which is a
-   different question from the one above and exists for a different caller. `css_length_parse` is for a value
-   already known to match the grammar (lexbor validated the declaration), and it CRASHES on one that does not,
-   deliberately. A shorthand LEXBOR'S REGISTRY DOES NOT CARRY reaches the cascade as raw tokens with nothing
-   having validated them, so `border-width: red` is a declaration CSS Syntax DROPS — not an engine gap — and
-   its expansion has to be able to ask.
-   TRUE for a `<number>` (§5.1's unitless zero, and the unitless non-zero the parse above asserts on), for a
-   dimension in ANY unit §5 defines as a length INCLUDING the relative ones this engine cannot yet absolutize
+/* IS THIS TEXT A `<length>` AT ALL — CSS Values §6's production, answered WITHOUT crashing and WITHOUT a realm,
+   which is a different question from the one above and exists for a different caller. `css_length_parse` is for
+   a value already known to match the grammar (lexbor validated the declaration), and it CRASHES on one that
+   does not, deliberately. A shorthand LEXBOR'S REGISTRY DOES NOT CARRY reaches the cascade as raw tokens with
+   nothing having validated them, so `border-width: red` is a declaration CSS Syntax DROPS — not an engine gap —
+   and its expansion has to be able to ask.
+   TRUE for a `<number>` (§6's unitless zero, and the unitless non-zero the parse above asserts on), for a
+   dimension in ANY unit §6 defines as a length INCLUDING the relative ones this engine cannot yet absolutize
    (those are a missing component and must reach the crash that names it, never be dropped as invalid), and for
    a FUNCTION — css-values §10 makes a math function a value of whatever type its operands give it, and telling
    `calc()` from `rgb()` is the same unbuilt grammar the parse above crashes for. FALSE for a `<percentage>`,
    for a keyword, and for anything else. */
 bool css_length_is_length(const char *value);
 
-/* CSS Values §6's SNAP A LENGTH AS A BORDER WIDTH (the spec's own alias of "snap a length as a line width"),
-   which css-backgrounds-3 §3.3 makes part of a `border-*-width`'s COMPUTED value: a length that is an integer
-   number of DEVICE PIXELS is unchanged, one between zero and a single device pixel is rounded AWAY from zero
-   to one, and anything larger is rounded TOWARDS zero to a whole number of them. The device pixel is where the
-   engine's own plumbing runs out, so a length this cannot answer for crashes rather than reporting the
-   unsnapped number. */
-double css_length_snap_line_width(double px);
+/* CSS Values §6's SNAP A LENGTH AS A LINE WIDTH, which css-backgrounds-3 §3.3 makes part of a
+   `border-*-width`'s COMPUTED value ("absolute length, snapped as a border width"): a length that is an integer
+   number of DEVICE PIXELS is unchanged, one whose absolute value is between zero and a single device pixel is
+   rounded AWAY from zero to one, and anything larger is rounded TOWARDS zero to a whole number of them.
+   THE DEVICE PIXEL IS `realm`'s, and the answer therefore DERIVES from the device pixel ratio — which is the
+   whole reason this takes a realm and answers a `CssPx`. A ratio of 1 leaves every whole number of CSS pixels
+   alone and a ratio of 1.5 does not, so the result is a function of a fact viewport.h models as a forkable
+   environment SOURCE, and a length that lost that fact would report `1px` as an author's own number. A border
+   width that is ITSELF viewport-derived (`border-width: 1vw`) meets a second fact here and crashes for the
+   reason the header gives. */
+CssPx css_length_snap_line_width(JSContext *realm, CssPx len);
 
-/* CSSOM §6.7.2's "serialize a CSS value" for an absolute length: the number, then `px`. The number is
-   css-values §serializing's SHORTEST FORM THAT ROUND-TRIPS, which is what makes `4px` come back as "4px" and
-   not "4.000000px". OWNED: the caller frees. */
+/* CSSOM §6.7.2's "serialize a CSS value" for an absolute length and for a percentage: the number, then `px` or
+   `%`. The number is css-values §serializing's SHORTEST FORM THAT ROUND-TRIPS, which is what makes `4px` come
+   back as "4px" and not "4.000000px". OWNED: the caller frees. */
 char *css_length_serialize_px(double px);
+char *css_length_serialize_pct(double pct);
 
 #endif

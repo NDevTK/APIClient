@@ -103,11 +103,20 @@ CssPx viewport_icb_height(JSContext *ctx)
     return css_px_env(CSS_ENV_ICB_HEIGHT, ctx, viewport_height(ctx));
 }
 
-/* See viewport.h: the one switch over CssEnvFact, so a used length mints its domain in one place. */
-JSValue viewport_icb_derived(CssPx len, JSValue computed)
+/* See viewport.h: the one switch over CssEnvFact, so a length mints its domain in one place.
+   THE SECOND COLUMN IS §4's "OR ZERO IF THERE IS NO VIEWPORT", asked per FACT because the facts differ on it
+   and js_vp_get below already draws the same line at the same place: the INITIAL CONTAINING BLOCK has the
+   dimensions of the viewport, so a document no navigable presents has none — while `devicePixelRatio`'s
+   algorithm asks about the OUTPUT DEVICE, which exists whether or not this document is on it. One condition
+   for both would either crash for a border width on a DOMParser element or wave through a length derived from
+   a rectangle that does not exist. */
+JSValue viewport_env_derived(CssPx len, JSValue computed)
 {
-    static const char *const MEMBER[] = {
-        NULL, "initialContainingBlock.width", "initialContainingBlock.height",
+    static const struct { const char *member; bool presented; } FACT[] = {
+        { NULL,                            false },
+        { "initialContainingBlock.width",  true  },
+        { "initialContainingBlock.height", true  },
+        { "devicePixelRatio",              false },
     };
 
     if (len.env == CSS_ENV_NONE) {
@@ -117,16 +126,17 @@ JSValue viewport_icb_derived(CssPx len, JSValue computed)
                "field-by-field past that entry");
         return computed;
     }
-    DCHECK((unsigned)len.env < sizeof(MEMBER) / sizeof(MEMBER[0]),
-           "a length carries a CssEnvFact this seam has no member name for. Every fact is a viewport fact — "
-           "css_length.h says so, and the test for one is viewport.h's — so a new fact is a new row HERE, and "
-           "a fact without one would cross to the page as a bare number with its domain dropped");
-    DCHECK(viewport_exists(len.realm),
+    DCHECK((unsigned)len.env < sizeof(FACT) / sizeof(FACT[0]),
+           "a length carries a CssEnvFact this seam has no member name for. Every fact is one core/frame/"
+           "viewport.h has decided is PICKED — css_length.h says so, and the test for one is this component's "
+           "— so a new fact is a new row HERE, and a fact without one would cross to the page as a bare number "
+           "with its domain dropped");
+    DCHECK(!FACT[len.env].presented || viewport_exists(len.realm),
            "a length derived from the INITIAL CONTAINING BLOCK reached the page out of a realm whose document "
            "is not being presented. §10.1's ICB has the dimensions of the viewport, and viewport.h makes a "
            "document that is not fully active have none — so this length was derived from a rectangle that "
            "does not exist rather than from one whose size is a UA choice");
-    return viewport_env_value(len.realm, MEMBER[len.env], computed);
+    return viewport_env_value(len.realm, FACT[len.env].member, computed);
 }
 
 /* See viewport.h: the one seam, and the one speller of the key. */

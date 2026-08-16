@@ -13,6 +13,7 @@
 #include "core/css/css_property_applies.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
+#include "core/dom/document.h"
 #include "core/frame/viewport.h"
 #include "core/layout/used_value.h"
 
@@ -200,22 +201,48 @@ static char *computed_display(lxb_dom_element_t *el, char *spec)
 
 /* ---- the BOX-MODEL LENGTHS' computed value ---------------------------------------------------------------- */
 
+/* THE REALM THE ELEMENT'S OWN DOCUMENT IS THE ACTIVE DOCUMENT OF, or NULL — which is what a relative unit
+   absolutizes against, and it is the ELEMENT's and never the running flow's: an iframe's initial containing
+   block is 300 CSS pixels wide and the top-level traversable's is 1280, so a `50vw` in one document is a
+   different number from a `50vw` in the other and a remembered realm would answer both with whichever asked
+   first (CLAUDE.md §per-realm). NULL is a real answer — a DOMParser document is presented by nothing — and it
+   is css_length.h's arms that crash on it, because only a relative unit needs it. */
+static JSContext *css_cv_realm(lxb_dom_element_t *el)
+{
+    const lxb_dom_node_t *n = lxb_dom_interface_node(el);
+
+    DCHECK(n->owner_document != NULL,
+           "a computed value was derived for an element whose node has no owner document — every node this "
+           "engine mints belongs to the document that created it");
+    if (n->owner_document == NULL) return NULL;
+    return document_active_realm_of(lxb_dom_interface_node(n->owner_document));
+}
+
 /* ONE `Computed value:` LINE, WRITTEN THE SAME WAY IN TEN PROPERTY DEFINITIONS. CSS 2.1 §8.3 and §8.4 give the
    margins and the paddings "the percentage as specified or THE ABSOLUTE LENGTH"; §10.2 and §10.5 give `width`
    and `height` "the percentage or 'auto' as specified or the absolute length"; css-sizing says the same for the
    four min/max limits. So the whole rule is: ABSOLUTIZE a length and leave everything else alone — a percentage
    cannot be resolved here because it refers to the containing block, which is a USED value and belongs to
    core/layout/used_value.h, and `auto` is a keyword no cascade step turns into a number.
-   THE ABSOLUTIZATION IS WHERE THE FONT AND THE VIEWPORT WOULD ENTER, and core/css/css_length.h is the one
-   component that knows it — `2em` and `50vw` crash there, each naming its own missing piece, rather than being
-   waved through as text that merely LOOKS like a computed value. */
-static char *computed_length(char *spec)
+   THE ABSOLUTIZATION IS WHERE THE FONT AND THE VIEWPORT ENTER, and core/css/css_length.h is the one component
+   that knows it: `50vw` becomes a number out of §10.1's initial containing block and carries that rectangle's
+   environment fact the whole way to the page, and `2em` crashes naming the inheritance step it needs. */
+static CssLength computed_length(JSContext *realm, char *spec)
 {
-    CssLength len = css_length_parse(spec);
+    CssLength len = css_length_parse(realm, spec);
 
-    if (len.kind != CSS_LENGTH_ABSOLUTE) return spec;   /* the percentage or the keyword, AS SPECIFIED */
     free(spec);
-    return css_length_serialize_px(len.px);
+    return len;
+}
+
+/* A computed value that IS an absolute length, with every other arm's field left in the one state a reader of
+   the wrong arm would have to be reading by mistake. */
+static CssLength css_cv_px(CssPx px)
+{
+    CssLength out = { CSS_LENGTH_ABSOLUTE, { 0.0, CSS_ENV_NONE, NULL }, 0.0, { '\0' } };
+
+    out.px = px;
+    return out;
 }
 
 /* ---- CSS Backgrounds §3.2 and §3.3's BORDER LONGHANDS ----------------------------------------------------- */
@@ -259,7 +286,7 @@ static const struct { const char *kw; double px; } CSS_LINE_WIDTH[] = {
  * is that same number, so getComputedStyle answers `0px` either way. The reverse choice satisfies only one.
  * THE STYLE IS THEREFORE READ FIRST, which is why these two longhands cannot be derived independently and why
  * `border-style` had to be modelled before `border-width` could be. */
-static char *computed_border_width(lxb_dom_element_t *el, const char *name, char *spec)
+static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, char *spec)
 {
     char sibling[32];
     int side = css_border_side_of(name, "width");
@@ -274,24 +301,28 @@ static char *computed_border_width(lxb_dom_element_t *el, const char *name, char
     style = css_computed_value(el, sibling);
     off = css_cv_is(style, "none") || css_cv_is(style, "hidden");
     free(style);
-    if (off) { free(spec); return css_length_serialize_px(0.0); }
+    /* §8.5.1's second clause is a NUMBER and not a snapped one: "0 if the border style is none or hidden" —
+       zero is an integer number of device pixels at every ratio, so it is the same 0 on every display and it
+       derives from no environment fact. That is the initial state of almost every element, which is why the
+       device pixel ratio does not reach most of the tree. */
+    if (off) { free(spec); return css_cv_px(css_px(0.0)); }
     for (i = 0; i < sizeof(CSS_LINE_WIDTH) / sizeof(CSS_LINE_WIDTH[0]); i++) {
         if (strcmp(CSS_LINE_WIDTH[i].kw, spec) != 0) continue;
         free(spec);
-        return css_length_serialize_px(CSS_LINE_WIDTH[i].px);
+        return css_cv_px(css_length_snap_line_width(css_cv_realm(el), css_px(CSS_LINE_WIDTH[i].px)));
     }
-    len = css_length_parse(spec);
+    len = computed_length(css_cv_realm(el), spec);
     DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
            "a `border-*-width` cascaded to a value that is neither one of §3.3's three keywords nor a length. "
            "`<line-width> = <length [0,∞]> | thin | medium | thick` admits nothing else — no percentage and no "
            "`auto` — so this is a declaration that reached the cascade without its grammar, which is exactly "
            "what css_shorthand.c validates for the two shorthands lexbor's registry does not carry");
-    DCHECK(len.px >= 0.0,
+    DCHECK(len.px.px >= 0.0,
            "a NEGATIVE `border-*-width` reached the computed value. css-backgrounds-3 §3.3 states it outright "
            "— 'Negative values are invalid' — so the declaration should have been DROPPED by the grammar that "
            "admitted it rather than absolutized here");
-    free(spec);
-    return css_length_serialize_px(css_length_snap_line_width(len.px));
+    len.px = css_length_snap_line_width(css_cv_realm(el), len.px);
+    return len;
 }
 
 /* The ten physical box-model lengths plus the four sizing limits — one list, because every one of them takes
@@ -312,36 +343,44 @@ static bool css_models_length(const char *name)
 
 /* ---- the computed value ----------------------------------------------------------------------------------- */
 
+bool css_computed_models_length(const char *name)
+{
+    DCHECK(name != NULL, "the computed-value model question was asked about a NULL property name");
+    return css_models_length(name) || css_border_side_of(name, "width") >= 0;
+}
+
 bool css_computed_models(const char *name)
 {
     DCHECK(name != NULL, "the computed-value model question was asked about a NULL property name");
     return strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0 ||
            strcmp(name, "display") == 0 || strcmp(name, "float") == 0 || strcmp(name, "position") == 0 ||
-           strcmp(name, "box-sizing") == 0 || css_models_length(name) ||
-           css_border_side_of(name, "width") >= 0 || css_border_side_of(name, "style") >= 0;
+           strcmp(name, "box-sizing") == 0 || css_computed_models_length(name) ||
+           css_border_side_of(name, "style") >= 0;
 }
 
-char *css_computed_value(lxb_dom_element_t *el, const char *name)
+/* THE CASCADE'S WINNER, plus the three conditions every computed-value rule below is derived under. Both
+   entries go through it, so neither can be reached with a property whose shorthands are unexpanded or with a
+   CSS-wide keyword nothing can default. OWNED: the rule that takes it frees it. */
+static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
 {
     char *spec;
 
     DCHECK(el != NULL && name != NULL, "a computed value was asked for with no element or no property name");
     DCHECK(css_computed_models(name),
-           "css_computed_value was asked for a property whose computed value this component does not derive. "
-           "It answers a NAMED set (css_computed_models) and crashes outside it rather than handing back a "
-           "specified value under the word `computed` — the two differ for every length-valued property, and "
-           "the caller asking is a spec algorithm that reads the computed one. BUILD the property's own "
-           "`Computed value:` line here, and record the shorthands that can set it in css_shorthand.c");
+           "a computed value was asked for a property this component does not derive. It answers a NAMED set "
+           "(css_computed_models) and crashes outside it rather than handing back a specified value under the "
+           "word `computed` — the two differ for every length-valued property, and the caller asking is a spec "
+           "algorithm that reads the computed one. BUILD the property's own `Computed value:` line here, and "
+           "record the shorthands that can set it in css_shorthand.c");
     DCHECK(css_shorthand_complete_for(name),
-           "css_computed_value derives a property whose SHORTHANDS are not all expanded by css_shorthand.c, so "
-           "the cascade it reads may never have looked at the declaration that set it — a `margin: 0` two "
-           "lines above a `margin-top` read is invisible, and the answer is a real number with nothing to say "
-           "it is the initial value. Record the complete set in css_shorthand_complete_for");
+           "a computed value was derived for a property whose SHORTHANDS are not all expanded by "
+           "css_shorthand.c, so the cascade it reads may never have looked at the declaration that set it — a "
+           "`margin: 0` two lines above a `margin-top` read is invisible, and the answer is a real number with "
+           "nothing to say it is the initial value. Record the complete set in css_shorthand_complete_for");
     spec = cssom_cascaded_value(el, name);
     DCHECK(spec != NULL,
            "the cascade produced nothing for a property this component models — every one of them is in "
            "lexbor's registry with an initial value, so the cascade's last layer always answers");
-    if (!spec) return NULL;
     DCHECK(!css_wide_keyword(spec),
            "the cascade's winner is a CSS-WIDE KEYWORD (inherit / initial / unset / revert), and CSS Cascade "
            "§7's DEFAULTING step is what turns one into a value: `inherit` takes the parent element's computed "
@@ -351,14 +390,40 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
            "with. BUILD the defaulting step: the property's inherited-ness comes from its own spec "
            "definition (@webref/css publishes it beside the `computedValue` line), and the parent's computed "
            "value is this same entry one node up");
+    return spec;
+}
+
+CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
+{
+    char *spec;
+
+    DCHECK(css_computed_models_length(name),
+           "css_computed_length was asked for a property whose `Computed value:` line is a KEYWORD and not a "
+           "length — `display`, `float`, `position`, `box-sizing`, an overflow axis or a `border-*-style`. "
+           "There is nothing to absolutize and nothing for a `CssPx` to carry, so the entry that answers those "
+           "is css_computed_value, and asking this one would report a keyword as the number zero");
+    spec = css_cv_specified(el, name);
+    if (css_border_side_of(name, "width") >= 0)
+        return computed_border_width(el, name, spec);
+    return computed_length(css_cv_realm(el), spec);
+}
+
+char *css_computed_value(lxb_dom_element_t *el, const char *name)
+{
+    char *spec;
+
+    DCHECK(!css_computed_models_length(name),
+           "css_computed_value was asked for a property whose `Computed value:` line is `the percentage as "
+           "specified or THE ABSOLUTE LENGTH`. An absolute length is where a `50vw` is resolved against the "
+           "INITIAL CONTAINING BLOCK and a `border-*-width` is snapped to a DEVICE PIXEL, and both of those "
+           "rectangles are PICKED environment facts (core/frame/viewport.h) — so the answer is a `CssPx` and "
+           "text would carry the number while dropping the domain behind it, which is the fork "
+           "`getComputedStyle(el).width < 768` shares with `innerWidth < 768`. Ask css_computed_length");
+    spec = css_cv_specified(el, name);
     if (strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0)
         return computed_overflow(el, name, spec);
     if (strcmp(name, "display") == 0)
         return computed_display(el, spec);
-    if (css_models_length(name))
-        return computed_length(spec);
-    if (css_border_side_of(name, "width") >= 0)
-        return computed_border_width(el, name, spec);
     /* `float` (CSS2 §9.5.1), `position` (css-position §2) and `box-sizing` (css-sizing §5) all state "Computed
        value: as specified" (`box-sizing`'s line is "specified keyword"), and a keyword has no absolutization to
        do — so the specified value IS the answer here rather than a stand-in for one. css-backgrounds-3 §3.2
@@ -411,11 +476,56 @@ CssResolvedKind css_resolved_kind(const char *name)
     return CSS_RESOLVED_COMPUTED;
 }
 
-/* The computed value, for a property whose resolved value §9 says the computed value IS. */
-static char *css_resolved_computed(lxb_dom_element_t *el, const char *name)
+/* CSSOM §6.7.2's serialization of a length, and the ONE place a length crosses into a page. The string is the
+   EXAMPLE; `viewport_env_derived` decides whether it crosses as itself or as the example of a concolic whose
+   domain is the environment's, from the fact the length carries (css_length.h). BOTH of §9's answers come
+   through here — a USED width off §10.3.3's equation and a COMPUTED `border-*-width` off §6's snap are derived
+   from different facts and are the same kind of answer, and a second serializer for one of them is a second
+   place for the fact to be dropped. */
+static JSValue css_resolved_px(JSContext *ctx, CssPx len)
 {
-    if (css_computed_models(name)) return css_computed_value(el, name);
-    return cssom_cascaded_value(el, name);
+    char *text = css_length_serialize_px(len.px);
+    JSValue v = JS_NewString(ctx, text);
+
+    free(text);
+    return viewport_env_derived(len, v);
+}
+
+/* The computed value, for a property whose resolved value §9 says the computed value IS. A length-valued one
+   is serialized from the `CssPx` its own entry answers rather than from text, which is what carries the
+   environment fact across: `getComputedStyle(el).borderTopWidth` is a device-pixel-ratio question and
+   `getComputedStyle(el).width` on a `50vw` box is a viewport question, and neither is a number the author's
+   own declarations determined. */
+static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, const char *name)
+{
+    char *v;
+    JSValue out;
+
+    if (css_computed_models_length(name)) {
+        CssLength len = css_computed_length(el, name);
+
+        if (len.kind == CSS_LENGTH_ABSOLUTE)   return css_resolved_px(ctx, len.px);
+        if (len.kind == CSS_LENGTH_PERCENTAGE) {
+            /* "The percentage AS SPECIFIED" — §8.3, §8.4 and §10.2's computed value for one, serialized by
+               §6.7.2's own rule for a `<percentage>`. It resolves against the containing block, and that is a
+               USED value this arm has already established §9 does not ask for. */
+            char *pct = css_length_serialize_pct(len.pct);
+
+            out = JS_NewString(ctx, pct);
+            free(pct);
+            return out;
+        }
+        DCHECK(len.kind == CSS_LENGTH_KEYWORD,
+               "a computed length is none of the three kinds css_length.h defines — the parse answers exactly "
+               "one of them and crashes rather than inventing a fourth");
+        return JS_NewString(ctx, len.keyword);
+    }
+    v = css_computed_models(name) ? css_computed_value(el, name) : cssom_cascaded_value(el, name);
+    /* A property no cascade layer answers at all — a custom property nobody set — is the EMPTY STRING, which
+       is §6.6.1's own answer for one that is not set rather than a default standing in for a value. */
+    out = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
+    free(v);
+    return out;
 }
 
 /* §9's two escapes read "the resolved value of the display property", which is the computed one — `display` is
@@ -429,21 +539,8 @@ static bool resolved_display_generates_a_box(lxb_dom_element_t *el)
     return box;
 }
 
-/* CSSOM §6.7.2's serialization of a used length, and the ONE place a used value crosses into a page. The
-   string is the EXAMPLE; `viewport_icb_derived` decides whether it crosses as itself or as the example of a
-   concolic whose domain is the viewport's, from the fact the length carries (css_length.h). */
-static JSValue css_resolved_used(JSContext *ctx, CssPx used)
-{
-    char *text = css_length_serialize_px(used.px);
-    JSValue v = JS_NewString(ctx, text);
-
-    free(text);
-    return viewport_icb_derived(used, v);
-}
-
 JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name)
 {
-    char *computed;
     JSValue out;
 
     DCHECK(ctx != NULL, "a resolved value was asked for with no realm to answer it in — the string is created "
@@ -463,7 +560,7 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
            core/layout/used_value.h computes it — §10.1's containing block and §10.3.3's equation included —
            crashing by section for the arms that need an intrinsic size. */
         if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) break;
-        return css_resolved_used(ctx, used_value_px(el, name));
+        return css_resolved_px(ctx, used_value_px(el, name));
     case CSS_RESOLVED_USED_IF_POSITIONED:
         /* "If the property applies to a positioned element and the resolved value of the display property is
            not none or contents, and the property is not over-constrained, then the resolved value is the used
@@ -527,11 +624,6 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
         break;
     }
     }
-    /* §9's "any other property", and the value every escape above breaks to: the COMPUTED value. A property no
-       cascade layer answers at all — a custom property nobody set — is the empty string, which is §6.6.1's own
-       answer for one that is not set rather than a default standing in for a value. */
-    computed = css_resolved_computed(el, name);
-    out = computed ? JS_NewString(ctx, computed) : JS_NewStringLen(ctx, "", 0);
-    free(computed);
-    return out;
+    /* §9's "any other property", and the value every escape above breaks to: the COMPUTED value. */
+    return css_resolved_computed(ctx, el, name);
 }

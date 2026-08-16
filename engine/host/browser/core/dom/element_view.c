@@ -123,11 +123,13 @@ static JSValue ev_long(JSContext *ctx, double v)
     return JS_NewInt32(ctx, (int32_t)v);
 }
 
-/* A `long` MEMBER WHOSE ANSWER IS A REAL LENGTH — §6's step 3 for `clientWidth` and `clientHeight`, and the
-   only place in this component that has one. A padding edge is a used value in CSS pixels and NOTHING snaps it:
+/* A `long` MEMBER WHOSE ANSWER IS A REAL LENGTH — §6's step 3 for `clientWidth` and `clientHeight`, and step 2
+   for `clientTop` and `clientLeft`. A padding edge is a used value in CSS pixels and NOTHING snaps it:
    css-backgrounds-3 §3.3 snaps a border WIDTH and no other term of the box model, so `padding: 0.5px` makes a
-   padding edge that is not an integer, and that is exactly why `clientTop`/`clientLeft` could be answered
-   before these two could.
+   padding edge that is not an integer. A snapped border width is a whole number of DEVICE pixels, which is a
+   whole number of CSS pixels only where the device pixel ratio is an integer — so `clientTop` is a real length
+   too, and the two members answer through one conversion rather than through a rounding one of them assumes it
+   never needs.
    WHAT THE SPEC SAYS AND WHERE IT STOPS. §6 declares all six extents `long` and its own Changes section records
    that as deliberate ("the scrollWidth, scrollHeight, clientTop, clientLeft, clientWidth and clientHeight IDL
    attributes on Element were changed back to return integers"), so the TYPE is the normative statement: the
@@ -155,12 +157,12 @@ static JSValue ev_long(JSContext *ctx, double v)
 static JSValue ev_length_long(JSContext *ctx, CssPx px)
 {
     DCHECK(isfinite(px.px) && px.px >= 0.0,
-           "§6's clientWidth/clientHeight step 3 was handed a padding edge that is not a NON-NEGATIVE FINITE "
-           "length. A padding edge is a content box floored at zero (css-sizing §5) plus two paddings CSS 2.1 "
-           "§8.4 forbids to be negative, so a negative or non-finite one is a used value that lost an operand — "
-           "and it would also make this conversion's tie-break observable, which the derivation above says it "
-           "is not");
-    return viewport_icb_derived(px, ev_long(ctx, floor(px.px + 0.5)));
+           "a CSSOM VIEW §6 length member was handed a length that is not a NON-NEGATIVE FINITE one. A padding "
+           "edge is a content box floored at zero (css-sizing §5) plus two paddings CSS 2.1 §8.4 forbids to be "
+           "negative, and a border width is a non-negative <length> css-values §6 snapped towards zero, so a "
+           "negative or non-finite one is a derivation that lost an operand — and it would also make this "
+           "conversion's tie-break observable, which the derivation above says it is not");
+    return viewport_env_derived(px, ev_long(ctx, floor(px.px + 0.5)));
 }
 
 /* A `long` member that reports the VIEWPORT: the modelled geometry as the EXAMPLE of a concolic, minted
@@ -454,30 +456,28 @@ static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical
    solid` reports 4, `border-left-width: 4px` with no style reports 0 (the initial style is `none`, which is
    the same number every user agent gives), and an element with no border declaration at all reports 0 for the
    same reason rather than the initial `medium`.
-   AND IT IS AN INTEGER BY CONSTRUCTION, which is what lets §6 declare these two `long` in the first place:
+   AND IT IS A WHOLE NUMBER OF DEVICE PIXELS, WHICH IS NOT THE SAME AS A WHOLE NUMBER OF CSS PIXELS.
    css-backgrounds-3 §3.3 makes the computed value "snapped as a border width", so css_length.h has already
-   rounded it to a whole number of device pixels — or crashed naming the piece it could not do that without. */
+   rounded it to a whole number of DEVICE pixels — one CSS pixel each at the modelled ratio of 1, and two
+   thirds of one at 1.5, which is why this goes through the same conversion `clientWidth` does rather than
+   through a `long` that assumes it never has to round. THE RATIO IS ALSO WHAT THE ANSWER DERIVES FROM:
+   viewport.h makes `devicePixelRatio` a PICKED environment fact, so `el.clientTop` is the retina gate asked
+   through a member, and the seam mints its domain from the fact the length carries. */
 static JSValue ev_client_edge(JSContext *ctx, const EvTarget *t, bool vertical)
 {
-    char *v;
     CssLength len;
 
     /* step 1 */
     if (!t->has_box || ev_box_is_inline(t)) return ev_long(ctx, 0.0);
     /* step 2 */
-    v = css_computed_value(lxb_dom_interface_element(t->node),
-                           vertical ? "border-top-width" : "border-left-width");
-    DCHECK(v != NULL, "the cascade produced no computed `border-*-width` — every layer of it answers, and the "
-                      "last one is the property's own initial value (`medium`), so a NULL here is a cascade "
-                      "that stopped early");
-    len = css_length_parse(v);
-    free(v);
+    len = css_computed_length(lxb_dom_interface_element(t->node),
+                              vertical ? "border-top-width" : "border-left-width");
     DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
            "§6's clientTop/clientLeft read a `border-*-width` whose computed value is not an absolute length. "
            "css-backgrounds-3 §3.3's `Computed value:` line is `absolute length, snapped as a border width` "
            "and every arm of that derivation produces one, so a percentage or a keyword here is a "
            "computed-value rule that did not run");
-    return ev_long(ctx, len.px);
+    return ev_length_long(ctx, len.px);
 }
 
 /* ---- §6's `getClientRects()` and `getBoundingClientRect()` ----------------------------------------------- */

@@ -119,12 +119,15 @@ double viewport_device_pixel_ratio(JSContext *ctx);
 CssPx viewport_icb_width(JSContext *ctx);
 CssPx viewport_icb_height(JSContext *ctx);
 
-/* THE ONE SEAM A VALUE DERIVED FROM THE ICB CROSSES to become what the page reads, and the ONE switch over
-   `CssEnvFact` — so a length that crosses to JS anywhere in this engine mints its domain here or not at all.
+/* THE ONE SEAM A VALUE DERIVED FROM THIS COMPONENT'S FACTS CROSSES to become what the page reads, and the ONE
+   switch over `CssEnvFact` — so a length that crosses to JS anywhere in this engine mints its domain here or
+   not at all. The facts are the ICB's two dimensions and the DEVICE PIXEL RATIO, which css-values §6's
+   snap-a-length-as-a-line-width divides a computed `border-*-width` by, so a page measuring a border is asking
+   the same question `devicePixelRatio > 1` asks and gets the same source key for it.
    `computed` is the SERIALIZED example the member's own IDL type demanded (CSSOM §6.7.2's `1264px` for a
    resolved value, §6's `long` for a client extent) and is CONSUMED. A length whose `env` is CSS_ENV_NONE is
    handed back unchanged — that is the positive statement css_length.h describes, not a missing domain. */
-JSValue viewport_icb_derived(CssPx len, JSValue computed);
+JSValue viewport_env_derived(CssPx len, JSValue computed);
 
 /* CSSOM VIEW §4's `scrollX`/`scrollY` — "the x-coordinate, relative to the initial containing block origin, of
    the left of the viewport". DERIVED, not stored, and the derivation is in viewport.c: no box in this model has

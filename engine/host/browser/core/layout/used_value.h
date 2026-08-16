@@ -88,9 +88,17 @@
  * answering it with a bare 1264 deletes a responsive bundle's whole mobile world exactly as viewport.h warns.
  * That is PROPAGATION and not a second policy — every operand's domain rides its result — and css_length.h
  * states the shape it rides in: the EXAMPLE is the number, which is what C compares and what the arithmetic
- * here runs on, and the FACT is what the JS boundary mints the domain from. `viewport_icb_derived` is that
+ * here runs on, and the FACT is what the JS boundary mints the domain from. `viewport_env_derived` is that
  * boundary and it is the only switch over the fact in the engine, so a used length either crosses to a page
  * through it or does not cross at all.
+ * AND THE ICB IS NO LONGER THE ONLY FACT THAT ARRIVES HERE, which is why every arm below reads its operands
+ * through core/css/css_computed_value.h's `css_computed_length` rather than parsing text. A computed value is
+ * already absolutized when it reaches this component, so a `width: 50vw` arrives carrying the ICB's fact and a
+ * `border: 1px solid` arrives carrying the DEVICE PIXEL RATIO's — css-values §6 snaps a border width to a whole
+ * number of device pixels, so the seven terms of §10.3.3's equation are not all functions of the same
+ * environment fact, and a box with a real border and a `width: auto` is a function of BOTH. That combination
+ * crashes in css_length.c naming the multi-fact domain, which is the honest answer: one source key cannot spell
+ * a relation over a pair, and keeping either fact alone would report a narrowing the page never made.
  *
  * NOTHING HERE IS STORED, SO NOTHING HERE TIME-TRAVELS — and that is a decision with a reason, not an omission.
  * A layout is per-flow state: two flows with different DOMs have different boxes, and a box tree cached across
@@ -116,7 +124,7 @@
    is why nothing here re-asks them. A case CSS 2.1 §10 defines and this component does not compute crashes
    naming its own section; there is no fallback answer.
    IT IS A `CssPx` AND NOT A `double` because §10.1's base case is the viewport — see the header above and
-   css_length.h. A caller that reports one to a page mints its domain through `viewport_icb_derived`; a caller
+   css_length.h. A caller that reports one to a page mints its domain through `viewport_env_derived`; a caller
    that does arithmetic on one uses css_length.h's, which propagates the fact and crashes where two facts
    would have to be carried by one source key. */
 CssPx used_value_px(lxb_dom_element_t *el, const char *name);

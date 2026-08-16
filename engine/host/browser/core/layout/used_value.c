@@ -49,6 +49,17 @@ static bool uv_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
+/* THE SAME QUESTION OF A LENGTH-VALUED PROPERTY, which is a different entry and not a different spelling: a
+   length's computed value is a `CssPx` carrying the environment fact a `50vw` or a snapped border width
+   derives from (core/css/css_computed_value.h), so the keyword arm is one of three answers rather than the
+   whole of it. §10's rules branch on `auto` and on `none` constantly, and this is how they ask. */
+static bool uv_length_is(lxb_dom_element_t *el, const char *name, const char *kw)
+{
+    CssLength len = css_computed_length(el, name);
+
+    return len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, kw) == 0;
+}
+
 /* css-display §2.4's table display types, plus the two `<display-inside>`/`<display-legacy>` spellings that
    generate a table box. CSS 2.1 §17.5 owns every one of their sizes. */
 static bool uv_display_is_table(const char *d)
@@ -118,15 +129,12 @@ static UvBox uv_box_kind(lxb_dom_element_t *el)
    ignored is a used width that is simply wrong. */
 static void uv_require_unclamped(lxb_dom_element_t *el, bool vertical)
 {
-    char *mn = uv_computed(el, vertical ? "min-height" : "min-width");
-    char *mx = uv_computed(el, vertical ? "max-height" : "max-width");
-    CssLength lmn = css_length_parse(mn), lmx = css_length_parse(mx);
-    bool no_min = (lmn.kind == CSS_LENGTH_ABSOLUTE && lmn.px == 0.0) ||
-                  (lmn.kind == CSS_LENGTH_KEYWORD && strcmp(mn, "auto") == 0);
-    bool no_max = lmx.kind == CSS_LENGTH_KEYWORD && strcmp(mx, "none") == 0;
+    CssLength lmn = css_computed_length(el, vertical ? "min-height" : "min-width");
+    CssLength lmx = css_computed_length(el, vertical ? "max-height" : "max-width");
+    bool no_min = (lmn.kind == CSS_LENGTH_ABSOLUTE && lmn.px.px == 0.0) ||
+                  (lmn.kind == CSS_LENGTH_KEYWORD && strcmp(lmn.keyword, "auto") == 0);
+    bool no_max = lmx.kind == CSS_LENGTH_KEYWORD && strcmp(lmx.keyword, "none") == 0;
 
-    free(mn);
-    free(mx);
     if (no_min && no_max) return;
     DFAIL("CSS 2.1 §10.4 / §10.7 CLAMP the used size by `min-width`/`max-width` (`min-height`/`max-height`), "
           "and this element declares one that is not its initial value, so the tentative used value §10.3 "
@@ -160,16 +168,15 @@ static UvSurround uv_surround(lxb_dom_element_t *el, bool vertical)
     UvSurround s = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
 
     for (i = 0; i < 2; i++) {
-        char *bw = uv_computed(el, BORDERS[axis][i]);
-        CssLength len = css_length_parse(bw);
+        CssLength len = css_computed_length(el, BORDERS[axis][i]);
 
         DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
                "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 "
-               "§3.3's `Computed value:` line is `absolute length` and every arm of that derivation produces "
-               "one — 0 for a `none`/`hidden` style, 1/3/5px for the three keywords, the absolutized length "
-               "otherwise — so a percentage or a keyword here is a rule that did not run");
-        free(bw);
-        s.border  = css_px_add(s.border, css_px(len.px));
+               "§3.3's `Computed value:` line is `absolute length, snapped as a border width` and every arm of "
+               "that derivation produces one — 0 for a `none`/`hidden` style, 1/3/5px for the three keywords, "
+               "the absolutized length otherwise — so a percentage or a keyword here is a rule that did not "
+               "run");
+        s.border  = css_px_add(s.border, len.px);
         s.padding = css_px_add(s.padding, used_value_px(el, PADDINGS[axis][i]));
     }
     DCHECK(s.padding.px >= 0.0 && s.border.px >= 0.0,
@@ -408,7 +415,7 @@ static CssPx uv_block_auto_margin(lxb_dom_element_t *el, const char *opposite)
     UvSurround s = uv_surround(el, false);
     CssPx cb = uv_containing_block_width(el);
     CssPx inner = css_px_add(uv_content_size(el, false, s), uv_surround_total(s));
-    bool both = uv_computed_is(el, opposite, "auto");
+    bool both = uv_length_is(el, opposite, "auto");
     CssPx other = both ? css_px(0.0) : used_value_px(el, opposite);
     CssPx slack = css_px_sub(css_px_sub(cb, inner), other);
 
@@ -420,8 +427,7 @@ static CssPx uv_block_auto_margin(lxb_dom_element_t *el, const char *opposite)
    the reverse — or NULL when this is a vertical margin, which is also how this function knows which pair it
    is in. §10.3.3's over-constraint is a statement about the three horizontal values TOGETHER, so the one that
    is not this margin and is not `width` has to be read. */
-static CssPx uv_margin(lxb_dom_element_t *el, const char *computed, const char *opposite, CssLength len,
-                       UvBox box)
+static CssPx uv_margin(lxb_dom_element_t *el, const char *opposite, CssLength len, UvBox box)
 {
     bool vertical = opposite == NULL;
 
@@ -437,8 +443,8 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *computed, const char *
            read: "if there is exactly one value specified as 'auto', its used value follows from the equality",
            so `margin-left: 10px; margin-right: auto; width: 100px` is not over-constrained at all and
            `margin-left`'s used value is the 10px it computed to. */
-        if (!vertical && box == UV_BOX_BLOCK_FLOW && !uv_computed_is(el, "width", "auto") &&
-            !uv_computed_is(el, opposite, "auto"))
+        if (!vertical && box == UV_BOX_BLOCK_FLOW && !uv_length_is(el, "width", "auto") &&
+            !uv_length_is(el, opposite, "auto"))
             DFAIL("CSS 2.1 §10.3.3: this is a block-level box in normal flow whose `width` and horizontal "
                   "margins are all non-auto, so its used values are OVER-CONSTRAINED and one horizontal "
                   "margin's used value is NOT its computed value — the spec ignores the specified "
@@ -450,7 +456,7 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *computed, const char *
                   "and §10.1's chain answers that width now — so this crash is waiting on the cascade's "
                   "defaulting and inheritance step (css_computed_value.c's CSS-wide-keyword DFAIL names the "
                   "same one) and on nothing in this component");
-        return css_px(len.px);
+        return len.px;
     }
     /* CSS 2.1 §8.3: a percentage margin "is calculated with respect to the WIDTH of the generated box's
        containing block. NOTE THAT THIS IS TRUE FOR 'margin-top' AND 'margin-bottom' AS WELL." So the axis is
@@ -458,7 +464,7 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *computed, const char *
        half of the rule and the reason this arm takes no `vertical`. */
     if (len.kind == CSS_LENGTH_PERCENTAGE)
         return css_px_scale(uv_containing_block_width(el), len.pct / 100.0);
-    DCHECK(strcmp(computed, "auto") == 0,
+    DCHECK(strcmp(len.keyword, "auto") == 0,
            "a margin's computed value is neither a length, nor a percentage, nor `auto` — CSS 2.1 §8.3's "
            "<margin-width> grammar admits exactly those three, and lexbor validates the declaration against "
            "it, so a fourth form here is a serializer that produced something the grammar does not");
@@ -481,7 +487,7 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *computed, const char *
        become '0'" — with a non-auto `width` its `auto` margins take the slack instead. */
     if (box == UV_BOX_INLINE || box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK) return css_px(0.0);
     if (box == UV_BOX_BLOCK_FLOW)
-        return uv_computed_is(el, "width", "auto") ? css_px(0.0) : uv_block_auto_margin(el, opposite);
+        return uv_length_is(el, "width", "auto") ? css_px(0.0) : uv_block_auto_margin(el, opposite);
     if (box == UV_BOX_TABLE)
         DFAIL("a horizontal `auto` margin on a TABLE box. CSS 2.1 §17.5.2 derives the table's own width first "
               "— an intrinsic size over its columns — and only then is there a slack for §10.3.3's margin "
@@ -516,7 +522,7 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *computed, const char *
    depend on the element crash in uv_size below. */
 static CssPx uv_padding(lxb_dom_element_t *el, CssLength len)
 {
-    if (len.kind == CSS_LENGTH_ABSOLUTE) return css_px(len.px);
+    if (len.kind == CSS_LENGTH_ABSOLUTE) return len.px;
     DCHECK(len.kind == CSS_LENGTH_PERCENTAGE,
            "a padding's computed value is neither a length nor a percentage. CSS 2.1 §8.4's <padding-width> "
            "grammar has no `auto` and no keyword at all — a padding is a length or a percentage and nothing "
@@ -554,7 +560,7 @@ static CssPx uv_block_auto_width(lxb_dom_element_t *el)
     return css_px_add(content, uv_surround_total(s));
 }
 
-static CssPx uv_size(lxb_dom_element_t *el, const char *computed, CssLength len, UvBox box, bool vertical)
+static CssPx uv_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool vertical)
 {
     /* CSS 2.1 §10.2: a percentage `width` "is calculated with respect to the width of the generated box's
        containing block", which §10.1 answers — and past that resolution it is a declared length like any
@@ -564,7 +570,7 @@ static CssPx uv_size(lxb_dom_element_t *el, const char *computed, CssLength len,
        uv_padding states. A percentage HEIGHT is not here: §10.5 makes it a computed-value question. */
     if (len.kind == CSS_LENGTH_ABSOLUTE || (len.kind == CSS_LENGTH_PERCENTAGE && !vertical)) {
         CssPx declared = len.kind == CSS_LENGTH_ABSOLUTE
-                             ? css_px(len.px)
+                             ? len.px
                              : css_px_scale(uv_containing_block_width(el), len.pct / 100.0);
 
         /* §10.3.3, §10.3.5, §10.3.7 and §10.3.9 all agree on this one case and each says it in its own words:
@@ -600,7 +606,7 @@ static CssPx uv_size(lxb_dom_element_t *el, const char *computed, CssLength len,
               "for. BUILD it in css_computed_value.c beside `height`'s other computed-value rule, then "
               "§10.6.3's content-based height for the `auto` result it produces");
     }
-    DCHECK(strcmp(computed, "auto") == 0,
+    DCHECK(len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0,
            "a `width` or `height` computed to a keyword that is not `auto` — CSS 2.1 §10.2 and §10.5 admit "
            "`<length> | <percentage> | auto`, and css-sizing's `min-content`/`max-content`/`fit-content` "
            "keywords are a level-3 addition this engine has not recorded a computed-value rule for");
@@ -666,7 +672,6 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
 {
     static const char *const MARGINS[] = { "margin-top", "margin-right", "margin-bottom", "margin-left" };
     static const char *const PADDINGS[] = { "padding-top", "padding-right", "padding-bottom", "padding-left" };
-    char *computed;
     CssLength len;
     UvBox box;
     CssPx out;
@@ -694,17 +699,15 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
               "a position in the TRANSFORM REFERENCE BOX (css-transforms §5) and not a length at all");
         return css_px(0.0);
     }
-    computed = uv_computed(el, name);
-    len = css_length_parse(computed);
+    len = css_computed_length(el, name);
     box = uv_box_kind(el);
     DCHECK(box != UV_BOX_INLINE || group != 2,
            "CSS 2.1 §10.3.1 and §10.6.1 say `width` and `height` DO NOT APPLY to an inline box, so CSSOM §9's "
            "first conjunct is false and the resolved value is the computed value — this call should never have "
            "been made. css_property_applies.c decides it, and the two have come apart");
-    if (group == 0)      out = uv_margin(el, computed, vertical ? NULL : MARGINS[(side + 2) % 4], len, box);
+    if (group == 0)      out = uv_margin(el, vertical ? NULL : MARGINS[(side + 2) % 4], len, box);
     else if (group == 1) out = uv_padding(el, len);
-    else                 out = uv_size(el, computed, len, box, vertical);
-    free(computed);
+    else                 out = uv_size(el, len, box, vertical);
     return out;
 }
 

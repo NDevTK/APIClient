@@ -26,6 +26,20 @@
  *   their COMPUTED values, a statically positioned element's insets do too, and so does every property that
  *   does not apply to the element.
  *
+ * A COMPUTED VALUE IS NOT TEXT, AND WHICH OF THE TWO ENTRIES ANSWERS IS THE PROPERTY'S OWN `Computed value:`
+ * LINE. Half the properties this file models have a line that says "specified keyword" — `display`, `float`,
+ * `position`, `box-sizing`, `border-*-style`, and css-overflow's one computed-value rule — and a keyword IS its
+ * text, so `css_computed_value` answers a `char *` for those and asserts it was not asked for a length. The
+ * other half's line is "the percentage as specified or THE ABSOLUTE LENGTH", and an absolute length is where
+ * CSS 2.1 §4.3.2's absolutization happens: `50vw` becomes a number here, out of the INITIAL CONTAINING BLOCK
+ * (css-values §6.1.2), and a `border-*-width` becomes a whole number of DEVICE PIXELS here (css-backgrounds-3
+ * §3.3's "snapped as a border width"). Both of those rectangles are PICKED environment facts core/frame/
+ * viewport.h models, so the answer is a `CssLength` whose absolute arm is a `CssPx` — the example plus the fact
+ * it derives from — and `css_computed_length` is that entry. Serializing it to text first is what the `char *`
+ * path did, and it dropped the fact on the floor: `getComputedStyle(el).width` compared against 768 is the same
+ * responsive gate as `innerWidth < 768`, and `devicePixelRatio > 1` is the same retina gate whether a page
+ * asks the member or measures a border.
+ *
  * WHAT IS STILL SPECIFIED-VALUE-SHAPED, AND THE MECHANISM THAT ENDS IT. A property this file does not model
  * takes its computed value to BE its specified value, which is what the majority of CSS properties' "Computed
  * value:" line says and what the length-valued ones' does not. The gap is not a judgement call to be made per
@@ -40,14 +54,29 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "core/css/css_length.h"
 #include "quickjs.h"
 
-/* THE COMPUTED VALUE of `name` on `el`, as text. OWNED: the caller frees. `name` must be one of the properties
-   this component models — `css_computed_models` is that list, and asking for another one crashes. */
+/* THE COMPUTED VALUE of a KEYWORD-VALUED property on `el`, as text. OWNED: the caller frees. `name` must be one
+   of the properties this component models and must NOT be one whose computed value is a length — the two
+   entries are split by the property's own `Computed value:` line (see the header above), and each crashes when
+   asked the other's question rather than answering it in a shape that cannot carry the answer. */
 char *css_computed_value(lxb_dom_element_t *el, const char *name);
+
+/* THE COMPUTED VALUE of a LENGTH-VALUED property on `el` — CSS 2.1 §8.3, §8.4, §10.2 and §10.5's one line,
+   "the percentage as specified or the absolute length", plus css-backgrounds-3 §3.3's snapped border widths.
+   Every relative unit is ABSOLUTIZED here (that is what makes this the computed value rather than the specified
+   one), against the realm the ELEMENT'S OWN DOCUMENT is the active document of — never the running realm, since
+   an iframe's initial containing block is 300 CSS pixels wide and its parent's is 1280. The absolute arm is a
+   `CssPx` and carries the environment fact it derives from; the percentage and keyword arms carry the number
+   and the text, as specified. Nothing is owned: the keyword rides the struct. */
+CssLength css_computed_length(lxb_dom_element_t *el, const char *name);
 
 /* Does this component DERIVE `name`'s computed value from the cascade's specified value? */
 bool css_computed_models(const char *name);
+
+/* Is it a LENGTH — so `css_computed_length` is the entry and `css_computed_value` is not? */
+bool css_computed_models_length(const char *name);
 
 /* Is `value` one of CSS Cascade §7.3's CSS-WIDE KEYWORDS — `inherit`, `initial`, `unset`, `revert`,
    `revert-layer`? Each is the ENTIRE value of a declaration when present, so this is an equality and not a
