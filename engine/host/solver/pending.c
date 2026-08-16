@@ -174,6 +174,10 @@ JSValue pending_push(JSValue *reg, int kind)
     pend_put(e, PEND_RESOLVE, JS_UNDEFINED);
     pend_put(e, PEND_VALUE, JS_UNDEFINED);
     pend_put(e, PEND_COMPLETION, JS_UNDEFINED);   /* no answer yet, so no completion type */
+    pend_put(e, PEND_EXTRA, JS_NULL);             /* …and no SECOND answer, which is the common case */
+    /* THIS FLOW ISSUED THE REQUEST, so it is the one that forks an arm per further answer — an arm's own entry
+       is the only place this is true of, and flow_answer_fork sets it there. */
+    pend_put(e, PEND_ANSWER_FIXED, JS_FALSE);
     pend_put(e, PEND_URL, JS_NULL);
     pend_put(e, PEND_HAVE_VALUE, JS_FALSE);
     pend_put(e, PEND_KIND, JS_NewInt32(pend_ctx(), kind));
@@ -225,6 +229,85 @@ void pending_list_add_pair(JSValueConst list, const char *name, const char *valu
     JS_SetPropertyUint32(pend_ctx(), pair, 1, JS_NewString(pend_ctx(), value));
     JS_SetPropertyUint32(pend_ctx(), list, (uint32_t)pend_len(list), pair);
     cow_engine_write_end();
+}
+
+/* ---- the answers beyond the first ---------------------------------------------------------------------------
+   See PEND_EXTRA in pending.h. They are PAIRS in the same shape the header list uses, deliberately: pend_list_fork
+   below already copies a pair list, so the field a fork must give each arm its own container of needs no second
+   copier — and a second copier is exactly where a container that must diverge quietly stays shared. */
+
+void pending_extra_add(JSValueConst e, int completion, JSValue value)
+{
+    JSValue list, pair;
+
+    pend_atoms();
+    list = pend_own(e, g_field[PEND_EXTRA]);
+    cow_engine_write_begin();
+    if (!JS_IsObject(list)) {
+        JS_FreeValue(pend_ctx(), list);
+        list = JS_NewArray(pend_ctx());
+        CHECK(!JS_IsException(list),
+              "engine: OOM recording a peer timeline's answer — a dropped one is a whole timeline of the "
+              "answering document that the asking flow will never fork an arm for, and nothing says so");
+        pend_put(e, PEND_EXTRA, JS_DupValue(pend_ctx(), list));
+    }
+    pair = JS_NewArray(pend_ctx());
+    CHECK(!JS_IsException(pair), "engine: OOM recording a peer timeline's answer");
+    /* THE TYPE AND THE VALUE ARE ONE WRITE, the same rule PEND_COMPLETION keeps beside PEND_VALUE: a peer
+       answers by RUNNING A PROGRAM and a program that threw completed just as truly as one that returned. */
+    JS_SetPropertyUint32(pend_ctx(), pair, 0, JS_NewInt32(pend_ctx(), completion));
+    JS_SetPropertyUint32(pend_ctx(), pair, 1, value);
+    JS_SetPropertyUint32(pend_ctx(), list, (uint32_t)pend_len(list), pair);
+    cow_engine_write_end();
+    JS_FreeValue(pend_ctx(), list);
+}
+
+int pending_extra_count(JSValueConst e)
+{
+    JSValue list;
+    int n;
+
+    pend_atoms();
+    list = pend_own(e, g_field[PEND_EXTRA]);
+    n = JS_IsObject(list) ? pend_len(list) : 0;
+    JS_FreeValue(pend_ctx(), list);
+    return n;
+}
+
+int pending_extra_pop(JSValueConst e, JSValue *pvalue)
+{
+    JSValue list, pair, c;
+    int n;
+    int32_t completion = 0;
+
+    DCHECK(pvalue != NULL, "a peer timeline's answer was taken with nowhere to put its value — the arm forked "
+                           "over it would resume the same frame with the FIRST answer, which is the timeline "
+                           "its parent is already exploring");
+    pend_atoms();
+    list = pend_own(e, g_field[PEND_EXTRA]);
+    DCHECK(JS_IsObject(list), "an answer beyond the first was taken from a request that has none recorded");
+    n = pend_len(list);
+    DCHECK(n > 0, "an answer beyond the first was taken from an empty list — the list is dropped the moment it "
+                  "empties, so a zero-length one is a container this file did not build");
+    /* THE LAST, because these are ALTERNATIVES and not a queue: two answers to one question are two peer
+       timelines, and neither is before the other. Taking from the end is what keeps the drop O(1). */
+    pair = JS_GetPropertyUint32(pend_ctx(), list, (uint32_t)(n - 1));
+    c = JS_GetPropertyUint32(pend_ctx(), pair, 0);
+    DCHECK(JS_IsNumber(c), "a recorded peer answer carries no completion type — the type and the value are one "
+                           "write, so a pair without one would deliver a peer's THROW to the arm as a value");
+    JS_ToInt32(pend_ctx(), &completion, c);
+    JS_FreeValue(pend_ctx(), c);
+    *pvalue = JS_GetPropertyUint32(pend_ctx(), pair, 1);
+    JS_FreeValue(pend_ctx(), pair);
+    cow_engine_write_begin();
+    JS_SetProperty(pend_ctx(), list, g_len_atom, JS_NewInt32(pend_ctx(), n - 1));
+    /* AND AN EMPTY LIST IS NOT A LIST — the same statement pending_remove makes about an empty register, for
+       the same reason: `extra` is read on every step of every flow that ever parked on anything, so its answer
+       for the overwhelmingly common case has to be a tag test rather than a shape lookup for `length`. */
+    if (n == 1) pend_put(e, PEND_EXTRA, JS_NULL);
+    cow_engine_write_end();
+    JS_FreeValue(pend_ctx(), list);
+    return (int)completion;
 }
 
 void pending_remove(JSValue *reg, int i)
@@ -395,7 +478,10 @@ long pending_bytes(JSValueConst reg)
             if (f == PEND_BODY) {
                 size_t bl = 0;
                 if (JS_GetArrayBuffer(pend_ctx(), &bl, v)) total += (long)bl;
-            } else if (f == PEND_HEADERS && JS_IsObject(v)) {
+            /* THE TWO PAIR LISTS, counted by one arm of this walk because they are one shape — the request's
+               headers, and the answers beyond the first that a peer's other timelines gave. A field a census
+               does not walk is a field a pager is surprised by. */
+            } else if ((f == PEND_HEADERS || f == PEND_EXTRA) && JS_IsObject(v)) {
                 int hn = pend_len(v), h;
                 for (h = 0; h < hn; h++) {
                     JSValue pair = JS_GetPropertyUint32(pend_ctx(), v, (uint32_t)h);

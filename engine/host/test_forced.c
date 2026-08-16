@@ -1778,7 +1778,7 @@ static int hostreq_answer_all(JSContext *ctx)
                already have read. */
             /* This fixture stands in for the trusted zone and answers out of its own tables, so every answer
                it gives is a NORMAL completion — there is no peer program here to have thrown in one. */
-            n += engine_host_answer(ctx, id, v, ENGINE_COMPLETION_NORMAL);
+            n += engine_host_answer(ctx, id, v, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
             JS_FreeValue(ctx, v);
         }
         p = end + 1;

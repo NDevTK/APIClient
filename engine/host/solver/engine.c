@@ -343,65 +343,104 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
     return JS_STEP_DONE;
 }
 
-/* Deliver the host's answer. Routed by id to ONE flow's ONE call site — never broadcast the way a fetched
-   body is, because the answer was computed under that flow's world. */
-int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int completion) {
+/* Deliver an answer. Routed by id to the call site that asked — never broadcast the way a fetched body is,
+   because the answer was computed under the ASKING FLOW'S world.
+ *
+ * A SECOND ANSWER TO ONE QUESTION IS NOT A DUPLICATE — it is a SECOND PEER TIMELINE, and the asking side's half
+ * of that is the fork this records for. A peer's document state IS its flows, so a cross-agent operation is
+ * performed by every live timeline it has and each one completes with its own answer: `otherW.length` has N
+ * answers for N peer timelines and they are all true. It is not hypothetical and it is not the peer host's
+ * oversight — engine_sibling_assemble COPIES `answer_token` onto a sibling on purpose, because a branch inside
+ * the answering program is a real peer timeline in which the answer differs, so N answers under one token is
+ * what that fork was built to produce. Taking the first and asserting on the rest picks a timeline; overwriting
+ * picks the last, after the machine may already have read the first.
+ *
+ * SO THE ANSWER IS RECORDED HERE AND THE FORK IS TAKEN IN flow_step, and that split is the whole design. This
+ * entry runs BETWEEN scheduler steps: `flow_running()` still names whichever flow was last switched in,
+ * `cow_delta_fork` would freeze the delta CURRENTLY APPLIED and `dom_cow_fork` would fork the LIVE DOM head, so
+ * a fork on this line would clone a stranger's timeline and call it the asker's — the exact "two timelines
+ * wearing one name" the world registry exists to prevent, with nothing to say so. What CAN be done between
+ * steps is to write the completion onto the entry as a JS value, which is a property write the COW delta and
+ * the cold tier already carry; flow_answer_fork then builds the arm with that flow switched in.
+ *
+ * A HOST-COMPUTED ANSWER GENUINELY HAS ONE ANSWER — a fetch this zone performed — and answering one of those
+ * twice is the zone's bug, which is what `source` is for and why it is not sniffed from the request's text. */
+int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int completion, int source) {
+    int extra = 0;
+
     DCHECK(req != 0, "the host answered a request with no id");
     DCHECK(completion == ENGINE_COMPLETION_NORMAL || completion == ENGINE_COMPLETION_THROW,
            "the host answered a request with a completion type that is neither normal nor a throw");
+    DCHECK(source == ENGINE_ANSWER_HOST || source == ENGINE_ANSWER_PEER,
+           "an answer arrived without saying who computed it — a value this zone computed has exactly one "
+           "answer and a peer's has one per timeline, and only the deliverer knows which this is");
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
             if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
                 (uint32_t)pending_get_int(p, PEND_REQ) != req) { JS_FreeValue(ctx, p); continue; }
-            /* A SECOND ANSWER TO ONE QUESTION IS NOT A DUPLICATE — it is a SECOND PEER TIMELINE, and this is
-               where the asking side's half of that is missing. A peer's document state IS its flows, so a
-               cross-agent operation is performed by every live timeline it has and each one completes with its
-               own answer; `otherW.length` has N answers for N peer timelines and they are all true. It is not
-               hypothetical and it is not the peer host's oversight: engine_fork_finalize COPIES `answer_token`
-               onto a sibling on purpose, because a branch inside the answering program is a real peer timeline
-               in which the answer differs — so N answers under one token is what that fork was built to
-               produce. Taking the first and asserting on the rest picks a timeline; overwriting picks the last,
-               after the machine may already have read the first.
-               WHAT BELONGS IS A FORK OF THE ASKING FLOW AT ITS PARK — a sibling per additional answer, resuming
-               the same suspended frame with that answer's value — and THE ONE THING THAT MUST NOT BE DONE IS TO
-               TAKE IT HERE. This entry runs BETWEEN scheduler steps: `flow_running()` still names whichever flow
-               was last switched in, `cow_delta_fork` freezes the delta CURRENTLY APPLIED and `dom_cow_fork`
-               forks the LIVE DOM head, so a fork on this line would clone a stranger's timeline and call it the
-               asker's — the exact "two timelines wearing one name" the world registry exists to prevent, with
-               nothing to say so. So the three named things to build are:
-                 (1) RECORD the extra completion ON THE ENTRY, as a JS value (an Array slot beside PEND_VALUE) —
-                     never a malloc'd C list, because a queued platform value must park to the cold tier and fork
-                     per flow, which the COW delta gives a property write for free and gives a pointer never;
-                 (2) TAKE THE FORK IN flow_step, with that flow switched in and before it resumes its frame,
-                     which is the only moment the delta, the DOM head and the running flow all agree — one
-                     sibling per recorded answer, each carrying that answer alone on its own forked register;
-                 (3) SPLIT engine_fork_finalize: its body assembles a sibling from a BRANCH's decision and pin
-                     blobs and DCHECKs that one is prepared, and a parked fork has no decision — the sibling
-                     assembly is what the two share, the decision is what only the branch has.
-               (A host-COMPUTED answer — a fetch this zone performed — genuinely has one answer, and answering
-               one of those twice is the host bug this assert used to be about. Both readings end here.) */
-            DCHECK(!pending_get_int(p, PEND_HAVE_VALUE),
-                   "one request was answered twice. If the answers came from a PEER, that is two of its "
-                   "timelines answering and both are true: record the extra completion on this entry as a JS "
-                   "value and fork the asking flow in flow_step, with that flow switched in — never on this "
-                   "line, which runs between steps where flow_running(), the applied delta and the live DOM "
-                   "head all still belong to a different flow");
-            pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
-            pending_set(p, PEND_COMPLETION, JS_NewInt32(ctx, completion));
-            pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
+            if (!pending_get_int(p, PEND_HAVE_VALUE)) {
+                DCHECK(!pending_get_int(p, PEND_ANSWER_FIXED),
+                       "a request whose answer was FIXED by an answer fork is UNANSWERED — the arm is built from "
+                       "the answer it took, so the two are written together and one without the other is an arm "
+                       "that would wait for a question nobody was asked");
+                pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
+                pending_set(p, PEND_COMPLETION, JS_NewInt32(ctx, completion));
+                pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
+                JS_FreeValue(ctx, p);
+                /* AND THE FLOW IS ASKABLE AGAIN. This is the event a flow parked on a synchronous request is
+                   waiting for — the one thing that can change the answer it gave the scheduler — so the mark
+                   comes off HERE, on the flow the answer reached, and not on a slice boundary that means
+                   nothing to it (flow.h). Without this line the answer would sit on the register while the pick
+                   kept skipping the flow that asked for it.
+                   THE FIRST ANSWER STOPS AT THE FIRST FLOW because the RECORD is what it is written onto and a
+                   fork SHARES records (pending.h): every arm that inherited this request observes it already. */
+                flow_clear_host_owed(f);
+                g_host_answered++;   /* the PAY half of the rate above — every delivery that reached a flow */
+                return 1;
+            }
+            DCHECK(source == ENGINE_ANSWER_PEER,
+                   "the trusted zone answered one request TWICE. A value this zone computed — §7.4 step 14's "
+                   "load, XHR §3.5.6's fetch — has exactly one answer, so the second is a delivery this zone "
+                   "made after it had already made one, and the flow has by now run on the first");
+            /* AN ARM'S OWN ANSWER IS FIXED, and skipping it here is what keeps the frontier from doubling per
+               answer: the arm holds the SAME request id (the id lives in the step state inside the frame it is
+               a clone of), so without this a third answer would fork from the arm as well as from the issuer,
+               producing a timeline that answered B and then C at one call site. */
+            if (pending_get_int(p, PEND_ANSWER_FIXED)) { JS_FreeValue(ctx, p); continue; }
+            /* …AND AN ANSWER BEYOND THE FIRST DOES NOT STOP AT THE FIRST FLOW, because it may not be written
+               onto a SHARED record. Every issuing timeline still holding this request — the flow that asked and
+               each of its BRANCH siblings, all of which observed the first answer — must fork over this peer
+               timeline's answer, and each of them DRAINS its own list to do it, so one shared list would let
+               whichever ran first take an answer the others were going to explore. The record therefore stops
+               being shared here, per flow, which is the same thing the branch fork does to the one field two
+               arms must disagree about. */
             JS_FreeValue(ctx, p);
-            /* AND THE FLOW IS ASKABLE AGAIN. This is the event a flow parked on a synchronous request is
-               waiting for — the one thing that can change the answer it gave the scheduler — so the mark comes
-               off HERE, on the flow the answer reached, and not on a slice boundary that means nothing to it
-               (flow.h). Without this line the answer would sit on the register while the pick kept skipping the
-               flow that asked for it. */
+            p = pending_unshare(f->pending, i);
+            pending_extra_add(p, completion, JS_DupValue(ctx, value));
+            JS_FreeValue(ctx, p);
             flow_clear_host_owed(f);
-            g_host_answered++;   /* the PAY half of the rate above — every delivery that reached a flow */
-            return 1;
+            g_host_answered++;
+            extra++;
         }
     }
-    return 0;   /* the asking flow is gone: an answer to a question nobody is waiting on is simply dropped */
+    if (extra) return 1;
+    /* NOTHING ON ANY REGISTER NAMES THIS REQUEST, and the two readings of that are not equally innocent.
+       For a value this zone computed it means the asking flow is GONE, which is not an error: nobody is
+       waiting on the answer.
+       For a PEER's it means the asking flow already TOOK its first answer — engine_host_take removes the entry
+       — and this timeline's answer has nowhere to land. That is a peer timeline the asking flow will never fork
+       an arm for, dropped silently, and it is the next thing to build: the register entry has to outlive the
+       take for as long as the peer holds timelines that may still answer, so that flow_answer_fork can still
+       find it. (The zone does not drop a live asker's rendezvous — bridge.js keeps the token until the
+       instance is finalized precisely so every completion is relayed — so this is not a stale relay.) */
+    DCHECK(source == ENGINE_ANSWER_HOST,
+           "a PEER's answer arrived for a request no ISSUING register holds — the asking flow took its first "
+           "answer and the entry left the register with it (or every entry left naming it is an ARM, whose "
+           "answer is fixed), so this timeline of the answering document has nowhere to land "
+           "and the arm it would have forked is silently missing. Keep the entry alive past the take while the "
+           "peer still holds timelines that may answer, and fork from it as flow_answer_fork already does");
+    return 0;
 }
 
 /* WHAT THE HOST STILL OWES, as `id\top\n` records. Pulled each step like the pending URLs, and NOT deduped:
@@ -1081,38 +1120,35 @@ void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *c
    job-drop walk — and both close the safepoint around themselves with it. */
 static int engine_reclaim_set(int v);
 
-static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
-    Flow *parent = flow_running();
-    DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
+/* ASSEMBLE A SIBLING FROM A PARENT AND A FRAME CLONE — everything a new timeline of this flow IS, and nothing
+ * about WHY it exists. That split is the point of this function existing separately from the branch hook below.
+ *
+ * A FORK IS NOT ONLY A BRANCH. A flow forks over a PREDICATE (the interpreter's concolic OP_if, whose sibling
+ * carries the other arm) and it forks over a VALUE it did not choose — a peer document's state IS its flows, so
+ * one cross-instance read has N true answers and the asking flow explores one arm per DISTINCT ANSWER
+ * (flow_answer_fork). Both need the identical construction: the frame clone, the O(1) delta and DOM-segment
+ * fork, the generator swaps, the inherited chunks, jobs and register, the world minted as a CHILD of the
+ * parent's so a peer can materialize the arm's segment by forking the asker's. What differs is exactly the
+ * decision state, which is why it is a PARAMETER here rather than read from a static: a branch has an arm to
+ * record and an answer fork has none, and that is the whole of the difference between them.
+ * `dec_blob` and `pin_blob` are CONSUMED — they become the sibling's. */
+static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
+                                     void *dec_blob, void *pin_blob) {
+    DCHECK(parent != NULL, "a sibling was assembled with no parent flow — every field below is copied from one");
+    DCHECK(dec_blob != NULL, "a sibling was assembled with no decision state — it would resume its parent's "
+                             "frame standing on nothing, and every branch its parent had already taken would "
+                             "be re-asked as a new one");
     /* A SIBLING WITHOUT A SNAPSHOT IS NOT A SIBLING. `started` is set below, so a NULL frame here produces a flow
        the scheduler believes is hot and which has nothing to resume — it compiles the program again and REPLAYS
        side effects the parent already performed. The engine's clone now CHECKs before it calls this, so this is
        the receiving end of that same contract said where the pointer arrives. */
-    DCHECK(clone != NULL, "engine_fork_finalize: a fork arrived with no frame snapshot — the sibling would be "
-                          "marked hot with nothing to resume and would replay the program from its start");
-    /* A DELIVERY IS MADE BEFORE ANY CODE RUNS, so no flow can be at a branch while still holding its record. If
-       one is, the record would be inherited by the sibling and delivered TWICE — the same message arriving in
-       two timelines of one document, which no peer sent. */
-    DCHECK(parent->deliver == NULL, "a flow forked while still holding a routed record — the sibling would "
-                                    "inherit it and deliver the peer's one message a second time");
-    /* THE SAME SENTENCE FOR AN UNSTARTED OPERATION and the OPPOSITE one for a running answer. A cross-agent
-       operation is turned into a program before any code runs, so no flow can be at a branch still holding the
-       RECORD — two flows would then perform one operation twice and the peer would get two answers for a
-       question it asked of one timeline. But the ANSWER TOKEN is different in kind: the program that answers is
-       the page's own code, so a branch inside it is a real peer timeline in which the answer differs, and the
-       sibling must carry the token and answer too. That is the multiplicity §7.2.5.1 has when a document's
-       state is its flows, and dropping it here would silently pick this arm's answer. */
-    DCHECK(parent->perform == NULL, "a flow forked while still holding an unstarted cross-agent operation — the "
-                                    "sibling would inherit the record and perform the peer's one operation a "
-                                    "second time under the same token");
-    /* AND A DISCOVERY PROBE CANNOT BE AT A BRANCH AT ALL. Its whole step is a park and a read (flow_step) — it
-       compiles no program, so no branch hook can fire under it, and a fork arriving from one means it entered a
-       program it has no business in. The sibling would not inherit the candidate either, so the probe would be
-       silently duplicated as a flow with nothing to do. */
-    DCHECK(parent->disc_url == NULL,
-           "a DISCOVERY PROBE forked — a probe runs no program, so a branch under one means it entered the "
-           "document's script sequence, and the sibling this is about to build carries no candidate and would "
-           "sit in the frontier with no work at all");
+    DCHECK(clone != NULL, "a fork arrived with no frame snapshot — the sibling would be marked hot with nothing "
+                          "to resume and would replay the program from its start");
+    /* AN UNSTARTED CROSS-AGENT OPERATION AND A ROUTED DELIVERY ARE NOT ASSERTED HERE, and their assertions have
+       moved to the BRANCH hook where they are true claims: they are statements about a flow being AT A BRANCH
+       (nothing routed can be outstanding, because a delivery and an operation are both turned into work before
+       any code runs), not about assembling a sibling. An answer fork happens at a PARK, where the trusted zone
+       may perfectly well have attached one meanwhile, and it says so at its own site. */
     /* THE SIBLING IS A MEMBER OF THE FRONTIER BEFORE IT IS A FLOW, so nothing may page it out while this
        assembles it. flow_add publishes it into the registry on its first line and everything below is the
        CONSTRUCTION — a dozen allocations, any one of which can reach the allocator's refusal edge. A newborn
@@ -1142,10 +1178,12 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
        (refcount 2 — parent keeps a fresh empty head over it, sibling references it too), so the sibling INHERITS
        the parent's PRE-FORK document writes in O(1) instead of a copy, then each diverges on its own head. */
     sib->dom_base = dom_cow_fork();
-    sib->dec_blob = g_fork_dec; g_fork_dec = NULL;
-    sib->pin_blob = g_fork_pins; g_fork_pins = NULL;
-    /* THE ANSWER TOKEN TRAVELS, per the assertion above: this sibling resumes the same operation's program from
-       the branch and completes it in its own timeline, so it owes the same peer an answer of its own. */
+    sib->dec_blob = dec_blob;
+    sib->pin_blob = pin_blob;
+    /* THE ANSWER TOKEN TRAVELS: this sibling resumes the same operation's program from the fork point and
+       completes it in its own timeline, so it owes the same peer an answer of its own. That is the multiplicity
+       §7.2.5.1 has when a document's state is its flows — N answers under one token is a thing this fork is
+       BUILT to produce, and it is what engine_host_answer records extras for at the other end. */
     if (parent->answer_token) {
         sib->answer_token = strdup(parent->answer_token);
         CHECK(sib->answer_token, "engine: OOM forking a cross-agent operation's rendezvous token");
@@ -1240,16 +1278,138 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
         JS_FreeValue(ctx, p);
     }
     engine_reclaim_set(prev_reclaim);   /* the sibling is fully assembled: it may be paged like any other member */
-    /* THE HANDOFFS ARE DRAINED, SAID AT THE END OF THE ONE OPERATION THAT DRAINS THEM. Both are module statics
-       filled by somebody else and emptied here, which is the shape where an arm added later takes an early
-       return and leaves one behind — a leaked decision blob keeps the whole frozen prefix chain under it alive,
-       and a leaked generator-fork record leaves the sibling's cloned gen_data owned by nobody. */
-    DCHECK(g_fork_dec == NULL && g_fork_pins == NULL,
-           "a fork finished without consuming the sibling's prepared decision and pin blobs — they are freed by "
-           "nothing else, and the decision blob is a reference on the shared frozen prefix chain");
     DCHECK(g_genfork_n == 0,
            "a fork finished with generator-state swaps still in the stash — the sibling's cloned gen_data was "
            "never recorded on its delta, so it is owned by nobody and its body frame is unreachable");
+    return sib;
+}
+
+/* JSFlowControlHooks.fork — the BRANCH's fork, which is the assembly above plus the one thing only a branch
+   has: an arm to record. The handoff statics are drained BEFORE the assembly rather than inside it, which is
+   what retires the assertion that used to stand at the end of this function: an early return could leave a
+   decision blob owned by nobody (and with it the whole frozen prefix chain under it), and there is now no
+   window in which one is both filled and unconsumed. */
+static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
+    Flow *parent = flow_running();
+    void *dec, *pins;
+
+    DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
+    /* A DELIVERY IS MADE BEFORE ANY CODE RUNS, so no flow can be AT A BRANCH while still holding its record. If
+       one is, the record would be inherited by the sibling and delivered TWICE — the same message arriving in
+       two timelines of one document, which no peer sent. */
+    DCHECK(parent->deliver == NULL, "a flow forked while still holding a routed record — the sibling would "
+                                    "inherit it and deliver the peer's one message a second time");
+    /* THE SAME SENTENCE FOR AN UNSTARTED OPERATION and the OPPOSITE one for a running answer. A cross-agent
+       operation is turned into a program before any code runs, so no flow can be at a branch still holding the
+       RECORD — two flows would then perform one operation twice and the peer would get two answers for a
+       question it asked of one timeline. But the ANSWER TOKEN is different in kind: the program that answers is
+       the page's own code, so a branch inside it is a real peer timeline in which the answer differs, and the
+       sibling must carry the token and answer too (which the assembly does). */
+    DCHECK(parent->perform == NULL, "a flow forked while still holding an unstarted cross-agent operation — the "
+                                    "sibling would inherit the record and perform the peer's one operation a "
+                                    "second time under the same token");
+    /* AND A DISCOVERY PROBE CANNOT BE AT A BRANCH AT ALL. Its whole step is a park and a read (flow_step) — it
+       compiles no program, so no branch hook can fire under it, and a fork arriving from one means it entered a
+       program it has no business in. The sibling would not inherit the candidate either, so the probe would be
+       silently duplicated as a flow with nothing to do. */
+    DCHECK(parent->disc_url == NULL,
+           "a DISCOVERY PROBE forked — a probe runs no program, so a branch under one means it entered the "
+           "document's script sequence, and the sibling this is about to build carries no candidate and would "
+           "sit in the frontier with no work at all");
+    dec = g_fork_dec; g_fork_dec = NULL;
+    pins = g_fork_pins; g_fork_pins = NULL;
+    engine_sibling_assemble(ctx, parent, clone, dec, pins);
+}
+
+/* ONE ARM PER DISTINCT ANSWER — the asking side of a peer document that has more than one timeline, and the
+ * reason engine_host_answer only RECORDS.
+ *
+ * A cross-instance operation is performed by every live timeline the peer has (engine_perform attaches it to
+ * each), so `otherW.length` comes back N times and every one of those numbers is the child-navigable count of
+ * that document in one of its timelines. They are not a race to resolve and not duplicates to drop: they are a
+ * value the asking flow must explore all of, which is the same primitive as a branch fork over a concolic
+ * value, taken over an ANSWER instead of over a predicate.
+ *
+ * WHY HERE AND NOWHERE ELSE. This runs from flow_step with `f` SWITCHED IN — its COW delta applied, its DOM
+ * head live, its decision state loaded — which is the only moment `cow_delta_fork`, `dom_cow_fork` and
+ * `decide_fork_same_path` all describe the same flow. On engine_host_answer's line, between scheduler steps,
+ * every one of those three would freeze whichever flow the scheduler last ran, and the arm would be a stranger's
+ * timeline wearing the asker's name. It also runs BEFORE the flow resumes its frame, because the frame is what
+ * the arm is a clone OF: once the machine is re-entered it takes the answer off the register and the call site
+ * the arm must resume at is gone.
+ *
+ * ONE ARM PER STEP, like every other branch of flow_step. The remaining answers stay on the register and the
+ * next step forks the next one, so a peer with a hundred timelines does not build a hundred flows inside one
+ * step — the scheduler re-ranks between each, which is what it is for.
+ *
+ * THE ARM'S WORLD is a CHILD of the asking flow's (flow_add mints and records the edge), so a peer that already
+ * holds a segment for the asker materializes the arm's by forking it. What that does NOT yet carry is the
+ * ANSWERING timeline's world: the completion crosses back naming only the rendezvous token, so an arm cannot
+ * say which of the peer's timelines it belongs to, and a SECOND operation from that arm would be answered by
+ * all of them again — the cross-product, of which every off-diagonal member is a timeline neither agent was
+ * ever in. Carrying the answering world on the answer, and pinning the arm to it, is the next thing here. */
+static int flow_answer_fork(JSContext *ctx, Flow *f) {
+    int n = pending_count(f->pending), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(f->pending, i), av = JS_UNDEFINED, se;
+        JSValue *clone;
+        Flow *sib;
+        int completion;
+
+        if (pending_extra_count(e) == 0) { JS_FreeValue(ctx, e); continue; }
+        DCHECK(flow_running() == f, "an answer fork was taken while another flow was switched in — the arm would "
+                                    "clone that flow's delta and DOM head and call the result the asker's");
+        DCHECK(f->frame != NULL,
+               "a flow holding a peer's second answer has no suspended frame — the arm exists to resume the "
+               "call site that asked, and a flow with no frame has already left it, so the answer belongs to a "
+               "timeline that cannot be re-entered");
+        DCHECK(f->park_fn == NULL,
+               "a flow whose blocked machine is in the runtime's PARK slot got a peer's second answer — the "
+               "frame clone below copies the flow's own chain and not that continuation, so the arm would "
+               "resume without the activation that asked the question. Carry the parked continuation into the "
+               "clone (JS_TakeParkedFlow's pair is what the context switch already does with it)");
+        DCHECK(f->deliver == NULL,
+               "a flow holding a ROUTED DELIVERY got a peer's second answer — the arm is that timeline "
+               "continued, so the message that arrived in it arrived in the arm too, and the assembly does not "
+               "carry the record. Give the arm its own copy of the record and the trusted zone's origin stamp");
+        DCHECK(f->perform == NULL,
+               "a flow holding an UNSTARTED cross-agent operation got a peer's second answer — the arm is that "
+               "timeline continued, so it owes the same peer an answer of its own and the assembly carries only "
+               "the token, never the record. Give the arm the record too, exactly as a branch inside the "
+               "operation's program already gives its sibling the token");
+
+        /* TAKEN FROM THE PARENT FIRST, so the arm inherits a list that no longer names it: the arm's copy is
+           cleared below in any case, and the parent's must not fork over this answer a second time. */
+        completion = pending_extra_pop(e, &av);
+        JS_FreeValue(ctx, e);
+
+        clone = JS_FlowClone(ctx, (JSValue *)f->frame);
+        CHECK(clone != NULL, "engine: a flow suspended on a cross-instance read could not be cloned — the "
+                             "peer's other timeline has an answer and no arm to carry it");
+        sib = engine_sibling_assemble(ctx, f, clone, decide_fork_same_path(), concolic_pins_suspend());
+        /* THE ARM'S OWN ANSWER, AND THE ONE RECORD IT CANNOT SHARE. pending_fork shares an ANSWERED entry
+           deliberately — an answer that arrived before a fork was computed in a world both arms were in — and
+           this is the case that is not: the two arms hold DIFFERENT answers to one question, which is exactly
+           the disagreement that stops a record being shared. */
+        se = pending_unshare(sib->pending, i);
+        pending_set(se, PEND_VALUE, av);
+        pending_set_int(se, PEND_COMPLETION, completion);
+        /* …AND NO ANSWERS BEYOND ITS OWN, in both directions. The arm inherited the parent's remaining list
+           through the STRUCT copy, and leaving it would make the arm fork over answers the parent is still
+           going to fork over; and its answer is FIXED, so a LATER answer to this request belongs to the flow
+           that issued it and never to this timeline, which took answer k and cannot also have taken k+1. The
+           two together are why a peer with N timelines costs exactly N-1 arms. */
+        pending_set(se, PEND_EXTRA, JS_NULL);
+        pending_set(se, PEND_ANSWER_FIXED, JS_TRUE);
+        DCHECK(pending_get_int(se, PEND_HAVE_VALUE) != 0,
+               "an arm was forked over a peer's answer onto a request that is still UNANSWERED — the assembly "
+               "re-issues an unanswered request under a fresh id, so this arm would be waiting on a question "
+               "nobody has been asked");
+        JS_FreeValue(ctx, se);
+        return 1;
+    }
+    return 0;
 }
 
 /* The frame-agnostic REPLAY fork is DELETED: re-running a nested/deep flow from its start is BANNED (not
@@ -1666,6 +1826,14 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
            "be stamped baseline and its DOM writes would be captured into no delta, so its state would leak "
            "into every sibling and its rewind would restore something that never existed");
     for (;;) {
+        /* ONE ARM PER DISTINCT ANSWER, BEFORE ANYTHING ELSE THIS FLOW COULD DO — because everything else it
+           could do consumes the very thing the arm is made of. A peer document's state IS its flows, so a
+           cross-instance read has an answer per peer timeline; the arm is a clone of the frame this flow is
+           SUSPENDED in, and the first resume below takes the answer off the register and leaves that call site
+           behind. It is also the first moment in the whole round at which a fork is even meaningful: the flow
+           is switched in, so its delta, its DOM head and its decision state are the ones an arm inherits. */
+        g_step_unit = "fork-over-a-peer-answer";
+        if (flow_answer_fork(ctx, f)) return 0;
         /* THE PARKED CONTINUATION OUTRANKS EVERYTHING ELSE THIS FLOW COULD DO — that is the park's whole
            contract: a forced preempt must be transparent to observable ordering, so the flow resumes BEFORE any
            job it has queued. Yielding after one resume keeps the scheduler in charge of fairness; the park (if

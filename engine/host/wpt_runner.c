@@ -818,7 +818,7 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                            the throw at the call site that parked on it. */
                         int completion = ENGINE_COMPLETION_NORMAL;
                         JSValue v = remote_completion_decode(ctx, answer, &completion);
-                        engine_host_answer(ctx, id, v, completion);
+                        engine_host_answer(ctx, id, v, completion, ENGINE_ANSWER_PEER);
                         answered = true;
                         JS_FreeValue(ctx, v);
                     }
@@ -847,7 +847,7 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             free(csp);
             /* THE HOST'S OWN ANSWER, so a NORMAL completion: this zone fetched bytes, it did not run a peer's
                program, and a load that did not load is `{body: null}` rather than a throw. */
-            engine_host_answer(ctx, id, v, ENGINE_COMPLETION_NORMAL);
+            engine_host_answer(ctx, id, v, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
             answered = true;
             JS_FreeValue(ctx, v);
         }
@@ -906,7 +906,7 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1) : JS_NULL;
             /* Also the host's own — §3.5.6's fetch, answered out of the network; a network error is a reply
                this component reads, never a thrown value. */
-            engine_host_answer(ctx, id, reply, ENGINE_COMPLETION_NORMAL);
+            engine_host_answer(ctx, id, reply, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
             answered = true;
             JS_FreeValue(ctx, reply);
             free(body);

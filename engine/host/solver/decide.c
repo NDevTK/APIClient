@@ -420,6 +420,22 @@ static void *decide_fork_blob(int cursor, int arm) {
     return b;
 }
 
+/* THE OTHER FORK'S BLOB — see decide.h. No arm, because no question was asked: the sibling's path IS its
+   parent's and it diverges over a value that arrived, not over a predicate. The freeze is the same one the
+   branch fork performs and for the same reason (one shared immutable prefix, O(1)); the cursor is the parent's
+   own, which may be mid-replay. */
+void *decide_fork_same_path(void) {
+    DecideBlob *b;
+
+    DCHECK(g_running, "a sibling's decision state was forked while no flow's was loaded — the blob would stand "
+                      "on whatever chain the previously-switched-in flow left behind, and the sibling would "
+                      "replay a path it never took");
+    b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM forking a flow's decision state");
+    b->seg = dec_freeze();   /* the caller's reference, on top of the running flow's own */
+    b->c = g_c;
+    return b;
+}
+
 /* THE PREDICATE'S IDENTITY, which is what the flow's constraint is keyed by. A bare truthiness test is about
    the SOURCE, so the source path is the whole key; a comparison is about a source AND what it was compared
    against, so `x === "a"` and `x === "b"` must stay independent facts. The separator is a control character no

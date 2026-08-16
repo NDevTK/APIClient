@@ -623,7 +623,7 @@ QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned complet
         /* Routed to ONE call site by id — never broadcast the way a fetched body is, because the answer was
            computed under the ASKING FLOW's world. A zero return means that flow is gone, which is not an
            error: nobody is waiting on the answer. */
-        engine_host_answer(g_ctx, (uint32_t)req, v, (int)completion);
+        engine_host_answer(g_ctx, (uint32_t)req, v, (int)completion, ENGINE_ANSWER_HOST);
         JS_FreeValue(g_ctx, v);
     }
 }
@@ -688,7 +688,7 @@ QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *completion)
     /* Routed to ONE call site by id, exactly as qjs_host_answer's is: the operation was performed under the
        ASKING FLOW's world, so this answer belongs to that flow and to no other. A zero return means that flow
        is gone, which is not an error — nobody is waiting on the answer. */
-    engine_host_answer(g_ctx, (uint32_t)req, v, type);
+    engine_host_answer(g_ctx, (uint32_t)req, v, type, ENGINE_ANSWER_PEER);
     JS_FreeValue(g_ctx, v);
 }
 

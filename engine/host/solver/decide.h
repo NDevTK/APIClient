@@ -72,6 +72,22 @@ int  decide_cursor(void);
 const char *decide_fork_at(int i, long *hits);
 long        decide_fork_total(void);
 
+/* THE SIBLING'S DECISION STATE AT A FORK THAT TOOK NO ARM — and the arm-taking fork above is the special case,
+ * not this one. A flow forks over a VALUE as well as over a predicate: a peer document's state IS its flows, so
+ * one cross-instance read has N true answers and the asking flow explores one arm per DISTINCT ANSWER
+ * (engine.c's flow_answer_fork). Nothing about that is a branch — the asking program asked no question it could
+ * have answered two ways, so there is no slot to record and the sibling's path is its parent's, unchanged.
+ * It freezes the running head exactly as the branch fork does, so both flows stand on ONE shared immutable
+ * prefix and neither pays for the other's, and it hands back a blob at the parent's CURRENT cursor rather than
+ * at the end of the vector: a flow may fork here mid-replay (a cold-resumed flow re-reaching the read), and a
+ * sibling given the end would skip every arm its parent still had to consume.
+ * WHAT IT CANNOT CARRY IS THE ANSWER, and that is the honest limit of a decision vector: the arms are what the
+ * flow DECIDED, and which of a peer's timelines answered it is not one of them. A parked arm therefore resumes
+ * by re-running, re-asking, and taking the first answer of whatever the peer's timelines say today — so the SET
+ * of arms is regenerated while the mapping from arm to peer timeline is not. Recording that mapping is the
+ * N-way outcome slot solver_outcome's own DCHECK already names. */
+void *decide_fork_same_path(void);
+
 /* Swap the running decision state when the scheduler interleaves flows: suspend snapshots the evolving vector
    + cursor of the paused flow; resume restores them + re-binds the flow's fn. */
 void *decide_suspend(void);

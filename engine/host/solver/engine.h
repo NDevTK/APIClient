@@ -234,9 +234,21 @@ JSValue  engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion);
    the machine is ABRUPT. Returns JS_STEP_DONE or JS_STEP_ABRUPT (quickjs-step.h) — one place that knows a
    peer's throw comes back as a throw, rather than that knowledge copied into each machine. */
 int      engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult);
+/* WHO COMPUTED THE ANSWER, and it is a parameter because the two have different MULTIPLICITIES — the one thing
+ * about a delivery that only the caller can state.
+ * A HOST answer is a value the trusted zone computed ITSELF (§7.4 step 14's load, XHR §3.5.6's fetch): there is
+ * exactly one of it, so a second one is that zone answering twice and is its bug.
+ * A PEER answer is a completion another instance's flow produced by RUNNING A PROGRAM, and a peer's document
+ * state IS its flows — so one question has N answers for N of its timelines and every one of them is true. The
+ * asking flow forks one arm per distinct answer (engine.c), which is a fork over a VALUE rather than over a
+ * predicate and is exactly as much a fork as a branch's.
+ * Sniffing the request's op text to tell them apart would be the recognizer shape this codebase bans; the two
+ * deliveries are different operations and say so. */
+enum { ENGINE_ANSWER_HOST, ENGINE_ANSWER_PEER };
+
 /* The host delivers. Routed by id to ONE call site — never broadcast the way a fetched body is. Returns 0 when
    the asking flow is gone, which is not an error: nobody is waiting. */
-int      engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int completion);
+int      engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int completion, int source);
 /* What the host still owes, as `id<TAB>op` lines. Pulled each step, and deliberately NOT deduped. */
 const char *engine_host_requests(void);
 

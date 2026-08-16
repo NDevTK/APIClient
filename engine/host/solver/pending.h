@@ -84,10 +84,34 @@
    arrived before a fork was computed in a world both arms were in), and parks with it. Its default is
    JS_UNDEFINED — "no answer yet, so no completion type" — and engine_host_answer writes the two together, so a
    record that has a value and no type crashes at the take rather than reading as a normal completion. */
+/* `extra` IS EVERY OTHER TRUE ANSWER TO THIS ONE QUESTION, and it is a field rather than a second register
+   because it belongs to the REQUEST. A peer's document state IS its flows, so a cross-agent operation is
+   performed by every live timeline the peer has and each completes with its own answer: `otherW.length` has N
+   answers for N peer timelines and all of them are true. The FIRST fills `value`/`completion` above; the rest
+   land here, as [completion, value] PAIRS — the same shape `headers` has, so pend_list_fork already copies it —
+   until the asking flow forks one arm per pair (engine.c's flow_answer_fork, which is the only reader).
+   IT IS `STRUCT` AND THAT IS LOAD-BEARING: an arm DRAINS its own list, so two flows that share a record would
+   drain each other's — the first to run would take an answer the other was going to fork over, and that peer
+   timeline would then be explored by nobody. Each arm therefore owns its container; the ANSWERS in it are
+   leaves and stay shared, because an answer is immutable once it has arrived.
+   JS_NULL — not an empty Array — is "no second answer", which is every request that ever crosses this seam
+   except the handful a forked peer answers, and it keeps the common case a tag test.
+ *
+ * `answerFixed` IS WHICH FLOW COLLECTS THEM, and without it the frontier doubles at every answer. An arm forked
+ * over the peer's k-th answer holds the SAME request id — it has to, because the id lives in the step state
+ * inside the frame it is a clone of — so a LATER answer would land on the arm's entry as well as on the
+ * issuer's, and each would fork: three peer timelines would produce four flows, one of them a timeline that
+ * answered B and then C at one call site, which no peer was ever in. The arm's answer is FIXED: it is the
+ * timeline that took answer k, so a further answer is another peer timeline for the ISSUING flow to fork, never
+ * for this one. It is SHARE because it belongs to the record: an arm's own later branch-siblings are fixed too
+ * (they are that arm continued), and the issuer's branch-siblings are not (each of them asked and observed the
+ * first answer, so each must fork over every other one). */
 #define PENDING_FIELDS(X)                    \
     X(RESOLVE,    "resolve",   PEND_SHARE)   \
     X(VALUE,      "value",     PEND_SHARE)   \
     X(COMPLETION, "completion",PEND_SHARE)   \
+    X(EXTRA,      "extra",     PEND_STRUCT)  \
+    X(ANSWER_FIXED, "answerFixed", PEND_SHARE) \
     X(URL,        "url",       PEND_SHARE)   \
     X(HAVE_VALUE, "haveValue", PEND_SHARE)   \
     X(KIND,       "kind",      PEND_SHARE)   \
@@ -148,6 +172,18 @@ void pending_set_int(JSValueConst e, int field, int64_t v);
 /* A field whose value is BYTES — the request body. Held as an ArrayBuffer, which is the honest shape for
    bytes that may not be text and the one XMLHttpRequest already uses for the same data. */
 void pending_set_bytes(JSValueConst e, int field, const void *p, size_t n);
+
+/* ANOTHER TRUE ANSWER TO THE SAME REQUEST — see PEND_EXTRA above. `value` is consumed. Recorded rather than
+   delivered, because the arm that will carry it cannot be forked where an answer ARRIVES: that runs between
+   scheduler steps, where the running flow, the applied delta and the live DOM head all still belong to some
+   other flow. */
+void pending_extra_add(JSValueConst e, int completion, JSValue value);
+/* How many answers beyond the first this request has been given — 0 for every request nothing forked. */
+int  pending_extra_count(JSValueConst e);
+/* TAKE one, with its completion TYPE as the return value and its value into `*pvalue` (owned). It leaves the
+   list, because the arm about to be forked over it is where it lives from now on — a pair read and left behind
+   would be forked over twice, which is two flows exploring one peer timeline. */
+int  pending_extra_pop(JSValueConst e, JSValue *pvalue);
 
 /* A [name, value] LIST, for a request's headers: the same shape XMLHttpRequest's two header lists have. Built
    through these so this file needs no dependency on the browser half's HeaderList — the solver reaching into
