@@ -20,6 +20,7 @@
 #include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what THIS host can measure */
 #include "solver/reclaim.h"   /* …and its RAM edge: which allocators can sell a flow rather than fail */
 #include "solver/req2proto.h" /* an API's own rejection is a description of the request it wanted — see engine_provide */
+#include "solver/discovery.h" /* …and an API's own PUBLISHED description: the flow this engine seeds to fetch one */
 #include "check.h"
 #include <time.h>
 #include <stdlib.h>
@@ -125,6 +126,25 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
     DCHECK(url != NULL && *url, "a <script src> was injected with no URL");
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT);
     pending_set(e, PEND_URL, JS_NewString(ctx, url));
+    JS_FreeValue(ctx, e);
+}
+
+/* PARK ON A PUBLISHED API DESCRIPTION — the engine's own probe (solver/discovery.h), and the reason a discovery
+   flow can exist at all: this engine's only network edge is this register, so a component that wants a document
+   fetched needs a FLOW to park. Same register, same dedup, same stall accounting as every other kind.
+   THERE IS NO METHOD PARAMETER AND THERE MUST NEVER BE ONE. The verb is stated here, once, as the constant it
+   is — §Attacker sources ("a state-mutating request is NEVER fired to learn") and SECURITY.md §Network ("GET
+   only") are then properties of this entry point's SHAPE, exactly as removing the method parameter from
+   `pageContextGet` made them properties of the JS relay's. A caller cannot express anything else, so there is
+   no check here to remember and none to get wrong. */
+void engine_pending_discovery_url(JSContext *ctx, const char *url) {
+    Flow *f = flow_running();
+    JSValue e;
+    DCHECK(f != NULL, "a discovery probe was issued outside a running flow");
+    DCHECK(url != NULL && *url, "a discovery probe parked with no URL for the host to fetch");
+    e = pending_push(&f->pending, FLOW_PENDING_DISCOVERY);
+    pending_set(e, PEND_URL, JS_NewString(ctx, url));
+    pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));
     JS_FreeValue(ctx, e);
 }
 
@@ -953,6 +973,19 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             }
             JS_FreeValue(ctx, resolve);
             JS_FreeValue(ctx, bv);
+        } else if (kind == FLOW_PENDING_DISCOVERY) {
+            /* the reply is a DESCRIPTION of an API: it settles no promise and runs as no program, so it goes
+               straight to the component that reads it (solver/discovery.h) and what it names lands in the same
+               @H surface as everything forced execution reached. The WHOLE reply record is handed over — the
+               component decides what a network error and a non-JSON body mean, because those are answers about
+               the address rather than states of this drain. */
+            JSValue uv = pending_get(p, PEND_URL);
+            const char *u = JS_IsString(uv) ? JS_ToCString(ctx, uv) : NULL;
+            DCHECK(u != NULL,
+                   "a discovery probe's reply arrived on an entry carrying no URL — the address is what the "
+                   "document's own relative server URLs resolve against, and the park writes it at the push");
+            if (u) { discovery_reply(ctx, u, pv); JS_FreeCString(ctx, u); }
+            JS_FreeValue(ctx, uv);
         } else {
             /* A SYNCHRONOUS ANSWER IS TAKEN, NEVER DRAINED, and that is asserted here because this branch is
                where it would land if it were not. The machine that asked resumes through its park and consumes
@@ -1053,6 +1086,14 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     DCHECK(parent->perform == NULL, "a flow forked while still holding an unstarted cross-agent operation — the "
                                     "sibling would inherit the record and perform the peer's one operation a "
                                     "second time under the same token");
+    /* AND A DISCOVERY PROBE CANNOT BE AT A BRANCH AT ALL. Its whole step is a park and a read (flow_step) — it
+       compiles no program, so no branch hook can fire under it, and a fork arriving from one means it entered a
+       program it has no business in. The sibling would not inherit the candidate either, so the probe would be
+       silently duplicated as a flow with nothing to do. */
+    DCHECK(parent->disc_url == NULL,
+           "a DISCOVERY PROBE forked — a probe runs no program, so a branch under one means it entered the "
+           "document's script sequence, and the sibling this is about to build carries no candidate and would "
+           "sit in the frontier with no work at all");
     /* THE SIBLING IS A MEMBER OF THE FRONTIER BEFORE IT IS A FLOW, so nothing may page it out while this
        assembles it. flow_add publishes it into the registry on its first line and everything below is the
        CONSTRUCTION — a dozen allocations, any one of which can reach the allocator's refusal edge. A newborn
@@ -1627,6 +1668,32 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                delivery is: it is a work item another agent's flow is suspended at, and it becomes one of THIS
                flow's programs — after which the loop below runs it like any other. */
             if (f->perform) { g_step_unit = "cross-agent-operation"; flow_perform(ctx, f); return 0; }
+            /* A DISCOVERY PROBE — the flow the ENGINE seeded to read one published API description
+               (solver/discovery.h). It is before the document's script sequence because it HAS no script
+               sequence: the probe is the whole flow, so it must never enter a program, and its three states are
+               the ordinary ones every other flow already has. Not a driver and not a loop — one unit per step,
+               like every branch here:
+                 - nothing parked yet  -> park on the address and report OWED, so siblings get the thread;
+                 - parked, unanswered  -> OWED again, and the flow is out of the pick until the host provides;
+                 - answered            -> the ONE drain reads it (the DISCOVERY kind above) and the flow is
+                                          DONE, because a probe's whole work is the document it just read. */
+            if (f->disc_url) {
+                g_step_unit = "discovery-probe";
+                if (pending_count(f->pending) == 0) {
+                    engine_pending_discovery_url(ctx, f->disc_url);
+                    return FLOW_STEP_OWED;
+                }
+                if (!flow_pending_ready(f)) return FLOW_STEP_OWED;
+                flow_drain_pending(ctx, f);
+                /* AND IT FINISHES HOLDING NOTHING, asserted where "finished" is decided for it. The drain
+                   removes the entry it delivered, and reading a document runs no page code — so a probe that
+                   reaches here with a job queued or a reply outstanding has done something this branch does
+                   not describe, and flow_release would drop it as a work item nothing replays. */
+                DCHECK(pending_count(f->pending) == 0 && f->njob == 0,
+                       "a discovery probe finished holding work — its one reply is drained and it queues no "
+                       "job, so anything left here is a work item the ONE frontier is about to drop");
+                return FLOW_STEP_DONE;
+            }
             if (f->script_i < n) {
                 body = bodies[f->script_i];
                 if (!body) {

@@ -128,7 +128,6 @@ function _serializeGlobalStore() {
     probeResults: Object.fromEntries(globalStore.probeResults),
     scopes: Object.fromEntries(globalStore.scopes),
     securityFindings: Object.fromEntries(globalStore.securityFindings),
-    discoveryChanges: Object.fromEntries(globalStore.discoveryChanges),
     savedAt: Date.now(),
   };
 }
@@ -174,10 +173,10 @@ function _deserializeIntoGlobalStore(s) {
      document-identity seen-set whose hit skipped the engine entirely, and its TTL + 500-entry LRU trim here
      are what a cache needs and a frontier must never have — the frontier drops nothing and is aged only by
      value. A persisted store written before this change simply carries a key nothing reads. */
-  if (s.discoveryChanges) {
-    for (const [k, v] of Object.entries(s.discoveryChanges))
-      globalStore.discoveryChanges.set(k, v);
-  }
+  /* NO discoveryChanges REHYDRATION, for the same reason as the line above and with the same consequence for
+     an older stored value: the map is gone from globalStore (see offscreen-brain.js) because its only writer,
+     the host-side discovery fetch, is the engine's now. A store written before this change carries a key
+     nothing reads. */
 }
 
 async function saveGlobalStore() {

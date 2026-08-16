@@ -84,6 +84,16 @@ typedef struct Flow {
     int cand_fired;        /* this flow's X9 marker executed */
     int cand_verifying;    /* this flow is a candidate run: the sink takes the concrete arg */
 
+    /* AN ENGINE-SEEDED DISCOVERY PROBE — the ONE candidate document address this flow exists to read
+       (solver/discovery.h). It is not a different KIND of flow either: it is ranked, preempted, parked and
+       resumed by the same WFQ as the boot fork and an @S candidate session, and its unit of work is the park
+       every other flow already uses. What it does NOT have is a page program — a probe runs no script, so
+       flow_step answers it before the document's script sequence and never enters one.
+       IT IS ALSO THE FLOW'S WHOLE IDENTITY, which is what makes the cold tier's record of it one string
+       (solver/cold.h's `d`): a resumed probe re-issues the GET and reads TODAY's document, which is exactly
+       what §Time-travel-resume asks of a flow whose work IS a fetch. Owned; NULL on every other flow. */
+    char *disc_url;
+
     /* HAS THIS FLOW'S RECIPE BEEN WRITTEN TO THE PARK DOCUMENT? A paged flow is not a dropped one — that is the
        whole claim the cold tier makes — and it is a fact about THIS FLOW rather than about the session. It used
        to be asked of the engine (`engine_frontier_paged`), which is true only of the whole-frontier park: a

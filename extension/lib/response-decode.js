@@ -381,9 +381,6 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     !apiKey;
   entry._boring = _isBoringFetch;
 
-  // Snapshot discovery status before learnFromRequest (which creates a virtual doc)
-  const preLearnDiscovery = tab.discoveryDocs.get(service);
-
   // Decode request body (protobuf/JSPB/JSON) — must happen BEFORE
   // learnFromRequest so entry.isJson / entry.decodedBody are set when
   // schema learning records body-field stats. Downstream code further
@@ -510,34 +507,16 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     }
   }
 
-  /* AUTOMATIC BACKGROUND DISCOVERY — skip for boring fetches (probing /.well-known/openapi.json on a CDN is
-     wasted traffic).
-
-     THE 300-SECOND COOLDOWN IS DELETED. `preLearnDiscovery._failedAt && Date.now() - _failedAt < 300000`
-     stood in this condition and suppressed every discovery attempt for five minutes after one came up empty.
-     §NO BOUNDS names the shape: "Never a depth/step/TIME/run/memory/recursion cap … Only EMITTED OUTPUT —
-     never identity — proves a flow is done." A clock deciding when a service may be asked again is a bound in
-     both directions — it suppresses an attempt that would now succeed (an API key learned two seconds later
-     unlocks documents the first sweep could not read) and it re-fires an identical sweep once the timer
-     expires. `_failedAt` went with it; nothing else read it.
-
-     WHAT REMAINS IS NOT A BOUND. `!preLearnDiscovery || status === "not_found"` is §Attacker sources'
-     "one-per-endpoint (no method is universally safe …), never a blind sweep": a service whose document is
-     already `found` has nothing to re-ask, and one that is `pending` has the same GETs in flight this instant.
-     A `not_found` service is asked AGAIN precisely because the second ask is a DIFFERENT request — the key set
-     below has grown since the first, and a candidate carrying a key the page had not yet used is a URL that
-     has never been fetched. */
-  if (!_isBoringFetch && (!preLearnDiscovery || preLearnDiscovery.status === "not_found")) {
-    const discoveryStatus = tab.discoveryDocs.get(service);
-    if (discoveryStatus) {
-      discoveryStatus.status = "pending";
-    } else {
-      tab.discoveryDocs.set(service, { status: "pending", seedUrl: msg.url });
-    }
-    const keysForService = collectKeysForService(tab, service, url.hostname);
-    if (apiKey && !keysForService.includes(apiKey)) keysForService.push(apiKey);
-    fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url);
-  }
+  /* AUTOMATIC BACKGROUND DISCOVERY IS THE ENGINE'S — engine/host/solver/discovery.c, seeded by the event this
+     zone cannot see: a HOST arriving on the engine's endpoint surface. What stood here called
+     `fetchDiscoveryForService` off passive learning, which is the same defect the error-probe below was deleted
+     for, one layer over: it fired off what the page HAPPENED to send rather than off what forced execution
+     learned the bundle CAN send, and it drove its candidates in an `await` loop in this zone. The engine seeds
+     one FLOW per candidate address on the one BFS frontier — ranked, parkable to the cold tier, resumed in a
+     later session — and every method the document names lands in the same @H surface as the call sites forced
+     execution reached, so it arrives here through the result document like every other finding.
+     The `pending` / `not_found` statuses this block wrote went with it: they were a latch on a host-side search
+     that no longer exists, and `discoveryDocs` is now written by learn.js's virtual documents alone. */
 
   /* THE ERROR-BASED SERVICE-INFO PROBE IS THE ENGINE'S — engine/host/solver/req2proto.c.
      What stood here fired an intentionally-malformed POST at every captured POST URL through the page-context

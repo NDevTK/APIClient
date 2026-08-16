@@ -72,6 +72,7 @@ void cold_census(ColdCensus *out)
         out->misc_bytes += (long)sizeof(Flow);
         if (f->cand_src) out->misc_bytes += (long)strlen(f->cand_src) + 1;
         if (f->cand_payload) out->misc_bytes += (long)strlen(f->cand_payload) + 1;
+        if (f->disc_url) out->misc_bytes += (long)strlen(f->disc_url) + 1;
         if (f->deliver) out->misc_bytes += (long)strlen(f->deliver) + 1;
         if (f->deliver_origin) out->misc_bytes += (long)strlen(f->deliver_origin) + 1;
         if (f->jobs) out->misc_bytes += (long)f->jobcap * (long)sizeof(FlowJob);
@@ -147,6 +148,31 @@ static void park_rec(const char *s)
                "on the way out, or (a ';') would split into two records on the way back in");
     park_str(g_park_recs++ ? ",\"" : "\"");
     park_str(s);
+    park_str("\"");
+}
+
+/* THE ONE RECORD WHOSE LAST FIELD IS TEXT THIS FILE DID NOT COMPOSE OUT OF DIGITS — a discovery flow's whole
+   identity is the address it probes (solver/discovery.h), so the address has to cross. It gets its OWN charset
+   rather than widening park_rec's for every record, because the reason that assert is narrow is that a record
+   built from digits can never need JSON escaping and can never contain the ';' the host joins records with. A
+   URL can contain neither either — every candidate is minted by discovery.c out of an origin, a well-known path
+   and a query — and this states exactly that, so the day one carries a quote, a backslash, a ';' or a byte
+   outside printable ASCII the park says so instead of storing a document that splits in two on the way back. */
+static void park_rec_url(double val, const char *url)
+{
+    char head[64];
+    const char *p;
+
+    snprintf(head, sizeof head, "d%.17g,", val);
+    for (p = url; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        DCHECK(c > 0x20 && c < 0x7f && c != '"' && c != '\\' && c != ';',
+               "a parked discovery candidate holds a character the recipe grammar does not have — it would "
+               "need JSON escaping on the way out, or (a ';') would split into two records on the way back in");
+    }
+    park_str(g_park_recs++ ? ",\"" : "\"");
+    park_str(head);
+    park_str(url);
     park_str("\"");
 }
 
@@ -293,9 +319,22 @@ void cold_park_flow(Flow *f)
            "a flow was parked with a reward that is not a number the WFQ can order by — a NaN compares "
            "false in both directions, so the resumed frontier's order would depend on array position, and "
            "an infinity does not survive the round trip as a number at all");
-    if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", f->val);
-    else        snprintf(rec, sizeof rec, "f%ld,%.17g", id, f->val);
-    park_rec(rec);
+    /* A DISCOVERY PROBE PARKS AS ITS ADDRESS, and that is the whole recipe because that is the whole flow: it
+       stands on no decision, holds no delta worth the name and has one thing left to do — read the document at
+       that URL. A resumed one re-issues the GET, which is not a weaker resume than the replay every other
+       record gets: §Time-travel-resume says a resumed flow "re-derives example VALUES from CURRENT sources", and
+       for this flow the fetch IS the work, so the residue comes back reading TODAY's published surface. */
+    if (f->disc_url) {
+        DCHECK(!f->started && f->dec_blob == NULL,
+               "a discovery probe was parked carrying a decision path — a probe compiles no program and so can "
+               "reach no branch, which means this flow ran something it has no business running and its record "
+               "would resume it as a probe with a path nothing will replay");
+        park_rec_url(f->val, f->disc_url);
+    } else {
+        if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", f->val);
+        else        snprintf(rec, sizeof rec, "f%ld,%.17g", id, f->val);
+        park_rec(rec);
+    }
     f->paged = 1;   /* its recipe exists: flow_release may now let its parked continuation go (flow.h) */
 }
 
@@ -461,9 +500,35 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl->pin_blob = concolic_pins_blob_empty();
             fl->val = val;
             flows++;
+        } else if (kind == 'd') {
+            /* A DISCOVERY PROBE COMES BACK AS ITS ADDRESS. It is NOT `started`: it stands on no path, so there
+               is nothing to replay — its first step parks on the URL exactly as the session that seeded it did,
+               and the document it reads is today's. The candidate is the last field and runs to the record's
+               end, which is what lets an address carry the ',' a query legitimately can. */
+            double val;
+            Flow *fl;
+            size_t ul;
+
+            val = strtod(q, &ep); q = ep;
+            q = park_comma(q);
+            ul = (size_t)(end - q);
+            DCHECK(ul > 0,
+                   "a parked discovery probe names no candidate address — the address IS the flow, so this "
+                   "record would resume a member of the frontier with nothing whatever to do");
+            fl = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);
+            DCHECK(flow_at((int)(before + flows)) == fl,
+                   "a rebuilt flow did not land at the end of the frontier — a resume APPENDS, so anything "
+                   "else means a live member was displaced by a parked one and is now unreachable");
+            fl->disc_url = malloc(ul + 1);
+            CHECK(fl->disc_url, "the cold tier could not rebuild a parked discovery candidate");
+            memcpy(fl->disc_url, q, ul);
+            fl->disc_url[ul] = 0;
+            fl->val = val;
+            flows++;
         } else {
-            DFAIL("a park record names a kind this grammar does not have — the recipe holds SEGMENTS ('s') and "
-                  "FLOWS ('f') and nothing else, so this document came from another writer or was truncated");
+            DFAIL("a park record names a kind this grammar does not have — the recipe holds SEGMENTS ('s'), "
+                  "FLOWS ('f') and DISCOVERY PROBES ('d') and nothing else, so this document came from another "
+                  "writer or was truncated");
         }
         p = (*end == ';') ? end + 1 : end;
     }

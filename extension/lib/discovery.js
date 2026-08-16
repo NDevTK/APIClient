@@ -1,95 +1,18 @@
-// Discovery document fetcher and parser.
-// Tries multiple URL patterns and auth strategies to locate
-// the REST discovery document for a given API service.
+// What is LEFT of this file is three components with three different consumers, and none of them is the
+// discovery FETCH any more:
+//   * schema resolution for the Send panel   (findDiscoveryMethod / findMethodById / resolveDiscoverySchema)
+//   * response-asset classification          (classifyResponseAsset — lib/response-decode.js)
+//   * the React Server Components parser     (isRSC / looksLikeRSC / parseRSC — lib/learn.js)
 //
-// EVERY CANDIDATE IS A GET, AND A CANDIDATE HAS NO FIELD IN WHICH TO SAY OTHERWISE.
-// One of them used to be `{method:"POST", headers:{"X-Http-Method-Override":"GET"}}` — the documented trick
-// for prising a discovery document out of a service that 405s a plain GET — and `fetchDiscoveryForService`
-// issued it through the page-context relay, reached automatically from response-decode.js's passive learning
-// with no user action. SECURITY.md §Network states the rule ("GET only … POST/PUT/DELETE endpoints are
-// RECORDED by forced exec, never issued") and CLAUDE.md §Attacker sources states it again ("a state-mutating
-// request … is NEVER fired to learn"); a `method` on a candidate is the parameter that let a caller break
-// both. The record is now `{url, headers}` and lib/schema.js's learning entry (`pageContextGet`) takes
-// headers, not options — so there is no longer a place to express a POST rather than a check against one.
-//
-// Strategies from the research:
-//  - Plain GET (public APIs)
-//  - ?labels=PANTHEON (visibility label expansion, "Decoding Google" article)
-//  - With API key in URL param or X-Goog-Api-Key header
-//  - Staging sandbox variant (staging-<svc>.sandbox.googleapis.com)
-//  - clients6.google.com variant
-
-/**
- * Build candidate discovery URLs for a given hostname.
- * @param {string} hostname - e.g. "people-pa.googleapis.com"
- * @param {string|null} apiKey
- * @returns {Array<{url: string, headers: object}>}
- */
-function buildDiscoveryUrls(hostname, apiKey) {
-  const candidates = [];
-
-  // 1. Generic Universal Patterns (OpenAPI / Swagger)
-  // These work on almost any modern API domain
-  const genericPaths = [
-    "/.well-known/openapi.json",
-    "/.well-known/swagger.json",
-    "/openapi.json",
-    "/swagger.json",
-    "/swagger/v1/swagger.json",
-    "/api/docs",
-    "/api/v1/docs",
-    "/api-docs",
-    "/v1/api-docs",
-  ];
-
-  for (const path of genericPaths) {
-    candidates.push({ url: `https://${hostname}${path}#_internal_probe`, headers: {} });
-  }
-
-  // 2. Google-Specific Patterns
-  // Normalize: if it's a clients6 host, also try the googleapis.com equivalent
-  const hosts = [hostname];
-  const clients6Suffix = ".clients6.google.com";
-  const googleapisSuffix = ".googleapis.com";
-  const isClients6Host =
-    hostname === clients6Suffix ||
-    hostname.endsWith(clients6Suffix);
-  const isGoogleapisHost =
-    hostname === googleapisSuffix ||
-    hostname.endsWith(googleapisSuffix);
-  if (isClients6Host) {
-    hosts.push(hostname.replace(clients6Suffix, googleapisSuffix));
-  } else if (isGoogleapisHost && !hostname.includes("sandbox")) {
-    hosts.push(hostname.replace(googleapisSuffix, clients6Suffix));
-  }
-
-  // Common version strings to try — some services require explicit ?version=
-  const versions = ["v1", "v2", "v1beta1", "v1alpha1"];
-
-  for (const host of hosts) {
-    const base = `https://${host}/$discovery/rest`;
-
-    // Plain
-    candidates.push({ url: `${base}#_internal_probe`, headers: {} });
-
-    // Visibility label expansion
-    candidates.push({ url: `${base}?labels=PANTHEON#_internal_probe`, headers: {} });
-
-    // Versions
-    for (const ver of versions) {
-      candidates.push({ url: `${base}?version=${ver}#_internal_probe`, headers: {} });
-    }
-
-    // With API key
-    if (apiKey) {
-      candidates.push({ url: `${base}?key=${apiKey}#_internal_probe`, headers: {} });
-      candidates.push({ url: `${base}#_internal_probe`, headers: { "X-Goog-Api-Key": apiKey } });
-    }
-  }
-
-  return candidates;
-}
-
+// THE CANDIDATE SET AND ITS FETCH LOOP ARE GONE TO engine/host/solver/discovery.c. `buildDiscoveryUrls` stood
+// here and `fetchDiscoveryForService` (lib/discovery-probe.js, deleted with it) walked its candidates in a
+// `for` loop, awaiting each in turn — a drive-to-completion in the host, driven by what the page HAPPENED to
+// send (response-decode.js called it off passive learning). CLAUDE.md §Attacker sources calls active discovery
+// REQUIRED and §Architecture calls it the engine's; the engine now seeds ONE FLOW PER CANDIDATE ADDRESS on the
+// one BFS frontier, so the probes are ranked, preempted, parked to the IDB cold tier and resumed in a later
+// session like every other flow, and what they learn lands in the same @H endpoint surface as forced
+// execution's own findings. It is also GET-only structurally there: the park takes a URL and has no method
+// parameter, which is the same shape `pageContextGet` was given here for the same rule.
 
 // ─── Schema Resolution (for Send Request form) ─────────────────────────────
 

@@ -72,9 +72,13 @@ const LEDGER = [
 
   // ── LOGIC / MIXED — the queue ────────────────────────────────────────────────────────────────────────
   { f: "lib/discovery.js", zone: "LOGIC", step: 1, dest: "engine/host/solver/discovery.c",
-    why: "candidate discovery-doc URLs + fetch strategies. §Active discovery is REQUIRED and is the engine's." },
-  { f: "lib/discovery-probe.js", zone: "LOGIC", step: 1, dest: "engine/host/solver/discovery.c",
-    why: "the probe/diff/virtual-doc half of the same component." },
+    why: "THREE COMPONENTS LEFT, and the file's own header now names them: schema resolution for the Send " +
+         "panel (findDiscoveryMethod/resolveDiscoverySchema), classifyResponseAsset (read by " +
+         "lib/response-decode.js), and the RSC parser (read by lib/learn.js). The FETCH half moved: the " +
+         "candidate set is engine/host/solver/discovery.c and the engine seeds a probe FLOW per candidate on " +
+         "the one frontier, so lib/discovery-probe.js is deleted and its row with it. What decides the next " +
+         "move is the CONSUMER: the schema half is the popup's, so it goes with the Send panel's own step, " +
+         "while classifyResponseAsset and the RSC parser are callees of step 2's reply_decode.c." },
   { f: "lib/protobuf.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
     why: "a wire CODEC. §A JS-engine encoding builtin is modeled FAITHFULLY — the engine runs the real codec; a second one in JS is the redundant layer." },
   { f: "lib/protocol-parsers.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",

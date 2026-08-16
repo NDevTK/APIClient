@@ -341,6 +341,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     pending_set_ctx(ctx);
     f->val = 0.0; f->cpu = 0;
     f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL;
+    f->disc_url = NULL;   /* …and no discovery candidate: seed_one asserts this before it installs one */
     f->last_compiled = -1;   /* nothing compiled yet; see the no-replay DCHECK at the compile site */
     f->world = w;
     g_flows[g_flows_n++] = f;
@@ -651,6 +652,9 @@ void flow_remove(JSContext *ctx, Flow *f) {
                that frees them is the frontier's teardown — which walks the flows that are STILL THERE, so a
                flow removed here took them with it into nothing. `cand_sink` is static text and is not one. */
             free(f->cand_src); free(f->cand_payload);
+            /* AND THE DISCOVERY CANDIDATE IT WAS PROBING, for the same reason and on the same terms: the string
+               is this flow's own copy and the flow IS the probe, so it goes out with it. */
+            free(f->disc_url);
             free(f);
             g_flows[i] = g_flows[--g_flows_n];   /* swap-remove; order is by weight, not position */
             frontier_rank_changed();   /* frontier changed */

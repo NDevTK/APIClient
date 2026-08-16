@@ -102,6 +102,10 @@ void cold_census(ColdCensus *out);
  *
  *     s<id>,<base-id|->,<arms>    a frozen segment: its own arms as '0'/'1', over the segment `base-id`
  *     f<seg-id|->,<val>           a flow standing on that segment, carrying its WFQ reward
+ *     d<val>,<url>                a DISCOVERY PROBE (solver/discovery.h) — the one flow whose identity is not a
+ *                                 path through the page but an ADDRESS it has still to read, so the address is
+ *                                 what crosses and the resumed flow re-issues the GET. It is the last field and
+ *                                 runs to the end of the record, which is what lets a query carry a ','.
  *
  * Ordinals are dense and ascending in EMISSION order, and a base is always emitted before anything that names
  * it, so the rebuild is one forward pass with nothing to patch up. */

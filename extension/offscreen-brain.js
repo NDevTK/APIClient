@@ -204,7 +204,12 @@ const globalStore = {
      ever creating an engine — so a revisited page never resumed the flows it had parked. §NO BOUNDS bans a
      seen-set outright, and this one was keyed on document IDENTITY, which is exactly what may never stand in
      for emitted output as proof that a flow is finished. */
-  discoveryChanges: new Map(), // service → [{ timestamp, fetchUrl, changes }]
+  /* NO discoveryChanges. It was service → [{timestamp, fetchUrl, changes}], written in exactly one place —
+     the host-side discovery fetch, which diffed the document it had just pulled against the one it held. That
+     fetch is the engine's now (engine/host/solver/discovery.c), so the map has no writer, and a store field
+     nothing writes is a plausible datum: every reader of it would have reported "this API's surface has never
+     changed" forever. The diff belongs where the documents now arrive, and it is not carried here in the
+     meantime. */
 };
 
 // In-flight exploit-probe sessions, keyed by marker. The EXPLOIT_PROBE
@@ -488,7 +493,9 @@ function collectKeysForService(tab, service, hostname) {
   return keys;
 }
 
-// (Discovery-doc probing -- diff/fetch/probe/virtual-doc build -- extracted to lib/discovery-probe.js.)
+// (Discovery-doc probing is the ENGINE's: engine/host/solver/discovery.c seeds a probe FLOW per candidate
+//  address on the one frontier. lib/discovery-probe.js, which held the host-side fetch loop and the
+//  document diff, is deleted.)
 
 // (Response-body protocol decoding -- handleResponseBody -- extracted to lib/response-decode.js, first.)
 

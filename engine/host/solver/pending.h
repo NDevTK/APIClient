@@ -59,6 +59,12 @@
    compiler `{status: 200, …}` to parse. Same register, same dedup, same stall accounting; only the delivery
    differs, which is what the kind is for. */
 #define FLOW_PENDING_MODULE    4
+/* A PUBLISHED API DESCRIPTION the engine itself asked for (solver/discovery.h). Same register, same dedup, same
+   stall accounting; the delivery differs because there is nobody to deliver TO — a discovery flow has no
+   promise and no program, so the drain hands the reply to the component that reads it and the flow is done.
+   It is the one kind whose METHOD is not the request's to choose: this entry is minted by an entry point that
+   takes a URL and nothing else, which is how §Attacker sources' "never fired to learn" is structural here. */
+#define FLOW_PENDING_DISCOVERY 5
 
 /* THE RECORD'S FIELDS, IN ONE PLACE, WITH WHAT THE FORK DOES WITH EACH.
  *   SHARE  — the sibling takes a REFERENCE. Right for an immutable value (a JS string, the request body's

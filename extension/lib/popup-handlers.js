@@ -48,22 +48,12 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
        (engine/host/solver/req2proto.c) and reaches the popup through the result document's `probeResults`,
        which `globalStore.probeResults` already feeds to the Send panel. */
 
-    case "FETCH_DISCOVERY": {
-      const tab = _docFromMsg(msg);
-      if (!tab) { sendResponse(null); return; }
-      const ep = tab.endpoints.values().next().value;
-      const hostname =
-        msg.hostname || (ep?.host ?? `${msg.service}.googleapis.com`);
-      const apiKeys = collectKeysForService(tab, msg.service, hostname);
-      if (msg.apiKey && !apiKeys.includes(msg.apiKey)) apiKeys.push(msg.apiKey);
-      if (ep?.apiKey && !apiKeys.includes(ep.apiKey)) apiKeys.push(ep.apiKey);
-      fetchDiscoveryForService(tab.documentId, msg.service, hostname, apiKeys).then(
-        () => {
-          sendResponse(serializeTabData(tab));
-        },
-      );
-      return true;
-    }
+    /* `FETCH_DISCOVERY` IS GONE THE SAME WAY, AND IT HAD NO SENDER EITHER. Its backend was
+       lib/discovery-probe.js's `fetchDiscoveryForService`, which is now the engine's active discovery
+       (engine/host/solver/discovery.c): the engine seeds a probe FLOW per candidate address the moment a host
+       first reaches its endpoint surface, so there is no search here for a command to kick off — and it also
+       invented the hostname it would probe (`${msg.service}.googleapis.com`) when the caller named none, which
+       is a host no code computed. */
 
     case "CLEAR_TAB": {
       // The main Clear button: delete ALL extension data and stop ALL work.
@@ -166,10 +156,11 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       return;
     }
 
-    case "GET_DISCOVERY_CHANGES": {
-      sendResponse(Object.fromEntries(globalStore.discoveryChanges));
-      return;
-    }
+    /* `GET_DISCOVERY_CHANGES` IS GONE WITH THE MAP IT READ. `globalStore.discoveryChanges` had exactly one
+       writer — the host-side discovery fetch, which diffed the document it had just pulled against the one it
+       held — and that fetch is the engine's now. A reader kept over a map nothing writes is the defect
+       CLAUDE.md §Architecture names: it answers `{}` forever and reads as "this API's surface has never
+       changed". Nothing in the popup posted this either. */
 
     case "GET_ENDPOINT_SCHEMA": {
       // GLOBAL — keyed by endpointKey/service against the cumulative store,

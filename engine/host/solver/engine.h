@@ -43,6 +43,10 @@ void engine_pending_script_url(JSContext *ctx, const char *url);
 /* Park the running flow on the document's OWN external <script src> at position `script_i`: classic scripts run
    in document order, so the flow waits there, and the reply fills the shared slot every flow reads. */
 void engine_pending_docscript(JSContext *ctx, const char *url, int script_i);
+/* Park the running flow on a PUBLISHED API DESCRIPTION — the engine's own active discovery (solver/discovery.h).
+   It takes a URL and NOTHING ELSE: the verb is the constant GET inside, so "a state-mutating request is NEVER
+   fired to learn" is the shape of this entry point rather than a check at its callers. */
+void engine_pending_discovery_url(JSContext *ctx, const char *url);
 
 /* THE DOCUMENT'S LOAD LIFECYCLE, owned by the browser layer and asked by the scheduler. Called once per stage
    per flow when that flow has run everything the document gave it: stage 0 fires DOMContentLoaded, stage 1
