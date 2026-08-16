@@ -217,7 +217,7 @@ static void r_idb_open(JSRuntime *rt) { idb_open_free(rt); }
    whole leaked browser with nothing naming the owner. That is the third column's entire purpose, twice over:
    a host cannot express the omission, and there is no longer a hand-copied list for it to drift out of. */
 static void r_file_system(JSRuntime *rt) { file_system_free(rt); }
-static void r_fs_writable(JSRuntime *rt) { (void)rt; fs_writable_free(); }
+static void r_fs_writable(JSRuntime *rt) { fs_writable_free(rt); }
 static void r_fs_handle(JSRuntime *rt) { (void)rt; fs_handle_free(); }
 static void r_fs_access(JSRuntime *rt) { (void)rt; file_system_access_free(); }
 static void r_file_picker(JSRuntime *rt) { (void)rt; file_picker_free(); }
@@ -243,6 +243,9 @@ static void r_xhr(JSRuntime *rt) { xhr_free(rt); }
    is the general one: a component released by nobody is what a THIRD copy of a hand-written list produces, and
    here there was no copy at all. */
 static void r_nav_destination(JSRuntime *rt) { navigation_destination_free(rt); }
+/* §5's four interned field names. fetch was one of the forty-three rows with a declare and an EMPTY third
+   column, and the atom walk named all four on 118 files of an area that touches fetch only incidentally. */
+static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
 /* THE DOM GROUP, WHOSE ROOT IS THE LARGEST CASCADE IN THIS BROWSER. element_free reaches forty-two further
    releases — node.c's WRAPPER IDENTITY TABLE (a counted reference to every node wrapper ever minted, and a
    wrapper holds its prototype, which holds the realm), custom_elements' registry backup and active-constructor
@@ -453,7 +456,7 @@ static const PlatformComponent PLATFORM[] = {
     { "media_query_list",    d_media_query_list,    i_media_query_list },
     /* AFTER the three whose algorithms update-the-rendering's steps 8 and 10 are. */
     { "rendering",           d_rendering,           NULL },
-    { "fetch",               d_fetch,               i_fetch },
+    { "fetch",               d_fetch,               i_fetch,     r_fetch },
     { "abort",               d_abort,               i_abort },
     { "observable",          d_observable,          i_observable },
     /* GEOMETRY INTERFACES §3 and §4, before the component that returns one. Neither reads anything of the DOM's

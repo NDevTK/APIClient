@@ -859,11 +859,26 @@ void fs_writable_init(JSContext *ctx)
     realm_declare_intrinsic(fs_writable_install_realm);
 }
 
-void fs_writable_free(void)
+void fs_writable_free(JSRuntime *rt)
 {
     g_stepid_write = g_stepid_close = g_stepid_abort = -1;
     g_id_write = g_id_seek = g_id_truncate = -1;
-    /* The atoms and the class id belong to a runtime that is going away with them, and the prototypes are the
-       realms' — each released with its context. */
+    /* THE ATOMS ARE GIVEN BACK, and the sentence that used to stand here — "the atoms and the class id belong
+       to a runtime that is going away with them" — was HALF true and that is what made it dangerous. It is
+       true of the class id, which is a registration and not a reference. It is false of an atom: JS_NewAtom
+       takes a COUNTED reference in the runtime's own table, and JS_FreeRuntime walks that table and reports
+       every id still holding one. So this function nulled five handles and dropped none of the references,
+       and four of them (`__fileSystemWritableSlots`, `type`, `data`, `position` — `size` is one of quickjs's
+       own built-in atoms) were named by the atom walk on 118 of the 190 files of `css/cssom`.
+       IT COULD NOT HAVE DONE OTHERWISE: this release took `void`, so it had no runtime to free them against.
+       That is the same defect as the one that kept element_free off core/platform.h's release column, one
+       level down — a row whose release cannot express what the component holds is a row that silently holds
+       it — and the fix is the same one: take the JSRuntime the column already has.
+       The prototypes are the realms' and go with their contexts. */
+    JS_FreeAtomRT(rt, g_slot_key);
+    JS_FreeAtomRT(rt, g_atom_type);
+    JS_FreeAtomRT(rt, g_atom_data);
+    JS_FreeAtomRT(rt, g_atom_position);
+    JS_FreeAtomRT(rt, g_atom_size);
     g_slot_key = g_atom_type = g_atom_data = g_atom_position = g_atom_size = JS_ATOM_NULL;
 }

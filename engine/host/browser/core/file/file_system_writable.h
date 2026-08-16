@@ -8,7 +8,7 @@
 #include "core/streams/stream_work.h"
 
 void fs_writable_init(JSContext *ctx);
-void fs_writable_free(void);
+void fs_writable_free(JSRuntime *rt);
 
 /* §2.5's CREATE A NEW FileSystemWritableFileStream given a file entry, as a SUB-SEQUENCE.
  *

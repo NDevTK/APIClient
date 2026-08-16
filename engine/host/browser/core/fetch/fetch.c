@@ -918,6 +918,24 @@ void fetch_init(JSContext *ctx)
     g_fetch_stepid = JS_RegisterStepDef(rt, &js_fetch_def);
 }
 
+/* §5's FOUR REQUEST/RESPONSE FIELD NAMES, given back. This component had NO release at all — it was one of
+   the forty-three rows on core/platform.h's list with a declare and an empty third column — so the four names
+   it interns once per agent were held for the runtime's whole life and reported by JS_FreeRuntime's atom walk
+   on 118 files of `css/cssom`, which is a CSSOM area that touches fetch only incidentally.
+   WHAT IS NOT FREED HERE is the four components fetch_init DECLARES (§4's ReadableStream, and §5's Response,
+   Headers and Request): each is its own component with its own release, and those are still hand-written into
+   the three host teardowns. They are present in all three, so they are not a divergence — they are the next
+   rows for this column, and freeing them from here would make this component the owner of state it does not
+   own. This releases exactly what fetch.c interned. */
+void fetch_free(JSRuntime *rt)
+{
+    JS_FreeAtomRT(rt, g_atom_method);
+    JS_FreeAtomRT(rt, g_atom_body);
+    JS_FreeAtomRT(rt, g_atom_url);
+    JS_FreeAtomRT(rt, g_atom_headers);
+    g_atom_method = g_atom_body = g_atom_url = g_atom_headers = JS_ATOM_NULL;
+}
+
 void fetch_install(JSContext *ctx, JSValueConst global)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);

@@ -520,10 +520,20 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     /* §7.2.5 marks `top` [LegacyUnforgeable] — an OWN property — but its VALUE is the navigable's, and `top`
        is a WALK of the parent chain, so a grandchild answers with the top-level traversable rather than with
        itself. An own ACCESSOR, not an own value frozen at install time. */
-    JS_DefinePropertyGetSet(ctx, g, JS_NewAtom(ctx, "top"),
-                            JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_win_top, "get top", 0,
-                                                 JS_CFUNC_getter_magic, 0),
-                            JS_UNDEFINED, JS_PROP_ENUMERABLE);
+    {
+        /* THE ATOM IS BORROWED BY THE DEFINE, NOT CONSUMED BY IT. JS_DefinePropertyGetSet frees the getter and
+           the setter it is handed and leaves `prop` alone, so an atom minted inline into the argument list has
+           nobody to give it back — `top` was named by JS_FreeRuntime's atom walk on 118 files of `css/cssom`.
+           Every other JS_DefinePropertyGetSet in this engine (abort.c, idl_args.c, html_element.c) already
+           holds the atom in a local and frees it; this was the one call site that did not. */
+        JSAtom a = JS_NewAtom(ctx, "top");
+        CHECK(a != JS_ATOM_NULL, "§7.2.5's `top` could not be interned");
+        JS_DefinePropertyGetSet(ctx, g, a,
+                                JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_win_top, "get top", 0,
+                                                     JS_CFUNC_getter_magic, 0),
+                                JS_UNDEFINED, JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, a);
+    }
     idl_install_replaceable_value(ctx, g, "frames", JS_DupValue(ctx, global));   /* [Replaceable] */
     /* §7.2.5's `parent` and `opener` ARE THE NAVIGABLE'S, so they are read from this realm's own WindowProxy
        rather than answered here. They were two FIXED values behind two comments explaining why an embedder

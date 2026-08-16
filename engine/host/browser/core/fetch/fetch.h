@@ -10,6 +10,8 @@
 /* §5/§6/§5.3's agent-wide declarations, including the three components' per-realm prototype entries. */
 void fetch_init(JSContext *ctx);
 void fetch_install(JSContext *ctx, JSValueConst global);
+/* §5's four interned field names — the agent's, so core/platform.h's release column gives them back. */
+void fetch_free(JSRuntime *rt);
 
 /* THE HOST'S NETWORK, as a seam the browser half takes rather than names.
  *
