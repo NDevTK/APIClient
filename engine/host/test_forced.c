@@ -101,11 +101,12 @@ static JSValue js_load_script(JSContext *ctx, JSValueConst this_val, int argc, J
     if (argc > 0) {
         const char *url = JS_ToCString(ctx, argv[0]);
         if (url) {
-            if (strstr(url, "admin")) engine_queue_script("fetch('/api/admin/audit-log');");   /* chunk-only endpoint */
+            /* THE FIXTURE'S OWN DOCUMENT — a chunk this host mints belongs to the document that loaded it. */
+            if (strstr(url, "admin")) engine_queue_script(world_local_doc(), "fetch('/api/admin/audit-log');");   /* chunk-only endpoint */
             /* A chunk that THROWS is what a page error IS — the report must name the capability. A DOMException
                is the most common throw in a DOM engine and keeps its name and message behind prototype
                accessors, so an own-property reader calls it "an object with no own name/message". */
-            if (strstr(url, "cethrow")) engine_queue_script("customElements.define('nohyphen', class {});");
+            if (strstr(url, "cethrow")) engine_queue_script(world_local_doc(), "customElements.define('nohyphen', class {});");
             JS_FreeCString(ctx, url);
         }
     }

@@ -11,19 +11,23 @@
  * revision. A spec-conformance claim about the browser half means "wpt passes", not "our fixture passes".
  *
  * IT RUNS THE FEATURE ENGINE, for the same reason test262 does. There is no non-feature mode in this project, so
- * a conformance pass over a plain JS_Eval would test something that never runs. Each file is a FLOW
- * (JS_FlowNew/JS_FlowResume) under forced preemption — every loop back-edge parks and rebuilds the heap-frame
- * chain — so a Headers iteration that suspends mid-walk is exercised by the same run that checks its answer.
+ * a conformance pass over a plain JS_Eval would test something that never runs.
  *
- * AND THE EXECUTION MODEL IT RUNS IS THE PRODUCT'S, WHICH IS A STRONGER STATEMENT AND IS TRUE OF HALF OF THIS
- * FILE SO FAR. Parking a frame is not the same thing as being scheduled: a `while (JS_FlowResume)` exercises
- * the park-and-rebuild machinery while the SCHEDULER never runs, so a gate built on one measures a model the
- * product does not have. The CHILD DOCUMENT — this process re-executed for a cross-origin navigable — is on
- * the one scheduler: engine_sched_begin seeds its document's scripts on the frontier, engine_sched_step is the
- * only thing that enters JS, engine_route attaches a delivery to every live timeline and engine_perform makes a
- * peer's operation a program of each of them. The TOP-LEVEL half still drives its programs itself and still
- * pumps quickjs's global job list; run_program names the two scheduler capabilities that stand between it and
- * the same treatment, and the top-level flow it fabricates in main() names itself.
+ * AND THE EXECUTION MODEL IT RUNS IS THE PRODUCT'S, WHICH IS THE STRONGER STATEMENT AND IS NOW TRUE OF THE
+ * WHOLE FILE. Parking a frame is not the same thing as being scheduled: a `while (JS_FlowResume)` exercises the
+ * park-and-rebuild machinery while the SCHEDULER never runs, so a gate built on one measures a model the
+ * product does not have. Both documents this binary runs — the TEST document and the CHILD document it
+ * re-executes itself for — are on the one scheduler: engine_sched_begin seeds the document's programs on the
+ * frontier, engine_sched_step is the only thing that enters JS, engine_route attaches a delivery to every live
+ * timeline, and engine_perform makes a peer's operation a program of each of them. What that deleted was a
+ * `while (JS_FlowResume)` per program, a fabricated flow standing in for the scheduler's state, and a
+ * `while (JS_ExecutePendingJob)` job drain beside a frontier whose flows own their own queues.
+ *
+ * WHAT PREEMPTS IS THEREFORE THE SCHEDULER'S POLICY AND NO LONGER THIS FILE'S. It used to force a yield at
+ * every back-edge and hand it straight back at the next loop iteration, which exercised the suspend/rebuild
+ * path and nothing else; that coverage is test262's, which measures ENGAGEMENT (§Testing) and is the harness
+ * built for it. Here the value yield and the cooperative quantum decide, exactly as they decide in the
+ * extension, because that is what this gate is for.
  *
  * The files are given in load order: resources/testharness.js, the test, then an epilogue this runner supplies
  * that registers a completion callback and calls done(). Results come out as one @WPT line per subtest, which
@@ -78,6 +82,7 @@
 #include "solver/concolic.h"
 #include "solver/flow.h"
 #include "solver/engine.h"
+#include "solver/result.h"   /* who prints a page error while the programs are the scheduler's */
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -105,18 +110,6 @@
 #include "core/encoding/text_stream.h"
 #include "core/idl_args.h"
 #include "core/idl_async_iter.h"
-
-/* Forced preemption at every back-edge, sampled at calls — the same policy run-test262 arms, and for the same
-   reason: a call is reached orders of magnitude more often than a back-edge, so forcing every one of them buys
-   no coverage the sample does not already have and costs a corpus that cannot finish. */
-static unsigned g_call_stride;
-static int wpt_preempt_always(int kind)
-{
-    if (kind == JS_PREEMPT_CALL) return (++g_call_stride & 63) == 0;
-    return 1;
-}
-static const JSFlowControlHooks WPT_HOOKS_ON  = { .branch = NULL, .fork = NULL, .preempt = wpt_preempt_always };
-static const JSFlowControlHooks WPT_HOOKS_OFF = { .branch = NULL, .fork = NULL, .preempt = NULL };
 
 /* testharness.js reports through a callback; the callback reports through this. One line per subtest, so the
    driver never has to parse prose. */
@@ -216,14 +209,25 @@ static const char WPT_EPILOGUE[] =
 static char g_wpt_root[512];
 
 
-static void wpt_report_exception(JSContext *ctx, const char *name, const char *what);
-
-/* THE WHOLE REQUEST is recorded, not the URL: the corpus's own handlers answer a POST by its BODY and a header
-   probe by its HEADERS, so a record that kept only where-to-go could never satisfy them. The strings are this
-   runner's copies, because the request the component built is gone by the time the pump drains. */
+/* THE REQUEST THE FRONTIER'S OWN REGISTER CANNOT HAND BACK — this file's half of the reply seam, and the exact
+ * shape of the capability that is still missing rather than a convenience.
+ *
+ * A `fetch()` PARKS the flow that issued it (engine_pending_fetch_url): the flow keeps its snapshot, reports
+ * itself host-owed, and its continuation resumes with the reply. That register records the WHOLE request —
+ * method, headers and body — but the two edges the HOST is offered do not: engine_pending_urls names a URL and
+ * engine_provide matches on one. The corpus asks this host for POSTs whose answer depends on the BODY sent
+ * (`echo-content.py`) and for probes whose answer is the HEADERS it was given (`inspect-headers.py`), so a URL
+ * alone cannot be turned back into the request that was made.
+ *
+ * SO THE HOST KEEPS ITS OWN COPY, keyed by the one thing the seam does name, and CRASHES where that key is not
+ * enough: two outstanding requests to one URL that differ in method or body are two questions the seam cannot
+ * tell apart, and answering either with the other's reply is a wrong answer with nothing to say so. That is the
+ * request-keyed reply seam, named where it bites — make engine_pending_urls a list of REQUESTS with an
+ * identity and engine_provide a delivery against that identity, and this table and its assert delete together.
+ * The strings are this runner's copies, because the request the component built is gone by the time the
+ * scheduler stalls on it. */
 #define WPT_OWED_MAX 64
 static struct {
-    JSValue deliver;
     char   *method, *url, *body;
     size_t  body_len;
     HeaderList headers;
@@ -233,14 +237,40 @@ static int g_owed_n;
 /* The document address of the file being run, which is what a relative fetch resolves against. */
 static char g_base_url[512];
 
+static void wpt_owed_forget(int i)
+{
+    free(g_owed[i].url);
+    free(g_owed[i].method);
+    free(g_owed[i].body);
+    header_list_free(&g_owed[i].headers);
+    g_owed[i] = g_owed[--g_owed_n];
+}
+
 static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, const FetchRequest *req)
 {
+    const char *method = req->method ? req->method : "GET";
+    const char *url = req->url ? req->url : "";
     int i;
-    (void)value;
+
+    for (i = 0; i < g_owed_n; i++) {
+        if (strcmp(g_owed[i].url, url)) continue;
+        /* THE SAME REQUEST FROM ANOTHER FLOW is the ordinary case — a candidate re-fire re-runs the fetches the
+           exploring flow made, and the frontier answers all of them with one reply. A DIFFERENT request at the
+           same URL is the seam's limit above, and it is fatal rather than first-come-first-served. */
+        DCHECK(!strcmp(g_owed[i].method, method) && g_owed[i].body_len == req->body_len &&
+               (req->body_len == 0 || (g_owed[i].body && req->body &&
+                                       !memcmp(g_owed[i].body, req->body, req->body_len))),
+               "two outstanding requests name one URL and differ in method or body — the reply seam names the "
+               "URL alone (engine_pending_urls/engine_provide), so whichever is answered first answers both and "
+               "one flow resumes with the reply to a question it never asked. Build the request-keyed seam");
+        /* AND THE PARK, which is what this provider does with the flow: it waits on its own register, exactly
+           as it does in the extension. */
+        engine_pending_fetch_url(ctx, deliver, value, req);
+        return;
+    }
     CHECK(g_owed_n < WPT_OWED_MAX, "wpt: more replies owed at once than this runner tracks");
-    g_owed[g_owed_n].deliver = JS_DupValue(ctx, deliver);
-    g_owed[g_owed_n].method = strdup(req->method ? req->method : "GET");
-    g_owed[g_owed_n].url = strdup(req->url ? req->url : "");
+    g_owed[g_owed_n].method = strdup(method);
+    g_owed[g_owed_n].url = strdup(url);
     CHECK(g_owed[g_owed_n].url && g_owed[g_owed_n].method, "wpt: OOM recording an owed reply");
     memset(&g_owed[g_owed_n].headers, 0, sizeof g_owed[g_owed_n].headers);
     for (i = 0; req->headers && i < req->headers->n; i++)
@@ -254,6 +284,7 @@ static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, co
         g_owed[g_owed_n].body[req->body_len] = 0;
     }
     g_owed_n++;
+    engine_pending_fetch_url(ctx, deliver, value, req);
 }
 
 /* Resolve one owed URL against the running file's address and read it out of the corpus. NULL when the corpus
@@ -410,64 +441,74 @@ static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, Heade
     return body;
 }
 
-/* Satisfy every reply owed so far. Returns true if any were, so the pump keeps turning while a test's data
-   load unblocks the next one. */
-static bool wpt_drain_owed(JSContext *ctx)
+/* ANSWER EVERY REPLY THE FRONTIER IS PARKED ON — the host's half of one slice boundary, and it is the same
+ * operation the extension's `qjs_pending`/`qjs_provide` pair performs: read what the flows are waiting for,
+ * fetch it, and deliver it onto the register of every flow that named it. Returns how many entries were
+ * filled, which is what tells a stall that could not be answered from one that was.
+ *
+ * IT DOES NOT ENTER JS. The delivery used to be `JS_CallAsFlow(deliver, reply)` out of the host's own time —
+ * a call root outside any scheduled flow, settling a promise whose reactions then belonged to whichever flow
+ * happened to be switched in. Now the resolve capability rides the flow's OWN pending entry: engine_provide
+ * lands the reply there, the flow's next step drains it, and the reaction is enqueued on the flow that issued
+ * the request. That is the whole reason the park is the product's park.
+ *
+ * A URL WITH NO RECORD IS A GET THE ENGINE ISSUED FOR CODE, not a default filled in for a missing one: an
+ * external document script, a dynamic `import()` and a discovery probe park on the same register and each is a
+ * GET by construction (engine.h says so at each entry point), so the absence of a request record is a positive
+ * statement about which kind of park this is. */
+static int wpt_provide_pending(JSContext *ctx)
 {
-    int i, n = g_owed_n;
-    if (!n) return false;
-    g_owed_n = 0;   /* taken first: satisfying one may owe another */
-    for (i = 0; i < n; i++) {
-        size_t len = 0;
+    char *list, *p;
+    int filled = 0;
+
+    if (!*engine_pending_urls()) return 0;
+    /* THE LIST IS COPIED BEFORE IT IS WALKED: engine_pending_urls answers out of one buffer it reuses, and the
+       provide below re-enters the engine. */
+    list = strdup(engine_pending_urls());
+    CHECK(list != NULL, "wpt: OOM copying the frontier's pending list");
+    for (p = list; *p; ) {
+        char *end = strchr(p, '\n');
         FetchRequest req;
+        HeaderList rh = { 0 };
+        HeaderList none = { 0 };
+        size_t len = 0;
+        int status = 0, i, rec = -1;
         char *body;
-        JSValue arg;
-        req.method = g_owed[i].method;
-        req.url = g_owed[i].url;
-        req.headers = &g_owed[i].headers;
-        req.body = g_owed[i].body;
-        req.body_len = g_owed[i].body_len;
-        {
-            int status = 0;
-            HeaderList rh = { 0 };
-            body = wpt_http(&req, &len, &status, &rh);
-            /* §4.1's clone of the REQUEST's URL list. This runner serves the checked-out corpus and follows no
-               redirect, so the list is the one URL it was asked for — which is what makes `response.url` the
-               address the test fetched and `response.redirected` false, both computed rather than declared. */
-            arg = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1) : JS_NULL;
-            header_list_free(&rh);
-        }
-        /* AS A FLOW, not a JS_Call. Settling the promise reads `then` off the value, which the page can own —
-           out of the pump that would have run with no flow base under it. */
-        if (JS_CallAsFlow(ctx, g_owed[i].deliver, arg) < 0)
-            wpt_report_exception(ctx, g_owed[i].url, "delivering: ");
-        JS_FreeValue(ctx, arg);
-        JS_FreeValue(ctx, g_owed[i].deliver);
+        JSValue reply;
+
+        if (!end) break;
+        *end = 0;
+        for (i = 0; i < g_owed_n; i++) if (!strcmp(g_owed[i].url, p)) { rec = i; break; }
+        req.method = rec >= 0 ? g_owed[rec].method : "GET";
+        req.url = p;
+        req.headers = rec >= 0 ? &g_owed[rec].headers : &none;
+        req.body = rec >= 0 ? g_owed[rec].body : NULL;
+        req.body_len = rec >= 0 ? g_owed[rec].body_len : 0;
+        body = wpt_http(&req, &len, &status, &rh);
+        /* §4.1's clone of the REQUEST's URL list. This runner serves the checked-out corpus and follows no
+           redirect, so the list is the one URL it was asked for — which is what makes `response.url` the
+           address the test fetched and `response.redirected` false, both computed rather than declared. */
+        reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1) : JS_NULL;
+        filled += engine_provide(ctx, p, reply);
+        JS_FreeValue(ctx, reply);
+        header_list_free(&rh);
         free(body);
-        free(g_owed[i].url);
-        free(g_owed[i].method);
-        free(g_owed[i].body);
-        header_list_free(&g_owed[i].headers);
+        if (rec >= 0) wpt_owed_forget(rec);
+        p = end + 1;
     }
-    return true;
+    free(list);
+    return filled;
 }
 
-/* Report the pending exception. JS_ToCString would run the thrown object's own `toString` from C — which is
-   the drive-to-completion the engine aborts on, and did abort on here, so the report of a failure became a
-   crash that hid it. JS_DiagCString is the engine's answer for a host with no flow to run page code on. */
-/* THE PENDING EXCEPTION, REPORTED. The `wpt_report_thrown` half that used to stand beside this — a thrown value
-   the caller already held — existed for exactly one caller, the cross-agent operation whose throw is its ANSWER
-   rather than a failure; that operation is performed by the scheduler now (flow_answer_perform encodes the
-   completion with its type), so the split has nothing left on the other side of it and goes with it. */
-static void wpt_report_exception(JSContext *ctx, const char *name, const char *what)
+/* WHAT THIS HOST OWES THE FRONTIER, asked by the scheduler before it may call a frontier exhausted (engine.h's
+   engine_set_stall_hook). Both registers, because both are answered at the same boundary and a flow parked on
+   either is a flow that has not finished: a reply it is waiting for, and a synchronous request it is suspended
+   inside. Without this the scheduler closes the session over them and every one of those continuations dies
+   with it — the session's own asserts then name flows that were dropped, which is the honest report of the
+   wrong thing. */
+static int wpt_owed(void)
 {
-    JSValue e = JS_GetException(ctx);
-    char *owned = NULL;
-    const char *msg = JS_DiagCString(ctx, e, &owned);
-
-    fprintf(report_out(), "@WPTERR %s: %s%s\n", name, what, msg ? msg : "?");
-    JS_DiagFreeCString(ctx, msg, owned);
-    JS_FreeValue(ctx, e);
+    return *engine_pending_urls() != '\0' || *engine_host_requests() != '\0';
 }
 
 /* THE HOST'S HALF, pumped between resumes.
@@ -638,13 +679,11 @@ static void wpt_children_free(void)
    it is the same request every other one is. */
 static char *wpt_get_csp(const char *url, size_t *plen, char **pcsp);
 
-/* Returns whether it ANSWERED anything, because the pump has to know. A flow parked on a host-owed answer is
-   resumed by JS_ResumeParkedFlow, re-parks on the same unanswered request and is resumed again — so a pump
-   that resumes before it answers spins at full CPU until something outside kills it. Every other owed thing in
-   this file already reports that (wpt_drain_owed, wpt_run_pending, timer_run_due); this one did not, because
-   while the only host request was an occasional cross-document read it was only ever pulled from inside
-   run_program's own resume loop, where the answer landed first by luck of ordering. §7.4 step 14's load parks
-   on one, and luck ran out. */
+/* Returns whether it ANSWERED anything, because the step loop has to know: it is one of the two things this
+   host can do at a slice boundary, and a STALL it answers nothing to is a frontier waiting on a reply that is
+   never coming rather than one waiting on this host (see the loop in main). The scheduler no longer re-enters
+   a flow that is blocked on an unanswered request — it reports itself host-owed and leaves the pick — so the
+   full-CPU spin this used to guard against is the scheduler's invariant now and not a rule of this file's. */
 /* THE TRUSTED ZONE'S ROUTER. Every notice, whoever emitted it, comes through here — the top-level document's
    own, and every one relayed up from a child instance — because "which instance holds which document" is
    exactly the one fact only this process knows, and a second copy of the decision would be a second answer.
@@ -659,8 +698,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
    the receiving side unable to use the engine's own entry for it. The zone's job is to ROUTE the record and to
    STAMP the origin the emitting engine may not name for itself (SECURITY.md); the origin therefore travels
    BESIDE the record rather than inside it, and the record crosses untouched. */
-static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, const char *from_origin,
-                           const char *world, const char *target_origin, const char *b64)
+static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, const char *from_origin)
 {
     ChildDoc *c = wpt_child_for(doc);
 
@@ -675,24 +713,20 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
     }
     /* NOT A CHILD, SO IT IS THIS PROCESS'S OWN DOCUMENT — the reply direction, which is most of what a real
        messaging protocol does: a frame answers its opener. The delivery is the same one a child makes, in this
-       instance, so it goes through the same engine entry rather than a second path. */
+       instance, so it goes through the same engine entry rather than a second path.
+       AND IT IS ATTACHED, NEVER PERFORMED HERE. This host used to take the record apart itself and call
+       window_message_route out of its own time: the task that lands is then enqueued against whichever flow
+       the scheduler last had switched in, and the page's `message` listener lives in the delta of the flow
+       that ran the script which registered it — so the message arrived at a document where nothing was
+       listening, or at a timeline that never asked for it. engine_route makes it a work item of EVERY live
+       timeline of the receiving document, each delivering under its own delta when the scheduler runs it,
+       which is exactly what the child half already does with the same record — which is also why this takes
+       the record and nothing out of it: the world vector, the target origin and the payload are fields of a
+       grammar window_message.c and world.c own, and every one of them this host named was a copy of theirs. */
     DCHECK(!strcmp(doc, "wpt"),
            "a routed message named a document neither this process nor any child of it holds — the "
            "navigable.create notice for it was dropped, or the post outran it");
-    {
-        /* THE RECORD IS TAKEN APART BY THE FILE THAT WROTE IT — window_message_route for the payload, and
-           world_parse for the vector. This host used to do both by hand (strchr for the colon, a decode of its
-           own), which is the writer's grammar restated where nothing can check it against the writer. */
-        WorldId w, anc[16];
-        size_t cap = strlen(target_origin) + strlen(b64) + 2;
-        char *tail = malloc(cap);
-
-        CHECK(tail != NULL, "wpt: OOM receiving a routed message");
-        snprintf(tail, cap, "%s\t%s", target_origin, b64);
-        world_parse(world, &w, anc, (int)(sizeof anc / sizeof anc[0]));
-        window_message_route(ctx, tail, world_doc_name(w.doc), from_origin);
-        free(tail);
-    }
+    engine_route(ctx, record, from_origin);
 }
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
@@ -720,7 +754,7 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        IS STAMPED HERE, by the zone that knows who sent it: the engine may not name its own sender
        (SECURITY.md), so the notice carries none and this adds the one it knows. */
     if (nf == 5 && !strcmp(f[0], "windowproxy.post")) {
-        wpt_route_post(ctx, f[1], whole, from_origin, f[2], f[3], f[4]);
+        wpt_route_post(ctx, f[1], whole, from_origin);
         free(whole);
         return;
     }
@@ -955,6 +989,42 @@ static char   g_test_url[512];  /* its address, server-relative — what to GET 
    here, in the two addresses everything else is derived from: what to GET, and what `location` answers. */
 static char   g_variant[256];   /* "" or the "?…"/"#…" this run is */
 
+/* A PAGE ERROR, AS IT HAPPENS — an uncaught throw from one of the programs the scheduler runs (solver/result.h).
+   It used to be caught here, at the `while (JS_FlowResume)` that drove each program; with the programs on the
+   frontier there is no such place, and a diagnostic this gate cannot print is a diagnostic it does not have.
+   It is a report and NEVER a verdict: a browser's script that throws does not stop the document, so the flow
+   runs on to the next program exactly as it would in Chrome, and testharness's own subtest results decide the
+   file. */
+static void wpt_page_error(const char *msg)
+{
+    fprintf(report_out(), "@WPTERR %s: %s\n", g_test_url[0] ? g_test_url : "<document>", msg);
+}
+
+/* THIS DOCUMENT'S PROGRAM SEQUENCE — what a session is opened over (engine.h). Each entry is its own program
+   body and its own JS_FlowNew: classic scripts do not share a top-level scope, and concatenating them would
+   leak per-<script> let/const bindings between two files the page kept apart. The scheduler BORROWS the arrays
+   for the life of the session, so they outlive every statement that builds them and are freed with the run;
+   `body` is taken (owned here from this point), `name` is copied. */
+static char **g_prog_bodies, **g_prog_srcs;
+static int    g_prog_n, g_prog_cap;
+
+static void wpt_program(char *body, const char *name)
+{
+    if (g_prog_n == g_prog_cap) {
+        int cap = g_prog_cap ? g_prog_cap * 2 : 8;
+        char **b = realloc(g_prog_bodies, (size_t)cap * sizeof *b);
+        char **u = realloc(g_prog_srcs, (size_t)cap * sizeof *u);
+        CHECK(b != NULL && u != NULL, "wpt: OOM building this document's program sequence — a dropped program "
+                                      "is a document that runs something other than what it was served");
+        g_prog_bodies = b; g_prog_srcs = u; g_prog_cap = cap;
+    }
+    g_prog_bodies[g_prog_n] = body;
+    g_prog_srcs[g_prog_n] = strdup(name);
+    CHECK(body != NULL && g_prog_srcs[g_prog_n] != NULL, "wpt: OOM naming a program");
+    g_prog_n++;
+}
+
+
 /* ONE GET against the corpus server, resolved against the running document's address. */
 /* `pcsp`, when given, receives the response's `Content-Security-Policy` as a malloc'd string (NULL when the
    response carried none). The header list was already parsed here and thrown away — which is how a corpus test
@@ -1016,46 +1086,6 @@ static void wpt_derive_addresses(int argc, char **argv)
         CHECK(strlen(sv) < sizeof g_server, "wpt: WPT_SERVER is longer than this runner holds");
         snprintf(g_server, sizeof g_server, "%s", sv);
     }
-}
-
-/* Run one program as a FLOW, exactly as the test262 harness does: park and rebuild the whole frame chain at
-   every back-edge. */
-/* THE TOP-LEVEL DOCUMENT'S PROGRAM DRIVER, AND THE ONE DRIVE-TO-COMPLETION LEFT IN THIS FILE. It is not what a
- * program is in this engine — a program is a work item on the ONE frontier, ranked, preemptible and parkable at
- * any depth — and every yield `JS_FlowResume` reports here is handed straight back to the same program by the
- * next iteration, so the flow machinery's park-and-rebuild runs while the SCHEDULER never does.
- *
- * THE CHILD DOCUMENT NO LONGER USES IT: wpt_child_main runs its document's scripts, its deliveries and the
- * programs that answer a peer's operations through engine_sched_begin/engine_sched_step, which is the same
- * scheduler main.c and test_forced.c drive. Two things stand between THIS half and that, and neither is a
- * decision — both are capabilities the scheduler does not have yet, and each is checkable in one line:
- *   - the session's program sequence is compiled in ONE realm (flow_step's JS_FlowNew takes the session's
- *     ctx), and this host queues programs belonging to a CHILD REALM's document (wpt_queue_program), which has
- *     no way onto the frontier;
- *   - the host's reply seam names a URL and nothing else (engine_pending_urls / engine_provide), and the
- *     corpus asks this host for POSTs whose answer depends on the BODY it sent — so a fetch parked on the
- *     frontier could not be answered correctly, which is why this half still owes its replies through g_owed.
- * A `while (JS_FlowResume)` per program is what the absence of those two costs, and it is stated here rather
- * than left to be rediscovered from the shape of the loop. */
-static int run_program(JSContext *ctx, const char *src, size_t len, const char *name)
-{
-    JSValue *flow;
-    JSValue res = JS_UNDEFINED;
-
-    flow = JS_FlowNew(ctx, src, len, name, JS_EVAL_TYPE_GLOBAL);
-    if (!flow) {
-        wpt_report_exception(ctx, name, "");
-        return 1;
-    }
-    while (JS_FlowResume(ctx, flow, &res)) { wpt_answer_host_requests(ctx); }
-    if (JS_IsException(res)) {
-        wpt_report_exception(ctx, name, "");
-        JS_FlowFree(ctx, flow);
-        return 1;
-    }
-    JS_FreeValue(ctx, res);
-    JS_FlowFree(ctx, flow);
-    return 0;
 }
 
 static lxb_html_document_t *g_wpt_dom;   /* the runner's parsed document */
@@ -1128,8 +1158,13 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
     dom_cow_set_ctx(ctx);
     /* THIS HOST'S NETWORK EDGE — WHO answers, which is the one thing that is legitimately this runner's and
        not the platform's: it serves the checked-out corpus over wptserve's own socket. An edge is a
-       PARAMETER, and fetch.c aborts on a fetch issued with none, which is what asserts this line is here. */
+       PARAMETER, and fetch.c aborts on a fetch issued with none, which is what asserts this line is here.
+       WHAT IT DOES WITH THE FLOW is the product's park (wpt_owe): the request goes on that flow's own pending
+       register, and the two lines below are the other half of it — what this host still owes the frontier, and
+       who reports a page error while the programs are the scheduler's rather than this file's. */
     { static const FetchProvider P = { wpt_owe }; fetch_set_provider(&P); }
+    engine_set_stall_hook(wpt_owed);
+    result_set_page_error_hook(wpt_page_error);
 
     agent.origin = origin;
     agent.top_level_url = top_level_url;
@@ -1176,50 +1211,6 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime, which is what HTML's
    similar-origin window agent is. It gets the identical per-document install the first document got; there is
    no smaller variant of it, because a child whose `window` is smaller is a different browser. */
-/* PROGRAMS A DOCUMENT OWES, waiting for the pump. A child realm is built inside the creator's `window.open()`,
-   so its scripts cannot run there — see the queue's one consumer in main. Each entry owns its bytes and its
-   name; the realm is BORROWED, because the agent owns every realm it built and outlives this queue. */
-typedef struct { JSContext *ctx; char *src; size_t len; char *name; } PendingProgram;
-static PendingProgram *g_pending;
-static int             g_pending_n, g_pending_cap;
-
-static void wpt_queue_program(JSContext *ctx, const char *src, size_t len, const char *name)
-{
-    PendingProgram *e;
-
-    if (g_pending_n == g_pending_cap) {
-        int cap = g_pending_cap ? g_pending_cap * 2 : 8;
-        PendingProgram *g = realloc(g_pending, (size_t)cap * sizeof *g);
-        CHECK(g != NULL, "wpt: OOM queuing a document's program — a dropped program is a document that never ran");
-        g_pending = g;
-        g_pending_cap = cap;
-    }
-    e = &g_pending[g_pending_n++];
-    e->ctx = ctx;
-    e->src = malloc(len + 1);
-    CHECK(e->src != NULL, "wpt: OOM copying a queued program");
-    memcpy(e->src, src, len);
-    e->src[len] = 0;
-    e->len = len;
-    e->name = strdup(name ? name : "<document>");
-    CHECK(e->name != NULL, "wpt: OOM naming a queued program");
-}
-
-/* Run one queued program, or report that there were none. Called from the pump, which is the only thing that
-   may enter JS: this is a program starting, exactly like the test file's own. */
-static bool wpt_run_pending(void)
-{
-    PendingProgram e;
-
-    if (g_pending_n == 0) return false;
-    e = g_pending[0];
-    memmove(g_pending, g_pending + 1, (size_t)(--g_pending_n) * sizeof *g_pending);
-    run_program(e.ctx, e.src, e.len, e.name);
-    free(e.src);
-    free(e.name);
-    return true;
-}
-
 static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                   const char *top_level_url, const char *origin, const char *csp,
                                   uint32_t doc_id, JSValueConst nav_proxy)
@@ -1237,23 +1228,27 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
     wpt_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
     /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm — they are what make a popup a participant rather
        than an empty frame, since message-opener.html's whole body is one script that posts to its opener.
-       THEY ARE QUEUED, NOT RUN HERE. A realm is built from inside the creator's `window.open()` — a C
-       activation in the middle of the parent's own program — so running the child's scripts at this point is a
-       nested drive-to-completion re-entering JS from C: exactly the shape this engine refuses everywhere else,
-       and it surfaced as `JS_ToPrimitiveFree reached with a real object` the moment a popup's script coerced
-       anything. A document's scripts are PROGRAMS, and a program is a flow the one pump drives. Queuing them
-       is what makes the child's script ordinary work on the same loop as the parent's, which is also what lets
-       one of them suspend. */
+       THEY ARE QUEUED ONTO THE FRONTIER, NOT RUN HERE. A realm is built from inside §7.4 step 14's load job —
+       a C activation in the middle of some flow's own program — so running the child's scripts at this point
+       is a nested drive-to-completion re-entering JS from C: exactly the shape this engine refuses everywhere
+       else, and it surfaced as `JS_ToPrimitiveFree reached with a real object` the moment a popup's script
+       coerced anything.
+       THEY GO ON THE RUNNING FLOW, NAMING THIS DOCUMENT, which is what the scheduler gained and what this host
+       had a queue of its own for. A document's scripts are PROGRAMS, and a program is a work item of the ONE
+       frontier: preemptible, parkable, ranked, and — because the queue entry names the DOCUMENT — compiled in
+       the realm just built above rather than in the session's. They belong to the flow that CREATED the
+       navigable because that is whose timeline this child exists in: a sibling arm that never navigated here
+       has no such document, and a host-side queue could not have said so. */
     {
         DocScripts ds = document_exec_scripts(dom);
         int i;
         for (i = 0; i < ds.n; i++) {
-            if (ds.bodies[i]) wpt_queue_program(ctx, ds.bodies[i], strlen(ds.bodies[i]), url);
+            if (ds.bodies[i]) engine_queue_script(doc_id, ds.bodies[i]);
             else if (ds.srcs[i]) {
                 size_t sl = 0;
                 char *body = wpt_get(ds.srcs[i], &sl);
                 if (!body) continue;
-                wpt_queue_program(ctx, body, sl, ds.srcs[i]);
+                engine_queue_script(doc_id, body);
                 free(body);
             }
         }
@@ -1395,12 +1390,17 @@ static void wpt_child_emit_notices(const char *token)
    IT ENDS AT THE STALL AND NEVER AT DONE. A document a peer holds a reference into may not run out of
    timelines (engine.h's engine_set_referenced), so its frontier is never exhausted — it stalls, waiting for
    the next thing to arrive on this channel, which is precisely where the thread belongs. */
-static void wpt_child_run(const char *token)
+static void wpt_child_run(JSContext *ctx, const char *token)
 {
     for (;;) {
         int r = engine_sched_step();
         wpt_child_emit_notices(token);
         if (r == ENGINE_STEP_YIELD) continue;
+        /* AND WHAT THIS HOST OWES, at the same boundary and for the same reason the top-level half pays it
+           there: a child document fetches too (its own `<script src>` aside, its scripts call `fetch`), and a
+           reply nobody supplies is a timeline parked for the life of the instance. A stall this fills is not a
+           stall — the frontier has work again. */
+        if (wpt_provide_pending(ctx) > 0) continue;
         DCHECK(r == ENGINE_STEP_STALLED,
                "the scheduler declared this instance's frontier EXHAUSTED — a document another agent holds a "
                "reference into has no such state, so either engine_set_referenced was not set for it or the "
@@ -1496,7 +1496,7 @@ static int wpt_child_main(int argc, char **argv)
     /* THE DOCUMENT RUNS BEFORE THE FIRST QUESTION ARRIVES, which is what makes a child a participant rather
        than an empty frame — message-opener.html's whole body is one script that posts to its opener, and that
        post has to be on this channel before the parent asks anything. */
-    wpt_child_run(NULL);
+    wpt_child_run(ctx, NULL);
 
     while (fgets(line, sizeof line, stdin)) {
         char *nl = strchr(line, '\n');
@@ -1533,7 +1533,7 @@ static int wpt_child_main(int argc, char **argv)
                script and nowhere else. This host used to take the record apart itself, route the payload, and
                then run an EMPTY PROGRAM to completion as a way of turning the task queue over. */
             engine_route(ctx, rec, f1);
-            wpt_child_run(NULL);
+            wpt_child_run(ctx, NULL);
             /* THE ACK IS THE TRANSPORT'S, not a program's completion: nothing was asked, so there is nothing
                for a timeline to answer. It is written through the one encoder so this pipe has ONE grammar
                rather than one for the answers and a bare `u` for this. */
@@ -1547,7 +1547,7 @@ static int wpt_child_main(int argc, char **argv)
                THE THROW IS THE ANSWER and needs nothing here: flow_answer_perform encodes the completion with
                its TYPE, so a peer's `try`/`catch` runs at the line that asked. */
             engine_perform(ctx, f1, rec);
-            wpt_child_run(f1);
+            wpt_child_run(ctx, f1);
             DCHECK(g_child_answer != NULL,
                    "this instance stalled without answering the operation it was asked — every timeline it was "
                    "attached to either finished without completing its program or is parked on something this "
@@ -1619,130 +1619,118 @@ int main(int argc, char **argv)
     g_wpt_ctx = ctx;
     rt = g_rt;
 
-    /* THE TOP-LEVEL DOCUMENT'S FLOW, FABRICATED — this half of the runner has not been converted to the one
-       scheduler yet, and this line is the whole of what stands in for it: a single flow, switched in for the
-       run, so that the program driver below and everything that asks flow_running() (a live fetch, a
-       synchronous host request, §7.4's open) has an answer. It is a scheduler's STATE with no scheduler, and
-       it cannot quietly survive one arriving: engine_sched_begin asserts the frontier is empty, so the first
-       session opened over this document crashes here rather than seeding a second timeline beside it. The
-       CHILD document below is on the real thing (engine_sched_begin/engine_sched_step) and does not have it. */
-    flow_set_running(flow_add(ctx, JS_UNDEFINED, WORLD_NONE));
-
-    JS_SetFlowControlHooks(&WPT_HOOKS_ON);
-    if (g_html_mode) {
-        /* THE DOCUMENT'S OWN SCRIPTS, IN DOCUMENT ORDER — the same component the engine loads a real page with,
-           so an HTML test's `<script src=/resources/testharness.js>` is loaded the way the page asked for it
-           rather than by this runner guessing which files a document needs. Each script is its own program body
-           and its own flow: classic scripts do not share a top-level scope, and concatenating them would leak
-           per-<script> let/const bindings between two files the page kept apart.
-           NO PROLOGUE HERE. `GLOBAL` is the shim WPT's server writes around a `.any.js`, and a document that
-           never asked for it must not be given one. */
-        DocScripts ds = document_exec_scripts(g_wpt_dom);
-        for (i = 0; i < ds.n && !failed; i++) {
-            if (ds.bodies[i]) {
-                failed = run_program(ctx, ds.bodies[i], strlen(ds.bodies[i]), g_test_url);
-            } else if (ds.srcs[i]) {
+    /* THE PROGRAMS THIS RUN IS, built before the session because that is what a session is opened over. */
+    {
+        if (g_html_mode) {
+            /* THE DOCUMENT'S OWN SCRIPTS, IN DOCUMENT ORDER — the same component the engine loads a real page
+               with, so an HTML test's `<script src=/resources/testharness.js>` is loaded the way the page
+               asked for it rather than by this runner guessing which files a document needs.
+               NO PROLOGUE HERE. `GLOBAL` is the shim WPT's server writes around a `.any.js`, and a document
+               that never asked for it must not be given one.
+               AN EXTERNAL SCRIPT IS FETCHED INTO ITS OWN SLOT, in position, because classic scripts run in
+               document order and one that did not load is a script that runs nothing rather than one that
+               moves the others up. (The engine's own answer for an external script is the docscript park —
+               the flow waits and the host fills the shared slot — and this host will use it the moment its
+               network edge can carry a REQUEST rather than a URL; today's seam names only the URL, which
+               cannot say which POST body a corpus handler is being asked to echo.) */
+            DocScripts ds = document_exec_scripts(g_wpt_dom);
+            for (i = 0; i < ds.n; i++) {
+                if (ds.bodies[i]) { wpt_program(strdup(ds.bodies[i]), g_test_url); continue; }
+                if (!ds.srcs[i]) continue;
+                {
+                    size_t len = 0;
+                    char *body = wpt_get(ds.srcs[i], &len);
+                    /* A <script src> THE SERVER DOES NOT HAVE is a real 404, and a real browser fires an
+                       error event and carries on rather than stopping the document. Reporting it names the
+                       file, because a test whose harness failed to load reports nothing at all otherwise. */
+                    if (!body) {
+                        fprintf(report_out(), "@WPTERR %s: <script src> did not load: %s\n",
+                                g_test_url, ds.srcs[i]);
+                        continue;
+                    }
+                    wpt_program(body, ds.srcs[i]);
+                }
+            }
+            doc_scripts_free(&ds);
+        } else {
+            wpt_program(strdup(WPT_PROLOGUE), "<wpt-prologue>");
+            /* THE HARNESS AND THE META SCRIPTS ARE PROGRAM INPUTS THE DRIVER RESOLVED, so they come from the
+               paths it named; a `.sub.js` among them was fetched and substituted by the driver before it
+               handed the path over. The TEST is not one of those — it is the run's ADDRESS — so it comes from
+               the server. */
+            for (i = 1; i < argc - 1 && !failed; i++) {
                 size_t len = 0;
-                char *body = wpt_get(ds.srcs[i], &len);
-                /* A <script src> THE SERVER DOES NOT HAVE is a real 404, and a real browser fires an error
-                   event and carries on rather than stopping the document. Reporting it names the file, because
-                   a test whose harness failed to load reports nothing at all otherwise. */
-                if (!body) { fprintf(report_out(), "@WPTERR %s: <script src> did not load: %s\n", g_test_url, ds.srcs[i]); continue; }
-                failed = run_program(ctx, body, len, ds.srcs[i]);
-                free(body);
+                char *src = read_file(argv[i], &len);
+                if (!src) { fprintf(report_out(), "@WPTERR %s: cannot read\n", argv[i]); failed = 1; break; }
+                wpt_program(src, argv[i]);
+            }
+            /* AND THE TEST ITSELF IS FETCHED, exactly as a document test is, because the reason is the same
+               and it is not a reason about markup: a `.sub.` file is a TEMPLATE, and wptserve substitutes
+               `{{host}}` and `{{ports[https][0]}}` when it serves one. Read off disk,
+               `dom/events/EventListener-addEventListener.sub.window.js` opens an iframe at the literal string
+               `https://{{hosts[alt][]}}:{{ports[https][0]}}/…`, which is not a URL — so the file tested the
+               template rather than the test, and the driver's own substitution reached only the META scripts.
+               One rule, both kinds: the test comes from the corpus's own server. */
+            if (!failed) {
+                size_t len = 0;
+                char *src = wpt_get(g_test_url, &len);
+                CHECK(src != NULL, "wpt: the corpus server did not serve the test file");
+                wpt_program(src, g_test_url);
             }
         }
-        doc_scripts_free(&ds);
-    } else {
-        failed = run_program(ctx, WPT_PROLOGUE, strlen(WPT_PROLOGUE), "<wpt-prologue>");
-        /* THE HARNESS AND THE META SCRIPTS ARE PROGRAM INPUTS THE DRIVER RESOLVED, so they come from the paths
-           it named; a `.sub.js` among them was fetched and substituted by the driver before it handed the path
-           over. The TEST is not one of those — it is the run's ADDRESS — so it comes from the server. */
-        for (i = 1; i < argc - 1 && !failed; i++) {
-            size_t len = 0;
-            char *src = read_file(argv[i], &len);
-            if (!src) { fprintf(report_out(), "@WPTERR %s: cannot read\n", argv[i]); failed = 1; break; }
-            failed = run_program(ctx, src, len, argv[i]);
-            free(src);
-        }
-        /* AND THE TEST ITSELF IS FETCHED, exactly as a document test is, because the reason is the same and it
-           is not a reason about markup: a `.sub.` file is a TEMPLATE, and wptserve substitutes `{{host}}` and
-           `{{ports[https][0]}}` when it serves one. Read off disk,
-           `dom/events/EventListener-addEventListener.sub.window.js` opens an iframe at the literal string
-           `https://{{hosts[alt][]}}:{{ports[https][0]}}/…`, which is not a URL — so the file tested the
-           template rather than the test, and the driver's own substitution reached only the META scripts. One
-           rule, both kinds: the test comes from the corpus's own server. */
-        if (!failed) {
-            size_t len = 0;
-            char *src = wpt_get(g_test_url, &len);
-            CHECK(src != NULL, "wpt: the corpus server did not serve the test file");
-            failed = run_program(ctx, src, len, g_test_url);
-            free(src);
-        }
+        /* THE EPILOGUE IS A PROGRAM OF THIS DOCUMENT LIKE THE REST — testharness.js hands its results to a
+           completion callback and, outside a browser, has to be TOLD the page is done. */
+        if (!failed) wpt_program(strdup(WPT_EPILOGUE), "<wpt-epilogue>");
     }
-    if (!failed)
-        failed = run_program(ctx, WPT_EPILOGUE, strlen(WPT_EPILOGUE), "<wpt-epilogue>");
-    /* The jobs are the test's too — a promise_test's body runs in one — so they drain with the feature still
-       armed, for the reason run-test262 keeps its hooks on across the drain.
-       PARKED FLOWS RESUME FIRST. A flow that suspended is ahead of every queued job in program order, so
-       draining a job while one is parked reorders observable microtasks — and this pump got it wrong on its
-       first run, which the engine's own assert named at the site with the fix in the message. */
-    for (;;) {
-        JSContext *c1;
-        int r;
-        /* ANSWER BEFORE RESUMING. A parked flow that is waiting on this host cannot progress until it has its
-           answer, so resuming it first is a busy-wait — and JS_ResumeParkedFlow reports "I resumed one", which
-           is true, so the loop below never ends. */
-        wpt_answer_host_requests(ctx);
-        while (JS_ResumeParkedFlow(rt)) ;
-        r = JS_ExecutePendingJob(rt, &c1);
-        if (r > 0) continue;
-        if (r < 0) { failed = 1; break; }
-        /* NOTHING LEFT TO RUN IS NOT NOTHING LEFT TO DO. A promise_test parked on `fetch` has no job pending
-           and no flow parked — it is waiting on the HOST, exactly as a page waits on the network. Satisfying
-           the owed replies is what re-enters JS and gives the pump more to drain; only when a drain owes
-           nothing new is the file really finished. */
-        if (wpt_drain_owed(ctx)) continue;
-        /* THE SAME SENTENCE FOR THE SYNCHRONOUS SEAM: a flow parked on a host-owed answer has no job pending
-           and no reply owed, and answering it is what gives the pump more to drain. */
-        if (wpt_answer_host_requests(ctx)) continue;
-        /* A DOCUMENT THAT LOADED OWES ITS SCRIPTS, and this is where they start. They were queued from inside
-           the creator's `window.open()`, which is a C activation and no place to enter JS from. Before the
-           clock moves, because a child's script is loading, not a timer. */
-        if (wpt_run_pending()) continue;
-        /* THE DOCUMENTS FINISH LOADING, and this runner used to run NONE of it — so its documents were
-           `readyState: "loading"` forever, `window.onload` never fired, and HTML §8.1.7.3 step 3 saw a
-           RENDER-BLOCKED document on every pass: no rendering opportunity, no `pagereveal`, and no animation
-           frame, in a harness whose whole job is to measure exactly those. PER DOCUMENT, so a child navigable's
-           document gets its own DOMContentLoaded and its own `load` rather than living for ever in a stage a
-           single counter could only ever hold for one of them. It is BEFORE the clock moves for the reason a
-           child's pending script is: the parser finishing is not a timer. */
-        if (document_lifecycle_step(ctx)) continue;
-        /* NOTHING QUEUED AND NOTHING OWED, which is the one moment virtual time may move — see timer.h. TWO
-           task sources become due at moments on that clock: §8.1.7.3's rendering task source at the next
-           rendering opportunity, and §8.6's timer source at the earliest expiry. The rendering step is asked
-           first because it is the one that can defer — it yields to a timer that expires before the frame. */
-        if (rendering_run_opportunity(ctx)) continue;
-        if (timer_run_due(ctx)) continue;
-        break;
-    }
-    JS_SetFlowControlHooks(&WPT_HOOKS_OFF);
 
-    /* ANY REPLY STILL OWED IS THIS RUNNER'S TO RELEASE. The pump leaves none behind on its normal exit — it
-       stops only when a drain owes nothing new — but a file that FAILED breaks out with entries recorded, and
-       each one holds a delivery closure, which holds the capability, which holds every reaction the page
-       attached to it. Dropped on the floor they are a leak of the page's own functions, reported at teardown as
-       leaked bytecode with no hint of where it came from. */
-    {
-        int i;
-        for (i = 0; i < g_owed_n; i++) {
-            JS_FreeValue(ctx, g_owed[i].deliver);
-            free(g_owed[i].url);
-            free(g_owed[i].method);
-            free(g_owed[i].body);
-            header_list_free(&g_owed[i].headers);
+    /* THE ONE SCHEDULER, over this document's programs. What stood here was a fabricated flow — one member
+       added at agent init and left switched in for the whole run so that everything asking flow_running() had
+       an answer — and a pump beside it: a `while (JS_FlowResume)` per program, a `while (JS_ResumeParkedFlow)`,
+       a `JS_ExecutePendingJob` drain, and this host's own copy of the event loop's order (the document
+       lifecycle, then the rendering opportunity, then the due timer). Every one of those is the scheduler's:
+       the flow's jobs are ITS queue, the parked continuation is resumed by flow_step before anything else the
+       flow could do, and the three task sources are asked through the hooks their components registered. A
+       host that kept its own copy was a second scheduler with the frontier bypassed, which is what CLAUDE.md
+       §scheduler forbids at every depth — and it measured a model the product does not have.
+       FORKING IS OFF: this gate measures the browser half against a spec oracle, so a concolic branch must not
+       explore both arms — the same choice the child half makes, and the same one the @S candidate re-fire
+       makes for its own reason. */
+    engine_sched_begin(ctx, g_prog_bodies, g_prog_srcs, g_prog_n, /*forking*/0, NULL);
+    for (;;) {
+        int r = engine_sched_step();
+        int did;
+
+        /* THE HOST'S HALF OF EVERY SLICE BOUNDARY, and it is asked at EVERY one rather than only at a stall —
+           the same protocol the extension's bridge speaks (engine.h): paying only at a stall makes one flow's
+           reply conditional on every other flow in the document also becoming blocked. Notices first: a
+           document announced but not yet provisioned is one a read would arrive for before its instance
+           exists. */
+        did = wpt_answer_host_requests(ctx);
+        if (wpt_provide_pending(ctx) > 0) did = 1;
+        if (r == ENGINE_STEP_DONE) break;
+        if (r == ENGINE_STEP_STALLED) {
+            /* THE TWO ANSWERS THIS HOST GIVES ABOUT ONE QUESTION MUST AGREE. The scheduler stalls because
+               wpt_owed said something is outstanding; if the very next thing this host does is fill NOTHING,
+               the two disagree and the frontier is parked on something that is never coming — a spin, not a
+               wait. In release there is nothing to fix it with, so the run ends with the flows parked and the
+               teardown names what was dropped. */
+            DCHECK(did, "the frontier stalled on work this host says it owes and then filled NOTHING — the "
+                        "stall hook and the provide edge are two answers to one question and they disagree, "
+                        "so the flows parked here are waiting for a reply nobody is going to send");
+            if (!did) break;
         }
-        g_owed_n = 0;
+    }
+
+    /* THE PROGRAM SEQUENCE AND THE REQUEST RECORDS, both of which outlived the session by design and neither
+       of which anything else owns. The session BORROWED the arrays (engine.h), so they are freed only now that
+       it has ended; a record still here is a request whose flow was parked when the run stopped, which the
+       frontier's own teardown asserts about from the other end. */
+    {
+        int k;
+        for (k = 0; k < g_prog_n; k++) { free(g_prog_bodies[k]); free(g_prog_srcs[k]); }
+        free(g_prog_bodies);
+        free(g_prog_srcs);
+        while (g_owed_n) wpt_owed_forget(g_owed_n - 1);
     }
 
     /* THE PLATFORM'S OWN LIST, UNDONE — see main.c's teardown: one call, whatever this browser declared. */
@@ -1774,14 +1762,11 @@ int main(int argc, char **argv)
     message_port_free(ctx);
     window_message_free(ctx);
     navigable_free(ctx);
-    /* THIS HOST'S SCHEDULER GIVES THE THREAD BACK BEFORE THE FRONTIER GOES DOWN. The serve loop IS this
-       instance's scheduler and it holds ONE flow running for the whole run (see flow_registry_init above), so
-       nothing else ever performs the switch-out that every other scheduler performs when its session ends. A
-       frontier torn down with a flow still switched in is one whose delta, DOM head and decision state are LIVE
-       rather than parked, and the release frees them as if they were parked — which flow_release asserts
-       against. Here the flow has neither (this runner drives quickjs flows directly), so the switch-out is
-       exactly this line; it is stated rather than left to the accident that its delta happens to be empty. */
-    flow_set_running(NULL);
+    /* NOTHING SWITCHES THE RUNNING FLOW OUT HERE ANY MORE, and the line that did is deleted rather than kept
+       as a safety net: a session ends by CLOSING (engine_session_close performs exactly that switch-out, which
+       is what makes the frontier a set of snapshots), so a host doing it as well would be the second scheduler
+       this conversion removed, expressed as one line of teardown. A flow still switched in at this point is a
+       session that never closed, and flow_release says so at the flow it reaches. */
     flow_registry_free(ctx);
     document_free(ctx);
     iframe_free(ctx);

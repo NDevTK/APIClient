@@ -65,6 +65,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/dom/document.h"   /* §8.6 compiles a STRING handler in the entry global's document */
 #include "solver/engine.h"
 
 /* ONE ENTRY OF §8.6's MAP, as an Array — the shape §8.9's map of animation frame callbacks uses, for the
@@ -78,7 +79,7 @@ static int      g_slot = -1;
 static JSAtom   g_atom_map = JS_ATOM_NULL, g_atom_next = JS_ATOM_NULL;
 static int      g_ready;
 static int      g_id_set_timeout, g_id_set_interval, g_id_clear_timeout, g_id_clear_interval;
-static void   (*g_script_sink)(const char *src);
+static void   (*g_script_sink)(uint32_t doc, const char *src);
 
 static void timer_install_map(JSContext *ctx);
 
@@ -211,7 +212,7 @@ double timer_next_due(JSContext *ctx)
     return timer_earliest(ctx, &idx, &when, &seq) ? when : -1;
 }
 
-void timer_set_script_sink(void (*queue)(const char *src)) { g_script_sink = queue; }
+void timer_set_script_sink(void (*queue)(uint32_t doc, const char *src)) { g_script_sink = queue; }
 
 /* SET ONE TIMER in `ctx`'s global's map — §8.6's shared tail for `setTimeout`, `setInterval` and the engine's
    own "run steps after a timeout". Returns the handle §8.6 gives back.
@@ -450,7 +451,9 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
         DCHECK(g_script_sink != NULL,
                "setTimeout was given a STRING handler and this host registered no way to evaluate one — HTML "
                "8.6 evaluates it when the timer fires, and dropping it would lose whatever it was going to do");
-        g_script_sink(src);
+        /* IN THIS REALM'S DOCUMENT — §8.6 compiles the string with the entry global object's settings, which
+           is the Window whose `setTimeout` was called and not the agent's root. */
+        g_script_sink(document_doc(ctx), src);
         JS_FreeCString(ctx, src);
         /* §8.6 still hands back a handle from THIS global's identifier, and it still names no entry — the
            script is queued, and there is nothing left for `clearTimeout` to find. */

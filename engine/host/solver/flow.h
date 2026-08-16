@@ -147,6 +147,18 @@ typedef struct Flow {
        replay re-executes side effects the flow already performed against a delta that already holds them. */
     int   last_compiled;   /* -1 until the flow compiles its first program */
     char **dyn; int dyn_n, dyn_cap;   /* this flow's OWN lazily-loaded chunk bodies (per-flow, not global) */
+    /* WHICH DOCUMENT each of those programs belongs to, which is WHERE it is compiled — a program is closed
+       over the compiling realm's global (JS_FlowNew), and an instance is an ORIGIN-KEYED AGENT CLUSTER, so the
+       document a program belongs to is a child navigable's as often as it is the session's. §7.4 step 14's
+       load hands a same-origin child its own realm and that document's classic scripts are the CREATING FLOW's
+       next programs; compiled in the session's realm they would run against the creator's Window, defining the
+       child's globals on the parent and reading the parent's back as the child's.
+       A DOCUMENT HANDLE AND NOT A JSContext*, for the reason `perform_doc` is one: a handle survives a park and
+       a realm does not, and a queued program outlives the turn that queued it. Parallel to `dyn` for the reason
+       `dyn_cand` is — a field added to the queue is an obligation at every clone, free and finish site, and the
+       three arrays are allocated, copied and freed together so one that got a field the others did not cannot
+       stay unnoticed. */
+    uint32_t *dyn_doc;
     /* WHAT KIND each of those programs is (a DynKind, engine.c). A page script that does not compile is a real
        problem and asserts; the two other kinds are ORDINARY when they do not. An @S CANDIDATE that does not
        compile is the common case — most breakouts do not fit most sink contexts, which is why the solver tries

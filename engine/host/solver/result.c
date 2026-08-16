@@ -17,9 +17,15 @@
    here interprets it. */
 static char **g_errs; static int g_errs_n, g_errs_cap;
 
+/* WHO PRINTS ONE AS IT HAPPENS — see result.h. NULL for a host whose output is a document it writes at the
+   end; set by a host whose output is a stream. */
+static void (*g_err_hook)(const char *msg);
+void result_set_page_error_hook(void (*fn)(const char *msg)) { g_err_hook = fn; }
+
 void result_page_error(const char *msg) {
     if (!msg || !*msg) return;
     for (int i = 0; i < g_errs_n; i++) if (!strcmp(g_errs[i], msg)) return;
+    if (g_err_hook) g_err_hook(msg);
     if (g_errs_n >= g_errs_cap) {
         int c = g_errs_cap ? g_errs_cap * 2 : 8;
         char **a = realloc(g_errs, (size_t)c * sizeof(char *));

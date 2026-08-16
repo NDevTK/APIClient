@@ -106,6 +106,11 @@
  * for this one. It is SHARE because it belongs to the record: an arm's own later branch-siblings are fixed too
  * (they are that arm continued), and the issuer's branch-siblings are not (each of them asked and observed the
  * first answer, so each must fork over every other one). */
+/* `doc` IS WHICH DOCUMENT OF THIS AGENT THE REPLY IS FOR, and it is on the record because for one kind the
+ * reply is a PROGRAM: an injected <script src>'s body becomes a program of the flow that injected it, and a
+ * program is compiled in the realm of the DOCUMENT it belongs to (solver/flow.h) — which for a script appended
+ * into an iframe's tree is that frame's document and not the session's. It is SHARE because it belongs to the
+ * record: an arm forked while the load is in flight is loading the same script into the same document. */
 #define PENDING_FIELDS(X)                    \
     X(RESOLVE,    "resolve",   PEND_SHARE)   \
     X(VALUE,      "value",     PEND_SHARE)   \
@@ -120,7 +125,8 @@
     X(OP,         "op",        PEND_SHARE)   \
     X(METHOD,     "method",    PEND_SHARE)   \
     X(HEADERS,    "headers",   PEND_STRUCT)  \
-    X(BODY,       "body",      PEND_SHARE)
+    X(BODY,       "body",      PEND_SHARE)   \
+    X(DOC,        "doc",       PEND_SHARE)
 
 enum {
 #define PEND_ENUM(id, name, copy) PEND_##id,

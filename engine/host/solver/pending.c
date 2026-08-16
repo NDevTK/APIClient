@@ -187,6 +187,9 @@ JSValue pending_push(JSValue *reg, int kind)
     pend_put(e, PEND_METHOD, JS_NULL);
     pend_put(e, PEND_HEADERS, JS_NULL);
     pend_put(e, PEND_BODY, JS_NULL);
+    /* WHICH DOCUMENT THE REPLY IS FOR — 0 is "this park's reply is not a program", which is every kind but the
+       injected <script src> that names one. */
+    pend_put(e, PEND_DOC, JS_NewInt32(pend_ctx(), 0));
     JS_SetPropertyUint32(pend_ctx(), *reg, (uint32_t)pend_len(*reg), JS_DupValue(pend_ctx(), e));
     cow_engine_write_end();
     return e;

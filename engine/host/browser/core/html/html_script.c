@@ -14,6 +14,7 @@
 #include "solver/endpoint.h"
 #include "solver/engine.h"
 #include "core/dom/node.h"
+#include "core/dom/document.h"   /* which DOCUMENT this program belongs to: the realm it is compiled in */
 #include "core/html/html_script.h"
 
 /* §4.12.1's `already started`, on the element's wrapper under a Symbol this file minted and never published —
@@ -196,7 +197,10 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el)
     {
         lxb_char_t *txt = lxb_dom_node_text_content(n, &n_len);
         if (txt) {
-            if (n_len) engine_queue_script((const char *)txt);
+            /* IN THE DOCUMENT WHOSE TREE IT WAS INSERTED INTO — "prepare the script" runs it with the
+               element's node document's settings object, which is the realm this chokepoint was entered
+               with. A program is a program OF a document (solver/flow.h), so it names one. */
+            if (n_len) engine_queue_script(document_doc(ctx), (const char *)txt);
             lxb_dom_document_destroy_text(n->owner_document, txt);
         }
     }

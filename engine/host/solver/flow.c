@@ -214,6 +214,7 @@ void flow_release(JSContext *ctx, Flow *f) {
     for (int k = 0; k < f->dyn_n; k++) free(f->dyn[k]);
     free(f->dyn); f->dyn = NULL;
     free(f->dyn_cand); f->dyn_cand = NULL;
+    free(f->dyn_doc); f->dyn_doc = NULL;
     f->dyn_n = f->dyn_cap = 0;
     for (int k = 0; k < f->njob; k++) {   /* any undrained microtask/task jobs */
         for (int a = 0; a < f->jobs[k].argc; a++) JS_FreeValue(ctx, f->jobs[k].argv[a]);
@@ -668,7 +669,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
     DCHECK(f->njob == 0 && f->jobs == NULL && JS_IsUndefined(f->pending),
            "a flow was removed still holding queued jobs or pending host replies — each is a work item on the "
            "one frontier, and the WFQ may never drop one");
-    DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dec_blob == NULL && f->pin_blob == NULL,
+    DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dyn_doc == NULL &&
+           f->dec_blob == NULL && f->pin_blob == NULL,
            "a flow was removed with its lazily-loaded chunk bodies or its suspended decision/pin blobs still "
            "attached — the flow's own allocations, freed by nothing else");
     for (int i = 0; i < g_flows_n; i++) {

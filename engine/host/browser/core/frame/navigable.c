@@ -517,7 +517,10 @@ void navigable_evaluate_javascript_url(JSContext *ctx, const char *url)
     /* Steps 4-7: the classic script is created with the target navigable's active document's settings and API
        base URL — this document's, which is what makes this the same-navigable case the header names — and RUN.
        Its completion value decides step 9, and the scheduler is the only place that value exists (engine.h). */
-    engine_queue_javascript_url(source);
+    /* IN THE TARGET NAVIGABLE'S ACTIVE DOCUMENT, which step 5 names as the settings object the script is
+       created with. `ctx` is that document's realm — the activation behaviour that reached here ran in it — so
+       the program is a program OF that document and is compiled there. */
+    engine_queue_javascript_url(document_doc(ctx), source);
     free(source);
 }
 

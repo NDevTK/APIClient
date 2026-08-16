@@ -14,12 +14,20 @@
 /* Run the page's scripts as one code flow: each script `bodies[i]` is its OWN program (JS_FlowNew — faithful
    per-<script> scope, NEVER concatenated), run in document order, sharing globals + the flow's COW delta. */
 
-/* Queue a DYNAMICALLY-LOADED script body (a lazy chunk / injected <script> / import()) to run in the CURRENT
-   flow after the current script, sharing its globals + COW delta. Called from the script-load host-edge when
-   forced execution reaches a load. Because a load sits behind a branch, the ONE BFS discovers different lazy
-   scripts on different arms — lazy loading is not a separate system, just more code the flow runs and forks
-   through. The body is copied; the queue is per-run and drained by the flow that owns it. */
-void engine_queue_script(const char *body);
+/* Queue a script body to run in the CURRENT flow after the current script, sharing its globals + COW delta.
+   Three callers, and they are one thing — code the page caused to run: a DYNAMICALLY-LOADED body (a lazy
+   chunk / injected <script> / import()), a `setTimeout` STRING handler, and the classic scripts of a DOCUMENT
+   this flow just created (§7.4 step 14's load, whose realm builder hands them over). Because a load sits
+   behind a branch, the ONE BFS discovers different lazy scripts on different arms — lazy loading is not a
+   separate system, just more code the flow runs and forks through. The body is copied; the queue is per-run
+   and drained by the flow that owns it.
+   `doc` NAMES WHICH DOCUMENT'S PROGRAM IT IS, which is WHERE IT IS COMPILED (solver/flow.h's `dyn_doc`). An
+   instance is an ORIGIN-KEYED AGENT CLUSTER, so this is a child navigable's document as often as the
+   session's, and a program compiled in the wrong realm is closed over the wrong Window — it defines the
+   child's globals on its creator and reads the creator's back as the child's. There is no default: the caller
+   knows which document's code it is holding, and a scheduler that guessed would guess the same way for every
+   document this agent has. */
+void engine_queue_script(uint32_t doc, const char *body);
 /* An @S CANDIDATE, queued as the program it would be if it fired. Same queue, one difference: it is ALLOWED not
    to compile, because most breakouts do not fit most sink contexts and a candidate that does not parse simply
    never fires. A page script that does not compile still asserts. */
@@ -35,8 +43,10 @@ void engine_queue_candidate(const char *body);
      Its COMPLETION VALUE DECIDES A NAVIGATION. A <script>'s is unobservable; this one's is step 9's whole
    condition — "if evaluationStatus.[[Value]] is a String", the Document is REPLACED by an HTML parse of that
    string. The scheduler is the only place that value exists, so that is where the engine says it cannot yet act
-   on one. */
-void engine_queue_javascript_url(const char *body);
+   on one.
+     `doc` is the TARGET NAVIGABLE'S ACTIVE DOCUMENT, which step 5 names as the settings object the classic
+   script is created with — the realm it is compiled in, and not always the session's. */
+void engine_queue_javascript_url(uint32_t doc, const char *body);
 /* Park the running flow on an injected <script src>: the host fetches it, and the reply becomes this flow's next
    program rather than a promise's value. */
 void engine_pending_script_url(JSContext *ctx, const char *url);

@@ -11,6 +11,7 @@
 #include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/world.h"   /* the routed record's world vector: whose timeline a delivery belongs to */
+#include "core/dom/document.h"   /* which DOCUMENT a parked program belongs to: the realm it is compiled in */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent OPERATION: what performs it */
 #include "core/frame/remote_object.h"    /* …and the grammar its completion crosses back in */
@@ -126,6 +127,10 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
     DCHECK(url != NULL && *url, "a <script src> was injected with no URL");
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT);
     pending_set(e, PEND_URL, JS_NewString(ctx, url));
+    /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
+       chokepoint was entered with is that tree's document — the reply is compiled there rather than in
+       whichever realm the session happens to be rooted at. */
+    pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
     JS_FreeValue(ctx, e);
 }
 
@@ -186,6 +191,12 @@ void engine_set_rendering_hook(int (*fn)(JSContext *ctx)) { g_rendering_hook = f
    read half the session and not the other half, so a router that needs to know whether a session is live had to
    be written somewhere it could see g_sess_live rather than where it belongs. */
 static JSContext *g_sess_ctx;
+/* WHICH DOCUMENT THE SEQUENCE BELOW BELONGS TO, said rather than implied by `g_sess_ctx`. A session is opened
+   over the instance's ROOT document (world.h's world_local_doc — the one the host named the agent for), and its
+   scripts are that document's; every other program a flow runs names its own document, which is what lets a
+   child navigable's scripts be work items of this frontier at all. It is the handle and not the realm for the
+   reason a queued program's is: a handle survives a park and a realm does not. */
+static uint32_t g_sess_doc;
 static char **g_sess_bodies;
 static char **g_sess_srcs;
 static int g_sess_n;
@@ -1018,7 +1029,8 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             JSValue bv = reply_body_of(ctx, pv);
             const char *body = JS_ToCString(ctx, bv);
             DCHECK(body != NULL, "an injected script's body did not arrive as text");
-            if (body) { engine_queue_script(body); JS_FreeCString(ctx, body); }
+            if (body) { engine_queue_script((uint32_t)pending_get_int(p, PEND_DOC), body);
+                        JS_FreeCString(ctx, body); }
             JS_FreeValue(ctx, bv);
         } else if (kind == FLOW_PENDING_MODULE) {
             /* the reply is a MODULE's SOURCE: settle the load's promise with the text, and the import's own
@@ -1229,9 +1241,15 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            finish site; the sibling inheriting bodies without knowing which are candidates would re-arm the
            page-script assert on a dead breakout it inherited. */
         sib->dyn_cand = malloc((size_t)parent->dyn_n); CHECK(sib->dyn_cand, "engine: OOM fork dyn flags");
+        /* AND SO DOES THE DOCUMENT EACH BELONGS TO, by the same sentence: an arm that inherited the bodies
+           without them would compile a child navigable's script in the session's realm and define that
+           document's globals on the creator's Window. */
+        sib->dyn_doc = malloc((size_t)parent->dyn_n * sizeof(uint32_t));
+        CHECK(sib->dyn_doc, "engine: OOM fork dyn documents");
         for (int i = 0; i < parent->dyn_n; i++) {
             sib->dyn[i] = strdup(parent->dyn[i]); CHECK(sib->dyn[i], "engine: OOM fork dyn body");
             sib->dyn_cand[i] = parent->dyn_cand ? parent->dyn_cand[i] : 0;
+            sib->dyn_doc[i] = parent->dyn_doc[i];
         }
         sib->dyn_n = sib->dyn_cap = parent->dyn_n;
     }
@@ -1453,17 +1471,36 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
    completion is not merely read, it is the ANSWER a peer's flow is parked on. */
 typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL, DYN_CROSS_AGENT_OP } DynKind;
 
-static void engine_queue(const char *body, DynKind kind) {
+/* `doc` IS WHICH DOCUMENT'S PROGRAM THIS IS, and it is a parameter at every entry rather than a fact the
+   scheduler assumes about itself. It used to be assumed: every program a flow ran was compiled with the
+   SESSION's ctx, with one `? :` for the cross-agent operation — so a document of this agent that is not the
+   one the session was rooted in had no way onto the frontier at all, and the host that had such programs (a
+   same-origin child navigable's classic scripts) kept a queue of its own and ran them itself. */
+static void engine_queue(uint32_t doc, const char *body, DynKind kind) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
+    /* A PROGRAM QUEUED WITH NO FLOW IS A DROPPED PROGRAM, and it used to leave silently. There is no global
+       queue to fall back to — the frontier IS the queue — so the caller is the one that has to be inside the
+       flow whose code caused this program to run: an injected <script>'s insertion, a document's own load job,
+       a fired PoC. A document whose scripts vanished here is indistinguishable from a document that had
+       none, which is exactly what this file's own routed-record asserts exist to prevent. */
+    DCHECK(f != NULL, "a program was queued with no flow running — a program is a work item of the ONE "
+                      "frontier and there is no member to give it to, so it would be dropped without a trace");
+    DCHECK(body != NULL, "a program was queued with no body — the caller has nothing to run and the queue "
+                         "entry would be a slot the compile below dereferences");
     if (!body || !f) return;
+    DCHECK(doc != 0, "a program was queued naming no document — the realm it is compiled in is a fact about "
+                     "the document it belongs to, and a program with none would be compiled in whichever realm "
+                     "the session happens to be rooted at and read that Window's globals as its own");
     if (f->dyn_n >= f->dyn_cap) {
         f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8;
         f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(char *));
         f->dyn_cand = realloc(f->dyn_cand, (size_t)f->dyn_cap);
-        CHECK(f->dyn && f->dyn_cand, "engine: OOM dynamic-script queue");
+        f->dyn_doc = realloc(f->dyn_doc, (size_t)f->dyn_cap * sizeof(uint32_t));
+        CHECK(f->dyn && f->dyn_cand && f->dyn_doc, "engine: OOM dynamic-script queue");
     }
     f->dyn[f->dyn_n] = strdup(body); CHECK(f->dyn[f->dyn_n], "engine: OOM dynamic-script body");
     f->dyn_cand[f->dyn_n] = (unsigned char)kind;
+    f->dyn_doc[f->dyn_n] = doc;
     f->dyn_n++;
 }
 
@@ -1476,19 +1513,36 @@ static DynKind flow_dyn_kind(const Flow *f, int n) {
     return (DynKind)f->dyn_cand[f->script_i - n];
 }
 
-void engine_queue_script(const char *body) { engine_queue(body, DYN_PAGE_SCRIPT); }
+/* AND WHICH DOCUMENT IT BELONGS TO, re-derived from the same cursor and for the same reason. The SESSION's
+   static sequence is the document this session was opened over (g_sess_doc); everything a flow queued names
+   its own. */
+static uint32_t flow_dyn_doc(const Flow *f, int n) {
+    if (f->script_i < n) return g_sess_doc;
+    if (f->script_i - n >= f->dyn_n) return g_sess_doc;
+    return f->dyn_doc[f->script_i - n];
+}
+
+void engine_queue_script(uint32_t doc, const char *body) { engine_queue(doc, body, DYN_PAGE_SCRIPT); }
 
 /* AN @S CANDIDATE, queued as the program it would be if it fired. It is the same queue because it IS the same
    thing — code the page caused to run — but it carries the one difference that matters: it is allowed not to
    compile. Most breakouts do not fit most sink contexts, which is exactly why the solver tries several and
    keeps whichever FIRES; a candidate that does not parse simply never fires. */
-void engine_queue_candidate(const char *body) { engine_queue(body, DYN_CANDIDATE); }
+/* THE DOCUMENT IS THE SESSION'S, and that is what a candidate IS: the same document re-run with one attacker
+   value substituted for one source. It is stated here rather than taken as a parameter because there is no
+   other document it could be — a breakout that fired in a child navigable is a candidate seeded against that
+   document, which is a session of that document's instance. */
+void engine_queue_candidate(const char *body) { engine_queue(g_sess_doc, body, DYN_CANDIDATE); }
 
 /* HTML §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL, steps 6-7 — "let script be the result of creating a classic
    script given scriptSource … let evaluationStatus be the result of running the classic script script". The
    source is the page's own code, so it is a program of the running flow like a lazy chunk: preemptible,
-   forkable and parkable, which a C `JS_Eval` under the live flow could never be. */
-void engine_queue_javascript_url(const char *body) { engine_queue(body, DYN_JAVASCRIPT_URL); }
+   forkable and parkable, which a C `JS_Eval` under the live flow could never be.
+   `doc` IS THE TARGET NAVIGABLE'S ACTIVE DOCUMENT, which step 5 states outright — "let settings be
+   targetNavigable's active document's relevant settings object" — and that document is not always the
+   session's: a `<form action="javascript:…" target=frame>` runs its program in the FRAME's realm, where the
+   globals it writes are the ones a later script of that document reads. */
+void engine_queue_javascript_url(uint32_t doc, const char *body) { engine_queue(doc, body, DYN_JAVASCRIPT_URL); }
 
 /* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one
    of these is the page's own code — an IDL getter, a page's setter, a page's function — which a C activation
@@ -1526,7 +1580,7 @@ static void flow_perform(JSContext *ctx, Flow *f)
            "a cross-agent operation ran in the answering flow's timeline alone while the asking world holds "
            "writes in this instance — it answers about a document missing everything the asking flow did here. "
            "Build the join of the two deltas that engine_route names");
-    engine_queue(remote_op_program(rctx, op), DYN_CROSS_AGENT_OP);
+    engine_queue(f->perform_doc, remote_op_program(rctx, op), DYN_CROSS_AGENT_OP);
     remote_op_free(op);
     free(f->perform); f->perform = NULL;   /* the TOKEN outlives it: the answer is the program's completion */
 }
@@ -2014,12 +2068,16 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                whichever flow starts it — a coverage fact about the document, not about the flow holding the
                thread (see g_deepest). */
             if (f->script_i > g_deepest) g_deepest = f->script_i;
-            /* IN THE REALM THE PROGRAM BELONGS TO, which for a CROSS-AGENT OPERATION is the realm of the
-               document the PEER named and not the one this session was rooted in. A program compiled here is
-               closed over the compiling realm's global (JS_FlowNew) and `globalThis[member]` is exactly the
-               read the operation is, so compiling it in the root would read the ROOT Window's member and hand
-               it back as the child's — the whole reason a document names its realm at all. */
-            f->frame = JS_FlowNew(kind == DYN_CROSS_AGENT_OP ? doc_realm(f->perform_doc) : ctx,
+            /* IN THE REALM OF THE DOCUMENT THE PROGRAM BELONGS TO — asked of the program, never of the
+               session. A program compiled here is closed over the compiling realm's global (JS_FlowNew), so
+               the realm is not a detail of where it happens to run: `globalThis[member]` compiled in the root
+               reads the ROOT Window's member, a child document's classic script defines the child's globals on
+               its creator, and a peer's operation answers about the wrong document. Every one of those is one
+               question — which document is this a program OF — and it is answered by the queue entry rather
+               than by a `? :` per kind: the kinds that used to need one are exactly the kinds whose document is
+               not the session's, and there is no upper limit on those (a same-origin agent cluster holds a
+               realm per document). */
+            f->frame = JS_FlowNew(doc_realm(flow_dyn_doc(f, n)),
                                   body, strlen(body), NULL, 0);   /* page <script>/chunk: classic non-strict global */
             if (f->frame == NULL) {
                 /* WHAT ACTUALLY FAILED, read before anything is decided from it. A compile can fail two ways
@@ -2455,7 +2513,34 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
 
 void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking, const char *recipes) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
+    /* A JOB THAT WAS ENQUEUED BEFORE THIS LINE IS A DROPPED WORK ITEM, and this is the one place it can be
+       caught. The enqueue hook is installed BELOW, so anything queued earlier went to quickjs's own global
+       list — which nothing in this engine ever drains (engine_enqueue_job says so at the other end), so it is
+       not deferred to a default, it is lost. It is not hypothetical: §4.8.5's insertion steps run for every
+       <iframe> in the INITIAL MARKUP when the document is installed, and an <iframe src> there enqueues §7.4
+       step 14's LOAD — so a frame in a page's own markup never loads, with no assert, no notice and nothing in
+       the output to distinguish it from a page that had none. Every host installs its document before it opens
+       a session, so every host has it.
+       WHAT TO BUILD, because the ordering alone does not fix it: seeding the session first does not help — the
+       flow is not switched in until the first step, so the hook would find no running flow — and the job cannot
+       be run here (that is page code entered from the host with no flow base). The initial markup's insertion
+       steps are the FIRST FLOW'S work, which is what §Boot already says: boot is the forking first flow and its
+       creations are the baseline. Give the document install a flow to run in, or give this call a way to adopt
+       what the runtime is already holding. */
+    DCHECK(!JS_IsJobPending(JS_GetRuntime(ctx)),
+           "a job was enqueued BEFORE this session began — it is on quickjs's global list, which this engine "
+           "never drains, so it is a work item the frontier will never run: the document was installed before "
+           "the scheduler existed and §4.8.5's insertion steps enqueued §7.4's load for an <iframe src> in the "
+           "initial markup");
     g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_srcs = srcs; g_sess_n = n; g_sess_cur = NULL; g_sess_live = 1;
+    /* THE DOCUMENT THIS SESSION IS OF. A session is opened over the instance's ROOT document, and its script
+       sequence is that document's — asserted against the realm rather than assumed, because everything below
+       compiles by asking the DOCUMENT for its realm and a session whose ctx is some other document's realm
+       would run its own scripts somewhere else. */
+    g_sess_doc = world_local_doc();
+    DCHECK(doc_realm(g_sess_doc) == ctx,
+           "a session was opened with a realm that is not the root document's — the session's scripts are that "
+           "document's programs, so they would be compiled in one realm and belong to another");
     g_parked = 0;
     g_paged_owed = 0;   /* replies owed to flows this session paged out — see engine_take_paged_owed */
     g_flows_sold = 0;   /* …and how many flows that was, which is what @PROGRESS's `sold` reports */

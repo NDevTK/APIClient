@@ -33,4 +33,14 @@ void result_page_error(const char *msg);
    is a second crash. */
 void result_page_error_value(JSContext *ctx, JSValueConst err);
 
+/* AND WHO REPORTS ONE AS IT HAPPENS, which is the HOST's question and not this file's. A host that publishes a
+   result document reads `pageErrors` out of it at the end (the extension's, and the smoke fixture's), and one
+   whose output IS a stream of lines has to print it when it occurs or it is not in the output at all — the wpt
+   runner used to catch every program's exception itself, at the `while (JS_FlowResume)` that ran it, and with
+   the programs on the scheduler there is no such place left. Registering none is a positive statement — this
+   host reports page errors in its document — and never a hole: the error is recorded either way, and the hook
+   only decides whether anything says so at the moment it is recorded. Called once per DISTINCT message, since
+   that is what the set below holds. */
+void result_set_page_error_hook(void (*fn)(const char *msg));
+
 #endif
