@@ -324,7 +324,10 @@ function frontierWeight(e) {
    per page, which is what this line used to say and what admit used to key on); the engine exposes its best flow's
    weight (qjs_top_weight) and yields HOT after a slice (qjs_step -> 2). The host ranks all live engines by
    that weight and advances the winner one slice, then re-ranks — the same WFQ policy the C engine runs
-   over flows WITHIN a document, now over engines ACROSS documents. RAM is the bound: at most POOL_CAP hot
+   over flows WITHIN a document, now over engines ACROSS documents. THE RANKING DOES NOT ASK: both of its
+   inputs — that weight and the instance's working set — are RECORDED by engineRecordFacts at the end of every
+   round this zone has with an instance, because an instance behind renderer-host.js's frame boundary answers
+   by postMessage and there is no synchronous value to read on the line that ranks. RAM is the bound: at most POOL_CAP hot
    engines resident; the lowest-weight one is EVICTED (qjs_park -> replay recipe in IDB) under pressure, and
    the cold tail is rehydrated INTO this same pool by admit (one WFQ, no second loop). Fetches don't block the pool: an engine awaiting a
    reply is 'fetching' and skipped until its body lands, so a slow fetch on doc A never stalls doc B.
@@ -334,7 +337,24 @@ function frontierWeight(e) {
 // tens — a count would ignore that). Over the budget, new docs wait as cold recipes -> IDB, pulled back into this pool by admit.
 // This is the RAM floor (like the disk floor), not a truncating bound. Always admit >=1 so a lone doc runs.
 const HOT_RAM_BUDGET = 512 * 1024 * 1024;   // bytes of summed live WASM memory before new engines wait
-function _residentBytes() { let b = 0; for (const e of _pool) { try { b += (e.M && e.M.HEAPU8) ? e.M.HEAPU8.length : 0; } catch (_) {} } return b; }
+/* THE HOT WORKING SET, SUMMED OVER WHAT EACH INSTANCE LAST REPORTED — never reached for across the boundary
+   an instance lives behind. This read `e.M.HEAPU8.length` live, through `(e.M && e.M.HEAPU8) ? … : 0` inside a
+   `try {} catch (_) {}`: three defaults over one number, and every one of them turns "this instance did not
+   report its working set" into "this instance occupies no memory", which admits another engine against RAM
+   that is already spoken for. engineRecordFacts writes the number at the end of every round this zone has with
+   an instance — the first of them before the record ever reaches the pool — so an absent one is a producer
+   that stopped writing rather than an engine of size zero, and it CRASHES. */
+function _residentBytes() {
+  let b = 0;
+  for (const e of _pool) {
+    DCHECK(typeof e.residentBytes === "number",
+           "a live engine is in the pool with no reported working set — the RAM floor is the sum of what each " +
+           "instance last reported, and an engine missing from that sum is admission running against memory " +
+           "that is already spent");
+    b += e.residentBytes;
+  }
+  return b;
+}
 
 /* THE NAVIGATION RESPONSE'S HEADER LIST, IN THE ONE FORM THAT CROSSES AN ABI — the HTTP field lines the
    response delivered, `name: value`, one per line. This is a RELAY and not logic: it restates what the browser
@@ -692,20 +712,63 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
      it answers is "has THIS instance's request already been asked", and an unanswered request is re-reported by
      qjs_host_requests on every single step; asking again would perform the peer's operation — a program, with
      the page's own side effects — once per step. */
-  return { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, fetchedXhr, code, html, state: "hot",
-           docId: _docId, cluster: clusterKeyOf(msg), groupId: msg && msg.groupId,
-           origin: (msg && msg.origin) || "", _resolvers: [], _forceparkSteps, _remoteAsked: new Set() };
+  const eng = { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, fetchedXhr, code, html, state: "hot",
+                docId: _docId, cluster: clusterKeyOf(msg), groupId: msg && msg.groupId,
+                origin: (msg && msg.origin) || "", _resolvers: [], _forceparkSteps, _remoteAsked: new Set() };
+  /* THE FIRST ROUND'S RECORD, TAKEN BEFORE THIS INSTANCE IS RANKABLE. `qjs_begin` above is what seeded the
+     frontier, so this line is the earliest moment a top-flow weight exists at all — and it is earlier than the
+     pool, which is what makes "an engine the ranking has never heard from" a state that cannot occur rather
+     than a case to default. */
+  engineRecordFacts(eng);
+  return eng;
 }
-/* THE LEVEL-1 WFQ'S ONE INPUT. A NaN would order this engine against every other by a comparison that is
-   false in both directions, so the pool's pick would depend on array order — a fairness invariant silently
-   replaced by whichever engine happened to be first. */
-function engineWeight(eng) {
-  if (eng.state !== "hot") return -Infinity;
+/* THE LEVEL-1 RANKING'S TWO FACTS, RECORDED WHERE THE INSTANCE ANSWERS THEM RATHER THAN READ WHERE THE RANKING
+   NEEDS THEM. Both were SYNCHRONOUS reaches into the module on every ranking pass — a `qjs_top_weight` ccall
+   per comparison, and an `M.HEAPU8.length` per engine per admission check — and neither survives the boundary
+   renderer-host.js now puts between this zone and an instance: a sandboxed opaque-origin frame answers by
+   postMessage, so on the line that ranks there is no value to read and no way to ask for one. So the host
+   RECORDS. Every round this zone has with an instance ends here, and the ranking reads a number it already
+   holds; when the pool's engines become renderers, this function's two reads become two fields on the reply
+   record and every caller of it stays exactly where it is.
+   THE NUMBERS ARE AS OF THE LAST ROUND, AND hostSchedule IS BUILT SO THAT IS THE RIGHT TIME. It ranks, advances
+   the winner, and re-ranks — so the engine that just did work is the one whose numbers are freshest, and an
+   engine that did none has numbers that cannot have moved, because nothing but a round with this zone changes
+   either fact. That is also why the recording sites are the three ROUNDS (seed, step, service) and not the
+   ccalls inside them: a round is what the boundary makes atomic.
+   THERE IS NO UNVISITED ARM HERE, AND THAT IS NOT AN OMISSION. §scheduler's "a UCB optimism bonus ∝ 1/(visits+1)
+   so a never-run flow is never starved" is implemented once, in solver/flow.c's flow_weight, where a never-run
+   flow stands at its reward plus the full 1.0 bonus; a freshly seeded frontier's boot flow carries it and
+   qjs_top_weight reports it. Level-1 therefore INHERITS level-2's optimism instead of restating it, which is
+   what "ONE WFQ policy at both levels" means — and restating it here would additionally be a branch on a state
+   the producer cannot be in, since qjs_top_weight DCHECKs `g_begun` (main.c) and qjs_begin is what sets it. */
+function engineRecordFacts(eng) {
   const w = +eng.M.ccall("qjs_top_weight", "number", [], []);
   DCHECK(Number.isFinite(w), "the engine answered a top-flow weight that is not a finite number — every " +
                              "Level-1 ranking comparison against it is false, so the pool would pick by " +
                              "array order and call it value-of-information");
-  return w;
+  eng.topWeight = w;
+  /* THE WORKING SET IS RE-READ, NEVER REMEMBERED: emscripten REPLACES HEAPU8 when the linear memory grows, so a
+     view captured once would report the size the instance started at for the rest of its life. WASM memory is a
+     whole number of 64 KiB pages by definition, so anything else is not the view over this instance's memory. */
+  const b = eng.M.HEAPU8.length;
+  DCHECK(Number.isInteger(b) && b > 0 && b % 65536 === 0,
+         "an instance reported a working set that is not a whole number of WASM pages (" + b + ") — HEAPU8 is " +
+         "the view over the entire linear memory, which is allocated and grown in 64 KiB pages, so a length " +
+         "outside that is a view onto something other than this engine's memory");
+  eng.residentBytes = b;
+}
+/* THE LEVEL-1 WFQ'S ONE INPUT, read off the record. A NaN would order this engine against every other by a
+   comparison that is false in both directions, so the pool's pick would depend on array order — a fairness
+   invariant silently replaced by whichever engine happened to be first; that is asserted above, where the
+   engine answers it. What is asserted HERE is that there is an answer at all, because an absent number and a
+   stale one are different things and only one of them may be ranked. */
+function engineWeight(eng) {
+  if (eng.state !== "hot") return -Infinity;
+  DCHECK(typeof eng.topWeight === "number",
+         "a hot engine carries no recorded top-flow weight — engineRecordFacts writes one at the end of every " +
+         "round this zone has with an instance, the first of them before the record ever reaches the pool, so " +
+         "an absent one is a round that stopped recording rather than an engine with nothing to do");
+  return eng.topWeight;
 }
 /* A BODY INTO THE ENGINE'S OWN LINEAR MEMORY, which is the only place a WASM instance can read bytes from.
    `null` is "this answer carries no body at all" — a network error, a load that did not load — and it is a
@@ -1162,8 +1225,23 @@ async function hostSchedule(pool, ops) {
       await Promise.race(fetching.map((e) => e._fetchP));
       continue;
     }
-    let best = hot[0], runner = -Infinity;   // Level-1 WFQ pick + the runner-up weight (the value yield floor)
-    for (const e of hot) { const w = ops.weight(e); if (w > ops.weight(best)) { runner = ops.weight(best); best = e; } else if (w > runner) runner = w; }
+    /* Level-1 WFQ pick + the RUNNER-UP's weight (the value yield floor). ONE reading per engine: every weight
+       here is a number the last round with that instance recorded, so asking three times per comparison — which
+       this did, `ops.weight(best)` twice inside a loop over `ops.weight(e)` — bought nothing but the chance for
+       one pass to rank against two different answers.
+       AND THE SCAN NO LONGER COUNTS THE WINNER AS ITS OWN RUNNER-UP. Seeded with `best = hot[0]` and then
+       visiting hot[0] again, the first iteration fell through to `else if (w > runner)` and set runner to BEST'S
+       OWN weight; whenever the highest-value engine happened to be first in the pool, the floor handed to
+       ops.setFloor was that engine's own top weight rather than the next engine's. The engine compares each
+       running flow against that floor (engine.c: `flow_weight(cur) < g_yield_floor`), so the winner yielded the
+       thread at its first back-edge below its own best flow — to a document worth strictly less — which is the
+       Level-1 interleave inverted, silently, on exactly the arrangement where the pick was already right. */
+    let best = hot[0], bestW = ops.weight(best), runner = -Infinity;
+    for (let i = 1; i < hot.length; i++) {
+      const e = hot[i], w = ops.weight(e);
+      if (w > bestW) { runner = bestW; best = e; bestW = w; }
+      else if (w > runner) runner = w;
+    }
     if (ops.setFloor) ops.setFloor(best, hot.length > 1 ? runner : -1e300);   // outranked-by-runner-up => yield; lone engine => run on
     // Normally step `best` (the highest-value engine). But under RAM pressure with >1 engine competing for the
     // working-set floor, step the LOWEST-value engine after flagging it to PARK — evicting it to the IDB cold
@@ -1280,12 +1358,29 @@ const _hostOps = {
            "finding this engine emits has nowhere to go");
     self.onFrontierAdvance(eng.msg.sourceUrl, partial);
   },
-  step: (eng) => { try { return eng.M.ccall("qjs_step", "number", [], []); } catch (e) { engineCrash(eng, "step", e); return 0; } },   // crashed instance -> finalize (loud), don't keep stepping a dead engine
+  step: (eng) => {
+    let st;
+    try { st = eng.M.ccall("qjs_step", "number", [], []); }
+    catch (e) { engineCrash(eng, "step", e); return 0; }   // crashed instance -> finalize (loud), don't keep stepping a dead engine
+    /* THE ROUND ENDS HERE, so the re-rank that follows reads what THIS step left behind: the frontier it
+       advanced and the linear memory it grew. A crashed instance is never asked — its memory is the thing that
+       aborted, and the branch above hands it to finish() rather than back to the ranking. */
+    engineRecordFacts(eng);
+    return st;
+  },
   /* ONE SERVICE ROUND, and there is no second op beside it. `serviceHostRequests` was a separate injected op
      because the yield branch paid half the owed list; it is a strict subset of this one (engineServiceFetch
      ends by calling it), so keeping both would be two names for one round with a caller free to pick the
      half that skips the replies. */
-  serviceFetch: engineServiceFetch,
+  /* A SERVICE ROUND IS A ROUND, so it records too — and it is the one that would be missed by recording after
+     steps alone. A delivered reply body is the biggest single thing this zone ever copies into an instance's
+     linear memory (a whole JS bundle), and it is copied with no step in between, so the RAM floor would not see
+     that growth until this engine's NEXT slice — admission running against memory already spent. The weight
+     moves for the same round's other half: a delivered reply resumes the flows parked on it, which is precisely
+     the reply-gated work §Attacker-sources calls the point, and the ranking must see it before it picks again.
+     A round that THREW recorded nothing, which is correct: hostSchedule's rejection arm owns that failure and
+     the last round's numbers are still the last thing this instance actually reported. */
+  serviceFetch: async (eng) => { await engineServiceFetch(eng); engineRecordFacts(eng); },
   admit: async () => {   // gate CREATION to the RAM budget: build an instance only under memory pressure headroom
     // 1) seat waiting LIVE documents (the user's open tabs) first
     /* AN INDEX WALK RATHER THAN A SHIFT, because one waiting document can be legitimately UNSEATABLE YET (the
