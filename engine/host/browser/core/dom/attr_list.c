@@ -368,7 +368,20 @@ lxb_dom_attr_t *dom_attr_write(lxb_dom_element_t *el, const char *ns, const char
  *
  * `ns == the element's ns` IS EXACTLY "the adjust hook did not move it": the hook is the only writer that sets
  * an attribute's namespace to anything else, and it always sets one of the three that differ from the element's.
- * No C recursion — depth here is the page's data. */
+ * No C recursion — depth here is the page's data.
+ *
+ * AND THE SECOND CORRECTION, WHICH IS THE SAME BOUNDARY: HTML §13.2.6.1's "adjust SVG attributes" says to
+ * "change the attribute's NAME to the name given in the corresponding cell of the second column" — one name,
+ * because DOM §4.9.1 defines an attribute's qualified name AS its local name when its namespace prefix is
+ * null. lexbor's lxb_html_tree_adjust_svg_attributes writes only `attr->qualified_name` and leaves the
+ * tokenizer's lower-cased `local_name` in place, so a parsed `<svg viewBox="…">` held the two spellings at
+ * once: `attr.name` answered `viewBox` and `attr.localName` answered `viewbox`, and §4.9's key is the LOCAL
+ * one — so `getAttributeNS(null, "viewBox")` found nothing on markup that plainly has it.
+ * That was invisible while dom_attr_create folded a scripted name the same way, and stopped being invisible
+ * the moment it stored what the page passed: `svg.setAttributeNS(null, "viewBox", v)` then created a SECOND
+ * attribute beside the parsed one. Correcting it here is the same shape as the namespace above — the parser's
+ * intent only exists at the boundary — and the invariant it restores is DOM's own sentence, which every
+ * reader afterwards may rely on. */
 void dom_attr_normalize_parsed(lxb_dom_node_t *root)
 {
     lxb_dom_node_t *n = root;
@@ -378,8 +391,25 @@ void dom_attr_normalize_parsed(lxb_dom_node_t *root)
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             lxb_dom_element_t *el = lxb_dom_interface_element(n);
             lxb_dom_attr_t *a;
-            for (a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a))
+            for (a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
                 if (a->node.ns == n->ns) a->node.ns = LXB_NS__UNDEF;
+                /* §4.9.1: with a null prefix the two names ARE one. A stored qualified name that differs is
+                   the SVG adjust having replaced half of it, and the qualified half is the one HTML's table
+                   named — so the local name is re-interned from those bytes. A zero qualified name is the
+                   ordinary HTML attribute, whose readers already fall back to the local name. */
+                if (a->node.prefix == LXB_NS__UNDEF && a->qualified_name != 0 &&
+                    a->qualified_name != a->node.local_name) {
+                    size_t qlen = 0;
+                    const lxb_char_t *q = lxb_dom_attr_qualified_name(a, &qlen);
+                    DCHECK(el->attr_id != a && el->attr_class != a,
+                           "the SVG adjust renamed the attribute an element's id/class cache names — those two "
+                           "slots are keyed on a local name this correction is about to change, so the cache "
+                           "would go on naming an attribute that no longer has that name");
+                    a->node.local_name = dom_intern_attribute_local_name(lxb_dom_interface_node(el)->
+                                                                         owner_document,
+                                                                         (const char *)q, qlen);
+                }
+            }
         }
         if (n->first_child) { n = n->first_child; continue; }
         while (n != root && !n->next) n = n->parent;
