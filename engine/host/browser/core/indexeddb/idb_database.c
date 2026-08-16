@@ -61,11 +61,14 @@
 #define IDB_DB_NAME             "name"
 #define IDB_DB_VERSION          "version"
 #define IDB_DB_STORES           "stores"        /* §2.1's "set of object stores", keyed by name */
+#define IDB_DB_UPGRADE          "upgradeTransaction"  /* §2.1's upgrade transaction, JS_NULL when there is none */
+#define IDB_DB_CONNECTIONS      "connections"   /* §2.1.1's open connections to this database, in join order */
 
 #define IDB_STORE_NAME          "name"
 #define IDB_STORE_KEY_PATH      "keyPath"       /* §2.2's optional key path — JS_NULL for out-of-line keys */
 #define IDB_STORE_KEY_GENERATOR "keyGenerator"  /* §2.2's optional key generator */
 #define IDB_STORE_RECORDS       "records"       /* §2.2's "list of records ... sorted according to key" */
+#define IDB_STORE_DELETED       "deleted"       /* §4.4's "Destroy store" — see idb_object_store_destroy */
 
 #define IDB_RECORD_KEY          "key"
 #define IDB_RECORD_VALUE        "value"
@@ -90,6 +93,18 @@ static uint32_t idb_list_len(JSContext *ctx, JSValueConst list)
     (void)r;
     JS_FreeValue(ctx, len);
     return n;
+}
+
+/* REMOVE a name from one of this file's own keyed records. A slot record has a NULL prototype and holds only
+   what this component wrote (core/idl_slots.h), so the atom round-trip is the whole of the operation and a
+   failure to intern one is an allocation failure rather than anything the page can cause. */
+static void idb_slots_delete(JSContext *ctx, JSValueConst rec, const char *name)
+{
+    JSAtom a = JS_NewAtom(ctx, name);
+
+    CHECK(a != JS_ATOM_NULL, "IndexedDB: a store name could not be interned to be removed");
+    JS_DeleteProperty(ctx, rec, a, 0);
+    JS_FreeAtom(ctx, a);
 }
 
 static JSValue idb_store_records(JSContext *ctx, JSValueConst store)
@@ -150,7 +165,7 @@ JSValue idb_database_find(JSContext *ctx, const char *name)
 
 JSValue idb_database_create(JSContext *ctx, const char *name)
 {
-    JSValue existing = idb_database_find(ctx, name), db, stores;
+    JSValue existing = idb_database_find(ctx, name), db, stores, connections;
 
     DCHECK(JS_IsNull(existing), "a database was created under a name this storage key already holds one for — "
                                 "§2.1 gives a storage key ONE database per name, and §5.1's open asks for the "
@@ -166,8 +181,95 @@ JSValue idb_database_create(JSContext *ctx, const char *name)
     JS_SetPropertyStr(ctx, db, IDB_DB_VERSION, JS_NewFloat64(ctx, 0));
     /* "When a new database is created it doesn't contain any object stores." */
     JS_SetPropertyStr(ctx, db, IDB_DB_STORES, stores);
+    /* "A database has at most one associated upgrade transaction, which is either null or an upgrade
+       transaction, and is INITIALLY NULL." */
+    JS_SetPropertyStr(ctx, db, IDB_DB_UPGRADE, JS_NULL);
+    connections = JS_NewArray(ctx);
+    CHECK(!JS_IsException(connections), "IndexedDB: a database's set of connections could not be allocated");
+    JS_SetPropertyStr(ctx, db, IDB_DB_CONNECTIONS, connections);
     JS_SetPropertyStr(ctx, g_databases, name, JS_DupValue(ctx, db));
     return db;
+}
+
+JSValue idb_database_name(JSContext *ctx, JSValueConst db)
+{
+    JSValue v = JS_GetPropertyStr(ctx, db, IDB_DB_NAME);
+
+    DCHECK(JS_IsString(v), "a database carried no NAME — §2.1 gives every database one and only "
+                           "idb_database_create writes it");
+    return v;
+}
+
+void idb_database_set_version(JSContext *ctx, JSValueConst db, double version)
+{
+    DCHECK(JS_IsObject(db), "a version was written on something that is not a §2.1 database");
+    DCHECK(version >= 1, "§5.1 step 5 makes a version at least 1 — 0 is the version a database is CREATED "
+                         "with and §4.3's `open` reports a zero version as a TypeError before §5.1 is reached, "
+                         "so nothing may write one back");
+    JS_SetPropertyStr(ctx, (JSValue)db, IDB_DB_VERSION, JS_NewFloat64(ctx, version));
+}
+
+JSValue idb_database_upgrade_transaction(JSContext *ctx, JSValueConst db)
+{
+    JSValue v = JS_GetPropertyStr(ctx, db, IDB_DB_UPGRADE);
+
+    DCHECK(!JS_IsUndefined(v), "a database carried no upgrade-transaction field — §2.1 gives every database "
+                               "one, initially null, and only idb_database_create builds them");
+    return v;
+}
+
+void idb_database_set_upgrade_transaction(JSContext *ctx, JSValueConst db, JSValue tx)
+{
+    DCHECK(JS_IsObject(db), "an upgrade transaction was written on something that is not a §2.1 database");
+    JS_SetPropertyStr(ctx, (JSValue)db, IDB_DB_UPGRADE, tx);
+}
+
+JSValue idb_database_connections(JSContext *ctx, JSValueConst db)
+{
+    JSValue v = JS_GetPropertyStr(ctx, db, IDB_DB_CONNECTIONS);
+
+    DCHECK(JS_IsArray(v), "a database carried no set of connections");
+    return v;
+}
+
+void idb_database_add_connection(JSContext *ctx, JSValueConst db, JSValueConst connection)
+{
+    JSValue list = idb_database_connections(ctx, db);
+
+    JS_DefinePropertyValueUint32(ctx, list, idb_list_len(ctx, list), JS_DupValue(ctx, connection),
+                                 JS_PROP_C_W_E);
+    JS_FreeValue(ctx, list);
+}
+
+void idb_database_remove_connection(JSContext *ctx, JSValueConst db, JSValueConst connection)
+{
+    JSValue list = idb_database_connections(ctx, db);
+    uint32_t i, n = idb_list_len(ctx, list);
+
+    for (i = 0; i < n; i++) {
+        JSValue m = JS_GetPropertyUint32(ctx, list, i);
+        bool same = JS_VALUE_GET_PTR(m) == JS_VALUE_GET_PTR(connection);
+
+        JS_FreeValue(ctx, m);
+        if (!same) continue;
+        for (; i + 1 < n; i++)
+            JS_DefinePropertyValueUint32(ctx, list, i, JS_GetPropertyUint32(ctx, list, i + 1), JS_PROP_C_W_E);
+        JS_SetPropertyStr(ctx, list, "length", JS_NewUint32(ctx, n - 1));
+        JS_FreeValue(ctx, list);
+        return;
+    }
+    JS_FreeValue(ctx, list);
+    DFAIL("a connection left a database's connection set without being in it — every connection joins at "
+          "idb_connection_open and leaves exactly once, when §5.2 finds it CLOSED, so this one was either "
+          "closed twice or opened by something other than §5.1");
+}
+
+JSValue idb_database_store_set(JSContext *ctx, JSValueConst db)
+{
+    JSValue stores = JS_GetPropertyStr(ctx, db, IDB_DB_STORES);
+
+    DCHECK(JS_IsObject(stores), "a database carried no set of object stores");
+    return stores;
 }
 
 double idb_database_version(JSContext *ctx, JSValueConst db)
@@ -181,44 +283,6 @@ double idb_database_version(JSContext *ctx, JSValueConst db)
     (void)r;
     JS_FreeValue(ctx, v);
     return out;
-}
-
-/* ---- §2.1.1's database connection ---------------------------------------------------------------------------- */
-
-#define IDB_CONN_DATABASE "database"
-#define IDB_CONN_VERSION  "version"        /* §2.1.1's version, "set when the connection is created" */
-#define IDB_CONN_STORES   "stores"         /* §2.1.1's object store set */
-#define IDB_CONN_CLOSING  "closePending"   /* §2.1.1's close pending flag, "initially false" */
-
-JSValue idb_connection_open(JSContext *ctx, JSValueConst db)
-{
-    JSValue conn, stores;
-
-    DCHECK(JS_IsObject(db), "a connection was opened to something that is not a §2.1 database");
-    conn = idl_slots_new(ctx);
-    CHECK(!JS_IsException(conn), "IndexedDB: §2.1.1's connection record could not be allocated");
-    stores = JS_GetPropertyStr(ctx, db, IDB_DB_STORES);
-    DCHECK(JS_IsObject(stores), "a database carried no set of object stores");
-    JS_SetPropertyStr(ctx, conn, IDB_CONN_DATABASE, JS_DupValue(ctx, db));
-    /* "A connection has a version, which is set when the connection is created." */
-    JS_SetPropertyStr(ctx, conn, IDB_CONN_VERSION, JS_NewFloat64(ctx, idb_database_version(ctx, db)));
-    /* "An object store set, which is initialized to the set of object stores in the associated database when
-       the connection is created. The contents of the set will remain constant except when an upgrade
-       transaction is live." The SAME record, not a copy: with no upgrade transaction in existence there is
-       nothing that can make the two diverge, and a copy taken now would be a second answer to one question
-       the day §5.7 lands — which is exactly the shape §Offensive-programming calls a plausible datum. */
-    JS_SetPropertyStr(ctx, conn, IDB_CONN_STORES, stores);
-    JS_SetPropertyStr(ctx, conn, IDB_CONN_CLOSING, JS_FALSE);
-    return conn;
-}
-
-JSValue idb_connection_database(JSContext *ctx, JSValueConst connection)
-{
-    JSValue db = JS_GetPropertyStr(ctx, connection, IDB_CONN_DATABASE);
-
-    DCHECK(JS_IsObject(db), "a connection carried no database — every connection is built by "
-                            "idb_connection_open, which gives it one");
-    return db;
 }
 
 /* ---- §2.2's object store ------------------------------------------------------------------------------------ */
@@ -244,9 +308,91 @@ JSValue idb_object_store_create(JSContext *ctx, JSValueConst db, const char *nam
     JS_SetPropertyStr(ctx, store, IDB_STORE_KEY_PATH, key_path);
     JS_SetPropertyStr(ctx, store, IDB_STORE_KEY_GENERATOR, JS_NewBool(ctx, key_generator));
     JS_SetPropertyStr(ctx, store, IDB_STORE_RECORDS, records);
+    JS_SetPropertyStr(ctx, store, IDB_STORE_DELETED, JS_FALSE);
     JS_SetPropertyStr(ctx, stores, name, JS_DupValue(ctx, store));
     JS_FreeValue(ctx, stores);
     return store;
+}
+
+JSValue idb_object_store_name(JSContext *ctx, JSValueConst store)
+{
+    JSValue v = JS_GetPropertyStr(ctx, store, IDB_STORE_NAME);
+
+    DCHECK(JS_IsString(v), "an object store carried no NAME — §2.2 gives every store one and only "
+                           "idb_object_store_create writes it");
+    return v;
+}
+
+JSValue idb_object_store_key_path(JSContext *ctx, JSValueConst store)
+{
+    JSValue v = JS_GetPropertyStr(ctx, store, IDB_STORE_KEY_PATH);
+
+    DCHECK(!JS_IsUndefined(v), "an object store carried no key-path field — §2.2 gives every store one, JS_NULL "
+                               "for a store with out-of-line keys, and the ABSENCE of the field is a different "
+                               "statement from the null it should hold");
+    return v;
+}
+
+bool idb_object_store_uses_key_generator(JSContext *ctx, JSValueConst store)
+{
+    JSValue v = JS_GetPropertyStr(ctx, store, IDB_STORE_KEY_GENERATOR);
+    bool b;
+
+    DCHECK(JS_IsBool(v), "an object store carried no key-generator field");
+    b = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    return b;
+}
+
+bool idb_object_store_is_deleted(JSContext *ctx, JSValueConst store)
+{
+    JSValue v = JS_GetPropertyStr(ctx, store, IDB_STORE_DELETED);
+    bool b;
+
+    DCHECK(JS_IsBool(v), "an object store carried no deleted flag");
+    b = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    return b;
+}
+
+void idb_object_store_destroy(JSContext *ctx, JSValueConst db, JSValueConst store)
+{
+    JSValue stores = idb_database_store_set(ctx, db), name = idb_object_store_name(ctx, store), held;
+    const char *cname = JS_ToCString(ctx, name);
+
+    CHECK(cname != NULL, "IndexedDB: a store being destroyed could not report its own name");
+    held = JS_GetPropertyStr(ctx, stores, cname);
+    DCHECK(JS_VALUE_GET_PTR(held) == JS_VALUE_GET_PTR(store),
+           "§4.4's deleteObjectStore destroyed a store its database's set does not hold under that name — the "
+           "member reads the store OUT of that set, so the two disagreeing means the set was written by "
+           "something else");
+    JS_FreeValue(ctx, held);
+    idb_slots_delete(ctx, stores, cname);
+    JS_FreeCString(ctx, cname);
+    JS_FreeValue(ctx, name);
+    JS_FreeValue(ctx, stores);
+    /* THE RECORD IS MARKED AND NOT FREED, because a handle the page already holds still names it and §4.5's
+       members each ask "has this store been deleted" as their first step. */
+    JS_SetPropertyStr(ctx, (JSValue)store, IDB_STORE_DELETED, JS_TRUE);
+}
+
+void idb_object_store_rename(JSContext *ctx, JSValueConst db, JSValueConst store, const char *name)
+{
+    JSValue stores = idb_database_store_set(ctx, db), old = idb_object_store_name(ctx, store), existing;
+    const char *cold = JS_ToCString(ctx, old);
+
+    DCHECK(name != NULL, "a store was renamed to no name");
+    CHECK(cold != NULL, "IndexedDB: a store being renamed could not report its own name");
+    existing = JS_GetPropertyStr(ctx, stores, name);
+    DCHECK(JS_IsUndefined(existing), "a store was renamed onto a name its database already holds one for — "
+                                     "§4.5's name setter reports that as a ConstraintError before this runs");
+    JS_FreeValue(ctx, existing);
+    idb_slots_delete(ctx, stores, cold);
+    JS_FreeCString(ctx, cold);
+    JS_FreeValue(ctx, old);
+    JS_SetPropertyStr(ctx, (JSValue)store, IDB_STORE_NAME, JS_NewString(ctx, name));
+    JS_SetPropertyStr(ctx, stores, name, JS_DupValue(ctx, store));
+    JS_FreeValue(ctx, stores);
 }
 
 JSValue idb_object_store_find(JSContext *ctx, JSValueConst db, const char *name)

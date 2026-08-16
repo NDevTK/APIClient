@@ -676,7 +676,16 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
        mixin, so this list is where they arrive. Each came WITH the algorithm that fires it: §5.9's fire a
        success event and §5.4's commit task, because a handler attribute for an event nothing dispatches is
        the shape-only member the IDL audit exists to expose. */                                           \
-    X("onsuccess", EH_IDB_REQUEST) X("oncomplete", EH_IDB_TRANSACTION)
+    X("onsuccess", EH_IDB_REQUEST) X("oncomplete", EH_IDB_TRANSACTION)                                    \
+    /* §4.1's IDBOpenDBRequest — "an extended interface to allow listening to the blocked and upgradeneeded
+       events" — and the one of §4.4's four that something fires. Each arrived WITH its algorithm: §5.1 step
+       10.5's `blocked`, §5.7 step 9.5's `upgradeneeded` and §5.1 step 10.2's `versionchange`. §4.4's other
+       three are NOT here: `onclose` needs §5.2's FORCED close, which no user-agent circumstance in this
+       engine performs, and `onabort`/`onerror` reach a connection only by BUBBLING from a transaction, which
+       needs §2.7's get-the-parent — until then each would be a handler attribute for an event nothing
+       dispatches, which is the shape-only member the IDL audit exists to expose. */                      \
+    X("onblocked", EH_IDB_OPEN_REQUEST) X("onupgradeneeded", EH_IDB_OPEN_REQUEST)                         \
+    X("onversionchange", EH_IDB_DATABASE)
 
 /* The NAMES are string literals, not stringified identifiers, so the IDL gap auditor — which scans a component
    for the property names it installs — can SEE them. Behind a `#n` it saw none of these and reported all ninety

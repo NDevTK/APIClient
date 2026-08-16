@@ -254,6 +254,11 @@ typedef enum {
     IDL_DEFAULT_NONE = 0,   /* the IDL writes no `= …`: an absent member does not exist */
     IDL_DEFAULT_NULL,       /* `= null` */
     IDL_DEFAULT_STRING,     /* `= "…"`, the string `dflt_str` holds */
+    /* `= 0`. Indexed Database §4.2's IDBVersionChangeEventInit writes it for `oldVersion`, and the difference
+       from IDL_DEFAULT_NONE is the same one this enum's own comment draws: an absent member does not exist, so
+       the reader would have to invent the zero — which is precisely the consumer-side default that cannot be
+       told apart from a measurement. Declared, the conversion places it and the reader asserts it is there. */
+    IDL_DEFAULT_ZERO,
 } IdlDictDefault;
 
 struct IdlDictDecl;

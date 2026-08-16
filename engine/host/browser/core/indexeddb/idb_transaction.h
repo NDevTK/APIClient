@@ -60,6 +60,48 @@ void idb_transaction_add_request(JSContext *ctx, JSValueConst tx, JSValueConst r
 void idb_transaction_remove_request(JSContext *ctx, JSValueConst tx, JSValueConst request);
 bool idb_transaction_requests_empty(JSContext *ctx, JSValueConst tx);
 
+/* §2.7's MODE and CONNECTION, read. The mode is what §4.5's members test for a "ReadOnlyError" and what §4.4's
+   `createObjectStore` tests to know it is inside an upgrade transaction; the connection is what §4.10's `db`
+   answers with and what §4.5's rename reaches the database through. The connection is OWNED. */
+int     idb_transaction_mode(JSContext *ctx, JSValueConst tx);
+JSValue idb_transaction_connection(JSContext *ctx, JSValueConst tx);
+
+/* §5.7 step 3's "set transaction's scope to connection's object store set", KEPT TRUE as that set changes.
+   §2.7's note is that "a transaction's scope remains fixed UNLESS the transaction is an upgrade transaction",
+   and §4.10's own note says what a page sees: "subsequent calls to this attribute during an upgrade transaction
+   can return lists with different contents as object stores are created and deleted". So §4.4's
+   `createObjectStore` adds the store it created and `deleteObjectStore` removes the one it destroyed, and the
+   assert is that only an upgrade transaction may. */
+void idb_transaction_scope_add(JSContext *ctx, JSValueConst tx, JSValueConst store);
+void idb_transaction_scope_remove(JSContext *ctx, JSValueConst tx, JSValueConst store);
+
+/* §2.2.1's "there must be only ONE object store handle associated with a particular object store within a
+   transaction", which §4.10's note states as what a page compares: `tx.objectStore('s') ===
+   tx.objectStore('s')`. The set is the TRANSACTION's because that is the scope the sentence names. The find
+   answers JS_NULL for a name this transaction has no handle for; both are keyed by the name the handle was
+   created under, which is the name §4.10 and §4.4 reach the store by. OWNED. */
+JSValue idb_transaction_handle_find(JSContext *ctx, JSValueConst tx, const char *name);
+void    idb_transaction_handle_add(JSContext *ctx, JSValueConst tx, const char *name, JSValueConst handle);
+
+/* §2.7.3's UPGRADE TRANSACTION and its OPEN REQUEST. "An upgrade transaction is automatically created when
+   running the steps to upgrade a database", and §5.4 step 2.5.4 and §5.5 step 7.3 both reach the request FROM
+   the transaction — so §5.7 records it here when it creates the transaction. JS_NULL for every other
+   transaction, which is what tells the two apart wherever the mode alone would not. `request` is BORROWED. */
+void    idb_transaction_set_request(JSContext *ctx, JSValueConst tx, JSValueConst request);
+JSValue idb_transaction_request(JSContext *ctx, JSValueConst tx);
+
+/* §5.7 step 10's "WAIT FOR TRANSACTION TO FINISH" — the one wait in §5.1 that neither the task queue nor a
+   connection closing can discharge, because what satisfies it is the upgrade transaction reaching FINISHED
+   inside §5.4's commit task or §5.5's abort task. §5.1's component registers here, and this file calls it for
+   an upgrade transaction and for no other, so the narrowness is what keeps one hook from serving two questions.
+   Registered once, by the component that performs §5.1. */
+void idb_transaction_set_upgrade_finished_hook(void (*on_finished)(JSContext *ctx, JSValueConst tx));
+
+/* §5.2 step 3's "wait for all transactions created using connection to complete". Asked of this component
+   because "live" is §2.7's own word for the set this file keeps, and the answer is what makes a close-pending
+   connection CLOSED. */
+bool idb_transaction_any_live_for_connection(JSContext *ctx, JSValueConst connection);
+
 /* Is this value an IDBTransaction — Web IDL §3.7.5's brand, asked of a value that arrived from another
    component (a request's `transaction`) rather than from the page. */
 bool idb_transaction_is(JSValueConst v);

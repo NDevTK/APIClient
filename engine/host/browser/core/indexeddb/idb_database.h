@@ -29,24 +29,35 @@ JSValue idb_database_create(JSContext *ctx, const char *name);
    with no caller: code nothing exercises, in a component whose whole claim is that it is exercised. */
 double idb_database_version(JSContext *ctx, JSValueConst db);
 
-/* §2.1.1's CONNECTION — "script does not interact with databases directly; instead, script has indirect access
-   via a connection ... it is also the only way to obtain a transaction for that database".
- *
- * IT IS §2.7'S PLUMBING AND THAT IS WHY IT IS HERE RATHER THAN WITH §4.4's IDBDatabase. A transaction is
- * "created through a connection, which is the transaction's connection", so the connection is a SUBPROBLEM of
- * the transaction and not of the interface over it: IDBDatabase is §4.4's page-facing object, and this is the
- * §2.1.1 record it will be a view of. The record is an internal-slot object like §2.1's database and §2.2's
- * store, so it time-travels for free.
- *
- * "The act of opening a database creates a connection" — §5.1's open is the only algorithm that may, and it
- * does not exist; until then the caller is a host that stands in for it. A connection has "a version, which is
- * set when the connection is created", "a close pending flag which is initially false" and "an object store
- * set, which is initialized to the set of object stores in the associated database when the connection is
- * created". OWNED. */
-JSValue idb_connection_open(JSContext *ctx, JSValueConst db);
-/* The connection's associated database, which §4.10's `db` getter and §5.4's upgrade arm both reach through.
-   OWNED. */
-JSValue idb_connection_database(JSContext *ctx, JSValueConst connection);
+/* §2.1's NAME, which §4.4's `name` getter answers with — "the name attribute returns this name even if this's
+   close pending flag is true", so it is the DATABASE's and not the connection's. OWNED. */
+JSValue idb_database_name(JSContext *ctx, JSValueConst db);
+
+/* §2.1's VERSION, WRITTEN. §5.7 step 8 is the only caller and the standard says so — "the only way to change
+   the version is using an upgrade transaction" — which is why this arrived with §5.7 and not before it. The
+   sentence continues "this change is considered part of the transaction, and so if the transaction is aborted,
+   this change is reverted", and that revert is §5.5 step 2's, which is not built. */
+void idb_database_set_version(JSContext *ctx, JSValueConst db, double version);
+
+/* §2.1's "a database has at most one associated UPGRADE TRANSACTION, which is either null or an upgrade
+   transaction, and is initially null". It is what §4.4's `createObjectStore` and `deleteObjectStore` read to
+   decide their "InvalidStateError", what §4.4's `transaction()` refuses on, and what §5.4 step 2.5.1 and §5.5
+   step 7.1 set back to null. The read is OWNED and answers JS_NULL when there is none; the write CONSUMES. */
+JSValue idb_database_upgrade_transaction(JSContext *ctx, JSValueConst db);
+void    idb_database_set_upgrade_transaction(JSContext *ctx, JSValueConst db, JSValue tx);
+
+/* §2.1.1's "there may be multiple CONNECTIONS to a given database at any given time", as the set §5.1 step
+   10.1 asks for ("the set of all connections, except connection, associated with db") and §5.3 asks for again.
+   A connection joins when it is created and leaves when it is CLOSED — §5.2's "once they are complete,
+   connection is closed" — which is exactly the pair of moments §5.1 step 10.6 waits between. The read is an
+   OWNED Array in join order. */
+void    idb_database_add_connection(JSContext *ctx, JSValueConst db, JSValueConst connection);
+void    idb_database_remove_connection(JSContext *ctx, JSValueConst db, JSValueConst connection);
+JSValue idb_database_connections(JSContext *ctx, JSValueConst db);
+
+/* §2.1's SET OF OBJECT STORES, as the record §2.1.1's connection is initialised to — the SAME object, never a
+   copy, for the reason idb_connection.c states. OWNED. */
+JSValue idb_database_store_set(JSContext *ctx, JSValueConst db);
 
 /* §2.2's SET OF OBJECT STORES. A store has a name unique within its database, OPTIONALLY a key path (with one
    it "uses in-line keys", without one "out-of-line keys") and OPTIONALLY a key generator — both are on the
@@ -77,5 +88,26 @@ int idb_store_record(JSContext *ctx, JSValueConst store, JSValueConst value, JSV
    mutates what it got has not touched the record. `idb_retrieve_key` answers §7.3's conversion of its key. */
 JSValue idb_retrieve_value(JSContext *ctx, JSValueConst store, JSValueConst range);
 JSValue idb_retrieve_key(JSContext *ctx, JSValueConst store, JSValueConst range);
+
+/* §2.2's THREE FIELDS a store handle reports and §4.5's members branch on. The name is the STORE's, which
+   §4.5's `name` getter note distinguishes from the HANDLE's copy of it; the key path is JS_NULL for a store
+   with out-of-line keys; the key generator is §4.5's `autoIncrement`. The first two are OWNED. */
+JSValue idb_object_store_name(JSContext *ctx, JSValueConst store);
+JSValue idb_object_store_key_path(JSContext *ctx, JSValueConst store);
+bool    idb_object_store_uses_key_generator(JSContext *ctx, JSValueConst store);
+
+/* §4.4's `deleteObjectStore` last step, "Destroy store", and the question every member of §4.5 asks first
+   ("if store has been DELETED, throw an InvalidStateError"). A destroyed store leaves its database's set and
+   is MARKED, because a handle the page already holds goes on naming it — §4.5's own note is that "although
+   script cannot access an object store by using the objectStore() method after the transaction is aborted, it
+   can still have references to IDBObjectStore instances", and those instances must report the state rather
+   than answer out of a record nothing points at. */
+void idb_object_store_destroy(JSContext *ctx, JSValueConst db, JSValueConst store);
+bool idb_object_store_is_deleted(JSContext *ctx, JSValueConst store);
+
+/* §4.5's `name` SETTER, whose whole content is a RE-KEY: "set store's name to name" moves the store within
+   §2.2's set, which is keyed by the name that identifies it there. The ConstraintError for a name the database
+   already holds is the member's, reported before this runs. */
+void idb_object_store_rename(JSContext *ctx, JSValueConst db, JSValueConst store, const char *name);
 
 #endif

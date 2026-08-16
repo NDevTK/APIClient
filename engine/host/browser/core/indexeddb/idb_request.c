@@ -22,10 +22,13 @@
  * JS values in the first place (core/indexeddb/idb_database.c): a page that put `location.hash` in a store and
  * reads it back through `request.result` gets the tainted value, and the gate it feeds forks.
  *
- * WHAT IS ABSENT AND WHY. §2.8.1's OPEN REQUEST is IDBOpenDBRequest, a separate interface with `blocked` and
- * `upgradeneeded`, and it arrives with §5.1's open — there is nothing that can create one, so it is honestly
- * absent and the IDL auditor says so. §4.1's own five attributes and two handler attributes are all here and
- * all compute. */
+ * §2.8.1's OPEN REQUEST IS HERE TOO, and it is the same RECORD wearing a second INTERFACE. "An open request is
+ * a special type of request" — the six fields are identical, and what differs is entirely above them: two more
+ * events may be fired at it (`blocked`, `upgradeneeded`), its source is always null, its get-the-parent returns
+ * null instead of its transaction, and it is never placed against a transaction by §5.6 — so §5.1, §5.7 and
+ * §4.3's completion task write its fields themselves, through the entries this file exports for them. The
+ * second CLASS exists because a class is what carries the per-realm prototype slot, and one class for both
+ * would put `onupgradeneeded` on every `store.get()` request. */
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -51,6 +54,11 @@
 static JSValue g_key;
 static int     g_ready;
 static JSClassID g_req_class;
+/* §2.8.1's OPEN REQUEST wears its own class, because §4.1 gives it its own INTERFACE — and the class is what
+   carries the per-realm prototype slot, so one class for both would put `onupgradeneeded` on every `store.get`
+   request. The RECORD is identical (the same six fields under the same private Symbol), which is §2.8.1's own
+   sentence: an open request is a request, with two more events fired at it. */
+static JSClassID g_open_class;
 static JSRuntime *g_req_rt;
 static int g_exec_stepid = -1, g_abort_stepid = -1;
 
@@ -76,7 +84,14 @@ static JSValue rq_slots(JSContext *ctx, JSValueConst req)
 
 bool idb_request_is(JSValueConst v)
 {
-    return g_req_class != 0 && JS_GetClassID(v) == g_req_class;
+    JSClassID id = JS_GetClassID(v);
+
+    return (g_req_class != 0 && id == g_req_class) || (g_open_class != 0 && id == g_open_class);
+}
+
+bool idb_request_is_open(JSValueConst v)
+{
+    return g_open_class != 0 && JS_GetClassID(v) == g_open_class;
 }
 
 static bool rq_brand(JSContext *ctx, JSValueConst this_val)
@@ -116,16 +131,19 @@ static bool rq_flag(JSContext *ctx, JSValueConst req, const char *field)
 }
 
 /* §2.8's "a new request with source as source", built with both flags false and neither value accessible.
-   `source` is BORROWED. OWNED. */
-static JSValue rq_new(JSContext *ctx, JSValueConst source)
+   `source` is BORROWED. `cls` is which of §4.1's two interfaces it wears — the RECORD is the same either way,
+   which is §2.8.1's own sentence. OWNED. */
+static JSValue rq_new(JSContext *ctx, JSValueConst source, JSClassID cls)
 {
     JSValue req, st, proto;
     JSAtom k;
 
     DCHECK(g_ready, "an IDBRequest was created before idb_request_init declared the interface");
-    proto = JS_GetClassProto(ctx, g_req_class);
-    DCHECK(!JS_IsNull(proto), "IDBRequest.prototype was asked for in a realm that never ran its install");
-    req = JS_NewObjectProtoClass(ctx, proto, g_req_class);
+    DCHECK(cls == g_req_class || cls == g_open_class,
+           "a request was created wearing a class that is not one of §4.1's two interfaces");
+    proto = JS_GetClassProto(ctx, cls);
+    DCHECK(!JS_IsNull(proto), "an IDBRequest prototype was asked for in a realm that never ran its install");
+    req = JS_NewObjectProtoClass(ctx, proto, cls);
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(req), "IndexedDB: the IDBRequest allocation failed");
     st = idl_slots_new(ctx);
@@ -143,6 +161,77 @@ static JSValue rq_new(JSContext *ctx, JSValueConst source)
     JS_SetProperty(ctx, req, k, st);
     JS_FreeAtom(ctx, k);
     return req;
+}
+
+/* §2.8.1's OPEN REQUEST. "The source of an open request is always null", which is the argument this call
+   passes and the whole of what makes the source parameter absent here. */
+JSValue idb_request_new_open(JSContext *ctx)
+{
+    return rq_new(ctx, JS_NULL, g_open_class);
+}
+
+/* ---- §2.8's four fields, for the algorithms outside this component that write them -------------------------
+ *
+ * WHY THE WRITES ARE HERE AND NOT AT THEIR CALLERS. §5.1, §5.7, §5.5 step 7.3 and §4.3's completion task each
+ * write a request's result, error, transaction and two flags directly, because an open request is never placed
+ * against a transaction and so never reaches §5.6's task, which is where every other request's fields are
+ * written. Four files reaching into a slot record under this component's private Symbol would be four copies of
+ * this file's field names; asked of the component, there is one, and each write asserts what §2.8 says the
+ * field is. */
+
+void idb_request_set_result(JSContext *ctx, JSValueConst req, JSValue result)
+{
+    DCHECK(idb_request_is(req), "a request result was written on something that is not a request");
+    rq_set(ctx, req, RQ_RESULT, result);
+}
+
+void idb_request_set_error(JSContext *ctx, JSValueConst req, JSValue error)
+{
+    DCHECK(idb_request_is(req), "a request error was written on something that is not a request");
+    DCHECK(JS_IsUndefined(error) || JS_IsObject(error),
+           "§2.8's error is a DOMException or nothing — `DOMException? error` is what §4.1's getter reports, "
+           "and a non-object here would be a value that getter has no answer for");
+    rq_set(ctx, req, RQ_ERROR, error);
+}
+
+void idb_request_set_transaction(JSContext *ctx, JSValueConst req, JSValue tx)
+{
+    DCHECK(idb_request_is(req), "a request transaction was written on something that is not a request");
+    DCHECK(JS_IsNull(tx) || idb_transaction_is(tx),
+           "§2.8's transaction is a transaction or null — §5.4 step 2.5.4 and §5.5 step 7.3 each set it back "
+           "to null once the upgrade transaction it named is gone");
+    rq_set(ctx, req, RQ_TRANSACTION, tx);
+}
+
+void idb_request_set_done(JSContext *ctx, JSValueConst req, bool done)
+{
+    DCHECK(idb_request_is(req), "a request done flag was written on something that is not a request");
+    rq_set(ctx, req, RQ_DONE, JS_NewBool(ctx, done));
+}
+
+void idb_request_set_processed(JSContext *ctx, JSValueConst req, bool processed)
+{
+    DCHECK(idb_request_is(req), "a request processed flag was written on something that is not a request");
+    rq_set(ctx, req, RQ_PROCESSED, JS_NewBool(ctx, processed));
+}
+
+JSValue idb_request_error(JSContext *ctx, JSValueConst req)
+{
+    JSValue e;
+
+    DCHECK(idb_request_is(req), "a request error was read off something that is not a request");
+    e = rq_get(ctx, req, RQ_ERROR);
+    /* The record spells "no error occurred" as UNDEFINED where §5.6 step 5.6.3.2 wrote one and as NULL where
+       the request was built; §5.1 step 10.9 asks one question of both, so both answer it the same way. */
+    if (JS_IsUndefined(e))
+        return JS_NULL;
+    return e;
+}
+
+JSValue idb_request_transaction(JSContext *ctx, JSValueConst req)
+{
+    DCHECK(idb_request_is(req), "a request transaction was read off something that is not a request");
+    return rq_get(ctx, req, RQ_TRANSACTION);
 }
 
 /* A DOMException as a VALUE. Built by throwing one and taking it back, because that is the engine's only
@@ -406,7 +495,7 @@ JSValue idb_request_execute(JSContext *ctx, JSValueConst source, JSValueConst tr
        optional `request` operand belongs to §5.1's open and §4.8's cursor, which reuse ONE request object
        across several results; neither exists, so there is nothing yet that can pass one and the parameter is
        honestly absent rather than declared and always null. */
-    req = rq_new(ctx, source);
+    req = rq_new(ctx, source, g_req_class);
     /* §5.6 step 4, and the write §2.8 describes as "this will be set when a request is placed against a
        transaction using the steps to asynchronously execute a request". */
     rq_set(ctx, req, RQ_TRANSACTION, JS_DupValue(ctx, transaction));
@@ -582,7 +671,7 @@ static JSValue js_rq_get_ready_state(JSContext *ctx, JSValueConst this_val, int 
 
 static void idb_request_install_realm(JSContext *ctx)
 {
-    JSValue proto, prev, ctor, global;
+    JSValue proto, prev, ctor, global, open_proto;
 
     DCHECK(g_req_class != 0, "a realm asked for IDBRequest.prototype before the interface was declared");
     prev = JS_GetClassProto(ctx, g_req_class);
@@ -602,15 +691,28 @@ static void idb_request_install_realm(JSContext *ctx)
 
     ctor = idl_interface_object(ctx, "IDBRequest", proto);
     CHECK(!JS_IsException(ctor), "the IDBRequest interface object could not be allocated");
-    JS_FreeValue(ctx, proto);
     global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "IDBRequest", ctor);
+
+    /* §4.1's SECOND INTERFACE: `interface IDBOpenDBRequest : IDBRequest`. Its prototype chains to the one just
+       built — so `request.result` and `request.readyState` are reached through it rather than copied — and it
+       adds exactly the two event handler IDL attributes the standard declares on it and nothing else. */
+    open_proto = JS_NewObjectProto(ctx, proto);
+    JS_FreeValue(ctx, proto);
+    CHECK(!JS_IsException(open_proto), "IDBOpenDBRequest.prototype could not be allocated");
+    idl_interface_tag(ctx, open_proto, "IDBOpenDBRequest");
+    event_target_install_handlers(ctx, open_proto, EH_IDB_OPEN_REQUEST);
+    JS_SetClassProto(ctx, g_open_class, JS_DupValue(ctx, open_proto));
+    ctor = idl_interface_object(ctx, "IDBOpenDBRequest", open_proto);
+    CHECK(!JS_IsException(ctor), "the IDBOpenDBRequest interface object could not be allocated");
+    JS_FreeValue(ctx, open_proto);
+    JS_SetPropertyStr(ctx, global, "IDBOpenDBRequest", ctor);
     JS_FreeValue(ctx, global);
 }
 
 void idb_request_init(JSContext *ctx)
 {
-    JSClassDef d = { "IDBRequest" };
+    JSClassDef d = { "IDBRequest" }, od = { "IDBOpenDBRequest" };
     JSRuntime *rt = JS_GetRuntime(ctx);
 
     DCHECK(!g_ready, "idb_request_init ran twice — one instance is one document is one agent");
@@ -620,6 +722,9 @@ void idb_request_init(JSContext *ctx)
     JS_NewClassID(rt, &g_req_class);
     CHECK(JS_NewClass(rt, g_req_class, &d) == 0,
           "IDBRequest: the per-realm prototype slot could not be declared");
+    JS_NewClassID(rt, &g_open_class);
+    CHECK(JS_NewClass(rt, g_open_class, &od) == 0,
+          "IDBOpenDBRequest: the per-realm prototype slot could not be declared");
     g_exec_stepid = JS_RegisterStepDef(rt, &js_idb_req_def);
     g_abort_stepid = JS_RegisterStepDef(rt, &js_idb_req_abort_def);
     g_ready = 1;

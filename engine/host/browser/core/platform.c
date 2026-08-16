@@ -47,10 +47,14 @@
 #include "core/html/form_data.h"
 #include "core/html/html_iframe.h"
 #include "core/html/unhandled_rejection.h"
+#include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key_range.h"
+#include "core/indexeddb/idb_object_store.h"
+#include "core/indexeddb/idb_open.h"
 #include "core/indexeddb/idb_request.h"
 #include "core/indexeddb/idb_transaction.h"
+#include "core/indexeddb/idb_version_change_event.h"
 #include "core/indexeddb/indexed_db.h"
 #include "core/loader/cookie_jar.h"
 #include "core/loader/module_loader.h"
@@ -117,6 +121,10 @@ static void d_indexed_db(JSContext *c, const PlatformAgent *a) { (void)a; indexe
 static void d_idb_database(JSContext *c, const PlatformAgent *a) { (void)a; idb_database_init(c); }
 static void d_idb_transaction(JSContext *c, const PlatformAgent *a) { (void)a; idb_transaction_init(c); }
 static void d_idb_request(JSContext *c, const PlatformAgent *a) { (void)a; idb_request_init(c); }
+static void d_idb_connection(JSContext *c, const PlatformAgent *a) { (void)a; idb_connection_init(c); }
+static void d_idb_object_store(JSContext *c, const PlatformAgent *a) { (void)a; idb_object_store_init(c); }
+static void d_idb_vce(JSContext *c, const PlatformAgent *a) { (void)a; idb_version_change_event_init(c); }
+static void d_idb_open(JSContext *c, const PlatformAgent *a) { (void)a; idb_open_init(c); }
 static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
 static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
 static void d_report_exception(JSContext *c, const PlatformAgent *a) { (void)a; report_exception_init(c); }
@@ -191,6 +199,10 @@ static void r_idb_database(JSRuntime *rt) { idb_database_free(rt); }
    its context, and these belong to the agent. */
 static void r_idb_transaction(JSRuntime *rt) { idb_transaction_free(rt); }
 static void r_idb_request(JSRuntime *rt) { idb_request_free(rt); }
+static void r_idb_connection(JSRuntime *rt) { idb_connection_free(rt); }
+static void r_idb_object_store(JSRuntime *rt) { idb_object_store_free(rt); }
+static void r_idb_vce(JSRuntime *rt) { idb_version_change_event_free(rt); }
+static void r_idb_open(JSRuntime *rt) { idb_open_free(rt); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -319,7 +331,21 @@ static const PlatformComponent PLATFORM[] = {
        prototype and a C member answers in the realm that defined it. */
     { "idb_transaction",     d_idb_transaction,     NULL,        r_idb_transaction },
     { "idb_request",         d_idb_request,         NULL,        r_idb_request },
+    /* §2.1.1's CONNECTION with §4.4's IDBDatabase over it, and §2.2.1's OBJECT STORE HANDLE with §4.5's
+       IDBObjectStore. Both are declared AFTER §2.7's EventTarget (IDBDatabase inherits it) and after the two
+       rows above, because core/realm.h runs the per-realm installs in DECLARATION order and each of these
+       interfaces is reached from the ones before it. Both hold one agent-lifetime value — the private Symbol
+       their internal slots hang off — which is what the release column is for. */
+    { "idb_connection",      d_idb_connection,      NULL,        r_idb_connection },
+    { "idb_object_store",    d_idb_object_store,    NULL,        r_idb_object_store },
     { "event",               d_event,               i_event },
+    /* §4.2's IDBVersionChangeEvent, and it is HERE rather than beside the other Indexed Database rows for the
+       one reason that decides every position in this list: its prototype chains to Event.prototype, which the
+       row above builds, and core/realm.h runs the per-realm installs in declaration order. §5.1's own
+       machinery follows it, because that is what FIRES three of these events — and because §5.1 registers the
+       two rendezvous idb_connection and idb_transaction declare, so both must already exist. */
+    { "idb_version_change_event", d_idb_vce,        NULL,        r_idb_vce },
+    { "idb_open",            d_idb_open,            NULL,        r_idb_open },
     /* Declared by the components that own the events they carry; the interface objects are this realm's. */
     { "message_event",       NULL,                  i_message_event },
     { "error_event",         NULL,                  i_error_event },
@@ -442,6 +468,10 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "indexedDB",             "indexed_db" },
     { "IDBTransaction",        "idb_transaction" },
     { "IDBRequest",            "idb_request" },
+    { "IDBOpenDBRequest",      "idb_request" },
+    { "IDBDatabase",           "idb_connection" },
+    { "IDBObjectStore",        "idb_object_store" },
+    { "IDBVersionChangeEvent", "idb_version_change_event" },
     { "Observable",            "observable" },
 };
 static const int PLATFORM_WITNESS_N = (int)(sizeof PLATFORM_WITNESS / sizeof PLATFORM_WITNESS[0]);

@@ -26,13 +26,15 @@
  * Arrays for the same reason core/events/message_port.c's queue is one: a malloc'd list captured as head/tail
  * POINTERS reverts the pointers on a context switch and leaves the nodes reachable from nothing.
  *
- * WHAT IS ABSENT AND WHY, stated rather than stubbed. `db` needs §4.4's IDBDatabase (the interface over §2.1.1's
- * connection this transaction holds), `objectStoreNames` needs a DOMStringList and `objectStore()` needs §4.6's
- * object store handle — all three arrive with §4.4-§4.6, and until then they are honestly ABSENT: the IDL gap
- * auditor lists them, and a page reaching one gets the TypeError a missing member gets rather than a shape-only
- * object that would report a store nothing wrote to. */
+ * WHAT IS ABSENT AND WHY, stated rather than stubbed. `objectStoreNames` is the one member of §4.10 this file
+ * does not build, and it is blocked on a whole interface rather than on anything here: §4.10's getter ends in
+ * "return the result (a DOMStringList) of creating a sorted name list with names", and DOMStringList does not
+ * exist in this engine. It is honestly ABSENT — the IDL gap auditor lists it, and a page reaching it gets the
+ * TypeError a missing member gets rather than an Array pretending to be a DOMStringList, which would answer
+ * `contains()` with undefined. */
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
@@ -42,6 +44,9 @@
 #include "core/realm.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/indexeddb/idb_connection.h"
+#include "core/indexeddb/idb_database.h"
+#include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_request.h"
 #include "core/indexeddb/idb_transaction.h"
 #include "solver/engine.h"
@@ -55,6 +60,8 @@
 #define TX_ERROR       "error"        /* §2.7's error, JS_NULL when none */
 #define TX_REQUESTS    "requests"     /* §2.7's request list */
 #define TX_HEAD        "head"         /* the index of the first request still in that list — see the header */
+#define TX_REQUEST     "request"      /* §2.7.3's open request, for an upgrade transaction; JS_NULL otherwise */
+#define TX_HANDLES     "handles"      /* §2.2.1's one-handle-per-store set, keyed by name */
 
 static JSValue g_key;          /* the private Symbol the slot record hangs off */
 static int     g_ready;
@@ -69,8 +76,11 @@ static JSValue g_live = JS_UNDEFINED;
    agent here, so membership IS "has a cleanup event loop", and clearing it is removal. */
 static JSValue g_cleanup = JS_UNDEFINED;
 
-static int g_id_commit = -1, g_id_abort = -1;
+static int g_id_commit = -1, g_id_abort = -1, g_id_object_store = -1;
 static int g_complete_stepid = -1, g_abort_stepid = -1;
+/* §5.7 step 10's rendezvous — see the header. NULL until §5.1's component registers, which it does in its own
+   declaration, so an upgrade transaction cannot finish before there is something to tell. */
+static void (*g_upgrade_finished)(JSContext *ctx, JSValueConst tx);
 
 /* ---- the record ---------------------------------------------------------------------------------------- */
 
@@ -152,6 +162,165 @@ int idb_transaction_state(JSContext *ctx, JSValueConst tx)
     return tx_int(ctx, tx, TX_STATE);
 }
 
+int idb_transaction_mode(JSContext *ctx, JSValueConst tx)
+{
+    int m = tx_int(ctx, tx, TX_MODE);
+
+    DCHECK(m >= IDB_TX_READONLY && m <= IDB_TX_VERSIONCHANGE,
+           "a transaction carried a mode IDBTransactionMode does not name");
+    return m;
+}
+
+static JSValue tx_field(JSContext *ctx, JSValueConst tx, const char *field)
+{
+    JSValue slots = tx_slots(ctx, tx), v;
+
+    DCHECK(JS_IsObject(slots), "an IDBTransaction field was read off a value carrying no slot record");
+    v = JS_GetPropertyStr(ctx, slots, field);
+    JS_FreeValue(ctx, slots);
+    return v;
+}
+
+JSValue idb_transaction_connection(JSContext *ctx, JSValueConst tx)
+{
+    JSValue conn = tx_field(ctx, tx, TX_CONNECTION);
+
+    DCHECK(JS_IsObject(conn), "a transaction carried no connection — §2.7 says all transactions are created "
+                              "through one, and idb_transaction_new refuses a creation without it");
+    return conn;
+}
+
+void idb_transaction_set_request(JSContext *ctx, JSValueConst tx, JSValueConst request)
+{
+    JSValue slots = tx_slots(ctx, tx);
+
+    DCHECK(JS_IsObject(slots), "an open request was recorded on a value that is not a transaction");
+    DCHECK(tx_int(ctx, tx, TX_MODE) == IDB_TX_VERSIONCHANGE,
+           "an open request was recorded on a transaction that is not an upgrade transaction — §2.7.3's "
+           "\"the request associated with transaction\" is a fact about an upgrade transaction alone, and a "
+           "readonly transaction carrying one would make §5.4 step 2.5.4 reach into somebody else\u2019s request");
+    JS_SetPropertyStr(ctx, slots, TX_REQUEST, JS_DupValue(ctx, request));
+    JS_FreeValue(ctx, slots);
+}
+
+JSValue idb_transaction_request(JSContext *ctx, JSValueConst tx)
+{
+    return tx_field(ctx, tx, TX_REQUEST);
+}
+
+/* ---- §2.7's SCOPE, for the one transaction whose scope moves ---------------------------------------------- */
+
+static JSValue tx_scope(JSContext *ctx, JSValueConst tx)
+{
+    JSValue scope = tx_field(ctx, tx, TX_SCOPE);
+
+    DCHECK(JS_IsArray(scope), "a transaction carried no scope — §2.7 gives every transaction one and only "
+                              "idb_transaction_new builds them");
+    return scope;
+}
+
+void idb_transaction_scope_add(JSContext *ctx, JSValueConst tx, JSValueConst store)
+{
+    JSValue scope;
+
+    DCHECK(idb_transaction_mode(ctx, tx) == IDB_TX_VERSIONCHANGE,
+           "a store was added to the scope of a transaction that is not an upgrade transaction — §2.7: \"a "
+           "transaction\u2019s scope remains fixed unless the transaction is an upgrade transaction\"");
+    scope = tx_scope(ctx, tx);
+    JS_DefinePropertyValueUint32(ctx, scope, tx_array_len(ctx, scope), JS_DupValue(ctx, store), JS_PROP_C_W_E);
+    JS_FreeValue(ctx, scope);
+}
+
+void idb_transaction_scope_remove(JSContext *ctx, JSValueConst tx, JSValueConst store)
+{
+    JSValue scope;
+    uint32_t i, n;
+
+    DCHECK(idb_transaction_mode(ctx, tx) == IDB_TX_VERSIONCHANGE,
+           "a store was removed from the scope of a transaction that is not an upgrade transaction");
+    scope = tx_scope(ctx, tx);
+    n = tx_array_len(ctx, scope);
+    for (i = 0; i < n; i++) {
+        JSValue m = JS_GetPropertyUint32(ctx, scope, i);
+        bool same = JS_VALUE_GET_PTR(m) == JS_VALUE_GET_PTR(store);
+
+        JS_FreeValue(ctx, m);
+        if (!same) continue;
+        for (; i + 1 < n; i++)
+            JS_DefinePropertyValueUint32(ctx, scope, i, JS_GetPropertyUint32(ctx, scope, i + 1), JS_PROP_C_W_E);
+        JS_SetPropertyStr(ctx, scope, "length", JS_NewUint32(ctx, n - 1));
+        JS_FreeValue(ctx, scope);
+        return;
+    }
+    JS_FreeValue(ctx, scope);
+    DFAIL("§4.4's deleteObjectStore removed a store the upgrade transaction\u2019s scope does not hold — §5.7 "
+          "step 3 sets that scope to the connection\u2019s object store set and §4.4\u2019s createObjectStore "
+          "adds to both, so the two disagreeing means one of them was written by something else");
+}
+
+/* ---- §2.2.1's ONE HANDLE PER STORE, per transaction ------------------------------------------------------- */
+
+static JSValue tx_handles(JSContext *ctx, JSValueConst tx)
+{
+    JSValue h = tx_field(ctx, tx, TX_HANDLES);
+
+    DCHECK(JS_IsObject(h), "a transaction carried no object store handle set");
+    return h;
+}
+
+JSValue idb_transaction_handle_find(JSContext *ctx, JSValueConst tx, const char *name)
+{
+    JSValue handles = tx_handles(ctx, tx), h;
+
+    DCHECK(name != NULL, "an object store handle was looked up under no name");
+    h = JS_GetPropertyStr(ctx, handles, name);
+    JS_FreeValue(ctx, handles);
+    if (JS_IsUndefined(h))
+        return JS_NULL;
+    return h;
+}
+
+void idb_transaction_handle_add(JSContext *ctx, JSValueConst tx, const char *name, JSValueConst handle)
+{
+    JSValue handles = tx_handles(ctx, tx), existing;
+
+    DCHECK(name != NULL, "an object store handle was filed under no name");
+    existing = JS_GetPropertyStr(ctx, handles, name);
+    DCHECK(JS_IsUndefined(existing), "a second object store handle was filed for one name in one transaction — "
+                                     "§2.2.1 says there must be only one, and §4.10 asks for the existing one "
+                                     "before it mints another");
+    JS_FreeValue(ctx, existing);
+    JS_SetPropertyStr(ctx, handles, name, JS_DupValue(ctx, handle));
+    JS_FreeValue(ctx, handles);
+}
+
+void idb_transaction_set_upgrade_finished_hook(void (*on_finished)(JSContext *ctx, JSValueConst tx))
+{
+    DCHECK(g_upgrade_finished == NULL || on_finished == NULL,
+           "§5.7 step 10's rendezvous was registered twice — one component performs §5.1, and a second "
+           "registration would silently replace the algorithm that is waiting");
+    g_upgrade_finished = on_finished;
+}
+
+bool idb_transaction_any_live_for_connection(JSContext *ctx, JSValueConst connection)
+{
+    uint32_t i, n = tx_array_len(ctx, g_live);
+
+    for (i = 0; i < n; i++) {
+        JSValue tx = JS_GetPropertyUint32(ctx, g_live, i), conn;
+        bool same;
+
+        DCHECK(idb_transaction_is(tx), "§2.7's live set held something that is not a transaction");
+        conn = idb_transaction_connection(ctx, tx);
+        same = JS_VALUE_GET_PTR(conn) == JS_VALUE_GET_PTR(connection);
+        JS_FreeValue(ctx, conn);
+        JS_FreeValue(ctx, tx);
+        if (same)
+            return true;
+    }
+    return false;
+}
+
 /* §2.7.1's LIFETIME, as the only door onto the state. Every transition the standard describes is here and
    nothing else is: the assert is what stops a caller inventing one, and it fires at the caller that wrote the
    wrong transition rather than three algorithms later at whoever read the impossible state. */
@@ -188,6 +357,17 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
                 JS_DefinePropertyValueUint32(ctx, g_live, i, next, JS_PROP_C_W_E);
             }
             JS_SetPropertyStr(ctx, g_live, "length", JS_NewUint32(ctx, n - 1));
+            /* §5.2 step 3: "wait for all transactions created using connection to complete. Once they are
+               complete, connection is closed." The moment that becomes true is exactly this one, and it is
+               reported rather than polled — the connection is what owns the answer and what §5.1 step 10.6 is
+               waiting on. It is told for EVERY transaction, because a connection with no close pending simply
+               answers that nothing changed. */
+            {
+                JSValue conn = idb_transaction_connection(ctx, tx);
+
+                idb_connection_transaction_finished(ctx, conn);
+                JS_FreeValue(ctx, conn);
+            }
             return;
         }
         DFAIL("a transaction reached the FINISHED state without being live — every transaction is added to "
@@ -257,6 +437,63 @@ bool idb_transaction_requests_empty(JSContext *ctx, JSValueConst tx)
     return empty;
 }
 
+/* ---- §2.7.3's TWO SHARED UPGRADE ARMS ----------------------------------------------------------------------
+ *
+ * §5.4's commit task and §5.5's abort task each carry the same two upgrade-transaction steps, phrased
+ * identically ("if transaction is an upgrade transaction, then set transaction's connection's associated
+ * database's upgrade transaction to null" / "... let request be the open request associated with transaction
+ * and set request's transaction to null"), so they are written once and each task states its own step around
+ * them. A transaction that is not an upgrade transaction has no request recorded, which is the ONE question
+ * both of them ask. */
+
+static void tx_clear_upgrade_transaction(JSContext *ctx, JSValueConst tx)
+{
+    JSValue req = idb_transaction_request(ctx, tx), conn, db, held;
+
+    if (JS_IsNull(req)) {
+        JS_FreeValue(ctx, req);
+        return;
+    }
+    JS_FreeValue(ctx, req);
+    conn = idb_transaction_connection(ctx, tx);
+    db = idb_connection_database(ctx, conn);
+    held = idb_database_upgrade_transaction(ctx, db);
+    DCHECK(JS_VALUE_GET_PTR(held) == JS_VALUE_GET_PTR(tx),
+           "a database's upgrade transaction is not the upgrade transaction that is finishing — §2.1 gives a "
+           "database AT MOST ONE, and §5.1's connection queue is what guarantees a second upgrade cannot start "
+           "while this one is live");
+    JS_FreeValue(ctx, held);
+    idb_database_set_upgrade_transaction(ctx, db, JS_NULL);
+    JS_FreeValue(ctx, db);
+    JS_FreeValue(ctx, conn);
+}
+
+/* §5.4 step 2.5.4 and §5.5 step 7.3, then §5.7 step 10's rendezvous. The ABORT arm puts three more fields back
+   — §5.5 step 7.3 is the only place in this standard where a request's done flag walks backwards, which §2.8's
+   own note names — and both arms end by telling the algorithm that is waiting for this transaction to finish. */
+static void tx_release_open_request(JSContext *ctx, JSValueConst tx, bool aborted)
+{
+    JSValue req = idb_transaction_request(ctx, tx);
+
+    if (JS_IsNull(req)) {
+        JS_FreeValue(ctx, req);
+        return;
+    }
+    idb_request_set_transaction(ctx, req, JS_NULL);
+    if (aborted) {
+        idb_request_set_result(ctx, req, JS_UNDEFINED);
+        idb_request_set_processed(ctx, req, false);
+        idb_request_set_done(ctx, req, false);
+    }
+    JS_FreeValue(ctx, req);
+    DCHECK(g_upgrade_finished != NULL,
+           "an upgrade transaction finished with nothing waiting for it. §5.7 step 10 is \"wait for "
+           "transaction to finish\" and §5.1 continues there — so the component that performs §5.1 registers "
+           "this rendezvous in its own declaration, and an upgrade transaction can only have been created by "
+           "that same component");
+    g_upgrade_finished(ctx, tx);
+}
+
 /* ---- §5.4's COMMIT: the database task that finishes the transaction and fires `complete` ------------------ */
 
 /* The state both of this file's task machines carry: the event in flight and §2.9's dispatch request buffer.
@@ -310,8 +547,11 @@ static JSValueConst tx_fire_target(const JSStepHdr *hdr)
 }
 
 #define TXC_STAGES(X) \
-    X(TXC_FINISH, "Indexed Database §5.4 step 2.5.2 (set transaction's state to finished)") \
-    X(TXC_FIRE,   "Indexed Database §5.4 step 2.5.3 (fire an event named complete at transaction)")
+    X(TXC_FINISH, "Indexed Database §5.4 steps 2.5.1-2.5.2 — ONE O(1) engine action: an upgrade "\
+                  "transaction's database forgets it, and the transaction's state is set to finished") \
+    X(TXC_FIRE,   "Indexed Database §5.4 step 2.5.3 (fire an event named complete at transaction)") \
+    X(TXC_RELEASE, "Indexed Database §5.4 step 2.5.4 (an upgrade transaction's open request has its "\
+                   "transaction set to null), and §5.7 step 10's wait for it to finish")
 enum { TXC_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const TXC_STEPS[] = { TXC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -346,6 +586,10 @@ static int js_idb_tx_complete_step(JSContext *ctx, void *st, JSValue cb_result, 
            wrote the record when it ran, and there is no medium behind it for a durability hint to reach. That
            is a fact about this store rather than a step skipped — which is also why step 2.4's write-error arm
            is unreachable and is not written. */
+        /* §5.4 step 2.5.1: "If transaction is an upgrade transaction, then set transaction's connection's
+           associated database's upgrade transaction to null." It runs BEFORE the state change, which is the
+           order that matters: a `complete` handler reading `db.createObjectStore` must already be refused. */
+        tx_clear_upgrade_transaction(ctx, tx);
         idb_transaction_set_state(ctx, tx, IDB_TX_FINISHED);
         STEP_GOTO(s->hdr.stage, TXC_FIRE, &s->phase, NULL);
 
@@ -361,6 +605,15 @@ static int js_idb_tx_complete_step(JSContext *ctx, void *st, JSValue cb_result, 
                                   out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
+        STEP_GOTO(s->hdr.stage, TXC_RELEASE, &s->phase, NULL);
+
+    STEP_ARM(TXC_RELEASE);
+        JS_FreeValue(ctx, cb_result);
+        /* §5.4 step 2.5.4: "If transaction is an upgrade transaction, then let request be the request
+           associated with transaction and set request's transaction to null." The request is an OPEN request
+           and §2.8.1 is what this restores: "the transaction of an open request is null unless an
+           upgradeneeded event has been fired". */
+        tx_release_open_request(ctx, tx, /*aborted*/ false);
         return JS_STEP_DONE;
 }
 
@@ -388,7 +641,12 @@ void idb_transaction_commit(JSContext *ctx, JSValueConst tx)
 /* ---- §5.5's ABORT: the database task that fires `abort` -------------------------------------------------- */
 
 #define TXA_STAGES(X) \
-    X(TXA_FIRE, "Indexed Database §5.5 step 7.2 (fire an event named abort at transaction)")
+    X(TXA_CLEAR, "Indexed Database §5.5 step 7.1 (an upgrade transaction's database forgets it)") \
+    X(TXA_FIRE,  "Indexed Database §5.5 step 7.2 (fire an event named abort at transaction)") \
+    X(TXA_RELEASE, "Indexed Database §5.5 steps 7.3.1-7.3.4 — ONE O(1) engine action: an upgrade "\
+                   "transaction's open request is returned to the state it was in before the "\
+                   "upgradeneeded event, so §4.3's completion task can settle it — and §5.7 step 10's "\
+                   "wait for the transaction to finish")
 enum { TXA_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const TXA_STEPS[] = { TXA_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -401,11 +659,14 @@ static int js_idb_tx_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSV
     tx_fire_start(s);
     STEP_DISPATCH(TXA_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
 
+    STEP_ARM(TXA_CLEAR);
+        /* §5.5 step 7.1: "If transaction is an upgrade transaction, then set transaction's connection's
+           associated database's upgrade transaction to null." */
+        tx_clear_upgrade_transaction(ctx, tx);
+        STEP_GOTO(s->hdr.stage, TXA_FIRE, &s->phase, NULL);
+
     STEP_ARM(TXA_FIRE);
-        /* §5.5 step 7.1 and 7.3 are the upgrade-transaction arms, and §2.7.3's upgrade transaction arrives
-           with §5.7's upgrade-a-database — there is no way to create one yet, which is why the arms are
-           absent rather than written against a state nothing can produce.
-           "with its bubbles attribute initialized to true": the event travels to the connection, which is what
+        /* "with its bubbles attribute initialized to true": the event travels to the connection, which is what
            §2.7's get-the-parent algorithm answers with. */
         if (JS_IsUndefined(s->ev)) {
             s->ev = event_new(ctx, "abort", /*bubbles*/ true, /*cancelable*/ false);
@@ -415,6 +676,14 @@ static int js_idb_tx_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSV
                                   out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
+        STEP_GOTO(s->hdr.stage, TXA_RELEASE, &s->phase, NULL);
+
+    STEP_ARM(TXA_RELEASE);
+        JS_FreeValue(ctx, cb_result);
+        /* §5.5 step 7.3: the open request's transaction, result, processed flag and done flag are all put
+           back — "in some cases, the request's done flag will be set to false, then set to true again", which
+           §2.8's own note names and which is why an open request is the one request that walks backwards. */
+        tx_release_open_request(ctx, tx, /*aborted*/ true);
         return JS_STEP_DONE;
 }
 
@@ -605,7 +874,7 @@ static void tx_check_can_start(JSContext *ctx, JSValueConst scope, int mode)
 
 JSValue idb_transaction_new(JSContext *ctx, JSValueConst connection, JSValue scope, int mode, int durability)
 {
-    JSValue tx, st, proto, requests;
+    JSValue tx, st, proto, requests, handles;
     JSAtom k;
 
     DCHECK(g_ready, "an IDBTransaction was created before idb_transaction_init declared the interface");
@@ -618,8 +887,13 @@ JSValue idb_transaction_new(JSContext *ctx, JSValueConst connection, JSValue sco
                                                                     "IDBTransactionMode does not name");
     DCHECK(durability >= IDB_DUR_DEFAULT && durability <= IDB_DUR_RELAXED,
            "a transaction was created with a durability hint IDBTransactionDurability does not name");
-    DCHECK(tx_array_len(ctx, scope) > 0, "a transaction was created with an EMPTY scope — §4.9 step 5 reports "
-                                         "that as an \"InvalidAccessError\" before this algorithm is reached");
+    /* §4.4's `transaction()` step 5 reports an empty scope as an "InvalidAccessError" before this algorithm is
+       reached — but §5.7 step 3 sets an UPGRADE transaction's scope to the connection's object store set, and
+       a database being created by this very upgrade has none yet. So the emptiness is refused for the modes a
+       page can ask for and is the ordinary state for the one it cannot. */
+    DCHECK(mode == IDB_TX_VERSIONCHANGE || tx_array_len(ctx, scope) > 0,
+           "a transaction was created with an EMPTY scope — §4.4's `transaction()` step 5 reports that as an "
+           "\"InvalidAccessError\" before this algorithm is reached");
 
     proto = JS_GetClassProto(ctx, g_tx_class);
     DCHECK(!JS_IsNull(proto), "IDBTransaction.prototype was asked for in a realm that never ran its install");
@@ -639,6 +913,11 @@ JSValue idb_transaction_new(JSContext *ctx, JSValueConst connection, JSValue sco
     JS_SetPropertyStr(ctx, st, TX_ERROR, JS_NULL);
     JS_SetPropertyStr(ctx, st, TX_REQUESTS, requests);
     JS_SetPropertyStr(ctx, st, TX_HEAD, JS_NewInt32(ctx, 0));
+    /* §2.7.3's open request, which only §5.7 records and only for the transaction it creates. */
+    JS_SetPropertyStr(ctx, st, TX_REQUEST, JS_NULL);
+    handles = idl_slots_new(ctx);
+    CHECK(!JS_IsException(handles), "IndexedDB: a transaction's object store handle set could not be allocated");
+    JS_SetPropertyStr(ctx, st, TX_HANDLES, handles);
     k = JS_ValueToAtom(ctx, g_key);
     CHECK(k != JS_ATOM_NULL, "the IDBTransaction slot key could not be interned");
     JS_SetProperty(ctx, tx, k, st);
@@ -727,6 +1006,69 @@ static JSValue js_tx_abort(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return JS_UNDEFINED;
 }
 
+/* "The db getter steps are to return this's connection's associated database." The IDL's type is IDBDatabase,
+   and in this engine §2.1.1's connection IS that object (idb_connection.h says why) — so the two halves of
+   that sentence are one value and `[SameObject]` holds without a cache. */
+static JSValue js_tx_get_db(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)magic;
+    if (!tx_brand(ctx, this_val)) return JS_EXCEPTION;
+    return idb_transaction_connection(ctx, this_val);
+}
+
+/* "The objectStore(name) method steps are: if this's state is finished, then throw an InvalidStateError. Let
+   store be the object store named name in this's scope, or throw a NotFoundError if none. Return an object
+   store handle associated with store and this."
+   THE HANDLE IS LOOKED UP BEFORE IT IS MINTED, which is §2.2.1's "there must be only one object store handle
+   associated with a particular object store within a transaction" and §4.10's note that a page compares them.
+   The SCOPE is what is searched and not the database: a transaction may only reach the stores it named. */
+static JSValue js_tx_object_store(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue scope, handle = JS_NULL, store = JS_UNDEFINED;
+    const char *name;
+    uint32_t i, n;
+
+    (void)argc; (void)magic;
+    if (!tx_brand(ctx, this_val)) return JS_EXCEPTION;
+    if (idb_transaction_state(ctx, this_val) == IDB_TX_FINISHED)
+        return JS_ThrowDOMException(ctx, "InvalidStateError",
+                                    "the transaction has finished, so it has no object stores");
+    name = JS_ToCString(ctx, argv[0]);
+    if (name == NULL) return JS_EXCEPTION;
+    handle = idb_transaction_handle_find(ctx, this_val, name);
+    if (!JS_IsNull(handle)) {
+        JS_FreeCString(ctx, name);
+        return handle;
+    }
+    JS_FreeValue(ctx, handle);
+    scope = tx_scope(ctx, this_val);
+    n = tx_array_len(ctx, scope);
+    for (i = 0; i < n; i++) {
+        JSValue candidate = JS_GetPropertyUint32(ctx, scope, i);
+        JSValue cname = idb_object_store_name(ctx, candidate);
+        const char *c = JS_ToCString(ctx, cname);
+        bool same;
+
+        CHECK(c != NULL, "IndexedDB: a store in a transaction's scope could not report its own name");
+        same = strcmp(c, name) == 0;
+        JS_FreeCString(ctx, c);
+        JS_FreeValue(ctx, cname);
+        if (same) { store = candidate; break; }
+        JS_FreeValue(ctx, candidate);
+    }
+    JS_FreeValue(ctx, scope);
+    if (JS_IsUndefined(store)) {
+        JS_FreeCString(ctx, name);
+        return JS_ThrowDOMException(ctx, "NotFoundError",
+                                    "no object store with that name is in the transaction's scope");
+    }
+    handle = idb_object_store_handle(ctx, store, this_val);
+    JS_FreeValue(ctx, store);
+    idb_transaction_handle_add(ctx, this_val, name, handle);
+    JS_FreeCString(ctx, name);
+    return handle;
+}
+
 /* §3.7's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — per realm because a C member runs in the realm that
    DEFINED it, so one prototype shared by two documents would answer both from whichever built it. */
 static void idb_transaction_install_realm(JSContext *ctx)
@@ -747,6 +1089,8 @@ static void idb_transaction_install_realm(JSContext *ctx)
     idl_install_accessor(ctx, proto, "mode", js_tx_get_mode, 0, -1);
     idl_install_accessor(ctx, proto, "durability", js_tx_get_durability, 0, -1);
     idl_install_accessor(ctx, proto, "error", js_tx_get_error, 0, -1);
+    idl_install_accessor(ctx, proto, "db", js_tx_get_db, 0, -1);
+    idl_install_method(ctx, proto, "objectStore", 1, g_id_object_store);
     idl_install_method(ctx, proto, "commit", 0, g_id_commit);
     idl_install_method(ctx, proto, "abort", 0, g_id_abort);
     JS_SetClassProto(ctx, g_tx_class, JS_DupValue(ctx, proto));
@@ -775,6 +1119,11 @@ void idb_transaction_init(JSContext *ctx)
     CHECK(!JS_IsException(g_live), "IndexedDB: §2.7.2's live transaction set could not be allocated");
     g_cleanup = JS_NewArray(ctx);
     CHECK(!JS_IsException(g_cleanup), "IndexedDB: §2.7.1's cleanup set could not be allocated");
+    {
+        static const IdlArgType OS_ARGS[1] = { IDL_DOMSTRING };
+
+        g_id_object_store = idl_method_id(ctx, OS_ARGS, 1, js_tx_object_store, 0);
+    }
     g_id_commit = idl_method_id(ctx, NULL, 0, js_tx_commit, 0);
     g_id_abort = idl_method_id(ctx, NULL, 0, js_tx_abort, 0);
     g_complete_stepid = JS_RegisterStepDef(rt, &js_idb_tx_complete_def);

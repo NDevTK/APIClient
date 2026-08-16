@@ -33,6 +33,7 @@
    and which a DataView satisfies without being a typed array. It is declared here rather than in quickjs.h. */
 #include "quickjs-step.h"
 #include "cutils.h"
+#include "libunicode.h"
 #include "core/idl_slots.h"
 #include "core/indexeddb/idb_key.h"
 #include "solver/concolic.h"
@@ -406,4 +407,58 @@ int idb_key_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
     JS_FreeValue(ctx, ha);
     JS_FreeValue(ctx, hb);
     return r;
+}
+
+/* ---- §2.5's VALID KEY PATH ----------------------------------------------------------------------------------
+ *
+ * "An empty string. An identifier, which is a string matching the IdentifierName production from the ECMAScript
+ * Language Specification. A string consisting of two or more identifiers separated by periods."
+ *
+ * THE IDENTIFIER IS ECMASCRIPT'S OWN AND SO IS THE TEST. IdentifierName is IdentifierStart IdentifierPart*, and
+ * both are UNICODE properties (ID_Start / ID_Continue, plus `$`, `_`, and ZWNJ/ZWJ in the continue set) — so the
+ * question is asked of the same table the JS lexer asks, `lre_is_id_start`/`lre_is_id_continue`, rather than of
+ * an ASCII range that would refuse `store.createObjectStore("x",{keyPath:"café"})` a browser accepts. The
+ * standard's own note — "spaces are not allowed within a key path" — is not a separate rule here: a space is
+ * neither an IdentifierStart nor an IdentifierPart, so it is refused by the production itself.
+ *
+ * The `\uXXXX` UnicodeEscapeSequence arm of IdentifierName is NOT accepted, and that is the production being
+ * followed rather than trimmed: §2.5's key path is compared against real property names by §7.1, and an escape
+ * would name a property whose characters are the escaped ones — which is a DIFFERENT string from the one the
+ * page wrote. No browser accepts one either.
+ *
+ * A LEADING OR TRAILING PERIOD, AND AN EMPTY SEGMENT, are refused because "two or more identifiers separated by
+ * periods" means every segment is an identifier and an empty string is not one — while the WHOLE path being
+ * empty IS valid, which is the standard's first arm and is why the empty case is answered before the walk. */
+bool idb_key_path_is_valid(const char *path, size_t len)
+{
+    const uint8_t *p = (const uint8_t *)path, *end = p + len;
+    bool at_segment_start = true;
+
+    DCHECK(path != NULL, "§2.5's valid key path was asked of no string — a key path is a string, and the empty "
+                         "string is one while a null pointer is not");
+    if (len == 0)
+        return true;   /* "An empty string." */
+    while (p < end) {
+        uint32_t c = utf8_decode_len(p, (size_t)(end - p), &p);
+
+        if (c == '.') {
+            /* A separator only ever follows a COMPLETE identifier, so a period at a segment's start is either
+               a leading one or an empty segment between two periods. */
+            if (at_segment_start)
+                return false;
+            at_segment_start = true;
+            continue;
+        }
+        if (at_segment_start) {
+            if (!(c == '$' || c == '_' || lre_is_id_start(c)))
+                return false;
+            at_segment_start = false;
+            continue;
+        }
+        /* IdentifierPart, which the lexer's own table answers including the two zero-width joiners. */
+        if (!(c == '$' || c == '_' || c == 0x200C || c == 0x200D || lre_is_id_continue(c)))
+            return false;
+    }
+    /* A trailing period leaves the walk expecting an identifier that never arrived. */
+    return !at_segment_start;
 }

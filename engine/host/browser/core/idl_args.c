@@ -507,6 +507,7 @@ static int idl_members_depth(const IdlDictMember *ms, int n)
 static JSValue idl_default_value(JSContext *ctx, const IdlDictMember *dm)
 {
     if (dm->dflt == IDL_DEFAULT_NULL) return JS_NULL;
+    if (dm->dflt == IDL_DEFAULT_ZERO) return JS_NewInt32(ctx, 0);
     DCHECK(dm->dflt == IDL_DEFAULT_STRING && dm->dflt_str != NULL,
            "a dictionary member declared a default this machine has no value for — the forms are the ones the "
            "platform's IDL writes, and a new one is an arm here rather than a string that means something else");

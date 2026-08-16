@@ -67,8 +67,6 @@
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key.h"
 #include "core/indexeddb/idb_key_range.h"
-#include "core/indexeddb/idb_request.h"
-#include "core/indexeddb/idb_transaction.h"
 #include "solver/endpoint.h"
 #include "solver/req2proto.h"
 #include "solver/result.h"
@@ -1306,19 +1304,27 @@ static const char *HTML =
     "fetch('/api/xdocread?v=' + (_w.closed === false && _w.length === 0 &&"
     " typeof _w.closed === 'boolean' && typeof _w.length === 'number' ? 'xread' : 'wrong'));"
 
-    /* INDEXED DATABASE §2.7's TRANSACTION AND §2.8's REQUEST, end to end, and every part of the marker is a
-       different sentence of the standard. `readonly` is §4.10's mode getter over the mode the transaction was
-       created with; `pending` is §4.1's readyState while the done flag is false — the request is returned
-       BEFORE its operation runs, which is the whole of what "asynchronously execute" means; `99` is the value
-       §6.2 read back out of the store the baseline wrote, delivered to a listener by §5.9's fire-a-success-
-       event, with `done` beside it because §5.6 step 5.6.2 set the flag before the dispatch. And `complete`
-       arrives with NOTHING CALLING commit(): §5.9 step 9.3 found the request list empty once the success
-       handler returned, so the transaction committed itself, which is §2.7.1's automatic-commit sentence and
-       the reason a transaction is a state machine rather than a handle. */
-    "var _tx = idbTransaction('s'); var _rq = idbGet(_tx, 's', 2);"
-    "var _idb = _tx.mode + ':' + _rq.readyState;"
-    "_rq.onsuccess = function(){ _idb += ':' + _rq.result + ':' + _rq.readyState; };"
-    "_tx.oncomplete = function(){ fetch('/api/idbreq?v=' + _idb); };"
+    /* INDEXED DATABASE FROM THE PAGE'S OWN DOOR — `indexedDB.open` through to `success`, and every part of
+       the marker is a different sentence of the standard.
+       `0:1` is §4.2's IDBVersionChangeEvent carrying §5.7 step 7's OLD VERSION and the version being opened,
+       which is what every migration in every bundle branches on. `versionchange` is §4.10's mode getter over
+       the transaction §5.7 step 2 created and §2.8.1's "the transaction of an open request is null unless an
+       upgradeneeded event has been fired" made reachable. `pending` is §4.1's readyState while the `get`'s
+       done flag is false — the request is returned BEFORE its operation runs, which is the whole of what
+       "asynchronously execute" means. `99:done` is the value §6.1 stored under key 2 and §6.2 read back,
+       delivered by §5.9's fire-a-success-event with the flag already set by §5.6 step 5.6.2.
+       AND THE ORDER IS THE PROOF: `success` at the open request fires only after the upgrade transaction has
+       FINISHED (§4.3's note says so, and §5.7 step 10 is what waits), and nothing calls `commit()` — §5.9
+       step 9.3 found the request list empty once the `get` handler returned. `_r.result.version` is §4.4's
+       version getter over the CONNECTION, which §5.1 step 9 set to the version that was opened. */
+    "var _r = indexedDB.open('fixture', 1); var _idb = '';"
+    "_r.onupgradeneeded = function(e){"
+    " var _s = _r.result.createObjectStore('s');"
+    " _s.put(99, 2); var _g = _s.get(2);"
+    " _idb += e.oldVersion + ':' + e.newVersion + ':' + _r.transaction.mode + ':' + _g.readyState;"
+    " _g.onsuccess = function(){ _idb += ':' + _g.result + ':' + _g.readyState; }; };"
+    "_r.onsuccess = function(){"
+    " fetch('/api/idbopen?v=' + _idb + ':' + _r.result.version + ':' + _r.result.name); };"
     "</script>"
     "</body></html>";
 
@@ -1894,11 +1900,6 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
     platform_agent_init(ctx, &agent);
 }
 
-/* THIS FIXTURE'S INDEXED DATABASE EDGES, declared here because the install below is written above them and
-   they belong beside the baseline database they reach — see their own comment for why they are edges. */
-static JSValue js_idb_transaction_edge(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-static JSValue js_idb_get_edge(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
-
 /* ONE DOCUMENT — run once per document including the first. THE PLATFORM FIRST, then this fixture's own
    globals: a host ADDS to the one list and cannot subtract from it, and adding afterwards is also what lets
    the `eval` sink below stand where the language's own `eval` would. */
@@ -1937,8 +1938,6 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
     /* INDEXED DATABASE §2.7/§2.8's two operations, until §4.6/§4.9/§5.1 exist to state them as members. */
-    JS_SetPropertyStr(ctx, g, "idbTransaction", JS_NewCFunction(ctx, js_idb_transaction_edge, "idbTransaction", 1));
-    JS_SetPropertyStr(ctx, g, "idbGet", JS_NewCFunction(ctx, js_idb_get_edge, "idbGet", 3));
     JS_FreeValue(ctx, g);
 }
 
@@ -2144,113 +2143,6 @@ static void idb_store_selftest(JSContext *ctx)
 
     JS_FreeValue(ctx, store);
     JS_FreeValue(ctx, db);
-}
-
-/* ─── INDEXED DATABASE §2.7/§2.8, DRIVEN FROM THE PAGE — THIS FIXTURE'S TWO HOST EDGES ───────────────────────
- *
- * WHY THEY ARE EDGES AND NOT MEMBERS. §2.7's transaction and §2.8's request are built, and the ONLY thing that
- * can create either is a member of an interface that does not exist yet: §4.9's `IDBDatabase.transaction()`
- * and §4.6's `IDBObjectStore.get()`, reached through §5.1's `indexedDB.open()`. Those are the NEXT subproblem
- * and writing them here to exercise this one would be writing the surface first. So this host supplies the two
- * operations the way core/platform.h says a host may — "a host adds its edges and its own globals after this
- * call; it can add, and it cannot subtract" — and they are DELETED with the members that replace them.
- *
- * WHY IT MUST BE THE PAGE AND NOT A C SELFTEST. Everything §2.8 is about happens on the EVENT LOOP: the
- * request completes in a queued task, its `success` event is dispatched at listeners the page registered, and
- * the transaction is deactivated by §2.7.1's cleanup when control returns to the loop. A queued task belongs
- * to the flow that enqueued it (solver/engine.c has no global drain, and asserts so), and the baseline where
- * idb_store_selftest runs is inside no flow at all — so a C exercise could assert the record layout and could
- * never run one turn of the machinery this subproblem IS.
- *
- * WHAT THE STATEMENT PROVES, in one marker: the transaction reports its MODE, the request is `pending` while
- * it is, the `success` listener sees `readyState` already `done` and the value §6.2 read back, and the
- * transaction commits ON ITS OWN — nothing calls `commit()` — so `complete` fires because §5.9 step 9.3 found
- * the request list empty. */
-
-/* §5.6's OPERATION, as this fixture states it: §6.2's "retrieve a value from an object store". A plain C
-   function over its two captured operands, because that is what it is — it runs none of the page's code, and
-   the closure is what carries the store and the range into the task (§scheduler: an operation that becomes a
-   work item takes its inputs with it). §4.6's `get` will state the same operation and this edge goes then. */
-static JSValue js_idb_get_operation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                    int magic, JSValueConst *func_data)
-{
-    (void)this_val; (void)argc; (void)argv; (void)magic;
-    return idb_retrieve_value(ctx, func_data[0], func_data[1]);
-}
-
-/* The one database this fixture's baseline created, and the store in it. Named at the edge rather than looked
-   up from the page's argument, because §5.1's open is what turns a name into a connection and this is not it. */
-static JSValue tf_idb_find_store(JSContext *ctx, const char *store_name)
-{
-    JSValue db = idb_database_find(ctx, "selftest"), store;
-
-    CHECK(JS_IsObject(db), "the fixture's Indexed Database edge ran before idb_store_selftest created its "
-                           "database — the baseline builds it, and the page can only be handed what exists");
-    store = idb_object_store_find(ctx, db, store_name);
-    CHECK(JS_IsObject(store), "the fixture's Indexed Database edge was asked for a store its baseline database "
-                              "does not hold");
-    JS_FreeValue(ctx, db);
-    return store;
-}
-
-/* STANDS IN FOR §4.9's `connection.transaction(storeNames)`: a read-only transaction over one named store,
-   with §4.9 step 8's cleanup event loop, on a connection this call opens. */
-static JSValue js_idb_transaction_edge(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    JSValue store, db, conn, scope, tx;
-    const char *name;
-
-    (void)this_val;
-    DCHECK(argc >= 1 && JS_IsString(argv[0]), "the fixture's transaction edge takes the store's name as a "
-                                              "string — a page value that had to be coerced would be running "
-                                              "the page's code at a C entry with no flow under it");
-    name = JS_ToCString(ctx, argv[0]);
-    CHECK(name != NULL, "the fixture's transaction edge could not read the store name it was given");
-    store = tf_idb_find_store(ctx, name);
-    JS_FreeCString(ctx, name);
-    db = idb_database_find(ctx, "selftest");
-    conn = idb_connection_open(ctx, db);        /* §2.1.1: opening a database creates a connection */
-    JS_FreeValue(ctx, db);
-    scope = JS_NewArray(ctx);
-    CHECK(!JS_IsException(scope), "the fixture could not allocate a transaction scope");
-    JS_DefinePropertyValueUint32(ctx, scope, 0, store, JS_PROP_C_W_E);   /* store CONSUMED into the scope */
-    tx = idb_transaction_new(ctx, conn, scope, IDB_TX_READONLY, IDB_DUR_DEFAULT);
-    JS_FreeValue(ctx, conn);
-    idb_transaction_set_cleanup_loop(ctx, tx);
-    return tx;
-}
-
-/* STANDS IN FOR §4.6's `store.get(query)` on a handle §4.10's `objectStore()` would have returned: §7.4 and
-   §2.9 turn the page's value into a key range, and §5.6 executes the retrieval against the transaction. */
-static JSValue js_idb_get_edge(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    JSValueConst data[2];
-    JSValue store, range, op, req;
-    const char *name;
-
-    (void)this_val;
-    DCHECK(argc >= 3, "the fixture's get edge takes the transaction, the store's name and the query");
-    DCHECK(JS_IsString(argv[1]), "the fixture's get edge takes the store's name as a string");
-    name = JS_ToCString(ctx, argv[1]);
-    CHECK(name != NULL, "the fixture's get edge could not read the store name it was given");
-    store = tf_idb_find_store(ctx, name);
-    JS_FreeCString(ctx, name);
-    /* §4.6's own step: "let range be the result of converting a value to a key range with query". Its DataError
-       is the member's to report, and this fixture never passes one. */
-    CHECK(idb_key_range_from_value(ctx, argv[2], false, &range) == 0,
-          "the fixture's get edge was given a query §2.9 refuses as a key range");
-    data[0] = store;
-    data[1] = range;
-    op = JS_NewCFunctionData(ctx, js_idb_get_operation, 0, 0, 2, data);
-    JS_FreeValue(ctx, store);
-    JS_FreeValue(ctx, range);
-    CHECK(!JS_IsException(op), "the fixture could not mint §5.6's operation");
-    /* §2.8's source would be the object store HANDLE §4.6 was reached through; there is no handle interface
-       yet, so the request's source is honestly null — which is what §2.8.1 says an open request's always is,
-       and what `request.source` therefore reports here. */
-    req = idb_request_execute(ctx, JS_NULL, argv[0], op);
-    JS_FreeValue(ctx, op);
-    return req;
 }
 
 /* WHICH DOCUMENT THIS RUN DRIVES, asked of the ARGUMENT VECTOR because that is the only channel a host has to

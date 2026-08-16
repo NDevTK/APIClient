@@ -40,7 +40,38 @@ JSValue idb_request_execute(JSContext *ctx, JSValueConst source, JSValueConst tr
    this component's. */
 void idb_request_abort(JSContext *ctx, JSValueConst request);
 
-/* Web IDL §3.7.5's brand, asked of a value that arrived from another component. */
+/* §2.8.1's OPEN REQUEST — "a special type of request used when opening a connection or deleting a database.
+ * In addition to success and error events, blocked and upgradeneeded events may be fired at an open request to
+ * indicate progress." Its interface is §4.1's IDBOpenDBRequest, which adds exactly those two event handler IDL
+ * attributes and nothing else.
+ *
+ * IT IS NOT PLACED AGAINST A TRANSACTION, which is the whole reason §5.1 and §4.3 write its four §2.8 fields
+ * themselves rather than reaching §5.6: "the source of an open request is always null", "the transaction of an
+ * open request is null unless an upgradeneeded event has been fired", and its get-the-parent returns null — so
+ * there is no transaction to activate around a dispatch and §4.3's own note says that is why §5.9 and §5.10 are
+ * not used for it. OWNED. */
+JSValue idb_request_new_open(JSContext *ctx);
+bool    idb_request_is_open(JSValueConst v);
+
+/* §2.8's FOUR FIELDS, written by the algorithms that own them. §5.1's open, §5.7's upgrade, §5.5's abort of an
+   upgrade transaction and §4.3's completion task each write these directly — an open request's progress is
+   THEIR steps and not §5.6's — so the writes are asked of this component rather than reached into from four
+   files, and each one asserts what §2.8 says the field is. Every value is CONSUMED. */
+void idb_request_set_result(JSContext *ctx, JSValueConst req, JSValue result);
+void idb_request_set_error(JSContext *ctx, JSValueConst req, JSValue error);
+void idb_request_set_transaction(JSContext *ctx, JSValueConst req, JSValue tx);
+void idb_request_set_done(JSContext *ctx, JSValueConst req, bool done);
+void idb_request_set_processed(JSContext *ctx, JSValueConst req, bool processed);
+/* §5.1 step 10.9's "If request's error is set" — the value, OWNED, JS_NULL when no error occurred. */
+JSValue idb_request_error(JSContext *ctx, JSValueConst req);
+
+/* §2.8's TRANSACTION, as the algorithms outside this component read it: §5.4 step 2.5.4 and §5.5 step 7.3 each
+   reach the open request FROM the upgrade transaction and back. OWNED, JS_NULL when there is none. */
+JSValue idb_request_transaction(JSContext *ctx, JSValueConst req);
+
+/* Web IDL §3.7.5's brand, asked of a value that arrived from another component. TRUE for an open request too:
+   §2.8.1's open request IS a request, and IDBOpenDBRequest inherits IDBRequest, so a brand that answered false
+   for one would make `openRequest.readyState` a TypeError. */
 bool idb_request_is(JSValueConst v);
 
 #endif

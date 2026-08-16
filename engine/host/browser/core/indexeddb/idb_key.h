@@ -2,6 +2,9 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_INDEXEDDB_IDB_KEY_H
 #define ENGINE_HOST_BROWSER_CORE_INDEXEDDB_IDB_KEY_H
 
+#include <stdbool.h>
+#include <stddef.h>
+
 #include "quickjs.h"
 
 /* §7.4's CONVERT A VALUE TO A KEY, FOLLOWED BY THE STEP EVERY MEMBER THAT TAKES ONE PERFORMS. §7.4 answers a
@@ -20,6 +23,20 @@ int idb_key_from_value(JSContext *ctx, JSValueConst input, JSValue *pkey);
 /* §7.3's CONVERT A KEY TO A VALUE — the other direction, which is what a member that hands a key BACK to the
    page returns (§4.7's `lower` and `upper`, §4.8's `key`, §6.2's retrieve-a-key). OWNED. */
 JSValue idb_key_to_value(JSContext *ctx, JSValueConst key);
+
+/* §2.5's VALID KEY PATH, over ONE string. "A valid key path is one of: an empty string; an identifier, which is
+ * a string matching the IdentifierName production from the ECMAScript Language Specification; a string
+ * consisting of two or more identifiers separated by periods (U+002E FULL STOP)" — and the standard's own note
+ * is the whole of why this is a real test rather than a glance: "spaces are not allowed within a key path".
+ *
+ * §4.4's `createObjectStore` is the caller, and the answer is a "SyntaxError" DOMException there. It is asked
+ * of THIS component because a key path is the address of a KEY inside a value, so the rule that says which
+ * addresses exist belongs beside the rule that says which values are keys — and because §7.1's extract-a-key
+ * will walk exactly the segments this accepts.
+ *
+ * `path` is UTF-8, `len` its length in bytes. The list arm of §2.5 is the CALLER's: a list is valid when it is
+ * non-empty and every one of its strings passes this. */
+bool idb_key_path_is_valid(const char *path, size_t len);
 
 /* §2.4's COMPARE TWO KEYS — -1, 0 or 1. It is THE ordering of this standard: §2.2's list of records is sorted
    by it, §2.9's key range is bounded by it, §2.10's cursor walks in it, and §4.3's `cmp` is it, exposed. */

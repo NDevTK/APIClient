@@ -141,21 +141,35 @@ const INTERFACES = {
                               "core/idl_async_iter.c"],
   /* INDEXED DATABASE §4.7 and §4.3. Both are rows from the day their components land, because an interface with
      no row is the lying-by-omission this map's own comment names — and here the omission would hide exactly the
-     gap that matters: IDBFactory ships `cmp` and NOT `open`, `deleteDatabase` or `databases()`, and those three
-     are the whole of the database half of the standard. A row is what makes that count a number rather than a
-     sentence in a comment somebody has to keep true. */
+     gap that matters: IDBFactory ships `open` and `cmp` and NOT `deleteDatabase` or `databases()`, each of
+     which is a whole algorithm of §5 rather than a member. A row is what makes that count a number rather
+     than a sentence in a comment somebody has to keep true. */
   IDBKeyRange:          "core/indexeddb/idb_key_range.c",
   IDBFactory:           "core/indexeddb/indexed_db.c",
   /* §4.1's IDBRequest and §4.10's IDBTransaction. Each inherits EventTarget, so event_target.c is named
      beside it for the three members it contributes AND for the event handler IDL attributes, which live on
      that component's one X-list — naming only the component would report `onsuccess`, `onerror`,
      `onabort` and `oncomplete` as absent when they are installed.
-     THE ROWS ARE WHAT MAKE THE GAP A NUMBER. IDBTransaction ships `mode`, `durability`, `error`, `commit()`
-     and `abort()` and NOT `db`, `objectStoreNames` or `objectStore()` — those three need §4.4's IDBDatabase,
-     a DOMStringList and §4.6's object store handle, which is the next subproblem. Without a row the audit
-     would report the interface as nothing at all rather than as three members to build. */
+     THE ROWS ARE WHAT MAKE THE GAP A NUMBER. IDBTransaction now ships `db` and `objectStore()` beside `mode`,
+     `durability`, `error`, `commit()` and `abort()`; the one member it does not is `objectStoreNames`, which
+     needs a DOMStringList. Without a row the audit would report the interface as nothing at all rather than
+     as one member to build. */
   IDBRequest:          ["core/indexeddb/idb_request.c", "core/events/event_target.c"],
   IDBTransaction:      ["core/indexeddb/idb_transaction.c", "core/events/event_target.c"],
+  /* §4.1's second interface, §4.4, §4.5 and §4.2. IDBOpenDBRequest declares only its two event handler IDL
+     attributes and INHERITS the rest, so the flattened member list is IDBRequest's plus two and every one of
+     the inherited members is installed by the file that builds the prototype it chains to.
+     THE ROWS ARE WHAT MAKE THE REMAINING GAP A NUMBER, and it is a specific one: IDBDatabase ships `name`,
+     `version`, `close()`, `createObjectStore()`, `deleteObjectStore()` and `onversionchange` and NOT
+     `objectStoreNames` (a DOMStringList, which this engine does not have) or `transaction()` (Web IDL
+     §3.2.25's `(DOMString or sequence<DOMString>)` union, whose resolution reads @@iterator off the page's
+     value and so must be a request); IDBObjectStore ships `name`, `keyPath`, `transaction`, `autoIncrement`,
+     `put()`, `add()`, `get()` and `getKey()` and NOT the index members (§2.6 does not exist) or the members
+     whose §6 algorithm does not (`delete`, `clear`, `count`, the four getAll* and the two cursor openers). */
+  IDBOpenDBRequest:    ["core/indexeddb/idb_request.c", "core/events/event_target.c"],
+  IDBDatabase:         ["core/indexeddb/idb_connection.c", "core/events/event_target.c"],
+  IDBObjectStore:       "core/indexeddb/idb_object_store.c",
+  IDBVersionChangeEvent: "core/indexeddb/idb_version_change_event.c",
   /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission
      this map's own comment names, and it was silent from the moment the component landed. */
   /* An `iterable<>` interface's keys/values/entries/forEach are installed by the SHARED default iterator
