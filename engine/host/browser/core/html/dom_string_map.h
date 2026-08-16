@@ -7,7 +7,7 @@
 void dom_string_map_init(JSContext *ctx);
 void dom_string_map_install_proto(JSContext *ctx);   /* §3.2.9's prototype, for ONE realm */
 void dom_string_map_install(JSContext *ctx, JSValueConst global);
-void dom_string_map_free(JSContext *ctx);
+void dom_string_map_free(JSRuntime *rt);
 /* A new map over `el`'s data-* attributes. The caller caches it on the element's wrapper — `dataset` is
    [SameObject], so `el.dataset === el.dataset` is what the IDL states. */
 JSValue dom_string_map_new(JSContext *ctx, lxb_dom_element_t *el);

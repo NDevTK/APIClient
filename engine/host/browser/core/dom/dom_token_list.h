@@ -9,7 +9,7 @@ void dom_token_list_init(JSContext *ctx);
 void dom_token_list_install_proto(JSContext *ctx);
 /* PER REALM. OWNED: the caller frees. */
 JSValue dom_token_list_proto(JSContext *ctx);
-void dom_token_list_free(JSContext *ctx);
+void dom_token_list_free(JSRuntime *rt);
 /* `DOMTokenList` as a global — the interface object and its prototype. */
 void dom_token_list_install(JSContext *ctx, JSValueConst global);
 /* Install `classList` on Element.prototype — §4.9 puts it there and nowhere else. */

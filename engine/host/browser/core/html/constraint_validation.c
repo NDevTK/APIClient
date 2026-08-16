@@ -1010,13 +1010,13 @@ void constraint_validation_install(JSContext *ctx, JSValueConst input_proto, JSV
     idl_install_method(ctx, textarea_proto, "setCustomValidity", 1, g_id_set_custom);
 }
 
-void constraint_validation_free(JSContext *ctx)
+void constraint_validation_free(JSRuntime *rt)
 {
     /* The slot key is the AGENT's — a Symbol nobody frees is a live GC object the runtime's own walk counts as
        a leak. */
-    JS_FreeAtom(ctx, g_atom_custom);
+    JS_FreeAtomRT(rt, g_atom_custom);
     g_atom_custom = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_custom_key);
+    JS_FreeValueRT(rt, g_custom_key);
     g_custom_key = JS_UNDEFINED;
     g_id_set_custom = -1;
 }

@@ -3769,10 +3769,9 @@ int main(int argc, char **argv) {
     abort_free(ctx);
     observable_free(ctx);
     document_free(ctx);   /* the window reference the lifecycle holds */
-    iframe_free(ctx);
-    element_free(ctx);    /* the wrapper identity table and the DOM interface prototypes */
-    dom_rect_list_free(ctx);   /* GEOMETRY §4's slot Symbol; §3 below holds only pool ids */
-    dom_rect_free();
+    /* THE WHOLE DOM GROUP — element_free's cascade, the <iframe> element and GEOMETRY INTERFACES §3/§4 — is a
+       set of ROWS on core/platform.h's release column now, run by the platform_agent_free above. `document`
+       stays: document_free releases a REALM's record, not the agent's. See main.c's teardown. */
     event_target_free(ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
     message_port_free(ctx);

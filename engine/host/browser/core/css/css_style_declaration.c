@@ -2008,11 +2008,11 @@ void cssom_install(JSContext *ctx, JSValueConst global)
     idl_install_method(ctx, global, "getComputedStyle", 1, g_id_gcs);
 }
 
-void cssom_free(JSContext *ctx)
+void cssom_free(JSRuntime *rt)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_decl_key);   /* the prototypes are the REALMS' — released with their contexts */
-    JS_FreeValue(ctx, g_inline_key);
+    JS_FreeValueRT(rt, g_decl_key);   /* the prototypes are the REALMS' — released with their contexts */
+    JS_FreeValueRT(rt, g_inline_key);
     g_decl_key = g_inline_key = JS_UNDEFINED;
     /* The selector state is released BY NAME: `lxb_css_parser_destroy` frees the parser's stack, rules, string
        buffer, log and tokenizer and does NOT touch `selectors`, so the record installed in cssom_init is this

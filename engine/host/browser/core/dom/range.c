@@ -1594,9 +1594,9 @@ void range_install(JSContext *ctx, JSValueConst global)
    there is a use-after-free at the first finalizer, and asserting the list is empty there asserts an order the
    runtime does not have. So teardown only says "no more registrations are coming", and the LAST finalizer
    frees the array. A list that is already empty is freed at once, which is the ordinary case. */
-void range_free(JSContext *ctx)
+void range_free(JSRuntime *rt)
 {
     g_live_closed = 1;
     range_live_drop();
-    abstract_range_free(ctx);
+    abstract_range_free(rt);
 }

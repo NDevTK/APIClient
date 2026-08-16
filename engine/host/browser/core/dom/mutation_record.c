@@ -155,11 +155,11 @@ void mutation_record_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
 }
 
-void mutation_record_free(JSContext *ctx)
+void mutation_record_free(JSRuntime *rt)
 {
     if (!g_record_class) return;
-    JS_FreeAtom(ctx, g_atom_fields);
+    JS_FreeAtomRT(rt, g_atom_fields);
     g_atom_fields = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_fields_key);
+    JS_FreeValueRT(rt, g_fields_key);
     g_fields_key = JS_UNDEFINED;
 }

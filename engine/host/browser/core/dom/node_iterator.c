@@ -421,9 +421,9 @@ void node_iterator_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
 }
 
-void node_iterator_free(JSContext *ctx)
+void node_iterator_free(JSRuntime *rt)
 {
-    (void)ctx;
+    (void)rt;
     /* THE LIST OUTLIVES THE COMPONENT'S TEARDOWN, and it has to. A component's `_free` runs BEFORE the runtime's
        final sweep, so the objects whose finalizers unregister are still alive when it does — freeing the array
        there is a use-after-free at the first finalizer, and asserting the list is empty there asserts an order the

@@ -3100,12 +3100,12 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global)
 }
 
 
-void node_free(JSContext *ctx)
+void node_free(JSRuntime *rt)
 {
     int i;
     for (i = 0; i < g_wrap_cap; i++)
         if (g_wraps[i].n)
-            JS_FreeValue(ctx, g_wraps[i].obj);
+            JS_FreeValueRT(rt, g_wraps[i].obj);
     free(g_wraps);
     g_wraps = NULL; g_wrap_n = g_wrap_cap = 0;
     /* The prototypes are the REALMS' — each is released with its context. What the AGENT holds is the table of

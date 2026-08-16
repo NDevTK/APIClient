@@ -166,9 +166,9 @@ void idl_indexed_init(JSContext *ctx)
     g_ready = 1;
 }
 
-void idl_indexed_free(JSContext *ctx)
+void idl_indexed_free(JSRuntime *rt)
 {
-    (void)ctx;
+    (void)rt;
     g_ready = 0;
 }
 

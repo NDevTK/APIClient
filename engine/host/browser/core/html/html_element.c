@@ -647,15 +647,15 @@ bool html_element_is(JSValueConst v)
     return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->ns == LXB_NS_HTML;
 }
 
-void html_element_free(JSContext *ctx)
+void html_element_free(JSRuntime *rt)
 {
-    dom_string_map_free(ctx);
+    dom_string_map_free(rt);
     declarative_shadow_free();
-    html_form_free(ctx);
-    html_dialog_free(ctx);
-    media_element_free(ctx);
-    element_internals_free(ctx);
-    if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
+    html_form_free(rt);
+    html_dialog_free(rt);
+    media_element_free(rt);
+    element_internals_free(rt);
+    if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
     /* the prototypes are the REALMS' — each is released with its context; the AGENT holds only class ids */
     g_html_ready = 0;
 }

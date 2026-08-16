@@ -2070,23 +2070,23 @@ void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst inp
     input_picker_install(ctx, input_proto);  /* §4.10.5.4's `showPicker()`, on the same prototype */
 }
 
-void html_form_free(JSContext *ctx)
+void html_form_free(JSRuntime *rt)
 {
-    submit_event_free(ctx);
-    form_data_event_free(ctx);
-    form_entry_list_free(ctx);
-    constraint_validation_free(ctx);
+    submit_event_free(rt);
+    form_data_event_free(rt);
+    form_entry_list_free(rt);
+    constraint_validation_free(rt);
     input_value_free();
     input_picker_free();
     user_activation_free();
     /* The slot keys are the AGENT's, so they are released with the agent — a Symbol nobody frees is a live GC
        object the runtime's own walk counts as a leak. */
-    JS_FreeAtom(ctx, g_atom_owner);
+    JS_FreeAtomRT(rt, g_atom_owner);
     g_atom_owner = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_owner_key);
+    JS_FreeValueRT(rt, g_owner_key);
     g_owner_key = JS_UNDEFINED;
-    JS_FreeAtom(ctx, g_atom_firing);
+    JS_FreeAtomRT(rt, g_atom_firing);
     g_atom_firing = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_firing_key);
+    JS_FreeValueRT(rt, g_firing_key);
     g_firing_key = JS_UNDEFINED;
 }

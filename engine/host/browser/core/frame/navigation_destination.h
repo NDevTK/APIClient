@@ -30,7 +30,7 @@
 void navigation_destination_init(JSContext *ctx);
 /* §3.7: THIS REALM's prototype and interface object — declared into core/realm.h's list. */
 void navigation_destination_install_protos(JSContext *ctx);
-void navigation_destination_free(JSContext *ctx);
+void navigation_destination_free(JSRuntime *rt);
 
 /* The CLASS, for `required NavigationDestination destination` to brand against — §7.2.6.10.1's NavigateEventInit
    declares the member as an interface type, and idl_iface_brand takes the class that type means. */

@@ -764,16 +764,16 @@ void shadow_root_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
 }
 
-void shadow_root_free(JSContext *ctx)
+void shadow_root_free(JSRuntime *rt)
 {
     if (!g_ready) return;
     /* The slot keys are the AGENT's — a Symbol nobody frees is a live GC object the runtime's own walk counts
        as a leak. The prototypes are the REALMS', released with their contexts. */
-    JS_FreeAtom(ctx, g_atom_slots);
-    JS_FreeAtom(ctx, g_atom_shadow);
+    JS_FreeAtomRT(rt, g_atom_slots);
+    JS_FreeAtomRT(rt, g_atom_shadow);
     g_atom_slots = g_atom_shadow = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_slots_key);
-    JS_FreeValue(ctx, g_shadow_key);
+    JS_FreeValueRT(rt, g_slots_key);
+    JS_FreeValueRT(rt, g_shadow_key);
     g_slots_key = g_shadow_key = JS_UNDEFINED;
     g_id_attach = g_id_inner_get = g_id_inner_set = g_id_set_html_unsafe = g_id_set_html = -1;
     g_ready = 0;

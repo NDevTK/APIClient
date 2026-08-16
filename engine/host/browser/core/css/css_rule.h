@@ -35,7 +35,7 @@ void css_rule_init(JSContext *ctx);
 void css_rule_install_proto(JSContext *ctx);
 /* `CSSRule` and `CSSStyleRule` as globals. */
 void css_rule_install(JSContext *ctx, JSValueConst global);
-void css_rule_free(JSContext *ctx);
+void css_rule_free(JSRuntime *rt);
 
 /* A §6.4.3 CSSStyleRule over the two texts a parse produced for it, and the sheet it belongs to. `parent_rule`
    is §6.4.2's parent CSS rule — JS_NULL for a top-level rule, and non-null only once CSSGroupingRule nests one.

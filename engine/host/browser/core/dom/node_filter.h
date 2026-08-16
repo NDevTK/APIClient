@@ -100,6 +100,6 @@ void node_filter_init(JSContext *ctx);
 /* §6.3's CALLBACK INTERFACE OBJECT: Web IDL §3.7.2 gives a callback interface with constants a property on the
    global whose value carries them. It is not callable and not constructible — there is nothing to construct. */
 void node_filter_install(JSContext *ctx, JSValueConst global);
-void node_filter_free(JSContext *ctx);
+void node_filter_free(JSRuntime *rt);
 
 #endif

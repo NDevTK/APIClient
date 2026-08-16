@@ -1045,17 +1045,17 @@ void mutation_observer_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "MutationObserver", ctor);
 }
 
-void mutation_observer_free(JSContext *ctx)
+void mutation_observer_free(JSRuntime *rt)
 {
     if (!g_ready) return;
-    mutation_record_free(ctx);
-    JS_FreeValue(ctx, g_pending);
-    JS_FreeValue(ctx, g_mo_key);
-    JS_FreeValue(ctx, g_ro_key);
+    mutation_record_free(rt);
+    JS_FreeValueRT(rt, g_pending);
+    JS_FreeValueRT(rt, g_mo_key);
+    JS_FreeValueRT(rt, g_ro_key);
     g_pending = g_mo_key = g_ro_key = JS_UNDEFINED;
-    JS_FreeAtom(ctx, g_atom_mo);
-    JS_FreeAtom(ctx, g_atom_ro);
-    JS_FreeAtom(ctx, g_atom_queued);
+    JS_FreeAtomRT(rt, g_atom_mo);
+    JS_FreeAtomRT(rt, g_atom_ro);
+    JS_FreeAtomRT(rt, g_atom_queued);
     g_atom_mo = g_atom_ro = g_atom_queued = JS_ATOM_NULL;
     g_notify_stepid = g_notify_slot = -1;
     g_id_observe = g_id_disconnect = g_id_take = g_id_ctor = -1;

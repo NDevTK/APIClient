@@ -624,7 +624,7 @@ void tree_walker_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
 }
 
-void tree_walker_free(JSContext *ctx)
+void tree_walker_free(JSRuntime *rt)
 {
-    (void)ctx;   /* the prototype is the REALM's — released with its context */
+    (void)rt;   /* the prototype is the REALM's — released with its context */
 }

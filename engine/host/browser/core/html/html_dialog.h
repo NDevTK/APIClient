@@ -13,7 +13,7 @@
    HTMLDialogElement.prototype, which core/html/html_element.c owns the table of and therefore hands over. */
 void html_dialog_declare(JSContext *ctx);
 void html_dialog_install(JSContext *ctx, JSValueConst dialog_proto);
-void html_dialog_free(JSContext *ctx);
+void html_dialog_free(JSRuntime *rt);
 
 /* IS THIS NODE A `dialog` ELEMENT — §4.10.22.3 step 11.1's "form does not have an ancestor dialog element" and
    step 11.2's nearest one are both this question, asked of a NODE because the walk that asks it is over the

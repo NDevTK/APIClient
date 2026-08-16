@@ -9,7 +9,7 @@ void range_init(JSContext *ctx);
 /* §5.5's INTERFACE PROTOTYPE OBJECT for one realm — declared into core/realm.h's list. */
 void range_install_proto(JSContext *ctx);
 void range_install(JSContext *ctx, JSValueConst global);
-void range_free(JSContext *ctx);
+void range_free(JSRuntime *rt);
 
 /* §4.5 createRange(): a new live range whose start and end are both (node, 0). `node` is the document's
    wrapper and is BORROWED. */

@@ -11,7 +11,7 @@ void shadow_root_install_proto(JSContext *ctx);
 /* The `ShadowRoot` interface object, and Element's two §4.8 members (`attachShadow`, `shadowRoot`). */
 void shadow_root_install(JSContext *ctx, JSValueConst global);
 void shadow_root_install_element_members(JSContext *ctx, JSValueConst element_proto);
-void shadow_root_free(JSContext *ctx);
+void shadow_root_free(JSRuntime *rt);
 
 /* IS THIS NODE A SHADOW ROOT — the one question every §4.8-aware algorithm asks, and the reason a shadow root
    carries lexbor's own node type rather than being a DocumentFragment with a flag: retargeting, the

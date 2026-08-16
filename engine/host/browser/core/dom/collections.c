@@ -722,11 +722,11 @@ void collections_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "HTMLCollection", hc);
 }
 
-void collections_free(JSContext *ctx)
+void collections_free(JSRuntime *rt)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — released with their contexts */
-    JS_FreeValue(ctx, g_cache_key);
+    JS_FreeValueRT(rt, g_key);   /* the prototypes are the REALMS' — released with their contexts */
+    JS_FreeValueRT(rt, g_cache_key);
     g_key = g_cache_key = JS_UNDEFINED;
     g_ready = 0;
 }

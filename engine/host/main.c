@@ -530,12 +530,12 @@ QJS_EXPORT void qjs_teardown(void)
     abort_free(g_ctx);
     observable_free(g_ctx);
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
-    iframe_free(g_ctx);
-    element_free(g_ctx);    /* the wrapper identity table and the DOM interface prototypes */
-    /* GEOMETRY INTERFACES, after the CSSOM VIEW members that return one: §4's list holds a private Symbol
-       and an interned atom, and §3 holds only pool ids. */
-    dom_rect_list_free(g_ctx);
-    dom_rect_free();
+    /* THE WHOLE DOM GROUP — element_free's forty-two-component cascade, the <iframe> element and GEOMETRY
+       INTERFACES §3/§4 — is NOT freed here any more: all four are ROWS on core/platform.h's release column, run
+       by the platform_agent_free above, and reverse declaration order gives them the same sequence they had
+       here. `document` stays, and stays FIRST, because document_free releases a REALM's record rather than the
+       agent's: it reads `doc_of(ctx)` and clears this context's own opaque, which is the one thing that column
+       cannot express. Every remaining line here is still a hand-copied teardown. */
     event_target_free(g_ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
     message_port_free(g_ctx);

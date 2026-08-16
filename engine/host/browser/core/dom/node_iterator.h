@@ -10,7 +10,7 @@ void node_iterator_init(JSContext *ctx);
 void node_iterator_install_proto(JSContext *ctx);
 /* §6.1's interface OBJECT on the global. It declares no constructor. */
 void node_iterator_install(JSContext *ctx, JSValueConst global);
-void node_iterator_free(JSContext *ctx);
+void node_iterator_free(JSRuntime *rt);
 
 /* §4.5 createNodeIterator steps 1-5. `root` is the node's wrapper and `filter` is JS_NULL or the callback
    object; both are BORROWED. */

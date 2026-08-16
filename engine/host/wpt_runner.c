@@ -1817,10 +1817,9 @@ int main(int argc, char **argv)
        session that never closed, and flow_release says so at the flow it reaches. */
     flow_registry_free(ctx);
     document_free(ctx);
-    iframe_free(ctx);
-    element_free(ctx);
-    dom_rect_list_free(ctx);   /* GEOMETRY §4's slot Symbol; §3 below holds only pool ids */
-    dom_rect_free();
+    /* THE WHOLE DOM GROUP — element_free's cascade, the <iframe> element and GEOMETRY INTERFACES §3/§4 — is a
+       set of ROWS on core/platform.h's release column now, run by the platform_agent_free above. `document`
+       stays: document_free releases a REALM's record, not the agent's. See main.c's teardown. */
     window_free(ctx);
     remote_object_free(ctx);
     window_proxy_free(ctx);

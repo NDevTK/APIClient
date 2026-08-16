@@ -231,6 +231,37 @@ static void r_broadcast_channel(JSRuntime *rt) { broadcast_channel_free(rt); }
 /* XMLHttpRequest holds the agent's step definitions and, through §5's ProgressEvent, the private Symbol that
    interface's own slots hang off. main.c freed it, wpt_runner.c and test_forced.c did not. */
 static void r_xhr(JSRuntime *rt) { xhr_free(rt); }
+/* §7.2.6.10.3's NavigationDestination, AND IT IS THE ROW THE AUDIT FOUND RATHER THAN THE LEAK WALK. Its release
+   was written, exported from its header, and CALLED BY NOBODY — not by a host, not by another component — so
+   the private Symbol its internal slots hang off has been leaked by every run this engine has ever made. The
+   walk could not report it and never will: a private Symbol is a JSAtomStruct, which is not on gc_obj_list, so
+   `JS_FreeRuntime`'s object walk does not see it, and the atom walk beside it is behind ENABLE_DUMPS +
+   JS_DUMP_ATOM_LEAKS, which no host in this tree sets. A component released by nobody is what a THIRD copy of
+   a hand-written list produces; here there was no copy at all, which is the same defect with the report
+   removed. */
+static void r_nav_destination(JSRuntime *rt) { navigation_destination_free(rt); }
+/* THE DOM GROUP, WHOSE ROOT IS THE LARGEST CASCADE IN THIS BROWSER. element_free reaches forty-two further
+   releases — node.c's WRAPPER IDENTITY TABLE (a counted reference to every node wrapper ever minted, and a
+   wrapper holds its prototype, which holds the realm), custom_elements' registry backup and active-constructor
+   map, §4.3's pending mutation-record queue, the CSSOM group, the selector engine's lexbor arena, the CSS
+   parser, and the private Symbol every one of slot/shadow_root/element_internals/html_dialog/html_form hangs
+   its internal slots off. Every one of those is a C static held for the AGENT, which is the entry condition for
+   this column, and all of it was written by hand into three host teardowns instead — correct in all three
+   today, and one edit from not being, which is the whole of what happened to the eight components before it.
+   WHAT BLOCKED IT WAS A SIGNATURE AND NOTHING ELSE: the cascade freed against a JSContext, so it could not be
+   a row. It takes a JSRuntime now and reaches the same values through JS_FreeValueRT/JS_FreeAtomRT — the same
+   operation, since JS_FreeValue is JS_FreeValueRT(ctx->rt, v).
+   THE FOUR ROWS MOVE AS A BLOCK, and that is why html_iframe, dom_rect_list and dom_rect come with it rather
+   than after it. Reverse declaration order puts them in exactly the sequence the hand-written lists had them
+   in — iframe, element, dom_rect_list, dom_rect — so nothing about the group's internal order changes; taking
+   only the middle one would have reordered it against its own neighbours.
+   `document` is NOT here, and the reason is the rule this column is stated by: document_free reads
+   `doc_of(ctx)` and clears the realm's own opaque, so what it releases is a REALM's record and not the agent's.
+   A row that wanted a JSContext is a per-realm component in the wrong column. */
+static void r_element(JSRuntime *rt) { element_free(rt); }
+static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
+static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
+static void r_dom_rect(JSRuntime *rt) { (void)rt; dom_rect_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -314,7 +345,7 @@ static const PlatformComponent PLATFORM[] = {
     /* HTML §7.2.6.10.3's NavigationDestination, whose CLASS is what §7.2.6.10.1's `required NavigationDestination
        destination` brands against — so it is declared before `event`, which is where every Event subclass
        including NavigateEvent is declared. It inherits nothing, so its own prototype needs no earlier row. */
-    { "navigation_destination", d_nav_destination,   NULL },
+    { "navigation_destination", d_nav_destination,   NULL,     r_nav_destination },
     { "window",              d_window,              i_window },
     /* §8.10.1's Navigator, and with it Permissions §6 (navigator.permissions), Storage §2 and File System §3
        (navigator.storage) and §6.4.4's UserActivation. This row is the one whose absence from one host's copy
@@ -426,10 +457,10 @@ static const PlatformComponent PLATFORM[] = {
        — a rectangle is four numbers — so their position is decided only by their CONSUMER: CSSOM VIEW §6's
        `getBoundingClientRect` is installed on Element.prototype by the row below, and it mints a DOMRect out of
        the element's own realm, so both prototypes must already be in every realm the list has built. */
-    { "dom_rect",            d_dom_rect,            i_dom_rect },
-    { "dom_rect_list",       d_dom_rect_list,       i_dom_rect_list },
-    { "element",             d_element,             NULL },
-    { "html_iframe",         d_iframe,              NULL },
+    { "dom_rect",            d_dom_rect,            i_dom_rect,  r_dom_rect },
+    { "dom_rect_list",       d_dom_rect_list,       i_dom_rect_list, r_dom_rect_list },
+    { "element",             d_element,             NULL,        r_element },
+    { "html_iframe",         d_iframe,              NULL,        r_iframe },
     /* RFC 6265 §5.3's COOKIE STORE, before the component whose §3.1.4 members read it. It is the first row with
        a RELEASE, and the reason is the reason it is a row at all: the store is the USER AGENT's by the
        standard's own words and an instance is one origin-keyed agent cluster, so it belongs to the JSRuntime

@@ -331,7 +331,7 @@ void dom_string_map_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "DOMStringMap", ctor);
 }
 
-void dom_string_map_free(JSContext *ctx)
+void dom_string_map_free(JSRuntime *rt)
 {
     if (!g_ready) return;
     g_ready = 0;   /* the prototypes are the REALMS' — released with their contexts */

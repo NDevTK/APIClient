@@ -54,6 +54,6 @@ void abstract_range_install_protos(JSContext *ctx);
 /* AbstractRange.prototype — the base §5.5's Range.prototype chains to. OWNED. */
 JSValue abstract_range_proto(JSContext *ctx);
 void abstract_range_install(JSContext *ctx, JSValueConst global);
-void abstract_range_free(JSContext *ctx);
+void abstract_range_free(JSRuntime *rt);
 
 #endif

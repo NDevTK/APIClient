@@ -436,18 +436,18 @@ void html_dialog_install(JSContext *ctx, JSValueConst dialog_proto)
     idl_install_accessor(ctx, dialog_proto, "returnValue", js_dialog_get_return_value, 0, g_id_return_value);
 }
 
-void html_dialog_free(JSContext *ctx)
+void html_dialog_free(JSRuntime *rt)
 {
-    toggle_event_free(ctx);
+    toggle_event_free(rt);
     /* The slot keys are the AGENT's, so they are released with the agent — a Symbol nobody frees is a live GC
        object the runtime's own walk counts as a leak. */
-    JS_FreeAtom(ctx, g_atom_ret);
+    JS_FreeAtomRT(rt, g_atom_ret);
     g_atom_ret = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_ret_key);
+    JS_FreeValueRT(rt, g_ret_key);
     g_ret_key = JS_UNDEFINED;
-    JS_FreeAtom(ctx, g_atom_tracker);
+    JS_FreeAtomRT(rt, g_atom_tracker);
     g_atom_tracker = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_tracker_key);
+    JS_FreeValueRT(rt, g_tracker_key);
     g_tracker_key = JS_UNDEFINED;
     g_toggle_stepid = -1;
     g_id_return_value = -1;

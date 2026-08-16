@@ -111,7 +111,7 @@ JSValue document_fragment_proto(JSContext *ctx)
     return proto;   /* OWNED */
 }
 
-void document_fragment_free(JSContext *ctx)
+void document_fragment_free(JSRuntime *rt)
 {
     if (!g_ready) return;
     /* the prototypes are the REALMS' — released with their contexts */

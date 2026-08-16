@@ -15,7 +15,7 @@
 void dom_rect_list_init(JSContext *ctx);
 void dom_rect_list_install_proto(JSContext *ctx);
 void dom_rect_list_install(JSContext *ctx, JSValueConst global);
-void dom_rect_list_free(JSContext *ctx);
+void dom_rect_list_free(JSRuntime *rt);
 
 /* §4's list over `rects`, an Array of DOMRect in the order the caller's algorithm produced them — CSSOM VIEW
  * §6's is "in content order, one for each box fragment". CONSUMES `rects`.

@@ -62,13 +62,13 @@ void form_entry_list_declare(JSContext *ctx)
     CHECK(g_atom_building != JS_ATOM_NULL, "the constructing-entry-list slot key could not be interned");
 }
 
-void form_entry_list_free(JSContext *ctx)
+void form_entry_list_free(JSRuntime *rt)
 {
     /* The AGENT's, so it is released with the agent — a Symbol nobody frees is a live GC object the runtime's
        own walk counts as a leak. */
-    JS_FreeAtom(ctx, g_atom_building);
+    JS_FreeAtomRT(rt, g_atom_building);
     g_atom_building = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_building_key);
+    JS_FreeValueRT(rt, g_building_key);
     g_building_key = JS_UNDEFINED;
 }
 

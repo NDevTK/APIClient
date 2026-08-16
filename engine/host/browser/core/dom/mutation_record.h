@@ -13,7 +13,7 @@ enum { MR_TYPE_ATTRIBUTES = 0, MR_TYPE_CHARACTER_DATA = 1, MR_TYPE_CHILD_LIST = 
 void mutation_record_init(JSContext *ctx);
 void mutation_record_install_proto(JSContext *ctx);   /* §3.7: this realm's MutationRecord.prototype */
 void mutation_record_install(JSContext *ctx, JSValueConst global);
-void mutation_record_free(JSContext *ctx);
+void mutation_record_free(JSRuntime *rt);
 
 /* §4.3.2 step 3.1's "a new MutationRecord object with its type set to …". Every field is passed because the
    record is IMMUTABLE once made — the spec constructs it in one step and nothing writes to it afterwards, so

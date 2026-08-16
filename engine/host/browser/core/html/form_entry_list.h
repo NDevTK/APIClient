@@ -20,7 +20,7 @@
 /* Steps 1/2/8's "constructing entry list" flag lives on the FORM, under a Symbol minted once per AGENT.
    Declared from html_form_declare, beside §4.10's other slot key, and released with the agent. */
 void form_entry_list_declare(JSContext *ctx);
-void form_entry_list_free(JSContext *ctx);
+void form_entry_list_free(JSRuntime *rt);
 /* §4.10.21.3 STEP 2's guard, over that same flag: "if form's constructing entry list is true, then return".
    It is a separate reader rather than a second flag because the two steps are about the same fact — a form
    re-entered from its own `formdata` handler — and step 2 has to answer BEFORE step 11 fires a second `submit`

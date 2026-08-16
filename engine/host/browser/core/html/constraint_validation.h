@@ -40,7 +40,7 @@ enum { CONSTRAINT_VALIDATION_STATES(CV_STATE_ENUM) CV_STATE_COUNT };
    is where the prototypes these go on arrive. */
 void constraint_validation_declare(JSContext *ctx);
 void constraint_validation_install(JSContext *ctx, JSValueConst input_proto, JSValueConst textarea_proto);
-void constraint_validation_free(JSContext *ctx);
+void constraint_validation_free(JSRuntime *rt);
 
 /* §4.10.21.1's "a submittable element is a CANDIDATE FOR CONSTRAINT VALIDATION except when a condition has
    barred the element from constraint validation", and `willValidate`'s whole answer. */

@@ -7,7 +7,7 @@
 #include "core/idl_args.h"
 
 void    element_init(JSContext *ctx);
-void    element_free(JSContext *ctx);
+void    element_free(JSRuntime *rt);
 
 /* HTML §13.4's FRAGMENT PARSE, and WHICH MEMBER is driving it — the magic every declaration of the one machine
    carries. Five members over one parse: they differ in the TARGET whose children the fragment replaces, in the

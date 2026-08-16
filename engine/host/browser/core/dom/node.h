@@ -11,7 +11,7 @@ void node_init(JSContext *ctx);
 void node_install_protos(JSContext *ctx);
 /* PER REALM. OWNED: the caller frees. */
 JSValue node_chardata_proto(JSContext *ctx);
-void node_free(JSContext *ctx);
+void node_free(JSRuntime *rt);
 
 /* The wrapper for `n`, or JS_NULL. The SAME Lexbor node always yields the SAME JS object: a page compares nodes
    by identity constantly, and a fresh wrapper per lookup makes every such comparison silently false. The

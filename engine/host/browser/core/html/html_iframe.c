@@ -354,9 +354,8 @@ void iframe_install(JSContext *ctx, JSValueConst proto)
     idl_install_accessor_step(ctx, proto, "contentDocument", g_content_doc_id, -1);
 }
 
-void iframe_free(JSContext *ctx)
+void iframe_free(JSRuntime *rt)
 {
-    (void)ctx;
-    JS_FreeAtom(ctx, g_atom_navigable);
+    JS_FreeAtomRT(rt, g_atom_navigable);
     g_atom_navigable = JS_ATOM_NULL;
 }

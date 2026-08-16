@@ -17,7 +17,7 @@ void cssom_init(JSContext *ctx);
 char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name);
 /* CSSOM §6.6.1's two prototypes for ONE realm — declared into core/realm.h's list, run once per realm. */
 void cssom_install_proto(JSContext *ctx);
-void cssom_free(JSContext *ctx);
+void cssom_free(JSRuntime *rt);
 /* `CSSStyleDeclaration` and `CSSStyleProperties` as globals, and `getComputedStyle` on the one the Window IDL
    puts it on. */
 void cssom_install(JSContext *ctx, JSValueConst global);

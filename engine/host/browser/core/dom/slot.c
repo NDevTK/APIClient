@@ -755,20 +755,20 @@ void slot_install_slottable_mixin(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "assignedSlot", js_slottable_assigned_slot, 0, -1);
 }
 
-void slot_free(JSContext *ctx)
+void slot_free(JSRuntime *rt)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_signal_slots);
+    JS_FreeValueRT(rt, g_signal_slots);
     g_signal_slots = JS_UNDEFINED;
-    JS_FreeAtom(ctx, g_atom_assigned);
-    JS_FreeAtom(ctx, g_atom_manual);
-    JS_FreeAtom(ctx, g_atom_slot_of);
-    JS_FreeAtom(ctx, g_atom_manual_of);
+    JS_FreeAtomRT(rt, g_atom_assigned);
+    JS_FreeAtomRT(rt, g_atom_manual);
+    JS_FreeAtomRT(rt, g_atom_slot_of);
+    JS_FreeAtomRT(rt, g_atom_manual_of);
     g_atom_assigned = g_atom_manual = g_atom_slot_of = g_atom_manual_of = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_assigned_key);
-    JS_FreeValue(ctx, g_manual_key);
-    JS_FreeValue(ctx, g_slot_of_key);
-    JS_FreeValue(ctx, g_manual_of_key);
+    JS_FreeValueRT(rt, g_assigned_key);
+    JS_FreeValueRT(rt, g_manual_key);
+    JS_FreeValueRT(rt, g_slot_of_key);
+    JS_FreeValueRT(rt, g_manual_of_key);
     g_assigned_key = g_manual_key = g_slot_of_key = g_manual_of_key = JS_UNDEFINED;
     g_id_assigned_nodes = g_id_assigned_elements = g_id_assign = -1;
     g_ready = 0;

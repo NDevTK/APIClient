@@ -88,7 +88,7 @@ int  custom_elements_reactions_invoke(JSContext *ctx, CustomElementQueue *q, JSV
                                       JSValue **out_cb, int *out_argc);
 
 void custom_elements_init(JSContext *ctx);
-void custom_elements_free(JSContext *ctx);
+void custom_elements_free(JSRuntime *rt);
 
 /* HTML §4.13.2's `[HTMLConstructor]` AS THIS REALM'S HTMLElement INTERFACE OBJECT. It is minted here and not
    where the other interface objects are because the algorithm is this component's — it walks the definition

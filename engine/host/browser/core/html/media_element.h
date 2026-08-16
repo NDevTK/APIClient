@@ -11,7 +11,7 @@
 /* Declared ONCE PER AGENT, from html_element_init — the interfaces, the reflections §4.8.11 puts on
    HTMLMediaElement rather than on the two element interfaces that inherit them, and the step machines. */
 void media_element_declare(JSContext *ctx);
-void media_element_free(JSContext *ctx);
+void media_element_free(JSRuntime *rt);
 
 /* PER REALM. Builds HTMLMediaElement.prototype over `html_proto` (§4.8.11's `interface HTMLMediaElement :
    HTMLElement`), MediaError.prototype and TimeRanges.prototype. It must run BEFORE the per-tag prototypes,

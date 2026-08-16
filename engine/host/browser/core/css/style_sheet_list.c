@@ -449,18 +449,18 @@ void style_sheet_list_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
 }
 
-void style_sheet_list_free(JSContext *ctx)
+void style_sheet_list_free(JSRuntime *rt)
 {
     if (!g_list_class) return;   /* the prototype is the REALM's — released with its context */
-    JS_FreeAtom(ctx, g_atom_sheets);
-    JS_FreeAtom(ctx, g_atom_view);
-    JS_FreeAtom(ctx, g_atom_holder);
-    JS_FreeAtom(ctx, g_atom_backing);
+    JS_FreeAtomRT(rt, g_atom_sheets);
+    JS_FreeAtomRT(rt, g_atom_view);
+    JS_FreeAtomRT(rt, g_atom_holder);
+    JS_FreeAtomRT(rt, g_atom_backing);
     g_atom_sheets = g_atom_view = g_atom_holder = g_atom_backing = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_sheets_key);
-    JS_FreeValue(ctx, g_view_key);
-    JS_FreeValue(ctx, g_holder_key);
-    JS_FreeValue(ctx, g_backing_key);
+    JS_FreeValueRT(rt, g_sheets_key);
+    JS_FreeValueRT(rt, g_view_key);
+    JS_FreeValueRT(rt, g_holder_key);
+    JS_FreeValueRT(rt, g_backing_key);
     g_sheets_key = g_view_key = g_holder_key = g_backing_key = JS_UNDEFINED;
     g_id_item = -1;
 }

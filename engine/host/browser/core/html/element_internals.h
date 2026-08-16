@@ -14,7 +14,7 @@ void element_internals_declare(JSContext *ctx);
 void element_internals_install_html_members(JSContext *ctx, JSValueConst html_proto);
 /* The interface OBJECTS — `ElementInternals`, `CustomStateSet`, `ValidityState`. */
 void element_internals_install(JSContext *ctx, JSValueConst global);
-void element_internals_free(JSContext *ctx);
+void element_internals_free(JSRuntime *rt);
 
 /* §4.13.5 STEP 10's TWO REACTIONS, for the upgrade that has just made an element custom. It is here rather
    than in custom_elements.c because step 10.1's "reset the form owner" and step 10.2's "is disabled" are this

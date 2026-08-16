@@ -1100,36 +1100,36 @@ void element_internals_install(JSContext *ctx, JSValueConst global)
     }
 }
 
-void element_internals_free(JSContext *ctx)
+void element_internals_free(JSRuntime *rt)
 {
     if (!g_ready) return;
     /* The slot keys are the AGENT's — a Symbol nobody frees is a live GC object the runtime's own walk counts
        as a leak. The prototypes are the REALMS', released with their contexts. */
-    JS_FreeAtom(ctx, g_atom_target);
-    JS_FreeAtom(ctx, g_atom_attached);
-    JS_FreeAtom(ctx, g_atom_face);
-    JS_FreeAtom(ctx, g_atom_states);
-    JS_FreeAtom(ctx, g_atom_aria);
-    JS_FreeAtom(ctx, g_atom_setitems);
-    JS_FreeAtom(ctx, g_atom_vtarget);
-    JS_FreeAtom(ctx, g_atom_validity);
-    JS_FreeAtom(ctx, g_atom_value);
-    JS_FreeAtom(ctx, g_atom_state);
-    JS_FreeAtom(ctx, g_atom_flags);
-    JS_FreeAtom(ctx, g_atom_message);
-    JS_FreeAtom(ctx, g_atom_anchor);
-    JS_FreeAtom(ctx, g_atom_custom);
+    JS_FreeAtomRT(rt, g_atom_target);
+    JS_FreeAtomRT(rt, g_atom_attached);
+    JS_FreeAtomRT(rt, g_atom_face);
+    JS_FreeAtomRT(rt, g_atom_states);
+    JS_FreeAtomRT(rt, g_atom_aria);
+    JS_FreeAtomRT(rt, g_atom_setitems);
+    JS_FreeAtomRT(rt, g_atom_vtarget);
+    JS_FreeAtomRT(rt, g_atom_validity);
+    JS_FreeAtomRT(rt, g_atom_value);
+    JS_FreeAtomRT(rt, g_atom_state);
+    JS_FreeAtomRT(rt, g_atom_flags);
+    JS_FreeAtomRT(rt, g_atom_message);
+    JS_FreeAtomRT(rt, g_atom_anchor);
+    JS_FreeAtomRT(rt, g_atom_custom);
     g_atom_target = g_atom_attached = g_atom_face = g_atom_states = g_atom_aria = JS_ATOM_NULL;
     g_atom_setitems = g_atom_vtarget = g_atom_validity = JS_ATOM_NULL;
     g_atom_value = g_atom_state = g_atom_flags = g_atom_message = g_atom_anchor = g_atom_custom = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_target_key);
-    JS_FreeValue(ctx, g_attached_key);
-    JS_FreeValue(ctx, g_face_key);
-    JS_FreeValue(ctx, g_states_key);
-    JS_FreeValue(ctx, g_aria_key);
-    JS_FreeValue(ctx, g_setitems_key);
-    JS_FreeValue(ctx, g_vtarget_key);
-    JS_FreeValue(ctx, g_validity_key);
+    JS_FreeValueRT(rt, g_target_key);
+    JS_FreeValueRT(rt, g_attached_key);
+    JS_FreeValueRT(rt, g_face_key);
+    JS_FreeValueRT(rt, g_states_key);
+    JS_FreeValueRT(rt, g_aria_key);
+    JS_FreeValueRT(rt, g_setitems_key);
+    JS_FreeValueRT(rt, g_vtarget_key);
+    JS_FreeValueRT(rt, g_validity_key);
     g_validity_key = JS_UNDEFINED;
     g_target_key = g_attached_key = g_face_key = g_states_key = g_aria_key = JS_UNDEFINED;
     g_setitems_key = g_vtarget_key = JS_UNDEFINED;

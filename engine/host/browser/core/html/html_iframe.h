@@ -38,6 +38,6 @@ void iframe_document_parsed(JSContext *ctx);
 int     iframe_child_navigable_count(JSContext *ctx);
 JSValue iframe_child_navigable(JSContext *ctx, int index);
 
-void iframe_free(JSContext *ctx);
+void iframe_free(JSRuntime *rt);
 
 #endif

@@ -8,7 +8,7 @@
    declaration point. The per-realm half declares ITSELF into realm.h's one list, so every realm this agent
    builds has SubmitEvent.prototype and the interface object the IDL's [Exposed=Window] puts on its global. */
 void submit_event_init(JSContext *ctx);
-void submit_event_free(JSContext *ctx);
+void submit_event_free(JSRuntime *rt);
 
 /* §4.10.22.3 step 5.6's event: "fire an event named submit at form using SubmitEvent, with the submitter
    attribute initialized to submitterButton, the bubbles attribute initialized to true, and the cancelable

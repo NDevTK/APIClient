@@ -291,10 +291,10 @@ void html_style_element_install(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "disabled", js_style_disabled, 0, g_id_set_disabled);
 }
 
-void html_style_element_free(JSContext *ctx)
+void html_style_element_free(JSRuntime *rt)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_key);
+    JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
     g_id_set_disabled = -1;
     g_ready = false;

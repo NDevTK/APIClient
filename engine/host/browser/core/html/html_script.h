@@ -46,7 +46,7 @@
    the key is a Symbol and its atom is an interned reference, so an agent torn down without this leaves both
    for the runtime's own leak walk to count. */
 void html_script_init(JSContext *ctx);
-void html_script_free(JSContext *ctx);
+void html_script_free(JSRuntime *rt);
 
 /* HTML §13.2.6.4.4's `script` start tag under §13.2.4.5's INERT scripting mode, applied to the tree a fragment
    parse produced: every `script` element in `root`'s subtree gets `already started` true.

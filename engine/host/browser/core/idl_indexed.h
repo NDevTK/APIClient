@@ -30,7 +30,7 @@ typedef struct {
 void *idl_indexed_cache(JSValueConst obj);
 
 void idl_indexed_init(JSContext *ctx);
-void idl_indexed_free(JSContext *ctx);
+void idl_indexed_free(JSRuntime *rt);
 
 /* A new object with `proto` that answers index lookups through `decl`. The decl is BORROWED and must outlive
    the runtime, which is what makes it a static per-interface constant rather than per-instance state. */

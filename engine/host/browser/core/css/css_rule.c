@@ -478,7 +478,7 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
 }
 
-void css_rule_free(JSContext *ctx)
+void css_rule_free(JSRuntime *rt)
 {
-    (void)ctx;   /* both prototypes are the REALM's — released with its context */
+    (void)rt;   /* both prototypes are the REALM's — released with its context */
 }

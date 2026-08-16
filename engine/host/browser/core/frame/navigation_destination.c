@@ -276,11 +276,11 @@ void navigation_destination_install_protos(JSContext *ctx)
     JS_FreeValue(ctx, proto);
 }
 
-void navigation_destination_free(JSContext *ctx)
+void navigation_destination_free(JSRuntime *rt)
 {
     /* The prototypes and the interface objects are the REALMS' — each is released with its context. What the
        agent holds is the Symbol it minted, which is a runtime-lifetime value this component owns. */
-    JS_FreeValue(ctx, g_key);
+    JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
     g_id_get_state = -1;
     g_ready = 0;

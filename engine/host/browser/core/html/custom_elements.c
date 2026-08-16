@@ -2905,58 +2905,58 @@ void custom_elements_install_proto(JSContext *ctx)
     JS_SetClassProto(ctx, g_registry_class, proto);
 }
 
-void custom_elements_free(JSContext *ctx)
+void custom_elements_free(JSRuntime *rt)
 {
     int k;
 
     if (!g_ready) return;
     /* the registries are the REALMS' — released with their contexts */
-    JS_FreeValue(ctx, g_ce_backup);
-    JS_FreeValue(ctx, g_rq_key);
-    JS_FreeValue(ctx, g_active_ctor_map);
-    JS_FreeValue(ctx, g_reg_key);
-    JS_FreeValue(ctx, g_node_reg_key);
+    JS_FreeValueRT(rt, g_ce_backup);
+    JS_FreeValueRT(rt, g_rq_key);
+    JS_FreeValueRT(rt, g_active_ctor_map);
+    JS_FreeValueRT(rt, g_reg_key);
+    JS_FreeValueRT(rt, g_node_reg_key);
     g_ce_backup = g_rq_key = JS_UNDEFINED;
     g_active_ctor_map = g_reg_key = g_node_reg_key = JS_UNDEFINED;
-    JS_FreeAtom(ctx, g_atom_reg);
-    JS_FreeAtom(ctx, g_atom_node_reg);
-    JS_FreeAtom(ctx, g_atom_defs);
-    JS_FreeAtom(ctx, g_atom_order);
-    JS_FreeAtom(ctx, g_atom_whendef);
-    JS_FreeAtom(ctx, g_atom_scoped);
-    JS_FreeAtom(ctx, g_atom_docs);
-    JS_FreeAtom(ctx, g_atom_defining);
+    JS_FreeAtomRT(rt, g_atom_reg);
+    JS_FreeAtomRT(rt, g_atom_node_reg);
+    JS_FreeAtomRT(rt, g_atom_defs);
+    JS_FreeAtomRT(rt, g_atom_order);
+    JS_FreeAtomRT(rt, g_atom_whendef);
+    JS_FreeAtomRT(rt, g_atom_scoped);
+    JS_FreeAtomRT(rt, g_atom_docs);
+    JS_FreeAtomRT(rt, g_atom_defining);
     g_atom_reg = g_atom_node_reg = g_atom_defs = g_atom_order = g_atom_whendef = JS_ATOM_NULL;
     g_atom_scoped = g_atom_docs = g_atom_defining = JS_ATOM_NULL;
     g_current = NULL;
-    JS_FreeAtom(ctx, g_atom_rq);
-    JS_FreeAtom(ctx, g_atom_rq_head);
-    JS_FreeAtom(ctx, g_atom_backup_flag);
+    JS_FreeAtomRT(rt, g_atom_rq);
+    JS_FreeAtomRT(rt, g_atom_rq_head);
+    JS_FreeAtomRT(rt, g_atom_backup_flag);
     g_atom_rq = g_atom_rq_head = g_atom_backup_flag = JS_ATOM_NULL;
     g_backup_stepid = -1;
-    JS_FreeAtom(ctx, g_atom_prototype);
-    JS_FreeAtom(ctx, g_atom_ctor);
-    JS_FreeAtom(ctx, g_atom_proto);
-    JS_FreeAtom(ctx, g_atom_observed);
-    JS_FreeAtom(ctx, g_atom_observed_src);
-    JS_FreeAtom(ctx, g_atom_callbacks);
-    JS_FreeAtom(ctx, g_atom_name);
-    JS_FreeAtom(ctx, g_atom_local);
-    JS_FreeAtom(ctx, g_atom_stack);
-    JS_FreeAtom(ctx, g_atom_flags);
-    JS_FreeAtom(ctx, g_atom_disabled_src);
-    JS_FreeAtom(ctx, g_atom_form_assoc_src);
+    JS_FreeAtomRT(rt, g_atom_prototype);
+    JS_FreeAtomRT(rt, g_atom_ctor);
+    JS_FreeAtomRT(rt, g_atom_proto);
+    JS_FreeAtomRT(rt, g_atom_observed);
+    JS_FreeAtomRT(rt, g_atom_observed_src);
+    JS_FreeAtomRT(rt, g_atom_callbacks);
+    JS_FreeAtomRT(rt, g_atom_name);
+    JS_FreeAtomRT(rt, g_atom_local);
+    JS_FreeAtomRT(rt, g_atom_stack);
+    JS_FreeAtomRT(rt, g_atom_flags);
+    JS_FreeAtomRT(rt, g_atom_disabled_src);
+    JS_FreeAtomRT(rt, g_atom_form_assoc_src);
     g_atom_flags = g_atom_disabled_src = g_atom_form_assoc_src = JS_ATOM_NULL;
     g_atom_name = g_atom_local = g_atom_stack = JS_ATOM_NULL;
-    JS_FreeAtom(ctx, g_atom_def);
-    JS_FreeValue(ctx, g_def_key);
+    JS_FreeAtomRT(rt, g_atom_def);
+    JS_FreeValueRT(rt, g_def_key);
     g_def_key = JS_UNDEFINED;
-    JS_FreeAtom(ctx, g_atom_state);
+    JS_FreeAtomRT(rt, g_atom_state);
     g_atom_state = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_state_key);
+    JS_FreeValueRT(rt, g_state_key);
     g_state_key = JS_UNDEFINED;
     for (k = 0; k < CE_CB_COUNT; k++) {
-        JS_FreeAtom(ctx, g_cb_atoms[k]);
+        JS_FreeAtomRT(rt, g_cb_atoms[k]);
         g_cb_atoms[k] = JS_ATOM_NULL;
     }
     g_atom_prototype = g_atom_def = JS_ATOM_NULL;

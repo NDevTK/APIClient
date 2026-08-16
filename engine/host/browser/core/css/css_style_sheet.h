@@ -32,7 +32,7 @@ void css_style_sheet_init(JSContext *ctx);
 void css_style_sheet_install_proto(JSContext *ctx);
 /* `StyleSheet` and `CSSStyleSheet` as globals. */
 void css_style_sheet_install(JSContext *ctx, JSValueConst global);
-void css_style_sheet_free(JSContext *ctx);
+void css_style_sheet_free(JSRuntime *rt);
 
 /* §6.1's "CREATE A CSS STYLE SHEET" — step 1, "create a new CSS style sheet object and set its properties as
    specified". The arguments ARE §6.1's state items, spelled out one per parameter rather than gathered into a

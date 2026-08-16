@@ -13,7 +13,7 @@
 void html_form_declare(JSContext *ctx);
 void html_form_install(JSContext *ctx, JSValueConst form_proto, JSValueConst input_proto,
                        JSValueConst textarea_proto, JSValueConst option_proto);
-void html_form_free(JSContext *ctx);
+void html_form_free(JSRuntime *rt);
 /* `document.forms` — a Document member, so document.c installs it on its prototype. */
 
 /* ---- §4.10.18.3 THE FORM OWNER -----------------------------------------------------------------------------

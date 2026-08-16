@@ -536,15 +536,15 @@ void dom_token_list_install_element(JSContext *ctx, JSValueConst element_proto)
     dom_token_list_install_reflection(ctx, element_proto, "classList");
 }
 
-void dom_token_list_free(JSContext *ctx)
+void dom_token_list_free(JSRuntime *rt)
 {
     if (!g_ready) return;
     {
         int i;
-        for (i = 0; i < TL_N; i++) { JS_FreeValue(ctx, g_key[i]); g_key[i] = JS_UNDEFINED; }
+        for (i = 0; i < TL_N; i++) { JS_FreeValueRT(rt, g_key[i]); g_key[i] = JS_UNDEFINED; }
     }
-    JS_FreeValue(ctx, g_owner_key);
-    JS_FreeValue(ctx, g_which_key);
+    JS_FreeValueRT(rt, g_owner_key);
+    JS_FreeValueRT(rt, g_which_key);
     /* the prototypes are the REALMS' — released with their contexts */
     g_owner_key = g_which_key = JS_UNDEFINED;
     g_ready = 0;

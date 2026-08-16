@@ -1970,6 +1970,12 @@ JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
    a fresh closure for every member of every element and made `a.getAttribute === b.getAttribute` false. */
 /* PER REALM — §3.7. The node-type table names the CLASS; the prototype lives in its per-context slot. */
 static JSClassID g_element_class;
+/* THE RUNTIME THIS GROUP WAS DECLARED IN. element_free is core/platform.h's release column, so it is handed a
+   JSRuntime rather than deriving one from a realm — and JS_FreeValueRT will drop a reference against WHATEVER
+   runtime it is given, silently, so the one thing the retarget to a runtime can get wrong is the runtime. This
+   is the two-sided half of that: the declaration records it, the release asserts it, and the whole forty-two-
+   component cascade below is covered by the one assert at the boundary the column reaches. */
+static JSRuntime *g_element_rt;
 /* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. */
 static int g_refl_base = -1, g_refl_n;
 static int g_id_get_attr = -1, g_id_set_attr = -1, g_id_matches = -1, g_id_closest = -1,
@@ -1995,6 +2001,10 @@ void element_init(JSContext *ctx)
     static const IdlArgType ONE_ATTR[1] = { IDL_INTERFACE };
     JSClassDef d = { "Element" };
 
+    DCHECK(g_element_rt == NULL,
+           "element_init ran twice — this group is declared once per AGENT, and a second declaration re-mints "
+           "the class ids every element wrapper already alive is branded with");
+    g_element_rt = JS_GetRuntime(ctx);
     node_init(ctx);
     JS_NewClassID(JS_GetRuntime(ctx), &g_element_class);
     JS_NewClass(JS_GetRuntime(ctx), g_element_class, &d);
@@ -2196,14 +2206,13 @@ JSValue element_proto(JSContext *ctx)
     return proto;   /* OWNED */
 }
 
-void element_free(JSContext *ctx)
+void element_free(JSRuntime *rt)
 {
-    /* NODE.C IS PART OF THIS GROUP AND WAS THE ONE MEMBER MISSING FROM THE CASCADE. It owns the WRAPPER
-       IDENTITY TABLE, which holds a reference to every node wrapper ever minted — and a wrapper holds its
-       prototype, which holds the realm, so four surviving wrappers kept the whole context alive: MEASURED as
-       2200 retained objects and a JSContext at refcount 2212 on the shipped entry, reported by the runtime's
-       leak walk as anonymous Functions with nothing naming the owner. */
-    node_free(ctx);
+    DCHECK(rt == g_element_rt,
+           "the DOM group was released against a runtime that is not the one it declared in — every JSValue and "
+           "every atom the cascade below gives back would have its reference subtracted from a runtime that "
+           "never took it, and JS_FreeValueRT reports nothing at all when it is the wrong one");
+    g_element_rt = NULL;
     /* THE TREE-STEPS RECORDER'S SCRATCH LIST. It is the chokepoint's own storage, refilled between members and
        emptied by every take, so anything still counted here is a mutation whose insertion steps no member ever
        drained — which the args machine already asserts at its own end and this states again at the teardown,
@@ -2215,32 +2224,42 @@ void element_free(JSContext *ctx)
     g_ts = NULL;
     g_ts_n = g_ts_cap = 0;
     element_view_free();
-    html_element_free(ctx);
-    html_style_element_free(ctx);   /* before the sheet interface whose objects it holds */
-    style_sheet_list_free(ctx);
-    css_rule_list_free(ctx);
-    css_rule_free(ctx);
-    css_style_sheet_free(ctx);
-    cssom_free(ctx);
+    html_element_free(rt);
+    html_style_element_free(rt);   /* before the sheet interface whose objects it holds */
+    style_sheet_list_free(rt);
+    css_rule_list_free(rt);
+    css_rule_free(rt);
+    css_style_sheet_free(rt);
+    cssom_free(rt);
     selector_match_free();   /* after every component that can still match a selector */
-    custom_elements_free(ctx);
-    html_script_free(ctx);
-    mutation_observer_free(ctx);
-    range_free(ctx);
-    tree_walker_free(ctx);
-    node_iterator_free(ctx);
-    node_filter_free(ctx);
-    dom_token_list_free(ctx);
-    collections_free(ctx);
-    attr_free(ctx);
-    if (g_attrs_key != JS_ATOM_NULL) { JS_FreeAtom(ctx, g_attrs_key); g_attrs_key = JS_ATOM_NULL; }
-    document_fragment_free(ctx);
-    shadow_root_free(ctx);
+    custom_elements_free(rt);
+    html_script_free(rt);
+    mutation_observer_free(rt);
+    range_free(rt);
+    tree_walker_free(rt);
+    node_iterator_free(rt);
+    node_filter_free(rt);
+    dom_token_list_free(rt);
+    collections_free(rt);
+    attr_free(rt);
+    if (g_attrs_key != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_attrs_key); g_attrs_key = JS_ATOM_NULL; }
+    document_fragment_free(rt);
+    shadow_root_free(rt);
     fragment_serializer_free();
     sanitizer_free();
-    slot_free(ctx);
-    idl_indexed_free(ctx);
+    slot_free(rt);
+    idl_indexed_free(rt);
     /* the prototypes are the REALMS' — each is released with its context */
     g_reflect_n = 0;
-    node_free(ctx);
+    /* NODE.C IS LAST, and it is the member of this group that holds real references rather than slot keys: the
+       WRAPPER IDENTITY TABLE names every node wrapper ever minted, and a wrapper holds its prototype, which
+       holds the realm — four surviving wrappers were measured keeping a whole JSContext alive at refcount 2212
+       on the shipped entry, reported by the runtime's leak walk as anonymous Functions with nothing naming the
+       owner. It goes after every member above because those are the ones that can still resolve a wrapper
+       (node_wrap_peek answers out of this table), so emptying it first would answer them all with UNDEFINED.
+       IT WAS CALLED TWICE, once here and once at the top of this function under a comment claiming node.c had
+       been "the one member missing from the cascade" — it never was; the call at the bottom predates that
+       claim by four months. The second call was harmless only because node_free happens to be idempotent, and
+       a teardown whose safety rests on that is one edit away from a double free. */
+    node_free(rt);
 }

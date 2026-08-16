@@ -11,7 +11,7 @@ void collections_install_protos(JSContext *ctx);
 /* PER REALM. OWNED: the caller frees. */
 JSValue nodelist_proto(JSContext *ctx);
 JSValue htmlcollection_proto(JSContext *ctx);
-void collections_free(JSContext *ctx);
+void collections_free(JSRuntime *rt);
 /* `NodeList` and `HTMLCollection` as globals. */
 void collections_install(JSContext *ctx, JSValueConst global);
 

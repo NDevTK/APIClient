@@ -18,7 +18,7 @@ void html_style_element_init(JSContext *ctx);
 /* `sheet` (CSSOM §6.3.2's LinkStyle mixin, which HTMLStyleElement includes) and `disabled` (§4.2.6's own, which
    is a forwarding to the sheet's disabled flag and NOT a content-attribute reflection). */
 void html_style_element_install(JSContext *ctx, JSValueConst proto);
-void html_style_element_free(JSContext *ctx);
+void html_style_element_free(JSRuntime *rt);
 
 /* §4.2.6's "UPDATE A STYLE BLOCK" for `el`, run whenever one of the three conditions the standard lists occurs.
    Not every element is a `<style>`: the test is this function's, so a caller at a tree seam names the seam and

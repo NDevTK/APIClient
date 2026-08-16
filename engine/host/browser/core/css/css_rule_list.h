@@ -16,7 +16,7 @@ void css_rule_list_init(JSContext *ctx);
 void css_rule_list_install_proto(JSContext *ctx);
 /* `CSSRuleList` as a global. */
 void css_rule_list_install(JSContext *ctx, JSValueConst global);
-void css_rule_list_free(JSContext *ctx);
+void css_rule_list_free(JSRuntime *rt);
 
 /* A collection over `rules`, which must be the very Array its holder keeps — see the header. CONSUMES `rules`.
    OWNED: the caller frees the collection. */

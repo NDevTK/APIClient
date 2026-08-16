@@ -5,7 +5,7 @@
 
 void document_fragment_init(JSContext *ctx);
 void document_fragment_install(JSContext *ctx, JSValueConst global);
-void document_fragment_free(JSContext *ctx);
+void document_fragment_free(JSRuntime *rt);
 /* DocumentFragment.prototype, borrowed — what template.content's wrapper wears. */
 /* §4.7's prototype for ONE realm — declared into core/realm.h's list. */
 void document_fragment_install_proto(JSContext *ctx);

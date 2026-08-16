@@ -9,7 +9,7 @@
 void mutation_observer_init(JSContext *ctx);
 void mutation_observer_install_proto(JSContext *ctx);   /* §3.7: this realm's MutationObserver.prototype */
 void mutation_observer_install(JSContext *ctx, JSValueConst global);
-void mutation_observer_free(JSContext *ctx);
+void mutation_observer_free(JSRuntime *rt);
 
 /* §4.3.2 "QUEUE A MUTATION RECORD of `type` for `target` with name, namespace, oldValue, addedNodes,
    removedNodes, previousSibling and nextSibling" — the ONE entry every mutation reaches this component

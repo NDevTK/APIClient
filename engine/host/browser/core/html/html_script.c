@@ -39,11 +39,11 @@ void html_script_init(JSContext *ctx)
     CHECK(g_atom_started != JS_ATOM_NULL, "the script already-started slot key could not be interned");
 }
 
-void html_script_free(JSContext *ctx)
+void html_script_free(JSRuntime *rt)
 {
-    JS_FreeAtom(ctx, g_atom_started);
+    JS_FreeAtomRT(rt, g_atom_started);
     g_atom_started = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_started_key);
+    JS_FreeValueRT(rt, g_started_key);
     g_started_key = JS_UNDEFINED;
 }
 

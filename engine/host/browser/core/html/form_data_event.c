@@ -193,10 +193,10 @@ void form_data_event_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "FormDataEvent", ctor);
 }
 
-void form_data_event_free(JSContext *ctx)
+void form_data_event_free(JSRuntime *rt)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — each is released with its context */
+    JS_FreeValueRT(rt, g_key);   /* the prototypes are the REALMS' — each is released with its context */
     g_key = JS_UNDEFINED;
     g_ready = 0;
     g_ctor_stepid = -1;

@@ -174,12 +174,12 @@ void css_rule_list_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
 }
 
-void css_rule_list_free(JSContext *ctx)
+void css_rule_list_free(JSRuntime *rt)
 {
     if (!g_list_class) return;   /* the prototype is the REALM's — released with its context */
-    JS_FreeAtom(ctx, g_atom_rules);
+    JS_FreeAtomRT(rt, g_atom_rules);
     g_atom_rules = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_rules_key);
+    JS_FreeValueRT(rt, g_rules_key);
     g_rules_key = JS_UNDEFINED;
     g_id_item = -1;
 }

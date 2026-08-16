@@ -608,7 +608,7 @@ void css_style_sheet_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
 }
 
-void css_style_sheet_free(JSContext *ctx)
+void css_style_sheet_free(JSRuntime *rt)
 {
-    (void)ctx;   /* both prototypes are the REALM's — released with its context, and the class is the agent's */
+    (void)rt;   /* both prototypes are the REALM's — released with its context, and the class is the agent's */
 }

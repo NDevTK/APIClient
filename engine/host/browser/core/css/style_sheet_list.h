@@ -35,7 +35,7 @@ void style_sheet_list_install(JSContext *ctx, JSValueConst global);
    IDL INCLUDES DocumentOrShadowRoot — Document and ShadowRoot. Called once per prototype, by the component
    that owns that prototype, because which interface carries a member is that component's statement. */
 void style_sheet_list_install_mixin(JSContext *ctx, JSValueConst proto);
-void style_sheet_list_free(JSContext *ctx);
+void style_sheet_list_free(JSRuntime *rt);
 
 /* §6.2's "ADD A CSS STYLE SHEET" step 1 — "add the CSS style sheet to the list of document or shadow root CSS
    style sheets AT THE APPROPRIATE LOCATION", which is tree order over the owner nodes. Invoked by §6.1's

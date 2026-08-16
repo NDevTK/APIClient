@@ -21,10 +21,10 @@ void node_filter_init(JSContext *ctx)
     CHECK(g_accept_node != JS_ATOM_NULL, "the acceptNode atom could not be interned");
 }
 
-void node_filter_free(JSContext *ctx)
+void node_filter_free(JSRuntime *rt)
 {
     if (g_accept_node == JS_ATOM_NULL) return;
-    JS_FreeAtom(ctx, g_accept_node);
+    JS_FreeAtomRT(rt, g_accept_node);
     g_accept_node = JS_ATOM_NULL;
 }
 

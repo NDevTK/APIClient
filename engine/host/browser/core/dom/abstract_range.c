@@ -294,7 +294,7 @@ void abstract_range_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "StaticRange", sctor);
 }
 
-void abstract_range_free(JSContext *ctx)
+void abstract_range_free(JSRuntime *rt)
 {
-    (void)ctx;   /* the prototypes are the REALMS' — released with their contexts */
+    (void)rt;   /* the prototypes are the REALMS' — released with their contexts */
 }

@@ -8,7 +8,7 @@
 
 /* Declared once per AGENT; the prototype and the interface object are per REALM, through realm.h's one list. */
 void toggle_event_init(JSContext *ctx);
-void toggle_event_free(JSContext *ctx);
+void toggle_event_free(JSRuntime *rt);
 
 /* THE ENGINE'S OWN FIRE, minted with the three initialisers the standard's callers name and nothing else.
    `old_state` and `new_state` are the spec's strings ("open", "closed"); `source` is the `Element?` — JS_NULL

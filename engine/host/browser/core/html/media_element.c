@@ -2078,14 +2078,14 @@ void media_element_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "TimeRanges", ctor);
 }
 
-void media_element_free(JSContext *ctx)
+void media_element_free(JSRuntime *rt)
 {
     if (!g_ready) return;
     g_ready = 0;
     /* The prototypes are the REALMS' — each goes with its context. */
-    JS_FreeAtom(ctx, g_atom_state);
+    JS_FreeAtomRT(rt, g_atom_state);
     g_atom_state = JS_ATOM_NULL;
-    JS_FreeValue(ctx, g_state_key);
+    JS_FreeValueRT(rt, g_state_key);
     g_state_key = JS_UNDEFINED;
     g_refl_base = g_id_load = g_id_can_play = g_id_play = g_id_pause = g_id_fast_seek = -1;
     g_id_start_date = g_id_range_start = g_id_range_end = -1;

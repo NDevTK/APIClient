@@ -647,10 +647,10 @@ void attr_install(JSContext *ctx, JSValueConst global)
     }
 }
 
-void attr_free(JSContext *ctx)
+void attr_free(JSRuntime *rt)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_nnm_key);   /* the prototypes are the REALMS' — released with their contexts */
+    JS_FreeValueRT(rt, g_nnm_key);   /* the prototypes are the REALMS' — released with their contexts */
     g_nnm_key = JS_UNDEFINED;
     g_ready = 0;
 }

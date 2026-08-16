@@ -12,7 +12,7 @@ void slot_init(JSContext *ctx);
 void slot_install_slot_members(JSContext *ctx, JSValueConst slot_proto);
 /* §4.2.9's `Slottable` mixin — one member, on each interface whose IDL INCLUDES it (Element and Text). */
 void slot_install_slottable_mixin(JSContext *ctx, JSValueConst proto);
-void slot_free(JSContext *ctx);
+void slot_free(JSRuntime *rt);
 
 /* IS THIS AN HTML `<slot>` ELEMENT — §4.2.2's "slot", which is the element and nothing else. */
 bool slot_is(const lxb_dom_node_t *n);
