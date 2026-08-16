@@ -124,7 +124,17 @@ const LEDGER = [
   { f: "lib/protobuf.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
     why: "a wire CODEC. §A JS-engine encoding builtin is modeled FAITHFULLY — the engine runs the real codec; a second one in JS is the redundant layer." },
   { f: "lib/protocol-parsers.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
-    why: "batchExecute/gRPC-Web/SSE/NDJSON/GraphQL/multipart framing. Same component." },
+    why: "batchExecute/gRPC-Web/SSE/NDJSON/GraphQL framing, and the RESPONSE half of multipart. The " +
+         "multipart REQUEST half left: `parseMultipartBatchRequest` read `METHOD /path HTTP/1.1` out of the " +
+         "parts of a batch body, and that is the one capability in this step whose consumer was already in C " +
+         "— every other parser here turns a body into a SCHEMA (step 3's moat_schema.c), this one turned it " +
+         "into an ADDRESS, and solver/endpoint.c has taken addresses since before this queue existed. It is " +
+         "now engine/host/solver/multipart_batch.c, read at the `fetch()` call site that already records the " +
+         "outer request's endpoint, so a batch the FORCED EXECUTION composes surfaces all N of its " +
+         "sub-endpoints instead of one. The JS body stayed because it is not the same input: this copy reads " +
+         "bodies intercept.js CAPTURED off live traffic (lib/learn.js) and bodies the user EDITS in the " +
+         "popup's multipart panel (lib/popup-mp.js), and deleting it would remove the editor with nothing " +
+         "replacing it. It goes out with those two callers at steps 4 and 6." },
   { f: "lib/response-decode.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
     why: "the protocol-chain unwrap that drives the two above. Must precede learn.js, which consumes its shapes." },
   { f: "lib/schema.js", zone: "LOGIC", step: 3, dest: "engine/host/solver/moat_schema.c",

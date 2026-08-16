@@ -191,57 +191,14 @@ function pbDecodeRaw(buf) {
   return fields;
 }
 
-/**
- * Helper: get all fields with a given field number from decoded raw fields.
- */
-function pbGetFields(fields, num) {
-  return fields.filter((f) => f.field === num);
-}
-
-/**
- * Helper: get first field value as string (wire type 2 → UTF-8).
- */
-function pbGetString(fields, num) {
-  const f = fields.find((f) => f.field === num && f.wire === PB_LEN);
-  return f ? new TextDecoder().decode(f.data) : null;
-}
-
-/**
- * Helper: get first field value as varint number.
- */
-function pbGetVarint(fields, num) {
-  const f = fields.find((f) => f.field === num && f.wire === PB_VARINT);
-  return f ? f.data : null;
-}
-
-/**
- * Helper: get first field as embedded message (decode bytes as raw fields).
- */
-function pbGetMessage(fields, num) {
-  const f = fields.find((f) => f.field === num && f.wire === PB_LEN);
-  if (!f) return null;
-  try {
-    return pbDecodeRaw(f.data);
-  } catch (_) {
-    return null;
-  }
-}
-
-/**
- * Helper: get all repeated embedded messages for a field number.
- */
-function pbGetRepeatedMessages(fields, num) {
-  return fields
-    .filter((f) => f.field === num && f.wire === PB_LEN)
-    .map((f) => {
-      try {
-        return pbDecodeRaw(f.data);
-      } catch (_) {
-        return null;
-      }
-    })
-    .filter(Boolean);
-}
+// `pbGetFields` / `pbGetString` / `pbGetVarint` / `pbGetMessage` / `pbGetRepeatedMessages` STOOD HERE WITH NO
+// CALLER. They were the field accessors `pbDecodeRpcStatus` read a `google.rpc.Status` envelope with, and that
+// function left this file when error-based schema learning became the engine's
+// (engine/host/solver/req2proto.c) — the note at the head of this file records the three that went and missed
+// the five that served them. CLAUDE.md §Offensive-programming states the rule from the producer's end: a
+// function nobody consumes reads as a capability this surface has, and it is indistinguishable from one that
+// runs. Three of them also swallowed a decode failure into `null` / a filtered-out entry, so the surface they
+// pretended to offer was one that could not report a malformed body either.
 
 // ─── Encoding ─────────────────────────────────────────────────────────────────
 
@@ -266,21 +223,10 @@ function pbEncodeLenField(fieldNum, data) {
   );
 }
 
-/** Encode a 32-bit fixed field. */
-function pbEncodeFixed32Field(fieldNum, value) {
-  const buf = new Uint8Array(4);
-  new DataView(buf.buffer).setUint32(0, value, true);
-  return concatBytes(pbTag(fieldNum, PB_32BIT), buf);
-}
-
-/** Encode a 64-bit fixed field. */
-function pbEncodeFixed64Field(fieldNum, lo, hi) {
-  const buf = new Uint8Array(8);
-  const dv = new DataView(buf.buffer);
-  dv.setUint32(0, lo, true);
-  dv.setUint32(4, hi || 0, true);
-  return concatBytes(pbTag(fieldNum, PB_64BIT), buf);
-}
+// `pbEncodeFixed32Field` / `pbEncodeFixed64Field` STOOD HERE WITH NO CALLER either, and for the same reason:
+// they encoded the probe payload req2proto.js used to fire. lib/encode.js writes the two fixed wire types it
+// needs from `pbTag` + `concatBytes` directly (its own fixed32/fixed64 arms), so these were not even the
+// spelling the one remaining encoder uses. PB_32BIT / PB_64BIT stay — encode.js reads both.
 
 // ─── Generic Protobuf Inspector ──────────────────────────────────────────────
 //

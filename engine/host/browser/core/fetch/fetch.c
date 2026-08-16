@@ -24,6 +24,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "solver/endpoint.h"
+#include "solver/multipart_batch.h"
 #include "core/agent_state.h"
 #include "core/fetch/fetch.h"
 #include "core/fetch/data_url.h"
@@ -991,6 +992,16 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         endpoint_record(ctx, method, s->url, eh, s->hdrs.n);
         js_free(ctx, eh);
     }
+    /* AND THE SUB-REQUESTS THE BODY ITSELF NAMES. A batch API takes N calls in ONE request — `POST /batch`
+       whose `multipart/mixed` body holds `GET /v1/animals/pony HTTP/1.1`, `POST /v1/farms HTTP/1.1`, … — and
+       those N addresses were composed by the page's own code, which is the strongest provenance an endpoint
+       can have. The line above recorded exactly one of them and the other N were discarded.
+       HERE rather than in a reply path, because this is the point that holds the request's header list, the
+       extracted body and §5.1's body Content-Type together (solver/multipart_batch.h), and because what is
+       being read is what the page SENDS — solver/reply_decode.c is what a reply TEACHES, a different fact
+       about a different record even though both end at `endpoint_record`. Nothing is fired: a sub-request is
+       recorded exactly as the outer one is. */
+    multipart_batch_learn(ctx, &s->hdrs, s->body_mime, s->body.bytes, s->body.len);
     if (mc) JS_FreeCString(ctx, mc);
     return JS_STEP_DONE;
 }
