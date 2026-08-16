@@ -12,6 +12,14 @@ void request_free(JSContext *ctx);
    the value is not one. */
 const char *request_url_of(JSValueConst v);
 
+/* IS THIS VALUE A Request — the BRAND, which is what Web IDL's `RequestInfo = Request or USVString` union
+   resolves on. A union member that is an interface type matches a PLATFORM OBJECT OF THAT INTERFACE and
+   nothing else; every other value goes to the USVString member and is converted. `JS_IsObject` is not that
+   test and the difference is not pedantic — see the FETCH_INPUT_URL stage in fetch.c, where it sent a CONCOLIC
+   URL down the Request arm and made every attacker-shaped endpoint report one property name too deep. The
+   class id is this file's, so the answer lives here rather than being re-derived by each caller. */
+bool request_is(JSValueConst v);
+
 /* §5.3's captured blob URL entry, or JS_UNDEFINED — the Blob a Request built from a `blob:` URL holds, so
    revoking the URL afterwards does not stop that request. Borrowed. */
 JSValueConst request_blob_entry(JSValueConst v);

@@ -544,6 +544,8 @@ static int fetch_reject_pending(JSContext *ctx, struct JSFetchState *s)
     X(FETCH_METHOD_STR,   "Web IDL §3.2.18 step 5.5 (converting init[\"method\"] to its ByteString)") \
     X(FETCH_INPUT_URL,    "Fetch §5.3 new Request(input, init) steps 5-6 (the request's URL: the input string, " \
                           "or the input Request's own)") \
+    X(FETCH_INPUT_URL_STR, "Web IDL §3.2.14 (converting a non-Request `input` to its USVString — the union's " \
+                          "other member, which runs the page's own toString)") \
     X(FETCH_METHOD,       "Fetch §5.3 new Request(input, init) step 25 (init[\"method\"] is a method, is not a " \
                           "forbidden method, and is normalized)") \
     X(FETCH_HEADERS,      "Fetch §5.3 new Request(input, init) step 33 (fill the request's headers with " \
@@ -637,8 +639,19 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     }
     if (s->hdr.stage == FETCH_INPUT_URL) {
         /* §5.3: a USVString names the URL directly; a Request names it through its `url` attribute, and THAT is
-           the read that has to be a request. */
-        if (JS_IsObject(input)) {
+           the read that has to be a request.
+           WHICH ONE IT IS, IS A BRAND — Web IDL §3.2's union resolution for `RequestInfo = Request or
+           USVString` matches the interface member against a PLATFORM OBJECT OF THAT INTERFACE, and sends every
+           other value to the string member. This asked `JS_IsObject`, which is a SHAPE test, and the two
+           disagree about the most important argument this engine ever sees: a CONCOLIC value is carried as an
+           object, so `fetch('/api/u?uid=' + state.id)` — a URL built out of unknown external input, which is
+           the whole surface this tool exists to report — took the Request arm. The `url` read is
+           opaque-infectious, so it answered with a NEW concolic one field deeper, and the address this flow
+           parked on and recorded was `/api/u?uid={state}.id.url`: an endpoint no page ever requested, keyed
+           under a property name welded onto the end of the real shape. Every gated endpoint in the @H surface
+           was reported that way. It also fetched `undefined` for `fetch({toString(){ return '/x' }})`, which is
+           the same defect wearing its ordinary-web clothes. */
+        if (request_is(input)) {
             r = step_getprop_run(ctx, &s->hdr, input, g_atom_url, cb_result, &s->url, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return fetch_reject_pending(ctx, s);
@@ -650,6 +663,29 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
            and the other frees it — so the local must be cleared before the next stage, which now hands it to
            another request. It was left stale when this was the last stage and nothing read it again; the moment
            a stage was added after it, that stale copy was freed a second time. */
+        cb_result = JS_UNDEFINED;
+        s->hdr.stage = FETCH_INPUT_URL_STR;
+    }
+    if (s->hdr.stage == FETCH_INPUT_URL_STR) {
+        /* THE UNION'S OTHER MEMBER, CONVERTED — and it is its own stage for the reason init["method"]'s is:
+           ToString on a page object runs the PAGE's code, so it is a request the machine parks on rather than
+           a coercion performed from C.
+           A CONCOLIC IS NOT CONVERTED HERE, and that is the one exception this stage must state rather than
+           discover. Its value is not known yet, so there is no string to produce; fetch_park asks it for its
+           SHAPE explicitly at the ToString boundary, and stringifying it here would hand that boundary a plain
+           string and DE-TAINT the URL — the endpoint would still be recorded, and it would be recorded as
+           though the page had computed it. Primitives need no stage either: `JS_ToCString` in fetch_park is
+           already ToString for every one of them. */
+        if (JS_IsObject(s->url) && !concolic_is(s->url)) {
+            JSValue str;
+            r = step_tostring_run(ctx, &s->hdr, s->url, cb_result, &str, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return fetch_reject_pending(ctx, s);
+            JS_FreeValue(ctx, s->url);
+            s->url = str;
+        } else {
+            JS_FreeValue(ctx, cb_result);
+        }
         cb_result = JS_UNDEFINED;
         s->hdr.stage = FETCH_METHOD;
     }

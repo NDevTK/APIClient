@@ -93,6 +93,14 @@ static BodyState *request_body_of(JSValueConst v)
     return d ? &d->body : NULL;
 }
 
+/* THE BRAND — see request.h. The same `JS_GetOpaque` against this file's class id that every accessor here
+   already uses to decide whether it is holding one of ours; it is public because a UNION resolves on exactly
+   this question and the answer may not be duck-typed at the call site. */
+bool request_is(JSValueConst v)
+{
+    return g_request_class && JS_GetOpaque(v, g_request_class) != NULL;
+}
+
 /* §5.3's captured blob URL entry, or JS_UNDEFINED — what a fetch of this Request answers from. Borrowed. */
 JSValueConst request_blob_entry(JSValueConst v)
 {
