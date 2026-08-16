@@ -538,10 +538,7 @@ QJS_EXPORT void qjs_teardown(void)
     dom_rect_free();
     event_target_free(g_ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
-    window_message_free(g_ctx);
-    broadcast_channel_free(g_ctx);
     message_port_free(g_ctx);
-    xhr_free(g_ctx);
     report_exception_free(g_ctx);
     event_free(g_ctx);
     headers_free(g_ctx);    /* Headers.prototype and the name it interned */
@@ -552,11 +549,13 @@ QJS_EXPORT void qjs_teardown(void)
     queuing_strategy_free(g_ctx);
     readable_stream_free(g_ctx);
     blob_free(g_ctx);
-    file_picker_free();
-    file_system_access_free();
-    fs_handle_free();
-    fs_writable_free();
-    file_system_free(g_ctx);   /* the two roots are the agent's, and they outlive no agent */
+    /* THE ONE VIRTUAL FILESYSTEM and its two standards, §9.4.4's and §9.5's delivery callees, §9.5's bus
+       and XMLHttpRequest are NOT freed here any more — all eight are ROWS on core/platform.h's release
+       column, run by the platform_agent_free above. This list had them and test_forced.c did not, and
+       that host is the one every gate in this tree links: its runs ended on JS_FreeRuntime's leak walk
+       with the two File System roots, §3.2.2's map and both delivery callees held from outside the heap,
+       and the ROOT REALM behind them uncollectable. Every remaining line here is still a hand-copied
+       teardown, which is the same defect waiting. */
     encoding_free(g_ctx);
     text_stream_free(g_ctx);
     form_data_free(g_ctx);        /* URLSearchParams.prototype */

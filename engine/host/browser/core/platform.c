@@ -205,6 +205,32 @@ static void r_idb_connection(JSRuntime *rt) { idb_connection_free(rt); }
 static void r_idb_object_store(JSRuntime *rt) { idb_object_store_free(rt); }
 static void r_idb_vce(JSRuntime *rt) { idb_version_change_event_free(rt); }
 static void r_idb_open(JSRuntime *rt) { idb_open_free(rt); }
+/* THE ONE VIRTUAL FILESYSTEM AND THE STANDARDS OVER IT, and this is the row whose absence was measured rather
+   than argued. §2.1's two ROOT DIRECTORY ENTRIES are agent state by the file's own reasoning (storage is keyed
+   by origin and an instance is an origin-keyed agent cluster), and File System Access §3.2.2's recently-picked
+   map is one more. Every one of those five releases was written out by hand into main.c's teardown and again
+   into wpt_runner.c's, and test_forced.c — the entry every gate in this tree actually links — had NONE of
+   them. The runtime's leak walk named the result exactly: `{kind:"directory", name:""}` and
+   `{kind:"directory", name:"local"}` with a null prototype, and §3.2.2's empty map beside them, each held with
+   refcount 1 from OUTSIDE the heap. Behind those three roots the ROOT REALM could never be collected — 2614
+   Functions, 408 shapes and a JSContext at refcount 3108 — so three C statics nobody freed were reported as a
+   whole leaked browser with nothing naming the owner. That is the third column's entire purpose, twice over:
+   a host cannot express the omission, and there is no longer a hand-copied list for it to drift out of. */
+static void r_file_system(JSRuntime *rt) { file_system_free(rt); }
+static void r_fs_writable(JSRuntime *rt) { (void)rt; fs_writable_free(); }
+static void r_fs_handle(JSRuntime *rt) { (void)rt; fs_handle_free(); }
+static void r_fs_access(JSRuntime *rt) { (void)rt; file_system_access_free(); }
+static void r_file_picker(JSRuntime *rt) { (void)rt; file_picker_free(); }
+/* THE TWO DELIVERY CALLEES AND §9.5's BUS, found by the same reading and leaked by the same host. Each of these
+   components mints ONE function object for the whole agent — the task callee a queued delivery runs through —
+   and §9.5's registry of open channels is a live Array beside it; the walk named both callees as
+   `Function { length: 2, name: "" }` and the registry as an empty Array. A component that mints a
+   runtime-lifetime value owns it, and this column is where it gives it back. */
+static void r_window_message(JSRuntime *rt) { window_message_free(rt); }
+static void r_broadcast_channel(JSRuntime *rt) { broadcast_channel_free(rt); }
+/* XMLHttpRequest holds the agent's step definitions and, through §5's ProgressEvent, the private Symbol that
+   interface's own slots hang off. main.c freed it, wpt_runner.c and test_forced.c did not. */
+static void r_xhr(JSRuntime *rt) { xhr_free(rt); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -299,17 +325,17 @@ static const PlatformComponent PLATFORM[] = {
        WritableStream, whose prototype it chains to; §2.2-§2.4's handles after the stream, since
        `createWritable()` mints one; §3's StorageManager after §8.10.1's Navigator, because `navigator.storage`
        is a partial interface member of the object that component builds. */
-    { "file_system",         d_file_system,         NULL },
-    { "file_system_writable", d_fs_writable,        NULL },
-    { "file_system_handle",  d_fs_handle,           NULL },
+    { "file_system",         d_file_system,         NULL,        r_file_system },
+    { "file_system_writable", d_fs_writable,        NULL,        r_fs_writable },
+    { "file_system_handle",  d_fs_handle,           NULL,        r_fs_handle },
     { "storage_manager",     d_storage_manager,     NULL,        r_storage_manager },
     /* FILE SYSTEM ACCESS, a DIFFERENT standard over that same model: §2.2's "file-system" powerful feature and
        §2.3's two members, then §3's three pickers. Both rows come after `navigator` because Permissions §4's
        registry — where the feature's row lives — is declared under it, and after `file_system_handle` because
        §2.3's members install onto the prototype that component builds and core/realm.h runs the per-realm
        installs in declaration order. */
-    { "file_system_access",  d_fs_access,           NULL },
-    { "file_picker",         d_file_picker,         NULL },
+    { "file_system_access",  d_fs_access,           NULL,        r_fs_access },
+    { "file_picker",         d_file_picker,         NULL,        r_file_picker },
     /* INDEXED DATABASE, in the standard's own dependency order and no further. §2.4's KEY is what §2.2's list
        of records is sorted by, what §2.9's range is bounded by and what §2.10's cursor walks in, so it is the
        first thing that standard can have; §4.7's IDBKeyRange is the interface over it, and §4.3's IDBFactory
@@ -355,7 +381,7 @@ static const PlatformComponent PLATFORM[] = {
     { "error_event",         NULL,                  i_error_event },
     { "report_exception",    d_report_exception,    NULL },
     { "message_port",        d_message_port,        i_message_port },
-    { "xml_http_request",    d_xhr,                 i_xhr },
+    { "xml_http_request",    d_xhr,                 i_xhr,       r_xhr },
     { "location",            d_location,            NULL },
     /* §7.4.1's state machine BEFORE §7.2.5's History, whose every member reads the record it builds. */
     { "session_history",     d_session_history,     NULL },
@@ -381,8 +407,8 @@ static const PlatformComponent PLATFORM[] = {
        run page code — which is none of them, and is why it sits beside the asking half rather than at the end. */
     { "remote_op",           d_remote_op,           NULL },
     /* AFTER window_proxy: §9.4.4's `postMessage` is installed on the WindowProxy PROTOTYPE. */
-    { "window_message",      d_window_message,      i_window_message },
-    { "broadcast_channel",   d_broadcast_channel,   i_broadcast_channel },
+    { "window_message",      d_window_message,      i_window_message, r_window_message },
+    { "broadcast_channel",   d_broadcast_channel,   i_broadcast_channel, r_broadcast_channel },
     { "structured_clone",    d_structured_clone,    i_structured_clone },
     { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection, r_unhandled_rejection },
     /* §8.9's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */

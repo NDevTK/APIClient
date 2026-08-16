@@ -13,6 +13,6 @@ void xhr_init(JSContext *ctx);
 void xhr_install_protos(JSContext *ctx);
 /* The four interface objects: XMLHttpRequestEventTarget, XMLHttpRequestUpload, XMLHttpRequest, ProgressEvent. */
 void xhr_install(JSContext *ctx, JSValueConst global);
-void xhr_free(JSContext *ctx);
+void xhr_free(JSRuntime *rt);
 
 #endif

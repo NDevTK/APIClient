@@ -1808,9 +1808,7 @@ int main(int argc, char **argv)
     writable_stream_free(ctx);
     abort_free(ctx);
     observable_free(ctx);
-    broadcast_channel_free(ctx);
     message_port_free(ctx);
-    window_message_free(ctx);
     navigable_free(ctx);
     /* NOTHING SWITCHES THE RUNNING FLOW OUT HERE ANY MORE, and the line that did is deleted rather than kept
        as a safety net: a session ends by CLOSING (engine_session_close performs exactly that switch-out, which
@@ -1834,11 +1832,9 @@ int main(int argc, char **argv)
     queuing_strategy_free(ctx);
     readable_stream_free(ctx);
     blob_free(ctx);
-    file_picker_free();
-    file_system_access_free();
-    fs_handle_free();
-    fs_writable_free();
-    file_system_free(ctx);
+    /* The File System model and its two standards, the two delivery callees, §9.5's bus and
+       XMLHttpRequest are ROWS on core/platform.h's release column now — this runner never had the
+       XMLHttpRequest line at all, so §5's ProgressEvent slot Symbol leaked in every file it ran. */
     encoding_free(ctx);
     text_stream_free(ctx);
     idl_args_free(ctx);

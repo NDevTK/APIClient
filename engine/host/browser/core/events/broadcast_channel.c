@@ -333,11 +333,12 @@ void broadcast_channel_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "BroadcastChannel", ctor);
 }
 
-void broadcast_channel_free(JSContext *ctx)
+void broadcast_channel_free(JSRuntime *rt)
 {
     if (!g_bc_rt) return;
-    JS_FreeValue(ctx, g_registry);
-    JS_FreeValue(ctx, g_deliver_fn);
+    DCHECK(rt == g_bc_rt, "§9.5's bus was released against a runtime that is not the one it was declared in");
+    JS_FreeValueRT(rt, g_registry);
+    JS_FreeValueRT(rt, g_deliver_fn);
     g_registry = g_deliver_fn = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
     g_bc_rt = NULL;
     g_ctor_stepid = -1;

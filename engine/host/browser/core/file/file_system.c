@@ -621,10 +621,15 @@ void file_system_init(JSContext *ctx)
     g_ready = 1;
 }
 
-void file_system_free(JSContext *ctx)
+/* AGAINST THE RUNTIME, because that is what the two roots belong to — see core/platform.h's third column. It
+   took a JSContext, which is why it could not go on that column and was written by hand into two of the three
+   hosts' teardowns instead; the third never had it and leaked both roots, every run, from the day the model
+   was built. The runtime's own walk named them: two null-prototype `{kind:"directory"}` records held with
+   refcount 1 from outside the heap, and behind them the realm nothing could then collect. */
+void file_system_free(JSRuntime *rt)
 {
-    JS_FreeValue(ctx, g_bucket_root);
-    JS_FreeValue(ctx, g_local_root);
+    JS_FreeValueRT(rt, g_bucket_root);
+    JS_FreeValueRT(rt, g_local_root);
     g_bucket_root = g_local_root = JS_UNDEFINED;
     g_fs_ctx = NULL;
     g_ready = 0;

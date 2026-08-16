@@ -2155,10 +2155,11 @@ void xhr_install(JSContext *ctx, JSValueConst global)
     progress_event_install(ctx, global);
 }
 
-void xhr_free(JSContext *ctx)
+void xhr_free(JSRuntime *rt)
 {
     if (!g_ready) return;
-    progress_event_free(ctx);
+    DCHECK(rt == g_xhr_rt, "XMLHttpRequest was released against a runtime that is not the one it declared in");
+    progress_event_free(rt);
     g_ready = 0;
     g_xhr_rt = NULL;
     g_ctor_stepid = g_open_stepid = g_send_stepid = g_abort_stepid = -1;

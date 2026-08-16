@@ -24,7 +24,7 @@
    baseline. Nothing can observe the difference: a root that has just been created and a root created at init
    are both an empty directory entry whose name is the empty string. */
 void file_system_init(JSContext *ctx);
-void file_system_free(JSContext *ctx);
+void file_system_free(JSRuntime *rt);
 
 /* §2.1's ROOT DIRECTORY ENTRY for one of the two roots. OWNED. */
 JSValue file_system_root_entry(JSContext *ctx, const char *root);

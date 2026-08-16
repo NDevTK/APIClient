@@ -8,7 +8,7 @@ void progress_event_init(JSContext *ctx);
 /* §5's PROTOTYPE FOR ONE REALM — run where a realm's other intrinsics are added, exactly once per realm. */
 void progress_event_install_proto(JSContext *ctx);
 void progress_event_install(JSContext *ctx, JSValueConst global);
-void progress_event_free(JSContext *ctx);
+void progress_event_free(JSRuntime *rt);
 
 /* `ProgressEvent.prototype`, OWNED. Per realm, for the reason event.h gives: a C member runs in the realm that
    DEFINED it, so one shared prototype answers every document out of whichever realm built it first. */

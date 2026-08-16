@@ -10,6 +10,6 @@ void broadcast_channel_init(JSContext *ctx);
 /* §9.5's interface prototype object for ONE realm — declared into core/realm.h's list by the init above. */
 void broadcast_channel_install_proto(JSContext *ctx);
 void broadcast_channel_install(JSContext *ctx, JSValueConst global);
-void broadcast_channel_free(JSContext *ctx);
+void broadcast_channel_free(JSRuntime *rt);
 
 #endif

@@ -589,9 +589,10 @@ void window_message_install(JSContext *ctx, JSValueConst global, const char *ori
 }
 
 
-void window_message_free(JSContext *ctx)
+/* §9.4.4's delivery callee is ONE function object for the whole agent, so it is released against the RUNTIME —
+   which is also what puts it on core/platform.h's release column instead of in each host's own teardown. */
+void window_message_free(JSRuntime *rt)
 {
-
-    JS_FreeValue(ctx, g_deliver_fn);
+    JS_FreeValueRT(rt, g_deliver_fn);
     g_deliver_fn = JS_UNDEFINED;
 }
