@@ -16,35 +16,35 @@
  * the same sentence covers the JS's `ctAssetMimes` table, which trusted a declared JavaScript/CSS type only
  * when the body did not start with `{` or `[` — a guess layered on top of a statement.
  *
- * AND IT IS IN THE WRONG PROCESS. This paragraph used to say the trusted zone read a reply body with
- * `Response.text()`, so a PNG's 0x89 was already U+FFFD before any C here saw it — that is fixed, the reply
- * record carries §2.2.5's byte sequence now (core/fetch/fetch.h), and fixing it is what made the real problem
- * visible: THE BYTES ARRIVING IS NOT THE SAME AS THIS PROCESS BEING ENTITLED TO SNIFF THEM.
+ * AND IT WAS IN THE WRONG PROCESS, WHICH IS WHY THIS FILE IS NOT UNDER `browser/`. §7 is a NETWORK-side
+ * algorithm. In a real browser it runs in the network service; CORB/ORB gates on its result; and the renderer
+ * is TOLD a computed MIME type it never derives from response bytes. Everything under `engine/host/browser` is
+ * the RENDERER — one WASM instance per origin-keyed agent cluster, running the untrusted bundle (SECURITY.md).
+ * A renderer that computes its own type can classify, and then MINE, a cross-origin body that a real renderer
+ * would have been handed as an opaque, empty response, and the endpoints taken out of one are surface the page
+ * could never have obtained, reported as a finding about the page.
  *
- * §7 is a NETWORK-side algorithm. In a real browser it runs in the network service; CORB/ORB gates on its
- * result; and the renderer is TOLD a computed MIME type it never derives from response bytes. Everything in
- * `engine/host` is the RENDERER — one WASM instance per origin-keyed agent cluster, running the untrusted
- * bundle (SECURITY.md). A renderer that computes its own type can classify, and then MINE, a cross-origin body
- * that a real renderer would have been handed as an opaque, empty response, and the endpoints taken out of one
- * are surface the page could never have obtained, reported as a finding about the page. It is also a DUPLICATE:
- * `extension/lib/safe-fetch.js` already classifies for CORB (`_jsMime`, `_corbProtectedMime`,
- * `_corbAllowsScript(mime, nosniff, body, …)`, which takes the body precisely because that decision needs the
- * bytes), so two answers to "what is this body" sat on opposite sides of the trust boundary and could disagree.
+ * THE ENFORCEMENT IS THE LINKER, NOT A CHECK, and that is the whole reason the file moved rather than gaining a
+ * guard. This unit used to sit in the shared source set with an unconditional `DFAIL` at the top of
+ * `mime_sniff_compute` saying no renderer-side caller may reach it — a run-time assertion about a compile-time
+ * fact, and one that vanishes at `-DAPICLIENT_DEV=0` precisely where the boundary must still hold.
+ * `engine/build.mjs` now links this object into the BROWSER-PROCESS artifact ALONE, so a renderer source that
+ * calls §7 does not link at all: the failure is a missing symbol at build time, in dev and in release, naming
+ * the function. A boundary that a build cannot violate needs no assertion to state it.
  *
- * SO NOTHING IN THIS PROCESS MAY CALL §7, AND `mime_sniff_compute` DFAILs SAYING SO. The implementation stays
- * because it is not wrong — it is the standard's own byte tables, written against the spec — it is HOUSED
- * wrongly. Its home is a BROWSER-PROCESS WASM instance: the trusted-zone counterpart to the per-document
- * renderer instances, which does not exist yet and which `safe-fetch.js`'s hand-written SOP/CORS check belongs
- * in beside this. Until it does, the computed type is a fact NO zone can state, so it is not a field on the
- * reply record either — a reader with no writer is the contract CLAUDE.md calls greppable, and adding one here
- * would be that defect with a DCHECK attached.
+ * ITS ONE CALLER IS `browser_process/browser_process.c`'s `mime.sniff` operation, which the trusted zone asks
+ * and a renderer may not. `extension/lib/safe-fetch.js` still classifies for CORB in JS (`_jsMime`,
+ * `_corbProtectedMime`, `_corbAllowsScript(mime, nosniff, body, …)`, which takes the body precisely because
+ * that decision needs the bytes) — a second answer to "what is this body", now on the same side of the trust
+ * boundary as this one rather than opposite it, and the next thing this component takes over.
  *
- * §4's RECORD next door is a different question and stays: `mime_type_extract` PARSES what a server STATED, and
- * that record is page-observable through `Blob.type`, `File.type`, `DataTransferItem.type` and `accept`
- * matching, so the renderer owes it. Parse is the renderer's; sniff is the network's.
+ * §4's RECORD is a different question and stays in the renderer: `mime_type_extract` PARSES what a server
+ * STATED, and that record is page-observable through `Blob.type`, `File.type`, `DataTransferItem.type` and
+ * `accept` matching, so the renderer owes it — and this file reaches ACROSS to it (`core/mime/mime_type.h`)
+ * because a parse is a parse in either process. Parse is the renderer's; sniff is the network's.
  */
-#ifndef ENGINE_HOST_BROWSER_CORE_MIME_MIME_SNIFF_H
-#define ENGINE_HOST_BROWSER_CORE_MIME_MIME_SNIFF_H
+#ifndef ENGINE_HOST_BROWSER_PROCESS_NETWORK_MIME_SNIFF_H
+#define ENGINE_HOST_BROWSER_PROCESS_NETWORK_MIME_SNIFF_H
 
 #include "core/mime/mime_type.h"
 

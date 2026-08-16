@@ -6,10 +6,11 @@
  * `extension/lib/response-decode.js`, `lib/protocol-parsers.js` and `lib/protobuf.js` — jsaudit step 2 names
  * THIS FILE as what all three become — and `extension/lib/discovery.js` (step 1) held two of their callees: the
  * magic-byte classifier and the React Flight parser. The classifier became its own standard
- * (core/mime/mime_sniff.c, WHATWG MIME Sniffing) — and that standard is the NETWORK SERVICE'S, so this file
- * does not call it: §7 sniffs bytes, CORB gates on the result, and a renderer that sniffs for itself can mine a
- * cross-origin body a real renderer would never have been shown. What this file asks instead is Fetch §4's
- * extract a MIME type, the server's own STATEMENT, which the renderer legitimately parses because the same
+ * (browser_process/network/mime_sniff.c, WHATWG MIME Sniffing) — and that standard is the NETWORK SERVICE'S, so
+ * this file does not call it and CANNOT: §7 sniffs bytes, CORB gates on the result, a renderer that sniffs for
+ * itself can mine a cross-origin body a real renderer would never have been shown, and that unit now links into
+ * the browser-process artifact alone, so a call from here would not link. What this file asks instead is
+ * Fetch §4's extract a MIME type, the server's own STATEMENT, which the renderer legitimately parses because the same
  * record is what `Blob.type` and `accept` matching are read off. The Flight parser is here, because a wire
  * protocol's framing is what this component is for.
  *

@@ -29,11 +29,15 @@
    the sniff decided ZERO of the endpoints in this engine's @H surface, and removing it from this process
    removes no measurement — it removes a vote the renderer is not entitled to.
    WHERE THE COMPUTED TYPE COMES FROM WHEN IT COMES: the trusted zone, on the record, stamped like the sender's
-   origin on a cross-document message — and it is NOT a field yet, because no zone can write one. §7 cannot live
-   in `safe-fetch.js` (CLAUDE.md: the only irreducible JS is a bridge, never logic) and it cannot live here, so
-   it belongs to a BROWSER-PROCESS WASM instance that does not exist. A `computedType` field added now would be
-   read here and written nowhere, which is the exact contract CLAUDE.md calls greppable and mechanical, with a
-   DCHECK that could only fire on every reply for a value that decides nothing. */
+   origin on a cross-document message. §7 cannot live in `safe-fetch.js` (CLAUDE.md: the only irreducible JS is
+   a bridge, never logic) and it cannot live here, so it belongs to a BROWSER-PROCESS WASM instance — which now
+   EXISTS and answers it (`engine/host/browser_process`, driven by `engine/browser_process.mjs`; the sniff unit
+   links into that artifact alone, so a call from this file would not link). It is still NOT a field on the
+   reply record, and the reason has moved rather than gone: the algorithm has a home, and the offscreen does not
+   yet ASK it per reply nor carry the answer onto the record `qjs_provide` delivers. Adding `computedType` ahead
+   of that writer is the exact contract CLAUDE.md calls greppable and mechanical — read here, written nowhere —
+   with a DCHECK that could only fire on every reply for a value that decides nothing. The writer is the next
+   step and this file is its consumer. */
 static bool is_asset(const MimeType *m)
 {
     return mime_type_is_image(m) || mime_type_is_audio_or_video(m) ||

@@ -13,6 +13,12 @@ extension/lib/qjs/*.cow.gen.js
 # engine/host/main.c + the engine/qjs submodule). Regenerable; not committed to avoid binary churn.
 extension/lib/qjs/qjs.mjs
 extension/lib/qjs/qjs.wasm
+# THE BROWSER PROCESS is a second program out of the same build (source of truth =
+# engine/host/browser_process/), staged beside the renderer's for the same reason: the offscreen provisions one
+# instance per extension and loads it the way it loads a renderer's. Regenerable, so ignored for the same churn
+# reason — an artifact left tracked is one nobody refreshes and everybody believes.
+extension/lib/qjs/browser_process.mjs
+extension/lib/qjs/browser_process.wasm
 # THE ARTIFACT'S BUILD STAMP — the revision `build.mjs` linked it from, written through gate_revision.mjs
 # so the stamp and the check are one answer. Output beside the output it describes, and ignored for the
 # same reason: committing it would pin an identity to a tree that no longer has the artifact it names.

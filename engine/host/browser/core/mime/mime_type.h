@@ -38,7 +38,8 @@ const char *mime_type_parameter(const MimeType *m, const char *name);
 /* §4.6's MIME TYPE GROUPS. Only the groups this engine's algorithms branch on are here — each arrives with the
    algorithm that first needs it, and a group nobody calls is a table no gate can audit. XHR §3.6.6's "set a
    document response" tests HTML and XML; §7's MIME type sniffing tests XML, HTML, image and audio-or-video
-   (core/mime/mime_sniff.c, which no renderer-side caller may reach — see its header); solver/reply_decode.c
+   (browser_process/network/mime_sniff.c, which links into the BROWSER-PROCESS artifact alone, so a
+   renderer-side caller does not link — see its header); solver/reply_decode.c
    tests image, audio-or-video, font, ZIP-based and archive over the SUPPLIED type to decide whether a reply
    body has any structure to learn from. The JSON and JavaScript groups are still ABSENT
    — nothing branches on them yet. */
