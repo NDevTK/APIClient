@@ -3,6 +3,7 @@
 #define ENGINE_HOST_BROWSER_CORE_INDEXEDDB_IDB_TRANSACTION_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "quickjs.h"
 
@@ -90,11 +91,20 @@ void idb_transaction_scope_remove(JSContext *ctx, JSValueConst tx, JSValueConst 
 
 /* §2.2.1's "there must be only ONE object store handle associated with a particular object store within a
    transaction", which §4.10's note states as what a page compares: `tx.objectStore('s') ===
-   tx.objectStore('s')`. The set is the TRANSACTION's because that is the scope the sentence names. The find
-   answers JS_NULL for a name this transaction has no handle for; both are keyed by the name the handle was
-   created under, which is the name §4.10 and §4.4 reach the store by. OWNED. */
-JSValue idb_transaction_handle_find(JSContext *ctx, JSValueConst tx, const char *name);
-void    idb_transaction_handle_add(JSContext *ctx, JSValueConst tx, const char *name, JSValueConst handle);
+   tx.objectStore('s')`. The set is the TRANSACTION's because that is the scope the sentence names.
+   IT IS KEYED BY THE STORE, WHICH IS THE ONLY KEY THAT SENTENCE ADMITS. A set keyed by NAME says something
+   else, and the difference is reachable from a page in three lines: `s.name = 'b'` renames the store an
+   upgrade transaction holds a handle for, and `tx.objectStore('b')` then finds no entry under 'b' and mints a
+   SECOND handle for that one store — two handles, `tx.objectStore('b') !== s`, and §5.8 step 5 walking a set
+   with one store in it twice. A name is the one thing about a store an upgrade transaction can change, so it
+   is the one thing this set cannot be keyed by. The find answers JS_NULL for a store this transaction holds no
+   handle for; both are OWNED, and the add asserts the uniqueness rather than trusting its callers.
+   THE SET IS A JS ARRAY in creation order, for the reason every other list in this component is one
+   (§State-isolation) and because §5.8 step 5 walks it: `count` is written with the length so a walk needs no
+   second reader of `length` in a third file. */
+JSValue idb_transaction_handle_find(JSContext *ctx, JSValueConst tx, JSValueConst store);
+void    idb_transaction_handle_add(JSContext *ctx, JSValueConst tx, JSValueConst handle);
+JSValue idb_transaction_handles(JSContext *ctx, JSValueConst tx, uint32_t *count);
 
 /* §2.7.3's UPGRADE TRANSACTION and its OPEN REQUEST. "An upgrade transaction is automatically created when
    running the steps to upgrade a database", and §5.4 step 2.5.4 and §5.5 step 7.3 both reach the request FROM

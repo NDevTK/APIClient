@@ -132,6 +132,39 @@ JSValue idb_object_store_handle(JSContext *ctx, JSValueConst store, JSValueConst
     return h;
 }
 
+JSValue idb_object_store_handle_store(JSContext *ctx, JSValueConst handle)
+{
+    JSValue store;
+
+    DCHECK(idb_object_store_is(handle),
+           "the associated object store of something that is not an object store handle was asked for");
+    store = os_get(ctx, handle, OS_STORE);
+    DCHECK(JS_IsObject(store), "an object store handle carried no store — idb_object_store_handle gives every "
+                               "handle one and nothing else builds them");
+    return store;
+}
+
+JSValue idb_object_store_handle_name(JSContext *ctx, JSValueConst handle)
+{
+    JSValue name;
+
+    DCHECK(idb_object_store_is(handle), "the name of something that is not an object store handle was asked for");
+    name = os_get(ctx, handle, OS_NAME);
+    DCHECK(JS_IsString(name), "an object store handle carried no name — §2.2.1 initialises one when the handle "
+                              "is created, and only this file writes it");
+    return name;
+}
+
+void idb_object_store_handle_restore_name(JSContext *ctx, JSValueConst handle)
+{
+    JSValue store = idb_object_store_handle_store(ctx, handle), slots = os_slots(ctx, handle);
+
+    DCHECK(JS_IsObject(slots), "an object store handle's name was restored on a value carrying no slot record");
+    JS_SetPropertyStr(ctx, slots, OS_NAME, idb_object_store_name(ctx, store));
+    JS_FreeValue(ctx, slots);
+    JS_FreeValue(ctx, store);
+}
+
 /* ---- the refusals every member of §4.5 begins with -------------------------------------------------------
  *
  * §4.5 states them once per member and states them IDENTICALLY, in this order, which is why they are one
@@ -325,7 +358,7 @@ static JSValue js_os_get_name(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)magic;
     if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
-    return os_get(ctx, this_val, OS_NAME);
+    return idb_object_store_handle_name(ctx, this_val);
 }
 
 /* "The keyPath getter steps are to return this's object store's key path, or null if none." The note — "the

@@ -132,4 +132,12 @@ void idb_object_store_rename(JSContext *ctx, JSValueConst tx, JSValueConst db, J
    See the file for why this is NOT a span of the flow's COW delta. */
 void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx);
 
+/* §5.5 step 2's "any object stores ... WHICH WERE CREATED DURING THE TRANSACTION", asked of one store — which
+   is the question §5.8 step 5.1 branches on ("if handle's object store was not newly created during
+   transaction"). It is answered out of the SAME list the revert runs, because that list is the record of what
+   this transaction did and a second flag on the store would be a second answer to it. Asked only BETWEEN §5.5's
+   step 2 and its step 4: the list is emptied when the transaction reaches FINISHED, which this asserts rather
+   than reading an empty list as "no". */
+bool idb_database_store_was_created_by(JSContext *ctx, JSValueConst tx, JSValueConst store);
+
 #endif

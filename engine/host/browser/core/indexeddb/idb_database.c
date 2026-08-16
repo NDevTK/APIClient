@@ -900,3 +900,35 @@ void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx)
         JS_FreeValue(ctx, change);
     }
 }
+
+/* "ANY OBJECT STORES ... WHICH WERE CREATED DURING THE TRANSACTION" — one store, asked of the list the revert
+   above runs. The list is READ FORWARDS here because this is a membership question and not a composition: a
+   store either appears as a creation of this transaction or it does not, and a store created and then
+   destroyed inside one transaction was still created by it (§5.8 step 5.1 skips its handle either way). */
+bool idb_database_store_was_created_by(JSContext *ctx, JSValueConst tx, JSValueConst store)
+{
+    JSValue changes = idb_transaction_changes(ctx, tx);
+    uint32_t i, n = idb_list_len(ctx, changes);
+    bool created = false;
+
+    DCHECK(JS_IsObject(store), "\"was this store newly created during the transaction\" was asked of something "
+                               "that is not a §2.2 object store");
+    DCHECK(idb_transaction_state(ctx, tx) != IDB_TX_FINISHED,
+           "a FINISHED transaction was asked which object stores it created. Its list of changes is emptied "
+           "when it reaches that state, so the answer would be NO for every store — and §5.8 step 5.1 would "
+           "then rename the handle of a store this transaction created, which is the one case it must not");
+    for (i = 0; i < n && !created; i++) {
+        JSValue change = JS_GetPropertyUint32(ctx, changes, i);
+
+        DCHECK(JS_IsObject(change), "a transaction's list of database changes had a hole in it");
+        if (idb_change_kind(ctx, change) == IDB_CHANGE_STORE_CREATED) {
+            JSValue made = idb_change_get(ctx, change, IDB_CHANGE_STORE);
+
+            created = JS_VALUE_GET_PTR(made) == JS_VALUE_GET_PTR(store);
+            JS_FreeValue(ctx, made);
+        }
+        JS_FreeValue(ctx, change);
+    }
+    JS_FreeValue(ctx, changes);
+    return created;
+}

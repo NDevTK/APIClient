@@ -49,6 +49,7 @@
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_request.h"
 #include "core/indexeddb/idb_transaction.h"
+#include "core/indexeddb/idb_upgrade_abort.h"
 #include "solver/engine.h"
 
 /* §2.7's own fields, spelled once so the writers and the readers cannot disagree. */
@@ -61,7 +62,7 @@
 #define TX_REQUESTS    "requests"     /* §2.7's request list */
 #define TX_HEAD        "head"         /* the index of the first request still in that list — see the header */
 #define TX_REQUEST     "request"      /* §2.7.3's open request, for an upgrade transaction; JS_NULL otherwise */
-#define TX_HANDLES     "handles"      /* §2.2.1's one-handle-per-store set, keyed by name */
+#define TX_HANDLES     "handles"      /* §2.2.1's one-handle-per-store set, keyed by the STORE — see below */
 #define TX_CHANGES     "changes"      /* §5.5 step 2's changes made to the database — see the header */
 
 static JSValue g_key;          /* the private Symbol the slot record hangs off */
@@ -259,39 +260,71 @@ void idb_transaction_scope_remove(JSContext *ctx, JSValueConst tx, JSValueConst 
           "adds to both, so the two disagreeing means one of them was written by something else");
 }
 
-/* ---- §2.2.1's ONE HANDLE PER STORE, per transaction ------------------------------------------------------- */
+/* ---- §2.2.1's ONE HANDLE PER STORE, per transaction -------------------------------------------------------
+ *
+ * "There must be only one object store handle associated with a particular object store within a transaction."
+ * THE SET IS KEYED BY THE STORE because that is the only key that sentence admits — see the header for the
+ * three lines of page script that tell a store-keyed set from a name-keyed one, and for why a name is the one
+ * thing about a store this set could not be keyed by. */
 
-static JSValue tx_handles(JSContext *ctx, JSValueConst tx)
+JSValue idb_transaction_handles(JSContext *ctx, JSValueConst tx, uint32_t *count)
 {
     JSValue h = tx_field(ctx, tx, TX_HANDLES);
 
-    DCHECK(JS_IsObject(h), "a transaction carried no object store handle set");
+    DCHECK(JS_IsArray(h), "a transaction carried no object store handle set — every transaction is built by "
+                          "idb_transaction_new, which gives it one");
+    DCHECK(count != NULL, "a transaction's object store handles were asked for with nowhere to report how "
+                          "many there are");
+    *count = tx_array_len(ctx, h);
     return h;
 }
 
-JSValue idb_transaction_handle_find(JSContext *ctx, JSValueConst tx, const char *name)
+JSValue idb_transaction_handle_find(JSContext *ctx, JSValueConst tx, JSValueConst store)
 {
-    JSValue handles = tx_handles(ctx, tx), h;
+    uint32_t i, n;
+    JSValue handles = idb_transaction_handles(ctx, tx, &n);
 
-    DCHECK(name != NULL, "an object store handle was looked up under no name");
-    h = JS_GetPropertyStr(ctx, handles, name);
+    DCHECK(JS_IsObject(store), "an object store handle was looked up for something that is not a §2.2 store");
+    for (i = 0; i < n; i++) {
+        JSValue h = JS_GetPropertyUint32(ctx, handles, i), held;
+        bool same;
+
+        DCHECK(idb_object_store_is(h), "a transaction's set of object store handles held something that is "
+                                       "not an object store handle");
+        held = idb_object_store_handle_store(ctx, h);
+        same = JS_VALUE_GET_PTR(held) == JS_VALUE_GET_PTR(store);
+        JS_FreeValue(ctx, held);
+        if (same) {
+            JS_FreeValue(ctx, handles);
+            return h;
+        }
+        JS_FreeValue(ctx, h);
+    }
     JS_FreeValue(ctx, handles);
-    if (JS_IsUndefined(h))
-        return JS_NULL;
-    return h;
+    return JS_NULL;
 }
 
-void idb_transaction_handle_add(JSContext *ctx, JSValueConst tx, const char *name, JSValueConst handle)
+void idb_transaction_handle_add(JSContext *ctx, JSValueConst tx, JSValueConst handle)
 {
-    JSValue handles = tx_handles(ctx, tx), existing;
+    JSValue handles, store, existing;
+    uint32_t n;
 
-    DCHECK(name != NULL, "an object store handle was filed under no name");
-    existing = JS_GetPropertyStr(ctx, handles, name);
-    DCHECK(JS_IsUndefined(existing), "a second object store handle was filed for one name in one transaction — "
-                                     "§2.2.1 says there must be only one, and §4.10 asks for the existing one "
-                                     "before it mints another");
+    DCHECK(idb_object_store_is(handle),
+           "something that is not an object store handle was filed in a transaction's handle set");
+    store = idb_object_store_handle_store(ctx, handle);
+    existing = idb_transaction_handle_find(ctx, tx, store);
+    DCHECK(JS_IsNull(existing),
+           "a SECOND object store handle was filed for one STORE in one transaction — §2.2.1: \"there must be "
+           "only one object store handle associated with a particular object store within a transaction\", "
+           "which §4.10's note states as what a page compares. §4.10's objectStore() resolves the store and "
+           "asks for its existing handle before it mints another, and §4.4's createObjectStore files the one "
+           "it has just made for a store nothing else can yet hold one for");
     JS_FreeValue(ctx, existing);
-    JS_SetPropertyStr(ctx, handles, name, JS_DupValue(ctx, handle));
+    JS_FreeValue(ctx, store);
+    handles = idb_transaction_handles(ctx, tx, &n);
+    /* A DEFINE and not an assignment, for core/idl_slots.h's sibling rule — the same reason the request list
+       and the change list are written with one. */
+    JS_DefinePropertyValueUint32(ctx, handles, n, JS_DupValue(ctx, handle), JS_PROP_C_W_E);
     JS_FreeValue(ctx, handles);
 }
 
@@ -755,24 +788,12 @@ void idb_transaction_abort(JSContext *ctx, JSValueConst tx, JSValue error)
     idb_database_revert_transaction(ctx, tx);
 
     /* §5.5 step 3: "If transaction is an upgrade transaction, run the steps to abort an upgrade transaction
-       with transaction." */
-    if (idb_transaction_mode(ctx, tx) == IDB_TX_VERSIONCHANGE) {
-        DFAIL("Indexed Database §5.8's ABORT AN UPGRADE TRANSACTION is not built. Step 2 above has just put the "
-              "DATABASE back — its version, its set of object stores, and every record — and §5.8 is the other "
-              "half of that sentence: what the page can still SEE of it. Its four steps are (1) the "
-              "connection's version goes back to the database's, which after step 2's revert is the one number "
-              "for both of §5.8's arms — a database this open created is back at the 0 it was created with, so "
-              "\"or 0 if database was newly created\" needs no second field remembering which it was; (2) the "
-              "connection's object store set goes back to the database's, which in this engine is the SAME "
-              "record (idb_connection.c says why) and so is already true — assert that identity rather than "
-              "writing it twice; (3) for each object store handle associated with the transaction, INCLUDING "
-              "the handles of stores created or deleted during it, a handle whose store was not newly created "
-              "takes its store's name back, which is what makes `store.name` answer the old name after an "
-              "aborted rename — the handle set is idb_transaction_handle_find's, and \"newly created during "
-              "this transaction\" is what idb_transaction_changes still holds at this point, since the list is "
-              "not cleared until the state goes FINISHED below; (4) the index-handle step, which §2.6's index "
-              "does not exist to have. Build it as its own component beside this one and delete this crash");
-    }
+       with transaction." Step 2 above put the DATABASE back; §5.8 is the other half of that sentence — what
+       the page can still SEE of it, which §5.5's own note names ("this reverts changes to all connection,
+       object store handle, and index handle instances associated with transaction"). It runs HERE, between
+       the revert it reads and step 4's state change that empties the record of what this transaction did. */
+    if (idb_transaction_mode(ctx, tx) == IDB_TX_VERSIONCHANGE)
+        idb_abort_upgrade_transaction(ctx, tx);
     /* §5.5 steps 4 and 5. */
     idb_transaction_set_state(ctx, tx, IDB_TX_FINISHED);
     slots = tx_slots(ctx, tx);
@@ -972,7 +993,7 @@ JSValue idb_transaction_new(JSContext *ctx, JSValueConst connection, JSValue sco
     JS_SetPropertyStr(ctx, st, TX_HEAD, JS_NewInt32(ctx, 0));
     /* §2.7.3's open request, which only §5.7 records and only for the transaction it creates. */
     JS_SetPropertyStr(ctx, st, TX_REQUEST, JS_NULL);
-    handles = idl_slots_new(ctx);
+    handles = JS_NewArray(ctx);
     CHECK(!JS_IsException(handles), "IndexedDB: a transaction's object store handle set could not be allocated");
     JS_SetPropertyStr(ctx, st, TX_HANDLES, handles);
     /* §5.5 step 2's changes, empty because a transaction has made none when it is created. */
@@ -1080,12 +1101,16 @@ static JSValue js_tx_get_db(JSContext *ctx, JSValueConst this_val, int magic)
 /* "The objectStore(name) method steps are: if this's state is finished, then throw an InvalidStateError. Let
    store be the object store named name in this's scope, or throw a NotFoundError if none. Return an object
    store handle associated with store and this."
-   THE HANDLE IS LOOKED UP BEFORE IT IS MINTED, which is §2.2.1's "there must be only one object store handle
-   associated with a particular object store within a transaction" and §4.10's note that a page compares them.
+   THE STORE IS RESOLVED FIRST AND THE HANDLE IS ASKED FOR BY THE STORE, which is the order the three steps
+   above are written in and is not a stylistic choice: §2.2.1 scopes "only one object store handle" to the
+   STORE, so a lookup by NAME answers a different question. `s.name = 'b'` inside an upgrade transaction leaves
+   the handle set holding a store this member is about to be asked for under 'b' — a name-first lookup finds
+   nothing, mints a second handle for that one store, and `tx.objectStore('b') !== s` where every browser
+   answers true.
    The SCOPE is what is searched and not the database: a transaction may only reach the stores it named. */
 static JSValue js_tx_object_store(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    JSValue scope, handle = JS_NULL, store = JS_UNDEFINED;
+    JSValue scope, handle, store = JS_UNDEFINED;
     const char *name;
     uint32_t i, n;
 
@@ -1096,12 +1121,6 @@ static JSValue js_tx_object_store(JSContext *ctx, JSValueConst this_val, int arg
                                     "the transaction has finished, so it has no object stores");
     name = JS_ToCString(ctx, argv[0]);
     if (name == NULL) return JS_EXCEPTION;
-    handle = idb_transaction_handle_find(ctx, this_val, name);
-    if (!JS_IsNull(handle)) {
-        JS_FreeCString(ctx, name);
-        return handle;
-    }
-    JS_FreeValue(ctx, handle);
     scope = tx_scope(ctx, this_val);
     n = tx_array_len(ctx, scope);
     for (i = 0; i < n; i++) {
@@ -1118,15 +1137,17 @@ static JSValue js_tx_object_store(JSContext *ctx, JSValueConst this_val, int arg
         JS_FreeValue(ctx, candidate);
     }
     JS_FreeValue(ctx, scope);
-    if (JS_IsUndefined(store)) {
-        JS_FreeCString(ctx, name);
+    JS_FreeCString(ctx, name);
+    if (JS_IsUndefined(store))
         return JS_ThrowDOMException(ctx, "NotFoundError",
                                     "no object store with that name is in the transaction's scope");
+    handle = idb_transaction_handle_find(ctx, this_val, store);
+    if (JS_IsNull(handle)) {
+        JS_FreeValue(ctx, handle);
+        handle = idb_object_store_handle(ctx, store, this_val);
+        idb_transaction_handle_add(ctx, this_val, handle);
     }
-    handle = idb_object_store_handle(ctx, store, this_val);
     JS_FreeValue(ctx, store);
-    idb_transaction_handle_add(ctx, this_val, name, handle);
-    JS_FreeCString(ctx, name);
     return handle;
 }
 

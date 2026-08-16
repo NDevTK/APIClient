@@ -69,7 +69,9 @@
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key.h"
 #include "core/indexeddb/idb_key_range.h"
+#include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_transaction.h"
+#include "core/indexeddb/idb_upgrade_abort.h"
 #include "solver/endpoint.h"
 #include "solver/req2proto.h"
 #include "solver/result.h"
@@ -2395,6 +2397,104 @@ static void idb_revert_selftest(JSContext *ctx, JSValueConst conn, JSValueConst 
     idb_selftest_finish(ctx, tx);
 }
 
+/* WHAT A HANDLE ANSWERS AFTER THE REVERT — the name of a handle is checked with, and against, the name of the
+   store it is a handle for. */
+static void idb_selftest_handle_named(JSContext *ctx, JSValueConst handle, const char *expect, const char *why)
+{
+    JSValue name = idb_object_store_handle_name(ctx, handle);
+    const char *got = JS_ToCString(ctx, name);
+
+    CHECK(got != NULL, "an object store handle could not report its own name");
+    CHECK(strcmp(got, expect) == 0, why);
+    JS_FreeCString(ctx, got);
+    JS_FreeValue(ctx, name);
+}
+
+/* INDEXED DATABASE §5.8 — ABORT AN UPGRADE TRANSACTION, the other half of §5.5 step 2's sentence: step 2 puts
+ * the DATABASE back and this puts back what the page can still SEE of it.
+ *
+ * WHAT IT EXERCISES, and each of the three is a different arm. (1) §5.8 step 3, the connection's version:
+ * §5.1 step 9 set it to the version being opened, §5.7 step 8 raised the database's, and after the revert the
+ * connection has to be back at the database's — which for a database an open newly created is the 0 §2.1
+ * creates one with, so both of the step's arms are the one read. (2) §5.8 step 5.1 for a store that OUTLIVED
+ * the transaction: its handle takes the store's name back, and the store's name is the one step 2 restored.
+ * (3) THE GUARD on that step, for a store the transaction CREATED: its handle keeps the name it has, because
+ * there is no earlier name to go back to — the assertion is that the two stores answer DIFFERENTLY, which a
+ * fixture with only one of them cannot see.
+ *
+ * HOW A HANDLE'S NAME COMES TO DIFFER FROM ITS STORE'S. A page reaches that state through §4.5's `name` setter,
+ * whose last two steps write both ("set store's name to name. Set this's name to name"), after which §5.5 step
+ * 2 puts back only the store's. This fixture reaches it through §2.2.1's other sentence — "a name, which is
+ * initialized to the name of the associated object store WHEN THE OBJECT STORE HANDLE IS CREATED" — by
+ * renaming the store first and minting the handle afterwards. The state under test is identical and it is the
+ * state step 5.1 exists for; what differs is only which of the two writes put the handle there.
+ *
+ * IT REVERTS AND THEN RUNS §5.8, in §5.5's own order, rather than calling abort a transaction: §5.5's steps 6
+ * and 7 are a queued database task and an event dispatch, and this fixture runs at the pre-boot baseline where
+ * there is no flow to queue one onto — the same reason idb_revert_selftest above stops where it does. */
+static void idb_upgrade_abort_selftest(JSContext *ctx, JSValueConst conn, JSValueConst db, JSValueConst store)
+{
+    JSValue tx, made, kept_handle, made_handle, found;
+
+    /* §5.1 step 9 ("set connection's version to version") and §5.7 step 8 ("set db's version to version"),
+       which is the state every upgrade is in by the time its transaction can abort. */
+    idb_connection_set_version(ctx, conn, 3);
+    tx = idb_selftest_tx(ctx, conn, JS_UNDEFINED, IDB_TX_VERSIONCHANGE);
+    idb_database_set_version(ctx, tx, db, 3);
+
+    /* The store that EXISTED before this transaction, renamed inside it — §5.8 step 5.1's own case. */
+    idb_object_store_rename(ctx, tx, db, store, "renamed");
+    kept_handle = idb_object_store_handle(ctx, store, tx);
+    idb_transaction_handle_add(ctx, tx, kept_handle);
+    idb_selftest_handle_named(ctx, kept_handle, "renamed",
+                              "§2.2.1: an object store handle's name is initialized to the name of the "
+                              "associated object store when the handle is created");
+    /* §2.2.1's uniqueness, over the key the set is actually scoped to: "there must be only one object store "
+       handle associated with a particular object STORE within a transaction". */
+    found = idb_transaction_handle_find(ctx, tx, store);
+    CHECK(JS_VALUE_GET_PTR(found) == JS_VALUE_GET_PTR(kept_handle),
+          "§2.2.1: a transaction's handle set must answer with the handle already associated with that store, "
+          "which is what stops §4.10's objectStore() minting a second one for a store an upgrade renamed");
+    JS_FreeValue(ctx, found);
+
+    /* The store the transaction CREATES, and then renames — the arm step 5.1 must NOT run for. */
+    made = idb_object_store_create(ctx, tx, db, "u", JS_NULL, false);
+    idb_object_store_rename(ctx, tx, db, made, "u2");
+    made_handle = idb_object_store_handle(ctx, made, tx);
+    idb_transaction_handle_add(ctx, tx, made_handle);
+
+    /* §5.5 step 2, then §5.5 step 3. */
+    idb_database_revert_transaction(ctx, tx);
+    idb_abort_upgrade_transaction(ctx, tx);
+
+    CHECK(idb_connection_version(ctx, conn) == idb_database_version(ctx, db),
+          "§5.8 step 3 did not put the CONNECTION's version back to the database's — §2.1.1: the connection's "
+          "version \"remains constant for the lifetime of the connection unless an upgrade is aborted, in "
+          "which case it is set to the previous version of the database\"");
+    CHECK(idb_connection_version(ctx, conn) == 0,
+          "§5.8 step 3's second arm: \"or 0 (zero) if database was newly created\". §2.1 creates a database at "
+          "0 and only §5.7 step 8 moves it, so after §5.5 step 2's revert the database IS at the number both "
+          "of the step's arms name — a fixture reading anything else means the two have stopped agreeing and "
+          "the arms need telling apart after all");
+    idb_selftest_handle_named(ctx, kept_handle, "s",
+                              "§5.8 step 5.1: a handle whose object store was NOT newly created during the "
+                              "transaction takes its store's name back — which is what makes `store.name` "
+                              "answer the old name after an upgrade transaction renamed the store and aborted");
+    idb_selftest_handle_named(ctx, made_handle, "u2",
+                              "§5.8 step 5.1's GUARD: a handle whose object store WAS newly created during the "
+                              "transaction is left alone. The store it names has just been destroyed by the "
+                              "revert and has no earlier name for the handle to go back to, so a step that ran "
+                              "unconditionally would rename this handle to a name nothing ever answered to");
+    CHECK(idb_object_store_is_deleted(ctx, made),
+          "§5.5 step 2 left a store the transaction created undeleted, so §5.8 ran against a database that had "
+          "not been put back");
+
+    JS_FreeValue(ctx, made_handle);
+    JS_FreeValue(ctx, kept_handle);
+    JS_FreeValue(ctx, made);
+    idb_selftest_finish(ctx, tx);
+}
+
 static void idb_store_selftest(JSContext *ctx)
 {
     static const int32_t ARRIVAL[] = { 3, 1, 2 };
@@ -2537,6 +2637,9 @@ static void idb_store_selftest(JSContext *ctx)
        next transaction finds — which is what §5.5 step 2 has to put back. */
     idb_selftest_finish(ctx, tx);
     idb_revert_selftest(ctx, conn, db, store);
+    /* §5.5 step 3 runs on the state step 2 has just put back, so §5.8's fixture runs on the state this one
+       left — the database at the 0 it was created with, and the store back under the name it had. */
+    idb_upgrade_abort_selftest(ctx, conn, db, store);
 
     JS_FreeValue(ctx, conn);
     JS_FreeValue(ctx, store);

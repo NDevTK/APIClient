@@ -440,9 +440,12 @@ static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val
        transaction can return lists with different contents as object stores are created and deleted". */
     idb_transaction_scope_add(ctx, tx, store);
     handle = idb_object_store_handle(ctx, store, tx);
-    /* §2.2.1's one-handle-per-store: the handle this member returns is the one `objectStore(name)` must answer
-       with afterwards, so it is filed rather than left for a second mint to duplicate. */
-    idb_transaction_handle_add(ctx, tx, name, handle);
+    /* §2.2.1's one-handle-per-store: the handle this member returns is the one `objectStore()` must answer
+       with afterwards, so it is filed rather than left for a second mint to duplicate. It is filed under the
+       STORE and not under `name`, which is the key §2.2.1's sentence scopes uniqueness to and the only key a
+       rename cannot invalidate — the store this member just created is one nothing else can yet hold a handle
+       for, which is what the add asserts. */
+    idb_transaction_handle_add(ctx, tx, handle);
     JS_FreeValue(ctx, store);
     if (path != NULL) JS_FreeCString(ctx, path);
     JS_FreeCString(ctx, name);
