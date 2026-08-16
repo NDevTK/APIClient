@@ -590,57 +590,17 @@ static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pi
  * file held a second one, so "does this element match this selector" had two implementations that could
  * disagree — and the arena is scratch either way: the match cleans its own pools before it returns. */
 
-/* The sheet's serialization, rebuilt from its RULE OBJECTS, and how many rules went into it. OWNED. */
+/* The sheet's serialization, rebuilt from its RULE OBJECTS, and how many STYLE rules went into it. OWNED.
+   THE FLATTENING IS core/css/css_rule.h's, because deciding which rules apply is §6.4's business and not this
+   file's: a conditional group rule contributes its children only when its condition holds, so what the matcher
+   re-parses is not the sheet's top level at all. */
 static char *cssd_sheet_text(JSContext *ctx, JSValueConst sheet, uint32_t *pn)
 {
     JSValue rules = css_style_sheet_rules(ctx, sheet);
-    CssBuf out = { 0 };
-    uint32_t n, i;
+    char *out = css_rule_cascade_text(ctx, rules, pn);
 
-    {
-        JSValue len = JS_GetPropertyStr(ctx, rules, "length");
-
-        n = 0;
-        JS_ToUint32(ctx, &n, len);
-        JS_FreeValue(ctx, len);
-    }
-    for (i = 0; i < n; i++) {
-        JSValue rule = JS_GetPropertyUint32(ctx, rules, i);
-        size_t sl = 0, bl = 0;
-        char *sel, *block;
-
-        DCHECK(css_rule_is(rule),
-               "a CSS style sheet's rule list holds something that is not a CSS rule — §6.4's insert is the "
-               "only thing that ever puts one in, and it asserts the same premise from the other side");
-        sel = css_rule_selector_text(ctx, rule, &sl);
-        block = css_rule_block_text(ctx, rule, &bl);
-        JS_FreeValue(ctx, rule);
-        /* A rule with NO selector text cannot be serialized into a sheet at all, and there is no partial answer
-           worth giving: an empty prelude would make lexbor drop the rule and every index after it would name a
-           neighbour's declarations, and a `*` stand-in would make the rule match EVERY element. §6.4.3's
-           selector list is non-empty for every rule this build can make — both creators keep only what lexbor
-           accepted as one — so this is the pending-exception path, and the whole sheet is abandoned. */
-        DCHECK(sel != NULL,
-               "a §6.4.3 style rule has no serialized selector list. Both things that write one — the parse in "
-               "css_style_sheet.c and `selectorText =` in css_rule.c — go through cssom_parse_rules and store "
-               "only what lexbor accepted, so an empty one means the string conversion itself failed");
-        if (!sel) {
-            free(block);
-            css_buf_free(&out);
-            JS_FreeValue(ctx, rules);
-            *pn = 0;
-            return NULL;
-        }
-        css_buf_add(&out, sel);
-        css_buf_add(&out, "{");
-        if (block) css_buf_add(&out, block);
-        css_buf_add(&out, "}");
-        free(sel);
-        free(block);
-    }
     JS_FreeValue(ctx, rules);
-    *pn = n;
-    return out.s;
+    return out;
 }
 
 static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
@@ -946,6 +906,118 @@ char *cssom_serialize_declarations(const char *text, size_t len)
     return cssd_serialize_text(text, len);
 }
 
+/* AN AT-RULE's OWN NAME, which is the only thing that can say WHICH at-rule this is. Lexbor recognises exactly
+   three by name (`@media`, `@font-face`, `@namespace`) and every other one it parses becomes a `_CUSTOM` rule
+   carrying the identifier it was written with, so the name is read from whichever of those two places holds it.
+   A rule whose own grammar FAILED has been converted to `_UNDEF` and is dropped by the walk below, which never
+   reaches here. Returns NULL for a type lexbor's own table has no entry for, which cannot happen. */
+static const char *cssd_at_rule_name(const lxb_css_rule_at_t *at)
+{
+    const lxb_css_entry_at_rule_data_t *e;
+
+    if (at->type == LXB_CSS_AT_RULE__CUSTOM) return (const char *)at->u.custom->name.data;
+    e = lxb_css_at_rule_by_id(at->type);
+    return e ? (const char *)e->name : NULL;
+}
+
+/* An at-rule's PRELUDE, sliced out of the source by the offsets lexbor recorded while consuming it. It is taken
+   from the text rather than from the parsed value because only `_UNDEF` and `_CUSTOM` keep a copy of it at all
+   — `@media`'s parsed form is its block and nothing else — and because the offsets are exactly what
+   `lxb_css_make_data` itself reads: they index the buffer handed to lxb_css_stylesheet_parse, which is `text`.
+   Trimmed of ASCII whitespace, because the prelude's span runs from its first token to the `{` and the parser
+   that consumes it next has no use for either edge. OWNED. */
+static char *cssd_at_rule_prelude(const char *text, size_t len, const lxb_css_rule_at_t *at)
+{
+    size_t begin = at->prelude_begin, end = at->prelude_end;
+    char *out;
+
+    DCHECK(begin <= end && end <= len,
+           "an at-rule's prelude offsets fall outside the text that was parsed — they index the tokenizer's "
+           "input buffer, which is the very string handed to lxb_css_stylesheet_parse");
+    if (begin > end || end > len) begin = end = 0;
+    while (begin < end && (text[begin] == ' ' || text[begin] == '\t' || text[begin] == '\n' ||
+                           text[begin] == '\r' || text[begin] == '\f')) begin++;
+    while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t' || text[end - 1] == '\n' ||
+                           text[end - 1] == '\r' || text[end - 1] == '\f')) end--;
+    out = malloc(end - begin + 1);
+    CHECK(out != NULL, "cssom: OOM copying an at-rule's prelude");
+    memcpy(out, text + begin, end - begin);
+    out[end - begin] = '\0';
+    return out;
+}
+
+/* One rule list, walked in document order, each rule reported and then its OWN nested list walked with the
+   handle the callback just returned. The recursion is over the PARSE TREE and its depth is the nesting depth of
+   the stylesheet's own braces, which the tokenizer has already bounded by consuming them. */
+static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_list_t *list,
+                            CssomRuleFn cb, void *ud, void *parent, unsigned *pn)
+{
+    lxb_css_rule_t *r;
+
+    for (r = list->first; r; r = r->next) {
+        CssomRule out = { NULL, "", NULL, false };
+        const lxb_css_rule_list_t *kids = NULL;
+        CssBuf sel = { 0 };
+        char *block = NULL, *prelude = NULL;
+        void *handle;
+
+        switch (r->type) {
+        case LXB_CSS_RULE_STYLE: {
+            lxb_css_rule_style_t *st = lxb_css_rule_style(r);
+
+            lxb_css_selector_serialize_list_chain(st->selector, css_buf_cb, &sel);
+            block = cssd_serialize_block(st->declarations);
+            out.prelude = sel.s ? sel.s : "";
+            out.block = block ? block : "";
+            out.has_block = true;
+            kids = st->child;                     /* CSS Nesting's own rules, which §6.4.5 makes `cssRules` */
+            break;
+        }
+        case LXB_CSS_RULE_AT_RULE: {
+            lxb_css_rule_at_t *at = lxb_css_rule_at(r);
+
+            /* `_UNDEF` is what lexbor converts an at-rule to when its OWN grammar failed, and CSS Syntax says
+               an invalid rule is dropped — which is what a user agent does with `@namespace { }` and why an
+               invalid at-rule is not in `cssRules`. */
+            if (at->type == LXB_CSS_AT_RULE__UNDEF) continue;
+            out.at_name = cssd_at_rule_name(at);
+            DCHECK(out.at_name != NULL,
+                   "lexbor reported an at-rule whose own name table has no entry for its type — the name is "
+                   "the only thing that can say which §6.4 interface the rule wants");
+            if (!out.at_name) continue;
+            prelude = cssd_at_rule_prelude(text, len, at);
+            out.prelude = prelude;
+            /* Every at-rule lexbor knows keeps its block in the same place in the union, and a STATEMENT
+               at-rule (`@import url(x);`) keeps a null one — which is the fact `has_block` reports. */
+            kids = (at->type == LXB_CSS_AT_RULE_MEDIA) ? at->u.media->block
+                 : (at->type == LXB_CSS_AT_RULE_FONT_FACE) ? at->u.font_face->block
+                 : (at->type == LXB_CSS_AT_RULE__CUSTOM) ? at->u.custom->block : NULL;
+            out.has_block = kids != NULL;
+            break;
+        }
+        /* A qualified rule whose PRELUDE is not a selector list, and a DECLARATION where a rule belongs: CSS
+           Syntax calls both invalid and drops them, so they are never reported. A declaration list inside a
+           STYLE rule is the one lexbor has already lifted out into that rule's own declarations, so what
+           remains here is a second one AFTER a nested rule — which is CSSOM's CSSNestedDeclarations, a rule
+           interface this build does not have and that the builder would have to be told about. */
+        case LXB_CSS_RULE_BAD_STYLE:
+        case LXB_CSS_RULE_DECLARATION_LIST:
+            continue;
+        default:
+            DFAIL("CSS Syntax produced a top-level rule kind this walk has no arm for — lexbor's own list is "
+                  "STYLE, BAD_STYLE, AT_RULE and DECLARATION_LIST, and a fifth means the parser grew a kind "
+                  "whose prelude and body split differently");
+            continue;
+        }
+        if (pn) (*pn)++;
+        handle = cb(ud, parent, &out);
+        if (kids) cssd_emit_rules(text, len, kids, cb, ud, handle, NULL);
+        free(prelude);
+        free(block);
+        css_buf_free(&sel);
+    }
+}
+
 unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *ud)
 {
     lxb_css_memory_t *mem = lxb_css_memory_create();
@@ -965,25 +1037,8 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
         sst = NULL;
     lxb_css_parser_memory_set(g_parser, NULL);
     cssd_selectors_intact();
-    if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST) {
-        lxb_css_rule_t *r;
-
-        for (r = lxb_css_rule_list(sst->root)->first; r; r = r->next) {
-            n++;
-            if (r->type != LXB_CSS_RULE_STYLE) { cb(ud, (unsigned)r->type, NULL, NULL); continue; }
-            {
-                lxb_css_rule_style_t *st = lxb_css_rule_style(r);
-                CssBuf sel = { 0 };
-                char *block;
-
-                lxb_css_selector_serialize_list_chain(st->selector, css_buf_cb, &sel);
-                block = cssd_serialize_block(st->declarations);
-                cb(ud, (unsigned)r->type, sel.s ? sel.s : "", block ? block : "");
-                free(block);
-                css_buf_free(&sel);
-            }
-        }
-    }
+    if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST)
+        cssd_emit_rules(text, len, lxb_css_rule_list(sst->root), cb, ud, NULL, &n);
     /* THE ARENA IS THE ONE OWNER and it is freed outright, for the reason the author cascade's is: creating a
        stylesheet REF-INCREMENTS the memory it is handed, so `lxb_css_stylesheet_destroy(sst, true)` only
        decrements it back and frees nothing. Every rule, selector and string above lives in here, which is

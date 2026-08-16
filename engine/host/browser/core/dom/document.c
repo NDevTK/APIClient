@@ -41,6 +41,7 @@
 #include "core/dom/selector_match.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_rule.h"
+#include "core/css/media_list.h"
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
@@ -2549,7 +2550,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
     css_style_sheet_install(ctx, global); /* CSSOM §6.1.1 StyleSheet and §6.1.2 CSSStyleSheet */
     style_sheet_list_install(ctx, global); /* CSSOM §6.2.2 StyleSheetList */
-    css_rule_install(ctx, global);       /* CSSOM §6.4.2 CSSRule and §6.4.3 CSSStyleRule */
+    media_list_install(ctx, global);     /* CSSOM §4.4 MediaList, which §7.3's `media` hands back */
+    css_rule_install(ctx, global);       /* CSSOM §6.4's five rule interfaces, §7.2 and §7.3 included */
     css_rule_list_install(ctx, global);  /* CSSOM §6.4.1 CSSRuleList */
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
     element_internals_install(ctx, global);  /* §4.13.7 ElementInternals, CustomStateSet, ValidityState */

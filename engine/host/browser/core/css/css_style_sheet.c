@@ -34,11 +34,8 @@
 
 #include "check.h"
 #include "quickjs.h"
-#include <lexbor/css/css.h>
-
 #include "core/css/css_rule.h"
 #include "core/css/css_rule_list.h"
-#include "core/css/css_style_declaration.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
 #include "core/dom/node.h"
@@ -350,9 +347,12 @@ void css_style_sheet_remove(JSContext *ctx, JSValueConst sheet)
 
 /* ---- §6.1.2's CSS RULES: cssRules, insertRule and deleteRule ---------------------------------------------- */
 
-/* INFRA's list operations over the rules Array. Private to this component with its own assertions, exactly as
-   §6.6.7's are private to core/html/autofocus.c and §6.2's to core/css/style_sheet_list.c: two lists share no
-   invariant, so one shared copy would buy nothing and cost a header. */
+/* §6.4's own list operations, its INSERT A CSS RULE and its REMOVE A CSS RULE all live in core/css/css_rule.c,
+   because the spec states each of them ONCE over "a CSS rule list" and §6.4.5's CSSGroupingRule is stated over
+   the very same three. A private copy here is what made §6.1.2's insertRule and §6.4.5's two implementations of
+   one algorithm, which is exactly the pair that drifts. `rules_len` is the one thing this file still needs of
+   its own — it asks its own list a question, and asking css_rule.c for it would export a list primitive nothing
+   else wants. */
 static uint32_t rules_len(JSContext *ctx, JSValueConst list)
 {
     JSValue len = JS_GetPropertyStr(ctx, list, "length");
@@ -363,66 +363,16 @@ static uint32_t rules_len(JSContext *ctx, JSValueConst list)
     return n;
 }
 
-static void rules_insert_at(JSContext *ctx, JSValueConst list, uint32_t i, JSValue v)   /* CONSUMES v */
-{
-    uint32_t n = rules_len(ctx, list), k;
-
-    DCHECK(i <= n, "§6.4 inserted a CSS rule at an index past the end of the list");
-    for (k = n; k > i; k--)
-        JS_SetPropertyUint32(ctx, (JSValue)list, k, JS_GetPropertyUint32(ctx, list, k - 1));
-    JS_SetPropertyUint32(ctx, (JSValue)list, i, v);
-}
-
-static void rules_remove_at(JSContext *ctx, JSValueConst list, uint32_t i)
-{
-    uint32_t n = rules_len(ctx, list), k;
-
-    DCHECK(i < n, "§6.4 removed a CSS rule at an index the list does not have");
-    for (k = i + 1; k < n; k++)
-        JS_SetPropertyUint32(ctx, (JSValue)list, k - 1, JS_GetPropertyUint32(ctx, list, k));
-    JS_SetPropertyStr(ctx, (JSValue)list, "length", JS_NewUint32(ctx, n - 1));
-}
-
-/* WHAT ONE PARSE PRODUCED, collected as the rule objects it becomes. `sheet` is the parent every rule names. */
-typedef struct { JSContext *ctx; JSValueConst sheet; JSValue list; unsigned n_style; } RuleBuild;
-
-static void sheet_rule_built(void *ud, unsigned type, const char *selector_text, const char *block_text)
-{
-    RuleBuild *b = ud;
-    JSValue rule;
-
-    if (type != (unsigned)LXB_CSS_RULE_STYLE) {
-        /* §6.4 has an interface for every rule type CSS defines and this build has exactly one of them, so a
-           rule that is not a style rule has no object it could become. Dropping it silently would make
-           `cssRules.length` a number no browser reports and `cssRules[i]` name the wrong rule from there on. */
-        DFAIL("CSSOM §6.4 has no interface built for this at-rule, so a stylesheet containing one cannot be "
-              "represented: §6.4.5's CSSGroupingRule and §6.4.6's CSSMediaRule are the pair almost every page "
-              "needs (an `@media` block), with §6.4.4's CSSImportRule, §6.4.7's CSSPageRule, §6.4.9's "
-              "CSSNamespaceRule and CSS Animations' CSSKeyframesRule behind them. Build the interface for the "
-              "type lexbor reported and mint it here — do NOT skip the rule, because every index after it "
-              "would then name a different rule than the page's");
-        return;
-    }
-    rule = css_style_rule_new(b->ctx, b->sheet, JS_NULL, selector_text, block_text);
-    if (JS_IsException(rule)) { JS_FreeValue(b->ctx, rule); return; }
-    JS_SetPropertyUint32(b->ctx, b->list, b->n_style++, rule);
-}
-
 void css_style_sheet_set_rules_from_text(JSContext *ctx, JSValueConst sheet, const char *text, size_t len)
 {
     CssStyleSheetData *s = sheet_of(sheet);
-    RuleBuild b;
 
     DCHECK(s != NULL, "a sheet's CSS rules were set on something that is not a CSS style sheet");
     DCHECK(rules_len(ctx, s->rules) == 0,
            "a CSS style sheet's rules were parsed into a list that is not empty — this is the operation "
            "§6.1.2's replaceSync is stated over and it SETS the rules, so a second call would append to the "
            "first instead of replacing it");
-    b.ctx = ctx;
-    b.sheet = sheet;
-    b.list = s->rules;
-    b.n_style = 0;
-    cssom_parse_rules(text, len, sheet_rule_built, &b);
+    css_rule_build_sheet(ctx, s->rules, sheet, text, len);
 }
 
 /* §6.1.2's `cssRules`. Its steps 1-2 are an origin-clean check and then "return a read-only, LIVE CSSRuleList
@@ -440,25 +390,16 @@ static JSValue js_sheet_css_rules(JSContext *ctx, JSValueConst this_val, int mag
     return JS_DupValue(ctx, s->rule_list);
 }
 
-/* §6.4's "INSERT A CSS RULE rule in a CSS rule list list at index index", which §6.1.2's insertRule is stated
-   over, with §6.1.2's own steps around it. THE THREE THROWS ARE THE BEHAVIOUR and not an edge to round off:
-     - step 2's IndexSizeError is `index > length`, NOT `>= length` — appending at the very end is LEGAL, and
-       that asymmetry against `remove a CSS rule`'s `>=` is the whole reason both are spelled out here;
-     - step 5's HierarchyRequestError is a rule that cannot go at that position (a CSS style sheet cannot hold
-       an `@import` after a style rule);
-     - step 6's InvalidStateError is an `@namespace` inserted into a list holding anything other than `@import`
-       and `@namespace` rules.
-   The last two are reachable only through a rule type this build has no interface for, so each is an
-   assertion rather than a live branch — see the two DCHECKs. */
+/* §6.1.2's `insertRule(rule, index)`: "return the result of invoking insert a CSS rule rule in the CSS rules at
+   index" — WITHOUT the nested flag, which is the whole difference from §6.4.5's, and which is why the algorithm
+   itself lives in core/css/css_rule.c and this member only names its arguments. */
 static JSValue js_sheet_insert_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                     int magic)
 {
     CssStyleSheetData *s = sheet_here(ctx, this_val);
     const char *text;
-    uint32_t index = 0, len;
-    RuleBuild b;
-    JSValue one, built;
-    unsigned n_rules;
+    uint32_t index = 0;
+    JSValue out;
 
     (void)magic;
     if (!s) return JS_EXCEPTION;
@@ -466,70 +407,26 @@ static JSValue js_sheet_insert_rule(JSContext *ctx, JSValueConst this_val, int a
     /* Both arguments arrive CONVERTED: `CSSOMString rule` and `optional unsigned long index = 0` are the
        declaration's work, so nothing here runs the page's code and the default is the IDL's. */
     if (argc >= 2) JS_ToUint32(ctx, &index, argv[1]);
-    len = rules_len(ctx, s->rules);
-    /* STEP 2 of insert-a-CSS-rule. FIRST, before the parse, which is the order the algorithm states: a bad
-       index throws even for text that would not have parsed. */
-    if (index > len)
-        return JS_ThrowDOMException(ctx, "IndexSizeError",
-                                    "the index is past the end of the style sheet's rule list");
     text = JS_ToCString(ctx, argv[0]);
     if (!text) return JS_EXCEPTION;
-    /* STEP 3 — "parse a CSS rule". CSS Syntax's parse-a-RULE is one rule and a syntax error for anything else,
-       which is what a stylesheet parse reporting a count other than one MEANS. */
-    one = JS_NewArray(ctx);
-    CHECK(!JS_IsException(one), "cssom: the insertRule scratch list could not be allocated");
-    b.ctx = ctx;
-    b.sheet = this_val;
-    b.list = one;
-    b.n_style = 0;
-    n_rules = cssom_parse_rules(text, strlen(text), sheet_rule_built, &b);
+    /* A rule at a SHEET's top level has no enclosing rule, which is §6.4.2's parent CSS rule being null. */
+    out = css_rule_list_insert(ctx, s->rules, this_val, JS_NULL, index, text, /*nested*/ false);
     JS_FreeCString(ctx, text);
-    /* STEP 4 — "if new rule is a syntax error, throw a SyntaxError". Nothing parsed, or more than one rule did,
-       or the one that did was a type with no interface (which the build above has already crashed on in dev). */
-    if (n_rules != 1 || b.n_style != 1) {
-        JS_FreeValue(ctx, one);
-        return JS_ThrowDOMException(ctx, "SyntaxError", "the rule could not be parsed as a single CSS rule");
-    }
-    built = JS_GetPropertyUint32(ctx, one, 0);
-    JS_FreeValue(ctx, one);
-    /* STEP 5's HierarchyRequestError and STEP 6's InvalidStateError. Both are about a rule whose TYPE decides
-       where it may sit — an `@import` after a style rule, an `@namespace` among anything but `@import` and
-       `@namespace` — and the only rule this build can construct is a style rule, which §6.4 lets sit at any
-       index of a style sheet. The day another type is constructible, both conditions become live branches
-       here; asserting the premise is what makes that impossible to forget. */
-    DCHECK(css_rule_is(built),
-           "§6.4's insert a CSS rule reached its constraint steps with something that is not a CSS rule");
-    /* STEP 7, then step 8 returns the index. */
-    rules_insert_at(ctx, s->rules, index, built);
-    return JS_NewUint32(ctx, index);
+    return out;
 }
 
-/* §6.4's "REMOVE A CSS RULE from a CSS rule list list at index index", which §6.1.2's deleteRule is stated
-   over. Step 2's IndexSizeError is `index >= length` — the asymmetry against insert's `>` — and its last step
-   is what makes a removed rule stop naming the sheet it has left. */
+/* §6.1.2's `deleteRule(index)`: "remove a CSS rule in the CSS rules at index". */
 static JSValue js_sheet_delete_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                     int magic)
 {
     CssStyleSheetData *s = sheet_here(ctx, this_val);
-    uint32_t index = 0, len;
-    JSValue old;
+    uint32_t index = 0;
 
     (void)magic;
     if (!s) return JS_EXCEPTION;
     DCHECK(argc >= 1, "§6.1.2's deleteRule reached its body with no index — its IDL argument is required");
     JS_ToUint32(ctx, &index, argv[0]);
-    len = rules_len(ctx, s->rules);
-    if (index >= len)                                               /* STEP 2 */
-        return JS_ThrowDOMException(ctx, "IndexSizeError",
-                                    "the index is at or past the end of the style sheet's rule list");
-    old = JS_GetPropertyUint32(ctx, s->rules, index);               /* STEP 3 */
-    /* STEP 4's InvalidStateError is an `@namespace` rule, which this build cannot construct — the same premise
-       insertRule's constraint steps assert, from the other side. */
-    DCHECK(css_rule_is(old), "§6.4's remove a CSS rule found something that is not a CSS rule at its index");
-    rules_remove_at(ctx, s->rules, index);                          /* STEP 5 */
-    css_rule_orphan(ctx, old);                                      /* STEP 6 */
-    JS_FreeValue(ctx, old);
-    return JS_UNDEFINED;
+    return css_rule_list_delete(ctx, s->rules, index);
 }
 
 /* ---- the interfaces ------------------------------------------------------------------------------------- */

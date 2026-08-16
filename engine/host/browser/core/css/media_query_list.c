@@ -7,15 +7,12 @@
 #include "quickjs.h"
 #include "core/css/media_query.h"
 #include "core/css/media_query_list.h"
-#include "core/dom/document.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
-#include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
-#include "solver/decide.h"
 
 static JSClassID g_mql_class, g_ev_class;
 static int  g_slot = -1;                      /* this document's collection, in creation order */
@@ -57,75 +54,30 @@ static MqlData *mql_data(JSContext *ctx, JSValueConst obj)
     return d;
 }
 
-/* ---- `matches` ---------------------------------------------------------------------------------------------- */
+/* ---- `matches` ----------------------------------------------------------------------------------------------
+ *
+ * THE VALUE AND THE ENGINE's OWN READ OF IT ARE core/css/media_query.h's, and they moved there when a SECOND
+ * member started asking the same question: CSSOM §7.3's `@media` rule reports whether its condition holds and
+ * the cascade decides whether the rule applies at all, and those are the same fact about the same document as
+ * this `matches` is. Two spellings of one source identity fork one predicate twice, so the arm that answered
+ * `true` here would have resolved the cascade as though it were false. What stays this file's is §4.2's
+ * OBJECT — its listener list, its reported-state latch, and the change algorithm below. */
 
-/* THE SOURCE IDENTITY of one document's answer to one query. The DOCUMENT is part of it and that is not
-   decoration: a child navigable's viewport is 300 CSS pixels wide and the top-level traversable's is 1280, so
-   `(min-width: 600px)` is genuinely a different question in each — one key would let a branch taken in the
-   parent decide the iframe's. The SHAPE is the human-readable half a finding carries, so it names the query
-   and not the document id. `out` must hold both; the caller sizes it. */
-static void mql_source(JSContext *ctx, const MqlData *d, char *shape, size_t nshape, char *src, size_t nsrc)
+static bool mql_matches_now(JSContext *ctx, JSValueConst obj)
 {
-    JSValueConst self = document_window_proxy(ctx);
+    MqlData *d = mql_data(ctx, obj);
 
-    DCHECK(window_proxy_is(self), "a MediaQueryList was reached in a realm whose document has no WindowProxy");
-    snprintf(shape, nshape, "{media:%s}", d->media);
-    snprintf(src, nsrc, "{media#%u}%s", (unsigned)window_proxy_doc(self), d->media);
-}
-
-/* The modelled answer — the real predicate run against the real modelled viewport. */
-static bool mql_computed(JSContext *ctx, const MqlData *d)
-{
-    return media_query_matches(ctx, d->set);
-}
-
-/* §4.2's `matches`, as the page sees it: the computed answer carried as the EXAMPLE of a concolic keyed on
-   this document's answer to this query. concolic_source_wrap hands back the plain boolean where no source
-   overlay is installed (a conformance host), which is what keeps this component testable against the standard. */
-static JSValue mql_matches_value(JSContext *ctx, JSValueConst this_val)
-{
-    MqlData *d = mql_data(ctx, this_val);
-    char shape[256], src[256];
-
-    if (!d) return JS_EXCEPTION;
-    mql_source(ctx, d, shape, sizeof shape, src, sizeof src);
-    return concolic_source_wrap(ctx, shape, src, JS_NewBool(ctx, mql_computed(ctx, d)));
+    DCHECK(d != NULL, "update-the-rendering step 10 read a MediaQueryList that is not one");
+    return media_query_matches_now(ctx, d->set);
 }
 
 static JSValue js_mql_matches(JSContext *ctx, JSValueConst this_val, int magic)
 {
+    MqlData *d = mql_data(ctx, this_val);
+
     (void)magic;
-    return mql_matches_value(ctx, this_val);
-}
-
-/* THE ENGINE's OWN READ. Step 10 is C and cannot fork, so it takes the arm this flow already committed to —
-   asked BY VALUE so decide.c stays the only speller of the constraint key — and falls back to the modelled
-   example when the flow has committed to neither. page_visibility.c does the identical thing for `hidden`,
-   because it is the identical problem. */
-static bool mql_matches_now(JSContext *ctx, JSValueConst obj)
-{
-    JSValue v = mql_matches_value(ctx, obj);
-    int arm;
-    bool r;
-
-    DCHECK(!JS_IsException(v), "update-the-rendering step 10 read a MediaQueryList that is not one");
-    if (!concolic_is(v)) {
-        r = JS_ToBool(ctx, v);
-        JS_FreeValue(ctx, v);
-        return r;
-    }
-    arm = decide_value_arm(v);
-    if (arm >= 0) {
-        JS_FreeValue(ctx, v);
-        return arm == 1;
-    }
-    {
-        JSValue ex = concolic_example(ctx, v);
-        r = JS_ToBool(ctx, ex);
-        JS_FreeValue(ctx, ex);
-    }
-    JS_FreeValue(ctx, v);
-    return r;
+    if (!d) return JS_EXCEPTION;
+    return media_query_matches_value(ctx, d->set);
 }
 
 static JSValue js_mql_media(JSContext *ctx, JSValueConst this_val, int magic)
@@ -384,7 +336,7 @@ static JSValue js_match_media(JSContext *ctx, JSValueConst this_val, int argc, J
        these steps were run", and a list created between two frames has not changed since it was created — a
        zero-initialised latch would make every `matchMedia("(min-width: 1px)")` fire a spurious `change` on the
        very next rendering opportunity. */
-    d->last_matches = mql_computed(ctx, d);
+    d->last_matches = media_query_matches(ctx, d->set);
     /* CREATION ORDER is the order §4.2 walks, so the collection is appended to and never reordered. */
     arr = mql_collection(ctx);
     JS_SetPropertyUint32(ctx, arr, arr_len(ctx, arr), JS_DupValue(ctx, obj));

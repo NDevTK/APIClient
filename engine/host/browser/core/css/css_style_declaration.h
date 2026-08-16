@@ -4,6 +4,9 @@
    §7.1's `element.style`, §7.2's `getComputedStyle` and §6.4.3's `rule.style`. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_DECLARATION_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_DECLARATION_H
+#include <stdbool.h>
+#include <stddef.h>
+
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
 
@@ -52,17 +55,44 @@ int cssom_put_forwards_setter(void);
  * while the arena swap, the parse and the "the record came back unchanged" assertion stay together in ONE
  * place. Handing a second component the `lxb_css_parser_t *` would be handing it three steps to remember.
  *
- * Each TOP-LEVEL rule is handed to `cb` as TEXT, never as a lexbor pointer: the arena is destroyed before this
- * returns, and CSSOM §6.4's objects have to outlive it — they park to the IDB cold tier and fork per flow, and
- * a rule named by a pointer into a freed arena can do neither. `type` is lexbor's own rule type, so the caller
- * decides what it has no interface for rather than this silently dropping it. For LXB_CSS_RULE_STYLE,
- * `selector_text` is the serialized selector list and `block_text` the serialized declaration block; for any
- * other type both are NULL, because how a rule splits into prelude and body is that rule interface's business.
- * Both strings are BORROWED for the duration of the call.
+ * Every rule is handed to `cb` as TEXT, never as a lexbor pointer: the arena is destroyed before this returns,
+ * and CSSOM §6.4's objects have to outlive it — they park to the IDB cold tier and fork per flow, and a rule
+ * named by a pointer into a freed arena can do neither. Every string below is BORROWED for the duration of the
+ * call.
  *
- * Returns how many top-level rules the text produced — which is what CSS Syntax's "parse a RULE" needs in
- * order to be that instead of this: exactly one, or a syntax error. */
-typedef void (*CssomRuleFn)(void *ud, unsigned type, const char *selector_text, const char *block_text);
+ * Returns how many TOP-LEVEL rules the text produced — which is what CSS Syntax's "parse a RULE" needs in order
+ * to be that instead of this: exactly one, or a syntax error. */
+typedef struct {
+    /* WHICH KIND OF RULE, by NAME. NULL for a QUALIFIED (style) rule; otherwise the at-rule's identifier with
+       no `@`, lowercased — "media", "import", "keyframes" — so the CALLER decides which §6.4 interface it has
+       and which it has none for, rather than this file deciding for it from a lexbor enumeration that knows
+       only three at-rules by name. */
+    const char *at_name;
+    /* A style rule's SERIALIZED SELECTOR LIST, or an at-rule's own PRELUDE text (for `@media`, its media query
+       list), with leading and trailing whitespace removed. Never NULL — `@media {}` has an EMPTY prelude, which
+       is a media query list of no queries and not the absence of one. */
+    const char *prelude;
+    /* A style rule's SERIALIZED DECLARATION BLOCK. NULL for an at-rule, whose body is RULES and not
+       declarations; the empty string for a style rule that declares nothing. */
+    const char *block;
+    /* Does this rule have a `{}` BLOCK at all? `@import url(x);` is a STATEMENT at-rule and has none, which is
+       a different fact from having an empty one and is what tells the two kinds apart. */
+    bool        has_block;
+} CssomRule;
+
+/* Called once per rule the parse KEPT, in document order. `parent` is what this callback returned for the rule
+ * that ENCLOSES this one, or NULL at the top level; a nested rule always arrives after its parent, so a builder
+ * needs no depth arithmetic and never sees a lexbor list. What the callback returns is opaque here — the parse
+ * only ever hands it back — with the ONE meaning NULL carries: a callback that answers NULL for a rule makes
+ * that rule's children arrive as though they were TOP-LEVEL, so a builder keeping objects must return a handle
+ * for every rule it is told about, the ones it decided to drop included.
+ *
+ * A rule CSS SYNTAX SAYS IS INVALID is dropped by the parse and never reported: a qualified rule whose prelude
+ * is not a selector list, an at-rule whose own grammar failed, and a declaration where a rule belongs. That is
+ * what every user agent does with one — an invalid rule is not in `cssRules` — and it is also what makes the
+ * count above mean what CSS Syntax's parse-a-RULE means, so `insertRule('???')` is a SyntaxError rather than a
+ * rule with no object. */
+typedef void *(*CssomRuleFn)(void *ud, void *parent, const CssomRule *rule);
 unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *ud);
 
 #endif

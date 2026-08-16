@@ -259,23 +259,31 @@ const INTERFACES = {
   /* CSSOM §6.1's two. StyleSheet is a base nothing instantiates, so its six members live on their own
      prototype and CSSStyleSheet.prototype CHAINS to it — both rows name the one component, and reporting
      StyleSheet's members absent from CSSStyleSheet would be the audit lying by direction. What each row is
-     EXPECTED to report missing is real: `media` (§4.4's MediaList is not built), and CSSStyleSheet's
-     `cssRules`, `insertRule`, `deleteRule`, `replace`, `replaceSync`, `rules`, `addRule` and `removeRule`
-     (§6.4's CSSRule and CSSRuleList are not built either). */
+     EXPECTED to report missing is real: StyleSheet's `media` — §4.4's MediaList is built now, but a SHEET's
+     media list is the `media` content attribute of the `<style>` or `<link>` that created it, which HTML
+     §4.2.6 hands to the create and this engine does not carry — and CSSStyleSheet's `replace`, `replaceSync`,
+     `rules`, `addRule` and `removeRule`. `cssRules`, `insertRule` and `deleteRule` are BUILT and are off that
+     list rather than still named. */
   StyleSheet:           "core/css/css_style_sheet.c",
   CSSStyleSheet:        "core/css/css_style_sheet.c",
+  /* CSSOM §4.4. Its collection of media queries is a JS Array of the per-query serializations, so `length`
+     and `item` are reads of it and `mediaText` is §4.2's serialize-a-media-query-list over it. */
+  MediaList:            "core/css/media_list.c",
   /* CSSOM §6.2.2. §6.2.3's `styleSheets` is installed by this same component onto Document.prototype and
      ShadowRoot.prototype, so Document's row names it too. ShadowRoot has no row at all — it is one of the
      interfaces this map is still silent about, which is the audit lying by omission rather than by direction,
      and it is not this change's to decide. */
   StyleSheetList:       "core/css/style_sheet_list.c",
-  /* CSSOM §6.4. CSSRule is an abstract base nothing instantiates, so its members live on their own prototype
-     and CSSStyleRule.prototype CHAINS to it — both rows name the one component. What is EXPECTED to report
-     missing is on CSSStyleRule: the three CSSGroupingRule members it inherits in the IDL and cannot here.
-     `style` is BUILT — the block over the rule's own declarations — and so is `cssText`, §6.4's serialize-a-
-     CSS-rule over §6.6's declaration-block serialization; both are off this list rather than still named. */
+  /* CSSOM §6.4 and CSS Conditional §7.2/§7.3. FIVE interfaces, ONE component: CSSRule, CSSGroupingRule and
+     CSSConditionRule are abstract bases nothing instantiates, so their members live on their own prototypes
+     and the two concrete ones CHAIN through them — every row names the one component, because reporting an
+     inherited member absent from the interface that really has it would be the audit lying by direction.
+     What is EXPECTED to report missing is on CSSRule: nothing. */
   CSSRule:              "core/css/css_rule.c",
+  CSSGroupingRule:      "core/css/css_rule.c",
   CSSStyleRule:         "core/css/css_rule.c",
+  CSSConditionRule:     "core/css/css_rule.c",
+  CSSMediaRule:         "core/css/css_rule.c",
   CSSRuleList:          "core/css/css_rule_list.c",
   /* HTML §4.2.6's `disabled` and CSSOM §6.3.2's LinkStyle `sheet` are installed onto HTMLStyleElement's
      prototype by their own component, for the same reason §4.10's rows name theirs. */

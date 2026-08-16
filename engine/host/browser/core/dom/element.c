@@ -55,6 +55,7 @@
 #include "core/idl_indexed.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_rule.h"
+#include "core/css/media_list.h"
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
@@ -2203,7 +2204,10 @@ void element_init(JSContext *ctx)
     html_script_init(ctx);    /* §4.12.1's `already started` slot, which the fragment parse below writes */
     cssom_init(ctx);          /* CSSStyleDeclaration, which HTMLElement's `style` attribute names */
     css_style_sheet_init(ctx);   /* CSSOM §6.1's StyleSheet and CSSStyleSheet, which a `<style>` element creates */
-    css_rule_init(ctx);          /* CSSOM §6.4.2 CSSRule and §6.4.3 CSSStyleRule, which a sheet's rules are */
+    /* CSSOM §4.4's MediaList, BEFORE the rules: §7.3's `media` is [PutForwards=mediaText] and css_rule.c reads
+       that setter's id out of this component while installing CSSMediaRule.prototype. */
+    media_list_init(ctx);
+    css_rule_init(ctx);          /* CSSOM §6.4's rules, §7.2/§7.3's conditional group rule, which a sheet holds */
     css_rule_list_init(ctx);     /* CSSOM §6.4.1 CSSRuleList, the collection §6.1.2's cssRules hands back */
     style_sheet_list_init(ctx);  /* CSSOM §6.2's collections, which §6.1's create adds every sheet to */
     /* HTML §4.2.6's association between the two. AFTER the sheet interface it creates, and after
@@ -2318,6 +2322,7 @@ void element_free(JSRuntime *rt)
     style_sheet_list_free(rt);
     css_rule_list_free(rt);
     css_rule_free(rt);
+    media_list_free(rt);         /* after the rules, whose `media` attribute holds one */
     css_style_sheet_free(rt);
     cssom_free(rt);
     selector_match_free();   /* after every component that can still match a selector */

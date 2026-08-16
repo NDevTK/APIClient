@@ -1,7 +1,7 @@
 /* CSSOM §6.4.1 — CSSRuleList, "an ordered collection of CSS rules".
  *
- * IT IS A VIEW, NOT A STORE. The rules themselves belong to whatever holds them — a CSSStyleSheet's CSS rules
- * today, a CSSGroupingRule's nested ones when §6.4.5 lands — and this is the object §6.1.2's `cssRules` hands
+ * IT IS A VIEW, NOT A STORE. The rules themselves belong to whatever holds them — a CSSStyleSheet's CSS rules,
+ * a §6.4.5 CSSGroupingRule's child CSS rules — and this is the object each of their `cssRules` attributes hands
  * back over that holder's Array. §6.1.2 says so in as many words: "even though the returned CSSRuleList object
  * is read-only, it can nevertheless change over time due to its liveness status. For example, invoking the
  * insertRule() or deleteRule() methods can result in mutations reflected in the returned object." Sharing the

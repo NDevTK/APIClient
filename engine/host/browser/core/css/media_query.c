@@ -8,8 +8,12 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/css/media_query.h"
+#include "core/dom/document.h"
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
+#include "core/frame/window_proxy.h"
+#include "solver/concolic.h"
+#include "solver/decide.h"
 
 /* ---- three-valued logic — MQ4 §3.1 -------------------------------------------------------------------------
    Kleene's, which is what the spec's own table is. `unknown` is a real third answer and not a stand-in for
@@ -773,6 +777,34 @@ static void out_cond(MqOut *o, const MqCond *c)
     if (c->parenthesized) out_put(o, ")");
 }
 
+/* CSSOM §4.2's SERIALIZE A MEDIA QUERY, for ONE query.
+   ITS FOURTH STEP IS THE ONE THAT IS EASY TO MISS AND THE ONE A PAGE SEES: "if type is not `all` OR the media
+   query is negated, append type, followed by ` and `" — so `all and (color)` serializes as `(color)` and
+   `not all and (color)` keeps its type, which is the spec's own example table and what
+   css/cssom/serialize-media-rule.html asserts byte for byte. `only` is not a negation and is not `all`'s
+   omission either: §2.2 makes it a no-op for evaluation, and every engine keeps it in the serialization, so it
+   holds the type the way a non-`all` type does. */
+static void out_query(MqOut *o, const MqQuery *q)
+{
+    bool keep_type;
+
+    if (q->invalid) { out_put(o, "not all"); return; }     /* §3.1: the replacement IS the serialization */
+    if (q->qualifier) out_put(o, q->qualifier == 1 ? "not " : "only ");
+    if (!q->type[0]) {
+        DCHECK(q->cond != NULL, "a media query with neither a type nor a condition survived the parser");
+        out_cond(o, q->cond);
+        return;
+    }
+    /* Step 3 first: "if the media query does not contain media features append type, then return." */
+    if (!q->cond) { out_put(o, q->type); return; }
+    keep_type = strcmp(q->type, "all") != 0 || q->qualifier != 0;
+    if (keep_type) {
+        out_put(o, q->type);
+        out_put(o, " and ");
+    }
+    out_cond(o, q->cond);
+}
+
 char *media_query_serialize(const MediaQuerySet *set)
 {
     MqOut o = { NULL, 0, 0 };
@@ -780,20 +812,39 @@ char *media_query_serialize(const MediaQuerySet *set)
 
     out_put(&o, "");
     for (i = 0; i < set->n; i++) {
-        const MqQuery *q = &set->q[i];
-
         if (i) out_put(&o, ", ");
-        if (q->invalid) { out_put(&o, "not all"); continue; }
-        if (q->qualifier) out_put(&o, q->qualifier == 1 ? "not " : "only ");
-        if (q->type[0]) {
-            out_put(&o, q->type);
-            if (q->cond) { out_put(&o, " and "); out_cond(&o, q->cond); }
-        } else {
-            DCHECK(q->cond != NULL, "a media query with neither a type nor a condition survived the parser");
-            out_cond(&o, q->cond);
-        }
+        out_query(&o, &set->q[i]);
     }
     return o.s;
+}
+
+int media_query_count(const MediaQuerySet *set)
+{
+    DCHECK(set != NULL, "a media query list was counted after it was freed");
+    return set->n;
+}
+
+char *media_query_serialize_at(const MediaQuerySet *set, int i)
+{
+    MqOut o = { NULL, 0, 0 };
+
+    DCHECK(set != NULL, "a media query was serialized out of a list that was freed");
+    if (i < 0 || i >= set->n) return NULL;      /* §4.4's `item`: null at or past the count */
+    out_put(&o, "");
+    out_query(&o, &set->q[i]);
+    return o.s;
+}
+
+MediaQuerySet *media_query_parse_one(const char *text)
+{
+    MediaQuerySet *set = media_query_parse(text);
+
+    /* §3.1's forward-compatible rule is about a query IN A LIST; a single query that does not match the grammar
+       has no `not all` to become, it simply does not parse — which is the null both §4.4 methods return on.
+       A comma makes it a LIST rather than a query, so more than one is a failure here too. */
+    if (set->n == 1 && !set->q[0].invalid) return set;
+    media_query_free(set);
+    return NULL;
 }
 
 /* ---- evaluation — MQ4 §3 and §4 ------------------------------------------------------------------------------ */
@@ -982,4 +1033,64 @@ bool media_query_matches(JSContext *ctx, const MediaQuerySet *set)
     for (i = 0; i < set->n; i++)
         if (query_matches(&set->q[i], &e)) return true;
     return false;
+}
+
+/* ---- the CSSOM-facing answer — see media_query.h for why it is spelled HERE ---------------------------------- */
+
+/* THE SOURCE IDENTITY of one document's answer to one query list. The DOCUMENT is part of it and that is not
+   decoration: a child navigable's viewport is 300 CSS pixels wide and the top-level traversable's is 1280, so
+   `(min-width: 600px)` is genuinely a different question in each — one key would let a branch taken in the
+   parent decide the iframe's. The SHAPE is the human-readable half a finding carries, so it names the query and
+   not the document id. */
+static void mq_source(JSContext *ctx, const MediaQuerySet *set, char *shape, size_t nshape,
+                      char *src, size_t nsrc)
+{
+    JSValueConst self = document_window_proxy(ctx);
+    char *text = media_query_serialize(set);
+
+    DCHECK(window_proxy_is(self), "a media query was reported in a realm whose document has no WindowProxy");
+    CHECK(text != NULL, "media queries: OOM keying a media query's answer on its own serialization");
+    snprintf(shape, nshape, "{media:%s}", text);
+    snprintf(src, nsrc, "{media#%u}%s", (unsigned)window_proxy_doc(self), text);
+    free(text);
+}
+
+JSValue media_query_matches_value(JSContext *ctx, const MediaQuerySet *set)
+{
+    char shape[256], src[256];
+
+    DCHECK(set != NULL, "a media query list's CSSOM answer was asked for after it was freed");
+    mq_source(ctx, set, shape, sizeof shape, src, sizeof src);
+    /* concolic_source_wrap hands back the plain boolean where no source overlay is installed (a conformance
+       host), which is what keeps this component testable against the standard. */
+    return concolic_source_wrap(ctx, shape, src, JS_NewBool(ctx, media_query_matches(ctx, set)));
+}
+
+bool media_query_matches_now(JSContext *ctx, const MediaQuerySet *set)
+{
+    JSValue v = media_query_matches_value(ctx, set);
+    int arm;
+    bool r;
+
+    if (!concolic_is(v)) {
+        r = JS_ToBool(ctx, v) != 0;
+        JS_FreeValue(ctx, v);
+        return r;
+    }
+    /* THE ENGINE's OWN READ CONCRETIZES ON THE FLOW's PIN — asked BY VALUE so decide.c stays the only speller
+       of the constraint key. -1 is "this flow has committed to neither arm", and the modelled example is then
+       the answer, exactly as core/html/page_visibility.c does for `hidden`. */
+    arm = decide_value_arm(v);
+    if (arm >= 0) {
+        JS_FreeValue(ctx, v);
+        return arm == 1;
+    }
+    {
+        JSValue ex = concolic_example(ctx, v);
+
+        r = JS_ToBool(ctx, ex) != 0;
+        JS_FreeValue(ctx, ex);
+    }
+    JS_FreeValue(ctx, v);
+    return r;
 }
