@@ -943,6 +943,27 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
                         JS_FreeCString(ctx, ms);
                     }
                 }
+                /* THE PRODUCER'S HALF OF THE CONTRACT THE DRAIN CHECKS, asked HERE so the two together say
+                   WHICH of two very different things went wrong. The drain asserts that a fetch entry carries a
+                   §2.2.6 URL list at the moment it is delivered; this asserts that it carried one at the moment
+                   it was WRITTEN. One assert alone cannot separate "the host built a bad record" from "a good
+                   record was changed after it landed" — and the second is a COW/lifetime bug in this file
+                   rather than a host bug, with a different fix and a different blast radius. Two asserts, one
+                   contract, and whichever fires names the half.
+                   Only for the FETCH kind: a docscript, an injected <script src> and a module load are owed
+                   BYTES, and their drains read `body` off the same record without ever asking for a list. */
+#if APICLIENT_DEV
+                if ((int)pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOLVE && JS_IsObject(value)) {
+                    JSValue ul = JS_GetPropertyStr(ctx, value, "urlList");
+                    char why[320];
+                    snprintf(why, sizeof why,
+                             "a reply with no `urlList` is being written onto a fetch entry — the HOST built "
+                             "this record, so the producer is the trusted zone's reply path and not this "
+                             "file's register. url=%s", url);
+                    DCHECK(JS_IsArray(ul), why);
+                    JS_FreeValue(ctx, ul);
+                }
+#endif
                 pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
                 pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
                 /* AND THIS FLOW IS ASKABLE AGAIN — the reply it parked on is on its register now, which is the
@@ -1096,12 +1117,34 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                 JSValue ul = JS_GetPropertyStr(ctx, pv, "urlList");
                 JSValue uv2 = pending_get(p, PEND_URL);
                 const char *u2 = JS_IsString(uv2) ? JS_ToCString(ctx, uv2) : NULL;
-                char why[512];
-                snprintf(why, sizeof why,
-                         "a fetch reply carrying no `urlList` is about to be delivered — the record on this "
-                         "entry was not built by fetch_reply_new, so some other writer reached a "
-                         "FLOW_PENDING_RESOLVE entry. url=%s kind=%d",
-                         u2 ? u2 : "(none)", kind);
+                char why[640];
+                int wi;
+                /* AND WHAT THE RECORD ACTUALLY IS, because "it has no urlList" names a hole and the FIELDS name
+                   the object. Every candidate on this path is identifiable by its own property list in one
+                   glance and by nothing else: `body,csp` is the peer's §7.4 navigation answer, `resolve,value,
+                   url,…` is a pending ENTRY that reached the value slot, `urlList,status,…` minus the list is a
+                   record that was built right and CHANGED afterwards, and a bare `{}` is an object nobody
+                   filled. Guessing between those cost a full round trip already. */
+                wi = snprintf(why, sizeof why,
+                              "a fetch reply carrying no `urlList` is about to be delivered — the record on "
+                              "this entry was not built by fetch_reply_new, so some other writer reached a "
+                              "FLOW_PENDING_RESOLVE entry. url=%s kind=%d tag=%d fields=",
+                              u2 ? u2 : "(none)", kind, (int)JS_VALUE_GET_TAG(pv));
+                if (JS_IsObject(pv)) {
+                    JSPropertyEnum *tab = NULL;
+                    uint32_t pn = 0, pi;
+                    if (JS_GetOwnPropertyNames(ctx, &tab, &pn, pv, JS_GPN_STRING_MASK) == 0) {
+                        for (pi = 0; pi < pn && wi < (int)sizeof why - 2; pi++) {
+                            const char *nm = JS_AtomToCString(ctx, tab[pi].atom);
+                            wi += snprintf(why + wi, sizeof why - (size_t)wi, "%s%s", pi ? "," : "",
+                                           nm ? nm : "?");
+                            if (nm) JS_FreeCString(ctx, nm);
+                        }
+                        JS_FreePropertyEnum(ctx, tab, pn);
+                    }
+                    if (pn == 0 && wi < (int)sizeof why - 8)
+                        snprintf(why + wi, sizeof why - (size_t)wi, "(none)");
+                }
                 DCHECK(JS_IsArray(ul), why);
                 if (u2) JS_FreeCString(ctx, u2);
                 JS_FreeValue(ctx, uv2);
