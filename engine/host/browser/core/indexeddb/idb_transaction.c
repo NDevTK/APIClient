@@ -383,6 +383,23 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
         JSValue changes = idb_transaction_changes(ctx, tx);
         uint32_t i, n;
 
+        /* AND NOBODY ELSE MAY STILL BE HOLDING IT — the one moment that question is decidable, which is why
+           the assert is here and not at the accessor. idb_transaction_changes hands out an OWNED reference,
+           and both of its other callers run strictly BEFORE this door (§5.5's revert and §5.8's
+           was-this-store-created each assert that the state is not yet finished), so at this line the list is
+           held by exactly two things: the transaction's slot record, and this local. A third holder is a
+           caller that took a reference and dropped it, and the consequence is out of all proportion to the
+           mistake: the list is emptied on the next line, so what leaks is an EMPTY Array — which holds
+           Array.prototype, which holds the realm's function objects, each of which holds the REALM. One
+           dropped reference kept a whole browser alive (2612 Functions, 408 shapes, a JSContext at refcount
+           3108) and the runtime's leak walk could name nothing but three anonymous Arrays, three sessions
+           apart, before gdb found the allocation. This is the line that names it at the transaction instead. */
+        DCHECK(JS_ValueRefCount(changes) == 2,
+               "a finishing transaction's list of database changes is held by something other than the "
+               "transaction and this reader — idb_transaction_changes hands out an OWNED reference and every "
+               "borrower has given it back by this point, so the extra holder is a caller that dropped one; "
+               "the list is emptied on the next line, so what it leaks is an empty Array whose only remaining "
+               "edge is Array.prototype, and that edge makes the whole realm behind it immortal");
         JS_SetPropertyStr(ctx, changes, "length", JS_NewInt32(ctx, 0));
         JS_FreeValue(ctx, changes);
         /* "A transaction is said to be live from when it is created until its state is set to finished." The
