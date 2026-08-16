@@ -7,9 +7,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
-#include "core/realm.h"
 #include "core/url/origin.h"
-#include "core/url/url.h"
 #include "core/dom/document.h"
 #include "core/frame/secure_context.h"
 #include "core/frame/window_proxy.h"
@@ -180,95 +178,62 @@ static PermissionConstraintFn PF_CONSTRAINT_FN[PF_N];
  * still holds the unknown. A malloc'd table would be one timeline for every flow at once. */
 static JSValue g_store;     /* §3.2: index PF_SLOT -> a PermissionState string, or undefined for no entry */
 static JSValue g_sources;   /* index by FEATURE -> §5.1 step 8's value for it */
-/* §5.1 STEP 5's PERMISSION KEY, WHICH IS AN ORIGIN AND IS HELD AS ONE. The default key generation algorithm is
-   "return origin", so the key IS §7.1.1's record (core/url/origin.h) — held, never re-derived, because §4.7
-   mints a NEW opaque origin every time a URL is parsed and a key that came back different each time would
-   have keyed every entry to nothing. It was the SERIALIZATION, in which every opaque origin is "null": two
-   top-level documents with distinct opaque origins generated the same key and shared one store, which is the
-   collision this type exists to remove. `g_key_url` is the top-level creation URL it was generated FROM, kept
-   so the per-realm assert below can compare environments rather than re-derive an identity. */
+/* §5.1 STEP 5's PERMISSION KEY, WHICH IS AN ORIGIN AND IS HELD AS ONE. The default permission key generation
+   algorithm "takes an origin origin and an origin embedded origin" and its whole body is "Return origin",
+   where step 5 passes "settings's TOP-LEVEL ORIGIN and settings's origin" — so the key IS §7.1.1's record
+   (core/url/origin.h) and it is the top-level one, which is permission delegation and the standard says so:
+   "Most powerful features grant permission to the top-level origin and delegate access to the requesting
+   document via Permissions Policy."
+   THE KEY THIS STORE IS KEYED BY is the one the first read generated; every read after it generates its own
+   and compares, which is §3.2's own shape ("an entry whose descriptor is descriptor, and whose key is EQUAL
+   TO key given descriptor") with one entry per descriptor because this agent has one key. A record here is
+   agent-lifetime and immutable, so which environment happened to read first cannot change what is held. */
 static const Origin *g_key;
-static char   *g_key_url;
 static int     g_ready;
 static JSRuntime *g_rt;
 
-/* THE PERMISSION KEY THIS AGENT GENERATES — §5.1 step 5 with the default permission key generation algorithm,
- * which is "return origin", where `origin` is the settings object's TOP-LEVEL ORIGIN. That is permission
- * delegation and the standard says so: "Most powerful features grant permission to the top-level origin and
- * delegate access to the requesting document via Permissions Policy."
- *   IT IS COMPUTED ONCE, because within one agent it cannot differ. An instance is a (browsing-context group,
- * origin) pair, and core/realm.h's top-level creation URL is INHERITED by every realm a navigable creates — so
- * every environment this agent holds generates the identical key, and the store therefore needs no per-entry
- * key field. That is asserted rather than assumed at every read, and the assert names what a second key means:
- * a peer instance, whose store is its own. */
-static const Origin *permission_key(JSContext *ctx, char **out_url)
+/* §5.1 STEP 5, GENERATED WHERE THE STANDARD GENERATES IT — at the read, from the environment doing the
+ * reading. It reads §8.1.3.1's TOP-LEVEL ORIGIN, which is a FIELD OF THE ENVIRONMENT and not a derivation of
+ * its top-level creation URL; HTML says exactly that at the field ("This is distinct from the top-level
+ * creation URL's origin when sandboxing, workers, and worklets are involved"), and this component used to run
+ * §4.7 over the URL instead. That is wrong twice over and both showed: §4.7 MINTS a new opaque origin for an
+ * address that has no tuple, and the URL is not the environment's origin in the first place — §7.3.2.1 gives
+ * every top-level browsing context the URL `about:blank` while giving it the initial Document's ORIGIN, so a
+ * popup and its opener are one origin with two URLs.
+ *   The environment's copy of the field lives on its NAVIGABLE (core/frame/window_proxy.h), because a
+ * navigable outlives the documents in it and is created before their realms are. */
+static const Origin *permission_key(JSContext *ctx)
 {
-    JSValue url = realm_top_level_creation_url(ctx);
-    const char *u = JS_ToCString(ctx, url);
-    const Origin *o;
-    UrlRecord rec;
+    JSValueConst nav = document_window_proxy(ctx);
 
-    JS_FreeValue(ctx, url);
-    CHECK(u != NULL, "the top-level creation URL could not be read as a string — §5.1 step 5 has no origin to "
-                     "generate a permission key from");
-    *out_url = strdup(u);
-    CHECK(*out_url != NULL, "permission store: OOM recording the URL §5.1 step 5 generated its key from");
-    url_record_init(&rec);
-    /* §4.7's answer for input that is not a URL is a NEW OPAQUE ORIGIN, which is same origin with nothing — so
-       it is its own key and every entry under it belongs to this environment alone. origin_determine says the
-       same thing about a null URL, and this is the same case reached through a parse failure. */
-    o = url_parse(&rec, u, strlen(u), NULL) ? origin_of_url(&rec) : origin_determine(NULL, false, NULL);
-    url_record_free(&rec);
-    JS_FreeCString(ctx, u);
-    return o;
+    DCHECK(window_proxy_is(nav),
+           "§5.1 step 5 was asked of a realm with no navigable — every Window this agent builds has one, and "
+           "§8.1.3.1's top-level origin is a field of the environment that navigable's documents are created "
+           "with");
+    return window_proxy_top_level_origin(nav);
 }
 
-/* THE ASSERTION IS THE WHOLE REASON THE KEY IS A FIELD AND NOT A PER-ENTRY ONE, so it re-reads the ENVIRONMENT
-   at every store touch rather than trusting the sentence above. It is DEV-ONLY in its body as well as in its
-   verdict: it reads a JS string out of the realm, and a release build must not pay for a check it cannot act
-   on. */
-static void permission_assert_key(JSContext *ctx)
+/* §3.2's "whose key is EQUAL TO key given descriptor", which for every feature registered above is the DEFAULT
+   permission key comparison algorithm — "Return key1 is same origin with key2" — and therefore §7.1.1, whose
+   step 1 compares IDENTITY. It is asked at every store touch rather than once per realm, because that is when
+   §5.1 generates a key at all; and the store holds ONE, so what this asserts is that this agent has exactly
+   one top-level origin to be keyed by. It NAMES what a second one means, which is not a peer instance: an
+   instance is (browsing-context group, origin) and a browsing-context group can hold several top-level
+   traversables, so a cross-origin frame's instance that also opens a popup legitimately holds two. */
+static void permission_key_assert(JSContext *ctx)
 {
-#if APICLIENT_DEV
-    JSValue v = realm_top_level_creation_url(ctx);
-    const char *u = JS_ToCString(ctx, v);
+    const Origin *key = permission_key(ctx);
 
-    DCHECK(g_key != NULL, "§3.2's store was touched before any realm generated its permission key — "
-                          "the key comes from the ENVIRONMENT's top-level creation URL, which "
-                          "core/realm.h creates with the realm, so the first realm's install is the "
-                          "earliest moment it exists");
-    CHECK(u != NULL, "the top-level creation URL could not be read as a string");
-    /* THE COMPARISON IS THE ENVIRONMENT'S URL, NOT A RE-GENERATED KEY, and that is the lesson of the type
-       rather than a weaker check: §5.1 step 5 reads the top-level creation URL, and re-running §4.7 over it
-       would MINT a second opaque origin for an opaque top-level document — so an identity comparison against
-       a re-derivation answers "different" for the one agent it is asked about. Two realms of one agent that
-       generated their keys from the same URL generated the same key, by construction; two that did not are
-       what this fires for. */
-    DCHECK(g_key_url != NULL && !strcmp(g_key_url, u),
-           "§5.1 step 5 generated a permission key this agent's store is not keyed by — an instance is "
-           "one (browsing-context group, origin) and every realm in it inherits ONE top-level creation "
-           "URL, so two keys mean this read belongs to a PEER instance. BUILD the cross-instance store: "
-           "§3.2's entry carries its key, the read is posted to the instance holding that document "
-           "exactly as a cross-instance property read is, and this assert becomes the routing question");
-    JS_FreeCString(ctx, u);
-    JS_FreeValue(ctx, v);
-#else
-    (void)ctx;
-#endif
-}
-
-/* THE KEY IS GENERATED PER REALM AND KEPT ONCE — which is where the ordering forces it and where the invariant
-   is worth stating. §5.1 step 5 reads the ENVIRONMENT's top-level origin, and core/realm.h creates the
-   environment WITH the realm, so no key exists at agent-declaration time at all; the first realm generates it
-   and every later realm asserts it generated the same one, which is the assertion that says an instance is one
-   origin. */
-static void permission_store_install_realm(JSContext *ctx)
-{
-    if (!g_key) {
-        g_key = permission_key(ctx, &g_key_url);
-        return;
-    }
-    permission_assert_key(ctx);
+    if (!g_key)
+        g_key = key;
+    DCHECK(origin_same(g_key, key),
+           "§5.1 step 5 generated a permission key this agent's store is not keyed by. §3.2's store is a LIST "
+           "of entries each carrying its own key, and this one collapses that to a single key per descriptor "
+           "because one instance has one origin — but §8.1.3.1's TOP-LEVEL origin is a different fact from "
+           "this agent's own, and an instance holding both a NESTED document (keyed by its embedder's top) "
+           "and a top-level traversable it opened (keyed by its own) holds two of them. BUILD the keyed "
+           "store: §3.2's entry carries its key, get/set compare with the feature's permission key comparison "
+           "algorithm, and this assert becomes that lookup");
 }
 
 /* ---- §3.2's store ---------------------------------------------------------------------------------------- */
@@ -283,7 +248,7 @@ int permission_store_get(JSContext *ctx, const PermissionDescriptor *d)
     DCHECK(d->feature >= 0 && d->feature < PF_N, "§3.2's store was asked about a feature §4's registry has no "
                                                  "row for — a descriptor is built from that registry and "
                                                  "nowhere else");
-    permission_assert_key(ctx);
+    permission_key_assert(ctx);
     v = JS_GetPropertyUint32(ctx, g_store, (uint32_t)PF_SLOT(d));
     if (JS_IsUndefined(v)) {
         JS_FreeValue(ctx, v);
@@ -321,7 +286,7 @@ void permission_store_set(JSContext *ctx, const PermissionDescriptor *din, int s
                       "since §5.1 answers the constraint ahead of the store, so writing one is a decision "
                       "about a world the standard says cannot exist");
     (void)fixed;
-    permission_assert_key(ctx);
+    permission_key_assert(ctx);
     /* §3.2: "If the user agent's permission store contains an entry whose descriptor is descriptor, and whose
        key is equal to key given descriptor, REPLACE that entry"; otherwise append. One slot per descriptor is
        both halves of that at once — the entry can appear "at most once in this list" by construction. */
@@ -744,11 +709,11 @@ void permission_store_init(JSContext *ctx)
     CHECK(!JS_IsException(g_store), "§3.2's permission store could not be allocated");
     g_sources = JS_NewArray(ctx);
     CHECK(!JS_IsException(g_sources), "the permission sources record could not be allocated");
-    /* THE KEY CANNOT BE GENERATED HERE. §5.1 step 5 reads the environment's TOP-LEVEL ORIGIN, and core/realm.h
-       creates the environment with the REALM — this declaration runs before the agent's own first realm has
-       one, so the key is generated by the realm install below and asserted equal for every realm after it. */
+    /* THE KEY CANNOT BE GENERATED HERE. §5.1 step 5 reads the ENVIRONMENT's top-level origin, and this
+       declaration runs before this agent has a realm, let alone a navigable carrying the field — so it is
+       generated where the standard generates it, at the read, and the first read is what this store is keyed
+       by from then on. */
     g_key = NULL;
-    g_key_url = NULL;
     /* §5.1 STEP 8's VALUE FOR EVERY FEATURE, MINTED WITH THE AGENT. Built here and not lazily on the first
        query for the reason core/frame/navigator.c builds its record with the realm: a value minted on first
        read is minted inside whichever flow happened to ask first, and that flow's baseline becomes every other
@@ -770,7 +735,6 @@ void permission_store_init(JSContext *ctx)
         JS_SetPropertyUint32(ctx, g_sources, (uint32_t)i, v);
     }
     g_ready = 1;
-    realm_declare_intrinsic(permission_store_install_realm);
 }
 
 void permission_store_free(void)
@@ -781,10 +745,8 @@ void permission_store_free(void)
     JS_FreeValueRT(g_rt, g_store);
     JS_FreeValueRT(g_rt, g_sources);
     g_store = g_sources = JS_UNDEFINED;
-    /* THE KEY IS AN ORIGIN AND ORIGINS GO WITH THE AGENT (origin_release), so what is released here is only
-       the URL string this component kept to compare environments with. */
-    free(g_key_url);
-    g_key_url = NULL;
+    /* THE KEY IS AN ORIGIN AND ORIGINS GO WITH THE AGENT (origin_release), so there is nothing here to free —
+       only the pointer to drop, so the next agent's first read generates its own. */
     g_key = NULL;
     g_ready = 0;
     g_rt = NULL;
