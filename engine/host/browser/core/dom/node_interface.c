@@ -285,6 +285,13 @@ lxb_html_document_t *dom_document_create(void)
            "a freshly created document already destroys its nodes through a dispatcher that is not lexbor's "
            "HTML one — name the third one here before it is overwritten");
     doc->destroy_interface = dom_node_interface_destroy;
+    /* AND ITS PARSES' TOKEN ATTRIBUTE VALUES HAVE AN OWNER — see core/html/html_parse.h. It goes on the same
+       resolved document as the dispatcher above and for the identical reason: `lxb_dom_element_attr_append`
+       reads `node_cb` off `lxb_dom_interface_node(element)->owner_document`, so the field the DOM reads is the
+       owner's and installing on an inherited struct would write the one pointer nothing reads. That is also
+       what covers §13.4's fragment parse, whose temporary document `lxb_dom_document_init` resets to lexbor's
+       empty table while stamping every element and Attr it makes with this one. */
+    html_parse_own_token_values(doc);
     /* AND THE ARENAS ARE THE AGENT'S, from here rather than from the first adopt — see core/dom/node_heap.h.
        Here, because it is the only moment the document has none of its own bytes yet, and because a document
        that reached its first node with private arenas can never be given the agent's afterwards. */
@@ -306,13 +313,14 @@ void dom_document_destroy(lxb_html_document_t *dom)
     /* AND ITS PARSE WENT THROUGH core/html/html_parse.h, asked here because this is the one line every
        document reaches and because a list of parse call sites that must remember is how the next one comes to
        be forgotten. `lxb_html_document_parse` CREATES the parser it uses, so a document that reached lexbor's
-       entry directly is holding a tokenizer this engine never took ownership of — and every DOCTYPE token
-       that parse produced left the bytes of its ids in the agent's text arena with nothing naming them, which
-       node_heap_detach then reports as a count with no cause. */
+       entry directly is holding a tokenizer this engine never took ownership of — and every attribute value
+       that parse read and tree construction did not adopt is left in the agent's text arena with nothing
+       naming it, which node_heap_detach then reports as a count with no cause. */
     DCHECK(html_parse_owns_tokens_of(doc),
            "a document is being destroyed whose parse did not go through core/html/html_parse.h — it holds an "
-           "HTML parser this engine did not build, so its tokens' attribute values had no owner and each "
-           "doctype id in that markup is one text allocation the agent's heap can never give back");
+           "HTML parser this engine did not build, so its tokens' attribute values had no owner and every "
+           "duplicate attribute, every re-attributed `<html>`/`<body>` attribute and every doctype id in that "
+           "markup is one text allocation the agent's heap can never give back");
     /* `lxb_dom_node_destroy_deep` DETACHES each node before it frees it, so the document's child list drains
        as the loop runs; it is iterative, so the depth of the page's markup costs no C stack. */
     while ((child = doc->node.first_child) != NULL)

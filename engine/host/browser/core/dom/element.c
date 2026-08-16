@@ -838,13 +838,15 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
     case FRAG_FEED:
         if (!s->parser) {
             lxb_dom_node_t *cn = lxb_dom_interface_node(s->context);
-            /* THROUGH core/html/html_parse.h, WHICH IS WHERE AN HTML PARSER IS MADE. A fragment parse
-               tokenises DOCTYPE tokens like any other (§13.2.6.4.7 ignores them, which is what makes their
-               attribute values unreferenced the instant the token is done), and their bytes come out of the
-               AGENT's text arena exactly as a document parse's do — `lxb_html_parse_fragment_chunk_begin`
-               points the tokenizer at `doc->text` of the temporary document, whose arenas are this
-               document's. A parser built here with `lxb_html_parser_create` directly would leak one
-               allocation per doctype id in every `innerHTML =` that carries one. */
+            /* THROUGH core/html/html_parse.h, WHICH IS WHERE AN HTML PARSER IS MADE. A fragment parse reads
+               attribute values like any other parse, and the ones tree construction does not adopt — a
+               duplicate attribute, an attribute of a token an insertion mode ignores, a DOCTYPE's ids
+               (§13.2.6.4.7 ignores the token outright) — come out of the AGENT's text arena exactly as a
+               document parse's do: `lxb_html_parse_fragment_chunk_begin` points the tokenizer at `doc->text`
+               of the temporary document, whose arenas are this document's. A parser built here with
+               `lxb_html_parser_create` directly would leak one allocation per such value in every
+               `innerHTML =`. The other half of that ownership is on the REAL document, installed at
+               dom_document_create, which is where §13.4's inherited temporary document gets it from. */
             s->parser = html_parse_new_parser();
             CHECK(s->parser != NULL, "the fragment parser could not be created");
             /* EVERY ONE OF THESE STATUSES WAS DROPPED, and dropping them is not a missing report — it is a

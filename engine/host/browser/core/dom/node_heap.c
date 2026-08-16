@@ -148,18 +148,18 @@ void node_heap_detach(lxb_dom_document_t *doc)
                      "now ALIAS and the next allocation of that size gets memory the other one still owns. "
                      "core/dom/document_type.h is the worked example: lexbor allocates a doctype's two ids "
                      "from `mraw` and frees them into `text`, which is exactly nodes at +2 and text at -2. "
-                     "FINALLY, TEXT AT +N WITH NODES UNCHANGED IS AN ATTRIBUTE VALUE TREE CONSTRUCTION DID "
-                     "NOT ADOPT, and no other arm produces that shape. A token's attribute values come out of "
-                     "this arena and nothing frees them; `lxb_html_tree_append_attributes` gives each one to "
-                     "the DOM Attr with `lxb_dom_attr_set_value_wo_copy`, which is what makes the Attr its "
-                     "owner — but it SKIPS a token attribute whose name the element already carries, so a "
-                     "duplicate attribute (`<div a=1 a=2>`, kept in the token because `lxb_html_parser_init` "
-                     "sets ATTR_KEEP_DUPLICATE) and §13.2.6.4.7's re-attribution of `<html>`/`<body>` "
-                     "attributes onto an element that already exists each strand one allocation per name the "
-                     "element already carried. "
-                     "core/html/html_parse.h owns that statement, releases the DOCTYPE token's values (the "
-                     "one kind whose consumer copies rather than adopts) and names what has to be built for "
-                     "the rest.",
+                     "FINALLY, TEXT AT +N WITH NODES UNCHANGED IS AN ATTRIBUTE VALUE WHOSE OWNERSHIP NEVER "
+                     "MOVED, and no other arm produces that shape. A token's attribute values come out of "
+                     "this arena and no lexbor destructor frees them; core/html/html_parse.h owns them "
+                     "instead, releasing at token-done whatever the DOM did not take and learning what the "
+                     "DOM took from the document's `node_cb->insert`, which `lxb_dom_element_attr_append` "
+                     "fires with the adopted pointer already in `attr->value->data`. So this count means one "
+                     "of the two halves did not run for some parse: a document whose `node_cb` is not that "
+                     "one (the token-done wrapper asserts it per token, so read that @WHY first), or a parse "
+                     "whose tokenizer never got the wrapper at all (`html_parse_owns_tokens_of`, asserted at "
+                     "dom_document_destroy). A value adopted through some path that is NOT "
+                     "`lxb_dom_element_attr_append` would show up as the OPPOSITE — a double free, read the "
+                     "huge-count arm above.",
                      (size_t)g_nodes->ref_count, (size_t)g_text->ref_count);
             DCHECK(g_nodes->ref_count == 0 && g_text->ref_count == 0, why);
         }
