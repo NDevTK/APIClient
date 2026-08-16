@@ -40,7 +40,7 @@
 #include "core/idl_slots.h"
 #include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_database.h"
-#include "core/indexeddb/idb_key.h"
+#include "core/indexeddb/idb_key_path.h"
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_transaction.h"
 #include "core/realm.h"

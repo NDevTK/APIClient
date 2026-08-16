@@ -33,7 +33,6 @@
    and which a DataView satisfies without being a typed array. It is declared here rather than in quickjs.h. */
 #include "quickjs-step.h"
 #include "cutils.h"
-#include "libunicode.h"
 #include "core/idl_slots.h"
 #include "core/indexeddb/idb_key.h"
 #include "solver/concolic.h"
@@ -110,10 +109,6 @@ static JSValue idb_concrete(JSContext *ctx, JSValueConst v)
 
 /* ---- §7.4's CONVERT A VALUE TO A KEY ----------------------------------------------------------------------- */
 
-/* The three answers §7.4 gives that are not an exception. */
-typedef enum { IDB_KEY_OK = 0, IDB_KEY_INVALID_VALUE, IDB_KEY_INVALID_TYPE } IdbKeyResult;
-
-static IdbKeyResult idb_convert_to_key(JSContext *ctx, JSValueConst input, JSValue *pkey);
 
 /* §7.4's BUFFER SOURCE ARM — "If input is detached then return 'invalid value'. Let bytes be the result of
    getting a copy of the bytes held by the buffer source input. Return a new key with type binary and value
@@ -183,7 +178,7 @@ static IdbKeyResult idb_key_from_concolic(JSContext *ctx, JSValueConst input, JS
               "accessor that fork needs first");
         return IDB_KEY_INVALID_TYPE;
     }
-    r = idb_convert_to_key(ctx, ex, pkey);
+    r = idb_key_convert(ctx, ex, pkey);
     JS_FreeValue(ctx, ex);
     if (r == IDB_KEY_OK) {
         int rank = idb_key_rank(ctx, *pkey);
@@ -194,7 +189,7 @@ static IdbKeyResult idb_key_from_concolic(JSContext *ctx, JSValueConst input, JS
     return r;
 }
 
-static IdbKeyResult idb_convert_to_key(JSContext *ctx, JSValueConst input, JSValue *pkey)
+IdbKeyResult idb_key_convert(JSContext *ctx, JSValueConst input, JSValue *pkey)
 {
     *pkey = JS_UNDEFINED;
 
@@ -250,7 +245,7 @@ static IdbKeyResult idb_convert_to_key(JSContext *ctx, JSValueConst input, JSVal
 
 int idb_key_from_value(JSContext *ctx, JSValueConst input, JSValue *pkey)
 {
-    if (idb_convert_to_key(ctx, input, pkey) == IDB_KEY_OK) return 0;
+    if (idb_key_convert(ctx, input, pkey) == IDB_KEY_OK) return 0;
     JS_ThrowDOMException(ctx, "DataError", "the value is not a valid IndexedDB key");
     return -1;
 }
@@ -407,111 +402,4 @@ int idb_key_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
     JS_FreeValue(ctx, ha);
     JS_FreeValue(ctx, hb);
     return r;
-}
-
-/* ---- §2.5's VALID KEY PATH ----------------------------------------------------------------------------------
- *
- * "An empty string. An identifier, which is a string matching the IdentifierName production from the ECMAScript
- * Language Specification. A string consisting of two or more identifiers separated by periods."
- *
- * THE IDENTIFIER IS ECMASCRIPT'S OWN AND SO IS THE TEST. IdentifierName is IdentifierStart IdentifierPart*, and
- * both are UNICODE properties (ID_Start / ID_Continue, plus `$`, `_`, and ZWNJ/ZWJ in the continue set) — so the
- * question is asked of the same table the JS lexer asks, `lre_is_id_start`/`lre_is_id_continue`, rather than of
- * an ASCII range that would refuse `store.createObjectStore("x",{keyPath:"café"})` a browser accepts. The
- * standard's own note — "spaces are not allowed within a key path" — is not a separate rule here: a space is
- * neither an IdentifierStart nor an IdentifierPart, so it is refused by the production itself.
- *
- * The `\uXXXX` UnicodeEscapeSequence arm of IdentifierName is NOT accepted, and that is the production being
- * followed rather than trimmed: §2.5's key path is compared against real property names by §7.1, and an escape
- * would name a property whose characters are the escaped ones — which is a DIFFERENT string from the one the
- * page wrote. No browser accepts one either.
- *
- * A LEADING OR TRAILING PERIOD, AND AN EMPTY SEGMENT, are refused because "two or more identifiers separated by
- * periods" means every segment is an identifier and an empty string is not one — while the WHOLE path being
- * empty IS valid, which is the standard's first arm and is why the empty case is answered before the walk. */
-bool idb_key_path_is_valid(const char *path, size_t len)
-{
-    const uint8_t *p = (const uint8_t *)path, *end = p + len;
-    bool at_segment_start = true;
-
-    DCHECK(path != NULL, "§2.5's valid key path was asked of no string — a key path is a string, and the empty "
-                         "string is one while a null pointer is not");
-    if (len == 0)
-        return true;   /* "An empty string." */
-    while (p < end) {
-        uint32_t c = utf8_decode_len(p, (size_t)(end - p), &p);
-
-        if (c == '.') {
-            /* A separator only ever follows a COMPLETE identifier, so a period at a segment's start is either
-               a leading one or an empty segment between two periods. */
-            if (at_segment_start)
-                return false;
-            at_segment_start = true;
-            continue;
-        }
-        if (at_segment_start) {
-            if (!(c == '$' || c == '_' || lre_is_id_start(c)))
-                return false;
-            at_segment_start = false;
-            continue;
-        }
-        /* IdentifierPart, which the lexer's own table answers including the two zero-width joiners. */
-        if (!(c == '$' || c == '_' || c == 0x200C || c == 0x200D || lre_is_id_continue(c)))
-            return false;
-    }
-    /* A trailing period leaves the walk expecting an identifier that never arrived. */
-    return !at_segment_start;
-}
-
-/* ONE STRING OF A KEY PATH, read back as bytes for the walk above. The string is the one §3.2.25's conversion
-   produced, so it is engine-owned and cannot run anything — a failure here is an allocation failure. */
-static bool idb_key_path_string_is_valid(JSContext *ctx, JSValueConst v)
-{
-    size_t len = 0;
-    const char *s = JS_ToCStringLen(ctx, &len, v);
-    bool ok;
-
-    CHECK(s != NULL, "IndexedDB: §2.5's key path could not be read back as a string");
-    ok = idb_key_path_is_valid(s, len);
-    JS_FreeCString(ctx, s);
-    return ok;
-}
-
-bool idb_key_path_value_is_valid(JSContext *ctx, JSValueConst path)
-{
-    JSValue len;
-    uint32_t i, n = 0;
-    int r;
-
-    if (JS_IsString(path))
-        return idb_key_path_string_is_valid(ctx, path);
-    DCHECK(JS_IsArray(path),
-           "§2.5's validity was asked of a key path that is neither a string nor a sequence. Its declared type "
-           "is §3.2.25's `(DOMString or sequence<DOMString>)`, which answers with exactly those two — and the "
-           "IDL null a member may also be handed means the store has NO key path, which is a question its "
-           "caller answers before it reaches this");
-    len = JS_GetPropertyStr(ctx, path, "length");
-    DCHECK(!JS_IsException(len), "reading the length of the sequence §3.2.25 built threw — it is the engine's "
-                                 "own Array and has no getters to run");
-    r = JS_ToUint32(ctx, &n, len);
-    DCHECK(r >= 0, "the sequence §3.2.25 built had a length that is not a number");
-    (void)r;
-    JS_FreeValue(ctx, len);
-    /* "A NON-EMPTY list" — see the header for why this is the list's own rule and not the loop's. */
-    if (n == 0)
-        return false;
-    for (i = 0; i < n; i++) {
-        JSValue e = JS_GetPropertyUint32(ctx, path, i);
-        bool ok;
-
-        DCHECK(JS_IsString(e), "the sequence §3.2.25 built held something that is not a string — §3.2.20's "
-                               "create-a-sequence-from-an-iterable converts every entry to its element type, "
-                               "so `['a', ['b','c']]` arrives here as `['a', 'b,c']` and is refused for the "
-                               "comma rather than crossing this line as a nested list");
-        ok = idb_key_path_string_is_valid(ctx, e);
-        JS_FreeValue(ctx, e);
-        if (!ok)
-            return false;
-    }
-    return true;
 }

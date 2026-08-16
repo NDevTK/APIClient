@@ -585,33 +585,31 @@ JSValue idb_object_store_find(JSContext *ctx, JSValueConst db, const char *name)
 int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst value, JSValueConst key,
                      bool no_overwrite, JSValue *pkey)
 {
-    JSValue records, key_path, generator, clone, rec, change;
+    JSValue records, clone, rec, change;
     uint32_t n, pos, i;
-    bool exists, derived;
+    bool exists;
 
     *pkey = JS_UNDEFINED;
-    key_path = JS_GetPropertyStr(ctx, store, IDB_STORE_KEY_PATH);
-    generator = JS_GetPropertyStr(ctx, store, IDB_STORE_KEY_GENERATOR);
-    derived = JS_ToBool(ctx, generator) || !JS_IsNull(key_path);
-    JS_FreeValue(ctx, key_path);
-    JS_FreeValue(ctx, generator);
-    if (derived) {
-        /* §6.1's FIRST STEP, and §4.5's step before it, are not built. This crash used to say they could not
-           be REACHED either, "because the only member that gives a store a key path or a key generator is
-           §4.4's createObjectStore, which does not exist" — and that member has since been written
-           (core/indexeddb/idb_connection.c passes both), so `createObjectStore('s', {keyPath: 'id'})` followed
-           by a `put` arrives here from the page. It crashes HERE because this is where the absence would
-           otherwise become a wrong record: a store with a key generator would file its record under a key
-           nothing generated, and a store with in-line keys under a key nothing extracted. */
-        DFAIL("Indexed Database §6.1's KEY-GENERATOR / IN-LINE-KEY step is not built. A store with a key "
-              "generator needs §2.11's \"generate a key\" (a monotonically increasing number) and \"possibly "
-              "update the key generator\" — and that generator's current number is state an aborted "
-              "transaction reverts, so it is recorded as a change like every other write this file makes "
-              "(see §5.5 step 2's revert at the bottom). Where the store ALSO uses in-line keys it needs "
-              "§7.2's \"inject a key into a value using a key path\", which WRITES into the value being "
-              "stored and therefore runs on the clone below and never on the page's own object. A store with "
-              "a key path and no generator needs §7.1's \"extract a key from a value using a key path\", "
-              "which §4.5's `put` runs BEFORE this algorithm — so that half lands with `put` and not here");
+    /* §6.1's FIRST STEP branches on the KEY GENERATOR and on nothing else — "if store uses a key generator,
+       then: if key is undefined ..." — and a store with in-line keys and no generator has no first step at all,
+       because §4.5's `put` has already run §7.1's extract-a-key and handed the result in as `key`. That
+       distinction is what this read is: the key path is not consulted here, and the arm below is the one arm
+       §6.1 states rather than a "the key was derived somehow" test. */
+    if (idb_object_store_uses_key_generator(ctx, store)) {
+        /* IT CRASHES HERE because this is where the absence would otherwise become a wrong record: a store
+           with a key generator would file its record under a key nothing generated. */
+        DFAIL("Indexed Database §6.1's KEY-GENERATOR step is not built, and it is now the only step of this "
+              "algorithm that is not — §7.1's extract-a-key landed with §4.5's `put`, so a store with in-line "
+              "keys and no generator arrives here with its key already extracted. What is missing is §2.11's "
+              "\"generate a key\" (a monotonically increasing number, failing above 2^53) and \"possibly "
+              "update the key generator\" (a stored NUMBER key at or above the current number raises it) — "
+              "and that generator's current number is state an aborted transaction reverts, so it is recorded "
+              "as a change like every other write this file makes (see §5.5 step 2's revert at the bottom). "
+              "Where the store ALSO uses in-line keys, step 1.3 needs §7.2's \"inject a key into a value using "
+              "a key path\", which WRITES into the value being stored and therefore runs on the clone below "
+              "and never on the page's own object — and §7.2's other algorithm, \"check that a key could be "
+              "injected into a value\", is the step §4.5's `put` owes before this one, reported there as a "
+              "DataError. Those three land together, in core/indexeddb/idb_key_path.c beside §7.1");
         /* A RELEASE BUILD FALLS THROUGH TO THE ALGORITHM'S OWN ANSWER for a key it could not derive — §6.1
            step 1.1.2: "If key is failure, then this operation failed with a ConstraintError DOMException." A
            bare -1 with nothing thrown would be a caller returning JS_EXCEPTION with no exception live. */
@@ -619,9 +617,11 @@ int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValu
         return -1;
     }
     DCHECK(JS_IsObject(key), "§6.1 was handed no key for a store that has no key generator. The key is §7.4's "
-                             "key RECORD and not the page's value: §4.5's `put` converts it and reports that "
-                             "conversion's DataError, and a store with out-of-line keys and no generator makes "
-                             "an absent key a DataError there too");
+                             "key RECORD and not the page's value, and §4.5's `put` is where both of the ways "
+                             "one arrives are performed: an out-of-line store's key argument is converted "
+                             "there (and an absent one is a DataError there), and an in-line store's key is "
+                             "§7.1's extract-a-key over the clone, whose `invalid` and whose `failure` are "
+                             "that member's two DataErrors");
 
     records = idb_store_records(ctx, store);
     n = idb_list_len(ctx, records);

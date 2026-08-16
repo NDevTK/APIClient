@@ -68,6 +68,7 @@
 #include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key.h"
+#include "core/indexeddb/idb_key_path.h"
 #include "core/indexeddb/idb_key_range.h"
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_transaction.h"
@@ -1329,7 +1330,14 @@ static const char *HTML =
        precedes it says the `push` into the first one reached no object store — "changing the properties of the
        object has no effect on the object store". `transaction('kp')` is also the first time §3.2.25's union
        takes its STRING arm from a page: a primitive string is not an Object, so §3.2.25 step 12.2's GetMethod
-       is never reached and the store name is not iterated into 'k','p'. */
+       is never reached and the store name is not iterated into 'k','p'.
+       AND §7.1's IN-LINE KEYS, which is a `put` WITH NO KEY AT ALL — the store named it, and §7.1's walk reads
+       it out of the value. `7:u-9` is the record coming back out under a key nothing passed: the value went in
+       under `id.v`, the `get('u-9')` found it, and reading `.id.v` off the answer says the key was extracted
+       from the value rather than moved out of it. `DataError` is §7.1's `failure` arm reported where §4.5 puts
+       it — SYNCHRONOUSLY, out of `put` itself, where the page's own try/catch sees it, and not as a request
+       that later fires an `error` event — for a value with nothing at the key path in a store with no key
+       generator. Both are the shape every bundle that keeps records by id writes. */
     "var _r = indexedDB.open('fixture', 1); var _idb = ''; var _k;"
     "_r.onupgradeneeded = function(e){"
     " var _s = _r.result.createObjectStore('s');"
@@ -1340,7 +1348,12 @@ static const char *HTML =
     " _idb += ':' + (Array.isArray(_k.keyPath) ? _k.keyPath.join('+') : 'notalist')"
     "       + ':' + (_k.keyPath === _k.keyPath ? 'same' : 'fresh')"
     "       + ':' + (Object.isFrozen(_k.keyPath) ? 'frozen' : 'plain');"
-    " _k.keyPath.push('c'); };"
+    " _k.keyPath.push('c');"
+    " var _i = _r.result.createObjectStore('in', { keyPath: 'id.v' });"
+    " _i.put({ id: { v: 'u-9' }, n: 7 });"
+    " try { _i.put({ q: 1 }); _idb += ':nothrow'; } catch (_e) { _idb += ':' + _e.name; }"
+    " var _ig = _i.get('u-9');"
+    " _ig.onsuccess = function(){ _idb += ':' + _ig.result.n + ':' + _ig.result.id.v; }; };"
     "_r.onsuccess = function(){"
     " var _k2 = _r.result.transaction('kp').objectStore('kp');"
     " _idb += ':' + _k2.keyPath.join('+') + ':' + (_k2.keyPath === _k.keyPath ? 'shared' : 'perhandle');"
@@ -2513,6 +2526,178 @@ static void idb_key_path_selftest(JSContext *ctx, JSValueConst conn, JSValueCons
     idb_selftest_finish(ctx, tx);
 }
 
+/* INDEXED DATABASE §7.1 — EXTRACT A KEY FROM A VALUE USING A KEY PATH, which is the whole of what IN-LINE KEYS
+ * are: a store created with a key path files each record under a key read OUT of the value, so `put` is called
+ * with no key at all. It is asserted here rather than only through §4.5's `put` because its three answers are
+ * three different sentences of that member (a key, a "DataError" for `invalid`, and a "DataError" for `failure`
+ * ONLY when the store has no key generator), and a fixture that went through `put` could see the first two
+ * collapse into one and not notice.
+ *
+ * WHAT EACH CASE IS FOR. The empty key path is §7.1's own first step and names the VALUE ITSELF — asserted from
+ * both sides, since the value is a key when it is a string and `invalid` when it is a plain object. `length` is
+ * asserted over a string containing a SUPPLEMENTARY character, because "the number of ELEMENTS in value" counts
+ * UTF-16 code units and the engine holds the string as UTF-8: a walk that counted bytes answers 5 where a
+ * browser answers 3, and the record goes into the wrong place in §2.2's sorted list. An own property holding
+ * `undefined` is `failure` and not a key, which is a different statement from the property being absent and the
+ * one §7.1 spells separately. And the LIST arm's assertion is its ABORT: a compound key is the tuple of all its
+ * parts, so a value missing one has no key at all rather than a shorter one.
+ *
+ * THE TAINTED CASES ARE THE HALF A BROWSER'S OWN SUITE CANNOT HAVE. A bundle stores what it received —
+ * `store.put(await res.json())` — so the value, or a field of it, is unknown external input. §7.1 asks "does it
+ * have this own property" and "what is at it", and answering `failure` for an unknown would FORCE A BRANCH on
+ * attacker-controlled input, toward the arm that takes the record out of the store and loses the code path and
+ * the taint together. So a field that IS a concolic reaches §7.4 as one, and a VALUE that is a concolic answers
+ * through its own exotic [[Get]] under the field-path identity ("{reply}.id") — which is what the pinned case
+ * asserts, because a pin is keyed by exactly that composed path. */
+static void idb_extract_case(JSContext *ctx, JSValue value, JSValue key_path, IdbKeyPathResult expect,
+                             const char *why)   /* CONSUMES value and key_path */
+{
+    JSValue key = JS_UNDEFINED;
+
+    CHECK(idb_key_path_extract(ctx, value, key_path, &key) == expect, why);
+    JS_FreeValue(ctx, key);
+    JS_FreeValue(ctx, key_path);
+    JS_FreeValue(ctx, value);
+}
+
+/* THE KEY §7.1 EXTRACTED, as §7.3 hands it back — which is how a key's own value is inspected anywhere else in
+   this engine, rather than by reaching into the key record this fixture does not own. CONSUMES both. */
+static JSValue idb_extract_value(JSContext *ctx, JSValue value, JSValue key_path, const char *why)
+{
+    JSValue key = JS_UNDEFINED, out;
+
+    CHECK(idb_key_path_extract(ctx, value, key_path, &key) == IDB_KEY_PATH_KEY, why);
+    out = idb_key_to_value(ctx, key);
+    JS_FreeValue(ctx, key);
+    JS_FreeValue(ctx, key_path);
+    JS_FreeValue(ctx, value);
+    return out;
+}
+
+static void idb_extract_string(JSContext *ctx, JSValue got, const char *expect, const char *why)  /* CONSUMES */
+{
+    const char *s = JS_ToCString(ctx, got);
+
+    CHECK(s != NULL && strcmp(s, expect) == 0, why);
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, got);
+}
+
+static JSValue idb_extract_obj(JSContext *ctx, const char *field, JSValue v)   /* CONSUMES v */
+{
+    JSValue o = JS_NewObject(ctx);
+
+    CHECK(!JS_IsException(o), "the fixture's value could not be allocated");
+    JS_SetPropertyStr(ctx, o, field, v);
+    return o;
+}
+
+static void idb_extract_selftest(JSContext *ctx)
+{
+    static const char *const AB[] = { "a", "b" };
+    JSValue v, tainted, got;
+
+    /* "Let hop be ! HasOwnProperty(value, identifier) ... let value be ! Get(value, identifier)" — one segment,
+       then two. */
+    got = idb_extract_value(ctx, idb_extract_obj(ctx, "id", JS_NewInt32(ctx, 7)), JS_NewString(ctx, "id"),
+                            "§7.1 could not extract the key at a one-identifier key path");
+    CHECK(idb_selftest_int(ctx, got) == 7, "§7.1 extracted the wrong value at `id`");
+    JS_FreeValue(ctx, got);
+    v = idb_extract_obj(ctx, "b", JS_NewString(ctx, "z"));
+    idb_extract_string(ctx, idb_extract_value(ctx, idb_extract_obj(ctx, "a", v), JS_NewString(ctx, "a.b"),
+                                              "§7.1 could not walk a two-identifier key path"),
+                       "z", "§7.1 walked `a.b` to the wrong value");
+
+    /* "If keyPath is the empty string, return value and skip the remaining steps." The split of "" is one EMPTY
+       identifier and not none, so a walk that reached it would look for a property named "". */
+    idb_extract_string(ctx, idb_extract_value(ctx, JS_NewString(ctx, "k"), JS_NewString(ctx, ""),
+                                              "§7.1's empty key path names the VALUE ITSELF, and a string is a "
+                                              "key"),
+                       "k", "§7.1's empty key path answered with something other than the value");
+    idb_extract_case(ctx, JS_NewObject(ctx), JS_NewString(ctx, ""), IDB_KEY_PATH_INVALID,
+                     "§7.1 over the empty key path answers with the value, and a plain object is not a key — "
+                     "\"if key is 'invalid value' or 'invalid type', return INVALID\", which is a different "
+                     "answer from `failure` and a different sentence of §4.5");
+
+    /* The three ways a walk ends in `failure`, which §4.5 reports as a DataError only for a store with no key
+       generator — the absent property, the absent property one level down, and the own property that is there
+       and holds `undefined`. */
+    idb_extract_case(ctx, idb_extract_obj(ctx, "a", JS_NewInt32(ctx, 1)), JS_NewString(ctx, "b"),
+                     IDB_KEY_PATH_FAILURE, "§7.1: \"if hop is false, return failure\"");
+    idb_extract_case(ctx, idb_extract_obj(ctx, "a", JS_NewObject(ctx)), JS_NewString(ctx, "a.b"),
+                     IDB_KEY_PATH_FAILURE, "§7.1: a key path whose LAST identifier is absent is failure, and "
+                                           "the walk reached it through a segment that resolved");
+    idb_extract_case(ctx, idb_extract_obj(ctx, "a", JS_UNDEFINED), JS_NewString(ctx, "a"),
+                     IDB_KEY_PATH_FAILURE, "§7.1: \"if value is undefined, return failure\" — an own property "
+                                           "holding undefined is a DIFFERENT state from an absent one and the "
+                                           "standard spells it as its own step");
+
+    /* "If Type(value) is String, and identifier is 'length': let value be a Number equal to the NUMBER OF
+       ELEMENTS in value." U+1D11E is one code POINT, two UTF-16 code units and four UTF-8 bytes, so `a𝄞`
+       answers 3 — a walk counting the engine's own bytes would answer 5. */
+    got = idb_extract_value(ctx, JS_NewString(ctx, "a\xF0\x9D\x84\x9E"), JS_NewString(ctx, "length"),
+                            "§7.1's String `length` arm did not answer with a key");
+    CHECK(idb_selftest_int(ctx, got) == 3,
+          "§7.1's String `length` counted something other than UTF-16 CODE UNITS — the elements of a JS string "
+          "are its code units, and a key that counted UTF-8 bytes files the record in the wrong place in "
+          "§2.2's sorted list");
+    JS_FreeValue(ctx, got);
+    got = idb_extract_value(ctx, idb_extract_obj(ctx, "s", JS_NewString(ctx, "xy")),
+                            JS_NewString(ctx, "s.length"),
+                            "§7.1's String `length` arm is reached MID-WALK too, not only at a bare key path");
+    CHECK(idb_selftest_int(ctx, got) == 2, "§7.1's String `length` answered the wrong count mid-walk");
+    JS_FreeValue(ctx, got);
+
+    /* "If value is an Array and identifier is 'length': let value be ! ToLength(! Get(value, 'length'))." */
+    v = JS_NewArray(ctx);
+    CHECK(!JS_IsException(v), "the fixture's array could not be allocated");
+    JS_DefinePropertyValueUint32(ctx, v, 0, JS_NewInt32(ctx, 5), JS_PROP_C_W_E);
+    JS_DefinePropertyValueUint32(ctx, v, 1, JS_NewInt32(ctx, 6), JS_PROP_C_W_E);
+    got = idb_extract_value(ctx, idb_extract_obj(ctx, "a", v), JS_NewString(ctx, "a.length"),
+                            "§7.1's Array `length` arm did not answer with a key");
+    CHECK(idb_selftest_int(ctx, got) == 2, "§7.1's Array `length` answered the wrong length");
+    JS_FreeValue(ctx, got);
+
+    /* §7.1's LIST ARM, at its abort: "if key is failure, ABORT THE OVERALL ALGORITHM and return failure". The
+       value has `a` and not `b`, so the compound key does not exist — it is not the one-element key `[1]`.
+       The SUCCEEDING list arm assembles an Array and hands it to §7.4's array arm, which is not built and
+       crashes by name; that conversion is the next subproblem and is why only the abort is asserted here. */
+    idb_extract_case(ctx, idb_extract_obj(ctx, "a", JS_NewInt32(ctx, 1)), idb_selftest_list(ctx, AB, 2),
+                     IDB_KEY_PATH_FAILURE,
+                     "§7.1's list arm must abort the OVERALL algorithm when one of its items evaluates to "
+                     "failure — a compound key is the tuple of all its parts, and a value missing one has no "
+                     "key rather than a shorter one");
+
+    /* A TAINTED FIELD: the ordinary shape of a bundle storing what a reply gave it. §7.4's concolic arm takes
+       the key's TYPE from the example and carries the concolic itself as the value, so §7.3 hands back the same
+       symbol every constraint the flow narrowed it with names. */
+    tainted = concolic_new(ctx, "{reply}.id", "{reply}.id", JS_NewString(ctx, "u-42"));
+    got = idb_extract_value(ctx, idb_extract_obj(ctx, "id", JS_DupValue(ctx, tainted)), JS_NewString(ctx, "id"),
+                            "§7.1 refused a value whose key-path field is unknown external input — a store "
+                            "that did that would take the whole tainted-key surface out of reach");
+    CHECK(JS_VALUE_GET_PTR(got) == JS_VALUE_GET_PTR(tainted),
+          "§7.1 extracted a tainted field as a LAUNDERED copy — the key a record is filed under has to carry "
+          "the fact an attacker chose it, so every later comparison on it forks");
+    JS_FreeValue(ctx, got);
+    JS_FreeValue(ctx, tainted);
+
+    /* A TAINTED VALUE — `store.put(await res.json())` where the reply itself is unknown. The walk reaches the
+       concolic's own exotic [[Get]], which mints the DERIVED source "{reply}.id"; a flow whose gate pinned that
+       source reads the pinned string, and asserting the pin is what proves the field path was composed rather
+       than the read having gone somewhere else. The pin map is the running flow's constraint and this fixture
+       runs at the pre-boot baseline where no flow has narrowed anything, so it is cleared after. */
+    concolic_pin("{reply}.id", "u-7");
+    idb_extract_string(ctx, idb_extract_value(ctx, concolic_new(ctx, "{reply}", "{reply}", JS_UNDEFINED),
+                                              JS_NewString(ctx, "id"),
+                                              "§7.1 answered `failure` for an unknown VALUE — that forces a "
+                                              "branch on attacker-controlled input, toward the arm that takes "
+                                              "the record out of the store entirely"),
+                       "u-7", "§7.1 read a concolic value's field under the wrong source identity — the "
+                              "derived source is the composed field path, which is what an @S candidate "
+                              "delivery and a gate's pin are both keyed by");
+    concolic_clear_pins();
+}
+
 /* WHAT A HANDLE ANSWERS AFTER THE REVERT — the name of a handle is checked with, and against, the name of the
    store it is a handle for. */
 static void idb_selftest_handle_named(JSContext *ctx, JSValueConst handle, const char *expect, const char *why)
@@ -2753,6 +2938,7 @@ static void idb_store_selftest(JSContext *ctx)
        next transaction finds — which is what §5.5 step 2 has to put back. */
     idb_selftest_finish(ctx, tx);
     idb_key_path_selftest(ctx, conn, db);
+    idb_extract_selftest(ctx);
     idb_revert_selftest(ctx, conn, db, store);
     /* §5.5 step 3 runs on the state step 2 has just put back, so §5.8's fixture runs on the state this one
        left — the database at the 0 it was created with, and the store back under the name it had. */
@@ -3218,7 +3404,8 @@ int main(int argc, char **argv) {
        whole marker is named here rather than a fragment of it, because a fragment is what let the first half
        of this string go on looking right after the second half stopped existing. */
     int idbopen_tt = (strstr(js, "\"/api/idbopen\"") &&
-                     strstr(js, "0:1:versionchange:pending:a+b:same:plain:99:done:a+b:perhandle:1:fixture"));
+                     strstr(js, "0:1:versionchange:pending:a+b:same:plain:DataError:99:done:7:u-9"
+                                ":a+b:perhandle:1:fixture"));
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one

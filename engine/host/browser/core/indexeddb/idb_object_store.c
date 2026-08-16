@@ -38,6 +38,7 @@
 #include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key.h"
+#include "core/indexeddb/idb_key_path.h"
 #include "core/indexeddb/idb_key_range.h"
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_request.h"
@@ -265,9 +266,11 @@ static JSValue js_os_put(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 
     if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
     if (os_check(ctx, this_val, /*writes*/ true, &store, &tx) < 0) return JS_EXCEPTION;
+    /* §2.2's key path is HELD until the in-line-key step below has walked it — "store uses in-line keys" is
+       the same fact as "its key path is not null", so the read that answers the first is the one the second
+       needs, and re-reading it there would be two reads of one field with a member's refusals in between. */
     key_path = idb_object_store_key_path(ctx, store);
     in_line = !JS_IsNull(key_path);
-    JS_FreeValue(ctx, key_path);
     generator = idb_object_store_uses_key_generator(ctx, store);
 
     /* "If store uses in-line keys and key was given, throw a DataError." */
@@ -298,10 +301,53 @@ static JSValue js_os_put(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     if (JS_IsException(clone))
         goto fail;
 
-    /* §4.5's in-line-key steps (§7.1's extract-a-key, §7.2's check-that-a-key-could-be-injected) are §6.1's
-       first step in this engine, which is where the crash naming them lives — see idb_database.c. A store
-       reaching this line with in-line keys or a key generator carries no key, which is exactly what that
-       algorithm's own first step branches on. */
+    /* "If store uses IN-LINE KEYS, then: let kpk be the result of extracting a key from a value using a key
+       path with CLONE and store's key path."
+       THE CLONE AND NEVER THE PAGE'S OBJECT, which is what makes §7.1's own note true ("assertions can be made
+       in the above steps because this algorithm is only applied to values that are the output of
+       StructuredDeserialize") — a getter on the page's object would otherwise run inside a walk that asserts
+       none can. It runs SYNCHRONOUSLY, in `put` and not in the operation, because its two refusals are things
+       the page catches at the call: a key path addressing a non-key is a "DataError" thrown here, never a
+       request that later fires an `error` event. */
+    if (in_line) {
+        JSValue kpk;
+
+        switch (idb_key_path_extract(ctx, clone, key_path, &kpk)) {
+        /* "If kpk is not failure, let key be kpk." The key argument is absent on this arm — §4.5 refused a
+           given one for an in-line store above — so there is nothing to free. */
+        case IDB_KEY_PATH_KEY:
+            DCHECK(JS_IsUndefined(key), "§4.5's in-line-key step overwrote a key the page gave — \"if store "
+                                        "uses in-line keys and key was given, throw a DataError\" is reported "
+                                        "before the clone, so no key can be live here");
+            key = kpk;
+            break;
+        /* "If kpk is INVALID, throw a DataError." The key path resolved to something §7.4 is not a key: the
+           value has a field at that address and what is there cannot be one. */
+        case IDB_KEY_PATH_INVALID:
+            JS_FreeValue(ctx, clone);
+            JS_ThrowDOMException(ctx, "DataError",
+                                 "the value at the object store's key path is not a valid key");
+            goto fail;
+        /* "Otherwise (kpk is FAILURE): if store does not have a key generator, throw a DataError." The value
+           has nothing at the key path at all, and without a generator there is no key for this record to be
+           filed under. WITH one there is: §6.1 generates it and §7.2 injects it into the value at that same
+           key path — which is the arm §4.5's remaining step ("if check that a key could be injected into a
+           value with clone and store's key path returns false, throw a DataError") guards, and it lands with
+           §2.11 and §7.2 where idb_database.c's crash names them. Reaching that crash is what a store with a
+           key generator does on every `put`, in-line or not. */
+        case IDB_KEY_PATH_FAILURE:
+            if (!generator) {
+                JS_FreeValue(ctx, clone);
+                JS_ThrowDOMException(ctx, "DataError",
+                                     "the value has no value at the object store's key path, and the store "
+                                     "has no key generator");
+                goto fail;
+            }
+            break;
+        }
+    }
+    JS_FreeValue(ctx, key_path);
+
     data[OP_STORE_TX] = tx;
     data[OP_STORE_STORE] = store;
     data[OP_STORE_VALUE] = clone;
@@ -319,6 +365,7 @@ static JSValue js_os_put(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     return req;
 
 fail:
+    JS_FreeValue(ctx, key_path);
     JS_FreeValue(ctx, key);
     JS_FreeValue(ctx, store);
     JS_FreeValue(ctx, tx);
