@@ -139,6 +139,13 @@ const INTERFACES = {
   FileSystemFileHandle:      ["core/file/file_system_handle.c", "core/file/file_system_access.c"],
   FileSystemDirectoryHandle: ["core/file/file_system_handle.c", "core/file/file_system_access.c",
                               "core/idl_async_iter.c"],
+  /* INDEXED DATABASE §4.7 and §4.3. Both are rows from the day their components land, because an interface with
+     no row is the lying-by-omission this map's own comment names — and here the omission would hide exactly the
+     gap that matters: IDBFactory ships `cmp` and NOT `open`, `deleteDatabase` or `databases()`, and those three
+     are the whole of the database half of the standard. A row is what makes that count a number rather than a
+     sentence in a comment somebody has to keep true. */
+  IDBKeyRange:          "core/indexeddb/idb_key_range.c",
+  IDBFactory:           "core/indexeddb/indexed_db.c",
   /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission
      this map's own comment names, and it was silent from the moment the component landed. */
   /* An `iterable<>` interface's keys/values/entries/forEach are installed by the SHARED default iterator
@@ -168,7 +175,12 @@ const INTERFACES = {
                         "core/frame/viewport.c", "core/frame/visual_viewport.c",
                         /* §7.2.6.2's `[Replaceable] readonly attribute Navigation navigation`, installed
                            with the object it answers with rather than with the Window it hangs off. */
-                        "core/frame/navigation.c"],
+                        "core/frame/navigation.c",
+                        /* Indexed Database §4.3's `[SameObject] readonly attribute IDBFactory indexedDB`, a
+                           member of the WindowOrWorkerGlobalScope mixin Window includes — installed with the
+                           component that builds the object it answers with, the same rule navigation.c's
+                           entry above states. */
+                        "core/indexeddb/indexed_db.c"],
   Navigator:            "core/frame/navigator.c",
   /* CSSOM VIEW §12. Its own seven attributes are its file's; the three event handler IDL attributes it
      declares (`onresize`, `onscroll`, `onscrollend`) and the three members it INHERITS from EventTarget come
