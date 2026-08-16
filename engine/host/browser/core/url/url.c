@@ -1290,39 +1290,53 @@ char *url_encoded_strdup(const char *s, size_t n)
     return r;
 }
 
-/* §6.2 sorts by CODE UNITS, which is not UTF-8 byte order. The two disagree for exactly one range: a
-   supplementary code point (U+10000 and up) is a SURROGATE PAIR in UTF-16, so it sorts as 0xD800..0xDBFF —
-   BELOW U+E000..U+FFFF — while its UTF-8 encoding starts with 0xF0 and sorts above theirs. `ﬃ` (U+FB03) and
-   `🌈` (U+1F308) are that case, and byte order put them the wrong way round.
-   Decoding one code point at a time and mapping a supplementary to its HIGH SURROGATE is enough to order
-   them: two supplementaries with the same high surrogate differ in the low one, and the code point order
-   within a high-surrogate block matches the low-surrogate order. */
-static uint32_t url_encoded_next_unit(const char *s, size_t n, size_t *i)
+/* §6.2's sort(): "sorting in ascending order this's list, with a being less than b if a's name is CODE UNIT
+   less than b's name." A name is stored here as UTF-8, so the comparison walks UTF-16 CODE UNITS over UTF-8
+   bytes — and a code unit is not a code point. The two orders disagree for exactly one range: a supplementary
+   code point (U+10000 and up) is a SURROGATE PAIR in UTF-16, so it begins at 0xD800..0xDBFF — BELOW
+   U+E000..U+FFFF — while its UTF-8 encoding starts with 0xF0 and sorts above theirs. `ﬃ` (U+FB03) and `🌈`
+   (U+1F308) are that case.
+   THE LOW SURROGATE IS A UNIT TOO, and yielding only the high one is what this cursor used to do: every pair
+   of code points inside ONE high-surrogate block then compared EQUAL, so `?🌉=1&🌈=2` — U+1F309 and U+1F308,
+   both 0xD83C first — sorted as a tie and a stable sort left them in input order where the standard swaps
+   them. So the cursor holds the second unit and hands it over on the next turn. */
+typedef struct { size_t i; uint32_t low; } Utf16Cursor;
+
+static bool url_utf16_done(const Utf16Cursor *c, size_t n) { return c->i >= n && c->low == 0; }
+
+static uint32_t url_encoded_next_unit(const char *s, size_t n, Utf16Cursor *c)
 {
-    unsigned char c = (unsigned char)s[*i];
+    unsigned char ch;
     uint32_t cp;
     int extra;
 
-    if (c < 0x80)                { cp = c;          extra = 0; }
-    else if ((c & 0xe0) == 0xc0) { cp = c & 0x1f;   extra = 1; }
-    else if ((c & 0xf0) == 0xe0) { cp = c & 0x0f;   extra = 2; }
-    else                         { cp = c & 0x07;   extra = 3; }
-    (*i)++;
-    while (extra-- > 0 && *i < n && ((unsigned char)s[*i] & 0xc0) == 0x80)
-        cp = (cp << 6) | ((unsigned char)s[(*i)++] & 0x3f);
-    return cp >= 0x10000 ? 0xd800 + ((cp - 0x10000) >> 10) : cp;
+    if (c->low) { uint32_t u = c->low; c->low = 0; return u; }
+    DCHECK(c->i < n, "a UTF-16 code unit was asked for past the end of a name — every walk over one is bounded "
+                     "by url_utf16_done, which counts the pending low surrogate as well as the bytes");
+    ch = (unsigned char)s[c->i];
+    if (ch < 0x80)                { cp = ch;         extra = 0; }
+    else if ((ch & 0xe0) == 0xc0) { cp = ch & 0x1f;  extra = 1; }
+    else if ((ch & 0xf0) == 0xe0) { cp = ch & 0x0f;  extra = 2; }
+    else                          { cp = ch & 0x07;  extra = 3; }
+    c->i++;
+    while (extra-- > 0 && c->i < n && ((unsigned char)s[c->i] & 0xc0) == 0x80)
+        cp = (cp << 6) | ((unsigned char)s[c->i++] & 0x3f);
+    if (cp < 0x10000)
+        return cp;
+    c->low = 0xdc00 + ((cp - 0x10000) & 0x3ff);
+    return 0xd800 + ((cp - 0x10000) >> 10);
 }
 
 int url_encoded_name_cmp(const UrlEncodedPair *a, const UrlEncodedPair *b)
 {
-    size_t ia = 0, ib = 0;
-    while (ia < a->nlen && ib < b->nlen) {
-        uint32_t ua = url_encoded_next_unit(a->name, a->nlen, &ia);
-        uint32_t ub = url_encoded_next_unit(b->name, b->nlen, &ib);
+    Utf16Cursor ca = { 0, 0 }, cb = { 0, 0 };
+    while (!url_utf16_done(&ca, a->nlen) && !url_utf16_done(&cb, b->nlen)) {
+        uint32_t ua = url_encoded_next_unit(a->name, a->nlen, &ca);
+        uint32_t ub = url_encoded_next_unit(b->name, b->nlen, &cb);
         if (ua != ub) return ua < ub ? -1 : 1;
     }
     /* a shorter name that is a prefix of a longer one sorts first */
-    return (ia < a->nlen) ? 1 : ((ib < b->nlen) ? -1 : 0);
+    return !url_utf16_done(&ca, a->nlen) ? 1 : (!url_utf16_done(&cb, b->nlen) ? -1 : 0);
 }
 
 void url_encoded_list_free(UrlEncodedList *l)

@@ -9,11 +9,12 @@
  * first — which is the same list Headers and URLSearchParams are built on, so it is the same one and not a
  * third copy of it.
  *
- * A VALUE IS A STRING HERE, and that is the union's own answer rather than a simplification: §5's `append` is
- * overloaded on `(USVString value)` and `(Blob blobValue, optional USVString filename)`, and Web IDL resolves
- * the overload by asking whether the argument is a platform object of the Blob interface. This engine has no
- * Blob, so nothing can be one, and every value takes the USVString arm — the same reasoning BodyInit's union
- * follows. When Blob lands it is one brand test in this file and a File in the entry, not a redesign. */
+ * A VALUE IS A STRING OR A FILE: §5's `append` is overloaded on `(USVString value)` and
+ * `(Blob blobValue, optional USVString filename)`, and Web IDL resolves the overload by asking whether the
+ * argument is a platform object of the Blob interface — so the arm is chosen by a BRAND TEST on the argument
+ * (`fd_entry_value` below), and §5's create an entry then turns a Blob into a File. The paragraph that stood
+ * here said this engine had no Blob and that every value therefore took the USVString arm; core/file/blob.c
+ * has existed since, and this file has included it and read `blob_bytes_of` off entries for as long. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -343,42 +344,146 @@ JSValueConst form_data_entry_value(JSValueConst fd, int i)
     return d->list.e[i].value;
 }
 
+/* HTML §4.10.22.8's multipart/form-data encoding algorithm, STEP 1: "Replace every occurrence of U+000D (CR)
+   not followed by U+000A (LF), and every occurrence of U+000A (LF) not preceded by U+000D (CR), in entry's
+   name, by a string consisting of a U+000D (CR) and U+000A (LF). If entry's value is not a File object, then
+   replace ... in entry's value" — so a lone CR and a lone LF each become a CRLF, and an existing CRLF is left
+   alone. It is a step of the SERIALIZER and not of the entry list: `fd.get(name)` still answers with the
+   string the page appended, which is why this builds a copy rather than rewriting the entry. Caller frees. */
+static char *fd_normalize_newlines(const char *s, size_t n, size_t *out_n)
+{
+    char *out = malloc(n * 2 + 1);
+    size_t i, w = 0;
+
+    CHECK(out, "formdata: OOM normalizing a field's newlines");
+    for (i = 0; i < n; i++) {
+        if (s[i] == '\r') {
+            out[w++] = '\r'; out[w++] = '\n';
+            if (i + 1 < n && s[i + 1] == '\n') i++;   /* an existing CRLF is one newline, not two */
+        } else if (s[i] == '\n') {
+            out[w++] = '\r'; out[w++] = '\n';
+        } else {
+            out[w++] = s[i];
+        }
+    }
+    out[w] = 0;
+    *out_n = w;
+    return out;
+}
+
+/* THE SAME ALGORITHM'S ESCAPE, which applies to FIELD NAMES and to FILENAMES FOR FILE FIELDS and to nothing
+   else: "the result of the encoding in the previous bullet point must be escaped by replacing any 0x0A (LF)
+   bytes with the byte sequence `%0A`, 0x0D (CR) with `%0D` and 0x22 (") with `%22`. The user agent must not
+   perform any other escapes."
+   IT IS NOT COSMETIC. The Content-Disposition line puts the name between DOUBLE QUOTES, so a name carrying a
+   `"` closes the quoted-string early and a name carrying a CRLF ends the header line — `fd.append('a"\r\nX-
+   Injected: 1', 'v')` wrote a part with a header the page never sent, and this engine's whole output is
+   requests it constructs and sinks it decides are reachable. A forged header there is a finding that does not
+   reproduce in any browser, because every browser performs this escape. Caller frees. */
+static char *fd_escape_field(const char *s, size_t n, size_t *out_n)
+{
+    size_t nn = 0, i, w = 0;
+    char *norm = fd_normalize_newlines(s, n, &nn);
+    char *out = malloc(nn * 3 + 1);
+
+    CHECK(out, "formdata: OOM escaping a multipart field name");
+    for (i = 0; i < nn; i++) {
+        switch (norm[i]) {
+        case '\n': memcpy(out + w, "%0A", 3); w += 3; break;
+        case '\r': memcpy(out + w, "%0D", 3); w += 3; break;
+        case '"':  memcpy(out + w, "%22", 3); w += 3; break;
+        default:   out[w++] = norm[i];
+        }
+    }
+    out[w] = 0;
+    free(norm);
+    DCHECK(!memchr(out, '\r', w) && !memchr(out, '\n', w) && !memchr(out, '"', w),
+           "a multipart field name or filename survived §4.10.22.8's escape still carrying a CR, an LF or a "
+           "double quote — the Content-Disposition line writes it inside a quoted-string, so any of the three "
+           "ends the header and turns the rest of the name into a header nobody sent");
+    *out_n = w;
+    return out;
+}
+
 /* Fetch §5.1's `multipart/form-data` SERIALIZER — the parser above, run backwards, and what a
  * `new Response(formData)` carries. RFC 7578's shape: `--boundary CRLF` then each part's Content-Disposition,
  * a blank line, its bytes, and a closing `--boundary--`. A FILE entry additionally carries `filename=` and its
  * own Content-Type, which is the whole reason a form's file control arrives as a file rather than as text.
+ *
+ * THE PARTS ARE PREPARED BEFORE THE BOUNDARY IS CHOSEN, because §4.10.22.8's escape changes the bytes the
+ * boundary must not occur in: a name is scanned in the form it is WRITTEN in, never in the form it arrived in.
  *
  * THE BOUNDARY MUST NOT OCCUR IN ANY PART, or the receiver splits the body in the wrong place. It is chosen by
  * SCANNING the parts rather than by drawing a random number: this engine is deterministic on purpose — a
  * time-travel resume must produce the byte-identical body — and a random boundary would make the same flow
  * serialise differently on every run. A counter that stops at the first candidate no part contains is both
  * deterministic AND correct, which a random string only ever is with high probability. */
+typedef struct {
+    char       *name;     size_t nlen;    /* §4.10.22.8-escaped */
+    char       *fname;    size_t fnlen;   /* §4.10.22.8-escaped, NULL when the entry is not a File */
+    const char *bytes;    size_t vlen;    /* a File's contents, or `norm` for a string entry */
+    char       *norm;                     /* the newline-normalized string value this part owns */
+    const char *btype;                    /* a File's own MIME type */
+} FdPart;
+
+static void fd_parts_free(FdPart *p, int n)
+{
+    int i;
+    for (i = 0; i < n; i++) { free(p[i].name); free(p[i].fname); free(p[i].norm); }
+    free(p);
+}
+
 char *form_data_serialize_multipart(JSContext *ctx, JSValueConst fd, char *boundary, size_t *out_n)
 {
     FormDataObj *d = JS_GetOpaque(fd, g_fd_class);
     const FdList *l;
     size_t cap = 256, n = 0;
     char *out;
+    FdPart *parts;
     int i;
     unsigned attempt;
 
     DCHECK(d != NULL, "the multipart serializer was handed something that is not a FormData");
     l = &d->list;
 
+    parts = calloc((size_t)(l->n > 0 ? l->n : 1), sizeof *parts);
+    CHECK(parts, "formdata: OOM preparing a multipart body's parts");
+    for (i = 0; i < l->n; i++) {
+        const char *cstr = NULL, *fname = NULL, *bytes;
+        size_t vlen = 0;
+
+        bytes = fd_entry_bytes(ctx, &l->e[i], &vlen, &fname, &cstr);
+        if (!bytes) { fd_parts_free(parts, i); return NULL; }
+        parts[i].name = fd_escape_field(l->e[i].name, l->e[i].nlen, &parts[i].nlen);
+        if (fname) {
+            /* A FILE entry: its name is escaped, and step 1 leaves its VALUE alone — the bytes of a file are
+               not a string and a CR inside them is data. */
+            parts[i].fname = fd_escape_field(fname, strlen(fname), &parts[i].fnlen);
+            parts[i].bytes = bytes;
+            parts[i].vlen  = vlen;
+            blob_bytes_of(l->e[i].value, NULL, &parts[i].btype);
+            DCHECK(cstr == NULL, "a File entry's bytes came out of the string pool");
+        } else {
+            DCHECK(cstr != NULL,
+                   "a part with no filename was built out of a Blob rather than out of a string — §5's create "
+                   "an entry converts every Blob to a File, so an entry holding a nameless Blob never went "
+                   "through it, and step 1's newline normalization would run over binary bytes");
+            parts[i].norm  = fd_normalize_newlines(bytes, vlen, &parts[i].vlen);
+            parts[i].bytes = parts[i].norm;
+            JS_FreeCString(ctx, cstr);
+        }
+    }
+
     for (attempt = 0; ; attempt++) {
+        size_t blen;
         int clash = 0;
         snprintf(boundary, FORM_DATA_BOUNDARY_MAX, "----APIClientFormBoundary%u", attempt);
+        blen = strlen(boundary);
         for (i = 0; i < l->n; i++) {
-            const char *cstr = NULL, *fname = NULL, *bytes;
-            size_t vlen = 0;
-            if (memmem(l->e[i].name, l->e[i].nlen, boundary, strlen(boundary))) { clash = 1; break; }
-            bytes = fd_entry_bytes(ctx, &l->e[i], &vlen, &fname, &cstr);
-            if (!bytes) return NULL;
-            if (memmem(bytes, vlen, boundary, strlen(boundary)) ||
-                (fname && strstr(fname, boundary)))
-                clash = 1;
-            if (cstr) JS_FreeCString(ctx, cstr);
-            if (clash) break;
+            if (memmem(parts[i].name, parts[i].nlen, boundary, blen) ||
+                memmem(parts[i].bytes, parts[i].vlen, boundary, blen) ||
+                (parts[i].fname && memmem(parts[i].fname, parts[i].fnlen, boundary, blen)))
+                { clash = 1; break; }
         }
         if (!clash) break;
     }
@@ -398,31 +503,27 @@ char *form_data_serialize_multipart(JSContext *ctx, JSValueConst fd, char *bound
 #define FD_PUTS(str) FD_PUT((str), strlen(str))
 
     for (i = 0; i < l->n; i++) {
-        const char *cstr = NULL, *fname = NULL, *btype = NULL, *bytes;
-        size_t vlen = 0;
-
-        bytes = fd_entry_bytes(ctx, &l->e[i], &vlen, &fname, &cstr);
-        if (!bytes) { free(out); return NULL; }
         FD_PUTS("--"); FD_PUTS(boundary); FD_PUTS("\r\n");
         FD_PUTS("Content-Disposition: form-data; name=\"");
-        FD_PUT(l->e[i].name, l->e[i].nlen);
+        FD_PUT(parts[i].name, parts[i].nlen);
         FD_PUTS("\"");
-        if (fname) {
-            FD_PUTS("; filename=\""); FD_PUTS(fname); FD_PUTS("\"");
-            blob_bytes_of(l->e[i].value, NULL, &btype);
+        if (parts[i].fname) {
+            FD_PUTS("; filename=\""); FD_PUT(parts[i].fname, parts[i].fnlen); FD_PUTS("\"");
             /* §5.1: a file part carries a Content-Type, and a File with no type of its own is
-               application/octet-stream — the type a receiver must assume for arbitrary bytes. */
+               application/octet-stream — the type a receiver must assume for arbitrary bytes. §4.10.22.8:
+               "The parts ... that correspond to non-file fields must not have a `Content-Type` header
+               specified", which is why this is inside the filename arm. */
             FD_PUTS("\r\nContent-Type: ");
-            FD_PUTS(btype && *btype ? btype : "application/octet-stream");
+            FD_PUTS(parts[i].btype && *parts[i].btype ? parts[i].btype : "application/octet-stream");
         }
         FD_PUTS("\r\n\r\n");
-        FD_PUT(bytes, vlen);
+        FD_PUT(parts[i].bytes, parts[i].vlen);
         FD_PUTS("\r\n");
-        if (cstr) JS_FreeCString(ctx, cstr);
     }
     FD_PUTS("--"); FD_PUTS(boundary); FD_PUTS("--\r\n");
 #undef FD_PUTS
 #undef FD_PUT
+    fd_parts_free(parts, l->n);
     out[n] = 0;
     *out_n = n;
     return out;
