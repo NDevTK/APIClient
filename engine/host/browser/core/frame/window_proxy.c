@@ -264,10 +264,35 @@ static char *proxy_strdup(const char *s)
     return c;
 }
 
+/* THE ONE WindowProxy PER REMOTE DOCUMENT — the importing half of a navigable's IDENTITY, and the reason it is
+   a table rather than a mint at each call site: `w[0] === w[0]`, `w.frames[0] === iframe.contentWindow` and
+   `event.source === event.source` are page-visible identities over ONE navigable, and every one of them
+   answers false the moment two sites each mint their own proxy for it.
+   THE ROW BORROWS, AND THAT IS WHAT MAKES THE TABLE ALLOWED TO EXIST. core/dom/document.h refuses a registry
+   keyed by document in as many words, and it is right about the OWNING kind: a navigable is created per
+   `open()` per flow, so an owning row would be an immortal root holding a proxy for every navigable a
+   forced-execution frontier ever created — the same shape as the realm-per-read that cost the frontier 43% of
+   its depth. A borrowed row is not that shape at all: an entry exists only while something ELSE holds the
+   proxy, and proxy_finalizer takes the row out at the moment the collector takes the object. So the table is
+   exactly the set of remote navigables that are still alive, there is no reclamation left to build, and
+   nothing is kept alive by being named. */
+typedef struct { uint32_t doc; JSValueConst proxy; } RemoteNav;
+static RemoteNav *g_remote_navs;
+static int        g_remote_navs_n, g_remote_navs_cap;
+
 static void proxy_finalizer(JSRuntime *rt, JSValue val)
 {
     ProxyData *p = JS_GetOpaque(val, g_proxy_class);
+    int i;
     (void)rt;
+    /* THE ROW GOES FIRST, and unconditionally: it names this object by POINTER, so a row left behind would
+       hand the next ask for that document a freed proxy. Above the `p` test because the table's claim is about
+       the OBJECT, not about whether its record survived to be freed here. */
+    for (i = 0; i < g_remote_navs_n; i++)
+        if (JS_VALUE_GET_PTR(g_remote_navs[i].proxy) == JS_VALUE_GET_PTR(val)) {
+            g_remote_navs[i] = g_remote_navs[--g_remote_navs_n];
+            break;
+        }
     if (!p) return;
     JS_FreeValueRT(rt, p->window);
     JS_FreeValueRT(rt, p->parent);
@@ -481,8 +506,11 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
 }
 
 
-JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origin *origin, const char *name,
-                                JSValueConst parent, JSValueConst opener)
+/* A proxy over a navigable whose active document lives in ANOTHER WASM instance. STATIC, and reached only
+   through window_proxy_for_document below: minting one is exactly where a navigable's identity can be lost,
+   so there is one site that does it and it records what it made. */
+static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origin *origin, const char *name,
+                                       JSValueConst parent, JSValueConst opener)
 {
     JSValue obj;
     ProxyData *p;
@@ -507,6 +535,60 @@ JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origin *orig
     p->opener = JS_DupValue(ctx, opener);
     p->doc = doc;
     JS_SetOpaque(obj, p);
+    return obj;
+}
+
+JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
+{
+    int i;
+
+    DCHECK(doc != 0, "the WindowProxy of document zero was asked for — zero is the world registry's NONE, so "
+                     "the caller is holding a handle it never resolved rather than a document");
+    /* A DOCUMENT THIS AGENT HOSTS IS ANSWERED BY ITS OWN REALM, never out of the table below: the realm holds
+       the one proxy for its navigable (core/dom/document.h), and a row here for a hosted document would be a
+       second answer to a question that already has one. */
+    if (world_doc_hosted(doc)) {
+        JSContext *realm = world_doc_realm(doc);
+
+        DCHECK(realm != NULL,
+               "the WindowProxy of a document THIS AGENT HOSTS was asked for before that document's realm was "
+               "materialized. The navigable exists — whatever created it holds its proxy — but a hosted "
+               "navigable has no row here, so there is nowhere else to answer from. A peer can only name a "
+               "document it has a reference into, and a reference into a document whose realm was never built "
+               "cannot have been lent, so a name reaching this state came from somewhere that is not a lend");
+        if (!realm) return JS_UNDEFINED;
+        return JS_DupValue(ctx, document_window_proxy(realm));
+    }
+    for (i = 0; i < g_remote_navs_n; i++)
+        if (g_remote_navs[i].doc == doc) return JS_DupValue(ctx, g_remote_navs[i].proxy);
+    return JS_UNDEFINED;
+}
+
+JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *origin, const char *name,
+                                  JSValueConst parent, JSValueConst opener)
+{
+    JSValue held = window_proxy_of_document(ctx, doc);
+    JSValue obj;
+
+    if (!JS_IsUndefined(held)) return held;
+    DCHECK(!world_doc_hosted(doc),
+           "a REMOTE WindowProxy was about to be minted for a document whose realm this agent holds — the "
+           "lookup above answers for every hosted document, so reaching here means it could not, and minting "
+           "would give one navigable a second proxy that resolves nothing");
+    obj = window_proxy_new_remote(ctx, doc, origin, name, parent, opener);
+    if (JS_IsException(obj)) return obj;
+    if (g_remote_navs_n == g_remote_navs_cap) {
+        int cap = g_remote_navs_cap ? g_remote_navs_cap * 2 : 8;
+        RemoteNav *g = realloc(g_remote_navs, (size_t)cap * sizeof *g);
+
+        CHECK(g != NULL, "window proxy: OOM recording a remote navigable's identity — an unrecorded navigable "
+                         "is minted again on the next ask, and `w[0] === w[0]` is then false about one window");
+        g_remote_navs = g;
+        g_remote_navs_cap = cap;
+    }
+    g_remote_navs[g_remote_navs_n].doc = doc;
+    g_remote_navs[g_remote_navs_n].proxy = obj;   /* BORROWED — proxy_finalizer takes the row out */
+    g_remote_navs_n++;
     return obj;
 }
 
@@ -1088,32 +1170,35 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
        wraps would ask for one, and the walk would answer for a frame at some other position. */
     if (!wp_closed(p) && idx <= (uint32_t)INT32_MAX) {
         if (!world_doc_hosted(p->doc)) {
-            /* §7.2.3.5 step 2.2 OF A DOCUMENT IN ANOTHER INSTANCE. Both halves of the answer are named here
-               because neither exists yet and each is a different kind of missing.
-               THE PEER-SIDE PROGRAM IS ALREADY BUILT: `windowproxy.get` runs `globalThis[__apiclientKey]` in
-               the named document's own realm (remote_op.c, engine.c's flow_perform), and §7.2.2.2 indexed
-               access on that realm's global IS this same step 2 performed there — so the member field carries
-               the decimal index and the peer needs nothing new to compute the answer. What it CANNOT do yet is
-               send it: the answer is a WindowProxy, and remote_object.c aborts rather than lending a navigable
-               as a generic cross-agent object reference, naming the navigable identity that has to cross
-               instead (document name, origin, browsing-context name, and the PARENT's document name, since a
-               navigable minted from a bare name would report itself top-level).
-               WHAT IS MISSING HERE IS THE SUSPEND. This is an exotic [[GetOwnProperty]] — a C hook that must
-               return a value — so it cannot park the flow the way `length` does, and `length` is only able to
-               because it is an IDL ACCESSOR driven as a step machine. There is exactly one read shape this
-               interpreter resolves at the operator site and drives on the trampoline (remote_object.c's block
-               comment, and quickjs.c's own DCHECK in tramp_walk_continues names the route: the keyed entry's
-               GP_GETOWNPROP). Route this class onto it, and step 2 becomes a step machine whose ASK stage
-               posts the record above and whose ANSWER stage mints the proxy — parked at `otherW[0]`, resumed
-               byte-identical, exactly as an await is. Answering `undefined` here is what this hook exists to
-               stop, and the SecurityError below is right only once the index is known to be out of range. */
-            DFAIL("an INDEXED read of a WindowProxy whose active document is in ANOTHER INSTANCE. The peer "
-                  "already computes it — `windowproxy.get` with the decimal index as the member runs "
-                  "§7.2.2.2's indexed access in that document's own realm — so what is missing is the two "
-                  "edges around it: a navigable must cross as its IDENTITY rather than as a generic object "
-                  "reference (remote_object.c aborts there and names the fields), and this read must SUSPEND, "
-                  "which an exotic [[GetOwnProperty]] cannot do. Route the class onto the keyed entry's "
-                  "GP_GETOWNPROP so step 2 is driven on the trampoline as a step machine, the way every other "
+            /* §7.2.3.5 step 2.2 OF A DOCUMENT IN ANOTHER INSTANCE, and ONE thing is missing now rather than
+               two. This block named both, and the OTHER one is built: a navigable crosses as its IDENTITY —
+               document name, origin, browsing-context name, the parent's and the opener's document names —
+               and resolves on the far side to that agent's own WindowProxy or to the one remote proxy it
+               keeps per document (remote_object.c's nav_encode/nav_decode, window_proxy_for_document above).
+               So the ANSWER can be sent, and the PEER-SIDE PROGRAM was already built before that:
+               `windowproxy.get` runs `globalThis[__apiclientKey]` in the named document's own realm
+               (remote_op.c, engine.c's flow_perform), and §7.2.2.2's indexed access on that realm's global IS
+               this same step 2 performed there — so the member field carries the decimal index and the peer
+               needs nothing new to compute it.
+               WHAT IS MISSING IS THE SUSPEND, AND ONLY THAT. This is an exotic [[GetOwnProperty]] — a C hook
+               that must return a value — so it cannot park the flow the way `length` does, and `length` is
+               only able to because it is an IDL ACCESSOR driven as a step machine. There is exactly one read
+               shape this interpreter resolves at the operator site and drives on the trampoline
+               (remote_object.c's block comment, and quickjs.c's own DCHECK in tramp_walk_continues names the
+               route: the keyed entry's GP_GETOWNPROP). Route this class onto it and step 2 becomes a step
+               machine whose ASK stage posts (document, world+ancestry, decimal index) exactly as
+               proxy_get_step does and whose ANSWER stage is remote_object_decode of the identity that comes
+               back — parked at `otherW[0]`, resumed byte-identical, exactly as an await is. Answering
+               `undefined` here is what this hook exists to stop, and the SecurityError below is right only
+               once the index is known to be out of range. */
+            DFAIL("an INDEXED read of a WindowProxy whose active document is in ANOTHER INSTANCE. Every edge "
+                  "around it now exists: the peer computes the answer (`windowproxy.get` with the decimal "
+                  "index as the member runs §7.2.2.2's indexed access in that document's own realm) and a "
+                  "navigable crosses back as its IDENTITY and resolves to one WindowProxy per document "
+                  "(remote_object.c). What is left is the SUSPEND, which an exotic [[GetOwnProperty]] cannot "
+                  "do because it is a C hook that must return a value. Route this class onto the keyed "
+                  "entry's GP_GETOWNPROP — quickjs.c's tramp_walk_continues names that route in its own "
+                  "DCHECK — so step 2 is driven on the trampoline as a step machine, the way every other "
                   "cross-instance read in this engine is");
         } else if (p->realm) {
             child = iframe_child_navigable(p->realm, (int)idx);
@@ -1347,6 +1432,32 @@ JSValue window_proxy_opener(JSContext *ctx, JSValueConst proxy)
     return proxy_member_get(ctx, proxy, WP_OPENER);
 }
 
+/* §7.2.5's `opener` AS THE NAVIGABLE, which is what an engine walk wants and what the member must not give it
+   — win_or_proxy maps this document's own navigable onto the GLOBAL, because `w.opener === window` is the
+   identity an opened page rests on, and a Window is not a WindowProxy. Same distinction, same reason, as
+   window_proxy_parent_navigable above. */
+JSValue window_proxy_opener_navigable(JSContext *ctx, JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+    DCHECK(p != NULL, "the opener navigable of something that is not a WindowProxy was asked for");
+    return JS_DupValue(ctx, p->opener);
+}
+
+/* THE NAVIGABLE A VALUE NAMES — win_or_proxy's mapping read backwards, and in one place for the reason that
+   one is: a Window and its WindowProxy are two spellings of ONE navigable, and a caller that has to treat
+   them as one (an encoder handing a navigable to another agent) must not be the place that decides it. */
+JSValueConst window_proxy_navigable_of(JSContext *ctx, JSValueConst v)
+{
+    JSValue g;
+    bool is_global;
+
+    if (window_proxy_is(v)) return v;
+    g = JS_GetGlobalObject(ctx);
+    is_global = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(v);
+    JS_FreeValue(ctx, g);
+    return is_global ? document_window_proxy(ctx) : JS_UNDEFINED;
+}
+
 /* §7.2.5.1's WRITE SIDE of `name` — the origin check, which is the whole of what this member adds over the
    write itself: `name` is not a cross-origin property, so setting it across origins is a SecurityError rather
    than a silent no-op. The rename is window_proxy_name_assign's, because a Window and its proxy write the one
@@ -1574,6 +1685,12 @@ void window_proxy_free(JSContext *ctx)
     /* §7.2.1.3.1's and §7.2.1.3.2's names, released with the agent that interned them. */
     for (i = 0; i < CROSS_ORIGIN_NAME_N; i++) { JS_FreeAtom(ctx, g_xo_atom[i]); g_xo_atom[i] = JS_ATOM_NULL; }
     for (i = 0; i < XO_FALLBACK_N; i++) { JS_FreeAtom(ctx, g_xo_fallback[i]); g_xo_fallback[i] = JS_ATOM_NULL; }
+    /* THE REMOTE-NAVIGABLE ROWS BORROW, so this frees the TABLE and nothing in it. Emptying it here is what
+       keeps a finalizer running later in the teardown from scanning freed storage: the loop then reads n == 0
+       and touches nothing. */
+    free(g_remote_navs);
+    g_remote_navs = NULL;
+    g_remote_navs_n = g_remote_navs_cap = 0;
     /* the prototypes are the REALMS' — released with their contexts, and the ORIGINS are the AGENT's, released
        by origin_release with everything else that outlives a realm */
     g_wp_rt = NULL;

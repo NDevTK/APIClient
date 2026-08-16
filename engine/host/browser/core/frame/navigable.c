@@ -813,10 +813,14 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                  world_doc_name(document_doc(ctx)), addr, origin_serialized(origin), tlu, csp ? csp : "");
         engine_host_notify(ctx, op);
         free(op);
-        proxy = window_proxy_new_remote(ctx, child, origin, name,
-                                        is_child ? document_window_proxy(ctx) : JS_UNDEFINED,
-                                        (is_child || (feat && feat->noopener)) ? JS_NULL
-                                                                               : document_window_proxy(ctx));
+        /* THROUGH THE ONE DOOR, so this navigable is the one a peer's answer resolves to. The child was just
+           minted and nothing has named it yet, so this ask is the mint — but it is the ask that RECORDS it,
+           and without the record `w.frames[0] === iframe.contentWindow` is false about the frame this line
+           created the moment the peer answers an indexed read with the same navigable's identity. */
+        proxy = window_proxy_for_document(ctx, child, origin, name,
+                                          is_child ? document_window_proxy(ctx) : JS_UNDEFINED,
+                                          (is_child || (feat && feat->noopener)) ? JS_NULL
+                                                                                 : document_window_proxy(ctx));
         CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
     }
     JS_FreeCString(ctx, creator_tlu_s);

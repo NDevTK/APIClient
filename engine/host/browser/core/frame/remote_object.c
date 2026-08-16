@@ -19,6 +19,13 @@
  * re-dispatched there). So a reference is a Proxy whose traps are STEP MACHINES, and `remote.title` parks the
  * flow at its own call site exactly as an await does.
  *
+ * EXCEPT A NAVIGABLE, WHICH CROSSES AS ITS IDENTITY AND NOT AS A NAME. A WindowProxy — and the Window global,
+ * which is the same navigable spelled the other way — is the one object both agents can independently BUILD,
+ * because a navigable belongs to the agent that created it and only its ACTIVE DOCUMENT lives in the peer. So
+ * it crosses as the five facts that decide which navigable it is (nav_encode) and is resolved on the far side
+ * to that agent's own WindowProxy, never lent as `o<doc>:<id>` — see the encoder for what a reference proxy
+ * would silently do to postMessage, to §7.2.5.1's cross-origin filter and to `w[0] === w.frames[0]`.
+ *
  * IDENTITY HOLDS ON BOTH SIDES, and neither half is optional. The exporting agent mints ONE id per object, so
  * two asks for the same object answer with the same name; the importing agent keeps ONE reference per (doc,
  * id), so two answers with the same name are the same object here. A page writes `w.document === w.document`
@@ -337,6 +344,163 @@ static char *dec_b64(const char *b64, size_t *plen)
     return bytes;
 }
 
+/* ---- A NAVIGABLE CROSSES AS ITS IDENTITY ----------------------------------------------------------------- */
+
+/* ITS OWN TAG, BESIDE 'o'/'f'/'c' AND NOT ONE OF THEM, because a navigable is not an object this agent may
+   lend — see remote_object_encode for what an `o<doc>:<id>` would silently do to one. */
+#define NAV_TAG 'W'
+
+/* WHAT THE IDENTITY IS, and every field of it is load-bearing:
+     DOC     — WHICH navigable. Documents cross by NAME (a `uint32_t doc` is this instance's handle into its
+               own table and means a different document in the peer's), and the name is what the receiving
+               side resolves FIRST: a name it hosts is its OWN WindowProxy, never a remote one.
+     ORIGIN  — the active document's principal, serialized. §7.2.5.1's whole surface is a filter over it, and a
+               proxy minted without one would answer every cross-origin read out of a principal this agent
+               invented. "null" is a real answer and resolves to a FRESH opaque origin here, which is correct:
+               an opaque origin is same origin with nothing, and two Documents sharing ONE opaque origin share
+               an agent cluster and so are never on two sides of this line.
+     NAME    — the BROWSING CONTEXT's name, which §7.3.3's named access matches against.
+     PARENT  — the parent navigable's DOCUMENT NAME, and this is the field whose absence is invisible:
+               window_proxy_for_document takes a parent, and a navigable minted from a bare name answers
+               `parent === self` and reports itself a top-level traversable — so `w[0].parent === w` would be
+               false and `w[0].close()` would try to close a frame.
+     OPENER  — §7.2.5's, by document name, for the same reason: `opener` is on §7.2.1.3.1's cross-origin list,
+               so a proxy minted with a hardcoded null answers a READABLE member with a value nothing computed.
+   EVERY FIELD IS BASE64 AND TERMINATED BY '.', not separated by one. Terminated, because a field that is
+   EMPTY (a top-level navigable's parent) then reads as one rather than as a missing separator; base64,
+   because a document name is "<parent>.<n>" and is full of the character doing the separating — '.' is
+   outside base64's alphabet, which is what makes a dotted record able to carry dotted names at all. */
+enum { NAV_DOC, NAV_ORIGIN, NAV_NAME, NAV_PARENT, NAV_OPENER, NAV_FIELD_N };
+
+/* The DOCUMENT NAME of the navigable a parent or opener slot holds, or "" when it holds none. */
+static const char *nav_slot_doc(JSValueConst v)
+{
+    if (JS_IsUndefined(v) || JS_IsNull(v)) return "";
+    DCHECK(window_proxy_is(v),
+           "a navigable's parent or opener slot holds something that is not a WindowProxy. Both slots are "
+           "NAVIGABLES — window_proxy.c keeps them un-mapped for exactly this reason, and the member accessors "
+           "are what turn this document's own navigable into the Window a page compares against — so a value "
+           "here that is not one has no document name to cross under and no navigable to name");
+    if (!window_proxy_is(v)) return "";
+    return world_doc_name(window_proxy_doc(v));
+}
+
+/* One base64 field, appended at `*pn` and terminated by '.'. */
+static void nav_put(char *out, size_t cap, size_t *pn, const char *s)
+{
+    size_t len = strlen(s);
+    size_t n;
+
+    CHECK(*pn + JS_Base64EncodedSize(len) + 2 <= cap,
+          "remote object: a navigable's identity did not fit the record sized for it — a truncated identity "
+          "names a DIFFERENT document, and the peer would resolve it to a navigable that is not the one meant");
+    n = JS_Base64Encode(out + *pn, cap - *pn, (const uint8_t *)s, len);
+    CHECK(n > 0 || len == 0, "the base64 buffer was sized wrong for a field of a navigable's identity");
+    *pn += n;
+    out[(*pn)++] = '.';
+    out[*pn] = 0;
+}
+
+static char *nav_encode(JSContext *ctx, JSValueConst nav)
+{
+    JSValue parent = window_proxy_parent_navigable(ctx, nav);
+    JSValue opener = window_proxy_opener_navigable(ctx, nav);
+    const char *f[NAV_FIELD_N];
+    size_t cap = 2, n = 1;
+    char *out;
+    int i;
+
+    f[NAV_DOC]    = world_doc_name(window_proxy_doc(nav));
+    f[NAV_ORIGIN] = origin_serialized(window_proxy_origin(nav));
+    f[NAV_NAME]   = window_proxy_name(nav);
+    f[NAV_PARENT] = nav_slot_doc(parent);
+    f[NAV_OPENER] = nav_slot_doc(opener);
+    for (i = 0; i < NAV_FIELD_N; i++) {
+        DCHECK(f[i] != NULL,
+               "a field of a navigable's identity is absent where the record has a place for it — every one of "
+               "the five is a computed fact about the navigable, so an absent one is a read that failed rather "
+               "than a navigable that has none, and \"\" is how having none is stated");
+        cap += JS_Base64EncodedSize(f[i] ? strlen(f[i]) : 0) + 2;
+    }
+    out = malloc(cap);
+    CHECK(out != NULL, "remote object: OOM naming a navigable for another agent");
+    out[0] = NAV_TAG;
+    out[1] = 0;
+    for (i = 0; i < NAV_FIELD_N; i++) nav_put(out, cap, &n, f[i] ? f[i] : "");
+    JS_FreeValue(ctx, parent);
+    JS_FreeValue(ctx, opener);
+    return out;
+}
+
+/* A parent or opener slot of an ARRIVING identity: the navigable that document name names, which this agent
+   must already hold. `none` is what the slot's absence means — JS_UNDEFINED for a parent (§7.2.5 makes a
+   top-level navigable's `parent` itself) and JS_NULL for an opener. */
+static JSValue nav_slot_resolve(JSContext *ctx, const char *doc_name, JSValue none)
+{
+    JSValue w;
+
+    if (!*doc_name) return none;
+    w = window_proxy_of_document(ctx, world_doc_intern(doc_name));
+    DCHECK(!JS_IsUndefined(w),
+           "a navigable's identity named a PARENT or OPENER navigable this agent holds no WindowProxy for. One "
+           "document name is enough to RESOLVE a navigable already known here and not enough to MINT one — a "
+           "minted parent needs its own origin, name, parent and opener, which is the identity of a second "
+           "navigable. So the CHAIN has to cross: an identity whose parent or opener is unknown here carries "
+           "that navigable's identity too, nearest first, exactly as a world carries its ancestry and for the "
+           "same reason (the far end holds some prefix of it and no more)");
+    if (JS_IsUndefined(w)) return none;
+    return w;
+}
+
+static JSValue nav_decode(JSContext *ctx, const char *text)
+{
+    char *f[NAV_FIELD_N] = {0};
+    const char *p = text + 1;
+    JSValue parent, opener, out;
+    uint32_t doc;
+    int i;
+
+    for (i = 0; i < NAV_FIELD_N; i++) {
+        const char *dot = strchr(p, '.');
+        char *slice;
+        size_t len = 0;
+
+        DCHECK(dot != NULL,
+               "a navigable's identity ran out of fields — every field is TERMINATED by a '.', so a record "
+               "that ends early was truncated in transit, and resolving the part that arrived would name a "
+               "different navigable rather than fail");
+        if (!dot) { while (i-- > 0) free(f[i]); return JS_UNDEFINED; }
+        slice = strndup(p, (size_t)(dot - p));
+        CHECK(slice != NULL, "remote object: OOM reading a navigable's identity");
+        f[i] = dec_b64(slice, &len);
+        free(slice);
+        /* EVERY FIELD IS READ AS A C STRING from here on — world_doc_intern keys the document table by one,
+           origin_parse parses one, and the browsing-context name is stored as one — so a NUL inside a field is
+           a different document, a different principal or a different name, silently. The base64 carries it
+           faithfully, which is exactly why the truncation has to be caught where the bytes are still counted. */
+        DCHECK(strlen(f[i]) == len,
+               "a field of a navigable's identity carries a NUL, and every consumer of it reads a C string — a "
+               "document name that stops early names a DIFFERENT navigable, an origin that does resolves to a "
+               "different principal, and both answer as though nothing was lost");
+        p = dot + 1;
+    }
+    DCHECK(*p == 0,
+           "a navigable's identity carried MORE than the fields this agent reads — the two sides disagree "
+           "about what a navigable IS, and the fields this one ignored are the ones the disagreement is in");
+
+    doc = world_doc_intern(f[NAV_DOC]);
+    parent = nav_slot_resolve(ctx, f[NAV_PARENT], JS_UNDEFINED);
+    opener = nav_slot_resolve(ctx, f[NAV_OPENER], JS_NULL);
+    /* THE ONE DOOR: a name this agent HOSTS resolves to its own WindowProxy, a name it has already seen
+       resolves to the proxy it minted then, and only a name it has never held is minted now. */
+    out = window_proxy_for_document(ctx, doc, origin_parse(f[NAV_ORIGIN]), f[NAV_NAME], parent, opener);
+    CHECK(!JS_IsException(out), "remote object: a navigable's WindowProxy could not be allocated");
+    JS_FreeValue(ctx, parent);
+    JS_FreeValue(ctx, opener);
+    for (i = 0; i < NAV_FIELD_N; i++) free(f[i]);
+    return out;
+}
+
 char *remote_object_encode(JSContext *ctx, JSValueConst v)
 {
     char *out;
@@ -412,22 +576,32 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
      * about `parent`, `top` and `closed`), so the Window GLOBAL is refused here on the same line as its proxy —
      * `remote.defaultView` reaches this with the peer's global and would lend the same wrong thing.
      *
-     * WHAT CROSSES INSTEAD. A navigable crosses as its IDENTITY, the way `navigable.create` and a routed
-     * message's sender already do (navigable.c, window_message.c both build a remote proxy from one): the
-     * DOCUMENT NAME, the ORIGIN's serialization, the BROWSING-CONTEXT NAME, and the PARENT's document name —
-     * that last one because window_proxy_new_remote takes a parent and a navigable minted from a bare name
-     * would answer `parent === self` and report itself a top-level traversable. The receiving side resolves the
-     * document name FIRST: a name this agent hosts is its OWN WindowProxy, not a remote one, and only a name it
-     * does not hold is minted — kept one per document, because `w[0] === w[0]` is a page-visible identity and
-     * this file already keeps one reference per (doc, id) for exactly that reason. */
-    DCHECK(!window_proxy_is(v) && !window_is(v),
-           "a NAVIGABLE was about to cross an agent boundary as a generic object reference. A WindowProxy (and "
-           "the Window global, which is the same navigable spelled the other way) must cross as its IDENTITY — "
-           "document name, origin, browsing-context name, and the PARENT's document name — and be resolved on "
-           "the far side to that agent's own WindowProxy for the document, or to a remote one minted once per "
-           "document. Lending it as `o<doc>:<id>` hands the peer a reference proxy: postMessage would become an "
-           "object.apply, §7.2.5.1's cross-origin filter would never run, and `w[0] === w.frames[0]` would be "
-           "false about one navigable");
+     * WHAT CROSSES INSTEAD — and it is nav_encode above, the way `navigable.create` and a routed message's
+     * sender already crossed one (navigable.c, window_message.c each build a remote proxy from one): the five
+     * facts that decide WHICH navigable it is. The receiving side resolves the DOCUMENT NAME first — a name
+     * this agent hosts is its OWN WindowProxy, never a remote one — and only a name it holds no proxy for at
+     * all is minted, once, because `w[0] === w[0]` is a page-visible identity and this file already keeps one
+     * reference per (doc, id) for exactly that reason. THE KEEPING IS window_proxy.c's, because a navigable's
+     * proxy is the navigable's, and its row BORROWS: core/dom/document.h refuses an OWNING table keyed by
+     * document, and correctly, since a navigable is created per `open()` per flow and owning rows would root
+     * every one the frontier ever made. A borrowed row is cleared by proxy_finalizer, so the table is the set
+     * of remote navigables still alive and keeps nothing alive itself. */
+    {
+        JSValueConst nav = window_proxy_navigable_of(ctx, v);   /* the two spellings, resolved in one place */
+
+        if (!JS_IsUndefined(nav)) return nav_encode(ctx, nav);
+        /* AND THE THIRD SPELLING IS NOT ONE. An instance is an origin-keyed agent CLUSTER, so a Window global
+           of ANOTHER realm of this agent can reach here — and it is a navigable this file cannot name, because
+           window_proxy_navigable_of resolves a global against the realm it was handed. Crossing it as an
+           object would lend that navigable as `o<doc>:<id>`, which is the whole failure above. */
+        DCHECK(!window_is(v),
+               "a Window global of another realm of THIS agent was about to cross an agent boundary as a "
+               "generic object reference. It is a navigable and must cross as its IDENTITY, but the mapping "
+               "from a global to its navigable is asked of the realm the encoder was handed, and this value "
+               "belongs to a different one. Reach the navigable from the WINDOW rather than from the realm — "
+               "the global's own realm is what document_window_proxy is keyed on — or encode in the realm the "
+               "value came out of, which is what flow_answer_perform already does for the value it answers");
+    }
     if (JS_IsObject(v)) {
         /* AN OBJECT CROSSES AS ITS NAME, AND THE NAME SAYS WHOSE. A value that is ALREADY a reference re-emits
            the name it arrived with — exporting the proxy instead would make a round trip a proxy of a proxy,
@@ -491,6 +665,9 @@ JSValue remote_object_decode(JSContext *ctx, const char *text)
         CHECK(!JS_IsException(s), "remote object: OOM resolving a registered symbol from another agent");
         return s;
     }
+    /* A NAVIGABLE, WHICH IS AN IDENTITY AND NEVER A REFERENCE — see nav_decode and the block above the
+       encoder's own refusal to lend one. */
+    case NAV_TAG: return nav_decode(ctx, text);
     case 'o': case 'f': case 'c': {
         const char *colon = strrchr(text + 1, ':');
         char *doc_name;

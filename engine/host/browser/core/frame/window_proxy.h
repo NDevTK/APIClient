@@ -53,13 +53,34 @@ bool window_proxy_is_popup(JSValueConst proxy);
    knows the answer is "" and says so. */
 JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name);
 
-/* A proxy over a navigable whose active document lives in ANOTHER WASM instance. It carries no Window — there
-   is no local object to hold — so every read through it is a cross-document operation the flow suspends on. */
-/* `name` is the BROWSING CONTEXT's name (the iframe element's `name` attribute, or §7.4's target), NULL for
-   none. `parent` is the parent navigable — this instance's own Window for a child navigable, JS_UNDEFINED for a
-   top-level one — and `opener` is §7.2.5's, JS_NULL when the navigable was not opened by a script. */
-JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origin *origin, const char *name,
-                                JSValueConst parent, JSValueConst opener);
+/* THE ONE WindowProxy FOR A DOCUMENT — this agent's own when it hosts it, and otherwise a proxy over a
+   navigable whose active document lives in ANOTHER WASM instance, minted here on the first ask and answered
+   from a table on every ask after it. A remote one carries no Window — there is no local object to hold — so
+   every read through it that reaches the active document is a cross-document operation the flow suspends on.
+   IT IS ONE DOOR BECAUSE IDENTITY IS ONE FACT. `w[0] === w[0]`, `w.frames[0] === iframe.contentWindow` and
+   `event.source === event.source` are page-visible identities over one navigable, and every one of them is
+   false the moment two call sites each mint their own proxy for it — which is what the two mint sites this
+   replaced did, one per created navigable and one per delivered message. A navigable arriving as an IDENTITY
+   from a peer (core/frame/remote_object.c) resolves through this same door, so a name that comes home lands on
+   the object this agent already had.
+   `name` is the BROWSING CONTEXT's name (the iframe element's `name` attribute, or §7.4's target), NULL for
+   none. `parent` is the parent navigable — this instance's own WindowProxy for a child navigable, JS_UNDEFINED
+   for a top-level one — and `opener` is §7.2.5's, JS_NULL when the navigable was not opened by a script. All
+   three describe the navigable at its FIRST ask; a later ask answers with the proxy that already exists,
+   because the DOCUMENT is the identity and these are its state. */
+JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *origin, const char *name,
+                                  JSValueConst parent, JSValueConst opener);
+
+/* THE WindowProxy THIS AGENT ALREADY HOLDS FOR `doc`, or JS_UNDEFINED when it holds none — the half of the
+   door above that may not mint, for a caller that has a document NAME and nothing else to build one from (an
+   arriving identity's parent and opener slots). Owned on a hit. */
+JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc);
+
+/* THE NAVIGABLE A VALUE NAMES, whichever of its two spellings it is: the value itself when it IS a
+   WindowProxy, and the asking realm's WindowProxy when it is that realm's Window GLOBAL — win_or_proxy's
+   mapping read the other way round, stated here so a caller that must not tell the two apart (an encoder
+   handing a navigable to another agent) cannot. JS_UNDEFINED when the value is neither. BORROWED. */
+JSValueConst window_proxy_navigable_of(JSContext *ctx, JSValueConst v);
 
 /* §7.2.5.2's IS CLOSING. The proxy a page is holding stays the object it was — the spec files check that it
    does — and reports `closed` from here on. Captured into the RUNNING FLOW's delta, so a sibling arm that
@@ -174,6 +195,11 @@ JSValue window_proxy_parent(JSContext *ctx, JSValueConst proxy);
 /* THE NAVIGABLE THIS ONE IS NESTED IN, for an ENGINE walk rather than for `window.parent`: JS_UNDEFINED at the
    top instead of the proxy itself, because a walk up the tree wants "nothing above this". Owned. */
 JSValue window_proxy_parent_navigable(JSContext *ctx, JSValueConst proxy);
+/* AND §7.2.5's `opener` AS THE NAVIGABLE IT IS, for the same reason: `opener` maps this document's own
+   navigable onto the GLOBAL, which is the right answer for a page reading the member and the wrong one for an
+   engine walk — a Window is not a WindowProxy, so a walk handed it asks "is this a proxy", is told no, and
+   silently walks nothing. JS_NULL when the navigable was not opened by a script. Owned. */
+JSValue window_proxy_opener_navigable(JSContext *ctx, JSValueConst proxy);
 JSValue window_proxy_top_of(JSContext *ctx, JSValueConst proxy);
 /* THE TOP-LEVEL TRAVERSABLE'S NAVIGABLE, which is NOT what `top` answers and that difference is load-bearing.
    `window.top` of the asking realm's own navigable is that realm's GLOBAL, because `window === window.top` is

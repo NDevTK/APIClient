@@ -279,8 +279,12 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
     /* THE STAMPED SERIALIZATION BECOMES A RECORD HERE, and it is the peer's own: origin_parse mints a fresh
        opaque origin for "null", so a sandboxed peer is same origin with nothing on this side — which is right,
        since two Documents sharing ONE opaque origin share an agent cluster and therefore an instance. */
-    source = window_proxy_new_remote(ctx, world_doc_intern(sender_doc), origin_parse(sender_origin), NULL,
-                                     JS_UNDEFINED, JS_NULL);
+    /* THROUGH THE ONE DOOR, which is also the fix for an identity this file was quietly breaking: a fresh
+       proxy per delivery made `a.source === b.source` false for two messages from ONE document, and a reply
+       posted back through the second reached the same navigable by a second name. The FIRST delivery from a
+       document mints; every one after it answers with that object. */
+    source = window_proxy_for_document(ctx, world_doc_intern(sender_doc), origin_parse(sender_origin), NULL,
+                                       JS_UNDEFINED, JS_NULL);
     CHECK(!JS_IsException(source), "the sending document's WindowProxy could not be allocated");
     JS_SetPropertyUint32(ctx, entry, PQ_DATA, buf);
     /* NO HOLDERS ARRIVE, because none can be SENT: window_message_send_remote aborts on a transfer rather than
