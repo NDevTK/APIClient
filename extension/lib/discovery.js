@@ -1,8 +1,18 @@
-// What is LEFT of this file is three components with three different consumers, and none of them is the
+// What is LEFT of this file is TWO components with two different consumers, and neither of them is the
 // discovery FETCH any more:
 //   * schema resolution for the Send panel   (findDiscoveryMethod / findMethodById / resolveDiscoverySchema)
 //   * response-asset classification          (classifyResponseAsset — lib/response-decode.js)
-//   * the React Server Components parser     (isRSC / looksLikeRSC / parseRSC — lib/learn.js)
+//
+// The React Server Components parser was the third and is gone — see the note at the foot of this file. What
+// keeps the other two here is their CONSUMERS, which is the ordering jsaudit.mjs's own ledger header states:
+// "a producer whose consumers still live in JS is not first, because moving it makes every call it serves
+// cross the JS↔WASM boundary the architecture rule exists to delete." There is no host→engine compute edge in
+// this architecture and there must not be one — the engine is the driver, the bridge relays. So the classifier
+// leaves with lib/response-decode.js (jsaudit step 2 → reply_decode.c), whose `_isAsset` / `_isBoringFetch`
+// gate its every learning call; and the schema half leaves with lib/send.js (step 7 → moat.c), which is what
+// the Send panel actually asks. Its ALGORITHM is already in C on the engine's own side of that line: the
+// WHATWG MIME Sniffing standard is core/mime/mime_sniff.c, and the schema of an engine-fetched discovery
+// document is read by engine/host/solver/discovery.c.
 //
 // THE CANDIDATE SET AND ITS FETCH LOOP ARE GONE TO engine/host/solver/discovery.c. `buildDiscoveryUrls` stood
 // here and `fetchDiscoveryForService` (lib/discovery-probe.js, deleted with it) walked its candidates in a
@@ -372,10 +382,19 @@ function mapJsonSchemaType(prop) {
 // media has no JSON/protobuf schema to learn, so we skip response parsing
 // and annotate the method entry with the detected media type.
 //
-// Nothing is hidden from the user — every captured response appears in the
-// log with its _assetKind / _assetLabel so a signed-URL photo endpoint,
-// avatar API, or CDN asset is all visible. The classifier just prevents the
-// extension from synthesizing a response schema from random bytes.
+// Nothing is hidden from the user — every captured response is logged whatever
+// this answers; the classifier only decides how much schema to synthesize
+// around it. (This paragraph used to say the log carried each response's
+// `_assetKind` / `_assetLabel`. It never did: response-decode.js wrote both
+// fields and nothing on either side of the popup boundary read them, so the
+// sentence described a surface that did not exist. Both writes are deleted.)
+//
+// THIS COMPONENT IS SUPERSEDED AND IS WAITING FOR ITS CALLER. What it does is
+// the WHATWG MIME Sniffing standard, and that standard is implemented in C at
+// engine/host/browser/core/mime/mime_sniff.c — §6's pattern tables and §7's
+// sniffing algorithm, read by engine/host/solver/reply_decode.c. The hand-
+// rolled table below survives only because lib/response-decode.js is still JS
+// and calls it; it goes out with that file at jsaudit step 2. Do not extend it.
 //
 // Sniff magic bytes on a Uint8Array. Returns a MIME-like label or null.
 function sniffBinaryMagic(bytes) {
@@ -542,130 +561,16 @@ function classifyResponseAsset(responseBody, responseBase64, opts) {
 if (typeof self !== "undefined") {
   self.sniffBinaryMagic = sniffBinaryMagic;
   self.classifyResponseAsset = classifyResponseAsset;
-  self.deriveGraphQLMethodName = deriveGraphQLMethodName;
 }
 
-// ─── React Server Components (RSC) ─────────────────────────────────────────
+// ─── React Server Components — GONE TO engine/host/solver/reply_decode.c ────────────────────────────────
 //
-// Next.js apps (Vercel, many modern SSR sites) stream RSC payloads with
-// Content-Type `text/x-component`. Format is line-framed:
-//
-//    <id>:<payload>\n
-//    <id>:<payload>\n
-//    ...
-//
-// Where <id> is a hex integer and <payload> is one of:
-//
-//    I[moduleId, [chunks], exportName]       — module import reference
-//    HL["href", ...]                          — preload link hint
-//    E[errorId, "message"]                    — error
-//    T<length>,<text>                         — text segment
-//    S<id>:<name>                             — symbol reference ($Sreact.fragment)
-//    <JSON>                                   — element tree or plain value
-//
-// Spec discussion: reactwg/server-components#5. Treated by the extension as
-// a first-class protocol so schemas are learned from the JSON-tree rows
-// instead of being garbage-merged as if the entire payload were one JSON
-// body.
-
-function isRSC(contentType) {
-  if (!contentType) return false;
-  const ct = contentType.toLowerCase().split(";")[0].trim();
-  return ct === "text/x-component" || ct === "application/x-component";
-}
-
-// Quick body-sniff for RSC. Used when the server sends a generic
-// Content-Type but the body clearly matches the line-framed shape.
-function looksLikeRSC(bodyText) {
-  if (!bodyText || typeof bodyText !== "string") return false;
-  const head = bodyText.slice(0, 512);
-  // First line must look like `<hex>:<payload>`.
-  const m = head.match(/^[0-9a-f]+:/);
-  if (!m) return false;
-  // Second line should also match (helps avoid JSON `{"1":...}` false positives).
-  const lines = head.split(/\r?\n/);
-  if (lines.length < 2) return false;
-  return /^[0-9a-f]+:/.test(lines[1]) || lines[1].length === 0;
-}
-
-// Parse one RSC row's payload into a typed record. Returns
-// { type, value, raw } where type is one of:
-//   "module" | "hint" | "error" | "text" | "symbol" | "json" | "unknown"
-function _parseRSCPayload(payload) {
-  if (typeof payload !== "string") return { type: "unknown", value: null, raw: payload };
-  const p = payload;
-  if (p.startsWith("I[")) {
-    // I[moduleId, [chunks], exportName]
-    try { return { type: "module", value: JSON.parse(p.slice(1)), raw: p }; }
-    catch (_) { return { type: "module", value: null, raw: p }; }
-  }
-  if (p.startsWith("HL[")) {
-    try { return { type: "hint", value: JSON.parse(p.slice(2)), raw: p }; }
-    catch (_) { return { type: "hint", value: null, raw: p }; }
-  }
-  if (p.startsWith("E[")) {
-    try { return { type: "error", value: JSON.parse(p.slice(1)), raw: p }; }
-    catch (_) { return { type: "error", value: null, raw: p }; }
-  }
-  if (p.length >= 2 && p[0] === "T" && /[0-9]/.test(p[1])) {
-    // T<hexLen>,<text>
-    const commaIdx = p.indexOf(",");
-    if (commaIdx > 0) {
-      const hex = p.slice(1, commaIdx);
-      if (/^[0-9a-f]+$/i.test(hex)) {
-        return { type: "text", value: p.slice(commaIdx + 1), raw: p, length: parseInt(hex, 16) };
-      }
-    }
-  }
-  if (p.startsWith("\"$S") && p.endsWith("\"")) {
-    return { type: "symbol", value: p.slice(3, -1), raw: p };
-  }
-  // Fall through: attempt JSON parse.
-  try {
-    const v = JSON.parse(p);
-    return { type: "json", value: v, raw: p };
-  } catch (_) {
-    return { type: "unknown", value: null, raw: p };
-  }
-}
-
-// Parse an RSC stream body.
-// Returns { rows: [{id, type, value, raw, length?}], modules: [{moduleId, chunks, exportName}] }
-// or null if the body isn't parseable as RSC.
-function parseRSC(bodyText) {
-  if (!bodyText || typeof bodyText !== "string") return null;
-  if (!isRSC("text/x-component") && !looksLikeRSC(bodyText)) {
-    // Caller will typically check isRSC(contentType) first; the second guard
-    // is there for callers that feed us sniffed bodies.
-  }
-  const lines = bodyText.split(/\r?\n/);
-  const rows = [];
-  const modules = [];
-  for (const line of lines) {
-    if (!line) continue;
-    const colon = line.indexOf(":");
-    if (colon <= 0) continue;
-    const idStr = line.slice(0, colon);
-    if (!/^[0-9a-f]+$/i.test(idStr)) continue;
-    const payload = line.slice(colon + 1);
-    const parsed = _parseRSCPayload(payload);
-    const row = { id: idStr, ...parsed };
-    rows.push(row);
-    if (parsed.type === "module" && Array.isArray(parsed.value)) {
-      // [moduleId, [chunks], exportName]
-      modules.push({
-        moduleId: parsed.value[0],
-        chunks: parsed.value[1] || [],
-        exportName: parsed.value[2] || null,
-      });
-    }
-  }
-  if (rows.length === 0) return null;
-  return { rows, modules };
-}
-
-if (typeof self !== "undefined") {
-  self.isRSC = isRSC;
-  self.looksLikeRSC = looksLikeRSC;
-  self.parseRSC = parseRSC;
-}
+// `isRSC` / `looksLikeRSC` / `parseRSC` parsed a React Flight stream (`text/x-component`, line-framed
+// `<hex row id>:<payload>`) so lib/learn.js could register each client reference's chunk as an endpoint and
+// merge the json rows into a response schema. The ENDPOINT half is the @H surface and is now learned in the
+// engine, at `engine_provide` — the one point every fetched reply crosses exactly once — keyed on the reply's
+// COMPUTED MIME type (WHATWG MIME Sniffing, core/mime/mime_sniff.c). `looksLikeRSC` did not move at all: it
+// guessed the protocol from a body whose first two lines matched `^[0-9a-f]+:`, which is also the shape of a
+// JSON object keyed by digits, and CLAUDE.md §RUN, DON'T MATCH names that ("no regex/name/identifier
+// matching, scoring, heuristics"). The schema half went with learn.js's branch, into the moat the engine is
+// taking over at jsaudit step 4 rather than being re-hosted twice.

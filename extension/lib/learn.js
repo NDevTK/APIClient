@@ -1471,64 +1471,14 @@ function learnFromResponse(documentId, interfaceName, entry) {
     } catch (e) {
       console.debug("[brain] multipart batch parse failed:", e && e.message || e, "url=" + entry.url);
     }
-  } else if (isRSC(mimeType) || (mimeType === "" && looksLikeRSC(textBody))) {
-    // React Server Components stream: line-framed `<id>:<payload>`. Each
-    // json-typed row carries structured data; module-typed rows catalog
-    // imported JS bundles (real endpoints the page will fetch). We learn
-    // the shape of json rows (merged into one response schema) and record
-    // module URLs so they show up in the endpoints list.
-    try {
-      const rsc = parseRSC(textBody);
-      if (rsc && rsc.rows.length) {
-        const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Response`;
-        targetM.response = { $ref: schemaName };
-        for (const row of rsc.rows) {
-          if (row.type === "json" && row.value && typeof row.value === "object") {
-            const newSchema = generateSchemaFromJson(row.value, schemaName, doc.schemas);
-            mergeSchemaInto(doc, schemaName, newSchema);
-          }
-          if (row.type === "error" && Array.isArray(row.value) && typeof row.value[1] === "string") {
-            extractKeysFromText(documentId, row.value[1], entry.url, "rsc_error");
-          }
-        }
-        // Register module chunks as endpoints so the user sees the JS
-        // bundles the page will fetch for this route. Same pattern as
-        // AST-discovered call sites.
-        try {
-          for (const mod of rsc.modules) {
-            if (!Array.isArray(mod.chunks)) continue;
-            for (const chunk of mod.chunks) {
-              if (typeof chunk !== "string" || !chunk.startsWith("/")) continue;
-              const chunkHost = url.host;
-              const epKey = `RSC GET ${chunkHost}${chunk}`;
-              if (!tab.endpoints.has(epKey)) {
-                tab.endpoints.set(epKey, {
-                  url: url.origin + chunk,
-                  method: "GET",
-                  host: chunkHost,
-                  path: chunk,
-                  service: interfaceName,
-                  source: "rsc_module",
-                  pageUrl: entry.url,
-                  firstSeen: Date.now(),
-                });
-              }
-            }
-          }
-        } catch (e) {
-          /* RSC module-chunk registration failed — likely a malformed
-             rsc.modules entry. The response schema still got learned
-             above. Surface so a chunk-discovery gap on RSC bundles
-             (Next.js app router, etc.) is visible. */
-          console.debug("[brain] RSC module-chunk registration failed:", e && e.message || e, "url=" + entry.url);
-        }
-      }
-    } catch (e) {
-      /* RSC parse failed — malformed stream or non-RSC content that
-         looksLikeRSC false-positived. Surface so the schema-learning
-         skip is observable. */
-      console.debug("[brain] RSC parse failed:", e && e.message || e, "url=" + entry.url);
-    }
+  /* THE `text/x-component` BRANCH IS GONE TO engine/host/solver/reply_decode.c. It parsed a React Flight
+     stream here and did two things with it: registered every client reference's chunk as an endpoint, and
+     merged each json row's shape into a synthesized response schema. The FIRST is the @H surface, and the
+     engine now learns it at engine_provide — the one point every reply crosses once — from the reply's
+     COMPUTED MIME type rather than from `looksLikeRSC`, a two-line regex over the body that fired whenever the
+     Content-Type was empty and the payload looked like a JSON object keyed by digits (§RUN, DON'T MATCH). The
+     SECOND is this file's own duplicate of the moat the engine is taking over (jsaudit step 4), so it goes
+     with the rest of it rather than being re-hosted twice. */
   } else if (isGraphQLUrl(url.href) && mimeType.includes("json")) {
     // GraphQL response: extract data/errors structure
     try {

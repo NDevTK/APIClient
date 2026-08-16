@@ -35,12 +35,19 @@ char *mime_type_essence(const MimeType *m);
    ASCII-lowercase. The returned string is the record's own — it dies with the record. */
 const char *mime_type_parameter(const MimeType *m, const char *name);
 
-/* §4.6's MIME TYPE GROUPS. Only the two groups this engine's algorithms branch on are here: XHR §3.6.6's "set
-   a document response" tests exactly these. The other groups (image, audio-or-video, font, ZIP-based, archive,
-   JSON, JavaScript) are ABSENT rather than written out unused — each belongs with the algorithm that first
-   needs to branch on it, and idlgen cannot audit a group nobody calls. */
+/* §4.6's MIME TYPE GROUPS. Only the groups this engine's algorithms branch on are here — each arrives with the
+   algorithm that first needs it, and a group nobody calls is a table no gate can audit. XHR §3.6.6's "set a
+   document response" tests HTML and XML; §7's MIME type sniffing tests XML, HTML, image and audio-or-video
+   (core/mime/mime_sniff.c); solver/reply_decode.c tests image, audio-or-video, font, ZIP-based and archive to
+   decide whether a reply body has any structure to learn from. The JSON and JavaScript groups are still ABSENT
+   — nothing branches on them yet. */
 bool mime_type_is_html(const MimeType *m);
 bool mime_type_is_xml(const MimeType *m);
+bool mime_type_is_image(const MimeType *m);
+bool mime_type_is_audio_or_video(const MimeType *m);
+bool mime_type_is_font(const MimeType *m);
+bool mime_type_is_zip_based(const MimeType *m);
+bool mime_type_is_archive(const MimeType *m);
 
 /* Fetch §2.2.3 "extract a MIME type", over the `Content-Type` value as "get a header" has already joined the
    list's duplicates (0x2C 0x20 between them) — which is exactly the string Fetch §2.2's "get, decode, and

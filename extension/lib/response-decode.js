@@ -369,8 +369,14 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     responseType: msg.responseType || null,
     responseContentType: (msg.responseHeaders && (msg.responseHeaders["content-type"] || msg.responseHeaders["Content-Type"])) || null,
   });
-  entry._assetKind = _assetClass.kind;     // "asset" | "empty" | "api"
-  entry._assetLabel = _assetClass.label;   // e.g. "image/png" when asset
+  /* `entry._assetKind`, `entry._assetLabel` and `entry._boring` USED TO BE WRITTEN HERE AND WERE READ BY
+     NOTHING — not by this file, not by learn.js, not by serialize.js, and not by the popup, which receives
+     every log entry whole and rendered neither of them. Three fields written on every captured response for
+     the whole life of this file, and the comment above claimed the first two were how a signed-URL photo
+     endpoint stayed "visible in the log". CLAUDE.md §Offensive-programming states the mirror rule — "a name
+     that is READ somewhere and WRITTEN nowhere is a broken contract" — and this is the same contract broken
+     from the other end: a producer nobody consumes reads as a capability the surface has. The two locals below
+     are the live half; they gate every learning call in this function. */
   const _isAsset = _assetClass.kind === "asset";
   const _isBoringFetch = _isAsset &&
     msg.method === "GET" &&
@@ -379,7 +385,6 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     !authorization &&
     !cookie &&
     !apiKey;
-  entry._boring = _isBoringFetch;
 
   // Decode request body (protobuf/JSPB/JSON) — must happen BEFORE
   // learnFromRequest so entry.isJson / entry.decodedBody are set when

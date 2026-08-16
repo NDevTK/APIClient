@@ -341,7 +341,15 @@ char *mime_type_serialize(const MimeType *m)
     return b.p;
 }
 
-/* ---- §4.6's two groups this engine branches on ---------------------------------------------------------- */
+/* ---- §4.6's groups this engine branches on -------------------------------------------------------------- */
+
+/* Every group below is stated in terms of the record's TYPE or its ESSENCE, exactly as §4.6 states it, so an
+   essence test is a compare of both halves rather than a serialize-then-strcmp: a record carrying parameters
+   would otherwise answer "no" to its own group because `charset` was appended to the string being compared. */
+static bool essence_is(const MimeType *m, const char *type, const char *subtype)
+{
+    return m->type && m->subtype && !strcmp(m->type, type) && !strcmp(m->subtype, subtype);
+}
 
 bool mime_type_is_html(const MimeType *m)
 {
@@ -356,6 +364,51 @@ bool mime_type_is_xml(const MimeType *m)
     n = strlen(m->subtype);
     if (n > 4 && !strcmp(m->subtype + n - 4, "+xml")) return true;
     return !strcmp(m->subtype, "xml") && (!strcmp(m->type, "text") || !strcmp(m->type, "application"));
+}
+
+bool mime_type_is_image(const MimeType *m)
+{
+    return m->type && !strcmp(m->type, "image");
+}
+
+bool mime_type_is_audio_or_video(const MimeType *m)
+{
+    if (m->type && (!strcmp(m->type, "audio") || !strcmp(m->type, "video"))) return true;
+    return essence_is(m, "application", "ogg");
+}
+
+/* §4.6's font group is `type` "font" OR one of seven legacy essences [RFC8081] — the `application/font-*` names
+   that predate the `font` tree, plus Microsoft's two. They are listed rather than pattern-matched on the
+   `font-` prefix, because `application/font-woff` is in the group and an `application/font-anything` a server
+   invents tomorrow is not. */
+bool mime_type_is_font(const MimeType *m)
+{
+    static const char *const LEGACY[] = { "font-cff", "font-otf", "font-sfnt", "font-ttf", "font-woff",
+                                          "vnd.ms-fontobject", "vnd.ms-opentype", NULL };
+    int i;
+
+    if (m->type && !strcmp(m->type, "font")) return true;
+    if (!m->type || !m->subtype || strcmp(m->type, "application")) return false;
+    for (i = 0; LEGACY[i]; i++)
+        if (!strcmp(m->subtype, LEGACY[i])) return true;
+    return false;
+}
+
+bool mime_type_is_zip_based(const MimeType *m)
+{
+    size_t n;
+
+    if (!m->type || !m->subtype) return false;
+    n = strlen(m->subtype);
+    if (n > 4 && !strcmp(m->subtype + n - 4, "+zip")) return true;
+    return essence_is(m, "application", "zip");
+}
+
+bool mime_type_is_archive(const MimeType *m)
+{
+    return essence_is(m, "application", "x-rar-compressed") ||
+           essence_is(m, "application", "zip") ||
+           essence_is(m, "application", "x-gzip");
 }
 
 /* ---- Fetch §2.2.3 "extract a MIME type" ----------------------------------------------------------------- */

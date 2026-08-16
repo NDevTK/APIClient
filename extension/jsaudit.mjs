@@ -42,7 +42,20 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
    script array the CONTENT_HTML handler stopped filling when the engine started sourcing its own scripts. None
    of it moved to result.c: a sink's location is a fact only the running engine holds, and the host's version
    was filing every finding under the first script. The surviving ~40-line handoff sits beside the handler that
-   writes the buffer, in offscreen-brain.js, whose own row already queues it. */
+   writes the buffer, in offscreen-brain.js, whose own row already queues it.
+
+   STEP 1 IS GONE THE SAME WAY, AND WHAT IT TAUGHT IS THE ORDERING RULE ABOVE, PAID FOR. `lib/discovery.js` sat
+   at step 1 holding three components, and its own `why` already said the opposite of its `step`: "what decides
+   the next move is the CONSUMER". Checked against the tree, all three had a LIVE JS consumer — the classifier
+   gates every learning call in response-decode.js through `_isAsset`/`_isBoringFetch`, the RSC parser fed
+   learn.js, and the schema half answers the Send panel — so a whole-file move could only have been completed
+   by inventing a host→engine COMPUTE call, which this architecture does not have and must not grow: the engine
+   is the driver and the bridge relays. What DID move is the part that needed no JS caller at all, because the
+   engine already holds the input: React Flight is now read at `engine_provide`, the one point every fetched
+   reply crosses exactly once, and the magic-byte classifier's ALGORITHM became the standard it was a
+   hand-rolled copy of (core/mime/mime_sniff.c, WHATWG MIME Sniffing §6/§7). The remainder is re-stepped to the
+   files that call it. A row's step is a claim about THIS tree, so a step that disagrees with its own reason is
+   the stale-DFAIL failure mode wearing a number. */
 const LEDGER = [
   // ── BRIDGE — irreducible platform edge ───────────────────────────────────────────────────────────────
   { f: "bridge.js", zone: "BRIDGE:1,2,5",
@@ -71,14 +84,20 @@ const LEDGER = [
   { f: "lib/popup-console.js", zone: "BRIDGE:4", why: "WS/postMessage console." },
 
   // ── LOGIC / MIXED — the queue ────────────────────────────────────────────────────────────────────────
-  { f: "lib/discovery.js", zone: "LOGIC", step: 1, dest: "engine/host/solver/discovery.c",
-    why: "THREE COMPONENTS LEFT, and the file's own header now names them: schema resolution for the Send " +
-         "panel (findDiscoveryMethod/resolveDiscoverySchema), classifyResponseAsset (read by " +
-         "lib/response-decode.js), and the RSC parser (read by lib/learn.js). The FETCH half moved: the " +
-         "candidate set is engine/host/solver/discovery.c and the engine seeds a probe FLOW per candidate on " +
-         "the one frontier, so lib/discovery-probe.js is deleted and its row with it. What decides the next " +
-         "move is the CONSUMER: the schema half is the popup's, so it goes with the Send panel's own step, " +
-         "while classifyResponseAsset and the RSC parser are callees of step 2's reply_decode.c." },
+  { f: "lib/discovery.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c + moat.c",
+    why: "TWO COMPONENTS LEFT and they belong to two different steps, which is why this row is no longer " +
+         "step 1: the RSC parser was the third and is GONE (React Flight is read in the engine at " +
+         "engine_provide; `looksLikeRSC` was a body-shape guess §RUN, DON'T MATCH forbids and did not move). " +
+         "What is left is classifyResponseAsset — whose `_isAsset`/`_isBoringFetch` gate every learning call " +
+         "in lib/response-decode.js, so it moves WITH that file, here at step 2 — and the Send panel's schema " +
+         "resolution (findDiscoveryMethod/findMethodById/resolveDiscoverySchema), whose consumers are " +
+         "lib/send.js and the popup, so it leaves at step 7. Neither could go earlier: this ledger's own rule " +
+         "is that a producer whose consumers still live in JS is not first, and there is no host→engine " +
+         "COMPUTE edge for a JS caller to reach a moved callee through — the engine is the driver and adding " +
+         "one would be the orchestration layer inverted. The ALGORITHMS are already in C: the magic-byte " +
+         "classifier's standard is core/mime/mime_sniff.c (WHATWG MIME Sniffing §6/§7, which also deletes the " +
+         "JS's invented SVG/CSS/VTT/HLS/DASH sniffs), and a discovery document's schema graph is read by " +
+         "engine/host/solver/discovery.c." },
   { f: "lib/protobuf.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
     why: "a wire CODEC. §A JS-engine encoding builtin is modeled FAITHFULLY — the engine runs the real codec; a second one in JS is the redundant layer." },
   { f: "lib/protocol-parsers.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",

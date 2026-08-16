@@ -23,6 +23,7 @@
 #include "solver/reclaim.h"   /* …and its RAM edge: which allocators can sell a flow rather than fail */
 #include "solver/req2proto.h" /* an API's own rejection is a description of the request it wanted — see engine_provide */
 #include "solver/discovery.h" /* …and an API's own PUBLISHED description: the flow this engine seeds to fetch one */
+#include "solver/reply_decode.h" /* …and what the reply BODY itself teaches — see engine_provide */
 #include "solver/endpoint.h"    /* the @H surface, and one of the three tables no leak walk in this runtime can see */
 #include "solver/attr_shadow.h" /* …and the taint shadow, whose entries ARE GC objects and are leaked by two hosts */
 #include "check.h"
@@ -1090,6 +1091,13 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
        A method-less entry is a park with no request record at all (a docscript or an injected <script src>);
        those are code, never an error envelope, and GET is what the host performed for them. */
     if (n) req2proto_learn(ctx, method[0] ? method : "GET", url, value);
+    /* AND THE REPLY'S OWN CONTENT, at the same one point and for the same reason (solver/reply_decode.h). The
+       rejection envelope above is what the server says about the request it WANTED; this is what the body says
+       about the addresses the page will go on to fetch — a React Flight payload's client references name the
+       route chunks of routes nobody navigated to. Beside it rather than inside it: an error envelope and a
+       protocol body are two different readings of one record, and folding them would make a component that
+       learns nothing from a 200 the gatekeeper of one that learns most of what it knows from them. */
+    if (n) reply_decode_learn(ctx, url, value);
     return n;
 }
 /* Resolve every pending fetch this flow issued (the network completed). Returns how many were drained. */
