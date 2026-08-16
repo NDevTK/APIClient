@@ -33,7 +33,10 @@
  *
  * THE CASCADE IS RESOLVED LIVE, per read, from THE RUNNING FLOW'S OWN OBJECTS: inline, then the author rules of
  * the CSS STYLE SHEETS in §6.2's list for this element's root — the sheet objects a page holds, whose rules it
- * inserts, deletes and retargets — then the UA default, then the property's initial value. Nothing is cached
+ * inserts, deletes and retargets — then css-cascade-5 §6.5's AUTHOR PRESENTATIONAL HINT ORIGIN
+ * (core/css/css_presentational_hints.h, which is where HTML's own markup enters the cascade and why it is an
+ * origin of its own rather than a row of the UA table), then the UA default, then the property's initial value.
+ * The order IS §6.1's origin precedence and each layer is asked once. Nothing is cached
  * across a read, because a cache would be shared state that the flow machinery does not swap; and reading the
  * OBJECTS rather than re-parsing each `<style>` element's text is what makes the objects load-bearing instead
  * of inert, which is the whole of why §6.1, §6.2 and §6.4 exist.
@@ -61,6 +64,7 @@
 #include "core/dom/element.h"
 #include "core/dom/selector_match.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_presentational_hints.h"
 #include "core/css/css_rule.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
@@ -988,7 +992,7 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
     return n;
 }
 
-/* LAYER 3 — the UA DEFAULT. A headless run still has a user-agent stylesheet, and `display` is the property a
+/* LAYER 4 — the UA DEFAULT. A headless run still has a user-agent stylesheet, and `display` is the property a
    bundle actually branches on. Modelling it is the difference between answering the spec's value and shrugging;
    what is NOT here — the rest of html.css — is honestly absent and reads as the property's initial value. */
 static const struct { const char *tag; const char *prop; const char *value; } UA_DEFAULT[] = {
@@ -1081,7 +1085,7 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
     { "border-bottom-style", "none" }, { "border-left-style", "none" },
 };
 
-/* LAYER 4 — the property's INITIAL value, straight out of Lexbor's registry, which is where the spec's own
+/* LAYER 5 — the property's INITIAL value, straight out of Lexbor's registry, which is where the spec's own
    initial values live, and out of the table above for the properties it has no entry for. */
 static char *cssd_initial_value(const char *name)
 {
@@ -1130,6 +1134,11 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
     v = cssd_inline_value(el, name, NULL);
     if (v) return v;
     v = cssd_author_value(el, name);
+    if (v) return v;
+    /* LAYER 3 — css-cascade-5 §6.5's AUTHOR PRESENTATIONAL HINT ORIGIN, "between the regular user origin and
+       the author origin". It is asked HERE and not as a row of the UA table below because that is where the
+       origin sits: an author rule of any specificity outranks a hint, and a hint outranks the UA sheet. */
+    v = css_presentational_hint(el, name);
     if (v) return v;
     {
         const char *ua = cssd_ua_value(el, name);

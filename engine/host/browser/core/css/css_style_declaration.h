@@ -8,7 +8,8 @@
 #include "quickjs.h"
 
 void cssom_init(JSContext *ctx);
-/* THE CASCADE'S WINNER for `name` on `el` — inline, then this flow's author rules, then the UA sheet, then the
+/* THE CASCADE'S WINNER for `name` on `el` — inline, then this flow's author rules, then css-cascade-5 §6.5's
+   author presentational hint origin (core/css/css_presentational_hints.h), then the UA sheet, then the
    property's initial value — as text. It is the SPECIFIED value: the declaration that won, before the
    property's own `Computed value:` line has been applied to it, which is core/css/css_computed_value.h's job
    and is who this exists for. OWNED: the caller frees. NULL only for a property no layer declares and that has
