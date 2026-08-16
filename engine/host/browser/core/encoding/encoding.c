@@ -20,6 +20,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "solver/cow.h"
 #include "core/encoding/encoding.h"
 #include "core/encoding/encoding_table.h"
 #include "core/idl_args.h"
@@ -915,6 +916,16 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
     if (JS_IsException(view)) return JS_EXCEPTION;
     dst = JS_GetArrayBuffer(ctx, &whole, view);
     if (!dst) { JS_FreeValue(ctx, view); return JS_EXCEPTION; }
+    /* forced-exec TIME-TRAVEL: THE BYTES BELOW ARE THE PAGE'S OWN BUFFER, so they are shared state and the
+       running flow's delta must hold them before the first one changes. The engine routes every typed-array
+       and DataView writer of its own through cow_capture_bytes, and nothing in it can see THIS write — a host
+       component was handed a raw pointer, so `enc.encodeInto(s, sharedU8)` left one flow's bytes standing in
+       the baseline for every sibling and standing through the unapply whose job is to take them back out. The
+       unit is the BUFFER and not the view's elements for the reason cow.h gives, which is why the capture
+       names `view` (JS_GetArrayBufferView answers with the buffer object, the same one the engine's hook
+       passes). BEFORE the coercion below, because a `toString` that detaches this buffer must find its bytes
+       already recorded. */
+    cow_capture_buffer(ctx, view);
     dst += off;
     s = JS_ToCStringLen(ctx, &len, argv[0]);
     if (!s) { JS_FreeValue(ctx, view); return JS_EXCEPTION; }
