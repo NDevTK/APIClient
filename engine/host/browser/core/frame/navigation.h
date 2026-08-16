@@ -33,13 +33,20 @@
  * `replaceState` are its one caller so far; core/frame/session_history.c's §7.4.6.1 step 5 still carries a
  * realm_awaits naming the TRAVERSE wrapper it owes.
  *
+ * A NAVIGATION ALSO ENDS BY BEING ABORTED, and that half is core/frame/navigation_abort.c: §7.2.6.8's abort the
+ * ongoing navigation, abort a NavigateEvent, and the loop over them that every navigation runs before it starts.
+ * It is what clears the ongoing navigate event below when a `navigate` listener refuses the navigation or a
+ * second navigation supersedes one still in flight, and it is what fires `navigateerror` — which is why that
+ * handler attribute is installed with it rather than here.
+ *
  * WHAT IS NOT HERE YET IS §7.2.6.7's INITIATING NAVIGATIONS AND THE INTERCEPTION HALF OF §7.2.6.10 —
- * `navigate`, `reload`, `traverseTo`, `back`, `forward`, `transition`, `activation`, `onnavigateerror`,
+ * `navigate`, `reload`, `traverseTo`, `back`, `forward`, `transition`, `activation`,
  * `NavigateEvent.intercept()`/`scroll()`, and the NavigationPrecommitController / NavigationTransition /
  * NavigationActivation interfaces they are made of. They are ABSENT rather than stubbed, so a page's own
  * TypeError names them, and every step of another algorithm that would reach them asserts against the member's
  * arrival instead of saying so in a comment — core/frame/navigate_event_fire.c carries two such assertions over
- * `NavigateEvent.prototype.intercept` and two DFAILs over §7.2.6.8's abort-the-ongoing-navigation.
+ * `NavigateEvent.prototype.intercept`, and core/frame/navigation_abort.c carries one more of those and one over
+ * `Navigation.prototype.navigate` for the API method tracker its step 5 would reject.
  * §7.2.6.7's methods additionally need what this build has no algorithm for at all — `navigate` and `reload a
  * navigable` — which core/frame/history.c's `go(0)` already crashes on by name. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_NAVIGATION_H
@@ -73,9 +80,11 @@ bool navigation_entries_and_events_disabled(JSContext *ctx);
  * core/frame/navigate_event_fire.c for the reason the focus-changed flag below is: the state belongs to the
  * Navigation, so it rides the Navigation's own slot record and the per-flow COW delta captures it as a property
  * write — two forked flows navigate independently and neither sees the other's ongoing event.
- *   Its writers are §7.2.6.10.4's inner algorithm step 24 (which sets it to the event it is about to dispatch)
- * and its commit handler success steps step 4 (which null it out), plus §7.2.6.8's abort when that is built.
- * Its readers are the wrapper's step 2, the inner algorithm's step 23 assert, and §7.2.6.4 step 10.
+ *   Its writers are §7.2.6.10.4's inner algorithm step 24 (which sets it to the event it is about to dispatch),
+ * its commit handler success steps step 4 (which null it out), and §7.2.6.8's ABORT A NavigateEvent step 2,
+ * which nulls it BEFORE the abort runs any of the page's code — that ordering is what makes §7.2.6.8's own loop
+ * terminate. Its readers are that loop's while condition, the inner algorithm's step 23 assert, and §7.2.6.4
+ * step 10.
  * The getter is OWNED and answers JS_NULL for the standard's null; the setter takes JS_NULL for it. */
 JSValue navigation_ongoing_navigate_event(JSContext *ctx);
 void    navigation_set_ongoing_navigate_event(JSContext *ctx, JSValueConst ev);

@@ -54,6 +54,14 @@ bool event_reinit(JSContext *ctx, JSValueConst ev, JSValueConst type, bool bubbl
 bool    event_is(JSContext *ctx, JSValueConst v);
 JSValue event_type(JSContext *ctx, JSValueConst ev);            /* a new owned string, or JS_UNDEFINED */
 bool    event_canceled(JSContext *ctx, JSValueConst ev);        /* the canceled flag */
+/* THE SAME FLAG, WRITTEN — and it is NOT §2.2's "set the canceled flag", which is an algorithm with two
+   conditions on it (cancelable is true, and the in-passive-listener flag is unset) and whose one caller is
+   preventDefault(). HTML §7.2.6.8's abort the ongoing navigation step 6 writes the FLAG: "if event's dispatch
+   flag is set, then set event's canceled flag to true", with no condition, because a navigation aborted while
+   its `navigate` event is still dispatching must report itself as canceled to the rest of §7.2.6.10.4 whatever
+   the listener currently running is allowed to do. Routing that through preventDefault's algorithm would make a
+   non-cancelable navigate event silently stay uncanceled. */
+void    event_set_canceled(JSContext *ctx, JSValueConst ev, bool on);
 bool    event_stop_immediate(JSContext *ctx, JSValueConst ev);  /* the stop-immediate-propagation flag */
 bool    event_bubbles(JSContext *ctx, JSValueConst ev);         /* does it travel up the propagation path */
 bool    event_stop_propagation(JSContext *ctx, JSValueConst ev);

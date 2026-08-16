@@ -87,15 +87,22 @@ static int ee_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst message, 
     return 0;
 }
 
-JSValue error_event_new(JSContext *ctx, JSValueConst message, JSValueConst filename,
-                        uint32_t lineno, uint32_t colno, JSValueConst error)
+JSValue error_event_new(JSContext *ctx, const char *type_name, bool cancelable, JSValueConst message,
+                        JSValueConst filename, uint32_t lineno, uint32_t colno, JSValueConst error)
 {
-    JSValue type = JS_NewString(ctx, "error");
-    /* §8.1.4.6 step 5.2: "firing an event named error at global, using ErrorEvent, with the cancelable
-       attribute initialized to true". It does not bubble, and it IS trusted — the user agent fired it. */
-    JSValue ev = event_new_derived(ctx, error_event_proto(ctx), type, /*bubbles*/ false, /*cancelable*/ true,
-                                   /*composed*/ false, /*trusted*/ true);
+    JSValue type;
+    JSValue ev;
 
+    DCHECK(type_name != NULL && *type_name,
+           "an ErrorEvent was minted with no event type — the two algorithms that fire this interface name "
+           "theirs (§8.1.4.6's `error`, §7.2.6.8's `navigateerror`), because the type belongs to the fire");
+    type = JS_NewString(ctx, type_name);
+    if (JS_IsException(type))
+        return type;
+    /* DOM's fire-an-event, with whatever the CALLING algorithm's flags are — see error_event.h. It does not
+       bubble, it is never composed, and it IS trusted, because the user agent fired it. */
+    ev = event_new_derived(ctx, error_event_proto(ctx), type, /*bubbles*/ false, cancelable,
+                           /*composed*/ false, /*trusted*/ true);
     JS_FreeValue(ctx, type);
     if (JS_IsException(ev))
         return ev;

@@ -222,16 +222,15 @@ static void report_position(JSContext *ctx, JSValueConst exception, char *file, 
     JS_FreeCString(ctx, s);
 }
 
-/* §8.1.4.6 step 2's EXTRACT ERROR INFORMATION, materialized as the event step 6.2 fires. `error` is the
-   exception; the other four are implementation-defined, and the message is derived WITHOUT running the page's
-   `toString` — a host reporting what went wrong must not depend on the code that went wrong, which is exactly
-   what JS_DiagCString is for.
-   THE ERROREVENT *IS* THIS ENGINE'S errorInfo. The standard's errorInfo is "a map keyed by IDL attributes"
-   whose only consumer is "additional attributes initialized according to errorInfo" — so the map and the event
-   built from it hold the same five values, and the event is what a rest point between step 2 and step 6.2 can
-   carry (a C map of borrowed strings could not park). Steps 3-5 are the only writers the standard puts between
-   the two, and all three are the identity here — see the stage declaration. */
-static JSValue report_error_event(JSContext *ctx, JSValueConst exception)
+/* §8.1.4.6's EXTRACT ERROR INFORMATION, materialized as the event whichever algorithm asked for it then fires.
+   `error` is the exception; the other four are implementation-defined, and the message is derived WITHOUT
+   running the page's `toString` — a host reporting what went wrong must not depend on the code that went wrong,
+   which is exactly what JS_DiagCString is for. report_exception.h states why the ErrorEvent IS this engine's
+   errorInfo, and names the SECOND caller this is exported for: §7.2.6.8's abort a NavigateEvent, whose step 4
+   extracts and whose step 6 fires `navigateerror` with the result.
+   Steps 3-5 of report-an-exception are the only writers that standard puts between its own step 2 and its step
+   6.2, and all three are the identity here — see the stage declaration. */
+JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const char *type, bool cancelable)
 {
     char *owned = NULL;
     const char *what = JS_DiagCString(ctx, exception, &owned);
@@ -244,7 +243,7 @@ static JSValue report_error_event(JSContext *ctx, JSValueConst exception)
     report_position(ctx, exception, path, sizeof path, &line, &col);
     filename = JS_NewString(ctx, path);
     JS_DiagFreeCString(ctx, what, owned);
-    ev = error_event_new(ctx, message, filename, line, col, exception);
+    ev = error_event_new(ctx, type, cancelable, message, filename, line, col, exception);
     JS_FreeValue(ctx, message);
     JS_FreeValue(ctx, filename);
     return ev;
@@ -272,7 +271,10 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
        than after the whole head has run. A mint that fails is an allocation failure and nothing else — this
        runs none of the page's code — which is why it is a CHECK and not a swallowed exception: returning 0 here
        left the caller continuing with a live throw in the context and a report that had reported nothing. */
-    w->ev = report_error_event(ctx, exception);
+    /* STEP 6.2's own two flags ride the extraction, because they are what the event IS: `error`, and "with the
+       cancelable attribute initialized to true" — which is how an `onerror` returning true says it handled the
+       exception, and which step 7 reads back as notHandled. */
+    w->ev = extract_error_information(ctx, exception, "error", /*cancelable*/ true);
     CHECK(!JS_IsException(w->ev), "the ErrorEvent carrying §8.1.4.6 step 2's errorInfo could not be allocated");
     /* STEPS 3-5 are performed and are the identity — script is null, so step 4's condition is false, and this
        component takes no omitError, so step 5's is too. See the stage declaration for both, and step 7 for the

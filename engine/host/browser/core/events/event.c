@@ -130,6 +130,8 @@ static void event_write_flag(JSContext *ctx, JSValueConst ev, const char *name, 
 }
 
 bool event_canceled(JSContext *ctx, JSValueConst ev)       { return event_read_flag(ctx, ev, "canceled"); }
+/* The flag itself, written — see event.h for why this is not §2.2's set-the-canceled-flag algorithm. */
+void event_set_canceled(JSContext *ctx, JSValueConst ev, bool on) { event_write_flag(ctx, ev, "canceled", on); }
 /* §2.9 reads these while it walks: whether the event travels up the path at all, and whether a listener
    stopped it between targets. */
 bool event_bubbles(JSContext *ctx, JSValueConst ev)        { return event_read_flag(ctx, ev, "bubbles"); }

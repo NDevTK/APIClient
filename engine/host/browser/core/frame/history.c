@@ -423,7 +423,8 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
        carried across: `cb_result` is this entry's (JS_UNDEFINED, since no request was in flight) and the next
        stage's own arrives on its re-entry. */
     JS_FreeValue(ctx, cb_result);
-    STEP_GOTO(hdr->stage, HPR_NAVIGATE, &s->fire.phase, &s->w.nav.phase, NULL);
+    STEP_GOTO(hdr->stage, HPR_NAVIGATE, &s->fire.phase, &s->fire.abort.phase,
+              &s->fire.abort.sig.phase, &s->w.nav.phase, NULL);
     return JS_STEP_YIELD;
 
     STEP_ARM(HPR_NAVIGATE);
@@ -457,7 +458,8 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
         session_history_url_update_begin(ctx, &s->w, url, &held, magic == HIST_PUSH);
         JS_FreeCString(ctx, url);
     }
-    STEP_GOTO(hdr->stage, HPR_UPDATE, &s->fire.phase, &s->w.nav.phase, NULL);
+    STEP_GOTO(hdr->stage, HPR_UPDATE, &s->fire.phase, &s->fire.abort.phase,
+              &s->fire.abort.sig.phase, &s->w.nav.phase, NULL);
     return JS_STEP_YIELD;
 
     STEP_ARM(HPR_UPDATE);

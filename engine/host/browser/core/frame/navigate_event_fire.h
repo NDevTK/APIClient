@@ -28,12 +28,16 @@
  * The other two are named at the sites that owe them — core/frame/session_history.c's §7.4.6.1 step 5 for the
  * traverse, and a download-initiating navigation for the third, which this build has no algorithm for at all.
  *
- * WHAT IS ABSENT AND WHERE IT CRASHES. §7.2.6.10.1's `intercept()` is not installed (core/events/navigate_event.h
- * says why), so the event's INTERCEPTION STATE can never leave "none": steps 29-31, §7.2.6.10.5's finish, the
- * transition and the precommit controller are all unreachable, and each site asserts that against
- * `NavigateEvent.prototype.intercept` rather than carrying a field with one writer. §7.2.6.8's ABORT THE
- * ONGOING NAVIGATION is the other absence and it is a DFAIL, because two reachable paths reach it: a listener
- * that cancels the event, and a second navigation started while one is ongoing. */
+ * BOTH OF ITS ENDINGS ARE NOW BUILT. §7.2.6.8's ABORT THE ONGOING NAVIGATION is core/frame/navigation_abort.c,
+ * and the two paths that reach it — the wrapper's step 2, where a second navigation supersedes one still
+ * ongoing, and inner step 28, where a listener called preventDefault() — DRIVE it rather than crashing at it.
+ * Each is a stage of this machine, because aborting fires `abort` at the event's signal and `navigateerror` at
+ * the Navigation and both of those are the page's own code.
+ *
+ * WHAT IS STILL ABSENT AND WHERE IT CRASHES. §7.2.6.10.1's `intercept()` is not installed
+ * (core/events/navigate_event.h says why), so the event's INTERCEPTION STATE can never leave "none": steps
+ * 29-31, §7.2.6.10.5's finish, the transition and the precommit controller are all unreachable, and each site
+ * asserts that against `NavigateEvent.prototype.intercept` rather than carrying a field with one writer. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_NAVIGATE_EVENT_FIRE_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_NAVIGATE_EVENT_FIRE_H
 
@@ -43,6 +47,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/events/event_target.h"   /* EventFireCb — the width of the fire request this work parks on */
+#include "core/frame/navigation_abort.h"  /* §7.2.6.8's abort, which two of this algorithm's steps perform */
 #include "core/structured_clone.h"
 
 /* Declared once per AGENT: the step definition of the commit handler job below, which is a machine the runtime
@@ -65,6 +70,11 @@ typedef struct {
     JSValue     classic;         /* §7.2.6.10.1's classic history API state: the bytes (ArrayBuffer) or JS_NULL */
     JSValue     destination;     /* §7.2.6.10.3's, built at step 7 of the wrapper (owned) */
     JSValue     event;           /* the NavigateEvent, held across the dispatch (owned) */
+    /* §7.2.6.8's ABORT, which this algorithm performs at TWO of its steps — the wrapper's step 2 (as the loop)
+       and inner step 28.2 (as the single abort). ONE record for both, because the two are steps of the same
+       navigation and can never be in flight at the same moment: step 2 has answered before the event step 28
+       is about has been built. */
+    NavigationAbortWork abort;
     EventFireCb cb;
 } NavigateEventFireWork;
 

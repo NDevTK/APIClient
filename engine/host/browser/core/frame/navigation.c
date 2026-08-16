@@ -35,18 +35,20 @@ static int       g_id_entries = -1, g_id_update_current_entry = -1;
  * what the per-flow COW delta captures, so two forked routers hold two entry lists with no new delta kind.
  *
  * §7.2.6.8's list of ongoing-navigation state has five entries and this build holds the two whose WRITERS are
- * built. FOCUS CHANGED is set by HTML §6.6.4's focus update steps and cleared by §8.1.7.3's
- * update-the-rendering. THE ONGOING NAVIGATE EVENT is set by §7.2.6.10.4's inner algorithm and nulled by its
- * commit handler success steps (core/frame/navigate_event_fire.c). The other three — the suppress normal
- * scroll restoration flag, the ongoing API method tracker and the map of upcoming traverse trackers — belong to
- * `intercept()` and to §7.2.6.7's methods, and a field with a writer and no reader is the fabricated datum
- * §Consumer-defaults describes, so each arrives with the algorithm that writes it. */
+ * built. FOCUS CHANGED is set by HTML §6.6.4's focus update steps, cleared by §8.1.7.3's update-the-rendering,
+ * and cleared again by §7.2.6.8's abort the ongoing navigation step 3 (core/frame/navigation_abort.c). THE
+ * ONGOING NAVIGATE EVENT is set by §7.2.6.10.4's inner algorithm, nulled by its commit handler success steps
+ * (core/frame/navigate_event_fire.c), and nulled by abort a NavigateEvent step 2. The other three — the
+ * suppress normal scroll restoration flag, the ongoing API method tracker and the map of upcoming traverse
+ * trackers — belong to `intercept()` and to §7.2.6.7's methods, and a field with a writer and no reader is the
+ * fabricated datum §Consumer-defaults describes, so each arrives with the algorithm that READS it. */
 #define NAV_ENTRIES       "entryList"
 #define NAV_CURRENT_INDEX "currentEntryIndex"
 #define NAV_FOCUS_CHANGED "focusChanged"
 /* §7.2.6.8's ONGOING NAVIGATE EVENT — the second of that list this build holds, and it is held for the same
-   reason focus-changed is: both of its writers are built. §7.2.6.10.4's inner algorithm sets it to the event it
-   dispatches and its commit handler success steps null it out. */
+   reason focus-changed is: every one of its writers is built. §7.2.6.10.4's inner algorithm sets it to the
+   event it dispatches; its commit handler success steps null it out when the navigation succeeded, and
+   §7.2.6.8's abort a NavigateEvent nulls it when the navigation ended any other way. */
 #define NAV_ONGOING_EVENT "ongoingNavigateEvent"
 
 /* ---- the object, and its slot record -------------------------------------------------------------------- */
@@ -468,7 +470,7 @@ JSValue navigation_ongoing_navigate_event(JSContext *ctx)
     DCHECK(JS_IsNull(ev) || navigate_event_is(ev),
            "§7.2.6.8's ongoing navigate event held something that is neither a NavigateEvent nor null — the "
            "field starts at null with the Navigation and its only writers are §7.2.6.10.4's inner algorithm "
-           "step 24 and its commit handler success steps step 4");
+           "step 24, its commit handler success steps step 4, and §7.2.6.8's abort a NavigateEvent step 2");
     return ev;
 }
 

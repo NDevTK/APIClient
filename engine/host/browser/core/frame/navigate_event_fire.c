@@ -21,6 +21,7 @@
 #include "core/frame/history.h"
 #include "core/frame/navigate_event_fire.h"
 #include "core/frame/navigation.h"
+#include "core/frame/navigation_abort.h"
 #include "core/frame/navigation_destination.h"
 #include "core/realm.h"
 #include "core/structured_clone.h"
@@ -28,18 +29,26 @@
 
 /* ---- the inner navigate event firing algorithm ------------------------------------------------------------- */
 
-/* TWO REST POINTS, AND THE SECOND IS THE ONE THE ALGORITHM EXISTS FOR. The first stage builds the destination
-   and the event out of what the operation was created with — a URL parse and a serialization, both over data
-   the PAGE chose the size of, which is why the stage ENDS there rather than running on into the dispatch. The
-   second is §2.9's dispatch itself, where the page's `navigate` listeners run; the fire request's own two-phase
-   cursor resumes inside that one stage, which is why steps 28-33 need no stage of their own — they are O(1)
-   engine actions performed once the dispatch has answered. */
+/* FOUR REST POINTS, AND EVERY ONE OF THEM IS SOMEWHERE THE PAGE'S CODE RUNS OR SOMETHING OF THE PAGE'S SIZE IS
+   WALKED. The wrapper's step 2 is its own stage because ABORTING a still-ongoing navigation fires `abort` at the
+   old event's signal and `navigateerror` at the Navigation, and the standard makes it a LOOP over exactly that.
+   NEF_PREPARE then builds the destination and the event out of what the operation was created with — a URL parse
+   and a serialization, both over data the PAGE chose the size of, which is why that stage ends rather than
+   running on into the dispatch. NEF_DISPATCH is §2.9's dispatch itself, where the page's `navigate` listeners
+   run; the fire request's own two-phase cursor resumes inside that one stage. NEF_CANCELED is step 28's abort,
+   for the same reason step 2's is a stage. Steps 29-33 need no stage of their own — they are O(1) engine
+   actions performed once the dispatch has answered. */
 #define NEF_STAGES(X)                                                                                        \
-    X(NEF_PREPARE,  "HTML §7.2.6.10.4 fire a push/replace/reload navigate event steps 1-11 and the inner "    \
+    X(NEF_ABORT,    "HTML §7.2.6.10.4 fire a push/replace/reload navigate event steps 1-2 (inform the "       \
+                    "navigation API about aborting navigation in document's node navigable — §7.2.6.8's "     \
+                    "loop, which aborts whatever navigation is still ongoing)")                               \
+    X(NEF_PREPARE,  "HTML §7.2.6.10.4 fire a push/replace/reload navigate event steps 3-11 and the inner "    \
                     "navigate event firing algorithm steps 1-26 (the destination, the event with everything "  \
                     "§7.2.6.10.4 initializes on it, and setting navigation's ongoing navigate event)")        \
     X(NEF_DISPATCH, "HTML §7.2.6.10.4 inner navigate event firing algorithm step 27 (let dispatchResult be "  \
-                    "the result of dispatching event at navigation)")
+                    "the result of dispatching event at navigation)")                                         \
+    X(NEF_CANCELED, "HTML §7.2.6.10.4 inner navigate event firing algorithm step 28.2 (if event's abort "     \
+                    "controller's signal is not aborted, then abort the ongoing navigation given navigation)")
 enum { NEF_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NEF_STEPS[] = { NEF_STAGES(JS_STEP_STAGE_LABEL) NULL };
 #define NEF_STAGE_COUNT ((int)(sizeof NEF_STEPS / sizeof *NEF_STEPS) - 1)
@@ -54,11 +63,12 @@ void navigate_event_fire_work_start(NavigateEventFireWork *w)
     /* THE SLOTS ARE UNDEFINED BEFORE THEY ARE ANYTHING ELSE — a zeroed JSValue is the INTEGER 0, not undefined
        (JS_TAG_INT is 0), so a slot read before it is written yields a real value the page can see. Same rule and
        same reason as core/frame/navigation.c's update work. */
-    w->stage = NEF_PREPARE;
+    w->stage = NEF_ABORT;
     w->phase = 0;
     w->navigation_type = NULL;
     w->same_document = false;
     w->url = w->classic = w->destination = w->event = JS_UNDEFINED;
+    navigation_abort_work_start(&w->abort);
     STEP_CB_FOREACH(w->cb, k) w->cb[k] = JS_UNDEFINED;
 }
 
@@ -70,6 +80,7 @@ void navigate_event_fire_work_visit(JSContext *ctx, NavigateEventFireWork *w, JS
     v->val(ctx, &w->classic);
     v->val(ctx, &w->destination);
     v->val(ctx, &w->event);
+    navigation_abort_work_visit(ctx, &w->abort, v);
     STEP_CB_FOREACH(w->cb, k) v->val(ctx, &w->cb[k]);
 }
 
@@ -85,6 +96,7 @@ void navigate_event_fire_work_release(JSContext *ctx, NavigateEventFireWork *w)
     JS_FreeValue(ctx, w->destination);
     JS_FreeValue(ctx, w->event);
     w->url = w->classic = w->destination = w->event = JS_UNDEFINED;
+    navigation_abort_work_release(ctx, &w->abort);
     STEP_CB_FOREACH(w->cb, k) {
         JS_FreeValue(ctx, w->cb[k]);
         w->cb[k] = JS_UNDEFINED;
@@ -93,7 +105,7 @@ void navigate_event_fire_work_release(JSContext *ctx, NavigateEventFireWork *w)
        at rather than the last one it rested at, so a record reached again is asked from the wrapper's step 1.
        A teardown is not a transition, which is why this is an assignment and not a STEP_GOTO — the record is
        abandoned wherever it stood, and its fire request's cursor is legitimately mid-flight. */
-    w->stage = NEF_PREPARE;
+    w->stage = NEF_ABORT;
     w->phase = 0;
 }
 
@@ -101,7 +113,7 @@ void navigate_event_fire_push_replace_reload_begin(JSContext *ctx, NavigateEvent
                                                    const char *navigation_type, const char *destination_url,
                                                    bool is_same_document, const StructuredData *classic_state)
 {
-    DCHECK(w->stage == NEF_PREPARE && JS_IsUndefined(w->url),
+    DCHECK(w->stage == NEF_ABORT && JS_IsUndefined(w->url),
            "§7.2.6.10.4's fire-a-push/replace/reload-navigate-event was created over a work record that is "
            "already carrying one — a record is started, driven to its answer and only then re-used, because "
            "the second creation would discard the first navigation's event with the Navigation still holding "
@@ -229,38 +241,30 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
 
     STEP_DISPATCH(NEF_STAGES, w->stage, NEF_ALGORITHM, JS_STEP_ABRUPT);
 
-    STEP_ARM(NEF_PREPARE);
-    JS_FreeValue(ctx, in);   /* nothing has asked for anything yet, so this entry's answer belongs to nobody */
+    STEP_ARM(NEF_ABORT);
     DCHECK(JS_IsString(w->url),
-           "§7.2.6.10.4's inner algorithm was entered over a work record that was never created — "
+           "§7.2.6.10.4's wrapper was entered over a work record that was never created — "
            "navigate_event_fire_push_replace_reload_begin is what takes the destination URL, and an algorithm "
            "with no destination has nothing to ask the page about");
     /* THE WRAPPER'S STEP 1 is "let document be navigation's relevant global object's associated Document" —
        this realm's, which every call below reaches through `ctx`.
        THE WRAPPER'S STEP 2: "INFORM THE NAVIGATION API ABOUT ABORTING NAVIGATION in document's node navigable",
-       whose whole content is "while navigation's ongoing navigate event is not null: abort the ongoing
-       navigation". With none ongoing it is a no-op, and this build cannot perform the other case. */
-    {
-        JSValue ongoing = navigation_ongoing_navigate_event(ctx);
-        bool any = !JS_IsNull(ongoing);
+       whose whole content is "while navigation's ongoing navigate event is not null: ABORT THE ONGOING
+       NAVIGATION" — core/frame/navigation_abort.h's loop. With none ongoing it does nothing and answers on this
+       same entry; with one ongoing it aborts it, which fires `abort` at that event's signal and `navigateerror`
+       at the Navigation, so this is a stage and not a line. TWO SYNCHRONOUS `history.pushState()` CALLS IN ONE
+       TURN are the reachable case, and they are why inner step 23's assert below can be an assert. */
+    r = navigation_abort_inform_run(ctx, &w->abort, in, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    /* AND IT RETURNS RATHER THAN RUNNING ON, for the reason the stage declaration gives: a body that sets its
+       stage and falls into the next arm has crossed a boundary the driver never saw, so the label would claim a
+       rest point the engine cannot park at. */
+    STEP_GOTO(w->stage, NEF_PREPARE, &w->phase, &w->abort.phase, &w->abort.sig.phase, NULL);
+    return JS_STEP_YIELD;
 
-        JS_FreeValue(ctx, ongoing);
-        if (any)
-            DFAIL("HTML §7.2.6.10.4's fire-a-push/replace/reload-navigate-event step 2 INFORMS THE NAVIGATION "
-                  "API ABOUT ABORTING NAVIGATION, and this navigable already has an ongoing navigate event — a "
-                  "second navigation started while the first has not finished, which is what two synchronous "
-                  "`history.pushState()` calls in one turn are. §7.2.6.8's ABORT THE ONGOING NAVIGATION is "
-                  "what handles it and it is not built: it sets the Navigation's focus-changed and "
-                  "suppress-normal-scroll-restoration to false, makes an \"AbortError\" DOMException, sets the "
-                  "event's canceled flag when its dispatch flag is set, and ABORTS THE NavigateEvent — which "
-                  "nulls the ongoing navigate event, SIGNALS ABORT on the event's abort controller with that "
-                  "reason (core/dom/abort.h's request, so the algorithm parks on the signal's own algorithms), "
-                  "extracts error information from the reason, rejects the ongoing API method tracker's "
-                  "finished promise, and fires `navigateerror` at the Navigation using ErrorEvent with those "
-                  "attributes (core/events/error_event.c builds one; core/events/report_exception.c shows the "
-                  "extraction). Build it beside this file as §7.2.6.8's own component, since the cancel path "
-                  "of step 28 below reaches the identical algorithm, and install `onnavigateerror` with it");
-    }
+    STEP_ARM(NEF_PREPARE);
+    JS_FreeValue(ctx, in);   /* the abort has answered; this entry's answer belongs to nobody */
     /* THE WRAPPER'S STEP 3 is "if navigation has entries and events disabled, and apiMethodTracker is not
        null" — the tracker is null here (see navigate_event_fire.h), so the branch is not taken and its own
        note's reason for existing (a `navigateerror` handler that detached the Document) is what the step 4
@@ -369,8 +373,11 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
 
         JS_FreeValue(ctx, ongoing);
         DCHECK(none, "§7.2.6.10.4's inner algorithm step 23 asserts the Navigation's ongoing navigate event is "
-                     "null and this one's is not — the wrapper's step 2 is what makes that true, by aborting "
-                     "whatever navigation is still ongoing, and it is the DFAIL above");
+                     "null and this one's is not — the wrapper's step 2 is what makes that true, by running "
+                     "§7.2.6.8's inform-the-navigation-API-about-aborting-navigation until the field IS null, "
+                     "and it is the NEF_ABORT stage above. A non-null here means something set the field "
+                     "BETWEEN that stage and this one, which nothing between them may do: every step from step "
+                     "3 to this one is an engine action");
     }
     navigation_set_ongoing_navigate_event(ctx, w->event);
     /* INNER STEP 25: "set navigation's focus changed during ongoing navigation to false." */
@@ -398,14 +405,23 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
        event, which is a router refusing the navigation. Its first sub-step consumes history-action user
        activation for a "traverse" (there are none here, per step 9's assertion), and its second is the abort. */
     if (!not_canceled) {
-        DFAIL("HTML §7.2.6.10.4's inner navigate event firing algorithm step 28 answers a CANCELED navigate "
-              "event by aborting the ongoing navigation — a page called preventDefault() on the event, and "
-              "this build cannot tell it what happened. \"If event's abort controller's signal is not aborted, "
-              "then ABORT THE ONGOING NAVIGATION given navigation\" is §7.2.6.8's algorithm, the same one the "
-              "wrapper's step 2 reaches, and the DFAIL above states what it is made of. Until it exists the "
-              "navigation is refused correctly — this returns false — but the Navigation is left holding the "
-              "event as its ongoing navigate event, no `navigateerror` is fired, and the event's AbortSignal "
-              "never aborts, so a listener that passed `event.signal` to a fetch is never told to stop");
+        /* STEP 28.1: "if navigationType is 'traverse', then CONSUME HISTORY-ACTION USER ACTIVATION given
+           navigation's relevant global object." There are none here, per step 9's assertion above, and it
+           arrives with fire-a-traverse-navigate-event and HTML §6.6's user activation state together.
+           STEP 28.2: "if event's abort controller's signal is NOT ABORTED, then abort the ongoing navigation
+           given navigation." The signal IS already aborted when a `navigate` listener aborted this very
+           navigation itself — a router that calls `preventDefault()` after something else already superseded
+           the navigation — and the standard's test is what stops this aborting it twice. */
+        bool aborted;
+
+        signal = navigate_event_signal(ctx, w->event);
+        aborted = abort_signal_aborted(ctx, signal);
+        JS_FreeValue(ctx, signal);
+        if (!aborted) {
+            STEP_GOTO(w->stage, NEF_CANCELED, &w->phase, &w->abort.phase, &w->abort.sig.phase, NULL);
+            return JS_STEP_YIELD;
+        }
+        /* STEP 28.3: "return false." */
         *pcontinue = false;
         return 0;
     }
@@ -436,6 +452,19 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
     /* INNER STEP 32: "if event's interception state is 'none', then return TRUE." It is, so this is the answer;
        step 33's "return false" is the intercepted navigation's and arrives with the assertion above. */
     *pcontinue = true;
+    return 0;
+
+    STEP_ARM(NEF_CANCELED);
+    /* INNER STEP 28.2, PERFORMED. §7.2.6.8's ABORT THE ONGOING NAVIGATION — the SINGLE abort rather than the
+       loop, because the standard names the algorithm here and not the informing wrapper, and because the event
+       it is about is the one this machine has just dispatched. It signals abort on that event's controller (so a
+       listener that handed `event.signal` to a fetch is told to stop) and fires `navigateerror` at the
+       Navigation, which is why this is a stage of its own. */
+    r = navigation_abort_ongoing_run(ctx, &w->abort, in, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    /* STEP 28.3: "return false" — the navigation the page refused must not proceed. */
+    *pcontinue = false;
     return 0;
 }
 
@@ -525,8 +554,10 @@ static int js_nef_commit_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
     DCHECK(same, "§7.2.6.10.4's commit handler success steps assert that the event they are ending is the "
                  "Navigation's ongoing navigate event, and it is not — a navigation started and finished "
                  "between §7.2.6.4 step 10 reading it and this microtask running. §7.2.6.8's ABORT THE ONGOING "
-                 "NAVIGATION is what the standard uses to make that impossible (it runs at the START of every "
-                 "navigation and leaves the field null), and it is not built");
+                 "NAVIGATION is what the standard uses to make that impossible: it runs at the START of every "
+                 "navigation (core/frame/navigation_abort.c, driven by this file's NEF_ABORT stage) and leaves "
+                 "the field null, so a navigation that STARTED in between has aborted this one and success "
+                 "step 2's aborted-signal test above should already have answered");
     /* SUCCESS STEP 4: "set navigation's ongoing navigate event to null." */
     navigation_set_ongoing_navigate_event(ctx, JS_NULL);
     /* SUCCESS STEP 5: "FINISH event given true" — §7.2.6.10.5's, whose step 3 is "if event's interception

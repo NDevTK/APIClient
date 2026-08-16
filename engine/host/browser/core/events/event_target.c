@@ -661,14 +661,16 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("onreadystatechange", EH_DOCUMENT | EH_XHR_READYSTATE) X("onvisibilitychange", EH_DOCUMENT) \
     /* XHR §3.3 — the two of its seven that belong to NO other mixin, so this list is where they arrive. */ \
     X("onloadend", EH_XHR) X("ontimeout", EH_XHR)                                                            \
-    /* HTML §7.2.6.2's Navigation and §7.2.6.5's NavigationHistoryEntry, each declaring its own. THREE of
-       §7.2.6.2's four are here: core/frame/navigate_event_fire.c performs §7.2.6.10.4, which dispatches
+    /* HTML §7.2.6.2's Navigation and §7.2.6.5's NavigationHistoryEntry, each declaring its own. ALL FOUR of
+       §7.2.6.2's are here now: core/frame/navigate_event_fire.c performs §7.2.6.10.4, which dispatches
        `navigate` at the Navigation before every navigation and `navigatesuccess` at the end of one that
-       committed. `onnavigateerror` is still absent — its event is §7.2.6.8's ABORT A NavigateEvent's, and
-       that algorithm is what the two DFAILs in that file name — because a handler attribute for an event
-       nothing dispatches is the shape-only member the IDL audit exists to expose. */                     \
+       committed, and core/frame/navigation_abort.c performs §7.2.6.8's ABORT A NavigateEvent, whose step 6
+       dispatches `navigateerror` at the same target for every navigation that ends any other way. Each of the
+       four arrived WITH the algorithm that fires it, because a handler attribute for an event nothing
+       dispatches is the shape-only member the IDL audit exists to expose. */                             \
     X("oncurrententrychange", EH_NAVIGATION) X("onnavigate", EH_NAVIGATION)                               \
-    X("onnavigatesuccess", EH_NAVIGATION) X("ondispose", EH_NAVIGATION_HISTORY_ENTRY)
+    X("onnavigateerror", EH_NAVIGATION) X("onnavigatesuccess", EH_NAVIGATION)                             \
+    X("ondispose", EH_NAVIGATION_HISTORY_ENTRY)
 
 /* The NAMES are string literals, not stringified identifiers, so the IDL gap auditor — which scans a component
    for the property names it installs — can SEE them. Behind a `#n` it saw none of these and reported all ninety

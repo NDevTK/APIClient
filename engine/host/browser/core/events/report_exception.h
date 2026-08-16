@@ -34,6 +34,24 @@ typedef struct {
     EventFireCb cb;
 } ReportExceptionWork;
 
+/* HTML §8.1.4.6's OTHER ALGORITHM — "to EXTRACT ERROR INFORMATION from a JavaScript value exception" — which is
+ * a sibling of report-an-exception rather than a step of it, and which has a second caller: HTML §7.2.6.8's
+ * abort-a-NavigateEvent step 4 extracts error information from the abort reason and its step 6 fires
+ * `navigateerror` "with additional attributes initialized according to errorInfo".
+ *
+ * THE ErrorEvent *IS* THIS ENGINE'S errorInfo. The standard's errorInfo is "a map keyed by IDL attributes" whose
+ * only consumer anywhere is "additional attributes initialized according to errorInfo", so the map and the event
+ * built from it hold the same five values — and the event is the form that PARKS, which a C map of borrowed
+ * strings could not. `attributes[error]` is the exception itself, which the standard pins; the other four are
+ * "implementation-defined values derived from exception", and this engine derives them from the message and from
+ * the backtrace the value carries, without running any of the page's code (a host reporting what went wrong must
+ * not depend on the code that went wrong).
+ *
+ * `type` and `cancelable` are the FIRING algorithm's, not the extraction's — §8.1.4.6 fires `error` cancelable,
+ * §7.2.6.8 fires `navigateerror` with DOM's plain fire-an-event — and they are here because the one thing every
+ * caller does with an errorInfo is dispatch it. `exception` is BORROWED; the result is OWNED. */
+JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const char *type, bool cancelable);
+
 /* The private key §8.1.4.6 step 6's "in error reporting mode" flag hangs off the global by. One per AGENT. */
 void report_exception_init(JSContext *ctx);
 void report_exception_free(JSContext *ctx);
