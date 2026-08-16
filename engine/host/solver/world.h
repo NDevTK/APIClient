@@ -159,6 +159,21 @@ bool world_has_segment(WorldId w);
    segments so a released-and-rebuilt world counts twice: it is a record of what the seam DID. */
 void world_segment_stats(int *materialized, int *forked);
 
+/* …AND HOW MANY IT HOLDS RIGHT NOW, WHICH IS A DIFFERENT QUESTION — and the one above answered it wrongly for
+ * as long as the cold tier has existed. `materialized` is a HISTORY: it counts materializations, world_release
+ * never decrements it, and the paragraph above says so in as many words ("a record of what the seam DID").
+ * cold_park read it to decide a PRESENT-TENSE fact — "the frontier was parked while this instance HOLDS a
+ * segment of a FOREIGN world" — and test_forced.c's world_registry_selftest materializes four peer worlds at
+ * startup and RELEASES all four, so that instance holds none while the counter reads 4 for the rest of the
+ * process. The first park that fixture ever succeeded in taking therefore aborted on a peer it does not have,
+ * naming the cross-instance park (a large piece of work with the offscreen route in it) as the thing to build
+ * next. A count that only ever rises cannot answer a question whose answer can fall, so they are two names and
+ * neither is a parameter of the other.
+ * `engine/route.mjs`, where a peer really exists, is unaffected either way: nothing there releases a world —
+ * `world_release` still has no caller outside a self-test — so its two numbers coincide, which is precisely why
+ * the substitution survived. */
+int world_segments_held(void);
+
 /* The world is gone (its flow finished, or was dropped): release this instance's segment. Releasing a world
    with no segment is not an error — a world that never wrote here never had one. */
 void world_release(JSContext *ctx, WorldId w);

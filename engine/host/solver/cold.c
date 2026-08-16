@@ -536,7 +536,7 @@ void cold_park_flow(Flow *f)
 void cold_park(void)
 {
     Flow *f;
-    int i, wseg = 0, wsegf = 0;
+    int i;
     /* WHAT THIS PARK IS ABOUT TO WRITE, AND WHAT IT DID — the two-sided half of the preview's contract. The
        host DECIDED to evict on the strength of the preview, so the residue it gets has to be the residue it was
        shown; the census ACCUMULATES across the several parks a session may take (a partial self-park writes a
@@ -554,18 +554,40 @@ void cold_park(void)
            "the host asked this engine to page out a frontier with no members — an empty park document is how a "
            "fully-explored document deletes its cold entry, so this stores 'nothing left to do' over whatever "
            "residue the origin had");
-    world_segment_stats(&wseg, &wsegf);
     /* ANOTHER INSTANCE'S FLOW STATE LIVES HERE, AND IT HAS NO RECIPE. A foreign world's segment is a peer
        document's timeline materialized in this instance; it belongs to a flow this frontier does not contain,
        so no record written below names it and no replay of ours re-derives it. It is asked HERE and not in the
        per-flow primitive because it is a fact about this ENGINE leaving memory, which is what a whole-frontier
-       park is and what a partial one is not. */
-    DCHECK(wseg == 0,
-           "the frontier was parked while this instance holds a segment of a FOREIGN world — that is a peer "
-           "document's flow state living here, no record below names it, and paging this engine out drops it. "
-           "Build the cross-instance park: a foreign segment travels with the WORLD's name (solver/world.h), "
-           "not with this document's flows, and the offscreen is what re-routes it to the instance that "
-           "rebuilds the peer");
+       park is and what a partial one is not.
+       IT IS ASKED OF THE LIVE COUNT, AND IT USED TO BE ASKED OF A HISTORY — which is the same defect this file's
+       own park hook had one layer up, arriving from the other side. `world_segment_stats` counts
+       MATERIALIZATIONS and world_release never decrements it (world.h calls it "a record of what the seam DID"),
+       so this present-tense claim was decided by a number that can only rise. test_forced.c's
+       world_registry_selftest materializes four peer worlds at startup and releases all four before the document
+       is even parsed, so the FIRST park that fixture ever succeeded in taking aborted here — on a peer it does
+       not have, naming the cross-instance park as the work to do next. The refusal itself is right and stays
+       exactly as it is; what changed is which number it reads. */
+#if APICLIENT_DEV
+    {
+        /* AND IT SAYS BOTH NUMBERS, because telling them apart is the whole of what this abort cost once. A
+           reader standing here has to decide between "a peer really is here" and "the counter is answering
+           about something else", and `held` alone cannot say: with `made` beside it, held=0 is impossible to
+           reach, held=4/made=4 is a live peer, and a held that is far below made is a seam that materialized
+           and released — which is what a self-test does and what a finished sender's world will do once
+           world_release has a caller. */
+        int held = world_segments_held(), made = 0;
+        char why[512];
+
+        world_segment_stats(&made, NULL);
+        snprintf(why, sizeof why,
+                 "the frontier was parked while this instance holds a segment of a FOREIGN world — that is a "
+                 "peer document's flow state living here, no record below names it, and paging this engine out "
+                 "drops it. Build the cross-instance park: a foreign segment travels with the WORLD's name "
+                 "(solver/world.h), not with this document's flows, and the offscreen is what re-routes it to "
+                 "the instance that rebuilds the peer. held=%d materialized-ever=%d", held, made);
+        DCHECK(held == 0, why);
+    }
+#endif
     cold_park_preview(&would);
     cold_parked(&before);
     for (i = 0; (f = flow_at(i)) != NULL; i++) {

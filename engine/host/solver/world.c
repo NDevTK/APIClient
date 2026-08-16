@@ -348,6 +348,19 @@ void world_segment_stats(int *materialized, int *forked)
 }
 static void world_segment_counts_reset(void) { g_seg_made = g_seg_forked = 0; }
 
+int world_segments_held(void)
+{
+    /* HELD IS BOUNDED BY MATERIALIZED, which is the one relation the two numbers have and the only thing that
+       can be checked about a table against its own history. Every entry is put here by world_segment, which
+       counts as it does so, and world_release only ever removes one — so a table that has outgrown the count of
+       times anything was put in it was written by something that is not this file. */
+    DCHECK(g_segs_n <= g_seg_made,
+           "this instance holds more foreign world segments than it has ever materialized — the table is grown "
+           "in exactly one place and counted there, so a live count above the history means a segment was "
+           "installed by something other than world_segment and nothing owns it");
+    return g_segs_n;
+}
+
 CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int n_anc)
 {
     ForeignSegment *s = find_segment(w);
