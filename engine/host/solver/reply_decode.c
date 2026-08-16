@@ -21,9 +21,9 @@
    CLAUDE.md states for active discovery ("CORS-bounded both ways") arriving from the other direction.
    WHAT IT COSTS TODAY, MEASURED FROM §7 RATHER THAN ASSUMED: nothing. §7's computed type differs from the
    supplied one only where a rule fires — steps 1-2 (no type at all, `unknown/unknown`, `application/unknown`,
-   `*/*`, or the Apache bug), step 5 (`text/html` feed-or-HTML), and steps 6-7 (an image or audio-or-video
-   supplied type re-matched against §6.1/§6.2's patterns). The ONE consumer below keys on a supplied
-   `text/x-component`, which no rule in §7 touches, so §7 reaches step 8 and answers the supplied type
+   the any-type `*` over `*`, or the Apache bug), step 5 (`text/html` feed-or-HTML), and steps 6-7 (an
+   image or audio-or-video supplied type re-matched against §6.1/§6.2's patterns). The ONE consumer below
+   keys on a supplied `text/x-component`, which no rule in §7 touches, so §7 reaches step 8 and answers the supplied type
    unchanged for every body this file has ever learned from. The asset early-out is the only other reader, and a
    body it would have skipped only on magic bytes is one whose essence is not `text/x-component` either way. So
    the sniff decided ZERO of the endpoints in this engine's @H surface, and removing it from this process
