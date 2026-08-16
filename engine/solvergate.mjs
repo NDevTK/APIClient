@@ -58,6 +58,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadavg, cpus } from "node:os";
+import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
@@ -323,6 +324,14 @@ if (!existsSync(WASM)) {
 }
 if (!existsSync(CORPUS)) { console.error("[solvergate] no corpus at " + CORPUS); process.exit(1); }
 
+/* WHICH TREE — AND, HERE, WHICH BUILD. This gate is the one that does not compile: it imports the shipped
+   wasm, so the revision above it in the log is a fact about the SOURCES and not about the program that
+   answered. Both are printed, and an artifact older than its own cone says so by name (engine/gate_revision.mjs)
+   — a clean tree in front of a stale .wasm is the pair that reads most convincingly and is most wrong.
+   AFTER the child re-entry above, so a spawned schedule does not print the block its parent already did. */
+const REV_AT_START = gateRevision(["engine/host", "engine/qjs", "engine/solvergate.mjs", "engine/gate_revision.mjs"], WASM);
+for (const l of revisionLines(REV_AT_START)) console.log(l);
+
 const arg = process.argv[2] || "";
 const docs = readdirSync(CORPUS).filter((f) => f.endsWith(".html")).sort()
                                 .filter((f) => !arg || f === arg || f === arg + ".html");
@@ -461,5 +470,12 @@ for (const doc of docs) {
   for (const e of ref.pageErrors) console.log(`         page error: ${e.slice(0, 160)}`);
 }
 console.log(`  ---- ${docs.length} document(s) x ${SCHEDULES.length} schedules`);
+/* THE REVISION IN THE TAIL, because the tail is what gets pasted — see engine/gate_revision.mjs. */
+for (const l of revisionLines(REV_AT_START)) console.log(l);
+{
+  const moved = revisionMoved(REV_AT_START);
+  console.log(moved ? `[rev] AND IT MOVED WHILE THIS RAN — ${moved}`
+                    : "[rev] the engine did not move during this run");
+}
 console.log("==========================================================================");
 process.exit(bad ? 1 : 0);

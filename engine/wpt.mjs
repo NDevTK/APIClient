@@ -20,6 +20,7 @@ import { existsSync, readdirSync, mkdtempSync, mkdirSync, openSync, readFileSync
          writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { tmpdir, cpus, loadavg } from "node:os";
+import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 
 function walk(dir) {
   const out = [];
@@ -327,6 +328,17 @@ function corpusIdentity() {
 /* THE IDENTITY THIS RUN'S NUMBERS BELONG TO, taken AFTER the cone above is applied — that is the corpus the
    collection below is about, and every later "did it move?" question is asked against it. */
 const CORPUS_AT_START = corpusIdentity();
+
+/* AND THE OTHER HALF OF THE SAME QUESTION, WHICH THIS GATE HAD NEVER ASKED. Everything above proves which
+   ORACLE ran; nothing proved which ENGINE ran. That asymmetry is not academic: a whole-corpus run of this file
+   reported 1393 files aborting on nine leaked atoms whose three roots superproject 26a34533 had already fixed,
+   and the only surviving evidence of WHICH tree it measured was the wording of the DCHECK it printed —
+   submodule 88701bd's "still interned", superseded by 2268e0f twenty-three minutes later. The engine is a
+   superproject plus a submodule and this checkout is edited continuously, so the revision is asked for BOTH
+   halves and for the dirtiness of exactly the cone linked below, and it is printed BEFORE the build so the
+   reader has it even for a run that never reaches a summary. See engine/gate_revision.mjs. */
+const REV_AT_START = gateRevision(["engine/host", "engine/qjs", "engine/wpt.mjs", "engine/gate_revision.mjs"]);
+for (const l of revisionLines(REV_AT_START)) console.log(l);
 
 /* WHICH FILES TO RUN — AND THE ANSWER IS THE CORPUS'S OWN, PORTED, not a set of endings this file grew one
    defect at a time. Four times now the rule here has been a habit rather than the definition, and each time the
@@ -1073,6 +1085,18 @@ console.log("  ---- summary");
     console.log(`       the corpus ${moved}`);
     for (const [k, why] of [...g_unreadable.entries()].sort()) console.log(`       ${why.padEnd(8)} ${k}`);
   }
+}
+/* THE REVISION, AGAIN, IN THE TAIL. The head of a corpus run scrolls out of every terminal and out of every
+   paste — the block a reader quotes is this one — so the identity is emitted where the numbers are and not
+   only where the run began. Re-asked rather than reprinted, because the answer can have CHANGED: this checkout
+   is shared, and a tree edited between the link and the summary means `git show HEAD` will not produce the
+   program these numbers are about. Three answers, all written out, for the reason the corpus's own three are:
+   "it did not move" is a POSITIVE finding and is what makes the head above quotable. */
+for (const l of revisionLines(REV_AT_START)) console.log(l);
+{
+  const moved = revisionMoved(REV_AT_START);
+  console.log(moved ? `[rev] AND IT MOVED WHILE THIS RAN — ${moved}`
+                    : "[rev] the engine did not move during this run");
 }
 console.log(`  files ${files.length}   runs ${runs.length}   subtests ${pass + fail}   pass ${pass}` +
             `   fail ${fail}   aborted-runs ${aborted}   unreadable-runs ${unread}`);

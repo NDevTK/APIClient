@@ -22,6 +22,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 
 const QJS = join(import.meta.dirname, "qjs");
 const CORPUS = join(QJS, "test262", "test");
@@ -49,6 +50,14 @@ if (!existsSync(CORPUS)) {
     "  cd engine/qjs && git -c submodule.test262.update=checkout submodule update --init --depth 1 test262");
   process.exit(1);
 }
+
+/* WHICH TREE THIS NUMBER IS ABOUT, asked before the build and printed with the result — CLAUDE.md §Testing,
+   and engine/gate_revision.mjs for the incident that made it a mechanism. THE CONE IS THE SUBMODULE AND NOT
+   THE HOST: this gate links five quickjs sources and not one file under engine/host, so an edit to solve.c or
+   cow.c does not touch the program measured here and reporting it as if it did would be the same collapsed
+   verdict §Testing forbids one level down. */
+const REV_AT_START = gateRevision(["engine/qjs", "engine/test262.mjs", "engine/gate_revision.mjs"]);
+for (const l of revisionLines(REV_AT_START)) console.log(l);
 
 console.log("[test262] building native run-test262 (clang, NDEBUG)…");
 const bin = join(mkdtempSync(join(tmpdir(), "t262-")), "run262.exe");
@@ -222,6 +231,14 @@ if (d2c) console.log(`  drive-to-completion: ${driveN}` +
   (driveN > 0 ? "  <-- some coroutine body ran to COMPLETION off-tramp (not suspend/resume) — route it onto the tramp chain"
               : "  (no bytecode body was entered by C recursion under a flow — says NOTHING about C-to-C\n" +
                 "                          recursion, which only engine/check_recursion.sh measures)"));
+/* THE REVISION IN THE TAIL, because the tail is what gets pasted — see engine/wpt.mjs's summary for the run
+   whose nine-atom report was quoted for hours against a tree that had already fixed all three of its roots. */
+for (const l of revisionLines(REV_AT_START)) console.log(l);
+{
+  const moved = revisionMoved(REV_AT_START);
+  console.log(moved ? `[rev] AND IT MOVED WHILE THIS RAN — ${moved}`
+                    : "[rev] the engine did not move during this run");
+}
 console.log("===========================================================");
 /* fail on: crash, spec errors, leaks, a NOT-ENGAGED run (0 back-edges proves nothing), fake-green (engagement
    < 100%), OR any drive-to-completion. */
