@@ -2626,6 +2626,12 @@ static int g_park_req, g_parked;
    JS_FlowGen() is read back at the end of every slice so the forks taken inside it are carried forward.
    Monotonic across slices, which is exactly what the boolean it replaced could not be. */
 static uint32_t g_slice_flow_gen;
+/* …AND THE DELTA THE SCHEDULER HOLDS ACROSS IT, for the identical reason and beside it deliberately: the two
+   are one fact about the running flow (which generation it is at, and where its captures land), so a boundary
+   that put one down and left the other up was recording the HOST's construction of a fresh object into a
+   stranger's head. See engine_sched_step. NULL between slices means the host's time captures into nothing,
+   which is what `!g_current` has always meant (cow.h). */
+static CowDelta *g_slice_delta;
 
 void engine_request_park(void) {
     DCHECK(g_sess_live, "a park was requested of an engine with no live session — there is no frontier to "
@@ -2809,6 +2815,11 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        the replies it already had — as belonging to a flow that has not run yet. Both this call and cold_resume
        above it create at baseline, exactly as they did before. */
     g_slice_flow_gen = 1;
+    /* …AND NO FLOW IS RUNNING YET, so the first slice opens with captures routed nowhere. Stated rather than
+       left to the static's zero-initialisation, because a host that opens a SECOND session in one process
+       would otherwise start it on the delta the previous session's last slice left behind — a pointer into a
+       frontier that engine_session_close has already released. */
+    g_slice_delta = NULL;
     dom_cow_set_ctx(ctx);                   /* the DOM delta needs ctx for the attribute taint-shadow dup/free */
     cow_set_ctx(ctx);                       /* …and the heap delta needs one for the component records it captures */
     JS_SetFlowControlHooks(forking ? &FC_EXPLORE : &FC_VERIFY);   /* preempt ALWAYS on; fork only when exploring */
@@ -3396,12 +3407,39 @@ int engine_sched_step(void) {
        AND IT IS SUSPEND/RESTORE, NEVER CLEAR/RE-ENTER. The generation is monotonic — every delta's fork_gen is
        a point on that one line — so the next slice resumes at the number this one left, and a restart at 1
        would make a later object compare as older than an earlier fork. */
+    /* AND THE CAPTURE ROUTE IS THE THIRD, WHICH THE PARAGRAPH ABOVE LEFT OUT — the one that made the stamp line
+       below not merely incomplete but the thing that ARMED the corruption.
+       The three marks are one statement in three registers: the STAMP says what generation an object is born
+       at, `g_dom_capture` says whether the Lexbor tree is being recorded, and the DELTA says WHOSE head a
+       capture lands in. The DOM half turned its recording OFF for the host's time; the JS half turned its STAMP
+       to 0 and left the route pointed at whichever flow the slice last switched in — and `cow_set_current` is
+       never called between slices, because §scheduler requires the yield to keep the running flow switched in.
+       So across the host's own time the capture hook was LIVE and aimed at a stranger's delta, and stamping the
+       host's objects BASELINE is exactly what removed the only thing that had been skipping them: a baseline
+       object is `flow_gen 0 <= d->fork_gen`, which is the SHARED arm of cow_capture_hook's test.
+       WHAT THAT DID, and it is the whole of the `urlList` abort: every property the host wrote on an object it
+       had just created was recorded as a CREATION (existed=0) in that flow's head, and the next context switch
+       away from it ran cow_unapply_entries, which DELETES a creation. A reply record built by
+       fetch_reply_new — or parsed by qjs_provide — therefore arrived at its delivery as `{}`: no urlList, no
+       status, no headers, no body, with its refcount intact and nothing to say what had happened. The same
+       sentence covers every other object the host builds between slices (qjs_host_answer's parsed answer,
+       qjs_route's and qjs_perform's delivery records), which is the list the DCHECK in qjs_step already names.
+       SUSPEND/RESTORE for the same reason the generation is: the slice left the route pointed at the flow it is
+       still holding across the yield, and the next slice must resume with that flow's captures going where they
+       went — clearing it would be a flow running with its writes recorded nowhere. */
     JS_SetFlowGen(g_slice_flow_gen);
     g_dom_capture = 1;
+    cow_set_current(g_slice_delta);
     r = engine_sched_slice();
     g_slice_flow_gen = JS_FlowGen();   /* the forks this slice took moved it; carry them, never restart */
     JS_SetFlowGen(0);                  /* the host's own time is baseline: what it creates is shared by construction */
     g_dom_capture = 0;
+    /* …and it is recorded into NO delta, which is what makes the line above safe rather than merely tidy. The
+       save reads whatever the slice left: the flow it is still holding across a yield, or NULL after a close —
+       engine_session_close switches its last flow out, and flow_switch_out un-currents as it unapplies, which
+       is the same reason that function's own clear of the live stamp is enough for the line above. */
+    g_slice_delta = cow_current();
+    cow_set_current(NULL);
     quantum_end();
     return r;
 }
@@ -3512,6 +3550,19 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
            asks the KIND (solver/pending.h) and the drain LEAVES a synchronous answer where its machine will take
            it (flow_drain_pending) — so the shape this branch was avoiding no longer exists to be avoided. */
         {
+            /* THE HOST'S OWN TIME, ASSERTED WHERE IT BEGINS — the same claim qjs_step makes at the ABI boundary,
+               made here because this driver has no ABI and pays the provider directly. A provider BUILDS
+               objects (a reply record, a peer's answer) and the three marks that decide what happens to those
+               objects belong to the flow that just ran, not to the host: with the stamp up they are stamped as
+               a flow's and no later write to them is ever captured, and with the capture ROUTE up every field
+               the provider writes is recorded as a creation in that flow's head and DELETED by its next
+               unapply — which is how a reply record reached its delivery as `{}`. Two registers, one fact, and
+               the failure mode of each is silent in the opposite direction. */
+            DCHECK(JS_FlowGen() == 0 && cow_current() == NULL,
+                   "the host is being paid with the last flow's generation or its capture route still up — "
+                   "every object the provider now builds either belongs to that flow (so nobody else's write "
+                   "to it is ever captured) or has its every field recorded as a CREATION in that flow's head, "
+                   "which the next context switch deletes: the record arrives at its delivery empty");
             int filled = g_provider ? g_provider(ctx) : 0;
             /* AND THE PAYMENT WAS COMPLETE, asserted at the seam instead of inferred from a census line six
                minutes later. This provider answers out of its OWN tables — a reply record it builds, a peer's

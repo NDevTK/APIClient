@@ -443,6 +443,18 @@ QJS_EXPORT int qjs_step(void)
            "qjs_step is returning to the host with the flow stamp still up — every object the host now creates "
            "would be stamped as belonging to the flow that just yielded, and a write to one of them by any "
            "OTHER flow that shares it is skipped by that flow's delta and survives its rewind");
+    /* …AND SO IS THE CAPTURE ROUTE, which is the OTHER half of that one fact and the half the paragraph above
+       did not have. Putting the stamp down is what makes the host's objects BASELINE — and a baseline object is
+       the SHARED arm of the capture test, so with the route still pointed at the flow that just yielded, every
+       property the four entries below write on a record they have just built is recorded as a CREATION in that
+       flow's head. The next context switch away from it runs the unapply, which DELETES a creation: the reply
+       record reaches the flow it was fetched for as `{}` — no urlList, no status, no headers, no body — with
+       its refcount intact and nothing at all to say what happened to it. The two asserts are opposite failures
+       of the same boundary, so they stand together and neither is enough alone. */
+    DCHECK(cow_current() == NULL,
+           "qjs_step is returning to the host with the last flow's CAPTURE ROUTE still up — every field the "
+           "host writes on a record it builds is recorded as a creation in that flow's COW head, and its next "
+           "context switch deletes them, so the reply arrives at its delivery stripped to an empty object");
     if (r == ENGINE_STEP_STALLED)
         return ENGINE_STEP_YIELD;   /* the bridge speaks two values; a stall is "call me again", same as a slice */
     /* TWO VALUES, AND THIS ENTRY IS WHERE THAT IS TRUE. The scheduler has three codes and the fold above is

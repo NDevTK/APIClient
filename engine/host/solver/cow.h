@@ -61,6 +61,10 @@ bool      cow_delta_empty(const CowDelta *d);
 
 /* Route captures to `d` (the flow about to run). NULL = captures are dropped (baseline setup). */
 void      cow_set_current(CowDelta *d);
+/* …AND WHAT IS ROUTED NOW, for the ONE boundary that has to take the route off and put back what it found —
+   engine_sched_step, around the return to the host. Not a question anybody else may ask: "which flow is
+   running" is flow_running()'s to answer, and a second reader of this would be that question re-spelled. */
+CowDelta *cow_current(void);
 
 /* Install as JSTimeTravelHooks.prop_write: called before a write to a baseline object; appends to the current
    delta. */

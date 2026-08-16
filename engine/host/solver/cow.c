@@ -195,6 +195,11 @@ void cow_set_current(CowDelta *d) {
     g_current = d; JS_SetFlowForkGen(d ? d->fork_gen : 0);
 }
 
+/* WHERE CAPTURES ARE ROUTED RIGHT NOW, so the one boundary that has to take them OFF can put back exactly what
+   it found. It is deliberately the only reader: a caller that asked this in order to DECIDE something would be
+   asking which flow is running, and flow_running() is the authority for that. */
+CowDelta *cow_current(void) { return g_current; }
+
 /* THE SCHEDULER'S OWN BOOKKEEPING — see cow.h. It is expressed as "there is no current delta", which is the
    statement every hook here already understands (`!g_current` is how baseline setup drops its captures), so
    nothing else has to learn about it and no hook can be added that forgets to ask. */
