@@ -113,17 +113,6 @@ typedef struct {
        captures, and — like every other string here — it is never freed on a navigation, because a parked
        flow's saved bytes still name the old one. */
     char   *top_level_url;
-    /* HTML §8.1.3.1's TOP-LEVEL ORIGIN — the OTHER field of that pair, and a separate one because the standard
-       says so in the field's own definition: "This is distinct from the top-level creation URL's origin when
-       sandboxing, workers, and worklets are involved." §7.3.2.1 states them in one breath and answers them
-       differently — the URL is `about:blank` for a top-level browsing context while the origin is the initial
-       Document's own — and §4.7 over a URL cannot express the third case at all, because §7.3.1 hands ONE
-       opaque origin to several Documents and an opaque origin has no serialization it can be recreated from.
-       Permissions §5.1 step 5 reads THIS one: its key is generated from "settings's top-level origin", and
-       §3.2 compares two keys with §7.1.1's same origin, whose step 1 is an identity comparison.
-       BORROWED and POD, exactly like `origin` beside it: an origin lives for the agent, a navigation REPLACES
-       this pointer, and the byte capture in proxy_of is therefore a complete description of the binding. */
-    const Origin *top_level_origin;
     /* §7.2.5's `closed` IS TWO FACTS AND THE GETTER IS THEIR OR — "true if this's browsing context is null or
        its is closing is true". They are two because they happen at two TIMES. `close()` sets is-closing at its
        own call site and QUEUES the destruction; §7.3.1's removal of a container queues one without setting
@@ -367,8 +356,7 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
 
 /* §7.2.5.1's NAVIGATE — see window_proxy.h. Reached from navigable.c, which owns the fetch and the realm. */
 void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
-                           const char *url, const char *top_level_url, const Origin *top_level_origin,
-                           const Origin *origin)
+                           const char *url, const char *top_level_url, const Origin *origin)
 {
     ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
 
@@ -398,15 +386,6 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
            "a navigable was navigated with no top-level creation URL for the new document's environment — the "
            "realm the caller just built has one, and these two must be the same string");
     p->top_level_url = proxy_strdup(top_level_url);
-    /* AND ITS TOP-LEVEL ORIGIN MOVED WITH IT, from the same caller and for the same reason. §7.11's fetch
-       gives a top-level traversable's new environment the NEW DOCUMENT's origin and a nested navigable's the
-       parent environment's — the pair is one decision about the operation's target, so a navigation that
-       moved the URL and left the origin behind would key this document's permissions to the document it
-       replaced. */
-    DCHECK(top_level_origin != NULL,
-           "a navigable was navigated with no top-level origin for the new document's environment — §8.1.3.1 "
-           "gives every environment one, and the realm the caller just built was built under it");
-    p->top_level_origin = top_level_origin;   /* BORROWED and REPLACED rather than mutated — see the field */
     /* THE NAVIGABLE IS NO LONGER SHOWING WHAT §7.4 CREATED IT WITH — see `ever_navigated`. Written here
        because this is the one site that replaces a navigable's active document, which is exactly what makes
        the flag answerable at all. */
@@ -450,7 +429,7 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
 
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
                          bool is_popup, const char *creator_csp, const char *top_level_url,
-                         const Origin *top_level_origin, JSValueConst parent, JSValueConst opener)
+                         JSValueConst parent, JSValueConst opener)
 {
     JSValue obj;
     ProxyData *p;
@@ -493,16 +472,6 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
            "the documents of this navigable are SECURE CONTEXTS, and §7.4 says which url it is: the creator's "
            "for a nested navigable, this navigable's own address for an auxiliary one");
     p->top_level_url = proxy_strdup(top_level_url);
-    /* AND EVERY ENVIRONMENT HAS A TOP-LEVEL ORIGIN, asserted separately from the URL beside it because it is a
-       separate field with a separate answer: §7.3.2.1 gives a top-level browsing context the URL `about:blank`
-       and the ORIGIN of the initial Document it creates, which are not each other's derivation. A caller with
-       nothing to pass has not decided whether it is nesting this navigable or making it a top-level
-       traversable, and Permissions §5.1 step 5 would then key this navigable's grants to a guess. */
-    DCHECK(top_level_origin != NULL,
-           "a navigable was created with no TOP-LEVEL ORIGIN — HTML §8.1.3.1 gives every environment one and "
-           "§7.3.2.1 says which it is: the creator's for a nested navigable, the origin of the initial "
-           "about:blank Document for an auxiliary one, which is the origin this same call is being given");
-    p->top_level_origin = top_level_origin;   /* BORROWED — an origin lives for the agent */
     p->parent = JS_DupValue(ctx, parent);
     p->opener = JS_DupValue(ctx, opener);
     p->doc = doc;
@@ -527,37 +496,11 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
        documents were created under is the one the host handed realm_install_intrinsics. */
     JSValue tlu = realm_top_level_creation_url(ctx);
     const char *tlus = JS_ToCString(ctx, tlu);
-    const Origin *tlo;
-    UrlRecord rec;
     JSValue obj;
     ProxyData *p;
 
     CHECK(tlus != NULL, "the realm's top-level creation URL would not convert to a C string");
-    /* §8.1.3.1's TOP-LEVEL ORIGIN FOR THE ONE NAVIGABLE NO §7.3.2.1 RAN FOR — the instance's root, whose
-       environment the HOST built. The URL it built it with is above; the ORIGIN is §7.3.1's determine the
-       origin over that URL with THIS AGENT'S origin as the source origin, which is the whole of what an
-       origin-keyed agent cluster has to inherit from. That is not a re-derivation dressed up: §7.3.1 IS the
-       algorithm that answers "whose origin is a Document at this address", and its two inheritance cases are
-       exactly the addresses §4.7 cannot answer for — `about:blank`, which is the address §7.3.2.1 creates
-       EVERY top-level browsing context at, and `about:srcdoc`. A host that started this instance at a real
-       address gets §4.7's tuple, which is the same origin as this agent's by construction. */
-    url_record_init(&rec);
-    tlo = url_parse(&rec, tlus, strlen(tlus), NULL) ? origin_determine(&rec, false, origin_agent())
-                                                    : origin_determine(NULL, false, NULL);
-    url_record_free(&rec);
-    /* THE ONE ANSWER §7.3.1 CANNOT REACH FROM A URL, named where it would otherwise be silent. A `data:` or
-       `file:` top-level creation URL takes §7.3.1 step 5 to §4.7, which MINTS a new opaque origin — and an
-       opaque origin that is not this agent's own record is same origin with nothing, so every environment of
-       this instance would be keyed to a value no other environment can ever equal. Which Document that origin
-       belongs to is a fact only the zone that created this instance holds. */
-    DCHECK(!origin_is_opaque(tlo) || origin_same(tlo, origin_agent()),
-           "this instance's root environment has a TOP-LEVEL CREATION URL whose §4.7 origin is OPAQUE and is "
-           "not this agent's own, so §7.3.1 minted a second one rather than inheriting: an opaque origin has "
-           "no serialization it can be recreated from, and a URL therefore cannot say WHOSE it is. STATE "
-           "§8.1.3.1's TOP-LEVEL ORIGIN beside the top-level creation URL from the zone that created this "
-           "instance — it is the same statement, made by the same party, for the same reason");
-    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, NULL, tlus, tlo,
-                           JS_UNDEFINED, JS_NULL);
+    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, NULL, tlus, JS_UNDEFINED, JS_NULL);
     JS_FreeCString(ctx, tlus);
     JS_FreeValue(ctx, tlu);
 
@@ -988,19 +931,6 @@ const char *window_proxy_top_level_url(JSValueConst proxy)
     ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the top-level creation URL of something that is not a WindowProxy was asked for");
     return p->top_level_url;
-}
-
-/* Through the capturing accessor for the same reason: an arm that navigated a top-level traversable moved this
-   field, and its sibling that did not must still read the origin its own world was created under. */
-const Origin *window_proxy_top_level_origin(JSValueConst proxy)
-{
-    ProxyData *p = proxy_of(proxy);
-    DCHECK(p != NULL, "the top-level origin of something that is not a WindowProxy was asked for");
-    DCHECK(p->top_level_origin != NULL,
-           "the TOP-LEVEL ORIGIN of a navigable whose active document lives in a PEER instance was asked for — "
-           "§8.1.3.1's field belongs to an ENVIRONMENT, this instance builds none for a remote navigable, and "
-           "the instance that does is the one that answers Permissions §5.1 for its documents");
-    return p->top_level_origin;
 }
 
 

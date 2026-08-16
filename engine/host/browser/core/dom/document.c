@@ -155,6 +155,73 @@ static Document *doc_here(JSContext *ctx)
     return d;
 }
 
+/* ---- THE RECORD'S COUNTED REFERENCES: ONE LIST, TWO CONSUMERS ------------------------------------------- */
+
+/* A Document record is malloc'd C, so the four references it holds are invisible to every walk the runtime
+   makes of itself — and two of them (`win_obj`, `proxy`) point straight back into the realm the record hangs
+   off. That is a cycle with one edge the collector cannot see: gc_decref never subtracts these, the WindowProxy
+   reads as externally rooted, gc_scan revives the Window and every function object behind it, and the realm can
+   never be collected. Since the ONLY thing that releases the record is the realm's own teardown hook, the
+   record was preventing the event that frees the record. Every child navigable's realm therefore lived to
+   JS_FreeRuntime, whose gc_obj_list walk reported the whole page as a leak naming no owner — the largest single
+   abort cause in web-platform-tests' html/browsers, and in the product a per-navigable heap that only grows for
+   the life of the browsing session.
+   THE LIST IS WRITTEN ONCE because the two consumers must agree EXACTLY. A field the release frees and the mark
+   omits is the leak above coming back; a field the mark reports and the release does not own is worse — an
+   over-subtracted refcount and a use-after-free. Two hand-kept lists is the drift CLAUDE.md's host-record rule
+   names, so there is one list and neither consumer restates it. */
+typedef void DocRefFn(JSContext *ctx, JSValue *pv, void *arg);
+
+static void doc_rec_refs(Document *d, DocRefFn *fn, void *arg)
+{
+    fn(d->realm, &d->impl, arg);
+    fn(d->realm, &d->proxy, arg);
+    fn(d->realm, &d->win_obj, arg);
+    fn(d->realm, &d->doc_obj, arg);
+}
+
+static void doc_ref_release(JSContext *ctx, JSValue *pv, void *arg)
+{
+    (void)arg;
+    JS_FreeValue(ctx, *pv);
+    *pv = JS_UNDEFINED;
+}
+
+/* A STRUCT AND NOT THE FUNCTION POINTER ITSELF THROUGH `void *`: converting a function pointer to an object
+   pointer is not something C defines, and this file already carries the scar of a data pointer put where a
+   function pointer belonged (§C-stack's JSCFunctionType rule). */
+typedef struct { JSRuntime *rt; JS_MarkFunc *mark; } DocMarkArg;
+
+static void doc_ref_mark(JSContext *ctx, JSValue *pv, void *arg)
+{
+    DocMarkArg *m = arg;
+
+    (void)ctx;
+    JS_MarkValue(m->rt, *pv, m->mark);
+}
+
+/* WHAT THIS REALM'S RECORDS HOLD, ANSWERED TO THE COLLECTOR — quickjs.h's JS_SetContextMarkHook, asked about
+   every realm of the runtime from inside a collection.
+   IT WALKS EXACTLY WHAT document_free WALKS: the realm's active record and the chain of documents that realm
+   created at BASELINE, which is the whole set of records the realm's teardown releases. A record a FLOW created
+   is owned by that flow's COW delta and is reachable from no realm, so it is neither walked here nor released
+   there — the delta destroys it, and until it does its references correctly read as rooted from outside. */
+static void document_realm_mark(JSRuntime *rt, JSContext *ctx, JS_MarkFunc *mark_func)
+{
+    DocMarkArg m;
+    Document *c;
+
+    m.rt = rt;
+    m.mark = mark_func;
+    for (c = doc_of(ctx); c; c = c->next_created) {
+        DCHECK(c->realm == ctx,
+               "a document record on a realm's baseline chain names a DIFFERENT realm — the chain is what that "
+               "realm's teardown releases, so a foreign record on it would have its references reported by one "
+               "realm's collection and freed by another's teardown");
+        doc_rec_refs(c, doc_ref_mark, &m);
+    }
+}
+
 /* THE RECORD FOR A DOM DOCUMENT — the answer to every per-document question, whatever realm is asking. NULL for
    a Lexbor document no record was ever built for, which is a solver scratch parse. */
 static Document *doc_rec(const lxb_dom_document_t *dom)
@@ -2031,6 +2098,12 @@ void document_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_document_class);
     JS_NewClass(JS_GetRuntime(ctx), g_document_class, &d);
     node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT, g_document_class);
+    /* HOW THIS COMPONENT'S RECORD REACHES THE COLLECTOR. Declared with the AGENT and for the RUNTIME, beside the
+       class it belongs to and before any record can exist — doc_rec_new asserts that order from the other side,
+       at the birth of each record. It is the mirror of the realm-teardown hook navigable.c declares: that one
+       says when a record dies, this one says what it holds while it lives, and a record with only the first is
+       a record that never gets to use it. */
+    JS_SetContextMarkHook(JS_GetRuntime(ctx), document_realm_mark);
     g_ready_slot = realm_value_declare(ctx, "HTML current document readiness");
     /* §7.5.9's page showing is the readiness's twin — one Document's state, written by the same two algorithms
        that move the readiness ("the end" sets it, unloading clears it) — so it is declared beside it. */
@@ -2136,6 +2209,18 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
            "no parse, no createDocument and no clone could have produced");
     DCHECK(dd->user == NULL, "a second record was built for one Lexbor document — the first would be leaked and "
                              "every node of the tree would answer through whichever won");
+    /* THE ORIGIN OF THE UNCOLLECTABLE REALM, ASKED AT THE BIRTH OF THE RECORD THAT CAUSES IT. Four counted
+       references are about to hang off malloc'd C, and two of them point back INTO this realm — so from this
+       line on, a collector that has not been told how to read this record can never collect the realm, and
+       nothing says so until JS_FreeRuntime's gc_obj_list walk reports a whole page with no owner named. That is
+       the worst possible place to learn it, so it is asked here, where it is still a fact about ONE record.
+       It is asked of every record and not only of a realm's active one, because a second Document (§4.5.1's
+       three factories, DOMParser, XHR's responseXML) holds the same references through the same list. */
+    DCHECK(JS_GetContextMarkHook(JS_GetRuntime(ctx)) == document_realm_mark,
+           "a Document record was built in a runtime that does not report this component's records to the "
+           "collector — document_init declares document_realm_mark, and without it every reference the record "
+           "holds is one gc_decref cannot subtract, so the realm the record points back into is a cycle with an "
+           "invisible edge and is uncollectable for the life of the runtime");
     d = calloc(1, sizeof *d);
     CHECK(d != NULL, "document: OOM naming a document");
     d->realm = ctx;
@@ -2158,11 +2243,10 @@ static void doc_rec_release(Document *d)
 {
     JSContext *ctx = d->realm;
 
+    /* BEFORE the references go, and it is not one of them: §4.5.1's object holds a raw pointer to the Lexbor
+       document, and a DOMImplementation the page kept outlives this record. */
     dom_implementation_detach(ctx, d->impl);
-    JS_FreeValue(ctx, d->impl);
-    JS_FreeValue(ctx, d->proxy);
-    JS_FreeValue(ctx, d->win_obj);
-    JS_FreeValue(ctx, d->doc_obj);
+    doc_rec_refs(d, doc_ref_release, NULL);   /* the ONE list — see doc_rec_refs */
     policy_container_free(d->policy);   /* malloc'd, so the GC walk would never have named it */
     if (d->dom)
         lxb_dom_interface_document(d->dom)->user = NULL;
@@ -2518,6 +2602,13 @@ void document_free(JSContext *ctx)
     Document *d = doc_of(ctx), *c, *next;
 
     if (!d) return;   /* a realm that never had a document — the runner builds one per component test */
+    /* THE REALM STOPS NAMING ITS RECORDS BEFORE THE FIRST ONE IS RELEASED, and it is the chain walk below that
+       makes the order matter. Every line under this one drops a counted reference, and dropping one can end a
+       refcount cascade that runs finalizers — so between the first free and the last there must be no chain for
+       document_realm_mark to walk, or a collection landing mid-teardown reads records that are already freed.
+       Clearing the opaque here makes that window EMPTY rather than merely short. `doc_of(ctx)` answering NULL
+       is the honest state for a realm whose document is going: it no longer has one. */
+    JS_SetContextOpaque(ctx, NULL);
     /* THE DOCUMENTS THIS REALM CREATED AT BASELINE go first: each holds a wrapper of the ACTIVE document's realm
        and each owns a whole Lexbor tree, and the active record is what the chain hangs off. */
     for (c = d->next_created; c; c = next) { next = c->next_created; doc_rec_free(ctx, c); }
@@ -2528,5 +2619,4 @@ void document_free(JSContext *ctx)
        no navigable names them and no peer can reach them. */
     world_doc_realm_set(d->doc, NULL);
     doc_rec_free(ctx, d);
-    JS_SetContextOpaque(ctx, NULL);
 }

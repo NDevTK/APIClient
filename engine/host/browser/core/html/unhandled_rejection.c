@@ -376,15 +376,26 @@ void unhandled_rejection_install(JSContext *ctx, JSValueConst global)
     JS_SetPropertyStr(ctx, (JSValue)global, "PromiseRejectionEvent", ctor);
 }
 
-void unhandled_rejection_free(JSContext *ctx)
+/* THE RUNTIME, NOT A REALM, and it is the platform's release column that calls it — see core/platform.h. What
+   this holds is AGENT state (§8.1.7.5's list of about-to-be-notified rejections and the slot key beside it), so
+   the thing it is released against is the agent, which is a JSRuntime; taking a JSContext is what made it a
+   line each host had to remember, and the WPT runner did not. That cost every file in that gate its result: the
+   list is a live Array held by a C static, so JS_FreeRuntime's gc_obj_list walk found it and aborted the run
+   after the test had already passed. */
+void unhandled_rejection_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
+    /* NOT `if (!g_ready) return;`. The release is the inverse of the DECLARATION and rides the same row of the
+       same list, so a release without a declaration is not a state to tolerate — it is a host that reached
+       teardown without having built this browser, which core/platform.c asserts from its end too. */
+    DCHECK(g_ready, "§8.1.7.5's rejection list was released in an agent that never declared it — the release "
+                    "column is the inverse of the declare column, so reaching here without an init means this "
+                    "component was torn down by something that is not the platform's one list");
     /* The tracker goes FIRST: teardown frees promises, and a rejected one still on the runtime's list would
        fire the callback into a list this call is about to release. */
-    JS_SetHostPromiseRejectionTracker(JS_GetRuntime(ctx), NULL, NULL);
+    JS_SetHostPromiseRejectionTracker(rt, NULL, NULL);
     g_ready = 0;
-    JS_FreeValue(ctx, g_list);   /* the prototypes are the REALMS' — each is released with its context */
-    JS_FreeValue(ctx, g_pre_key);
+    JS_FreeValueRT(rt, g_list);   /* the prototypes are the REALMS' — each is released with its context */
+    JS_FreeValueRT(rt, g_pre_key);
     g_list = g_pre_key = JS_UNDEFINED;   /* the per-realm driver is released with its context */
     g_report = NULL;
 }

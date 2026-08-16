@@ -74,7 +74,11 @@
    shuffles, and a component whose facts change breaks its own thunk and nothing else. */
 typedef void PlatformDeclare(JSContext *ctx, const PlatformAgent *a);
 typedef void PlatformInstall(JSContext *ctx, JSValueConst g, const PlatformDocument *d);
-typedef void PlatformRelease(void);
+/* THE RELEASE TAKES THE RUNTIME, because that is what an AGENT is: a component on this column holds state for
+   the whole agent (that is the entry condition for being on it), and agent state is freed against the runtime
+   the declaration was made in — which platform.c already remembers, so no host has to pass anything. A row that
+   wanted a JSContext would be a per-realm component in the wrong column; those go with their realm. */
+typedef void PlatformRelease(JSRuntime *rt);
 
 typedef struct {
     const char      *name;      /* the component, as its file is named — every assert below says which */
@@ -150,9 +154,15 @@ static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; mod
 
 /* ---- the agent half, undone ----------------------------------------------------------------------------- */
 
-static void r_hr_time(void) { hr_time_free(); }
-static void r_cookie_jar(void) { cookie_jar_free(); }
-static void r_navigate_event_fire(void) { navigate_event_fire_free(); }
+static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
+static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
+static void r_navigate_event_fire(JSRuntime *rt) { (void)rt; navigate_event_fire_free(); }
+/* §8.1.7.5's list of about-to-be-notified rejections is a live Array a C static holds for the agent, so it is
+   agent state and belongs on this column. It was a line in each host's own teardown instead, the WPT runner's
+   copy did not have it, and the consequence was not a subtle one: EVERY file that gate ran ended on
+   JS_FreeRuntime's gc_obj_list walk with a leaked Array, so a test that had already passed was reported as an
+   abort. That is exactly the drift this column exists to end. */
+static void r_unhandled_rejection(JSRuntime *rt) { unhandled_rejection_free(rt); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -301,7 +311,7 @@ static const PlatformComponent PLATFORM[] = {
     { "window_message",      d_window_message,      i_window_message },
     { "broadcast_channel",   d_broadcast_channel,   i_broadcast_channel },
     { "structured_clone",    NULL,                  i_structured_clone },
-    { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection },
+    { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection, r_unhandled_rejection },
     /* §8.9's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
     { "animation_frame",     d_animation_frame,     i_animation_frame },
     { "page_reveal",         d_page_reveal,         i_page_reveal },
@@ -477,7 +487,7 @@ void platform_agent_free(void)
        another may hold a value that component minted, so it must give it up first. */
     for (i = PLATFORM_N - 1; i >= 0; i--)
         if (PLATFORM[i].release)
-            PLATFORM[i].release();
+            PLATFORM[i].release(g_declared_in);
     /* THE ORIGINS GO LAST, AFTER EVERY COMPONENT THAT NAMES ONE. They are the agent's, not a realm's — a
        WindowProxy holds one as a POD pointer inside the bytes its COW delta captures — so the whole table is
        released here, once, when nothing is left that could read it. */

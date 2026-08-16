@@ -2444,7 +2444,8 @@ int main(int argc, char **argv) {
     animation_frame_free(ctx);
     timer_free(ctx);        /* §8.6's declaration; each global's map went with its realm */
     event_loop_free(ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
-    unhandled_rejection_free(ctx);
+    /* §8.1.7.5's rejection list is a row on core/platform.h's release column now, run by the
+       platform_agent_free above — see main.c's teardown for what having it here cost the host that did not. */
     abort_free(ctx);
     observable_free(ctx);
     document_free(ctx);   /* the window reference the lifecycle holds */

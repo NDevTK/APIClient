@@ -32,34 +32,15 @@ void window_proxy_free(JSContext *ctx);
    not be the creator. WHICH url it is, is §7.4 read from both ends — a CHILD navigable is nested, so it
    inherits its creator's (core/realm.h), while an AUXILIARY one is its own top-level traversable and its
    documents' top-level creation URL is its OWN address. Never NULL: every environment has one. */
-/* `top_level_origin` is HTML §8.1.3.1's TOP-LEVEL ORIGIN, which is a SECOND field beside the one above and not
-   a derivation of it: "This is distinct from the top-level creation URL's origin when sandboxing, workers, and
-   worklets are involved." §7.3.2.1 sets the pair together and states each separately — "Let topLevelCreationURL
-   be about:blank if embedder is null; otherwise embedder's relevant settings object's top-level creation URL.
-   Let topLevelOrigin be origin if embedder is null; otherwise embedder's relevant settings object's top-level
-   origin" — where `origin` is the origin of the initial about:blank Document the navigable is created with. So
-   a CHILD navigable inherits its creator's and an AUXILIARY one is its own top-level environment, exactly as
-   the URL does, and the two answers disagree wherever a URL cannot carry an identity (§7.1.1: an opaque origin
-   has "no serialization it can be recreated from"). Never NULL for a local proxy. */
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
                          bool is_popup, const char *creator_csp, const char *top_level_url,
-                         const Origin *top_level_origin, JSValueConst parent, JSValueConst opener);
+                         JSValueConst parent, JSValueConst opener);
 
 /* THE TOP-LEVEL CREATION URL THE DOCUMENTS OF THIS NAVIGABLE ARE CREATED UNDER. BORROWED — the proxy owns the
    bytes, and like every other string it has ever held they outlive it (see proxy_of), so a parked flow that
    still names an older one resumes onto live memory. NULL only for a REMOTE proxy, whose documents' realms are
    a peer's to build. */
 const char *window_proxy_top_level_url(JSValueConst proxy);
-
-/* HTML §8.1.3.1's TOP-LEVEL ORIGIN of the environments of this navigable's documents — the RECORD, because
-   that is what every algorithm reading it compares: Permissions §5.1 step 5 generates its permission key from
-   "settings's top-level origin" and §3.2 compares two keys with the default permission key comparison
-   algorithm, which is "return key1 is same origin with key2" — §7.1.1, whose step 1 is an identity comparison
-   a serialization cannot express. BORROWED: an origin lives for the agent (core/url/origin.h), so it sits
-   inside the bytes proxy_of captures exactly as `origin` does, and a navigation REPLACES the pointer rather
-   than mutating what it points at. Asked only of a LOCAL proxy: a remote navigable's environments are built by
-   the instance that holds its documents, and that instance answers §5.1 for them. */
-const Origin *window_proxy_top_level_origin(JSValueConst proxy);
 
 /* §7.4's "popup window is requested" for this navigable — §7.2.5.3's BarProps are the negation of it. */
 bool window_proxy_is_popup(JSValueConst proxy);
@@ -69,13 +50,7 @@ bool window_proxy_is_popup(JSValueConst proxy);
    `name` is the navigable's, and NULL is the host STATING THAT IT DOES NOT KNOW IT — this is the one navigable
    §7.4 did not create, so the browser may have been handed a name by a cross-origin document that set it before
    navigating, and `window.name` then reads as unknown external input. A host that loaded the document itself
-   knows the answer is "" and says so.
-   §8.1.3.1's TWO TOP-LEVEL FIELDS ARE READ OFF THE REALM THE HOST ALREADY BUILT, not passed in — the URL
-   verbatim (realm_top_level_creation_url) and the ORIGIN by running §7.3.1's determine the origin over it with
-   THIS AGENT'S origin as the source origin, which is the only source origin an origin-keyed agent cluster has.
-   That is the standard's own answer for the two addresses a URL cannot carry an origin for: an `about:blank`
-   top-level environment (§7.3.2.1 creates every top-level browsing context at that address) inherits the
-   source, and a real address gives §4.7's tuple. */
+   knows the answer is "" and says so. */
 JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name);
 
 /* THE ONE WindowProxy FOR A DOCUMENT — this agent's own when it hosts it, and otherwise a proxy over a
@@ -289,23 +264,19 @@ const Origin *window_proxy_origin(JSValueConst proxy);
 /* NAVIGATE — REPLACE THE NAVIGABLE'S ACTIVE DOCUMENT while the proxy object stays the same, which is the whole
    reason a WindowProxy exists: a page holding `iframe.contentWindow` across a navigation holds the same object
    and reaches the NEW document through it.
-   ALL SEVEN FACTS MOVE AT ONCE — realm, Window, document id, address, top-level creation URL, top-level
-   origin, origin — because they are one binding. An earlier attempt replaced the Window and the origin and
-   left the REALM behind, so the two halves of one navigable named different documents; that is why they are
-   one call and not seven setters. `top_level_url` and `top_level_origin` are the environment the CALLER built
-   the new realm under: §7.11's navigate gives a TOP-LEVEL traversable's new environment `currentURL` and the
-   new document's own origin, and leaves a nested navigable's pair where its creation put it ("If navigable is
-   not a top-level traversable ... set topLevelCreationURL to parentEnvironment's top-level creation URL and
-   topLevelOrigin to parentEnvironment's top-level origin"). The caller is the one that knows which, because it
-   is a fact about the operation's target.
+   ALL SIX FACTS MOVE AT ONCE — realm, Window, document id, address, top-level creation URL, origin — because
+   they are one binding. An earlier attempt replaced the Window and the origin and left the REALM behind, so
+   the two halves of one navigable named different documents; that is why they are one call and not six
+   setters. `top_level_url` is the environment the CALLER built the new realm under: §7.11 moves it to the new
+   address for a top-level traversable and leaves a nested navigable's where its creation put it, and the
+   caller is the one that knows which, because it is a fact about the operation's target.
    PER FLOW: the whole record is captured into the running flow's delta at the accessor, so a sibling arm that
    never navigated still resolves this proxy to the document it knew, and a parked flow resumes into its own.
    `realm` is BORROWED — the agent owns every realm it built (navigable.c) — and the superseded one is NOT torn
    down here: a flow parked inside it resumes there, which is what makes it a time-travel entity rather than a
    page a browser could throw away. */
 void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
-                           const char *url, const char *top_level_url, const Origin *top_level_origin,
-                           const Origin *origin);
+                           const char *url, const char *top_level_url, const Origin *origin);
 
 /* HAS THIS NAVIGABLE'S ACTIVE DOCUMENT BEEN REPLACED BY A NAVIGATION — HTML §7.4.4 step 4's "document's IS
    INITIAL about:blank", asked of the navigable because that is what can answer it. §7.4 creates every navigable

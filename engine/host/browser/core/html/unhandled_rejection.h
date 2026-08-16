@@ -9,7 +9,10 @@ void unhandled_rejection_init(JSContext *ctx);
 void unhandled_rejection_install_proto(JSContext *ctx);
 /* PER REALM — see event.h. OWNED: the caller frees. */
 JSValue unhandled_rejection_proto(JSContext *ctx);
-void unhandled_rejection_free(JSContext *ctx);
+/* THE AGENT HALF, UNDONE — called ONLY from core/platform.c's release column, which is why it takes the
+   RUNTIME: what it frees is agent state, and a host that has to remember the call is a host that can forget it
+   (the WPT runner did, and every file in that gate ended on the runtime's own leak walk). */
+void unhandled_rejection_free(JSRuntime *rt);
 /* `PromiseRejectionEvent` as a global — §8.1.7.5's own interface, chained to Event. */
 void unhandled_rejection_install(JSContext *ctx, JSValueConst global);
 

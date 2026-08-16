@@ -443,7 +443,10 @@ QJS_EXPORT void qjs_teardown(void)
     animation_frame_free(g_ctx);
     timer_free(g_ctx);        /* §8.6's declaration; each global's map went with its realm */
     event_loop_free(g_ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
-    unhandled_rejection_free(g_ctx);
+    /* §8.1.7.5's rejection list is NOT freed here any more — it is a row on core/platform.h's release column,
+       run by the platform_agent_free above. It was a line in this list and in nobody else's, and the host that
+       did not have it aborted every file it ran on the runtime's leak walk. Every other line below is still a
+       hand-copied teardown, which is the same defect waiting: they belong on that column too. */
     abort_free(g_ctx);
     observable_free(g_ctx);
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
