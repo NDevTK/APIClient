@@ -296,6 +296,13 @@ const INTERFACES = {
      really are installed. CSSMarginRule inherits CSSRule and declares only `name` and `style`. */
   CSSPageRule:          "core/css/css_rule.c",
   CSSMarginRule:        "core/css/css_rule.c",
+  /* CSS Animations §6.2 and §6.3, same component and the same reason. Both derive from CSSRule directly — a
+     `@keyframes` holds rules and is still not a CSSGroupingRule, which the IDL states outright — so both rows
+     are expected to report NOTHING missing. §6.3.1's indexed property getter is not a named member and so is
+     not a row the audit can see; it is core/idl_indexed.h's mechanism reached from the rule class's own
+     exotic hooks. */
+  CSSKeyframeRule:      "core/css/css_rule.c",
+  CSSKeyframesRule:     "core/css/css_rule.c",
   /* CSS Fonts §12.1's and CSSOM §6.4.7's descriptor blocks. Their file is the DECLARATION-BLOCK component and
      not the rule's: the descriptor attributes are installed beside §6.6.1's per-property ones, over the same
      record. Both rows are expected to report nothing missing — each interface's members are exactly its own

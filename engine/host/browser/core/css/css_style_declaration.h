@@ -37,26 +37,42 @@ void cssom_install(JSContext *ctx, JSValueConst global);
    — installed by the html layer, because the attribute is HTMLElement's and the object is this component's. */
 void cssom_install_style_attribute(JSContext *ctx, JSValueConst proto);
 
-/* CSSOM §6.6's SERIALIZE A CSS DECLARATION BLOCK over the text a backing keeps — the declarations that parsing
-   `text` produces, with §6.6's shorthand consolidation loop applied, joined by a single SPACE and each closed
-   by a semicolon. OWNED. NULL for a block that declares nothing, which is both the spec's "the serialization
-   of an empty CSS declaration block is the empty string" and §6.4's "null if there are no such declarations" —
-   the two answers a caller has to tell apart, which is why this reports it as NULL rather than as "".
-   EXPORTED FOR §6.4's SERIALIZE A CSS RULE, because a rule's `cssText` is its selector list and this. */
-char *cssom_serialize_declarations(const char *text, size_t len);
-
-/* THE SAME, RESTRICTED TO A PAGE CONTEXT — CSS Paged Media §4.3's "the @page rule can only contain page
- * properties and margin at-rules" and "the margin at-rules can only contain page-margin properties", applied
- * to the declarations `text` parses to. `margin_context` picks which of Appendix A's two lists decides;
- * core/css/css_page.h owns the lists and states why they are closed.
+/* WHICH RULE'S DECLARATION BLOCK THIS IS — the one thing that decides which declarations it may HOLD, and
+ * therefore an argument of the serialization below rather than a question any reader asks for itself.
  *
- * IT IS A SERIALIZATION AND NOT A PREDICATE because that is where the restriction has to bite. A rule's
- * declarations are kept as TEXT (core/css/css_rule.h says why), so the two moments a page context's text is
- * DECIDED are the two moments it is written — the parse that builds the rule, and §6.6.1's writes through the
- * block — and filtering at both is what makes `length`, `cssText`, `getPropertyValue` and `setProperty` agree
- * without any of them asking the question for itself. OWNED; NULL when the context admits none of them, which
- * is the same "no declarations" the entry above reports. */
-char *cssom_serialize_page_declarations(const char *text, size_t len, bool margin_context);
+ * THREE SPECIFICATIONS RESTRICT A BLOCK BY THE RULE IT BELONGS TO, and each states it as a closed sentence.
+ * CSS Paged Media §4.3: "The @page rule can only contain page properties and margin at-rules. The margin
+ * at-rules can only contain page-margin properties" (core/css/css_page.h owns the two lists). CSS Animations
+ * §3: "The <declaration-list> inside of <keyframe-block> accepts any CSS property except those defined in this
+ * specification, but does accept the animation-timing-function property", plus "properties qualified with
+ * !important are invalid and ignored" (core/css/css_keyframes.h owns both halves). UNRESTRICTED is every other
+ * block this engine has — an inline style, a computed style, a style rule's and an `@font-face`'s — and it is
+ * ZERO so that a caller with no rule to name states it by naming nothing.
+ *
+ * IT IS A RULE TYPE AND NOT A PROPERTY FILTER, which is Blink's `StyleRule::RuleType` reaching
+ * `CSSParserImpl::ConsumeDeclaration` and is the shape that keeps the three restrictions from becoming three
+ * entry points that a fourth rule type could be added to only two of. */
+typedef enum {
+    CSSOM_BLOCK_UNRESTRICTED = 0,
+    CSSOM_BLOCK_PAGE,        /* CSS Paged Media §4.3's page context — inside `@page` itself */
+    CSSOM_BLOCK_MARGIN,      /* one of §5's margin at-rules */
+    CSSOM_BLOCK_KEYFRAME,    /* CSS Animations §3's `<keyframe-block>` */
+} CssomBlockContext;
+
+/* CSSOM §6.6's SERIALIZE A CSS DECLARATION BLOCK over the text a backing keeps — the declarations that parsing
+ * `text` produces, with §6.6's shorthand consolidation loop applied, joined by a single SPACE and each closed
+ * by a semicolon, RESTRICTED to what `context`'s rule may hold. OWNED. NULL for a block that declares nothing,
+ * which is both the spec's "the serialization of an empty CSS declaration block is the empty string" and
+ * §6.4's "null if there are no such declarations" — the two answers a caller has to tell apart, which is why
+ * this reports it as NULL rather than as "". EXPORTED FOR §6.4's SERIALIZE A CSS RULE, because a rule's
+ * `cssText` is its prelude and this.
+ *
+ * THE RESTRICTION IS A SERIALIZATION AND NOT A PREDICATE because that is where it has to bite. A rule's
+ * declarations are kept as TEXT (core/css/css_rule.h says why), so the two moments a restricted block's text
+ * is DECIDED are the two moments it is written — the parse that builds the rule, and §6.6.1's writes through
+ * the block — and filtering at both is what makes `length`, `cssText`, `getPropertyValue` and `setProperty`
+ * agree without any of them asking the question for itself. */
+char *cssom_serialize_declarations(const char *text, size_t len, CssomBlockContext context);
 
 /* §6.4.3's `style`: a CSSStyleProperties whose DECLARATIONS are `rule`'s — computed flag unset, readonly flag
    unset, parent CSS rule the rule, owner node null. Every read and every write goes back through the rule's own
@@ -118,6 +134,18 @@ typedef struct {
        list), with leading and trailing whitespace removed. Never NULL — `@media {}` has an EMPTY prelude, which
        is a media query list of no queries and not the absence of one. */
     const char *prelude;
+    /* IS `prelude` A SERIALIZED SELECTOR LIST? True for a qualified rule whose prelude parsed as one; FALSE
+       for a qualified rule whose prelude did NOT, where it is the RAW SOURCE SPAN instead, and false for every
+       at-rule, whose prelude is its own grammar's raw source and which `at_name` already marks.
+       IT IS THE CONTEXT'S QUESTION AND THEREFORE THE CALLER'S. CSS Syntax consumes a qualified rule without
+       deciding what its prelude MEANS — "if the rule is valid in the current context, return it" — and at a
+       stylesheet's top level the context is a style rule, so `0%, 100% { }` there is an invalid selector list
+       and the rule is dropped. Inside a `@keyframes` the very same text is CSS Animations §3's
+       `<keyframe-selector>#` and the rule is a `<keyframe-block>`. Lexbor reports the second shape as a
+       BAD_STYLE rule carrying the raw prelude, which is exactly the material the caller needs to tell the two
+       apart, so it is reported rather than dropped in the parser layer — the same reason a body's declarations
+       AND its child rules are both reported for every rule that has a body. */
+    bool        prelude_is_selectors;
     /* A SERIALIZED DECLARATION BLOCK — the declarations this rule's body declares. NULL for a statement
        at-rule with no body at all (`@import url(x);`); the empty string for a body that declares nothing,
        which is every `@media` and every `@page` that holds only rules.
@@ -139,11 +167,16 @@ typedef struct {
  * that rule's children arrive as though they were TOP-LEVEL, so a builder keeping objects must return a handle
  * for every rule it is told about, the ones it decided to drop included.
  *
- * A rule CSS SYNTAX SAYS IS INVALID is dropped by the parse and never reported: a qualified rule whose prelude
- * is not a selector list, an at-rule whose own grammar failed, and a declaration where a rule belongs. That is
- * what every user agent does with one — an invalid rule is not in `cssRules` — and it is also what makes the
- * count above mean what CSS Syntax's parse-a-RULE means, so `insertRule('???')` is a SyntaxError rather than a
- * rule with no object. */
+ * A rule CSS SYNTAX SAYS IS INVALID IN EVERY CONTEXT is dropped by the parse and never reported: an at-rule
+ * whose own grammar failed, and a declaration where a rule belongs. That is what every user agent does with
+ * one — an invalid rule is not in `cssRules` — and it is also what makes the count above mean what CSS
+ * Syntax's parse-a-RULE means, so `insertRule('@namespace { }')` is a SyntaxError rather than a rule with no
+ * object.
+ * A QUALIFIED RULE WHOSE PRELUDE IS NOT A SELECTOR LIST IS NOT THAT, AND USED TO BE TREATED AS IT. Whether one
+ * is invalid depends on the CONTEXT and nothing here knows the context, so it is reported with
+ * `prelude_is_selectors` unset and the builder decides — which is what makes `0%, 100% { }` a
+ * `<keyframe-block>` inside a `@keyframes` and a dropped rule anywhere else. A builder that drops it must
+ * still return a handle for it, by the rule above, and must still count it out of its own total. */
 typedef void *(*CssomRuleFn)(void *ud, void *parent, const CssomRule *rule);
 unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *ud);
 

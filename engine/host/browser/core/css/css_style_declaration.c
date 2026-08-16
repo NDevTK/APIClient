@@ -64,6 +64,7 @@
 #include "core/dom/element.h"
 #include "core/dom/selector_match.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_keyframes.h"
 #include "core/css/css_page.h"
 #include "core/css/css_presentational_hints.h"
 #include "core/css/css_rule.h"
@@ -315,16 +316,12 @@ static char *cssd_decl_value(const lxb_css_rule_declaration_t *d)
  * wins and the later one never enters the block — which is what
  * `css/cssom/cssstyledeclaration-csstext-important.html` asserts and every engine does. */
 typedef struct { char *name; char *value; bool important; } CssDecl;
-/* WHICH CONTEXT a block's declarations are being collected in. CSS Paged Media §4.3 says "the @page rule can
-   only contain page properties and margin at-rules" and "the margin at-rules can only contain page-margin
-   properties", so a declaration's own name decides whether it is IN the block at all — and this is the one
-   place a block's declarations are built, which is why the question is asked here and nowhere else.
-   `ELEMENT` is every other block this engine has: an inline style, a computed style, a style rule's and an
-   `@font-face`'s, none of which restricts by name. It is ZERO so that the `{ 0 }` every collector starts from
-   states it. */
-typedef enum { CSSD_CONTEXT_ELEMENT = 0, CSSD_CONTEXT_PAGE, CSSD_CONTEXT_MARGIN } CssdContext;
 
-typedef struct { CssDecl *v; unsigned n, cap; CssdContext context; } CssDecls;
+/* WHICH RULE'S BLOCK is being collected — css_style_declaration.h's `CssomBlockContext`, which states the three
+   restrictions and why the question belongs to the rule rather than to any reader. This is the one place a
+   block's declarations are built, which is why it is asked here and nowhere else, and CSSOM_BLOCK_UNRESTRICTED
+   is ZERO so that the `{ 0 }` every collector starts from states it. */
+typedef struct { CssDecl *v; unsigned n, cap; CssomBlockContext context; } CssDecls;
 
 static void cssd_decls_free(CssDecls *d)
 {
@@ -395,6 +392,34 @@ static void cssd_decls_collect(CssDecls *d, const char *name, char *value, bool 
     cssd_decls_append(d, cssd_strdup(name), value, important);
 }
 
+/* IS THIS DECLARATION IN THIS RULE'S BLOCK AT ALL — the three restrictions css_style_declaration.h names,
+   reached through the ONE question every declaration is asked, so a rule type is either restricted here or
+   restricted nowhere.
+   A CUSTOM PROPERTY REACHES THE TWO SPECIFICATIONS DIFFERENTLY, and each arm says which. CSS Paged Media's
+   Appendix A is a list of CSS 2.1 PROPERTIES, so it cannot name `--x` and must not be asked about one (its own
+   entry asserts that); CSS Animations' refused set cannot name one either, so the name half admits it — but
+   that spec's other half is about the DECLARATION's importance, which applies to a custom property like any
+   other. */
+static bool cssd_block_admits(CssomBlockContext context, const char *name, bool important)
+{
+    bool custom = name[0] == '-' && name[1] == '-';
+
+    switch (context) {
+    case CSSOM_BLOCK_PAGE:
+        return custom || css_page_property_applies(CSS_PAGE_CONTEXT_PAGE, name);
+    case CSSOM_BLOCK_MARGIN:
+        return custom || css_page_property_applies(CSS_PAGE_CONTEXT_MARGIN, name);
+    case CSSOM_BLOCK_KEYFRAME:
+        return css_keyframes_declaration_applies(name, important);
+    default:
+        DCHECK(context == CSSOM_BLOCK_UNRESTRICTED,
+               "a declaration block was collected in a context css_style_declaration.h does not declare — the "
+               "enum IS the list of specifications that restrict a block, so a fourth value is a restriction "
+               "with no rule behind it");
+        return true;
+    }
+}
+
 /* THE LONGHAND DECLARATIONS ONE DECLARATION PRODUCES, collected into the block. A declaration sets a longhand
    either by BEING it or by being a SHORTHAND of it, and CSS Syntax drops an INVALID declaration whole — so a
    shorthand whose value fails one component's grammar sets none of them, rather than the ones before it. */
@@ -404,16 +429,13 @@ static void cssd_decls_collect_declaration(CssDecls *d, const char *name, const 
     char *values[CSS_SHORTHAND_MAX_LONGHANDS];
     unsigned n, i;
 
-    /* CSS Paged Media §4.3's restriction, asked of the DECLARATION AS WRITTEN and before the expansion below.
-       Before it, because a shorthand Appendix A names expands to longhands Appendix A does not — `text-
-       decoration` is a page property and `text-decoration-line` is a CSS 3 longhand no CSS 2.1 list can carry
-       — so filtering the expansion would delete the very declaration the spec admits. A custom property is
-       asked about by nobody: it is not a CSS 2.1 property, so the lists cannot name it, and CSS Variables §2
-       makes it valid wherever a declaration is. */
-    if (d->context != CSSD_CONTEXT_ELEMENT && !(name[0] == '-' && name[1] == '-') &&
-        !css_page_property_applies(d->context == CSSD_CONTEXT_MARGIN ? CSS_PAGE_CONTEXT_MARGIN
-                                                                    : CSS_PAGE_CONTEXT_PAGE, name))
-        return;
+    /* The rule's own restriction, asked of the DECLARATION AS WRITTEN and before the expansion below. Before
+       it, because a shorthand a restriction admits expands to longhands it may not name — `text-decoration` is
+       a page property and `text-decoration-line` is a CSS 3 longhand no CSS 2.1 list can carry — so filtering
+       the expansion would delete the very declaration the spec admits. It runs in the other direction too:
+       `animation` is refused inside a keyframe by NAME, so none of the eight longhands it expands to is ever
+       reached — including the one `animation-timing-function` that §3 admits as a declaration of its own. */
+    if (!cssd_block_admits(d->context, name, important)) return;
     lh = css_shorthand_longhands(name, &n);
     if (!lh) {
         /* THE DECLARATION IS THE LONGHAND, and its value has been through a grammar only if lexbor's registry
@@ -951,19 +973,13 @@ static char *cssd_serialize_text(const char *text, size_t len)
     return out;
 }
 
-char *cssom_serialize_declarations(const char *text, size_t len)
-{
-    DCHECK(g_ready, "a declaration block was serialized before cssom_init built the parser it goes through");
-    return cssd_serialize_text(text, len);
-}
-
-char *cssom_serialize_page_declarations(const char *text, size_t len, bool margin_context)
+char *cssom_serialize_declarations(const char *text, size_t len, CssomBlockContext context)
 {
     CssDecls d = { 0 };
     char *out;
 
-    DCHECK(g_ready, "a page context's declarations were serialized before cssom_init built the parser");
-    d.context = margin_context ? CSSD_CONTEXT_MARGIN : CSSD_CONTEXT_PAGE;
+    DCHECK(g_ready, "a declaration block was serialized before cssom_init built the parser it goes through");
+    d.context = context;
     cssd_decls_from_text(text, len, &d);
     out = cssd_serialize_decls(&d);
     cssd_decls_free(&d);
@@ -1001,19 +1017,21 @@ static char *cssd_at_rule_name(const lxb_css_rule_at_t *at)
     return out;
 }
 
-/* An at-rule's PRELUDE, sliced out of the source by the offsets lexbor recorded while consuming it. It is taken
+/* A RULE'S PRELUDE, sliced out of the source by the offsets lexbor recorded while consuming it. It is taken
    from the text rather than from the parsed value because only `_UNDEF` and `_CUSTOM` keep a copy of it at all
    — `@media`'s parsed form is its block and nothing else — and because the offsets are exactly what
    `lxb_css_make_data` itself reads: they index the buffer handed to lxb_css_stylesheet_parse, which is `text`.
    Trimmed of ASCII whitespace, because the prelude's span runs from its first token to the `{` and the parser
-   that consumes it next has no use for either edge. OWNED. */
-static char *cssd_at_rule_prelude(const char *text, size_t len, const lxb_css_rule_at_t *at)
+   that consumes it next has no use for either edge. OWNED.
+   IT IS SHARED WITH THE BAD-STYLE ARM, which keeps its own copy of exactly the same span under a different
+   field name: a qualified rule whose prelude is not a selector list is reported with the RAW prelude, and a
+   second slicer for it would be a second chance to disagree about the trim. */
+static char *cssd_prelude_span(const char *text, size_t len, size_t begin, size_t end)
 {
-    size_t begin = at->prelude_begin, end = at->prelude_end;
     char *out;
 
     DCHECK(begin <= end && end <= len,
-           "an at-rule's prelude offsets fall outside the text that was parsed — they index the tokenizer's "
+           "a rule's prelude offsets fall outside the text that was parsed — they index the tokenizer's "
            "input buffer, which is the very string handed to lxb_css_stylesheet_parse");
     if (begin > end || end > len) begin = end = 0;
     while (begin < end && (text[begin] == ' ' || text[begin] == '\t' || text[begin] == '\n' ||
@@ -1036,7 +1054,7 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
     lxb_css_rule_t *r;
 
     for (r = list->first; r; r = r->next) {
-        CssomRule out = { NULL, "", NULL, false };
+        CssomRule out = { NULL, "", false, NULL, false };
         const lxb_css_rule_list_t *kids = NULL;
         CssBuf sel = { 0 };
         char *block = NULL, *prelude = NULL, *at_name = NULL;
@@ -1049,9 +1067,28 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
             lxb_css_selector_serialize_list_chain(st->selector, css_buf_cb, &sel);
             block = cssd_serialize_block(st->declarations);
             out.prelude = sel.s ? sel.s : "";
+            out.prelude_is_selectors = true;
             out.block = block ? block : "";
             out.has_block = true;
             kids = st->child;                     /* CSS Nesting's own rules, which §6.4.5 makes `cssRules` */
+            break;
+        }
+        /* THE SAME RULE WITH A PRELUDE LEXBOR'S SELECTOR PARSER REFUSED. It is a qualified rule and it has a
+           block, so everything about it is reported exactly as a style rule's is — the ONE difference is that
+           `prelude` is the raw source span rather than a serialized selector list, which is what
+           `prelude_is_selectors` says and what lets the BUILDER decide whether the rule is valid in the
+           context it is in. Dropping it here (which is what this arm used to do beside the declaration-list
+           one) decided that question in the parser layer, where the context is not known, and made
+           `@keyframes foo { 0% { } }` a keyframes rule with no keyframes in it. */
+        case LXB_CSS_RULE_BAD_STYLE: {
+            lxb_css_rule_bad_style_t *bad = lxb_css_rule_bad_style(r);
+
+            prelude = cssd_prelude_span(text, len, bad->prelude_begin, bad->prelude_end);
+            block = cssd_serialize_block(bad->declarations);
+            out.prelude = prelude;
+            out.block = block ? block : "";
+            out.has_block = true;
+            kids = bad->child;
             break;
         }
         case LXB_CSS_RULE_AT_RULE: {
@@ -1067,7 +1104,7 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
                    "lexbor reported an at-rule whose own name table has no entry for its type — the name is "
                    "the only thing that can say which §6.4 interface the rule wants");
             if (!out.at_name) continue;
-            prelude = cssd_at_rule_prelude(text, len, at);
+            prelude = cssd_prelude_span(text, len, at->prelude_begin, at->prelude_end);
             out.prelude = prelude;
             /* Every at-rule lexbor knows keeps its block in the same place in the union, and a STATEMENT
                at-rule (`@import url(x);`) keeps a null one — which is the fact `has_block` reports. */
@@ -1089,12 +1126,10 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
             }
             break;
         }
-        /* A qualified rule whose PRELUDE is not a selector list, and a DECLARATION where a rule belongs: CSS
-           Syntax calls both invalid and drops them, so they are never reported. A declaration list inside a
-           STYLE rule is the one lexbor has already lifted out into that rule's own declarations, so what
-           remains here is a second one AFTER a nested rule — which is CSSOM's CSSNestedDeclarations, a rule
-           interface this build does not have and that the builder would have to be told about. */
-        case LXB_CSS_RULE_BAD_STYLE:
+        /* A DECLARATION WHERE A RULE BELONGS, which CSS Syntax calls invalid and drops. A declaration list
+           inside a STYLE rule is the one lexbor has already lifted out into that rule's own declarations, so
+           what remains here is a second one AFTER a nested rule — which is CSSOM's CSSNestedDeclarations, a
+           rule interface this build does not have and that the builder would have to be told about. */
         case LXB_CSS_RULE_DECLARATION_LIST:
             continue;
         default:

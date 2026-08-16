@@ -28,13 +28,17 @@
 #include "core/css/media_list.h"
 #include "core/css/media_query.h"
 #include "core/idl_args.h"
+#include "core/idl_indexed.h"
 #include "core/realm.h"
 #include "solver/cow.h"
 
 /* §6.4's TYPE state item, which IS which interface this rule is — the values are §6.4.2's own constants, so
-   there is one number rather than a stored type beside an interface tag that could disagree with it. */
+   there is one number rather than a stored type beside an interface tag that could disagree with it. CSS
+   Animations §6.1.1's `partial interface CSSRule` adds the two in the middle, exactly as CSS Conditional §7.1
+   adds SUPPORTS_RULE to a list CSSOM calls frozen. */
 enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE_FONT_FACE = 5,
-       RULE_TYPE_PAGE = 6, RULE_TYPE_MARGIN = 9, RULE_TYPE_NAMESPACE = 10 };
+       RULE_TYPE_PAGE = 6, RULE_TYPE_KEYFRAMES = 7, RULE_TYPE_KEYFRAME = 8, RULE_TYPE_MARGIN = 9,
+       RULE_TYPE_NAMESPACE = 10 };
 
 /* WHERE A RULE MAY SIT IN A STYLE SHEET, as the one number the ordering CSS specifies is stated over. CSS
    Cascade §2: "any @import rules must precede all other valid at-rules and style rules in a style sheet";
@@ -49,7 +53,11 @@ enum { RANK_IMPORT = 0, RANK_NAMESPACE = 1, RANK_OTHER = 2 };
 typedef struct CssRuleData {
     JSValue parent_style_sheet;  /* §6.4.2 "parent CSS style sheet" (OWNED) */
     JSValue parent_rule;         /* §6.4.2 "parent CSS rule" (OWNED) */
-    JSValue selector_text;       /* §6.4.3's selector list, serialized — JS_NULL on a rule that has none */
+    /* THE RULE'S PRELUDE, in the canonical form its own getter must answer — §6.4.3's selector list, §6.4.7's
+       page selector list and CSS Animations §6.2.2's keyText are three grammars and one field, because each
+       is that rule's prelude serialized and each is what its setter replaces. JS_NULL on a rule that has
+       none. (OWNED) */
+    JSValue selector_text;
     JSValue block_text;          /* the rule's declarations, serialized — JS_NULL on a rule that has none */
     /* §6.4.3's `[SameObject] style` — the CSSStyleProperties over `block_text`, minted once because a page
        holds `rule.style` and compares it. JS_UNDEFINED until something asks. (OWNED) */
@@ -82,6 +90,14 @@ typedef struct CssRuleData {
        rather than derived because the RULE is what the at-keyword was: `type` says MARGIN and nothing else on
        the record could say WHICH margin box, and `cssText` needs the same string the attribute returns. */
     JSValue at_name;
+    /* CSS Animations §6.3.2's `name` — "the name of the keyframes, used by the animation-name property".
+       JS_NULL on every rule that is not a `@keyframes`. It is a SECOND name field beside `at_name` and not a
+       widening of it, because the two are two different facts under one word: §6.4.8's is an AT-KEYWORD out of
+       CSS Paged Media's closed sixteen, ASCII case-insensitive and readonly, while this one is an author's
+       `<custom-ident>` or `<string>`, FULLY case-sensitive ("two names are equal only if they are
+       codepoint-by-codepoint equal"), settable, and serialized by a rule of its own. One slot would have had
+       to be read with the rule's type in hand at every site anyway, which is two facts wearing one name. */
+    JSValue keyframes_name;
     uint16_t type;
 } CssRuleData;
 
@@ -91,10 +107,11 @@ static JSClassID g_rule_class;
    CSSGroupingRule or CSSConditionRule) and the rest are concrete; all are held the same way because a rule is
    built with an EXPLICIT prototype chosen from its type, so the class's own proto slot decides nothing. */
 enum { PROTO_RULE = 0, PROTO_GROUPING, PROTO_STYLE, PROTO_CONDITION, PROTO_MEDIA, PROTO_IMPORT,
-       PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_PAGE, PROTO_MARGIN, PROTO_N };
+       PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_PAGE, PROTO_MARGIN, PROTO_KEYFRAMES, PROTO_KEYFRAME, PROTO_N };
 static int g_proto_slot[PROTO_N];
-static int g_id_set_selector = -1, g_id_set_page_selector = -1, g_id_set_css_text = -1,
-           g_id_insert_rule = -1, g_id_delete_rule = -1;
+static int g_id_set_selector = -1, g_id_set_page_selector = -1, g_id_set_key_text = -1,
+           g_id_set_keyframes_name = -1, g_id_set_css_text = -1, g_id_insert_rule = -1, g_id_delete_rule = -1,
+           g_id_append_rule = -1, g_id_kf_delete_rule = -1, g_id_find_rule = -1;
 
 static const uint16_t RULE_VALS[] = {
     (uint16_t)offsetof(CssRuleData, parent_style_sheet),
@@ -111,6 +128,7 @@ static const uint16_t RULE_VALS[] = {
     (uint16_t)offsetof(CssRuleData, namespace_uri),
     (uint16_t)offsetof(CssRuleData, prefix),
     (uint16_t)offsetof(CssRuleData, at_name),
+    (uint16_t)offsetof(CssRuleData, keyframes_name),
 };
 static const CowRecord RULE_REC = { sizeof(CssRuleData), RULE_VALS,
                                     (int)(sizeof(RULE_VALS) / sizeof(RULE_VALS[0])) };
@@ -176,6 +194,7 @@ static void rule_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, r->namespace_uri);
     JS_FreeValueRT(rt, r->prefix);
     JS_FreeValueRT(rt, r->at_name);
+    JS_FreeValueRT(rt, r->keyframes_name);
     free(r);
 }
 
@@ -198,6 +217,7 @@ static void rule_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
     JS_MarkValue(rt, r->namespace_uri, mark_func);
     JS_MarkValue(rt, r->prefix, mark_func);
     JS_MarkValue(rt, r->at_name, mark_func);
+    JS_MarkValue(rt, r->keyframes_name, mark_func);
 }
 
 /* ---- §6.4's CSS RULE LIST, as INFRA's list operations over an Array ---------------------------------------- */
@@ -232,18 +252,36 @@ static void rules_remove_at(JSContext *ctx, JSValueConst list, uint32_t i)
     JS_SetPropertyStr(ctx, list, "length", JS_NewUint32(ctx, n - 1));
 }
 
+/* DOES THIS RULE TYPE HOLD CHILD RULES AT ALL — which decides whether the create allocates a list, whether the
+   parse may put a rule inside one, and whether the serialization has children to walk.
+   §6.4.7 declares `interface CSSPageRule : CSSGroupingRule`, and that is not a formality: an `@page` CONTAINS
+   CSS Paged Media §4.3's margin at-rules, so `pageRule.cssRules[0]` is a CSSMarginRule. §6.4.8's CSSMarginRule
+   is NOT one — its body is a `<declaration-list>` and holds no rules at all, and neither does a
+   `<keyframe-block>`'s. */
+static bool rule_type_has_child_rules(uint16_t type)
+{
+    return type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_PAGE ||
+           type == RULE_TYPE_KEYFRAMES;
+}
+
 /* IS THIS RULE TYPE A §6.4.5 GROUPING RULE — "an at-rule that CONTAINS OTHER RULES nested inside itself", plus
-   the style rule CSS Nesting made one. It is asked in three places and must be ONE fact: the create decides
-   whether to allocate a child list at all, `rule_child_rules` asserts it has one, and §3.7.5's brand check on
-   `cssRules`/`insertRule`/`deleteRule` decides whether the member may run on this receiver — a page can reach
-   `CSSGroupingRule.prototype.insertRule` and apply it to an `@import` rule, and the answer is a TypeError and
-   not an insertion into a list that rule does not have. */
+   the style rule CSS Nesting made one. It is Web IDL §3.7.5's brand check for `cssRules`, `insertRule` and
+   `deleteRule` AS CSSGroupingRule DECLARES THEM: a page can reach `CSSGroupingRule.prototype.insertRule` and
+   apply it to an `@import` rule, and the answer is a TypeError and not an insertion into a list that rule does
+   not have.
+   IT IS A NARROWER QUESTION THAN THE ONE ABOVE, and CSS Animations is why. Its CSSKeyframesRule holds child
+   rules and is `interface CSSKeyframesRule : CSSRule` — it does not inherit CSSGroupingRule and declares its
+   OWN `cssRules`, `appendRule(CSSOMString)` and `deleteRule(CSSOMString)`, whose argument is a keyframe
+   SELECTOR where §6.4.5's is an index. Answering both questions from one predicate would have put §6.4.5's
+   index-taking `deleteRule` on a `@keyframes` beside the selector-taking one it really has. */
 static bool rule_type_is_grouping(uint16_t type)
 {
-    /* §6.4.7 declares `interface CSSPageRule : CSSGroupingRule`, and that is not a formality: an `@page`
-       CONTAINS CSS Paged Media §4.3's margin at-rules, so `pageRule.cssRules[0]` is a CSSMarginRule. §6.4.8's
-       CSSMarginRule is NOT one — its body is a `<declaration-list>` and holds no rules at all. */
-    return type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_PAGE;
+    bool grouping = type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_PAGE;
+
+    DCHECK(!grouping || rule_type_has_child_rules(type),
+           "a rule type is a §6.4.5 grouping rule and yet holds no child rules — CSSGroupingRule is DEFINED as "
+           "a rule that contains other rules, so the two tables above have drifted apart");
+    return grouping;
 }
 
 /* §6.4.5's CHILD CSS RULES — the very Array a grouping rule's `cssRules` shares. OWNED. */
@@ -252,11 +290,11 @@ static JSValue rule_child_rules(JSContext *ctx, JSValueConst rule)
     CssRuleData *r = rule_of(rule);
 
     DCHECK(r != NULL, "a rule's child CSS rules were read off something that is not a CSS rule");
-    DCHECK(rule_type_is_grouping(r->type),
-           "a rule that is not a §6.4.5 grouping rule was asked for its child CSS rules. An `@import`, an "
-           "`@namespace`, an `@font-face` and a §4.3 margin at-rule contain no rules at all, so the answer is "
-           "not an empty list — it is that the question does not apply, and every member that could ask it is "
-           "brand-checked");
+    DCHECK(rule_type_has_child_rules(r->type),
+           "a rule that holds no child rules was asked for its child CSS rules. An `@import`, an `@namespace`, "
+           "an `@font-face`, a §4.3 margin at-rule and a `<keyframe-block>` contain no rules at all, so the "
+           "answer is not an empty list — it is that the question does not apply, and every member that could "
+           "ask it is brand-checked");
     DCHECK(JS_IsArray(r->child_rules),
            "a CSS rule's child list is not an Array — the create allocates one for every grouping rule before "
            "it is handed to anybody, and nothing replaces it");
@@ -301,9 +339,9 @@ static JSValue rule_new(JSContext *ctx, int proto_slot, uint16_t type, JSValueCo
     r->selector_text = JS_NULL;
     r->block_text = JS_NULL;
     r->style = JS_UNDEFINED;
-    /* Only a §6.4.5 grouping rule gets one, because only a grouping rule HAS child CSS rules — an empty Array
-       on an `@import` would read as a list that happens to be empty, which is a different fact. */
-    r->child_rules = rule_type_is_grouping(type) ? JS_NewArray(ctx) : JS_NULL;
+    /* Only a rule that HAS child CSS rules gets one — an empty Array on an `@import` would read as a list that
+       happens to be empty, which is a different fact. */
+    r->child_rules = rule_type_has_child_rules(type) ? JS_NewArray(ctx) : JS_NULL;
     CHECK(!JS_IsException(r->child_rules), "a CSS rule's child list could not be allocated");
     r->rule_list = JS_UNDEFINED;
     r->media = JS_NULL;
@@ -313,6 +351,7 @@ static JSValue rule_new(JSContext *ctx, int proto_slot, uint16_t type, JSValueCo
     r->namespace_uri = JS_NULL;
     r->prefix = JS_NULL;
     r->at_name = JS_NULL;
+    r->keyframes_name = JS_NULL;
     JS_SetOpaque(obj, r);
     return obj;
 }
@@ -434,6 +473,23 @@ static JSValue font_face_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     return obj;
 }
 
+/* WHICH RULE'S BLOCK THIS RULE'S DECLARATIONS ARE — the one statement of it, read by the three creators whose
+   bodies are restricted and by §6.6.1's write path, so a rule type cannot be filtered at the parse and left
+   unfiltered at a `setProperty` (or the reverse), which is a `length` that disagrees with its own `cssText`.
+   A rule with NO declaration block at all never reaches this: `css_rule_set_block_text` asserts which five
+   types have one, and each creator calls it about itself. */
+static CssomBlockContext rule_block_context(uint16_t type)
+{
+    if (type == RULE_TYPE_PAGE) return CSSOM_BLOCK_PAGE;
+    if (type == RULE_TYPE_MARGIN) return CSSOM_BLOCK_MARGIN;
+    if (type == RULE_TYPE_KEYFRAME) return CSSOM_BLOCK_KEYFRAME;
+    DCHECK(type == RULE_TYPE_STYLE || type == RULE_TYPE_FONT_FACE,
+           "a rule type that has no declaration block was asked which restriction its block carries — §6.4.3's "
+           "CSSStyleRule and CSS Fonts §12.1's CSSFontFaceRule are the two whose blocks are unrestricted, and "
+           "every other rule with a block is named above");
+    return CSSOM_BLOCK_UNRESTRICTED;
+}
+
 /* A §6.4.7 CSSPageRule over the `@page` at-rule's prelude and its page descriptors. Both halves are grammars
    this file does not own: CSS Paged Media §4.3's `<page-selector-list>` is parsed and canonicalised by
    core/css/css_at_rule_prelude.h (a prelude whose grammar FAILS is not an `@page` rule at all — CSS Syntax
@@ -459,7 +515,7 @@ static JSValue page_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JS
     JS_FreeValue(ctx, r->selector_text);
     r->selector_text = JS_NewString(ctx, selectors);
     free(selectors);
-    decls = cssom_serialize_page_declarations(block_text, strlen(block_text), /*margin_context*/ false);
+    decls = cssom_serialize_declarations(block_text, strlen(block_text), CSSOM_BLOCK_PAGE);
     JS_FreeValue(ctx, r->block_text);
     r->block_text = JS_NewString(ctx, decls ? decls : "");
     free(decls);
@@ -488,7 +544,69 @@ static JSValue margin_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, 
     r = JS_GetOpaque(obj, g_rule_class);
     JS_FreeValue(ctx, r->at_name);
     r->at_name = JS_NewString(ctx, name);
-    decls = cssom_serialize_page_declarations(block_text, strlen(block_text), /*margin_context*/ true);
+    decls = cssom_serialize_declarations(block_text, strlen(block_text), CSSOM_BLOCK_MARGIN);
+    JS_FreeValue(ctx, r->block_text);
+    r->block_text = JS_NewString(ctx, decls ? decls : "");
+    free(decls);
+    return obj;
+}
+
+/* A CSS Animations §6.3 CSSKeyframesRule over the `@keyframes` at-rule's prelude. That prelude is §3's
+   `<keyframes-name>`, a grammar this file does not own (core/css/css_at_rule_prelude.h) and one whose failure
+   is not a rule at all: `@keyframes none {}` and `@keyframes {}` are at-rules whose grammar failed, which CSS
+   Syntax drops and which is JS_UNDEFINED here, the same answer `@namespace a b c;` gets.
+   THE NAME IS STORED RAW, not serialized. §6.3.2's `name` returns what the author wrote (`@keyframes "foo"` is
+   the name `foo`, and §6.3.2's setter stores whatever it is given), while §6.4's CSSKeyframesRule arm decides
+   per read whether that name serializes as an identifier or as a string — two answers off one storage, which
+   is why the storage is the one the attribute returns.
+   The child list `rule_new` gives it is where its `<keyframe-block>`s go. */
+static JSValue keyframes_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
+                                  const char *prelude)
+{
+    char *name;
+    JSValue obj;
+    CssRuleData *r;
+
+    DCHECK(prelude != NULL, "a CSSKeyframesRule was built with no prelude — `<keyframes-name>` is REQUIRED by "
+                            "§3's grammar, so an empty prelude is a rule that does not match it rather than a "
+                            "rule with an empty name");
+    name = css_prelude_keyframes_name(prelude, strlen(prelude));
+    if (!name) return JS_UNDEFINED;
+    obj = rule_new(ctx, PROTO_KEYFRAMES, RULE_TYPE_KEYFRAMES, parent_style_sheet, parent_rule);
+    if (JS_IsException(obj)) { free(name); return obj; }
+    r = JS_GetOpaque(obj, g_rule_class);
+    JS_FreeValue(ctx, r->keyframes_name);
+    r->keyframes_name = JS_NewString(ctx, name);
+    free(name);
+    return obj;
+}
+
+/* A CSS Animations §6.2 CSSKeyframeRule — one `<keyframe-block>`. Its prelude is §3's `<keyframe-selector>#`,
+   canonicalised to §6.2.2's comma-separated percentages by core/css/css_at_rule_prelude.h, and its body is a
+   `<declaration-list>` restricted by §3's own sentence (core/css/css_keyframes.h), applied here so that every
+   reader of the block sees the declarations the rule really has.
+   The prelude is kept in `selector_text` because that is what it IS: §6.2.2 calls it "the keyframe selector",
+   and the field already carries §6.4.3's selector list and §6.4.7's page selector list for the same reason —
+   it is the rule's prelude in the canonical form the getter must answer. */
+static JSValue keyframe_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
+                                 const char *prelude, const char *block_text)
+{
+    char *keys, *decls;
+    JSValue obj;
+    CssRuleData *r;
+
+    DCHECK(prelude != NULL && block_text != NULL,
+           "a CSSKeyframeRule was built without both of the texts it IS — `0% {}` declares NOTHING, which is "
+           "the empty string, and a block with NO prelude matches no `<keyframe-selector>#`");
+    keys = css_prelude_keyframe_selectors(prelude, strlen(prelude));
+    if (!keys) return JS_UNDEFINED;
+    obj = rule_new(ctx, PROTO_KEYFRAME, RULE_TYPE_KEYFRAME, parent_style_sheet, parent_rule);
+    if (JS_IsException(obj)) { free(keys); return obj; }
+    r = JS_GetOpaque(obj, g_rule_class);
+    JS_FreeValue(ctx, r->selector_text);
+    r->selector_text = JS_NewString(ctx, keys);
+    free(keys);
+    decls = cssom_serialize_declarations(block_text, strlen(block_text), CSSOM_BLOCK_KEYFRAME);
     JS_FreeValue(ctx, r->block_text);
     r->block_text = JS_NewString(ctx, decls ? decls : "");
     free(decls);
@@ -581,10 +699,28 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
         if (!pr->at_name || !css_page_margin_at_rule(pr->at_name) || !pr->has_block) return JS_UNDEFINED;
         return margin_rule_new(b->ctx, b->sheet, parent_rule, pr->at_name, pr->block ? pr->block : "");
     }
+    /* CSS Animations §3: "The <rule-list> inside of @keyframes can only contain <keyframe-block> rules." So
+       inside a `@keyframes` the ONLY rule is a qualified rule whose prelude is a `<keyframe-selector>#`, and
+       everything else written there — an at-rule of any kind, a qualified rule whose prelude is neither a
+       keyframe selector list nor anything else — is invalid IN THIS CONTEXT and CSS Syntax drops it.
+       BOTH SHAPES OF QUALIFIED RULE ARRIVE HERE, and that is not an accident of the parser: `from { }` and
+       `to { }` are valid SELECTOR lists (they are type selectors), so lexbor parses them as style rules and
+       `pr->prelude` is the serialized selector; `0%, 100% { }` is not a selector list at all, so it arrives
+       with the raw prelude and `prelude_is_selectors` unset. Either way the text is what §3's grammar reads,
+       and it decides which of them is a keyframe block. */
+    if (enclosing == RULE_TYPE_KEYFRAMES) {
+        if (pr->at_name) return JS_UNDEFINED;
+        return keyframe_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude, pr->block ? pr->block : "");
+    }
     /* AND THE MIRROR: a margin at-rule is only a rule INSIDE an `@page`. Anywhere else `@top-left { }` is an
        at-rule no specification defines, which CSS Syntax drops — so it is dropped here rather than reaching
        the crash below, which would name a capability that is already built. */
     if (pr->at_name && css_page_margin_at_rule(pr->at_name)) return JS_UNDEFINED;
+    /* AND ITS MIRROR: outside a `@keyframes` a qualified rule whose prelude is not a selector list is an
+       invalid STYLE rule, which CSS Syntax drops. `0%, 100% { }` at a sheet's top level is that, and so is
+       `!!! { }` — the context is what makes the first one a rule elsewhere and nothing makes the second one
+       one anywhere. */
+    if (!pr->at_name && !pr->prelude_is_selectors) return JS_UNDEFINED;
     if (!pr->at_name)
         return style_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude, pr->block ? pr->block : "");
     if (strcmp(pr->at_name, "media") == 0) {
@@ -626,6 +762,13 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
         return pr->has_block ? page_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude,
                                              pr->block ? pr->block : "")
                              : JS_UNDEFINED;
+    /* CSS Animations §3 makes `@keyframes` a BLOCK at-rule (`@keyframes <keyframes-name> {
+       <qualified-rule-list> }`), so `@keyframes foo;` is an at-rule whose grammar failed and CSS Syntax drops
+       it — the same shape `@font-face;` and `@page;` have, and dropped here for the same reason. Its BODY is
+       a rule list and nothing else, so the declarations the parse reports for it are not read: a declaration
+       written directly inside a `@keyframes` is not in a `<keyframe-block>` and §3 admits nothing else. */
+    if (strcmp(pr->at_name, "keyframes") == 0)
+        return pr->has_block ? keyframes_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude) : JS_UNDEFINED;
     if (at_rule_dropped(pr->at_name)) return JS_UNDEFINED;
     if (!b->unbuilt[0]) snprintf(b->unbuilt, sizeof b->unbuilt, "%s", pr->at_name);
     return JS_UNDEFINED;
@@ -647,11 +790,12 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
         parent_rule = b->built[i];
         /* The enclosing rule was dropped, so this one has no list to go in and no parent to name. */
         if (JS_IsUndefined(parent_rule)) return build_push(b, JS_UNDEFINED);
-        /* THE ENCLOSING RULE CONTAINS NO RULES AT ALL, so this one is not in it either. An `@font-face`'s and
-           a margin at-rule's body is CSS Syntax's `<declaration-list>`, which admits declarations and nothing
-           else, so a rule written inside one is invalid and dropped — and it must be dropped HERE, because
-           `rule_child_rules` asserts its receiver is a §6.4.5 grouping rule and neither of those is. */
-        if (!rule_type_is_grouping(enclosing_rule_type(parent_rule)))
+        /* THE ENCLOSING RULE CONTAINS NO RULES AT ALL, so this one is not in it either. An `@font-face`'s, a
+           margin at-rule's and a `<keyframe-block>`'s body is CSS Syntax's `<declaration-list>`, which admits
+           declarations and nothing else, so a rule written inside one is invalid and dropped — and it must be
+           dropped HERE, because `rule_child_rules` asserts its receiver has a child list and none of those
+           does. */
+        if (!rule_type_has_child_rules(enclosing_rule_type(parent_rule)))
             return build_push(b, JS_UNDEFINED);
         list = rule_child_rules(b->ctx, parent_rule);
     }
@@ -678,11 +822,12 @@ static void rule_unbuilt_fail(const char *name)
              "CSSOM §6.4 has no interface built for the at-rule `@%s`, so a stylesheet containing one cannot be "
              "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "
              "CSSMarginRule, §6.4.9's CSSNamespaceRule, CSS Conditional §7.2's CSSConditionRule, §7.3's "
-             "CSSMediaRule and CSS Fonts §12.1's CSSFontFaceRule are built; what remains is CSS Animations' "
-             "CSSKeyframesRule and CSSKeyframeRule, CSS Conditional §7.4's CSSSupportsRule (whose condition "
-             "needs CSS.supports to evaluate), CSS Cascade's CSSLayerBlockRule and CSSLayerStatementRule, and "
-             "CSS Contain's CSSContainerRule. Build the one this names and mint it in rule_from_parse — do NOT "
-             "skip the rule, because every index after it would then name a different rule than the page's",
+             "CSSMediaRule, CSS Fonts §12.1's CSSFontFaceRule and CSS Animations §6.2/§6.3's CSSKeyframeRule "
+             "and CSSKeyframesRule are built; what remains is CSS Conditional §7.4's CSSSupportsRule (whose "
+             "condition needs CSS.supports to evaluate), CSS Cascade's CSSLayerBlockRule and "
+             "CSSLayerStatementRule, and CSS Contain's CSSContainerRule. Build the one this names and mint it "
+             "in rule_from_parse — do NOT skip the rule, because every index after it would then name a "
+             "different rule than the page's",
              name);
     DFAIL(msg);
 }
@@ -995,7 +1140,7 @@ static bool decls_and_rules_serialize(JSContext *ctx, CssRuleData *r, JSValueCon
     unsigned nk, i;
 
     block = rule_text_copy(ctx, r->block_text, &bl);
-    decls = block ? cssom_serialize_declarations(block, bl) : NULL;
+    decls = block ? cssom_serialize_declarations(block, bl, CSSOM_BLOCK_UNRESTRICTED) : NULL;
     free(block);
     kids = rule_children_serialized(ctx, rule, &nk);
     rbuf_add_n(out, prefix, prefix_len);      /* STEP 1 */
@@ -1055,6 +1200,86 @@ static bool page_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rul
     ok = decls_and_rules_serialize(ctx, r, rule, prefix.s, prefix.len, out);
     free(prefix.s);
     return ok;
+}
+
+/* §6.4's CSSKeyframesRule arm, WHICH THE SPEC STATES — unlike §6.4.7's and §6.4.8's, which had to be derived.
+ * Its five pieces: "@keyframes" and a SPACE; "the serialization of the name attribute. If the attribute is a
+ * CSS wide keyword, or the value default, or the value none, then it is serialized as a string. Otherwise, it
+ * is serialized as an identifier."; the string " { "; "the result of performing serialize a CSS rule on each
+ * rule in the rule's cssRules list, separated by a newline and indented by two spaces"; "a newline, followed
+ * by the string "}"".
+ * THE ONE PLACE THIS DIVERGES FROM A LITERAL READING IS THE NEWLINE AFTER `{`, and the section says why. Read
+ * literally, the fourth piece is a SEPARATOR, so the first child would sit on the brace line
+ * (`@keyframes foo {   0% { … }`) and every engine instead emits a newline there; §6.4 attaches its own note
+ * to this very arm — "The 'indented by two spaces' bit matches browsers, but needs work, see #5494" — which
+ * is the spec deferring to what browsers emit for exactly this piece of exactly this arm. So each child is a
+ * newline, two spaces and the child, which is also the shape the CSSMediaRule arm below produces and the shape
+ * `@keyframes bar { }` collapses to in css/cssom/CSSKeyframesRule.html's whitespace-insensitive assertion.
+ * A KEYFRAMES RULE'S CHILDREN ARE NOT FILTERED FOR EMPTINESS the way §6.4.5's are: this arm names no
+ * "filtering out empty strings" step, and it does not need one — every child is a CSSKeyframeRule and every
+ * CSSKeyframeRule serializes to at least its keyText and a brace pair. */
+static bool keyframes_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+{
+    size_t nl = 0;
+    char *name = rule_text_copy(ctx, r->keyframes_name, &nl);
+    char **kids;
+    char *piece;
+    unsigned nk, i;
+
+    DCHECK(name != NULL,
+           "a CSS Animations §6.3 keyframes rule has no name. §3's grammar has no arm without a "
+           "`<keyframes-name>` so the creator refuses a prelude that lacks one, and §6.3.2's setter stores a "
+           "string — a null here means the string conversion itself failed");
+    if (!name) return false;
+    /* THE THREE EXCLUSIONS ARE THE `<keyframes-name>` GRAMMAR'S OWN, so they are asked of the one entry that
+       holds them (core/css/css_at_rule_prelude.h) rather than restated here — the parse REFUSES exactly this
+       set and the serialization QUOTES exactly this set, and that is what makes `cssText` re-parse as the rule
+       it came from. A name the parse would have refused reaches this branch because §6.3.2's setter runs no
+       grammar, which is what makes `rule.name = 'initial'` read back as `@keyframes "initial"`. */
+    piece = css_prelude_keyframes_name_excluded(name) ? css_serialize_string(name, nl)
+                                                      : css_serialize_identifier(name, nl);
+    free(name);
+    kids = rule_children_serialized(ctx, rule, &nk);
+    rbuf_add(out, "@keyframes ");
+    rbuf_add(out, piece);
+    free(piece);
+    rbuf_add(out, " { \n");
+    for (i = 0; i < nk; i++) { rbuf_add_indented(out, kids[i]); rbuf_add(out, "\n"); }
+    rbuf_add(out, "}");
+    serialized_free(kids, nk);
+    return true;
+}
+
+/* §6.4's CSSKeyframeRule arm, also stated: "The keyText. The string " { ". The result of performing serialize
+   a CSS declaration block on the rule's associated declarations. If the rule is associated with one or more
+   declarations, the string " ". The string "}"." So `0% { top: 0px; }`, which css/cssom/CSSKeyframesRule.html
+   asserts byte for byte on every rule it touches, and `0% { }` for the block that declares nothing, which is
+   what css/cssom/CSSRuleList-appendRule-keyframe-001-crash.html appends.
+   THE CONDITIONAL SPACE IS THE WHOLE OF WHY THIS IS NOT THE `@font-face` ARM: there the space belongs to the
+   declarations and here it belongs to the closing brace, so an empty block is `0% { }` and not `0% {  }`. */
+static bool keyframe_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+{
+    size_t kl = 0, bl = 0;
+    char *keys = rule_text_copy(ctx, r->selector_text, &kl);
+    char *block, *decls;
+
+    DCHECK(keys != NULL,
+           "a CSS Animations §6.2 keyframe rule has no keyText. §3's `<keyframe-selector>#` has no empty arm, "
+           "so both writers — the parse and `keyText =` — store a non-empty canonical list or refuse");
+    if (!keys) return false;
+    block = rule_text_copy(ctx, r->block_text, &bl);
+    /* UNRESTRICTED, like every other arm, and that is the point of filtering on the WRITE side: the stored
+       text is already what §3 admits, so a serialization that asked again would be a second reader deciding
+       for itself — which is the shape css_style_declaration.h's restriction exists to avoid. */
+    decls = block ? cssom_serialize_declarations(block, bl, CSSOM_BLOCK_UNRESTRICTED) : NULL;
+    free(block);
+    rbuf_add_n(out, keys, kl);
+    free(keys);
+    rbuf_add(out, " { ");
+    if (decls) { rbuf_add(out, decls); rbuf_add(out, " "); }
+    rbuf_add(out, "}");
+    free(decls);
+    return true;
 }
 
 /* §6.4's CSSMediaRule arm: "@media", a SPACE, the media query list, a SPACE and "{", a newline, then each
@@ -1188,7 +1413,7 @@ static bool decl_body_rule_serialize(JSContext *ctx, CssRuleData *r, const char 
            "declare nothing, which is the EMPTY STRING, so a null here means the string conversion itself "
            "failed");
     if (!block) return false;
-    decls = cssom_serialize_declarations(block, bl);
+    decls = cssom_serialize_declarations(block, bl, CSSOM_BLOCK_UNRESTRICTED);
     free(block);
     rbuf_add(out, "@");
     rbuf_add(out, at_name);
@@ -1229,6 +1454,8 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
     case RULE_TYPE_FONT_FACE: return decl_body_rule_serialize(ctx, r, "font-face", out);
     case RULE_TYPE_PAGE:      return page_rule_serialize(ctx, r, rule, out);
     case RULE_TYPE_MARGIN:    return margin_rule_serialize(ctx, r, out);
+    case RULE_TYPE_KEYFRAMES: return keyframes_rule_serialize(ctx, r, rule, out);
+    case RULE_TYPE_KEYFRAME:  return keyframe_rule_serialize(ctx, r, out);
     default:
         DCHECK(r->type == RULE_TYPE_STYLE, "§6.4's serialize a CSS rule met a rule type it has no arm for");
         return style_rule_serialize(ctx, r, rule, out);
@@ -1239,7 +1466,19 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
 
 enum { CR_PARENT_RULE = 0, CR_PARENT_STYLE_SHEET, CR_TYPE, CR_CSS_TEXT, CR_SELECTOR_TEXT, CR_CONDITION_TEXT,
        CR_MEDIA, CR_MATCHES, CR_CSS_RULES, CR_HREF, CR_IMPORT_MEDIA, CR_LAYER_NAME, CR_SUPPORTS_TEXT,
-       CR_NAMESPACE_URI, CR_PREFIX, CR_PAGE_SELECTOR_TEXT, CR_MARGIN_NAME };
+       CR_NAMESPACE_URI, CR_PREFIX, CR_PAGE_SELECTOR_TEXT, CR_MARGIN_NAME, CR_KEY_TEXT, CR_KEYFRAMES_NAME,
+       CR_KEYFRAMES_CSS_RULES, CR_KEYFRAMES_LENGTH };
+
+/* §6.4.5's `[SameObject] cssRules` and CSS Animations §6.3.2's, which are one read of one Array. The
+   collection is remembered on the record because both are [SameObject], and it SHARES the very Array the
+   children live in, which is what its liveness IS. Two attributes of two interfaces, one body: what differs is
+   the BRAND their getters check, which is the caller's. */
+static JSValue rule_css_rules(JSContext *ctx, CssRuleData *r)
+{
+    if (!JS_IsObject(r->rule_list))
+        r->rule_list = css_rule_list_new(ctx, JS_DupValue(ctx, r->child_rules));
+    return JS_DupValue(ctx, r->rule_list);
+}
 
 static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -1361,16 +1600,37 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     case CR_MARGIN_NAME:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_MARGIN, "CSSMarginRule");
         return r ? JS_DupValue(ctx, r->at_name) : JS_EXCEPTION;
+    /* CSS Animations §6.2.2: "This attribute represents the keyframe selector as a comma-separated list of
+       percentage values. The from and to keywords map to 0% and 100%, respectively." The record holds that
+       canonical list — core/css/css_at_rule_prelude.h produced it, at the parse and at the setter alike —
+       which is why `from` reads back as `0%`. */
+    case CR_KEY_TEXT:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAME, "CSSKeyframeRule");
+        return r ? JS_DupValue(ctx, r->selector_text) : JS_EXCEPTION;
+    /* CSS Animations §6.3.2: "This attribute is the name of the keyframes, used by the animation-name
+       property." The name AS WRITTEN, which is not how §6.4 serializes it — see the serialization arm. */
+    case CR_KEYFRAMES_NAME:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
+        return r ? JS_DupValue(ctx, r->keyframes_name) : JS_EXCEPTION;
+    /* CSS Animations §6.3.2: "This attribute gives access to the keyframes in the list." It is CSSKeyframesRule's
+       OWN attribute and not §6.4.5's — a `@keyframes` is not a CSSGroupingRule — so it brand-checks against
+       this interface and shares the one body with it. */
+    case CR_KEYFRAMES_CSS_RULES:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
+        return r ? rule_css_rules(ctx, r) : JS_EXCEPTION;
+    /* CSS Animations §6.3.2: "This attribute is the number of keyframes in the list." It is the length of the
+       child list itself and never a second count, which is also what makes it the `length` Web IDL §3.7.10
+       pairs with the indexed getter below. */
+    case CR_KEYFRAMES_LENGTH:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
+        return r ? JS_NewUint32(ctx, rules_len(ctx, r->child_rules)) : JS_EXCEPTION;
     /* §6.4.5: "The cssRules attribute must return a CSSRuleList object for the child CSS rules." [SameObject],
        so the collection is remembered on the record — and it shares the very Array the children live in, which
        is what its liveness IS. */
     default:
         DCHECK(magic == CR_CSS_RULES, "a CSS rule attribute ran with a magic §6.4 does not declare");
         r = rule_here_grouping(ctx, this_val);
-        if (!r) return JS_EXCEPTION;
-        if (!JS_IsObject(r->rule_list))
-            r->rule_list = css_rule_list_new(ctx, JS_DupValue(ctx, r->child_rules));
-        return JS_DupValue(ctx, r->rule_list);
+        return r ? rule_css_rules(ctx, r) : JS_EXCEPTION;
     }
 }
 
@@ -1388,12 +1648,15 @@ static JSValue js_rule_set_css_text(JSContext *ctx, JSValueConst this_val, JSVal
 
 /* The one thing a selector probe keeps: the SERIALIZED selector list lexbor accepted, which is the canonical
    form §6.4.3's getter must answer afterwards. A parse that produced no top-level style rule leaves `*out`
-   NULL, which is the setter's "the algorithm returned null, do nothing". */
+   NULL, which is the setter's "the algorithm returned null, do nothing" — and a qualified rule whose prelude
+   was NOT accepted as a selector list is exactly that case, which is why the probe asks. Without that test
+   `rule.selectorText = '0%'` would store the raw `0%` the parse now reports for a keyframe block's prelude. */
 static void *css_rule_selector_probe(void *ud, void *parent, const CssomRule *pr)
 {
     char **out = ud;
 
-    if (parent || pr->at_name || *out || !pr->prelude || !*pr->prelude) return NULL;
+    if (parent || pr->at_name || !pr->prelude_is_selectors || *out || !pr->prelude || !*pr->prelude)
+        return NULL;
     *out = strdup(pr->prelude);
     CHECK(*out != NULL, "cssom: OOM keeping a parsed selector list");
     return NULL;
@@ -1468,6 +1731,254 @@ static JSValue js_rule_set_page_selector(JSContext *ctx, JSValueConst this_val, 
     return JS_UNDEFINED;
 }
 
+/* CSS Animations §6.2.2's setter, and it is neither of the two above. "If keyText is updated with an INVALID
+   keyframe selector, a SyntaxError exception must be THROWN and the value of keyText must remain unchanged" —
+   where §6.4.3's and §6.4.7's both do nothing at all. Three attributes, three sentences, three bodies; folding
+   them would have to carry the difference in a flag, and the flag is the sentence. */
+static JSValue js_rule_set_key_text(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAME, "CSSKeyframeRule");
+    const char *v;
+    char *parsed;
+
+    (void)magic;
+    if (!r) return JS_EXCEPTION;
+    v = JS_ToCString(ctx, val);   /* a real string by now: the declaration converted it */
+    if (!v) return JS_EXCEPTION;
+    parsed = css_prelude_keyframe_selectors(v, strlen(v));
+    JS_FreeCString(ctx, v);
+    if (!parsed)
+        return JS_ThrowDOMException(ctx, "SyntaxError", "the value is not a keyframe selector list");
+    JS_FreeValue(ctx, r->selector_text);
+    r->selector_text = JS_NewString(ctx, parsed);
+    free(parsed);
+    return JS_UNDEFINED;
+}
+
+/* CSS Animations §6.3.2's `attribute CSSOMString name`, whose setter the specification states by NOT stating
+   one: §6.3.2 gives the attribute a definition ("the name of the keyframes, used by the animation-name
+   property") and no setter steps, so Web IDL's own default applies and the value is simply set. It is NOT the
+   `<keyframes-name>` grammar asked again — `rule.name = 'initial'` is a name every engine accepts and
+   css/cssom/CSSKeyframesRule.html reads back, where `@keyframes initial {}` is a rule §3 refuses to make. The
+   two are different questions, and §6.4's serialization is what makes the accepted one round-trip: it writes
+   the excluded keywords AS A STRING. */
+static JSValue js_rule_set_keyframes_name(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
+
+    (void)magic;
+    if (!r) return JS_EXCEPTION;
+    DCHECK(JS_IsString(val),
+           "§6.3.2's `name` setter reached its body with a value that is not a string. The declaration runs "
+           "the CSSOMString conversion (and parks on the page's `toString` if there is one) before the body "
+           "is entered, so what arrives here is always the converted value");
+    JS_FreeValue(ctx, r->keyframes_name);
+    r->keyframes_name = JS_DupValue(ctx, val);
+    return JS_UNDEFINED;
+}
+
+/* ---- CSS Animations §6.3.3 through §6.3.6 — the keyframes rule's own list members --------------------------- */
+
+/* §6.3.5 and §6.3.6's MATCH, which the two sections state in identical words: "The number and order of the
+   values in the specified keyframe selector must match those of the targeted keyframe rule(s). The match is
+   not sensitive to white space around the values in the list." Both are therefore a comparison of CANONICAL
+   forms — the stored keyText against the same grammar run over `select` — which is also what makes §6.3.6's
+   worked example come out right in both directions: `findRule('to')` finds the `100%` rule because both
+   canonicalise to `100%`, and `findRule('75%')` finds nothing when the rule's own selector is `25%, 75%`,
+   because a keyframe selector list is a LIST and not a set of keys.
+   Answers the index of the LAST match — "the last declared CSSKeyframeRule matching" — or -1, which covers
+   both "no rule matches" and "`select` is not a keyframe selector list at all". */
+static int keyframes_match_last(JSContext *ctx, CssRuleData *r, const char *select)
+{
+    char *want = css_prelude_keyframe_selectors(select, strlen(select));
+    uint32_t n, i;
+    int found = -1;
+
+    if (!want) return -1;
+    n = rules_len(ctx, r->child_rules);
+    for (i = 0; i < n; i++) {
+        JSValue kid = JS_GetPropertyUint32(ctx, r->child_rules, i);
+        CssRuleData *kr = rule_of(kid);
+        size_t kl = 0;
+        char *have;
+
+        DCHECK(kr != NULL && kr->type == RULE_TYPE_KEYFRAME,
+               "a `@keyframes` rule's child list holds something that is not a CSSKeyframeRule — §3 says the "
+               "rule list inside one can only contain `<keyframe-block>` rules, and the two things that put a "
+               "rule in this list (the parse and `appendRule`) both build one through keyframe_rule_new");
+        have = kr ? rule_text_copy(ctx, kr->selector_text, &kl) : NULL;
+        if (have && strcmp(have, want) == 0) found = (int)i;
+        free(have);
+        JS_FreeValue(ctx, kid);
+    }
+    free(want);
+    return found;
+}
+
+/* §6.3.4: "The appendRule method appends the passed CSSKeyframeRule at the end of the keyframes rule. rule:
+   The rule to be appended, expressed in the same syntax as one entry in the @keyframes rule. A VALID rule is
+   always appended e.g. even if its key(s) already exists." — so a duplicate key is appended and never
+   replaces, which is what makes §6.3.5's "the LAST declared" a question with two answers. "No Exceptions", so
+   text that is not one entry is simply not appended: no SyntaxError, no IndexSizeError, nothing.
+   IT PARSES THROUGH THE ONE BUILDER, with THIS rule as the enclosing rule, which is what makes the parsed
+   text mean what it means inside a `@keyframes` — `0% { }` is a keyframe block here and an invalid style rule
+   at a sheet's top level, and the enclosing rule is the only thing that says which. */
+static JSValue js_rule_append_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                   int magic)
+{
+    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
+    RuleBuild b;
+    JSValue scratch, built;
+    const char *text;
+    unsigned n;
+
+    (void)magic;
+    if (!r) return JS_EXCEPTION;
+    DCHECK(argc >= 1, "§6.3.4's appendRule reached its body with no rule — its IDL argument is required");
+    text = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
+    if (!text) return JS_EXCEPTION;
+    /* A SCRATCH LIST, so that text which is not exactly one keyframe block was never in the page's list. */
+    scratch = JS_NewArray(ctx);
+    CHECK(!JS_IsException(scratch), "cssom: the appendRule scratch list could not be allocated");
+    b.ctx = ctx;
+    b.sheet = r->parent_style_sheet;
+    b.top_parent = this_val;
+    b.top_list = scratch;
+    n = build_run(&b, text, strlen(text));
+    build_free(&b);
+    JS_FreeCString(ctx, text);
+    DCHECK(!b.unbuilt[0],
+           "a `@keyframes` body parse met an at-rule with no §6.4 interface. Inside one, §3 admits only "
+           "`<keyframe-block>` rules and rule_from_parse drops every at-rule before it can reach the crash, "
+           "so this is that arm having stopped being taken");
+    if (n != 1) { JS_FreeValue(ctx, scratch); return JS_UNDEFINED; }
+    built = JS_GetPropertyUint32(ctx, scratch, 0);
+    JS_FreeValue(ctx, scratch);
+    DCHECK(css_rule_is(built), "§6.3.4's appendRule built something that is not a CSS rule");
+    JS_SetPropertyUint32(ctx, r->child_rules, rules_len(ctx, r->child_rules), built);
+    return JS_UNDEFINED;
+}
+
+/* §6.3.5: "The deleteRule method deletes the last declared CSSKeyframeRule matching the specified keyframe
+   selector. If no matching rule exists, the method does nothing." No exceptions, and no §6.4 remove-a-CSS-rule
+   either: that algorithm's own steps are about `@namespace` ordering in a SHEET, and this list is a
+   `@keyframes` body. What it does share is the ORPHANING — a removed rule's parent CSS rule and parent CSS
+   style sheet become null, which §6.4's own note calls "the only circumstance where null is returned". */
+static JSValue js_rule_kf_delete_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic)
+{
+    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
+    const char *select;
+    JSValue old;
+    int at;
+
+    (void)magic;
+    if (!r) return JS_EXCEPTION;
+    DCHECK(argc >= 1, "§6.3.5's deleteRule reached its body with no selector — its IDL argument is required");
+    select = JS_ToCString(ctx, argv[0]);
+    if (!select) return JS_EXCEPTION;
+    at = keyframes_match_last(ctx, r, select);
+    JS_FreeCString(ctx, select);
+    if (at < 0) return JS_UNDEFINED;
+    old = JS_GetPropertyUint32(ctx, r->child_rules, (uint32_t)at);
+    rules_remove_at(ctx, r->child_rules, (uint32_t)at);
+    rule_orphan(ctx, old);
+    JS_FreeValue(ctx, old);
+    return JS_UNDEFINED;
+}
+
+/* §6.3.6: "The findRule returns the last declared CSSKeyframeRule matching the specified keyframe selector."
+   Its IDL return type is `CSSKeyframeRule?`, so no match is NULL — §6.3.6's own example says so outright
+   ("will set red to null"). */
+static JSValue js_rule_find_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                 int magic)
+{
+    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
+    const char *select;
+    int at;
+
+    (void)magic;
+    if (!r) return JS_EXCEPTION;
+    DCHECK(argc >= 1, "§6.3.6's findRule reached its body with no selector — its IDL argument is required");
+    select = JS_ToCString(ctx, argv[0]);
+    if (!select) return JS_EXCEPTION;
+    at = keyframes_match_last(ctx, r, select);
+    JS_FreeCString(ctx, select);
+    return at < 0 ? JS_NULL : JS_GetPropertyUint32(ctx, r->child_rules, (uint32_t)at);
+}
+
+/* §6.3.3's INDEXED PROPERTY GETTER — "returns the CSSKeyframeRule from the list of keyframes at the indicated
+ * position ... The found rule or UNDEFINED if there is no rule at the specific index", which is Web IDL §3.9's
+ * supported property indices exactly and is why this is core/idl_indexed.h's mechanism rather than a second
+ * index parse. The `length` beside it is the attribute above, so §3.7.10 also gives the prototype
+ * %Array.prototype.values% as its @@iterator.
+ *
+ * IT LIVES ON THE RULE CLASS AND NOT ON A COLLECTION OBJECT, which is the whole reason the mechanism had to be
+ * separable from that file's own class: a CSSKeyframesRule is a CSS RULE — it carries this component's record
+ * behind this component's class opaque — and it ALSO answers `rule[0]`. One object cannot be two classes, so
+ * the exotic hooks are this class's and the algorithm behind them is the shared one.
+ * EVERY OTHER RULE ANSWERS NOTHING HERE, and says so by having no decl: the hooks below hand back a NULL decl
+ * for any type but this one, which core/idl_indexed.h reads as "not an indexed interface" and which leaves an
+ * ordinary property lookup exactly as it was. */
+static uint32_t keyframes_indexed_length(JSContext *ctx, JSValueConst self)
+{
+    CssRuleData *r = rule_of(self);
+
+    DCHECK(r != NULL && r->type == RULE_TYPE_KEYFRAMES,
+           "§6.3.3's indexed getter was asked for its length by something that is not a CSSKeyframesRule — the "
+           "decl is handed out only for one type, so reaching this from another is that test having changed");
+    return r ? rules_len(ctx, r->child_rules) : 0;
+}
+
+static JSValue keyframes_indexed_item(JSContext *ctx, JSValueConst self, uint32_t i)
+{
+    CssRuleData *r = rule_of(self);
+    JSValue kid;
+
+    DCHECK(r != NULL && r->type == RULE_TYPE_KEYFRAMES,
+           "§6.3.3's indexed getter was asked for an item by something that is not a CSSKeyframesRule");
+    if (!r) return JS_UNDEFINED;
+    kid = JS_GetPropertyUint32(ctx, r->child_rules, i);
+    DCHECK(JS_IsUndefined(kid) || css_rule_is(kid),
+           "a `@keyframes` rule's child list holds something that is not a CSS rule — its indexed getter "
+           "declares `CSSKeyframeRule`, and the parse and `appendRule` are the only things that put one in");
+    return kid;
+}
+
+static const IdlIndexedDecl KEYFRAMES_INDEXED = { "CSSKeyframesRule", keyframes_indexed_length,
+                                                  keyframes_indexed_item, NULL, 0 };
+
+/* The decl for THIS object, or NULL — the one place the "is this the interface with the indexed getter"
+   question is asked, so the two hooks below cannot answer it differently.
+   THROUGH JS_GetOpaque AND NOT THE ACCESSOR, which is the one place in this file that is right. The hooks run
+   on every own-property MISS on every rule object, and a miss is not a reach: capturing there would put a
+   record into the running flow's delta because a page read `styleRule.foo`. The two callbacks above do use the
+   accessor, because they run only for a real index on a real `@keyframes`, which IS a reach. */
+static const IdlIndexedDecl *rule_indexed_decl(JSValueConst obj)
+{
+    CssRuleData *r = JS_GetOpaque(obj, g_rule_class);
+
+    return (r && r->type == RULE_TYPE_KEYFRAMES) ? &KEYFRAMES_INDEXED : NULL;
+}
+
+static int rule_get_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
+{
+    return idl_indexed_own_property(ctx, desc, obj, prop, rule_indexed_decl(obj));
+}
+
+static int rule_own_property_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj)
+{
+    return idl_indexed_own_property_names(ctx, ptab, plen, obj, rule_indexed_decl(obj));
+}
+
+static JSClassExoticMethods g_rule_exotic = {
+    .get_own_property = rule_get_own_property,
+    .get_own_property_names = rule_own_property_names,
+    /* An index parse and a read of this component's own Array. A Web IDL indexed property getter has no
+       accessor by construction, which is what lets the engine's own read path run it from C. */
+    .get_own_property_no_user_code = true,
+};
+
 /* ---- §6.4.5's insertRule and deleteRule ------------------------------------------------------------------- */
 
 /* §6.4.5: "The insertRule(rule, index) method must return the result of invoking insert a CSS rule rule into
@@ -1528,9 +2039,13 @@ static JSValue js_rule_delete_rule(JSContext *ctx, JSValueConst this_val, int ar
    @webref/idl types it `CSSStyleDeclaration`, which a CSSStyleProperties IS; the editor's draft types it
    `CSSMarginDescriptors`, an interface CSSOM references twice and never declares anywhere, so there is no
    member list to build one from and the corpus contradicts it outright.
+   CSS Animations §6.2.2's is the fifth and it says the same five things about a `<keyframe-block>` ("readonly
+   flag unset, declarations the declared declarations in the rule in specified order, parent CSS rule the
+   context object, owner node null"), and its IDL types it `CSSStyleProperties` — the editor's draft and the
+   @webref/idl corpus agree on that word, so there is no third interface here and no disagreement to settle.
    IT IS MINTED THROUGH THE CAPTURING ACCESSOR, which is what makes the memo per-flow: the block belongs to the
    flow that first asked for it, and a sibling that asks gets its own over the same declarations. */
-enum { STYLE_OF_STYLE_RULE = 0, STYLE_OF_FONT_FACE, STYLE_OF_PAGE, STYLE_OF_MARGIN };
+enum { STYLE_OF_STYLE_RULE = 0, STYLE_OF_FONT_FACE, STYLE_OF_PAGE, STYLE_OF_MARGIN, STYLE_OF_KEYFRAME };
 
 static JSValue js_rule_style(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -1543,6 +2058,7 @@ static JSValue js_rule_style(JSContext *ctx, JSValueConst this_val, int magic)
         { RULE_TYPE_FONT_FACE, "CSSFontFaceRule", cssom_font_face_descriptors_for_rule },
         { RULE_TYPE_PAGE,      "CSSPageRule",     cssom_page_descriptors_for_rule },
         { RULE_TYPE_MARGIN,    "CSSMarginRule",   cssom_style_properties_for_rule },
+        { RULE_TYPE_KEYFRAME,  "CSSKeyframeRule", cssom_style_properties_for_rule },
     };
     CssRuleData *r;
 
@@ -1584,19 +2100,21 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
     DCHECK(r != NULL, "a rule's declaration block was written on something that is not a CSS rule");
     DCHECK(text != NULL, "a rule's declaration block was written with no text — an emptied block is the empty "
                          "string, which is what serializing no declarations produces");
-    DCHECK(r->type == RULE_TYPE_STYLE || r->type == RULE_TYPE_FONT_FACE ||
-           r->type == RULE_TYPE_PAGE || r->type == RULE_TYPE_MARGIN,
+    DCHECK(r->type == RULE_TYPE_STYLE || r->type == RULE_TYPE_FONT_FACE || r->type == RULE_TYPE_PAGE ||
+           r->type == RULE_TYPE_MARGIN || r->type == RULE_TYPE_KEYFRAME,
            "§6.6's declaration block wrote its text back onto a rule that HAS no declaration block. A rule's "
            "`style` attribute is the only thing that reaches this, and it is declared by §6.4.3's "
-           "CSSStyleRule, CSS Fonts §12.1's CSSFontFaceRule, §6.4.7's CSSPageRule and §6.4.8's CSSMarginRule "
-           "and by nothing else in this build");
-    /* CSS Paged Media §4.3's restriction, on the WRITE side. `setProperty`, `style.cssText =` and every
-       descriptor attribute reach the record through this one function, so filtering here is what makes
-       `pageRule.style.setProperty('transform', 'scale(1)')` take no effect and leaves `length` at what the
-       page context really declares — css/cssom/rule-restrictions.html reads both. It is the same call the two
-       creators make, so the text a write leaves behind is the text a parse would have. */
-    if (r->type == RULE_TYPE_PAGE || r->type == RULE_TYPE_MARGIN) {
-        char *kept = cssom_serialize_page_declarations(text, len, r->type == RULE_TYPE_MARGIN);
+           "CSSStyleRule, CSS Fonts §12.1's CSSFontFaceRule, §6.4.7's CSSPageRule, §6.4.8's CSSMarginRule and "
+           "CSS Animations §6.2's CSSKeyframeRule and by nothing else in this build");
+    /* THE RULE'S OWN RESTRICTION, ON THE WRITE SIDE. `setProperty`, `style.cssText =` and every descriptor
+       attribute reach the record through this one function, so filtering here is what makes
+       `pageRule.style.setProperty('transform', 'scale(1)')` and
+       `keyframeRule.style.setProperty('animation-name', 'none')` take no effect and leaves `length` at what
+       the context really declares — css/cssom/rule-restrictions.html reads both, on both rules, through both
+       `setProperty` and `cssText`. It is the same call the three restricted creators make, so the text a
+       write leaves behind is the text a parse would have. */
+    if (rule_block_context(r->type) != CSSOM_BLOCK_UNRESTRICTED) {
+        char *kept = cssom_serialize_declarations(text, len, rule_block_context(r->type));
 
         JS_FreeValue(ctx, r->block_text);
         r->block_text = JS_NewString(ctx, kept ? kept : "");
@@ -1664,6 +2182,12 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, RBuf *out, uint3
        elements — `named:first` matches no element, and there is no element it could — so nothing in it can
        reach the selector matcher. §4.3's margin at-rules are inside it and go with it. */
     if (r->type == RULE_TYPE_PAGE) return true;
+    /* NOR DOES A `@keyframes`, and for a FOURTH reason: CSS Animations §3 says its rule list "can only contain
+       <keyframe-block> rules", and a keyframe block's prelude is a `<keyframe-selector>#` — a position along a
+       duration, which selects no element and cannot. Its declarations reach an element only through the
+       ANIMATION that names it (§4.1's `animation-name`), which is a step after the cascade rather than a rule
+       in it — CSS Cascade §6.1 puts animations in an origin of their own, above every author declaration. */
+    if (r->type == RULE_TYPE_KEYFRAMES) return true;
     DCHECK(r->type == RULE_TYPE_STYLE, "the author cascade met a rule type it has no arm for");
     /* CSS NESTING IS NOT FLATTENED, and must not be: a nested style rule's selector is RELATIVE to its parent's
        (`&`, and the implicit descendant a bare compound selector carries), so lifting it to the top level of
@@ -1729,9 +2253,13 @@ char *css_rule_cascade_text(JSContext *ctx, JSValueConst list, uint32_t *pn)
 /* §6.4.2's historical constants, which the IDL declares on the interface AND its prototype. */
 static const struct { const char *name; uint32_t v; } CR_CONSTS[] = {
     { "STYLE_RULE", 1 }, { "CHARSET_RULE", 2 }, { "IMPORT_RULE", 3 }, { "MEDIA_RULE", 4 },
-    { "FONT_FACE_RULE", 5 }, { "PAGE_RULE", 6 }, { "MARGIN_RULE", 9 }, { "NAMESPACE_RULE", 10 },
-    /* CSS Conditional §7.1's `partial interface CSSRule` — the one addition to a list CSSOM calls frozen, and
-       it is here because that standard puts it there rather than because a number was needed. */
+    { "FONT_FACE_RULE", 5 }, { "PAGE_RULE", 6 },
+    /* CSS Animations §6.1.1's `partial interface CSSRule` — two more additions to a list CSSOM calls frozen,
+       and §6.4.2's own `type` table lists both numbers, so the two standards agree about them outright. */
+    { "KEYFRAMES_RULE", 7 }, { "KEYFRAME_RULE", 8 },
+    { "MARGIN_RULE", 9 }, { "NAMESPACE_RULE", 10 },
+    /* CSS Conditional §7.1's `partial interface CSSRule` — another addition to that same list, and it is here
+       because that standard puts it there rather than because a number was needed. */
     { "SUPPORTS_RULE", 12 },
 };
 
@@ -1746,7 +2274,10 @@ static void rule_install_constants(JSContext *ctx, JSValueConst target)
 
 void css_rule_init(JSContext *ctx)
 {
-    JSClassDef d = { "CSSRule", rule_finalizer, rule_gc_mark };
+    /* THE EXOTIC IS CSS Animations §6.3.3's INDEXED PROPERTY GETTER, and it is on the class every rule shares
+       because a CSSKeyframesRule is a rule. It answers nothing for every other type — see rule_indexed_decl —
+       so what a CSSStyleRule gains is one NULL-decl call per own-property miss and no behaviour at all. */
+    JSClassDef d = { "CSSRule", rule_finalizer, rule_gc_mark, NULL, &g_rule_exotic };
 
     if (g_rule_class) return;   /* one AGENT, one class and one set of pool entries */
     JS_NewClassID(JS_GetRuntime(ctx), &g_rule_class);
@@ -1761,8 +2292,12 @@ void css_rule_init(JSContext *ctx)
     g_proto_slot[PROTO_FONT_FACE] = realm_value_declare(ctx, "CSS Fonts §12.1 CSSFontFaceRule.prototype");
     g_proto_slot[PROTO_PAGE] = realm_value_declare(ctx, "CSSOM §6.4.7 CSSPageRule.prototype");
     g_proto_slot[PROTO_MARGIN] = realm_value_declare(ctx, "CSSOM §6.4.8 CSSMarginRule.prototype");
+    g_proto_slot[PROTO_KEYFRAMES] = realm_value_declare(ctx, "CSS Animations §6.3 CSSKeyframesRule.prototype");
+    g_proto_slot[PROTO_KEYFRAME] = realm_value_declare(ctx, "CSS Animations §6.2 CSSKeyframeRule.prototype");
     g_id_set_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_selector, 0);
     g_id_set_page_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_page_selector, 0);
+    g_id_set_key_text = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_key_text, 0);
+    g_id_set_keyframes_name = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_keyframes_name, 0);
     g_id_set_css_text = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_css_text, 0);
     {
         /* §6.4.5: `unsigned long insertRule(CSSOMString rule, optional unsigned long index = 0)` and
@@ -1770,10 +2305,17 @@ void css_rule_init(JSContext *ctx)
            the same two algorithms. */
         static const IdlArgType INSERT[2] = { IDL_DOMSTRING, IDL_UNSIGNED_LONG };
         static const IdlArgType ONE_ULONG[1] = { IDL_UNSIGNED_LONG };
+        /* CSS Animations §6.3.1's three, every one of them `(CSSOMString)`. §6.3.5's `deleteRule` takes a
+           keyframe SELECTOR where §6.4.5's takes an index, which is the whole reason a `@keyframes` must not
+           be a §6.4.5 grouping rule — two members of one name whose arguments are different types. */
+        static const IdlArgType ONE_STRING[1] = { IDL_DOMSTRING };
 
         g_id_insert_rule = idl_method_id(ctx, INSERT, 2, js_rule_insert_rule, 0);
         idl_optional_from(1);
         g_id_delete_rule = idl_method_id(ctx, ONE_ULONG, 1, js_rule_delete_rule, 0);
+        g_id_append_rule = idl_method_id(ctx, ONE_STRING, 1, js_rule_append_rule, 0);
+        g_id_kf_delete_rule = idl_method_id(ctx, ONE_STRING, 1, js_rule_kf_delete_rule, 0);
+        g_id_find_rule = idl_method_id(ctx, ONE_STRING, 1, js_rule_find_rule, 0);
     }
     realm_declare_intrinsic(css_rule_install_proto);
 }
@@ -1781,6 +2323,7 @@ void css_rule_init(JSContext *ctx)
 void css_rule_install_proto(JSContext *ctx)
 {
     JSValue base, grouping, style, condition, media, import_rule, ns, font_face, page, margin;
+    JSValue keyframes, keyframe;
 
     DCHECK(g_rule_class != 0, "a realm asked for the rule prototypes before the interfaces existed");
 
@@ -1887,7 +2430,37 @@ void css_rule_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, margin, "name", js_rule_get, CR_MARGIN_NAME, -1);
     idl_install_accessor(ctx, margin, "style", js_rule_style, STYLE_OF_MARGIN, cssom_put_forwards_setter());
 
+    /* CSS Animations §6.3's CSSKeyframesRule.prototype. It derives from CSSRule and NOT from CSSGroupingRule
+       even though a `@keyframes` contains rules — the IDL says `interface CSSKeyframesRule : CSSRule` — and
+       that is a real difference a page reads: §6.4.5's `insertRule(rule, index)` and index-taking `deleteRule`
+       are absent here, and the `deleteRule` that IS here takes a keyframe SELECTOR.
+       ITS INDEXED GETTER IS ON THE CLASS, not on this prototype: §6.3.3 declares
+       `getter CSSKeyframeRule (unsigned long index)`, which Web IDL §3.9 makes an object's own-property
+       behaviour rather than a member. §3.7.10's @@iterator IS a prototype member and goes here, because this
+       interface has both an indexed getter and an integer `length`. */
+    keyframes = JS_NewObjectProto(ctx, base);
+    CHECK(!JS_IsException(keyframes), "CSSKeyframesRule.prototype could not be allocated");
+    idl_interface_tag(ctx, keyframes, "CSSKeyframesRule");
+    idl_install_accessor(ctx, keyframes, "name", js_rule_get, CR_KEYFRAMES_NAME, g_id_set_keyframes_name);
+    idl_install_accessor(ctx, keyframes, "cssRules", js_rule_get, CR_KEYFRAMES_CSS_RULES, -1);
+    idl_install_accessor(ctx, keyframes, "length", js_rule_get, CR_KEYFRAMES_LENGTH, -1);
+    idl_install_method(ctx, keyframes, "appendRule", 1, g_id_append_rule);
+    idl_install_method(ctx, keyframes, "deleteRule", 1, g_id_kf_delete_rule);
+    idl_install_method(ctx, keyframes, "findRule", 1, g_id_find_rule);
+    idl_indexed_install_iterable(ctx, keyframes);
+
+    /* CSS Animations §6.2's CSSKeyframeRule.prototype — from CSSRule directly, because a `<keyframe-block>`'s
+       body is a `<declaration-list>` and holds no rules at all. */
+    keyframe = JS_NewObjectProto(ctx, base);
+    CHECK(!JS_IsException(keyframe), "CSSKeyframeRule.prototype could not be allocated");
+    idl_interface_tag(ctx, keyframe, "CSSKeyframeRule");
+    idl_install_accessor(ctx, keyframe, "keyText", js_rule_get, CR_KEY_TEXT, g_id_set_key_text);
+    idl_install_accessor(ctx, keyframe, "style", js_rule_style, STYLE_OF_KEYFRAME,
+                         cssom_put_forwards_setter());
+
     /* Each into the realm's own slot, which asserts on its own that this install ran once in this realm. */
+    realm_value_set(ctx, g_proto_slot[PROTO_KEYFRAMES], keyframes);
+    realm_value_set(ctx, g_proto_slot[PROTO_KEYFRAME], keyframe);
     realm_value_set(ctx, g_proto_slot[PROTO_IMPORT], import_rule);
     realm_value_set(ctx, g_proto_slot[PROTO_NAMESPACE], ns);
     realm_value_set(ctx, g_proto_slot[PROTO_FONT_FACE], font_face);
@@ -1922,6 +2495,10 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
            while §6.4.8's derives from CSSRule, because a margin at-rule contains none. */
         { "CSSPageRule",       PROTO_PAGE,       1 },
         { "CSSMarginRule",     PROTO_MARGIN,     0 },
+        /* CSS Animations §6.2.1 and §6.3.1 declare both as `: CSSRule`. A `@keyframes` holds rules and is
+           still not a CSSGroupingRule, which is the IDL's own statement and not a simplification. */
+        { "CSSKeyframeRule",   PROTO_KEYFRAME,   0 },
+        { "CSSKeyframesRule",  PROTO_KEYFRAMES,  0 },
     };
     JSValue iface[sizeof(IFACES) / sizeof(IFACES[0])];
     unsigned i, n = sizeof(IFACES) / sizeof(IFACES[0]);

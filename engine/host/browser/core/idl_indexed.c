@@ -73,9 +73,9 @@ static void idl_indexed_finalizer(JSRuntime *rt, JSValue val)
     js_free_rt(rt, o);
 }
 
-static int idl_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
+int idl_indexed_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop,
+                             const IdlIndexedDecl *d)
 {
-    const IdlIndexedDecl *d = decl_of(obj);
     const char *s;
     uint32_t i;
     JSValue v;
@@ -106,9 +106,9 @@ static int idl_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSVal
 
 /* §3.9's SUPPORTED PROPERTY INDICES enumeration — what Object.keys, spread and for-in see. The indices come first and in
    order, which is what makes `Object.keys(list)` read like an array's. */
-static int idl_indexed_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj)
+int idl_indexed_own_property_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj,
+                                   const IdlIndexedDecl *d)
 {
-    const IdlIndexedDecl *d = decl_of(obj);
     JSPropertyEnum *tab;
     uint32_t n, i;
 
@@ -130,6 +130,19 @@ static int idl_indexed_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t
     *ptab = tab;
     *plen = n;
     return 0;
+}
+
+/* THIS FILE'S OWN CLASS asks the two algorithms above about the decl IT stores. A class that keeps its
+   objects' state elsewhere — core/css/css_rule.c, whose CSSKeyframesRule is a rule first — resolves the decl
+   its own way and calls the same two functions, so there is one algorithm and two ways of finding the decl. */
+static int idl_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
+{
+    return idl_indexed_own_property(ctx, desc, obj, prop, decl_of(obj));
+}
+
+static int idl_indexed_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj)
+{
+    return idl_indexed_own_property_names(ctx, ptab, plen, obj, decl_of(obj));
 }
 
 /* THERE IS NO EXOTIC [[HasProperty]], AND THAT IS THE SPEC, NOT AN OMISSION. Web IDL §3.9 overrides exactly

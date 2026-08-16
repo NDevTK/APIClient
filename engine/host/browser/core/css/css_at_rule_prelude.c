@@ -1,6 +1,6 @@
-/* CSS Cascade §2's, CSS Namespaces §2's and CSS Paged Media §4.3's at-rule preludes. See
- * css_at_rule_prelude.h for why this is a component, why it tokenizes with lexbor's own tokenizer, and which
- * spans stay raw source. */
+/* CSS Cascade §2's, CSS Namespaces §2's, CSS Paged Media §4.3's and CSS Animations §3's rule preludes. See
+ * css_at_rule_prelude.h for why this is a component, why it tokenizes with lexbor's own tokenizer, which
+ * spans stay raw source, and why a `<keyframe-block>`'s prelude is one of these. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -11,6 +11,8 @@
 
 #include "check.h"
 #include "core/css/css_at_rule_prelude.h"
+#include "core/css/css_defaulting.h"
+#include "core/css/css_length.h"
 #include "core/css/css_serialize.h"
 
 /* ONE PRELUDE BEING READ. `base`/`len` are the source the offsets below index — every token lexbor hands back
@@ -388,6 +390,131 @@ char *css_prelude_page_selectors(const char *prelude, size_t len)
     }
     pre_close(&p);
     return out.s ? out.s : pre_copy("", 0);
+
+fail:
+    free(out.s);
+    pre_close(&p);
+    return NULL;
+}
+
+/* ---- CSS Animations §3's `<keyframes-name>` and `<keyframe-selector>#` -------------------------------------
+ *
+ * See css_at_rule_prelude.h for why both live here, what each refuses, and why only the second one serializes.
+ */
+
+/* An ASCII case-insensitive equality against a lowercase literal, which is what a CSS KEYWORD comparison is.
+   `pre_name_is` is the same test against a TOKEN; this one is against a name already copied out of one, which
+   is the shape the serialization side has. */
+static bool pre_keyword_is(const char *v, const char *lower)
+{
+    size_t i;
+
+    for (i = 0; lower[i]; i++) {
+        char c = v[i];
+
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != lower[i]) return false;
+    }
+    return v[i] == '\0';
+}
+
+bool css_prelude_keyframes_name_excluded(const char *name)
+{
+    DCHECK(name != NULL, "a `<keyframes-name>` exclusion was asked about with no name");
+    /* CSS Cascade §7.3's FIVE ARE READ FROM THE ONE PLACE THAT HOLDS THEM, never restated: a second copy here
+       could disagree about `revert-layer`, and core/css/css_defaulting.h's test already folds ASCII case.
+       `default` is beside them rather than in them because CSS Values §4.2 states it in a sentence of its own
+       ("The default keyword is reserved and is also not a valid <custom-ident>") and it is not a CSS-wide
+       keyword anywhere else in the cascade; `none` is CSS Animations §3's own addition to the list. */
+    return css_wide_keyword(name) || pre_keyword_is(name, "default") || pre_keyword_is(name, "none");
+}
+
+char *css_prelude_keyframes_name(const char *prelude, size_t len)
+{
+    Prelude p = { NULL, NULL, 0 };
+    lxb_css_syntax_token_t *t;
+    char *name = NULL;
+
+    if (!pre_open(&p, prelude, len)) return NULL;
+    t = pre_peek_ws(&p);
+    if (!t) goto fail;
+    if (t->type == LXB_CSS_SYNTAX_TOKEN_IDENT) {
+        name = pre_token_string(t);
+        /* The `<custom-ident>` arm, and the only arm the exclusions apply to. */
+        if (css_prelude_keyframes_name_excluded(name)) goto fail;
+        pre_take(&p);
+    } else if (t->type == LXB_CSS_SYNTAX_TOKEN_STRING) {
+        name = pre_token_string(t);
+        /* "The <string> additionally excludes the empty string (but allows the string "none" and other
+           excluded keywords)" — so this arm tests LENGTH and never the keyword list. */
+        if (!*name) goto fail;
+        pre_take(&p);
+    } else {
+        goto fail;
+    }
+    /* The production is one value, so a prelude with anything after it matches no `@keyframes` at all. */
+    t = pre_peek_ws(&p);
+    if (!t || t->type != LXB_CSS_SYNTAX_TOKEN__EOF) goto fail;
+    pre_close(&p);
+    return name;
+
+fail:
+    free(name);
+    pre_close(&p);
+    return NULL;
+}
+
+/* ONE `<keyframe-selector> = from | to | <percentage [0,100]>`, as the percentage it denotes. `*pct` is the
+   number `keyText` reports; false when the token in front of the cursor is not one of the three, which
+   includes a `<number>` (§3's note: "the percentage unit specifier must be used ... Therefore, 0 is an invalid
+   keyframe selector") and a percentage outside the range (§3: "Values less than 0% or higher than 100% are
+   invalid and cause their <keyframe-block> to be ignored"). */
+static bool pre_keyframe_selector(Prelude *p, double *pct)
+{
+    lxb_css_syntax_token_t *t = pre_peek_ws(p);
+
+    if (!t) return false;
+    if (t->type == LXB_CSS_SYNTAX_TOKEN_IDENT) {
+        if (pre_name_is(t, "from")) *pct = 0.0;
+        else if (pre_name_is(t, "to")) *pct = 100.0;
+        else return false;
+        pre_take(p);
+        return true;
+    }
+    if (t->type != LXB_CSS_SYNTAX_TOKEN_PERCENTAGE) return false;
+    *pct = lxb_css_syntax_token_percentage(t)->num;
+    if (!(*pct >= 0.0 && *pct <= 100.0)) return false;   /* written so a NaN is refused by the same test */
+    pre_take(p);
+    return true;
+}
+
+char *css_prelude_keyframe_selectors(const char *prelude, size_t len)
+{
+    Prelude p = { NULL, NULL, 0 };
+    PBuf out = { NULL, 0, 0 };
+    lxb_css_syntax_token_t *t;
+
+    if (!pre_open(&p, prelude, len)) return NULL;
+    for (;;) {
+        double pct = 0.0;
+        char *one;
+
+        if (!pre_keyframe_selector(&p, &pct)) goto fail;
+        one = css_length_serialize_pct(pct);
+        pbuf_add(&out, one);
+        free(one);
+        t = pre_peek_ws(&p);
+        if (!t) goto fail;
+        if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) break;
+        if (t->type != LXB_CSS_SYNTAX_TOKEN_COMMA) goto fail;
+        pre_take(&p);
+        pbuf_add(&out, ", ");
+    }
+    pre_close(&p);
+    DCHECK(out.s != NULL && out.s[0] != '\0',
+           "a keyframe selector list parsed to the EMPTY string — the `#` multiplier has no zero-length arm, "
+           "so the loop above cannot leave without having appended at least one percentage");
+    return out.s;
 
 fail:
     free(out.s);

@@ -36,6 +36,25 @@ void idl_indexed_free(JSRuntime *rt);
    the runtime, which is what makes it a static per-interface constant rather than per-instance state. */
 JSValue idl_indexed_new(JSContext *ctx, JSValueConst proto, const IdlIndexedDecl *decl);
 
+/* WEB IDL §3.9's TWO ALGORITHMS, FOR A CLASS OF ITS OWN — the same [[GetOwnProperty]] and [[OwnPropertyKeys]]
+ * the objects above answer with, callable from another class's exotic hooks.
+ *
+ * WHY THAT IS NEEDED AT ALL: an indexed property getter is not always the whole of what an object is. CSS
+ * Animations §6.3.1's CSSKeyframesRule declares `getter CSSKeyframeRule (unsigned long index)` on an interface
+ * that is ALSO a CSSRule — it carries that component's record behind that component's class opaque — and one
+ * object cannot be two classes. So the class that owns the object owns the hooks, and the ALGORITHM stays
+ * here: the index parse, the descriptor, the key enumeration and what `list['01']` means are written once, for
+ * the reason this file's own header gives.
+ *
+ * `decl` is what the calling class resolved for THIS object, and NULL is a real answer meaning "this object is
+ * not an indexed interface" — the lookup then reports no own property and no extra keys, which leaves an
+ * ordinary property lookup exactly as it was. The return values are quickjs's exotic contract: 1/0 for found
+ * or not (and -1 on failure) from the first, 0 or -1 from the second. */
+int idl_indexed_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop,
+                             const IdlIndexedDecl *decl);
+int idl_indexed_own_property_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj,
+                                   const IdlIndexedDecl *decl);
+
 /* Web IDL §3.7.10: an interface with an indexed property getter and an integer `length` gets
    %Array.prototype.values% as its @@iterator. Installed on the PROTOTYPE, which is where the IDL puts it. */
 void idl_indexed_install_iterable(JSContext *ctx, JSValueConst proto);

@@ -1,7 +1,7 @@
 /* CSSOM §6.4's CSS RULES — §6.4.2 CSSRule, §6.4.5 CSSGroupingRule, §6.4.3 CSSStyleRule, §6.4.4 CSSImportRule,
  * §6.4.7 CSSPageRule, §6.4.8 CSSMarginRule and §6.4.9 CSSNamespaceRule, plus CSS Conditional §7.2's
- * CSSConditionRule and §7.3's CSSMediaRule (the `@media` half of the same object) and CSS Fonts §12.1's
- * CSSFontFaceRule.
+ * CSSConditionRule and §7.3's CSSMediaRule (the `@media` half of the same object), CSS Fonts §12.1's
+ * CSSFontFaceRule and CSS Animations §6.2/§6.3's CSSKeyframeRule and CSSKeyframesRule.
  *
  * `CSSImportRule.styleSheet` IS ABSENT, AND IT IS THE ONE MEMBER OF THESE INTERFACES THAT IS. §6.4.4 defines it
  * as "the associated CSS style sheet, if any, or null otherwise" and its own note gives the case that produces
@@ -54,6 +54,18 @@
  * §6.6.1 write through `style`), which is what makes `selectorText`, `cssText`, `length` and
  * `getPropertyValue` agree without any of them asking for itself.
  *
+ * A `@keyframes` HOLDS RULES AND IS NOT A §6.4.5 GROUPING RULE, so those are two questions here and not one.
+ * CSS Animations §6.3.1 declares `interface CSSKeyframesRule : CSSRule` and then gives it a `cssRules` of its
+ * own, an `appendRule(CSSOMString)`, a `deleteRule(CSSOMString)` and a `findRule(CSSOMString)` — a
+ * `deleteRule` whose argument is a keyframe SELECTOR where §6.4.5's is an INDEX, which is exactly why the IDL
+ * keeps the two interfaces apart and why one predicate could not serve both. `rule_type_has_child_rules`
+ * decides storage (an Array, for the reason above) and what the parse may nest; `rule_type_is_grouping` is
+ * §3.7.5's brand for the three members CSSGroupingRule declares, and it asserts it is the narrower of the two.
+ * §6.3.3's INDEXED PROPERTY GETTER is not a member at all — Web IDL §3.9 makes it the object's own-property
+ * behaviour — so it is an EXOTIC on this component's class, running core/idl_indexed.h's one algorithm over a
+ * decl this file hands out for that one rule type. A collection object could not have carried it: a
+ * CSSKeyframesRule is a rule, its record lives behind this class's opaque, and one object has one class.
+ *
  * WHAT A RULE HOLDS AND WHAT READS IT. The selector text is read by §6.4.3's `selectorText`, which is also
  * SETTABLE — one of the reasons the record time-travels. The declaration block text is a style rule's BODY, and
  * §6.4.3's `style` is the CSS DECLARATION BLOCK over it: core/css/css_style_declaration.h owns §6.6 and reads
@@ -79,7 +91,8 @@ void css_rule_init(JSContext *ctx);
 /* Every §6.4 and §7.x rule prototype for ONE realm — declared into core/realm.h's list. */
 void css_rule_install_proto(JSContext *ctx);
 /* `CSSRule`, `CSSGroupingRule`, `CSSStyleRule`, `CSSConditionRule`, `CSSMediaRule`, `CSSImportRule`,
-   `CSSNamespaceRule` and `CSSFontFaceRule` as globals. */
+   `CSSNamespaceRule`, `CSSFontFaceRule`, `CSSPageRule`, `CSSMarginRule`, `CSSKeyframeRule` and
+   `CSSKeyframesRule` as globals. */
 void css_rule_install(JSContext *ctx, JSValueConst global);
 void css_rule_free(JSRuntime *rt);
 
