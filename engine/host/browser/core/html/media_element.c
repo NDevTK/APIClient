@@ -72,10 +72,12 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/dom/document.h"
 #include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/events/event.h"
+#include "core/frame/sandboxing.h"
 #include "core/events/event_target.h"
 #include "core/html/media_element.h"
 #include "core/idl_args.h"
@@ -718,10 +720,22 @@ static bool media_eligible_for_autoplay(JSContext *ctx, JSValueConst el, JSValue
     char *autoplay;
     bool eligible;
 
-    /* §4.8.11.7's list, of which this engine can answer the first three: the can autoplay flag, `paused`, and
-       an `autoplay` content attribute. The sandboxing flag and the "autoplay" permission-policy feature are
-       both absent from this build, and neither can make an element eligible that these three do not. */
+    /* §4.8.11.7's list: the can autoplay flag, `paused`, an `autoplay` content attribute, and "the element's
+       node document's ACTIVE SANDBOXING FLAG SET does not have the SANDBOXED AUTOMATIC FEATURES BROWSING
+       CONTEXT FLAG set" — the same flag §6.6.7's autofocus reads, and a fact this build now carries
+       (core/frame/sandboxing.h). The "autoplay" permission-policy feature is the one conjunct still absent,
+       and it can only ever make an element LESS eligible than these four do.
+       IT IS THE ELEMENT'S NODE DOCUMENT, not the running realm: the step names the element's document, and an
+       element adopted into another document is governed by the document it is IN. A node document that is the
+       active document of no navigable answers NULL, and §7.1.5's answer for such a Document is a POSITIVE one
+       rather than a gap — "when the Document is created, its active sandboxing flag set must be empty", and
+       only the navigation algorithm ever populates it, so a Document no navigation reached has an empty set. */
+    lxb_dom_node_t *node = node_of(el);
+    JSContext *dctx = node && node->owner_document
+                    ? document_active_realm_of(lxb_dom_interface_node(node->owner_document)) : NULL;
+
     if (!st_bool(ctx, st, "canAutoplay") || !st_bool(ctx, st, "paused")) return false;
+    if (dctx && (document_active_sandbox_flags(dctx) & SANDBOX_AUTOMATIC_FEATURES)) return false;
     autoplay = element_attr_get(ctx, el, "autoplay");
     eligible = autoplay != NULL;
     free(autoplay);

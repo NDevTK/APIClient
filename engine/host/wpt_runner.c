@@ -44,6 +44,7 @@
 #include "core/fetch/request.h"
 #include "core/fetch/fetch.h"
 #include "core/url/url.h"
+#include "core/frame/policy_container.h"
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
@@ -1184,7 +1185,8 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
 /* ONE DOCUMENT. Runs once per document INCLUDING the first, which is what makes it the one description of what
    a document of this build is — a same-origin child navigable gets exactly this and nothing else. */
 static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                              const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
+                              const char *csp, SandboxFlags sandbox_flags, uint32_t doc_id,
+                              JSValueConst nav_proxy)
 {
     PlatformDocument doc;
     JSValue global = JS_GetGlobalObject(ctx);
@@ -1211,6 +1213,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
     doc.url = url;
     doc.origin = origin;
     doc.csp = csp;
+    doc.sandbox_flags = sandbox_flags;
     doc.doc_id = doc_id;
     doc.nav_proxy = nav_proxy;
     platform_document_install(ctx, global, &doc);
@@ -1223,7 +1226,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
    no smaller variant of it, because a child whose `window` is smaller is a different browser. */
 static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                   const char *top_level_url, const char *origin, const char *csp,
-                                  uint32_t doc_id, JSValueConst nav_proxy)
+                                  SandboxFlags sandbox_flags, uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -1235,7 +1238,7 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
        §7.4 decided the CHILD's top-level creation URL and handed it over; a builder that used `url` here
        would make an about:blank iframe of an http page a secure context. */
     realm_install_intrinsics(ctx, top_level_url);
-    wpt_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
+    wpt_realm_install(ctx, dom, url, origin, csp, sandbox_flags, doc_id, nav_proxy);
     /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm — they are what make a popup a participant rather
        than an empty frame, since message-opener.html's whole body is one script that posts to its opener.
        THEY ARE QUEUED ONTO THE FRONTIER, NOT RUN HERE. A realm is built from inside §7.4 step 14's load job —
@@ -1313,7 +1316,16 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            nothing opened it under a name. Saying so is what keeps `window.name` a computed value here. */
         JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "");
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, root_csp, world_local_doc(), root_proxy);
+        /* §7.4.5's FINAL SANDBOXING FLAG SET FOR THE ROOT DOCUMENT, and the whole of it is the second
+           half. The first is this navigable's CREATION sandboxing flags, and for the navigable an instance
+           STARTED in those are empty: a top-level traversable has no embedder element, so §7.1.5 answers
+           from its POPUP sandboxing flag set, which begins empty and which only §7.1's rules for choosing a
+           navigable ever fill — nothing chose this one. What remains is §7.1.5's CSP-DERIVED SANDBOXING
+           FLAGS, the `sandbox` directive of the policy the response carried; without this the header would
+           parse and then do nothing. */
+        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, root_csp,
+                          policy_csp_derived_sandboxing_flags(root_csp, root_csp ? strlen(root_csp) : 0),
+                          world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }
     free(root_csp);   /* document_install built its container from it and keeps no pointer */

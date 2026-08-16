@@ -37,6 +37,7 @@
 #include <lexbor/html/html.h>
 
 #include "quickjs.h"
+#include "core/frame/sandboxing.h"
 #include "core/frame/window_features.h"
 #include "core/url/origin.h"
 
@@ -91,9 +92,18 @@
    of Web IDL §3.3.13's members exist in it at all. They differ for every nested navigable — an `https` iframe
    inside an `http` page is not a secure context and an `about:blank` iframe of one is not either — so a
    builder handed only `url` would install a platform surface belonging to a document it is not building. */
+/* `sandbox_flags` is §7.1.5's ACTIVE SANDBOXING FLAG SET for the Document this realm is being built for, and
+   it is a SEPARATE argument from `csp` because §7.1.7's policy container does not contain one — five sites in
+   this tree used to say it did. What the container contributes is one HALF of it, through the CSP `sandbox`
+   directive alone (§7.1.5's CSP-derived sandboxing flags); the other half is the navigable's CREATION
+   sandboxing flags, which come from the `<iframe sandbox>` attribute and the embedder's own set. Which of the
+   two algorithms produced the set depends on WHICH ALGORITHM IS CREATING THE DOCUMENT — §7.2's create hands
+   the initial about:blank the creation flags alone, §7.5.1's create-and-initialize hands a navigated Document
+   §7.4.5's union — so the caller states the whole set and the builder never re-derives it. */
 typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                    const char *top_level_url, const char *origin,
-                                   const char *csp, uint32_t doc_id, JSValueConst nav_proxy);
+                                   const char *csp, SandboxFlags sandbox_flags, uint32_t doc_id,
+                                   JSValueConst nav_proxy);
 void navigable_set_realm_builder(RealmBuilder b);
 
 /* BUILD THE REALM OF A SAME-ORIGIN NAVIGABLE THIS AGENT HOLDS. The answer is BORROWED, and that is a statement
@@ -136,9 +146,13 @@ void navigable_set_realm_builder(RealmBuilder b);
 /* `origin` is §7.3.1's answer for THIS document — the RECORD, because the identity is what a same-origin check
    compares and the host boundary below takes only its serialization (a host builds a realm; it does not decide
    a principal). It is asserted to be same origin with the agent's, which is what makes that split sound. */
+/* `sandbox_flags` is §7.1.5's ACTIVE SANDBOXING FLAG SET for the Document being built, stated by the caller
+   for the same reason `csp` is and answering a question the container cannot: §7.2's create gives the initial
+   about:blank the navigable's CREATION sandboxing flags, and §7.4.5's navigation gives its Document the UNION
+   of those and the response policy's CSP-derived flags. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
-                           const char *csp);
+                           const char *csp, SandboxFlags sandbox_flags);
 
 /* THE AGENT'S HALF: §7.4's `open` member, declared once. */
 void navigable_init(JSContext *ctx);
@@ -215,7 +229,14 @@ int navigable_realm_count(void);
    §7.4's AUXILIARY one, which is its own top and links back through `opener`. */
 /* `feat` is §7.4's parsed features argument, or NULL for §4.8.5's iframe — which has no features to
    parse, is never a popup, and never has an opener. */
+/* `iframe_sandbox_flags` is §7.1.5's IFRAME SANDBOXING FLAG SET of the container element — the parse of its
+   `sandbox` content attribute, or an EMPTY set when the element carries no such attribute. It is the embedder's
+   half of determine-the-creation-sandboxing-flags and only §4.8.5's caller has it: the attribute is read
+   through the DOM chokepoint in the CREATING FLOW's delta, which is what makes a child navigable's sandboxing
+   per-flow without anything here having to capture it. Must be empty for an AUXILIARY navigable (`is_child`
+   false), which has no embedder element at all — §7.1.5 answers that case from the POPUP sandboxing flag set,
+   which this function derives from the creator's own active set. */
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
-                         const WindowFeatures *feat);
+                         const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags);
 
 #endif

@@ -13,6 +13,7 @@
 #include "core/events/message_port.h"
 #include "core/events/page_transition_event.h"
 #include "core/frame/document_lifecycle.h"
+#include "core/frame/sandboxing.h"
 #include "core/frame/session_history.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/html_iframe.h"
@@ -172,13 +173,11 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
  * as well — and each of those would then have grown its own copy of the same excuse. */
 
 /* §7.4.2.4's second conjunct — "document's active sandboxing flag set does not have its sandboxed modals flag
-   set". A document's sandboxing flags come from §7.6.2's navigable container through §7.2.6's policy container,
-   and this engine's policy container carries a CSP and nothing else, so no document it builds has any flag set.
-   The conjunct therefore HOLDS (nothing sandboxes modals) and it is evaluated rather than assumed away. */
+   set". §7.1.5 lists THE BEFOREUNLOAD EVENT among the modal dialogs that flag suppresses, beside `alert`,
+   `confirm`, `print` and `prompt`, and `allow-modals` is what clears it. */
 static bool document_sandboxes_modals(JSContext *ctx)
 {
-    (void)ctx;
-    return false;
+    return (document_active_sandbox_flags(ctx) & SANDBOX_MODALS) != 0;
 }
 
 #define BEFOREUNLOAD_STAGES(X) \
@@ -819,16 +818,82 @@ static bool traversable_is_script_closable(JSContext *ctx, JSValueConst proxy)
     return session_history_length(tctx) == 1;
 }
 
-/* "the incumbent global object's navigable is ALLOWED BY SANDBOXING TO NAVIGATE thisTraversable, given
-   sourceSnapshotParams". §7.4.5's algorithm is a walk over the SOURCE's sandboxing flags, and a document's
-   flags come from §7.6.2's navigable container through §7.2.6's policy container, which in this engine carries
-   a CSP and nothing else — so every one of that algorithm's "if the … flag is set, return false" tests fails
-   and its answer is true. Evaluated at the step that asks it, in the same shape §4.10.22.3's sandboxed-forms
-   condition has. */
+/* IS `maybe_ancestor` AN ANCESTOR NAVIGABLE OF `node` — the relation §7.4.2.1's algorithm asks twice, in both
+   directions, and the only tree question it has. STRICT: a navigable is not its own ancestor, which is what
+   makes the algorithm's step 1 a separate step from its step 2. The walk is up the PARENT chain rather than
+   down, so it costs the depth of one navigable rather than the size of the tree, and it uses the ENGINE
+   spelling of `parent` (JS_UNDEFINED at the top) — §7.2.5's scriptable one answers the navigable ITSELF at the
+   top, which would make this loop never terminate. */
+static bool proxy_is_ancestor_of(JSContext *ctx, JSValueConst maybe_ancestor, JSValueConst node)
+{
+    JSValue cur = window_proxy_parent_navigable(ctx, node);
+    bool hit = false;
+
+    while (window_proxy_is(cur)) {
+        JSValue up;
+
+        if (JS_VALUE_GET_PTR(cur) == JS_VALUE_GET_PTR(maybe_ancestor)) { hit = true; break; }
+        up = window_proxy_parent_navigable(ctx, cur);
+        JS_FreeValue(ctx, cur);
+        cur = up;
+    }
+    JS_FreeValue(ctx, cur);
+    return hit;
+}
+
+/* HTML §7.4.2.1's "a navigable SOURCE is ALLOWED BY SANDBOXING TO NAVIGATE a second navigable TARGET, given a
+ * source snapshot params sourceSnapshotParams", verbatim, for the one caller §7.2.5.2's close() has: source is
+ * the incumbent global object's navigable — this realm's — and target is thisTraversable.
+ *
+ * THE FLAGS ARE THE SOURCE'S, which is sourceSnapshotParams's "sandboxing flags — sourceDocument's active
+ * sandboxing flag set" (§7.4.2.1's snapshot-source-snapshot-params). A sandbox restricts what the sandboxed
+ * document may do TO others; reading the target's set instead would ask whether the window being closed is
+ * sandboxed, which no step of this algorithm asks.
+ *
+ * TWO OF ITS BRANCHES NAME STATE THIS BUILD HAS NOT GOT, AND BOTH CRASH RATHER THAN GUESS — and neither is
+ * reachable for a document with an EMPTY flag set, which is every document that no `<iframe sandbox>` and no
+ * CSP `sandbox` directive produced. That is why this reads as "true" exactly where the placeholder it replaced
+ * did, and stops doing so precisely where the placeholder was wrong. */
 static bool allowed_by_sandboxing_to_navigate(JSContext *ctx, JSValueConst proxy)
 {
-    (void)ctx; (void)proxy;
-    return true;
+    JSValueConst source = document_window_proxy(ctx);
+    SandboxFlags flags = document_active_sandbox_flags(ctx);
+
+    if (JS_VALUE_GET_PTR(source) == JS_VALUE_GET_PTR(proxy)) return true;   /* step 1: source IS target */
+    if (proxy_is_ancestor_of(ctx, source, proxy)) return true;              /* step 2 */
+    if (proxy_is_ancestor_of(ctx, proxy, source)) {                         /* step 3 */
+        if (!window_proxy_is_top_level(proxy)) return true;                 /* step 3.1 */
+        /* STEPS 3.2-3.3 SPLIT ON sourceSnapshotParams's HAS TRANSIENT ACTIVATION, and §6.4's transient
+           activation is a question this component cannot ask HERE: user_activation_transient_run is a step
+           member, because "has the transient state expired" is answered against the clock at the moment of
+           the ask and an ask can suspend, and close() is a plain C body. Reached only when one of the two
+           top-level-navigation flags is set — which needs an `<iframe sandbox>` without
+           `allow-top-navigation` — so it names the conversion rather than blocking one. */
+        DCHECK(!(flags & (SANDBOX_TOP_LEVEL_NAVIGATION_WITH_USER_ACTIVATION |
+                          SANDBOX_TOP_LEVEL_NAVIGATION_WITHOUT_USER_ACTIVATION)),
+               "§7.4.2.1 steps 3.2-3.3 need sourceSnapshotParams's HAS TRANSIENT ACTIVATION to decide whether "
+               "a sandboxed nested document may close its own top-level traversable, and §6.4's transient "
+               "activation is a SUSPENDING read (core/html/user_activation.h) while §7.2.5.2's close() is a "
+               "plain C body — make close() a step machine and take the answer from "
+               "user_activation_transient_run, as §7.4.2.4's beforeunload prompt already does");
+        return true;                                                        /* step 3.4 */
+    }
+    if (window_proxy_is_top_level(proxy)) {                                 /* step 4 */
+        /* STEP 4.1 IS THE ONE PERMITTED SANDBOXED NAVIGATOR — the browsing context field §7.1's rules for
+           choosing a navigable set on a popup opened BY a sandboxed-navigation document, so that the opener
+           can still navigate the window it opened. This engine's WindowProxy carries no such field, so the
+           question cannot be answered rather than answered "no": answering "no" here would fall to step 4.2
+           and refuse a sandboxed opener the close() of its own popup, which is the exact case the field
+           exists for. Unreachable without the flag. */
+        DCHECK(!(flags & SANDBOX_NAVIGATION),
+               "§7.4.2.1 step 4.1 asks whether the source is the ONE PERMITTED SANDBOXED NAVIGATOR of this "
+               "top-level traversable, and no navigable in this engine carries that field — §7.1's rules for "
+               "choosing a navigable set it on a navigable a SANDBOXED document opened, and until it is "
+               "carried a sandboxed opener cannot be told from an unrelated sandboxed document");
+        return true;                                                        /* step 4.3 */
+    }
+    if (flags & SANDBOX_NAVIGATION) return false;                           /* step 5 */
+    return true;                                                            /* step 6 */
 }
 
 void document_lifecycle_window_close(JSContext *ctx, JSValueConst proxy)

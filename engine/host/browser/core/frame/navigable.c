@@ -9,6 +9,7 @@
 #include "core/frame/navigable.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/policy_container.h"
+#include "core/frame/sandboxing.h"
 #include "core/frame/window_features.h"
 #include "core/dom/document.h"
 #include "core/html/html_iframe.h"   /* §7.2.5's document-tree child navigables — §7.1's walk descends them */
@@ -89,19 +90,6 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
 }
 
 
-/* §7.1.5's SANDBOXED ORIGIN BROWSING CONTEXT FLAG for the document creating this navigable — §7.3.1 step 1's
-   condition, and the site that MINTS a fresh opaque origin when it is set. A document's sandboxing flags come
-   from §7.6.2's navigable container through §7.2.6's policy container, and this engine's policy container
-   carries a CSP and nothing else (policy_container.c), so no document it builds has the flag SET. It is
-   EVALUATED at the step that asks it rather than assumed away — the same shape core/html/autofocus.c and
-   core/html/html_form.c evaluate the other sandboxing flags with — and the day §7.1.5's flag set lands in the
-   policy container this is the one line that reads it. */
-static bool child_sandboxed_origin(JSContext *ctx)
-{
-    (void)ctx;
-    return false;
-}
-
 /* THE CHILD'S ADDRESS AND ORIGIN, from ONE parse. §7.3.1's DETERMINE THE ORIGIN decides the second: an
    `about:blank` navigable — which is what `open()` with no URL creates, and what an `<iframe>` with no `src`
    creates — gets the CREATOR'S ORIGIN RECORD, the same record and therefore the same identity, which is the
@@ -112,8 +100,15 @@ static bool child_sandboxed_origin(JSContext *ctx)
    written, and a relative reference has neither an origin nor a meaning outside the document that wrote it —
    handing the host the raw text would make it resolve against something, and the only base it could pick is a
    guess. Returns false when the reference does not parse; `*out_url` is owned and `*out_origin` is BORROWED
-   (an origin lives for the agent). */
-static bool child_address(JSContext *ctx, const char *url, char **out_url, const Origin **out_origin)
+   (an origin lives for the agent).
+   `sandbox_flags` IS THE FLAG SET OF THE DOCUMENT BEING CREATED, NOT OF THE CREATOR — §7.3.1's determine the
+   origin takes `sandboxFlags`, and §7.2 passes it the NEW browsing context's creation sandboxing flags, whose
+   SANDBOXED ORIGIN BROWSING CONTEXT FLAG is what mints a fresh opaque origin. Handing it the creator's set
+   instead would make `<iframe sandbox>` leave the child same-origin with its embedder (the creator is not
+   itself sandboxed) and would make a `sandbox allow-same-origin` frame of a sandboxed page opaque (the creator
+   is). It is an input of the operation, which is why it is a parameter here and not a read off anything. */
+static bool child_address(JSContext *ctx, const char *url, SandboxFlags sandbox_flags, char **out_url,
+                          const Origin **out_origin)
 {
     UrlRecord base, rec;
     const char *base_url;
@@ -129,7 +124,7 @@ static bool child_address(JSContext *ctx, const char *url, char **out_url, const
         /* §7.3.1 STEP 4, WITHOUT A PARSE: this IS `about:blank` with a non-null source origin, so the answer is
            the source origin — this agent's — and no URL record is needed to say so. The sandbox flag is asked
            first because §7.3.1's step 1 comes first and would mint instead of inherit. */
-        *out_origin = child_sandboxed_origin(ctx) ? origin_determine(NULL, true, NULL) : origin_agent();
+        *out_origin = (sandbox_flags & SANDBOX_ORIGIN) ? origin_determine(NULL, true, NULL) : origin_agent();
         return true;
     }
     base_url = document_base_url(ctx);
@@ -138,7 +133,7 @@ static bool child_address(JSContext *ctx, const char *url, char **out_url, const
     url_record_init(&rec);
     if (url_parse(&rec, url, strlen(url), have_base ? &base : NULL)) {
         *out_url = url_serialize(&rec, false);
-        *out_origin = origin_determine(&rec, child_sandboxed_origin(ctx), origin_agent());
+        *out_origin = origin_determine(&rec, (sandbox_flags & SANDBOX_ORIGIN) != 0, origin_agent());
         ok = *out_url != NULL;
     }
     url_record_free(&rec);
@@ -204,7 +199,7 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
    `<meta>` policies alone. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
-                           const char *csp)
+                           const char *csp, SandboxFlags sandbox_flags)
 {
     lxb_html_document_t *dom;
     JSContext *cctx;
@@ -227,8 +222,19 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
     dom = child_document(body, body_len);
     /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
        principal — and because the identity it would have to carry is this agent's, asserted above. */
-    cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, top_level_url, origin_serialized(origin), csp, doc,
-                           nav_proxy);
+    /* §7.1.5 STATES A CONSEQUENCE OF THE FLAG SET THIS AGENT CANNOT HONOUR, AND IT IS ASSERTED RATHER THAN
+       IGNORED: the SANDBOXED ORIGIN flag "forces content into an opaque origin", and an opaque origin is same
+       origin with nothing — so a Document carrying it is a document of a DIFFERENT agent cluster and belongs
+       in another instance. Reaching here with it set means §7.3.1's determine-the-origin was asked with a
+       different flag set than the one the Document is being created with, which is the "an operation takes
+       its inputs with it" split getting one of its two answers from the wrong place. */
+    DCHECK(!(sandbox_flags & SANDBOX_ORIGIN),
+           "a realm of THIS agent was built for a Document whose active sandboxing flag set has the sandboxed "
+           "origin browsing context flag — §7.1.5 forces such a Document into a fresh OPAQUE origin, which is "
+           "same origin with nothing, so it is a second INSTANCE the host provisions and never a second realm "
+           "in this heap; the origin this call was handed was determined from a different flag set");
+    cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, top_level_url, origin_serialized(origin), csp,
+                           sandbox_flags, doc, nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
@@ -318,6 +324,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     JSValue bodyv = JS_UNDEFINED, cspv = JS_UNDEFINED;
     size_t body_len = 0;
     JSContext *cctx;
+    SandboxFlags final_flags, csp_flags;
     uint32_t doc, oid = 0;
     int orc;
     bool fetches;
@@ -394,7 +401,26 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        permission key its EMBEDDER's (Permissions §5.1: "Most powerful features grant permission to the
        top-level origin and delegate access to the requesting document via Permissions Policy"). */
     tlo = window_proxy_is_top_level(proxy) ? origin : window_proxy_top_level_origin(proxy);
-    cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, body, body_len, csp);
+    /* §7.4.5's FINAL SANDBOXING FLAG SET, which is what §7.5.1 hands the new Document as its ACTIVE
+       SANDBOXING FLAG SET: "let finalSandboxFlags be the union of targetSnapshotParams's sandboxing flags and
+       policyContainer's CSP list's CSP-derived sandboxing flags". The first half is this navigable's creation
+       sandboxing flags (§7.4.2.1 snapshots them off the target), the second is the `sandbox` directive of the
+       policy this Document is created with — the response's when it carried one, §7.2.6's inherited clone
+       when it did not, which is the same `csp` resolved above and for the same reason. */
+    csp_flags = policy_csp_derived_sandboxing_flags(csp, csp ? strlen(csp) : 0);
+    final_flags = window_proxy_creation_sandbox_flags(proxy) | csp_flags;
+    /* THE ORIGIN WAS DETERMINED BEFORE THE RESPONSE EXISTED, and a `Content-Security-Policy: sandbox` is the
+       one header that makes that ordering observable: §7.4.5 determines the response origin FROM
+       finalSandboxFlags, so a sandbox directive in the response must mint a fresh opaque origin — and this
+       engine resolved the destination's origin when the navigation was ENQUEUED, before anything was fetched.
+       The Document would then run under a principal the response revoked. */
+    DCHECK(!(csp_flags & SANDBOX_ORIGIN),
+           "a navigation's response carried a CSP `sandbox` directive WITHOUT `allow-same-origin`, so §7.4.5 "
+           "determines its Document's origin from a flag set that mints a fresh OPAQUE origin — but this "
+           "engine determined that origin when the navigation was enqueued, before the response existed. Move "
+           "§7.3.1's determine-the-origin for a navigation to the point the response arrives (here), keeping "
+           "the enqueue-time answer only for the `about:` destinations that have no response");
+    cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, body, body_len, csp, final_flags);
     window_proxy_navigate(ctx, proxy, cctx, doc, addr, tlu, tlo, origin);
     JS_FreeCString(ctx, csp);
     JS_FreeCString(ctx, body);
@@ -482,7 +508,32 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
     const Origin *origin = NULL;
 
     DCHECK(window_proxy_is(proxy), "something that is not a WindowProxy was navigated");
-    if (!child_address(ctx, url, &addr, &origin)) {
+    /* AND IT IS ONE OF THIS AGENT'S, asked BEFORE anything is read off it. §7.1's rules for choosing a
+       navigable can hand this a navigable whose active document a PEER instance holds, and every fact the
+       navigation needs — its target snapshot params, its policy container, the Document it creates — belongs
+       to that instance. The check that used to catch this stood after the destination was resolved and spoke
+       about the DESTINATION's origin, which is a different question with a different answer. */
+    DCHECK(!window_proxy_is_remote(proxy),
+           "§7.2.5.1's navigate was asked to navigate a navigable whose ACTIVE DOCUMENT a PEER instance holds "
+           "— the navigation's target snapshot params, its policy container and the Document it creates are "
+           "all that instance's, so this is a host route like §7.4's create notice and not a load this agent "
+           "can perform");
+    /* §7.4.2.1's SNAPSHOT TARGET SNAPSHOT PARAMS: "sandboxing flags — the result of determining the creation
+       sandboxing flags given targetNavigable's active browsing context and targetNavigable's CONTAINER". The
+       container is the `<iframe>` element, and this engine's WindowProxy does not carry one: what it holds is
+       the set computed when the navigable was CREATED. Those agree for every navigable created and navigated
+       in one operation, and §4.8.5 says they can disagree afterwards — "when the sandbox attribute is set or
+       changed while it has a content navigable, set the iframe sandboxing flag set … these flags only take
+       effect when the content navigable is NAVIGATED", which is this call. So a re-snapshot is owed exactly
+       when a SANDBOXED navigable is navigated a second time, and that is where it crashes rather than reading
+       a set that may be one attribute write out of date. */
+    DCHECK(window_proxy_creation_sandbox_flags(proxy) == 0,
+           "a SANDBOXED navigable was navigated, and §7.4.2.1 re-snapshots its container's IFRAME SANDBOXING "
+           "FLAG SET at every navigation while this proxy carries only the set its creation computed — §4.8.5 "
+           "lets the two disagree the moment a page writes `sandbox`. Give the navigable its CONTAINER "
+           "(core/html/html_iframe.c holds the element) so this call can re-parse the attribute, rather than "
+           "navigating a document under flags from before the write");
+    if (!child_address(ctx, url, window_proxy_creation_sandbox_flags(proxy), &addr, &origin)) {
         free(addr);
         return JS_UNDEFINED;   /* §7.4 step 4: the caller turns this into a SyntaxError */
     }
@@ -684,11 +735,20 @@ static JSValue navigable_choose_keyword(JSContext *ctx, const char *target)
 }
 
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
-                         const WindowFeatures *feat)
+                         const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags)
 {
     const char *csp = policy_container_csp(document_policy(ctx));
     char *addr = NULL;
     const Origin *origin = NULL;
+    /* §7.1.5's DETERMINE THE CREATION SANDBOXING FLAGS, and the two arms are §7.4's two shapes of navigable.
+       A CHILD has an embedder element, so its set is the union of that element's IFRAME SANDBOXING FLAG SET
+       and the embedder document's own ACTIVE SANDBOXING FLAG SET — which is how a sandbox is inherited down a
+       frame tree with no keyword able to escape it. An AUXILIARY navigable has no embedder, so its set is the
+       new top-level browsing context's POPUP SANDBOXING FLAG SET, which §7.1's rules for choosing a navigable
+       fill from the OPENER's flags only when the propagate flag survived the parse — the one place
+       `allow-popups-to-escape-sandbox` acts. */
+    SandboxEmbedder embedder;
+    SandboxFlags creation_flags;
     uint32_t child;
     JSValue proxy;
     char *op;
@@ -718,7 +778,15 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     CHECK(creator_tlu_s != NULL, "navigable: this realm's top-level creation URL would not convert");
     tlu = is_child ? creator_tlu_s : "about:blank";
     tlo = is_child ? creator_tlo : origin_agent();
-    if (!child_address(ctx, url, &addr, &origin)) {   /* the reference does not parse; the caller decides what that means */
+    DCHECK(is_child || iframe_sandbox_flags == 0,
+           "§7.4's AUXILIARY navigable was created with an IFRAME SANDBOXING FLAG SET — an auxiliary navigable "
+           "has no embedder element for one to come from, and §7.1.5 answers its creation flags from the POPUP "
+           "sandboxing flag set instead");
+    embedder.iframe_flags = iframe_sandbox_flags;
+    embedder.document_flags = document_active_sandbox_flags(ctx);
+    creation_flags = sandbox_creation_flags(is_child ? &embedder : NULL,
+                                            is_child ? 0 : sandbox_popup_flags(embedder.document_flags));
+    if (!child_address(ctx, url, creation_flags, &addr, &origin)) {   /* the reference does not parse; the caller decides what that means */
         JS_FreeCString(ctx, creator_tlu_s);
         JS_FreeValue(ctx, creator_tlu);
         free(addr);
@@ -761,6 +829,11 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            the job carries a handle); recording it here would give the initial Document a principal it never
            had — the same "an operation takes its inputs with it" split the address already makes. */
         proxy = window_proxy_new(ctx, child, "about:blank", origin_agent(), name, feat && feat->is_popup,
+                                 /* §7.1.5's creation sandboxing flags, decided above. §7.2 hands exactly this
+                                    set to the initial about:blank Document as its ACTIVE SANDBOXING FLAG SET,
+                                    and it is kept on the navigable for the same reason the policy is: that
+                                    Document's realm is materialized later, possibly by another document. */
+                                 creation_flags,
                                  /* §7.2.6/§7.4: a navigable created with no address has no response to carry a
                                     policy, so it CLONES THE CREATOR'S — the SAME `csp` this function already
                                     sends to a PEER instance for a cross-origin child, which is where the gap
@@ -836,6 +909,19 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            more than a JSValue does, and what the peer needs is its own principal, which its host will state
            back. A peer's opaque origin is same origin with nothing here, which is exactly right: two Documents
            sharing ONE opaque origin share an agent cluster, so they are never on two sides of this line. */
+        /* §7.1.5's SET DOES NOT CROSS THE NOTICE, AND A SANDBOXED CHILD IS ALWAYS ON THIS SIDE OF IT. That is
+           not a coincidence to note, it is the whole reason this is reachable: the SANDBOXED ORIGIN flag makes
+           the child's origin OPAQUE, an opaque origin is same origin with nothing, so §7.1.1 puts every
+           sandboxed child in another agent cluster and child_in_this_agent above sent it here. The peer would
+           then create that Document with an EMPTY active sandboxing flag set and run scripts, submit forms and
+           relax document.domain that the `sandbox` attribute forbids — a sandbox that exists in the markup and
+           nowhere in the model. */
+        DCHECK(creation_flags == 0,
+               "a CROSS-INSTANCE child navigable was created with a non-empty §7.1.5 CREATION SANDBOXING FLAG "
+               "SET, and the `navigable.create` notice carries the creator's policy but not the flag set — so "
+               "the peer instance would build this Document unsandboxed. Add the set to the notice beside the "
+               "policy (it is one word, and it crosses as text like everything else on this record), and hand "
+               "it to that instance's document_install as its active sandboxing flag set");
         n = strlen(world_doc_name(child)) + strlen(world_doc_name(document_doc(ctx))) +
             strlen(addr) + strlen(origin_serialized(origin)) + strlen(csp ? csp : "") + strlen(tlu) + 32;
         op = malloc(n);
@@ -885,7 +971,10 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
     }
     /* §7.1's LAST rule: create one, and GIVE it the name — unless the name was a keyword, which names no
        navigable at all. */
-    return navigable_create(ctx, url, target && *target && target[0] != '_' ? target : NULL, false, feat);
+    /* §7.1.5: an AUXILIARY navigable has NO EMBEDDER ELEMENT, so there is no iframe sandboxing flag set for
+       it to inherit — its creation flags come from the popup sandboxing flag set, which navigable_create
+       derives from this document's own active set through §7.1's propagate rule. */
+    return navigable_create(ctx, url, target && *target && target[0] != '_' ? target : NULL, false, feat, 0);
 }
 
 /* §7.4's `window.open`, AS A STEP MACHINE — and it is one again for a reason that did not exist when the note

@@ -29,6 +29,7 @@
 #include "core/dom/attr_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/document.h"
+#include "core/frame/sandboxing.h"
 #include "core/dom/node.h"
 #include "core/encoding/encoding.h"
 #include "core/events/event.h"
@@ -680,16 +681,11 @@ static bool form_cannot_navigate(JSContext *ctx, JSValueConst form)
 }
 
 /* §4.10.22.3 step 4's condition, "form document's active sandboxing flag set has its SANDBOXED FORMS BROWSING
-   CONTEXT FLAG set". A document's sandboxing flags come from §7.6.2's navigable container — an `<iframe
-   sandbox>` — through §7.2.6's policy container, and this engine's policy container carries a CSP and nothing
-   else, so no document it builds has a flag set to read. That is the same kind of answer §4.10.22.4 step 5.8
-   gives a file control in an engine with no file picker: not a skipped step, a condition whose state cannot
-   exist, evaluated at the step that asks it. The day the flag set lands in the policy container, this is the
-   one site that reads it. */
+   CONTEXT FLAG set" — the flag `<iframe sandbox>` sets and `allow-forms` clears, and the step that makes a
+   sandboxed form submission return with the form never submitted. */
 static bool form_document_sandboxes_forms(JSContext *ctx)
 {
-    (void)ctx;
-    return false;
+    return (document_active_sandbox_flags(ctx) & SANDBOX_FORMS) != 0;
 }
 
 /* §4.10.21's CONSTRAINT VALIDATION belongs to constraint_validation.c — §4.10.21.1's ten validity states are a

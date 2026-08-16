@@ -17,11 +17,18 @@
  * mode is not `none`, then set key to origin; otherwise, if group's historical agent cluster key map[origin]
  * exists ...; otherwise: if requestsOAC is true, then set key to origin", and `is origin-keyed` is true only
  * when the key ended up being an ORIGIN. The three inputs are the browsing context group's cross-origin
- * isolation mode, the historical map, and the `Origin-Agent-Cluster` response header — and this engine's §7.2.6
- * policy container carries a CSP and nothing else, so the header has never reached a Document it built and the
- * mode is "none". The key is therefore the SITE and the cluster is NOT origin-keyed. Each of those is evaluated
- * at the step that asks it, the same shape core/frame/navigable.c evaluates the sandboxed-origin flag with, so
- * the day a policy container carries the header this is the one place it is read.
+ * isolation mode, the historical map, and the `Origin-Agent-Cluster` response header — and the only header this
+ * engine hands a Document at its creation is `Content-Security-Policy`, so that one has never reached a
+ * Document it built and the mode is "none". The key is therefore the SITE and the cluster is NOT origin-keyed.
+ * Each of those is evaluated at the step that asks it, so the day a response's headers reach a Document this
+ * is the one place they are read.
+ * §7.1.5's SANDBOXING FLAG SET IS NOT THE MISSING PIECE, and it is named because the two used to be described
+ * as one absence. That set is carried now (core/frame/sandboxing.h) and it is a field of the DOCUMENT rather
+ * than of the policy container, which is where §7.5.1's creation table puts it — and it says nothing about
+ * agent-cluster keying. What is still absent is the `Origin-Agent-Cluster`, `Cross-Origin-Opener-Policy` and
+ * `Cross-Origin-Embedder-Policy` RESPONSE HEADERS: the only header a Document is created with in this engine
+ * is its `Content-Security-Policy` (core/dom/document.h's install), so §7.1.7's EMBEDDER POLICY has no writer
+ * and neither does the OPENER POLICY §7.5.1 gives a Document beside its container.
  *
  * ONE INSTANCE PER ORIGIN IS NOT ORIGIN-KEYING, and conflating the two would give the wrong answer here.
  * SECURITY.md partitions this engine by `(browsing context group, origin)` — a heap boundary — and an agent

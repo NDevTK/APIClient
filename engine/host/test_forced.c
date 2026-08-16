@@ -1833,7 +1833,8 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
    globals: a host ADDS to the one list and cannot subtract from it, and adding afterwards is also what lets
    the `eval` sink below stand where the language's own `eval` would. */
 static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                             const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
+                             const char *csp, SandboxFlags sandbox_flags, uint32_t doc_id,
+                             JSValueConst nav_proxy)
 {
     PlatformDocument doc;
     JSValue g = JS_GetGlobalObject(ctx);
@@ -1842,6 +1843,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     doc.url = url;
     doc.origin = origin;
     doc.csp = csp;
+    doc.sandbox_flags = sandbox_flags;
     doc.doc_id = doc_id;
     doc.nav_proxy = nav_proxy;
     platform_document_install(ctx, g, &doc);
@@ -1870,7 +1872,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime. */
 static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                  const char *top_level_url, const char *origin, const char *csp,
-                                 uint32_t doc_id, JSValueConst nav_proxy)
+                                 SandboxFlags sandbox_flags, uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -1882,7 +1884,7 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
        §7.4 decided this child's top-level creation URL and handed it over — using `url` would make an
        about:blank iframe of an http page a secure context. */
     realm_install_intrinsics(ctx, top_level_url);
-    tf_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
+    tf_realm_install(ctx, dom, url, origin, csp, sandbox_flags, doc_id, nav_proxy);
     return ctx;
 }
 
@@ -2112,7 +2114,13 @@ int main(int argc, char **argv) {
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* NULL: this fixture's document is a C string literal, so it came from no response and has no
            header-borne policy. That is a fact about it, not a gap. */
-        tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", NULL, world_local_doc(), root_proxy);
+        /* AND AN EMPTY §7.1.5 ACTIVE SANDBOXING FLAG SET, from the same fact and the same sentence: the two
+           halves §7.4.5 unions are this navigable's CREATION sandboxing flags — empty, because a top-level
+           traversable has no embedder element and its POPUP sandboxing flag set begins empty — and the
+           CSP-derived flags of the policy above, which there is none of. Not a placeholder: an unsandboxed
+           document's set IS empty, and this fixture's is. */
+        tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", NULL, 0, world_local_doc(),
+                         root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }
 

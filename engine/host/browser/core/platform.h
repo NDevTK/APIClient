@@ -45,6 +45,7 @@
 #include <lexbor/html/html.h>
 
 #include "quickjs.h"
+#include "core/frame/sandboxing.h"
 
 /* THE AGENT'S FACTS — what a declaration needs that is true of the whole similar-origin window agent. */
 typedef struct {
@@ -64,6 +65,11 @@ typedef struct {
     const char          *url;    /* the document's ADDRESS */
     const char          *origin; /* the document's PRINCIPAL */
     const char          *csp;    /* §7.2.6's header half, or NULL for a document that came from no response */
+    /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET this Document is created with. A SEPARATE fact from `csp` for
+       the same reason `url` and `origin` are separate from each other: §7.1.7's policy container holds no
+       flag set, so a host that derived one from the policy would answer a question the container was never
+       asked. §7.5.1 lists them as two rows of one creation, and this struct is where the pair travels. */
+    SandboxFlags         sandbox_flags;
     uint32_t             doc_id; /* the world registry's name for this document */
     JSValueConst         nav_proxy;   /* §7.2.5.1's ONE WindowProxy for the navigable this is active in */
 } PlatformDocument;

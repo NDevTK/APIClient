@@ -9,6 +9,7 @@
 #include "core/dom/document_domain.h"
 #include "core/dom/node.h"
 #include "core/frame/agent_cluster.h"
+#include "core/frame/sandboxing.h"
 #include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
 #include "core/url/origin.h"
@@ -50,17 +51,25 @@ static const Origin *dd_origin(lxb_dom_document_t *dom)
 }
 
 /* §7.1.5's SANDBOXED document.domain BROWSING CONTEXT FLAG, which is the setter's step 2 — "this flag prevents
-   content from using the document.domain setter". It is the one sandboxing flag §7.1.5's parse-a-sandboxing-
+   content from using the document.domain setter". It is one of the two flags §7.1.5's parse-a-sandboxing-
    directive adds UNCONDITIONALLY, with no `unless tokens contains ...` beside it, so ANY `<iframe sandbox>`
-   sets it. A document's sandboxing flags come from §7.6.2's navigable container through §7.2.6's policy
-   container, and this engine's policy container carries a CSP and nothing else (core/frame/policy_container.c),
-   so no document it builds has the flag set. Evaluated at the step that asks it rather than assumed away — the
-   same shape core/frame/navigable.c evaluates the sandboxed-origin flag with — and the day §7.1.5's flag set
-   lands in the policy container this is the one line that reads it. */
+   sets it and no keyword can relax it.
+   IT IS READ OFF THE RECEIVER'S DOCUMENT, never off the running realm, for the same reason dd_origin above is:
+   `frame.contentDocument.domain = "x"` set from the parent is an operation on the CHILD, and the child is the
+   Document §7.1.5 gave a flag set to. The old placeholder answered `false` for every document and said the set
+   lived in §7.2.6's policy container — it does not: §7.1.7's container has a CSP list, an embedder policy, a
+   referrer policy and two integrity policies, and a Document's ACTIVE SANDBOXING FLAG SET is a field of the
+   Document, handed to it at creation by §7.2 or §7.4.5. */
 static bool dd_sandboxed(lxb_dom_document_t *dom)
 {
-    (void)dom;
-    return false;
+    JSContext *cctx = document_active_realm_of(lxb_dom_interface_node(dom));
+
+    /* The setter's step 1 has already returned for a Document that is the active document of no navigable, so
+       reaching here without a realm would mean step 1 and step 2 disagree about the same fact. */
+    DCHECK(cctx != NULL, "§7.1.1.2's setter reached its step 2 for a Document with no browsing context — step 1 "
+                         "throws a SecurityError for exactly that Document, so the two steps are reading two "
+                         "different answers to `this's browsing context is null`");
+    return (document_active_sandbox_flags(cctx) & SANDBOX_DOCUMENT_DOMAIN) != 0;
 }
 
 /* "X, PREFIXED BY U+002E (.), MATCHES THE END OF Y" — the phrase §7.1.1.2 uses three times, as one function so

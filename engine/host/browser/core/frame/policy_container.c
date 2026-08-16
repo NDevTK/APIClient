@@ -31,6 +31,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/frame/policy_container.h"
+#include "core/frame/sandboxing.h"
 
 /* CSP §2.2's SOURCE LIST for ONE directive, reduced to the answers a script-execution question turns on. */
 typedef struct {
@@ -52,6 +53,13 @@ typedef struct {
     Directive script_src;
     Directive script_src_elem;
     Directive script_src_attr;
+    /* CSP's `sandbox` directive, which is NOT a source list and shares nothing with the four above: its value
+       is a SANDBOXING DIRECTIVE (§7.1.5), parsed by that standard's own algorithm, and what it produces is a
+       flag set rather than a permission. It is kept here rather than folded into a flag on the container
+       because §7.1.5's CSP-derived sandboxing flags reads the LAST policy in the list that carries one — a
+       per-policy question, which a merged bit could not answer. */
+    uint8_t      sandbox_present;
+    SandboxFlags sandbox_flags;
 } Policy;
 
 /* THE CONTAINER HOLDS A LIST, not a policy — CSP §2.2. Several policies arrive as a comma-delimited header, or
@@ -136,6 +144,16 @@ static void parse_policy(Policy *p, const char *text, size_t len)
         name = text + start;
         name_len = ni - start;
 
+        /* THE `sandbox` DIRECTIVE IS READ FIRST AND SEPARATELY, because its value is not a source list. §7.1.5
+           parses it, and §2.2.1's "a directive whose name is already in this policy is IGNORED" applies to it
+           exactly as it applies to the four below — the first one in a policy wins. */
+        if (kw(name, name_len, "sandbox")) {
+            if (!p->sandbox_present) {
+                p->sandbox_present = 1;
+                p->sandbox_flags = sandbox_parse_directive(text + ni, end - ni);
+            }
+            continue;
+        }
         d = kw(name, name_len, "script-src")      ? &p->script_src
           : kw(name, name_len, "script-src-elem") ? &p->script_src_elem
           : kw(name, name_len, "script-src-attr") ? &p->script_src_attr
@@ -227,6 +245,28 @@ void policy_container_free(PolicyContainer *p)
 }
 
 const char *policy_container_csp(const PolicyContainer *p) { return p ? p->csp_text : NULL; }
+
+SandboxFlags policy_csp_derived_sandboxing_flags(const char *serialized_csp_list, size_t len)
+{
+    /* §7.1.5's "Every CSP list cspList has CSP-derived sandboxing flags", verbatim: collect the `sandbox`
+       directive of every ENFORCE policy, and if there are any, parse a sandboxing directive over the LAST
+       one. Not the union of them — the last one WINS, which is the one place in CSP where a later policy does
+       something other than narrow, and is why this cannot be answered from a per-container flag.
+       NO OWNED TEXT: the parse copies nothing out of `serialized_csp_list` (a Policy holds bytes only), so
+       the container below borrows the caller's bytes for the length of this call and owns only its array. */
+    PolicyContainer c;
+    SandboxFlags out = 0;
+    size_t i;
+
+    if (!serialized_csp_list || !len) return 0;
+    memset(&c, 0, sizeof c);
+    parse_policy_list(&c, serialized_csp_list, len);
+    for (i = 0; i < c.n_policies; i++)
+        if (c.policies[i].sandbox_present)
+            out = c.policies[i].sandbox_flags;
+    free(c.policies);
+    return out;
+}
 
 /* Does ONE policy permit this? The directive is chosen by §6.1's chain first, then read. */
 static bool one_allows(const Policy *pol, PolicyScriptKind kind)

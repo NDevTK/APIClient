@@ -9,11 +9,15 @@
    whether it is NOT `none`, while §7.2.2's cross-origin isolated capability asks whether it IS `concrete`. A
    single boolean answered both, which is one fact collapsed into the WRONG shape rather than into one place:
    under `logical` a Document is origin-keyed and `crossOriginIsolated` is FALSE, and a boolean cannot say that.
-   The mode is derived from the `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` response headers
-   of the top-level Document, and §7.2.6's policy container is where a Document's headers land — this engine's
-   carries a CSP and nothing else (core/frame/policy_container.c), so no Document it builds has ever been handed
-   either header and the mode is the standard's initial value, `none`. Evaluated at the step that asks it rather
-   than assumed away, and the day the container carries a COOP/COEP pair this is the one line that reads it. */
+   The mode is set by ONE step of ONE algorithm: §7.1.3.2's obtain-a-browsing-context-to-use-for-a-navigation-
+   response, on a browsing context group SWAP — "if navigationCOOP's value is `same-origin-plus-COEP`, then set
+   newBrowsingContext's group's cross-origin isolation mode to either `logical` or `concrete`". So it takes a
+   COOP value on the navigation params, which takes a `Cross-Origin-Opener-Policy` response header, and no
+   route carries one into this engine: the only header a Document is created with is its
+   `Content-Security-Policy` (core/dom/document.h's install), §7.1.7's EMBEDDER POLICY has no writer, and the
+   OPENER POLICY §7.5.1 gives a Document beside its policy container is not a field this build has. The mode is
+   therefore the standard's initial value, `none`. Evaluated at the step that asks it rather than assumed away,
+   and the day a response's headers reach a Document this is the one line that reads them. */
 typedef enum {
     AC_ISOLATION_NONE = 0,
     AC_ISOLATION_LOGICAL,
@@ -32,10 +36,12 @@ bool agent_cluster_is_origin_keyed(void)
        "Documents whose agent cluster's cross-origin isolation mode is not `none` are automatically
        origin-keyed", which is `logical` AS WELL AS `concrete` and is the half of the mode this reader wants. */
     if (cross_origin_isolation_mode() != AC_ISOLATION_NONE) return true;
-    /* §8.1.2.2 steps 4-5: the historical agent cluster key map, and `requestsOAC` — which §7.11's create-and-
-       initialize sets from the `Origin-Agent-Cluster` response header. Neither reaches a Document here (see
-       cross_origin_isolation_mode above for where a header would arrive), so the key stays the SITE and step 6's
-       "if key is an origin ... set agentCluster's is origin-keyed to true" never runs. */
+    /* §8.1.2.2 steps 4-5: the historical agent cluster key map, and `requestsOAC` — which §7.5.1's create-and-
+       initialize sets from the `Origin-Agent-Cluster` response header ("let oacHeader be the result of getting
+       a structured field value given `Origin-Agent-Cluster` and `item` from navigationParams's response's
+       header list"). Neither reaches a Document here (see cross_origin_isolation_mode above for where a header
+       would arrive), so the key stays the SITE and step 6's "if key is an origin ... set agentCluster's is
+       origin-keyed to true" never runs. */
     return false;
 }
 

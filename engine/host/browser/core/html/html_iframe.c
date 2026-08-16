@@ -31,6 +31,7 @@
 #include "core/dom/document.h"
 #include "core/frame/document_lifecycle.h"
 #include "core/frame/navigable.h"
+#include "core/frame/sandboxing.h"
 #include "core/frame/window_proxy.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
@@ -60,7 +61,8 @@ bool iframe_has_navigable(JSContext *ctx, JSValueConst wrap)
 
 void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
 {
-    char *src, *name;
+    char *src, *name, *sandbox;
+    SandboxFlags iframe_flags;
     JSValue proxy;
 
     DCHECK(g_atom_navigable != JS_ATOM_NULL, "an iframe's navigable was created before iframe_init ran");
@@ -75,12 +77,24 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
        whole reason the navigable is per-flow. */
     src  = element_attr_get(ctx, wrap, "src");
     name = element_attr_get(ctx, wrap, "name");
-    proxy = navigable_create(ctx, src, name, true, NULL);
+    /* §7.1.5's IFRAME SANDBOXING FLAG SET: "every iframe element has an iframe sandboxing flag set … which
+       flags in it are set at any particular time is determined by the iframe element's sandbox attribute."
+       AN ABSENT ATTRIBUTE IS AN EMPTY SET AND `sandbox=""` IS NEARLY THE WHOLE SET, which is why the presence
+       of the attribute and its value are two different questions and only the read can tell them apart —
+       element_attr_get answers NULL for the first and "" for the second, and collapsing them would make
+       `<iframe sandbox>` (the most restrictive form there is) mean nothing at all.
+       READ THROUGH THE DOM CHOKEPOINT like `src` and `name` beside it, so the value is the RUNNING FLOW's:
+       an arm that wrote `sandbox` and an arm that did not create two children with two flag sets, which is
+       the whole of how §7.1.5's set becomes per-flow without anything having to capture the set itself. */
+    sandbox = element_attr_get(ctx, wrap, "sandbox");
+    iframe_flags = sandbox ? sandbox_parse_directive(sandbox, strlen(sandbox)) : 0;
+    proxy = navigable_create(ctx, src, name, true, NULL, iframe_flags);
     /* §4.8.5 has no "did not parse" branch the way §7.4 does: an `<iframe src="::">` still has a navigable,
        holding the initial about:blank it was created with. */
-    if (JS_IsUndefined(proxy)) proxy = navigable_create(ctx, NULL, name, true, NULL);
+    if (JS_IsUndefined(proxy)) proxy = navigable_create(ctx, NULL, name, true, NULL, iframe_flags);
     free(src);
     free(name);
+    free(sandbox);
     DCHECK(!JS_IsUndefined(proxy), "an about:blank child navigable could not be created, which has no failing "
                                    "branch — its address needs no parse and its origin is this document's");
     /* WRITABLE, NOT CONFIGURABLE. The removing steps below CLEAR this slot, and a slot defined with no flags

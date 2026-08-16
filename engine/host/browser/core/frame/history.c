@@ -377,7 +377,8 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
        certain timespan". This user agent has no such throttle and must not acquire one — a rate cap on how
        often a bundle may route is a bound on the exploration, which CLAUDE.md's §NO BOUNDS forbids outright —
        so the algorithm returns ALLOWED for every navigable here. Evaluated at the step that asks it rather
-       than dropped, exactly as core/html/autofocus.c evaluates the sandboxing flag it has no state for. */
+       than dropped — and unlike a MISSING state there is nothing here to build later: §7.3.1 declares the
+       algorithm implementation-defined and ALLOWED is this implementation's answer. */
 
     /* newURL AND serializedData ARE TAKEN OUT OF THIS STAGE'S C LOCALS AND ONTO THE MACHINE, because the
        navigate event fires between them and step 10 and its listeners are the page's own code. A string and an

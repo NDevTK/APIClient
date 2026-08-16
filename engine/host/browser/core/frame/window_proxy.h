@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "quickjs.h"
+#include "core/frame/sandboxing.h"
 #include "core/url/origin.h"
 
 /* The ACCESSOR side of §7.2.5.1's same-origin check is THE AGENT'S OWN ORIGIN, and it is asked of the one
@@ -41,9 +42,24 @@ void window_proxy_free(JSContext *ctx);
    a CHILD navigable inherits its creator's and an AUXILIARY one is its own top-level environment, exactly as
    the URL does, and the two answers disagree wherever a URL cannot carry an identity (§7.1.1: an opaque origin
    has "no serialization it can be recreated from"). Never NULL for a local proxy. */
+/* `creation_sandbox_flags` is §7.1.5's DETERMINE THE CREATION SANDBOXING FLAGS for this navigable, and it is a
+   third field of the same kind as the two above: decided by the OPERATION that created the navigable, read
+   when a Document of it is finally built. §7.2's create-a-new-browsing-context-and-document hands exactly this
+   set to the initial about:blank Document as its ACTIVE SANDBOXING FLAG SET, and §7.4.5 makes it one half of
+   the FINAL SANDBOXING FLAG SET a later navigation's Document gets — so it is read twice, by the two places a
+   Document of this navigable comes into existence (window_proxy.c's materialization and navigable.c's load).
+   A CREATION FACT, like `is_popup`: no flow can change it, so unlike `url` there is nothing here for the delta
+   to capture, and the per-flow answer comes from the INPUTS — an `<iframe sandbox>`'s attribute is a DOM read
+   in the creating flow's own delta, and the navigable that read produced belongs to that flow. */
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
-                         bool is_popup, const char *creator_csp, const char *top_level_url,
-                         const Origin *top_level_origin, JSValueConst parent, JSValueConst opener);
+                         bool is_popup, SandboxFlags creation_sandbox_flags, const char *creator_csp,
+                         const char *top_level_url, const Origin *top_level_origin, JSValueConst parent,
+                         JSValueConst opener);
+
+/* §7.1.5's creation sandboxing flags for this navigable — see window_proxy_new. Asked only of a LOCAL proxy:
+   a remote navigable's Documents are a peer instance's to create, so the set that would answer for them lives
+   there and a value invented here would be a second answer to the peer's own question. */
+SandboxFlags window_proxy_creation_sandbox_flags(JSValueConst proxy);
 
 /* THE TOP-LEVEL CREATION URL THE DOCUMENTS OF THIS NAVIGABLE ARE CREATED UNDER. BORROWED — the proxy owns the
    bytes, and like every other string it has ever held they outlive it (see proxy_of), so a parked flow that

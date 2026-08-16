@@ -19,6 +19,9 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_POLICY_CONTAINER_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_POLICY_CONTAINER_H
 #include <stdbool.h>
+#include <stddef.h>
+
+#include "core/frame/sandboxing.h"
 
 typedef struct PolicyContainer PolicyContainer;
 
@@ -47,5 +50,25 @@ typedef enum {
     POLICY_EVAL,                /* eval, new Function, setTimeout(string) */
 } PolicyScriptKind;
 bool policy_allows(const PolicyContainer *p, PolicyScriptKind kind);
+
+/* §7.1.5's CSP-DERIVED SANDBOXING FLAGS for a CSP list, which is the ONE thing a policy container contributes
+ * to a Document's active sandboxing flag set. §7.4.5 builds navigationParams's final sandboxing flag set as
+ * "the union of targetSnapshotParams's sandboxing flags and policyContainer's CSP list's CSP-derived
+ * sandboxing flags", and this is the second half. The algorithm is: take every ENFORCE policy's `sandbox`
+ * directive, keep the LAST one, and parse a sandboxing directive over its value; no such directive anywhere
+ * in the list is an EMPTY flag set.
+ *
+ * IT TAKES THE TEXT RATHER THAN A CONTAINER, because the caller that needs it is the NAVIGATION and the
+ * container it would read does not exist yet — §7.5.1 hands the new Document its policy container and its
+ * final sandboxing flag set in the same breath, so the flag set is computed from the response's policy before
+ * anything is installed. Every policy this engine parses has disposition ENFORCE: a container is built from
+ * `Content-Security-Policy` and from CSP §3.3's `<meta>`, never from `Content-Security-Policy-Report-Only`,
+ * which this build is never handed.
+ *
+ * IT IS NEVER GIVEN `<meta>` TEXT, and that is enforced rather than assumed: CSP §3.3 makes `sandbox`
+ * meaningless in a `<meta>` element, and this parser carries no per-policy SOURCE that could tell one from
+ * the other — so core/dom/document.c asserts, at the site that collects a `<meta>` policy, that the policy it
+ * is about to merge declares no `sandbox` directive, using this same function as the question. */
+SandboxFlags policy_csp_derived_sandboxing_flags(const char *serialized_csp_list, size_t len);
 
 #endif

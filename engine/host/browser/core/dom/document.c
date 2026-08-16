@@ -110,6 +110,12 @@ typedef struct Document {
     lxb_html_document_t *dom;
     int                  owned;    /* this record destroys `dom` — true for a document the page CREATED */
     PolicyContainer     *policy;    /* owned; NULL for a document with no browsing context */
+    /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET — a field of the DOCUMENT and not of the policy container
+       beside it, which §7.1.7 gives a CSP list, an embedder policy, a referrer policy and two integrity
+       policies and no flag set at all. §7.5.1's creation table lists the two on separate rows for that
+       reason. Written exactly once, by the install below, from the set the creating operation decided; no
+       standard writes it again, which is why it is a plain word rather than a captured record. */
+    SandboxFlags         sandbox_flags;
     JSValue              doc_obj;   /* the `document` object — HELD, released by document_free */
     JSValue              win_obj;   /* this document's Window — HELD, and UNDEFINED with no browsing context */
     /* §7.2.5.1's ONE WindowProxy FOR THIS NAVIGABLE — `window`, `self`, and the `source` of every message this
@@ -1994,6 +2000,18 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp)
                     const lxb_char_t *cv = lxb_dom_element_get_attribute((lxb_dom_element_t *)cur,
                                                                          (const lxb_char_t *)"content", 7, &cl);
                     if (cv && cl) {
+                        /* CSP §3.3 MAKES `sandbox` MEANINGLESS IN A `<meta>`, and this container carries no
+                           per-policy SOURCE that could tell a meta policy from a header one — so a meta
+                           `sandbox` merged here would be read by §7.1.5's CSP-derived sandboxing flags as if
+                           the server had sent it, and would sandbox a document the server did not sandbox.
+                           Asked with the same function that would go on to misread it, so the question and
+                           the answer cannot drift: give a Policy its CSP §2.2 SOURCE (`header`/`meta`) and
+                           have the derivation skip the meta ones, then this assert is the line to delete. */
+                        DCHECK(policy_csp_derived_sandboxing_flags((const char *)cv, cl) == 0,
+                               "a `<meta http-equiv=Content-Security-Policy>` declares a `sandbox` directive, "
+                               "which CSP §3.3 IGNORES for a meta-delivered policy — this container has no "
+                               "per-policy SOURCE, so merging it would let §7.1.5's CSP-derived sandboxing "
+                               "flags read it as a header policy and sandbox a Document the response did not");
                         /* SEVERAL META POLICIES ALL APPLY, and they are joined with a COMMA because that is
                            CSP §2.2's serialization of a policy LIST. A ';' join would have made them one
                            policy, where a repeated directive is ignored and `script-src` overrides
@@ -2022,6 +2040,8 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp)
 }
 
 const PolicyContainer *document_policy(JSContext *ctx) { return doc_here(ctx)->policy; }
+
+SandboxFlags document_active_sandbox_flags(JSContext *ctx) { return doc_here(ctx)->sandbox_flags; }
 
 JSValueConst document_window_proxy(JSContext *ctx)
 {
@@ -2393,7 +2413,7 @@ const char *document_content_type_of(const lxb_dom_document_t *dom)
 }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
+                      const char *csp, SandboxFlags sandbox_flags, uint32_t doc_id, JSValueConst nav_proxy)
 {
     Document *d;
     JSValue doc;
@@ -2414,6 +2434,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     d = doc_rec_new(ctx, dom, url, "text/html");
     d->doc = doc_id;
     d->policy = document_policy_new(dom, csp);
+    /* §7.1.5's ACTIVE SANDBOXING FLAG SET, as the creating operation decided it — §7.2's creation flags for
+       the initial about:blank, §7.4.5's final flag set for a navigated Document. Beside the policy container
+       because §7.5.1 hands the Document both in one breath, and NOT derived from it: the container's only
+       contribution is the CSP `sandbox` directive, and which of the two algorithms unions that in is a fact
+       about the operation that no inspection of the container could recover. */
+    d->sandbox_flags = sandbox_flags;
     /* THE REALM'S ACTIVE DOCUMENT FROM HERE ON — set before the early return below, because the policy was
        already built and §7.4 clones it for an about:blank child whether or not this document got an address. */
     JS_SetContextOpaque(ctx, d);

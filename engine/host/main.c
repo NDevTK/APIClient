@@ -32,6 +32,7 @@
 #include "browser/core/frame/remote_object.h"
 #include "browser/core/html/html_iframe.h"
 #include "browser/core/frame/navigable.h"
+#include "browser/core/frame/policy_container.h"
 #include "browser/core/url/url_search_params.h"
 #include "browser/core/html/form_data.h"
 #include "browser/core/file/blob.h"
@@ -149,7 +150,8 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
    `https://site/app/api/users`. They are two FIELDS of the one document record now, which is what makes that
    substitution unspellable rather than merely fixed. */
 static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                                 const char *csp, uint32_t doc_id, JSValueConst nav_proxy)
+                                 const char *csp, SandboxFlags sandbox_flags, uint32_t doc_id,
+                                 JSValueConst nav_proxy)
 {
     PlatformDocument doc;
     JSValue g = JS_GetGlobalObject(ctx);
@@ -158,6 +160,7 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     doc.url = url;
     doc.origin = origin;
     doc.csp = csp;
+    doc.sandbox_flags = sandbox_flags;
     doc.doc_id = doc_id;
     doc.nav_proxy = nav_proxy;
     platform_document_install(ctx, g, &doc);
@@ -176,7 +179,7 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
    distinguished it from a page that had none. */
 static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                      const char *top_level_url, const char *origin, const char *csp,
-                                     uint32_t doc_id, JSValueConst nav_proxy)
+                                     SandboxFlags sandbox_flags, uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -190,7 +193,7 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
        navigable, the navigable's own address for an auxiliary one — so this passes it rather than `url`,
        which would make an about:blank iframe of an http page a secure context. */
     realm_install_intrinsics(ctx, top_level_url);
-    engine_realm_install(ctx, dom, url, origin, csp, doc_id, nav_proxy);
+    engine_realm_install(ctx, dom, url, origin, csp, sandbox_flags, doc_id, nav_proxy);
     return ctx;
 }
 
@@ -305,7 +308,16 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
            window.name became an attacker source. The read is concolic until something states it. */
         JSValue root_proxy = window_proxy_new_self(g_ctx, world_local_doc(), NULL);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        engine_realm_install(g_ctx, g_dom, url, origin, csp, world_local_doc(), root_proxy);
+        /* §7.4.5's FINAL SANDBOXING FLAG SET FOR THE ROOT DOCUMENT, and the whole of it is the second
+           half. The first is this navigable's CREATION sandboxing flags, and for the navigable an instance
+           STARTED in those are empty: a top-level traversable has no embedder element, so §7.1.5 answers
+           from its POPUP sandboxing flag set, which begins empty and which only §7.1's rules for choosing a
+           navigable ever fill — nothing chose this one. What remains is §7.1.5's CSP-DERIVED SANDBOXING
+           FLAGS, the `sandbox` directive of the policy the response carried; without this the header would
+           parse and then do nothing. */
+        engine_realm_install(g_ctx, g_dom, url, origin, csp,
+                             policy_csp_derived_sandboxing_flags(csp, csp ? strlen(csp) : 0),
+                             world_local_doc(), root_proxy);
         JS_FreeValue(g_ctx, root_proxy);
     }
     /* The surface is installed, so every member the platform has is declared — a declaration from here on is a

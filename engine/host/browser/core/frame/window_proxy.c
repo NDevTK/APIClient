@@ -103,6 +103,12 @@ typedef struct {
        document happened to touch it first. A creation fact, so like `is_popup` no flow can change it.
        NULL for a navigable with an address (its policy comes with its response) and for the root. Owned. */
     char   *creator_csp;
+    /* §7.1.5's DETERMINE THE CREATION SANDBOXING FLAGS for this navigable, taken at CREATION for exactly the
+       reason `creator_csp` above is: §7.2 hands this set to the initial about:blank Document as its ACTIVE
+       SANDBOXING FLAG SET, that Document's realm is materialized LAZILY, and the realm that materializes it
+       need not be its creator's. A creation fact like `is_popup` — no flow can re-sandbox a navigable that
+       exists — and one WORD, so the byte capture in proxy_of describes it completely. */
+    SandboxFlags creation_sandbox_flags;
     /* HTML §8.1.3.1's TOP-LEVEL CREATION URL for the environments of this navigable's documents — kept beside
        the policy container because it is the same KIND of fact and arrives the same way: decided by the
        operation that created the navigable, read when a realm is finally built. §7.4 makes a CHILD navigable
@@ -358,8 +364,15 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
            materializes an about:blank child may come from any same-origin document, and answering from `ctx`
            would give the child whichever document happened to touch it first. The same sentence as
            `creator_csp` beside it, and the same field for the same reason. */
+        /* §7.2's CREATE A NEW BROWSING CONTEXT AND DOCUMENT gives this Document its ACTIVE SANDBOXING FLAG
+           SET, and what it gives is `sandboxFlags` — the navigable's CREATION sandboxing flags, with NO
+           CSP-derived half. That absence is the spec's and it is what `allow-popups-to-escape-sandbox` is
+           for: a sandboxed page's popup inherits the creator's flags only when the propagate flag survived
+           the parse, and unioning the inherited policy's own CSP-derived flags in here would re-sandbox the
+           popup that keyword exists to free. The union belongs to §7.4.5's NAVIGATION (core/frame/navigable.c),
+           which is the other place a Document of this navigable is created. */
         p->realm = navigable_realm(ctx, p->doc, p->url, p->top_level_url, p->origin, proxy, NULL, 0,
-                                   p->creator_csp);
+                                   p->creator_csp, p->creation_sandbox_flags);
         p->window = JS_GetGlobalObject(p->realm);
     }
     return p->realm;
@@ -449,8 +462,9 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
 }
 
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
-                         bool is_popup, const char *creator_csp, const char *top_level_url,
-                         const Origin *top_level_origin, JSValueConst parent, JSValueConst opener)
+                         bool is_popup, SandboxFlags creation_sandbox_flags, const char *creator_csp,
+                         const char *top_level_url, const Origin *top_level_origin, JSValueConst parent,
+                         JSValueConst opener)
 {
     JSValue obj;
     ProxyData *p;
@@ -484,6 +498,11 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
     p->name_known = 1;
     p->is_popup = is_popup ? 1 : 0;
     p->creator_csp = creator_csp && *creator_csp ? proxy_strdup(creator_csp) : NULL;
+    /* §7.1.5's creation sandboxing flags, decided by §7.4's create — see the field. An EMPTY set is the
+       ordinary answer (no `<iframe sandbox>`, no propagating opener) and is not a "not yet known": §7.1.5
+       says a browsing context's popup sandboxing flag set starts empty and an absent `sandbox` attribute is
+       an empty iframe sandboxing flag set, so there is no third state here to spell. */
+    p->creation_sandbox_flags = creation_sandbox_flags;
     /* EVERY ENVIRONMENT HAS A TOP-LEVEL CREATION URL, so unlike the policy container there is no "none" here
        to spell: §7.4 either nests the navigable (inherit the creator's) or makes it a top-level traversable
        (its own address), and both are addresses. A caller with nothing to pass has not decided which of the
@@ -556,7 +575,13 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
            "no serialization it can be recreated from, and a URL therefore cannot say WHOSE it is. STATE "
            "§8.1.3.1's TOP-LEVEL ORIGIN beside the top-level creation URL from the zone that created this "
            "instance — it is the same statement, made by the same party, for the same reason");
-    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, NULL, tlus, tlo,
+    /* §7.1.5: AN EMPTY CREATION SANDBOXING FLAG SET, and it is the spec's answer rather than a placeholder.
+       This is the navigable the INSTANCE STARTED IN — a top-level traversable with no embedder, so
+       determine-the-creation-sandboxing-flags returns its POPUP SANDBOXING FLAG SET, which §7.1.5 says is
+       empty when a browsing context is created and which only §7.1's rules for choosing a navigable ever
+       populate. Nothing chose this one. What the ROOT document's own `Content-Security-Policy: sandbox` adds
+       is the other half of §7.4.5's union, and it is added where a Document is created rather than here. */
+    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, 0, NULL, tlus, tlo,
                            JS_UNDEFINED, JS_NULL);
     JS_FreeCString(ctx, tlus);
     JS_FreeValue(ctx, tlu);
@@ -1001,6 +1026,25 @@ const Origin *window_proxy_top_level_origin(JSValueConst proxy)
            "§8.1.3.1's field belongs to an ENVIRONMENT, this instance builds none for a remote navigable, and "
            "the instance that does is the one that answers Permissions §5.1 for its documents");
     return p->top_level_origin;
+}
+
+/* §7.1.5's creation sandboxing flags for this navigable — through the capturing accessor like every other
+   field of the binding, so an arm that created the navigable and an arm that did not read their own. */
+SandboxFlags window_proxy_creation_sandbox_flags(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "the creation sandboxing flags of something that is not a WindowProxy were asked for");
+    /* A REMOTE PROXY HAS NONE TO GIVE, and answering the empty set would be worse than crashing: an empty set
+       is a real answer meaning "not sandboxed", so a cross-origin `<iframe sandbox>` would report itself
+       unsandboxed to whichever algorithm asked. §7.1.5's set belongs to the Document, the peer instance is
+       what creates that Document, and this is a question to route there rather than to guess. */
+    DCHECK(!window_proxy_is_remote(proxy),
+           "the CREATION SANDBOXING FLAGS of a navigable whose Documents a PEER instance creates were asked "
+           "for — §7.1.5's flag set is handed to a Document at its creation, this instance creates none for a "
+           "remote navigable, and the notice that provisions the peer does not carry the set yet: add it "
+           "beside the policy the `navigable.create` notice already sends (core/frame/navigable.c)");
+    return p->creation_sandbox_flags;
 }
 
 

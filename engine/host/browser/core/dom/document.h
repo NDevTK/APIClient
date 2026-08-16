@@ -27,8 +27,15 @@ void document_install_proto(JSContext *ctx);
    or §7.4's clone of the creator's for a document that came from no response (`about:blank`). NULL when there
    is neither. It is not an optional extra: CSP §3.3's `<meta>` is only HALF of §7.2.6's container, and a
    document whose created-with policy is dropped reports a sink as exploitable that the real page's CSP kills. */
+/* `sandbox_flags` is §7.1.5's ACTIVE SANDBOXING FLAG SET this Document is CREATED with, and it is a SEPARATE
+   argument from `csp` because §7.1.7's policy container has no such field — the two are separate items of the
+   Document in §7.5.1's own creation table ("policy container … navigationParams's policy container; active
+   sandboxing flag set … navigationParams's final sandboxing flag set"). The caller states the whole set,
+   because only the caller knows which algorithm is running: §7.2's create-a-new-browsing-context-and-document
+   gives the initial about:blank the navigable's CREATION sandboxing flags alone, while §7.5.1 gives a
+   navigated Document §7.4.5's union of those and the response policy's CSP-derived flags. */
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      const char *csp, uint32_t doc_id, JSValueConst nav_proxy);
+                      const char *csp, SandboxFlags sandbox_flags, uint32_t doc_id, JSValueConst nav_proxy);
 
 /* WHICH DOCUMENT THIS REALM IS, in the world registry's naming. §7.4 mints a child's name from it, so a
    same-origin child of a child is named from the child and not from the instance root. */
@@ -181,6 +188,23 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp);
    than on demand because §7.4 clones it for an about:blank child at the moment that child is created, which
    may be before anything else has asked. BORROWED. */
 const PolicyContainer *document_policy(JSContext *ctx);
+
+/* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET for this realm's Document — the set §7.2's create or §7.4.5's
+ * navigation handed it, unchanged since.
+ *
+ * IT DOES NOT NEED A COW CAPTURE, AND THAT IS THE SPEC RATHER THAN AN OMISSION. §7.1.5 says a Document's
+ * active sandboxing flag set is empty when the Document is created and is populated by the navigation
+ * algorithm — no standard writes it again — so the field has exactly ONE write and a delta entry for it could
+ * never hold two values. What makes the ANSWER per-flow is its INPUTS: an `<iframe sandbox>` attribute is a
+ * DOM read in the creating flow's own delta, and the child navigable that read produced belongs to that flow,
+ * so two flows that disagree about the attribute end up with two Documents holding two sets. The one thing
+ * that could give a single navigable two sets is a NAVIGATION, which replaces the whole Document — and
+ * document_install already crashes on a second install into one realm, naming the per-flow record to build;
+ * whoever builds that record carries this field in it with everything else.
+ *
+ * ZERO IS A REAL ANSWER, never "not known yet": an unsandboxed Document has an EMPTY active sandboxing flag
+ * set, which is what every top-level document without a CSP `sandbox` directive gets. */
+SandboxFlags document_active_sandbox_flags(JSContext *ctx);
 /* Release what the component HOLDS across the document's lifecycle — the window it fires `load` at. */
 void document_free(JSContext *ctx);
 

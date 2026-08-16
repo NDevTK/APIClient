@@ -39,6 +39,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
+#include "core/frame/sandboxing.h"
 #include "core/dom/node.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/autofocus.h"
@@ -164,15 +165,14 @@ static JSContext *top_document_realm(JSContext *docctx)
 }
 
 /* §6.6.7's insertion steps step 4, "target's ACTIVE SANDBOXING FLAG SET has the SANDBOXED AUTOMATIC FEATURES
-   BROWSING CONTEXT FLAG". A document's sandboxing flags come from §7.6.2's navigable container — an `<iframe
-   sandbox>` — through §7.2.6's policy container, and this engine's policy container carries a CSP and nothing
-   else, so no document it builds has a flag set to read. Not a skipped step: a condition whose state cannot
-   exist, evaluated at the step that asks it, exactly as core/html/html_form.c evaluates the SANDBOXED FORMS
-   flag. The day the flag set lands in the policy container, this and that one are the sites that read it. */
+   BROWSING CONTEXT FLAG". §7.1.5 relaxes that flag with `allow-scripts` rather than with a keyword of its own —
+   "when scripts are enabled these features are trivially possible anyway" — so `<iframe sandbox>` and
+   `<iframe sandbox="allow-forms">` both stop an autofocus and `sandbox="allow-scripts"` does not.
+   IT IS THE TARGET DOCUMENT'S SET, not the running realm's: the step names `target`, which is the element's
+   node document, and `docctx` is that document's realm. */
 static bool sandboxes_automatic_features(JSContext *docctx)
 {
-    (void)docctx;
-    return false;
+    return (document_active_sandbox_flags(docctx) & SANDBOX_AUTOMATIC_FEATURES) != 0;
 }
 
 /* §6.6.7 flush step 4's second disjunct — "topDocument has non-null TARGET ELEMENT".
