@@ -206,11 +206,24 @@ static bool cssd_decl_named(const lxb_css_rule_declaration_t *d, const char *nam
     return same;
 }
 
+/* A declaration's VALUE, serialized. CSS Syntax's CONSUME A DECLARATION ends with "while the last token in
+   value is a <whitespace-token>, remove that token", and this is where that step lands. A declaration lexbor's
+   registry TYPES is serialized back out of that typed value and carries no surrounding whitespace at all; one
+   it does NOT — every `__CUSTOM`, which is every property outside the registry, including the `border-width`
+   and `border-*-style` spellings — is the RAW TOKEN STREAM with the whitespace tokens in it. `border-top-
+   style: solid ;` would otherwise reach its grammar as "solid " and match no keyword in it, and the failure
+   would be a silent initial value rather than a crash. Leading whitespace is already gone: the parser consumes
+   it between the colon and the first value token. OWNED. */
 static char *cssd_decl_value(const lxb_css_rule_declaration_t *d)
 {
     CssBuf b = { 0 };
+    size_t n;
+
     lxb_css_property_serialize(d->u.user, d->type, css_buf_cb, &b);
-    return b.s ? b.s : NULL;
+    if (!b.s) return NULL;
+    for (n = b.n; n > 0 && isspace((unsigned char)b.s[n - 1]); n--) { }
+    b.s[n] = '\0';
+    return b.s;
 }
 
 /* THE VALUE THIS DECLARATION GIVES TO `name`, or NULL when it gives it none. A declaration sets a longhand
@@ -230,7 +243,17 @@ static char *cssd_decl_value_for(const lxb_css_rule_declaration_t *d, const char
     if (d->type == LXB_CSS_PROPERTY__UNDEF) return NULL;
     dname = cssd_decl_name(d);
     if (!dname) return NULL;
-    if (strcmp(dname, name) == 0) { free(dname); return cssd_decl_value(d); }
+    if (strcmp(dname, name) == 0) {
+        free(dname);
+        value = cssd_decl_value(d);
+        /* THE DECLARATION IS THE LONGHAND, and its value has been through a grammar only if lexbor's registry
+           TYPES it. For the properties it does not carry, css_shorthand.h owns that grammar — the same one its
+           shorthand expansion applies to each component — and an invalid value is a DROPPED declaration. */
+        if (!value || !css_shorthand_validates_longhand(name)) return value;
+        out = css_shorthand_longhand_value(name, value);
+        free(value);
+        return out;
+    }
     value = cssd_decl_value(d);
     out = value ? css_shorthand_component(dname, value, name) : NULL;
     free(value);
@@ -441,16 +464,48 @@ static const char *cssd_ua_value(lxb_dom_element_t *el, const char *name)
     return NULL;
 }
 
+/* THE INITIAL VALUES LEXBOR'S REGISTRY DOES NOT CARRY. An initial value is a fact about the PROPERTY, stated
+   on its own `Initial:` line, and it exists whether or not the vendored parser has a generated entry for it —
+   so a property lexbor does not know still has one, and answering NULL for it is not "undeclared", it is a
+   cascade that stopped a layer early. Lexbor carries the `border` and `border-<side>` SHORTHANDS and the four
+   `border-*-color` longhands and nothing else of the border, so the eight below have no entry: the four widths
+   are `medium` (css-backgrounds-3 §3.3) and the four styles are `none` (§3.2), which together are why the
+   spec's own note says "although the initial width is medium, the initial style is none; therefore the used
+   initial width is 0". The registry is still asked FIRST for every property, and a name here that lexbor DOES
+   carry would be one fact with two sources — asserted below rather than assumed. */
+static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNREGISTERED[] = {
+    { "border-top-width", "medium" }, { "border-right-width", "medium" },
+    { "border-bottom-width", "medium" }, { "border-left-width", "medium" },
+    { "border-top-style", "none" }, { "border-right-style", "none" },
+    { "border-bottom-style", "none" }, { "border-left-style", "none" },
+};
+
 /* LAYER 4 — the property's INITIAL value, straight out of Lexbor's registry, which is where the spec's own
-   initial values live. */
+   initial values live, and out of the table above for the properties it has no entry for. */
 static char *cssd_initial_value(const char *name)
 {
     const lxb_css_entry_data_t *e = lxb_css_property_by_name((const lxb_char_t *)name, strlen(name));
     CssBuf b = { 0 };
+    unsigned i;
 
-    if (!e || !e->initial) return NULL;
-    lxb_css_property_serialize(e->initial, e->unique, css_buf_cb, &b);
-    return b.s;
+    if (e && e->initial) {
+        lxb_css_property_serialize(e->initial, e->unique, css_buf_cb, &b);
+        return b.s;
+    }
+    for (i = 0; i < sizeof(CSSD_INITIAL_UNREGISTERED) / sizeof(CSSD_INITIAL_UNREGISTERED[0]); i++) {
+        char *out;
+
+        if (strcmp(CSSD_INITIAL_UNREGISTERED[i].name, name) != 0) continue;
+        DCHECK(e == NULL,
+               "a property this file states an initial value for is ALSO in lexbor's property registry — one "
+               "fact with two answers, and the registry's is the one every other property in CSS reads. DELETE "
+               "the row: the registry entry is what a pinned parser upgrade would keep in step");
+        out = strdup(CSSD_INITIAL_UNREGISTERED[i].initial);
+        CHECK(out != NULL, "cssom: OOM copying an initial value — a dropped one reads as no value at all, "
+                           "which is a cascade that stopped before its last layer");
+        return out;
+    }
+    return NULL;
 }
 
 /* THE CASCADE, in the order the spec resolves it. What comes out is the SPECIFIED value — the declaration that

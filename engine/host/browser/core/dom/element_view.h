@@ -19,10 +19,13 @@
  *   WHAT HAS CHANGED, AND WHY THIS LINE IS NOT THE ONE IT WAS. It used to say "there is no layout", and there
  *   is one: core/layout/used_value.h is CSS 2.1 §10, and it computes the USED VALUE of a box-model length
  *   wherever §10 defines one without a containing block — every absolute-length margin and padding, and a
- *   `width` or `height` that is an absolute length. That is not an EDGE (an edge is a position, and a position
- *   needs the containing block chain), which is why none of the members here can be answered from it yet, but
- *   it does mean the next step is named: §10.3.3's constraint equation, blocked on the `border-*-width`
- *   longhands lexbor has no property for, which `clientTop`/`clientLeft` below states the build order for.
+ *   `width` or `height` that is an absolute length, css-sizing §5's border box included. That is not an EDGE
+ *   (an edge is a position, and a position needs the containing block chain), which is why the members here
+ *   that want one still crash. `clientTop` and `clientLeft` are the two that never wanted one: §6 defines them
+ *   as a COMPUTED VALUE and not as a geometry, so they are answered for real from
+ *   core/css/css_computed_value.h's `border-*-width` — which is also the term §10.3.3's constraint equation
+ *   used to be blocked on and no longer is. What §10.3.3 is waiting on now is §10.1's containing-block chain
+ *   and the CONCOLIC width of the ICB at its base, which used_value.h states in full.
  *
  * THOSE ARE TWO DIFFERENT ANSWERS AND THE SPEC ASKS THEM SEPARATELY, which is the whole reason this component
  * can answer anything at all. §6's algorithms use box EXISTENCE as a gate and then, in several branches, route

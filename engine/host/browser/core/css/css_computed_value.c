@@ -1,6 +1,7 @@
 /* CSS Cascade §Computed Value + CSSOM §9's resolved value. See css_computed_value.h for the split. */
 #include <ctype.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,10 +27,8 @@ static bool css_cv_is(const char *v, const char *kw)
     return v != NULL && strcmp(v, kw) == 0;
 }
 
-/* CSS Cascade §7.3's CSS-WIDE KEYWORDS. Each is the ENTIRE value of the declaration when present, so the test
-   is an equality and not a search, and each of them makes the computed value a product of the DEFAULTING step
-   rather than of the declaration. */
-static bool css_wide_keyword(const char *v)
+/* CSS Cascade §7.3's CSS-WIDE KEYWORDS. See css_computed_value.h for the contract and for the second caller. */
+bool css_wide_keyword(const char *v)
 {
     static const char *const WIDE[] = { "inherit", "initial", "unset", "revert", "revert-layer" };
     unsigned i;
@@ -218,6 +217,82 @@ static char *computed_length(char *spec)
     return css_length_serialize_px(len.px);
 }
 
+/* ---- CSS Backgrounds §3.2 and §3.3's BORDER LONGHANDS ----------------------------------------------------- */
+
+/* The four sides in the order every four-side rule in CSS states them, so a width's index IS its style's. */
+static const char *const CSS_BORDER_SIDES[] = { "top", "right", "bottom", "left" };
+
+/* Which side `border-<side>-<part>` names, or -1. The SIDE is the whole reason this exists: `border-top-width`
+   has to read `border-top-style` and not some fixed one, so the sibling's name is DERIVED from this property's
+   rather than tabulated a second time. */
+static int css_border_side_of(const char *name, const char *part)
+{
+    char probe[32];
+    unsigned i;
+
+    for (i = 0; i < sizeof(CSS_BORDER_SIDES) / sizeof(CSS_BORDER_SIDES[0]); i++) {
+        snprintf(probe, sizeof probe, "border-%s-%s", CSS_BORDER_SIDES[i], part);
+        if (strcmp(probe, name) == 0) return (int)i;
+    }
+    return -1;
+}
+
+/* css-backgrounds-3 §3.3: "The thin, medium, and thick keywords are equivalent to 1px, 3px, and 5px,
+   respectively." CSS 2.1 §8.5.1 left the three UA-dependent and required only `thin <= medium <= thick`; the
+   level-3 sentence PINS them, so these are the spec's numbers and not this UA's preference. */
+static const struct { const char *kw; double px; } CSS_LINE_WIDTH[] = {
+    { "thin", 1.0 }, { "medium", 3.0 }, { "thick", 5.0 },
+};
+
+/* CSS 2.1 §8.5.1's `Computed value:` line, entire: "absolute length; '0' if the border style is 'none' or
+   'hidden'". css-backgrounds-3 §3.3 states the same line as "absolute length, snapped as a border width" and
+   moves the none/hidden rule to the USED value ("if the border-style corresponding to a given border-width is
+   none or hidden, then the used width is 0", plus the note that the used INITIAL width is therefore 0).
+ * THE TWO SPECS PUT ONE RULE AT TWO DIFFERENT STAGES AND THE DIFFERENCE IS OBSERVABLE, so the choice is made
+ * here rather than left to whichever caller asks first. CSSOM VIEW §6's `clientTop` returns "the unscaled
+ * COMPUTED value of the border-top-width property" — so under the level-3 split a `border-style: none` box
+ * would report its declared width as `clientTop`, which is the answer no user agent gives. Applying the rule
+ * at the COMPUTED value satisfies every normative sentence in both documents instead of choosing between them:
+ * 0 IS an absolute length, so §3.3's computed-value line holds; the used value is then 0 as well, so §3.3's
+ * used-value sentence and its note hold; and css-backgrounds-3 makes the RESOLVED value the used value, which
+ * is that same number, so getComputedStyle answers `0px` either way. The reverse choice satisfies only one.
+ * THE STYLE IS THEREFORE READ FIRST, which is why these two longhands cannot be derived independently and why
+ * `border-style` had to be modelled before `border-width` could be. */
+static char *computed_border_width(lxb_dom_element_t *el, const char *name, char *spec)
+{
+    char sibling[32];
+    int side = css_border_side_of(name, "width");
+    char *style;
+    bool off;
+    CssLength len;
+    unsigned i;
+
+    DCHECK(side >= 0, "the `border-*-width` computed-value rule was asked for a property that is not one of "
+                      "the four — css_computed_models and this switch are one list and have come apart");
+    snprintf(sibling, sizeof sibling, "border-%s-style", CSS_BORDER_SIDES[side < 0 ? 0 : side]);
+    style = css_computed_value(el, sibling);
+    off = css_cv_is(style, "none") || css_cv_is(style, "hidden");
+    free(style);
+    if (off) { free(spec); return css_length_serialize_px(0.0); }
+    for (i = 0; i < sizeof(CSS_LINE_WIDTH) / sizeof(CSS_LINE_WIDTH[0]); i++) {
+        if (strcmp(CSS_LINE_WIDTH[i].kw, spec) != 0) continue;
+        free(spec);
+        return css_length_serialize_px(CSS_LINE_WIDTH[i].px);
+    }
+    len = css_length_parse(spec);
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+           "a `border-*-width` cascaded to a value that is neither one of §3.3's three keywords nor a length. "
+           "`<line-width> = <length [0,∞]> | thin | medium | thick` admits nothing else — no percentage and no "
+           "`auto` — so this is a declaration that reached the cascade without its grammar, which is exactly "
+           "what css_shorthand.c validates for the two shorthands lexbor's registry does not carry");
+    DCHECK(len.px >= 0.0,
+           "a NEGATIVE `border-*-width` reached the computed value. css-backgrounds-3 §3.3 states it outright "
+           "— 'Negative values are invalid' — so the declaration should have been DROPPED by the grammar that "
+           "admitted it rather than absolutized here");
+    free(spec);
+    return css_length_serialize_px(css_length_snap_line_width(len.px));
+}
+
 /* The ten physical box-model lengths plus the four sizing limits — one list, because every one of them takes
    the same computed-value rule above and because used_value.c reads the limits to decide §10.4's clamp. */
 static bool css_models_length(const char *name)
@@ -241,7 +316,8 @@ bool css_computed_models(const char *name)
     DCHECK(name != NULL, "the computed-value model question was asked about a NULL property name");
     return strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0 ||
            strcmp(name, "display") == 0 || strcmp(name, "float") == 0 || strcmp(name, "position") == 0 ||
-           strcmp(name, "box-sizing") == 0 || css_models_length(name);
+           strcmp(name, "box-sizing") == 0 || css_models_length(name) ||
+           css_border_side_of(name, "width") >= 0 || css_border_side_of(name, "style") >= 0;
 }
 
 char *css_computed_value(lxb_dom_element_t *el, const char *name)
@@ -280,10 +356,15 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
         return computed_display(el, spec);
     if (css_models_length(name))
         return computed_length(spec);
+    if (css_border_side_of(name, "width") >= 0)
+        return computed_border_width(el, name, spec);
     /* `float` (CSS2 §9.5.1), `position` (css-position §2) and `box-sizing` (css-sizing §5) all state "Computed
        value: as specified" (`box-sizing`'s line is "specified keyword"), and a keyword has no absolutization to
-       do — so the specified value IS the answer here rather than a stand-in for one. */
-    DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0,
+       do — so the specified value IS the answer here rather than a stand-in for one. css-backgrounds-3 §3.2
+       gives `border-*-style` the same line ("specified keyword"), which is what lets `border-top-width`'s rule
+       above read its sibling with no second derivation in between. */
+    DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0 ||
+               css_border_side_of(name, "style") >= 0,
            "a property this component claims to model reached the as-specified arm without a `Computed value: "
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "
            "apart");
@@ -378,10 +459,11 @@ char *css_resolved_value(lxb_dom_element_t *el, const char *name)
               "used `left`/`right` from the containing block's WIDTH (a percentage) and from each other (the "
               "`left = -right` rule when one is `auto`), and §10.3.7 solves an ABSOLUTELY positioned box's "
               "from the same constraint equation as its width — so both need the containing block, and both "
-              "are waiting on the subproblem core/layout/used_value.h names: §10.3.3's equation, and under it "
-              "the `border-*-width` longhands lexbor's property registry does not carry. BUILD those, then "
-              "§9's THIRD conjunct, which is stated in terms of the same equation — an OVER-CONSTRAINED pair "
-              "(`left` and `right` both non-auto on a non-auto width) resolves to the computed value");
+              "are waiting on the one subproblem core/layout/used_value.h names: §10.3.3's equation over "
+              "§10.1's containing-block chain, whose base case is the ICB and whose width is a CONCOLIC. BUILD "
+              "that, then §9's THIRD conjunct, which is stated in terms of the same equation — an "
+              "OVER-CONSTRAINED pair (`left` and `right` both non-auto on a non-auto width) resolves to the "
+              "computed value");
         break;
     case CSS_RESOLVED_USED:
         DFAIL("CSSOM §9 makes this property's resolved value the USED value unconditionally — it is one of the "

@@ -1,6 +1,7 @@
 /* CSS Values and Units §5 — the `<length>` in CSS pixels. See css_length.h for why this is a component and why
    each unit group this engine cannot absolutize crashes with its OWN message. */
 #include <ctype.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -86,14 +87,18 @@ CssLength css_length_parse(const char *value)
     if (end == p) {
         if (strchr(p, '(') != NULL)
             DFAIL("a length-valued property's value is a FUNCTION — `calc()`, `min()`, `max()`, `clamp()`, "
-                  "css-sizing's `fit-content()`, or a `var()` substitution that produced one. css-values §10 "
+                  "css-sizing's `fit-content()`, a `var()` substitution that produced one, or a function that "
+                  "is not a length at all and whose declaration the grammar should have DROPPED (`border-width: "
+                  "rgb(1, 2, 3)` reaches here through css_length_is_length, which cannot tell them apart for "
+                  "the same reason). css-values §10 "
                   "makes a math function a value in its "
                   "own right whose result is computed from operands in every unit this file knows and several "
                   "it crashes on, and lexbor parses one and serializes it back as TEXT, so it arrives here "
                   "looking like neither a dimension nor a keyword. BUILD the math-function grammar and its type "
                   "algebra: that is where `calc(100% - 2em)` splits into the PERCENTAGE half its caller "
                   "resolves against the containing block and the LENGTH half the two crashes below are about, "
-                  "and it is also where css-variables' substitution has to have happened already");
+                  "it is what tells a math function from `rgb()`, and it is also where css-variables' "
+                  "substitution has to have happened already");
         return out;
     }
     while (*end != '\0' && isspace((unsigned char)*end)) end++;
@@ -161,6 +166,66 @@ CssLength css_length_parse(const char *value)
           "is not a box-model length, so this is a caller asking the wrong component, or lexbor's own "
           "validation admitting a declaration its grammar rejects");
     return out;
+}
+
+/* Is `unit` (already lowercased) one CSS Values §5 defines as a LENGTH unit — absolute, font-relative or
+   viewport-percentage? All three tables, because §5's production admits all three and the two this engine
+   cannot absolutize are a missing component rather than a syntax error. */
+static bool css_len_unit_known(const char *unit)
+{
+    unsigned i;
+
+    for (i = 0; i < sizeof(CSS_ABSOLUTE) / sizeof(CSS_ABSOLUTE[0]); i++)
+        if (strcmp(CSS_ABSOLUTE[i].unit, unit) == 0) return true;
+    return css_len_in(CSS_FONT_RELATIVE, sizeof(CSS_FONT_RELATIVE) / sizeof(CSS_FONT_RELATIVE[0]), unit) ||
+           css_len_in(CSS_VIEWPORT_RELATIVE,
+                      sizeof(CSS_VIEWPORT_RELATIVE) / sizeof(CSS_VIEWPORT_RELATIVE[0]), unit);
+}
+
+bool css_length_is_length(const char *value)
+{
+    char unit[CSS_LEN_UNIT_MAX];
+    const char *p = value;
+    char *end = NULL;
+
+    DCHECK(value != NULL, "the `<length>` grammar was asked about a NULL value — a declaration carries a value "
+                          "by the time lexbor has serialized it, and an absent one is a caller that lost it");
+    while (*p != '\0' && isspace((unsigned char)*p)) p++;
+    (void)strtod(p, &end);
+    /* Not a number token at all: a FUNCTION is the one remaining production a `<length>` can take (see the
+       header), and every other spelling — a keyword, an identifier, a string — is not one. */
+    if (end == p) return strchr(p, '(') != NULL;
+    while (*end != '\0' && isspace((unsigned char)*end)) end++;
+    if (*end == '\0') return true;    /* §5.1's unitless zero; the parse above asserts on a unitless non-zero */
+    if (*end == '%') return false;    /* a `<percentage>` is a sibling production, never a `<length>` */
+    if (!css_len_unit_of(end, unit)) return false;
+    return css_len_unit_known(unit);
+}
+
+double css_length_snap_line_width(double px)
+{
+    /* The DEVICE PIXEL every step of the algorithm is stated in. This engine models a `devicePixelRatio` of 1
+       (core/frame/viewport.h says why that is a UA choice and not an unknown), so one device pixel is one CSS
+       pixel and a whole number of CSS pixels is already snapped — at that ratio and at every other INTEGER
+       one, which is what makes this arm independent of a value this entry cannot reach. */
+    double whole = trunc(px);
+
+    DCHECK(px == px && px * 0.0 == 0.0,
+           "CSS Values §6's snap-as-a-border-width was handed a length that is not a FINITE number — every "
+           "border width reaching it is an absolute length off a real declaration or one of §3.3's three "
+           "keywords, so a NaN or an infinity is a derivation that lost an operand");
+    if (px == whole) return px;
+    DFAIL("CSS Values §6 SNAPS a border width to a whole number of DEVICE PIXELS — away from zero to one when "
+          "the length is between zero and a single device pixel, towards zero otherwise — and this width is "
+          "not a whole number of CSS pixels, so the answer depends on how many device pixels one CSS pixel is. "
+          "core/frame/viewport.h MODELS that (`viewport_device_pixel_ratio`, a modelled 1.0) and it is a "
+          "forkable environment SOURCE there, not a constant: `devicePixelRatio > 1` is the retina gate, and a "
+          "computed border width derived from it carries that domain. Neither half is reachable from here — "
+          "this entry arrives through `css_resolved_value(element, property)`, which carries no realm, and a "
+          "concolic computed value would not fit the `char *` it returns. BUILD the same plumbing the "
+          "viewport-percentage arm above asks for: the realm through css_resolved_value into this component, "
+          "and with it the resolved-value path that can carry a concolic");
+    return px;
 }
 
 char *css_length_serialize_px(double px)

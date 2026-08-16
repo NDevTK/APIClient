@@ -26,28 +26,34 @@
  *   - A `width` or `height` whose computed value is an absolute length, for every box type but a table box and
  *     a flex or grid item. §10.3.3's equation solves for `width` only when `width` is `auto`; §10.3.5,
  *     §10.3.7 and §10.3.9 each say the same for their own box type. A TABLE may be widened past it (§17.5.2)
- *     and a FLEX ITEM's size is its container's algorithm and not §10's at all, so both crash. Two further
- *     conjuncts are ASSERTED rather than assumed, because each is a case in which the declared length is not
- *     the used one and neither is visible as a crash otherwise: §10.4/§10.7's clamp by a declared
- *     `min-`/`max-` limit, and css-sizing §5's `box-sizing: border-box`, which makes the declared value the
- *     BORDER box's while §10.2 and CSSOM §9 both mean the content box's.
+ *     and a FLEX ITEM's size is its container's algorithm and not §10's at all, so both crash. One further
+ *     conjunct is ASSERTED rather than assumed, because it is a case in which the declared length is not the
+ *     used one and it is not visible as a crash otherwise: §10.4/§10.7's clamp by a declared `min-`/`max-`
+ *     limit.
+ *   - AND THE SAME SIZE UNDER `box-sizing: border-box`, which is a COMPUTATION and not a second assertion.
+ *     What stood here called it one, on the ground that css-sizing §5 "makes the declared value the BORDER
+ *     box's while §10.2 and CSSOM §9 both mean the content box's" — and §5's own next sentence says the
+ *     opposite: "Used values, as exposed for instance through getComputedStyle(), also refer to the border
+ *     box." So the exposed used value is the border box's size, which is the declared length except when the
+ *     paddings and borders alone exceed it and the content box floors at zero (§5's own worked example: "the
+ *     border-box size ends up at 120px, even though width: 100px is specified"). It is the LARGER of the two,
+ *     and the four terms it needs are the two paddings and the two border widths.
  *
- * AND WHY THE ROOT ELEMENT'S `width: auto` IS NOT AMONG THEM, WHICH IS THE ONE THING TO READ BEFORE ADDING IT.
- * css_computed_value.c's crash named §10.3.3 from the ICB as where a layout starts, and the ICB is real —
- * core/frame/viewport.c models it. The blocker is one layer down and it is not the ICB: §10.3.3's constraint
- * equation has SEVEN terms,
+ * AND WHY THE ROOT ELEMENT'S `width: auto` IS STILL NOT AMONG THEM, WHICH IS THE ONE THING TO READ BEFORE
+ * ADDING IT. §10.3.3's constraint equation has SEVEN terms,
  *     margin-left + border-left-width + padding-left + width + padding-right + border-right-width +
  *     margin-right = width of containing block
- * and TWO of them cannot be read by this engine at all. Lexbor's property registry carries no
- * `border-left-width` longhand — it has the `border`, `border-left` and `border-width` SHORTHANDS and the four
- * `border-*-color` longhands, and nothing else of the border — so `border: 1px solid red` sets a width that no
- * cascade read can see, and `border-left-width: 1px` reaches the cascade as an unknown declaration with raw
- * tokens and no grammar. Solving the equation with those two terms taken as zero would not be an approximate
- * used width: it would be a number computed from a value the producer never produced, which is the defect
- * CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS is about, and it would be silent for every page that puts a border on
- * anything. core/dom/element_view.c's `clientTop`/`clientLeft` DFAIL already states the build order for those
- * four shorthand expansions and two longhands, because that member IS the border width. It is the subproblem,
- * and it comes first.
+ * and EVERY ONE OF THEM IS READABLE. This paragraph used to say that two were not, because lexbor's property
+ * registry carries no `border-*-width` longhand — it has the `border` and `border-<side>` SHORTHANDS and the
+ * four `border-*-color` longhands and nothing else of the border, so `border: 1px solid red` set a width no
+ * cascade read could see. That is built: core/css/css_shorthand.c expands `border`, `border-<side>`,
+ * `border-width` and `border-style`, and core/css/css_computed_value.c derives the two longhands' computed
+ * value (CSS 2.1 §8.5.1's rule that a `none`/`hidden` style makes it 0 included, and that file states why the
+ * rule lives at the computed value rather than at the used one).
+ * WHAT IS LEFT IS THE CONTAINING BLOCK, and it is two problems. §10.1's CHAIN makes every block-level box's
+ * containing block the content edge of its nearest block container ancestor, so the equation is recursive; the
+ * base case is real, because §10.1 makes the ROOT ELEMENT's the INITIAL CONTAINING BLOCK core/frame/viewport.c
+ * models. And the ICB's width is not a number — see the paragraph below.
  *
  * THE GEOMETRY IS CONCRETE, AND A GEOMETRY DERIVED FROM THE VIEWPORT IS NOT. c35f1fed decided the first half
  * and it is right: viewport.h's test is whether the model PICKED one point out of a range the environment

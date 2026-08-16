@@ -47,6 +47,15 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name);
 /* Does this component DERIVE `name`'s computed value from the cascade's specified value? */
 bool css_computed_models(const char *name);
 
+/* Is `value` one of CSS Cascade §7.3's CSS-WIDE KEYWORDS — `inherit`, `initial`, `unset`, `revert`,
+   `revert-layer`? Each is the ENTIRE value of a declaration when present, so this is an equality and not a
+   search, and each makes the value a product of §7's DEFAULTING step rather than of the declaration.
+   EXPORTED because a SHORTHAND carrying one "sets all of its sub-properties to that keyword" (CSS Cascade
+   §Shorthand Properties), which core/css/css_shorthand.h has to know BEFORE it tries the shorthand's own
+   grammar: `border: initial` is not a `<line-width> || <line-style> || <color>`, and a keyword that reached
+   that grammar would be classified as one of its terms. */
+bool css_wide_keyword(const char *value);
+
 /* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, which is not the
    parent element when a `display: contents` ancestor sits between them. OWNED, or NULL at the root. Exported
    because it is the question "is this box a flex or grid ITEM", and TWO algorithms ask it: CSS Display §2.7's

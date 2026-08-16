@@ -33,6 +33,7 @@
  * not a dimension, and the honest answer is the grammar this file does not implement. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_LENGTH_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_LENGTH_H
+#include <stdbool.h>
 
 typedef enum {
     CSS_LENGTH_ABSOLUTE = 0,   /* an absolute `<length>`; `px` carries it in CSS pixels */
@@ -52,6 +53,28 @@ typedef struct {
    A UNITLESS ZERO is a `<length>` (CSS Values §5.1 permits the unit to be omitted for zero, and it is how
    lexbor serializes every box-model property's initial value). */
 CssLength css_length_parse(const char *value);
+
+/* IS THIS TEXT A `<length>` AT ALL — CSS Values §5's production, answered WITHOUT crashing, which is a
+   different question from the one above and exists for a different caller. `css_length_parse` is for a value
+   already known to match the grammar (lexbor validated the declaration), and it CRASHES on one that does not,
+   deliberately. A shorthand LEXBOR'S REGISTRY DOES NOT CARRY reaches the cascade as raw tokens with nothing
+   having validated them, so `border-width: red` is a declaration CSS Syntax DROPS — not an engine gap — and
+   its expansion has to be able to ask.
+   TRUE for a `<number>` (§5.1's unitless zero, and the unitless non-zero the parse above asserts on), for a
+   dimension in ANY unit §5 defines as a length INCLUDING the relative ones this engine cannot yet absolutize
+   (those are a missing component and must reach the crash that names it, never be dropped as invalid), and for
+   a FUNCTION — css-values §10 makes a math function a value of whatever type its operands give it, and telling
+   `calc()` from `rgb()` is the same unbuilt grammar the parse above crashes for. FALSE for a `<percentage>`,
+   for a keyword, and for anything else. */
+bool css_length_is_length(const char *value);
+
+/* CSS Values §6's SNAP A LENGTH AS A BORDER WIDTH (the spec's own alias of "snap a length as a line width"),
+   which css-backgrounds-3 §3.3 makes part of a `border-*-width`'s COMPUTED value: a length that is an integer
+   number of DEVICE PIXELS is unchanged, one between zero and a single device pixel is rounded AWAY from zero
+   to one, and anything larger is rounded TOWARDS zero to a whole number of them. The device pixel is where the
+   engine's own plumbing runs out, so a length this cannot answer for crashes rather than reporting the
+   unsnapped number. */
+double css_length_snap_line_width(double px);
 
 /* CSSOM §6.7.2's "serialize a CSS value" for an absolute length: the number, then `px`. The number is
    css-values §serializing's SHORTEST FORM THAT ROUND-TRIPS, which is what makes `4px` come back as "4px" and

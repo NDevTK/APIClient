@@ -1,6 +1,5 @@
 /* CSS 2.1 §10 — the used value of a box-model length. See used_value.h for the contract, for why the BOX TYPE
-   is the first question, and for why the root element's `width: auto` is blocked on the border-width longhands
-   rather than on the initial containing block. */
+   is the first question, and for what the root element's `width: auto` is blocked on. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -133,19 +132,50 @@ static void uv_require_unclamped(lxb_dom_element_t *el, bool vertical)
           "MINIMUM SIZE, which is a content-based minimum and therefore a real layout");
 }
 
-/* css-sizing §5: `box-sizing: border-box` makes the DECLARED width the border box's, so the used `width` —
-   which CSSOM §9 and CSS 2.1 §10.2 both define as the CONTENT width — is that value minus the paddings and
-   the border widths. */
-static void uv_require_content_box(lxb_dom_element_t *el)
+/* css-sizing §5's `box-sizing: border-box`, and the one sentence in it that decides what this function
+   returns: "Used values, AS EXPOSED FOR INSTANCE THROUGH getComputedStyle(), also refer to the border box."
+ * SO THE ANSWER IS THE BORDER BOX'S SIZE, NOT THE CONTENT BOX'S. What stood here said the opposite — that
+ * "CSS 2.1 §10.2 and CSSOM §9 both mean the CONTENT width", so the used value was the declared one minus the
+ * paddings and the border widths — and it crashed rather than computing that. Both halves were wrong. The
+ * subtraction §5 describes ("The content width and height are calculated by subtracting the border and padding
+ * widths of the respective sides from the specified <length-percentage>") produces the CONTENT box, which is
+ * the number CSS 2.1 §10.3.3's equation and CSSOM VIEW's padding edge want; the number CSSOM §9 exposes is the
+ * border box, which is why `getComputedStyle(el).width` is `100px` and not `80px` for a `box-sizing:
+ * border-box; width: 100px; padding: 10px` box in every user agent. A crash there took out most of the modern
+ * web, which sets `box-sizing: border-box` on `*`.
+ * IT IS STILL NOT THE DECLARED LENGTH VERBATIM, and the exception is the one §5 spells out with its own
+ * example: the content box floors at zero, so when the paddings and borders alone exceed the declared
+ * border-box size the border box GROWS to hold them — "the border-box size ends up at 120px, even though
+ * width: 100px is specified for the border box". The used border-box size is therefore the LARGER of the two,
+ * and computing it needs exactly the four terms §10.3.3 was waiting on, two of which are the border widths. */
+static double uv_border_box_size(lxb_dom_element_t *el, double declared, bool vertical)
 {
-    if (uv_computed_is(el, "box-sizing", "content-box")) return;
-    DFAIL("css-sizing §5's `box-sizing: border-box` is in effect, so the value the author declared for `width` "
-          "is the BORDER BOX's width, while CSS 2.1 §10.2 and CSSOM §9 both mean the CONTENT width — the used "
-          "value is the declared one minus `padding-left`, `padding-right`, `border-left-width` and "
-          "`border-right-width`. The paddings are readable here; the two border widths are NOT — lexbor's "
-          "property registry carries no `border-*-width` longhand at all. BUILD those first (element_view.c's "
-          "clientTop/clientLeft DFAIL states the order: the four shorthand expansions, then the two longhands' "
-          "computed values), which is the same subproblem §10.3.3's constraint equation is waiting on");
+    static const char *const PADDINGS[2][2] = {
+        { "padding-left", "padding-right" }, { "padding-top", "padding-bottom" },
+    };
+    static const char *const BORDERS[2][2] = {
+        { "border-left-width", "border-right-width" }, { "border-top-width", "border-bottom-width" },
+    };
+    int axis = vertical ? 1 : 0, i;
+    double surround = 0.0;
+
+    DCHECK(uv_computed_is(el, "box-sizing", "border-box"),
+           "css-sizing §5's border-box arm was reached for a `box-sizing` that is neither of the two keywords "
+           "its `content-box | border-box` grammar admits — lexbor validates the declaration against it, so a "
+           "third value here is a cascade layer that answered without one");
+    for (i = 0; i < 2; i++) {
+        char *bw = uv_computed(el, BORDERS[axis][i]);
+        CssLength len = css_length_parse(bw);
+
+        DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+               "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 "
+               "§3.3's `Computed value:` line is `absolute length` and every arm of that derivation produces "
+               "one — 0 for a `none`/`hidden` style, 1/3/5px for the three keywords, the absolutized length "
+               "otherwise — so a percentage or a keyword here is a rule that did not run");
+        free(bw);
+        surround += len.px + used_value_px(el, PADDINGS[axis][i]);
+    }
+    return declared > surround ? declared : surround;
 }
 
 /* ---- the used value ------------------------------------------------------------------------------------- */
@@ -181,18 +211,19 @@ static double uv_margin(lxb_dom_element_t *el, const char *computed, const char 
                   "recomputes it to make the constraint equation true. TWO things are missing and they are "
                   "different: `direction` is an INHERITED property and this engine's cascade has no "
                   "inheritance step, so the containing block's computed `direction` cannot be read; and the "
-                  "recomputed value is the containing block's WIDTH minus the other six terms, two of which "
-                  "are the border widths lexbor has no longhand for (used_value.h states that subproblem)");
+                  "recomputed value is the containing block's WIDTH minus the other six terms, which is "
+                  "§10.3.3's equation over the CONTAINING BLOCK CHAIN §10.1 defines (used_value.h states that "
+                  "subproblem — every term of the equation is readable now, and the chain and its base case "
+                  "in the ICB are what is left)");
         return len.px;
     }
     if (len.kind == CSS_LENGTH_PERCENTAGE)
         DFAIL("CSS 2.1 §8.3: a PERCENTAGE margin — including `margin-top` and `margin-bottom`, which the spec "
               "is explicit about — 'is calculated with respect to the WIDTH of the generated box's containing "
               "block'. §10.1 makes that containing block the content edge of the nearest block container "
-              "ancestor, and its width is §10.3.3's constraint equation, which this engine cannot evaluate "
-              "because two of its seven terms are `border-left-width` and `border-right-width` and lexbor's "
-              "property registry carries no border-width longhand. BUILD those (element_view.c's clientTop "
-              "DFAIL has the order), then §10.3.3, then the containing-block chain §10.1 defines");
+              "ancestor, and its width is §10.3.3's constraint equation. BUILD §10.3.3 and the containing-block "
+              "chain §10.1 defines — all seven of the equation's terms are readable now, and used_value.h "
+              "states what the chain's base case in the ICB costs");
     DCHECK(strcmp(computed, "auto") == 0,
            "a margin's computed value is neither a length, nor a percentage, nor `auto` — CSS 2.1 §8.3's "
            "<margin-width> grammar admits exactly those three, and lexbor validates the declaration against "
@@ -219,8 +250,7 @@ static double uv_margin(lxb_dom_element_t *el, const char *computed, const char 
           "margin takes up all the slack, and two `auto` margins split it, which is what `margin: 0 auto` "
           "means — and §10.3.7 does the same for an absolutely positioned box between `left` and `right`. "
           "Every one of them needs the containing block's WIDTH, so they are all waiting on the same "
-          "subproblem: §10.3.3's equation, and under it the border-width longhands lexbor does not carry "
-          "(used_value.h states it in full)");
+          "subproblem: §10.3.3's equation over §10.1's containing-block chain (used_value.h states it in full)");
     return 0.0;
 }
 
@@ -233,8 +263,8 @@ static double uv_padding(CssLength len)
            "else — so this is a value lexbor's own validation should have dropped");
     DFAIL("CSS 2.1 §8.4: a PERCENTAGE padding 'is calculated with respect to the WIDTH of the generated box's "
           "containing block, EVEN FOR padding-top and padding-bottom'. That width is §10.3.3's constraint "
-          "equation over the nearest block container ancestor, which this engine cannot evaluate — see "
-          "used_value.h and element_view.c's clientTop DFAIL for the border-width longhands it is blocked on");
+          "equation over the nearest block container ancestor, which this engine cannot evaluate yet — see "
+          "used_value.h for the containing-block chain it is blocked on");
     return 0.0;
 }
 
@@ -259,8 +289,10 @@ static double uv_size(lxb_dom_element_t *el, const char *computed, CssLength len
                   "adjust against the container's free space), and css-grid §11 sizes a grid item to its "
                   "track. BUILD the flex layout algorithm, which needs the container's own used content size "
                   "first — the same §10.3.3 subproblem, one level up");
-        uv_require_content_box(el);
         uv_require_unclamped(el, vertical);
+        /* css-sizing §5 decides which BOX EDGE the declared length is on, and the used value it exposes. */
+        if (!uv_computed_is(el, "box-sizing", "content-box"))
+            return uv_border_box_size(el, len.px, vertical);
         return len.px;
     }
     if (len.kind == CSS_LENGTH_PERCENTAGE) {
@@ -273,8 +305,8 @@ static double uv_size(lxb_dom_element_t *el, const char *computed, CssLength len
                   "§10.6.3's content-based height for the `auto` result it produces");
         DFAIL("CSS 2.1 §10.2: a PERCENTAGE `width` 'is calculated with respect to the width of the generated "
               "box's containing block'. §10.1 makes that the content edge of the nearest block container "
-              "ancestor, whose own used width is §10.3.3's constraint equation — blocked on the border-width "
-              "longhands lexbor does not carry (used_value.h states it in full)");
+              "ancestor, whose own used width is §10.3.3's constraint equation (used_value.h states it in "
+              "full)");
     }
     DCHECK(strcmp(computed, "auto") == 0,
            "a `width` or `height` computed to a keyword that is not `auto` — CSS 2.1 §10.2 and §10.5 admit "
@@ -301,16 +333,19 @@ static double uv_size(lxb_dom_element_t *el, const char *computed, CssLength len
               "§8.3.1's margin COLLAPSING between them");
     DFAIL("CSS 2.1 §10.3.3: a `width` of `auto` on a block-level box 'follows from the resulting equality' — "
           "the used width is the CONTAINING BLOCK's width minus the six other terms of the constraint "
-          "equation. The containing block is real and reachable: §10.1 makes the ROOT ELEMENT's the INITIAL "
-          "CONTAINING BLOCK, which core/frame/viewport.c models, and every other block-level box's is the "
-          "content edge of the nearest block container ancestor, so the chain has a base case. What is missing "
-          "is TWO OF THE SEVEN TERMS: `border-left-width` and `border-right-width` are not in lexbor's "
-          "property registry at all, so a `border: 1px solid` sets a width no cascade read can see and taking "
-          "them as zero would compute a used width out of a value nothing produced. BUILD them first — "
-          "element_view.c's clientTop/clientLeft DFAIL states the exact order (the `border`, `border-top`, "
-          "`border-width` and `border-style` shorthand expansions in css_shorthand.c, then the longhands' own "
-          "computed values) — and note that a used width derived from the ICB carries the ICB's CONCOLIC "
-          "domain, so the resolved-value path stops being a `char *` on the same day (used_value.h says why)");
+          "equation. ALL SEVEN TERMS ARE READABLE NOW: the margins and paddings are this component's own §8.3 "
+          "and §8.4 arms, and `border-left-width`/`border-right-width` are css_computed_value.c's, which used "
+          "to be the blocker and is not one. What is missing is the CONTAINING BLOCK itself, and it is two "
+          "things rather than one. (1) §10.1's CHAIN: every block-level box's containing block is the content "
+          "edge of its nearest block container ancestor, so the equation is recursive and the recursion has to "
+          "walk to a base case — which exists, because §10.1 makes the ROOT ELEMENT's containing block the "
+          "INITIAL CONTAINING BLOCK that core/frame/viewport.c models. (2) THE ICB'S WIDTH IS A CONCOLIC, not "
+          "a number: viewport.h makes the viewport size a PICKED environment fact minted through "
+          "`viewport_env_value`, so a used width derived from it carries that domain — "
+          "`parseInt(getComputedStyle(el).width) < 768` is the same responsive gate as `innerWidth < 768` and "
+          "answering it with a bare 1280 deletes the mobile arm. So the resolved-value path stops being a "
+          "`char *` on the same day this lands, which is the same plumbing css_length.c's viewport-unit and "
+          "snap-a-border-width crashes both ask for. BUILD the chain and that path together");
     return 0.0;
 }
 

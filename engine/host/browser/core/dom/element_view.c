@@ -12,6 +12,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_length.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
 #include "core/dom/element_view.h"
@@ -370,37 +371,60 @@ static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical
     }
     /* step 3 */
     DFAIL("CSSOM VIEW §6's clientWidth/clientHeight step 3 returns THE UNSCALED WIDTH OF THE PADDING EDGE of "
-          "the element's box — the used `width` plus `padding-left` plus `padding-right` — for an element that "
-          "is neither the root element outside quirks mode nor the body inside it. THE LAYOUT THIS USED TO ASK "
-          "FOR NOW EXISTS AND IS core/layout/used_value.h, and it already answers two of those three terms "
-          "whenever they are absolute lengths, so this is no longer `BUILD A LAYOUT`: what is missing is the "
-          "used `width` for the ordinary `width: auto` box, which is CSS 2.1 §10.3.3's constraint equation, "
-          "which is blocked on the `border-*-width` longhands lexbor's property registry does not carry — the "
-          "same ones clientTop/clientLeft below is waiting on, and its DFAIL states the build order. BUILD "
-          "those, then §10.3.3, and this step becomes three reads of used_value_px");
+          "the element's box, for an element that is neither the root element outside quirks mode nor the body "
+          "inside it. THE LAYOUT THIS USED TO ASK FOR EXISTS AND IS core/layout/used_value.h, and the term it "
+          "used to name as missing — the `border-*-width` longhands lexbor's property registry does not carry "
+          "— IS BUILT (css_shorthand.c's four expansions and css_computed_value.c's two computed values, which "
+          "is what clientTop/clientLeft below now answers from). TWO THINGS ARE LEFT AND THEY ARE DIFFERENT "
+          "FROM EACH OTHER. (1) The padding edge is not a used value this component exposes: it is the CONTENT "
+          "box plus the two paddings under `box-sizing: content-box`, and the BORDER box minus the two border "
+          "widths under `border-box` — css-sizing §5 makes `used_value_px(width)` the BORDER box's size in "
+          "that mode, so a caller adding paddings to it would double-count. ADD the padding edge as its own "
+          "entry in used_value.h, where css-sizing §5 already is, rather than branching on `box-sizing` here. "
+          "(2) The ordinary box has `width: auto`, which is CSS 2.1 §10.3.3's constraint equation over §10.1's "
+          "containing-block chain, and used_value.c's own crash states what that costs. NOTE ALSO that these "
+          "two members are IDL `long` while a padding edge is not snapped to anything the way a border width "
+          "is (css-backgrounds-3 §3.3), so a fractional one needs §6's rounding decided — which is why "
+          "clientTop/clientLeft could land and these two could not");
     return ev_long(ctx, 0.0);
 }
 
-static JSValue ev_client_edge(JSContext *ctx, const EvTarget *t)
+/* CSSOM VIEW §6's `clientTop`/`clientLeft`, in the spec's own two steps. Step 2 is "return the unscaled
+   COMPUTED VALUE of the border-top-width / border-left-width property plus the width of any scrollbar rendered
+   between the top padding edge and the top border edge, ignoring any transforms that apply to the element and
+   its ancestors."
+   THE SCROLLBAR TERM IS ZERO AND THAT IS A DERIVATION, not an omission: this user agent renders no scroll bar
+   — element_view.h states the box model, and every other §6 member here reads the same fact the same way — so
+   the whole answer is that computed value. It is a REAL one now: core/css/css_computed_value.c derives
+   `border-*-width` over the four shorthand expansions core/css/css_shorthand.c added, with CSS 2.1 §8.5.1's
+   rule that a `none` or `hidden` border style makes it 0 whatever width was declared. So `border-left: 4px
+   solid` reports 4, `border-left-width: 4px` with no style reports 0 (the initial style is `none`, which is
+   the same number every user agent gives), and an element with no border declaration at all reports 0 for the
+   same reason rather than the initial `medium`.
+   AND IT IS AN INTEGER BY CONSTRUCTION, which is what lets §6 declare these two `long` in the first place:
+   css-backgrounds-3 §3.3 makes the computed value "snapped as a border width", so css_length.h has already
+   rounded it to a whole number of device pixels — or crashed naming the piece it could not do that without. */
+static JSValue ev_client_edge(JSContext *ctx, const EvTarget *t, bool vertical)
 {
+    char *v;
+    CssLength len;
+
     /* step 1 */
     if (!t->has_box || ev_box_is_inline(t)) return ev_long(ctx, 0.0);
     /* step 2 */
-    DFAIL("CSSOM VIEW §6's clientTop/clientLeft step 2 returns THE UNSCALED COMPUTED VALUE OF THE "
-          "border-top-width / border-left-width PROPERTY plus the width of any scrollbar rendered between that "
-          "padding edge and that border edge. The scrollbar term is 0 for as long as this user agent renders "
-          "none, so the whole answer is that computed value, and css_computed_value.c is now the C entry that "
-          "would carry it — what is missing is BELOW it. Lexbor's property registry has no `border-top-width` "
-          "and no `border-top-style` (it carries the `border-top` SHORTHAND and `border-*-color`, and nothing "
-          "else of the border), so both longhands reach the cascade as unknown declarations with raw text and "
-          "no grammar, and `border-width: 1px 2px`, `border-style: solid`, `border-top: 1px solid red` and "
-          "`border: 1px solid red` all set them through shorthands css_shorthand.c does not expand. BUILD, in "
-          "this order: those four expansions (the four-side 1-to-4 rotation, and the any-order triple lexbor "
-          "already parses into a typed struct for `border` and `border-top`), then the two longhands' computed "
-          "value in css_computed_value.c — CSS Backgrounds §border-width makes it 0 when the matching "
-          "border-*-style computes to `none` or `hidden`, and an absolute length otherwise, with "
-          "thin/medium/thick the UA's own 1px/3px/5px");
-    return ev_long(ctx, 0.0);
+    v = css_computed_value(lxb_dom_interface_element(t->node),
+                           vertical ? "border-top-width" : "border-left-width");
+    DCHECK(v != NULL, "the cascade produced no computed `border-*-width` — every layer of it answers, and the "
+                      "last one is the property's own initial value (`medium`), so a NULL here is a cascade "
+                      "that stopped early");
+    len = css_length_parse(v);
+    free(v);
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+           "§6's clientTop/clientLeft read a `border-*-width` whose computed value is not an absolute length. "
+           "css-backgrounds-3 §3.3's `Computed value:` line is `absolute length, snapped as a border width` "
+           "and every arm of that derivation produces one, so a percentage or a keyword here is a "
+           "computed-value rule that did not run");
+    return ev_long(ctx, len.px);
 }
 
 /* ---- §6's `getClientRects()` and `getBoundingClientRect()` ----------------------------------------------- */
@@ -502,8 +526,8 @@ static JSValue js_ev_get(JSContext *ctx, JSValueConst this_val, int magic)
     case EV_SCROLL_WIDTH:   return ev_scroll_extent(ctx, &t, false);
     case EV_CLIENT_HEIGHT:  return ev_client_extent(ctx, &t, true);
     case EV_CLIENT_WIDTH:   return ev_client_extent(ctx, &t, false);
-    case EV_CLIENT_TOP:
-    case EV_CLIENT_LEFT:    return ev_client_edge(ctx, &t);
+    case EV_CLIENT_TOP:     return ev_client_edge(ctx, &t, true);
+    case EV_CLIENT_LEFT:    return ev_client_edge(ctx, &t, false);
     }
     DFAIL("a CSSOM VIEW §6 Element member was read with a magic no member of this file declares — the magic IS "
           "the member, so an unknown one means a name was installed without a case to answer it");
