@@ -462,3 +462,56 @@ bool idb_key_path_is_valid(const char *path, size_t len)
     /* A trailing period leaves the walk expecting an identifier that never arrived. */
     return !at_segment_start;
 }
+
+/* ONE STRING OF A KEY PATH, read back as bytes for the walk above. The string is the one §3.2.25's conversion
+   produced, so it is engine-owned and cannot run anything — a failure here is an allocation failure. */
+static bool idb_key_path_string_is_valid(JSContext *ctx, JSValueConst v)
+{
+    size_t len = 0;
+    const char *s = JS_ToCStringLen(ctx, &len, v);
+    bool ok;
+
+    CHECK(s != NULL, "IndexedDB: §2.5's key path could not be read back as a string");
+    ok = idb_key_path_is_valid(s, len);
+    JS_FreeCString(ctx, s);
+    return ok;
+}
+
+bool idb_key_path_value_is_valid(JSContext *ctx, JSValueConst path)
+{
+    JSValue len;
+    uint32_t i, n = 0;
+    int r;
+
+    if (JS_IsString(path))
+        return idb_key_path_string_is_valid(ctx, path);
+    DCHECK(JS_IsArray(path),
+           "§2.5's validity was asked of a key path that is neither a string nor a sequence. Its declared type "
+           "is §3.2.25's `(DOMString or sequence<DOMString>)`, which answers with exactly those two — and the "
+           "IDL null a member may also be handed means the store has NO key path, which is a question its "
+           "caller answers before it reaches this");
+    len = JS_GetPropertyStr(ctx, path, "length");
+    DCHECK(!JS_IsException(len), "reading the length of the sequence §3.2.25 built threw — it is the engine's "
+                                 "own Array and has no getters to run");
+    r = JS_ToUint32(ctx, &n, len);
+    DCHECK(r >= 0, "the sequence §3.2.25 built had a length that is not a number");
+    (void)r;
+    JS_FreeValue(ctx, len);
+    /* "A NON-EMPTY list" — see the header for why this is the list's own rule and not the loop's. */
+    if (n == 0)
+        return false;
+    for (i = 0; i < n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, path, i);
+        bool ok;
+
+        DCHECK(JS_IsString(e), "the sequence §3.2.25 built held something that is not a string — §3.2.20's "
+                               "create-a-sequence-from-an-iterable converts every entry to its element type, "
+                               "so `['a', ['b','c']]` arrives here as `['a', 'b,c']` and is refused for the "
+                               "comma rather than crossing this line as a nested list");
+        ok = idb_key_path_string_is_valid(ctx, e);
+        JS_FreeValue(ctx, e);
+        if (!ok)
+            return false;
+    }
+    return true;
+}

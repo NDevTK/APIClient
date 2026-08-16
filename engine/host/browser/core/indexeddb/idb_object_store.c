@@ -49,6 +49,11 @@
 #define OS_STORE       "store"        /* the §2.2 object store record this handle is a view of */
 #define OS_TRANSACTION "transaction"  /* §2.2.1's associated transaction */
 #define OS_NAME        "name"         /* §2.2.1's own name, "initialized to the name of the associated store" */
+/* §4.5's keyPath getter answers with ONE object per handle — "it returns the same object instance every time
+   it is inspected" — so the converted value is remembered here on its FIRST inspection. JS_UNDEFINED is the
+   positive statement "not inspected yet" and is written when the handle is created, never left absent: a
+   consumer that read a missing field as "no cache" would be defaulting a field nobody writes. */
+#define OS_KEY_PATH    "keyPathValue"
 
 static JSValue   g_key;
 static JSClassID g_os_class;
@@ -125,6 +130,7 @@ JSValue idb_object_store_handle(JSContext *ctx, JSValueConst store, JSValueConst
        created." The handle's OWN copy — which is what §5.8 reverts and what makes `store.name` go on answering
        the old name after an aborted rename, the difference §4.5's getter note draws. */
     JS_SetPropertyStr(ctx, st, OS_NAME, idb_object_store_name(ctx, store));
+    JS_SetPropertyStr(ctx, st, OS_KEY_PATH, JS_UNDEFINED);
     k = JS_ValueToAtom(ctx, g_key);
     CHECK(k != JS_ATOM_NULL, "the IDBObjectStore slot key could not be interned");
     JS_SetProperty(ctx, h, k, st);
@@ -361,18 +367,37 @@ static JSValue js_os_get_name(JSContext *ctx, JSValueConst this_val, int magic)
     return idb_object_store_handle_name(ctx, this_val);
 }
 
-/* "The keyPath getter steps are to return this's object store's key path, or null if none." The note — "the
-   returned value is not the same instance that was used when the object store was created" — is satisfied by
-   the store holding the string §4.4 converted rather than the page's own value. */
+/* "The keyPath getter steps are to return this's object store's key path, or null if none. The key path is
+   converted as a DOMString (if a string) or a sequence<DOMString> (if a list of strings), per [WEBIDL]."
+   THE CONVERSION IS THE STORE'S (idb_database.h states what Web IDL §3.2.24 makes of a list, and why it is a
+   plain Array and not a frozen one); WHAT IS HERE IS THE IDENTITY THE NOTE REQUIRES. "The returned value is
+   not the same instance that was used when the object store was created. However, if this attribute returns an
+   object (specifically an Array), it returns the same object instance every time it is inspected" — a
+   requirement §3.2.24 alone does not meet, since its own steps mint a new Array per conversion. So the first
+   inspection converts and the handle remembers, which is also the half of the note about the STORE: two
+   handles for one store answer with two Arrays, because the cache is the handle's. */
 static JSValue js_os_get_key_path(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    JSValue store, kp;
+    JSValue store, kp, slots;
 
     (void)magic;
     if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
+    slots = os_slots(ctx, this_val);
+    DCHECK(JS_IsObject(slots), "an IDBObjectStore carried no slot record");
+    kp = JS_GetPropertyStr(ctx, slots, OS_KEY_PATH);
+    if (!JS_IsUndefined(kp)) {   /* the positive statement "inspected before" — see OS_KEY_PATH */
+        JS_FreeValue(ctx, slots);
+        return kp;
+    }
+    JS_FreeValue(ctx, kp);
     store = os_get(ctx, this_val, OS_STORE);
-    kp = idb_object_store_key_path(ctx, store);
+    kp = idb_object_store_key_path_value(ctx, store);
     JS_FreeValue(ctx, store);
+    DCHECK(!JS_IsUndefined(kp), "§4.5's keyPath conversion answered undefined, which is the one value this "
+                                "cache reads as \"not converted yet\" — the conversion answers null for a "
+                                "store with out-of-line keys, a string, or an Array");
+    JS_SetPropertyStr(ctx, slots, OS_KEY_PATH, JS_DupValue(ctx, kp));
+    JS_FreeValue(ctx, slots);
     return kp;
 }
 

@@ -488,6 +488,27 @@ JSValue idb_object_store_key_path(JSContext *ctx, JSValueConst store)
     return v;
 }
 
+JSValue idb_object_store_key_path_value(JSContext *ctx, JSValueConst store)
+{
+    JSValue path = idb_object_store_key_path(ctx, store), out;
+    uint32_t i, n;
+
+    /* "or null if none", and a string key path converts to ITSELF — §3.2.9's DOMString-to-JS conversion is the
+       identity on a string this component already holds, so there is nothing to copy: a JS string is
+       immutable, which is why the note's "changing the properties of the object" is about the Array alone. */
+    if (!JS_IsArray(path))
+        return path;
+    n = idb_list_len(ctx, path);
+    DCHECK(n > 0, "an object store's key path is an EMPTY list — §2.5's last bullet is \"a non-empty list\", "
+                  "which §4.4's createObjectStore reports as a SyntaxError before a store is created");
+    out = JS_NewArray(ctx);
+    CHECK(!JS_IsException(out), "IndexedDB: §4.5's keyPath could not allocate the Array Web IDL §3.2.24 makes");
+    for (i = 0; i < n; i++)
+        JS_DefinePropertyValueUint32(ctx, out, i, JS_GetPropertyUint32(ctx, path, i), JS_PROP_C_W_E);
+    JS_FreeValue(ctx, path);
+    return out;
+}
+
 bool idb_object_store_uses_key_generator(JSContext *ctx, JSValueConst store)
 {
     JSValue v = JS_GetPropertyStr(ctx, store, IDB_STORE_KEY_GENERATOR);

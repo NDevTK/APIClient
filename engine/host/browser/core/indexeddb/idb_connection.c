@@ -358,9 +358,8 @@ static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val
        declared default — so a body that wrote `argc > 1 ? argv[1] : JS_UNDEFINED` would be filling a hole the
        conversion does not leave, which is the consumer-side default §Offensive-programming names. */
     JSValueConst options = argv[1];
-    JSValue db = JS_UNDEFINED, tx = JS_UNDEFINED, key_path, existing, store, handle;
-    const char *name = NULL, *path = NULL;
-    size_t path_len = 0;
+    JSValue db = JS_UNDEFINED, tx = JS_UNDEFINED, key_path = JS_UNDEFINED, existing, store, handle;
+    const char *name = NULL;
     bool auto_increment;
 
     (void)magic; (void)argc;
@@ -376,41 +375,13 @@ static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val
     DCHECK(!JS_IsUndefined(key_path), "IDBObjectStoreParameters' `keyPath` is declared with the IDL's own "
                                       "`= null`, so the conversion places it whether or not the page wrote "
                                       "one — an undefined here is the declaration having lost its default");
-    if (!JS_IsNull(key_path)) {
-        /* §2.5's LIST ARM. The union IS built — the member is declared with §3.2.25's
-           IDL_DOMSTRING_OR_SEQUENCE_NULLABLE, so what arrives is the IDL null, a string, or the ENGINE'S own
-           array of strings, and "if it is a sequence" is this one JS_IsString and nothing else. What remains
-           unbuilt is what a list key path MEANS, and the crash below names those three things rather than the
-           conversion that used to be one of them. */
-        if (!JS_IsString(key_path)) {
-            DCHECK(JS_IsArray(key_path),
-                   "§2.5's key path is neither the IDL null, a string, nor a sequence — its declared type is "
-                   "§3.2.25's `(DOMString or sequence<DOMString>)?`, which answers with exactly those three");
-            JS_FreeValue(ctx, key_path);
-            DFAIL("Indexed Database §2.5's LIST key path is not built, and it is now the only half of it that "
-                  "is not: `createObjectStore(name, {keyPath: ['a','b']})` reaches this arm with the engine's "
-                  "own array of strings, because the union is a declared type. Three things are missing and "
-                  "none of them is a conversion — §2.5's VALIDITY for a list (non-empty, and every entry a "
-                  "valid string key path), §4.5's convert a key path to a value (a list answers a FROZEN "
-                  "array, which is idl_freeze_array and not the array the conversion made), and §7.1's list "
-                  "arm of extract a key from a value using a key path, which assembles the list of extracted "
-                  "keys into an array key. Build those three, and storing the list is then "
-                  "idb_object_store_create's `key_path` taking the array it already documents");
-            /* A RELEASE BUILD FALLS THROUGH, and it must not return JS_EXCEPTION with nothing thrown — the
-               capability is simply not supportable outside dev, which is what this says. */
-            JS_ThrowTypeError(ctx, "a sequence key path is not supported");
-            JS_FreeCString(ctx, name);
-            goto fail;
-        }
-        path = JS_ToCStringLen(ctx, &path_len, key_path);
-        JS_FreeValue(ctx, key_path);
-        if (path == NULL) { JS_FreeCString(ctx, name); goto fail; }
-        if (!idb_key_path_is_valid(path, path_len)) {
-            JS_ThrowDOMException(ctx, "SyntaxError", "the key path is not a valid key path");
-            goto fail_path;
-        }
-    } else {
-        JS_FreeValue(ctx, key_path);
+    /* "If keyPath is not null and is not a VALID KEY PATH, throw a SyntaxError DOMException." §2.5's two arms
+       are one question asked of core/indexeddb/idb_key.h, over the value §3.2.25's union answered with — the
+       IDL null, a string, or the ENGINE'S own array of strings. A list is valid when it is non-empty and every
+       one of its (already ToString'd) strings is, which is why `[]` is a SyntaxError and `['']` is not. */
+    if (!JS_IsNull(key_path) && !idb_key_path_value_is_valid(ctx, key_path)) {
+        JS_ThrowDOMException(ctx, "SyntaxError", "the key path is not a valid key path");
+        goto fail_name;
     }
 
     existing = idb_object_store_find(ctx, db, name);
@@ -418,23 +389,41 @@ static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val
         JS_FreeValue(ctx, existing);
         JS_ThrowDOMException(ctx, "ConstraintError",
                              "an object store with that name already exists in the database");
-        goto fail_path;
+        goto fail_name;
     }
     JS_FreeValue(ctx, existing);
 
     auto_increment = idl_dict_bool(ctx, options, "autoIncrement");
-    /* "If autoIncrement is true and keyPath is an EMPTY STRING or any sequence, throw an InvalidAccessError."
-       The sequence arm is unreachable above; the empty string is not, and it is the arm that matters — an
-       empty key path names the value ITSELF as the key, which a generated key could not be injected into. */
-    if (auto_increment && path != NULL && path_len == 0) {
-        JS_ThrowDOMException(ctx, "InvalidAccessError",
-                             "a key generator cannot be used with an empty key path");
-        goto fail_path;
+    /* "If autoIncrement is true and keyPath is an EMPTY STRING or ANY SEQUENCE (empty or otherwise), throw an
+       InvalidAccessError." Both arms name a key path §7.2's inject-a-key-into-a-value has nowhere to write a
+       generated key: the empty key path names the VALUE ITSELF, and a list names several places at once. The
+       standard's "empty or otherwise" covers a list §2.5's validity has already refused above with a
+       SyntaxError, so what reaches here is a non-empty one. */
+    if (auto_increment && !JS_IsNull(key_path)) {
+        bool uninjectable = JS_IsArray(key_path);
+
+        if (!uninjectable) {
+            size_t len = 0;
+            const char *s = JS_ToCStringLen(ctx, &len, key_path);
+
+            CHECK(s != NULL, "IndexedDB: §4.4's key path could not be read back as a string");
+            uninjectable = len == 0;
+            JS_FreeCString(ctx, s);
+        }
+        if (uninjectable) {
+            JS_ThrowDOMException(ctx, "InvalidAccessError",
+                                 "a key generator cannot be used with an empty key path or a sequence");
+            goto fail_name;
+        }
     }
 
-    store = idb_object_store_create(ctx, tx, db, name,
-                                    path != NULL ? JS_NewStringLen(ctx, path, path_len) : JS_NULL,
-                                    auto_increment);
+    /* §2.2's "if keyPath is not null, set the created object store's key path to keyPath" — the value ITSELF,
+       string or list, and not a re-derived copy of it. It is engine-owned (the union built it), so the page
+       holds no reference to what the record now names — the other half of §4.5's note, whose first sentence is
+       that the value its getter answers with "is not the same instance that was used when the object store
+       was created". CONSUMED here. */
+    store = idb_object_store_create(ctx, tx, db, name, key_path, auto_increment);
+    key_path = JS_UNDEFINED;
     /* §5.7 step 3 set this transaction's scope to the connection's object store set, and this is the write
        that keeps that true — §4.10's note: "subsequent calls to [objectStoreNames] during an upgrade
        transaction can return lists with different contents as object stores are created and deleted". */
@@ -447,16 +436,19 @@ static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val
        for, which is what the add asserts. */
     idb_transaction_handle_add(ctx, tx, handle);
     JS_FreeValue(ctx, store);
-    if (path != NULL) JS_FreeCString(ctx, path);
     JS_FreeCString(ctx, name);
     JS_FreeValue(ctx, db);
     JS_FreeValue(ctx, tx);
     return handle;
 
-fail_path:
-    if (path != NULL) JS_FreeCString(ctx, path);
+/* The key path is OWNED from the dictionary read until idb_object_store_create consumes it, so every refusal
+   after that read leaves through the same two labels — `fail_name` once the name has been taken, `fail` before
+   it. It is JS_UNDEFINED at both ends of its life (at the declaration, and again the moment the store record
+   has taken it), which is what lets one free stand for every path. */
+fail_name:
     JS_FreeCString(ctx, name);
 fail:
+    JS_FreeValue(ctx, key_path);
     JS_FreeValue(ctx, db);
     JS_FreeValue(ctx, tx);
     return JS_EXCEPTION;

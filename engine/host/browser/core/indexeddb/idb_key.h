@@ -34,9 +34,21 @@ JSValue idb_key_to_value(JSContext *ctx, JSValueConst key);
  * addresses exist belongs beside the rule that says which values are keys — and because §7.1's extract-a-key
  * will walk exactly the segments this accepts.
  *
- * `path` is UTF-8, `len` its length in bytes. The list arm of §2.5 is the CALLER's: a list is valid when it is
- * non-empty and every one of its strings passes this. */
+ * `path` is UTF-8, `len` its length in bytes. */
 bool idb_key_path_is_valid(const char *path, size_t len);
+
+/* §2.5's VALIDITY OVER THE WHOLE OF WHAT A KEY PATH CAN BE, which is the question a member actually has: its
+ * last bullet is "a NON-EMPTY LIST containing only strings conforming to the above requirements", and the
+ * value a member is handed is whatever §3.2.25's `(DOMString or sequence<DOMString>)` answered with — a string,
+ * or the ENGINE'S OWN Array of strings. Asking it here rather than in each caller is what stops the list arm
+ * being re-derived per member: §4.4's createObjectStore and §4.5's createIndex both report the same
+ * "SyntaxError" for the same reason, and the second of them is not written yet.
+ *
+ * THE EMPTINESS IS THE LIST'S OWN AND IS NOT THE STRING RULE APPLIED N TIMES: the empty STRING is a valid key
+ * path (it names the value itself), so a loop over an empty list would answer true for a list §2.5 refuses.
+ * Every entry has already been ToString'd by the sequence conversion, which is why `['a', ['b','c']]` arrives
+ * as `['a', 'b,c']` and is refused for the comma rather than for being nested. */
+bool idb_key_path_value_is_valid(JSContext *ctx, JSValueConst path);
 
 /* §2.4's COMPARE TWO KEYS — -1, 0 or 1. It is THE ordering of this standard: §2.2's list of records is sorted
    by it, §2.9's key range is bounded by it, §2.10's cursor walks in it, and §4.3's `cmp` is it, exposed. */

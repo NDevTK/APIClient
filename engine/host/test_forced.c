@@ -1318,13 +1318,32 @@ static const char *HTML =
        FINISHED (§4.3's note says so, and §5.7 step 10 is what waits), and nothing calls `commit()` — §5.9
        step 9.3 found the request list empty once the `get` handler returned. `_r.result.version` is §4.4's
        version getter over the CONNECTION, which §5.1 step 9 set to the version that was opened. */
-    "var _r = indexedDB.open('fixture', 1); var _idb = '';"
+    /* AND §2.5's LIST KEY PATH, whose whole observable surface is the `keyPath` getter. `a+b` is §4.5's
+       conversion of the store's list — Web IDL §3.2.24 makes it "a new Array object created as if by the
+       expression []", so `plain` is the assertion that it is NOT a frozen array: `FrozenArray<T>` is a
+       different parameterized type that neither the attribute's declaration (`readonly attribute any keyPath`)
+       nor §4.5's prose names. `same` is the note's identity ("it returns the same object instance every time
+       it is inspected"), which §3.2.24 alone does not give since its own steps mint a new Array per
+       conversion. And the SECOND handle, over a transaction the page opens after the upgrade, is the other
+       half of that note: `perhandle` says two handles for one store answer with two Arrays, and the `a+b` that
+       precedes it says the `push` into the first one reached no object store — "changing the properties of the
+       object has no effect on the object store". `transaction('kp')` is also the first time §3.2.25's union
+       takes its STRING arm from a page: a primitive string is not an Object, so §3.2.25 step 12.2's GetMethod
+       is never reached and the store name is not iterated into 'k','p'. */
+    "var _r = indexedDB.open('fixture', 1); var _idb = ''; var _k;"
     "_r.onupgradeneeded = function(e){"
     " var _s = _r.result.createObjectStore('s');"
     " _s.put(99, 2); var _g = _s.get(2);"
     " _idb += e.oldVersion + ':' + e.newVersion + ':' + _r.transaction.mode + ':' + _g.readyState;"
-    " _g.onsuccess = function(){ _idb += ':' + _g.result + ':' + _g.readyState; }; };"
+    " _g.onsuccess = function(){ _idb += ':' + _g.result + ':' + _g.readyState; };"
+    " _k = _r.result.createObjectStore('kp', { keyPath: ['a', 'b'] });"
+    " _idb += ':' + (Array.isArray(_k.keyPath) ? _k.keyPath.join('+') : 'notalist')"
+    "       + ':' + (_k.keyPath === _k.keyPath ? 'same' : 'fresh')"
+    "       + ':' + (Object.isFrozen(_k.keyPath) ? 'frozen' : 'plain');"
+    " _k.keyPath.push('c'); };"
     "_r.onsuccess = function(){"
+    " var _k2 = _r.result.transaction('kp').objectStore('kp');"
+    " _idb += ':' + _k2.keyPath.join('+') + ':' + (_k2.keyPath === _k.keyPath ? 'shared' : 'perhandle');"
     " fetch('/api/idbopen?v=' + _idb + ':' + _r.result.version + ':' + _r.result.name); };"
     "</script>"
     "</body></html>";
@@ -2397,6 +2416,103 @@ static void idb_revert_selftest(JSContext *ctx, JSValueConst conn, JSValueConst 
     idb_selftest_finish(ctx, tx);
 }
 
+/* INDEXED DATABASE §2.5's LIST KEY PATH — its VALIDITY, and §4.5's conversion of a store's list back out.
+ *
+ * The list arm is the one §2.5 bullet whose rule is not the string rule applied N times: "a NON-EMPTY list
+ * containing only strings conforming to the above requirements". So `[]` is refused where `['']` is accepted
+ * (the empty STRING is a valid key path, naming the value itself), and a nested list arrives already
+ * ToString'd by §3.2.20's sequence conversion — `['multi_array', ['a','b']]` is `['multi_array', 'a,b']` and is
+ * refused for the comma. Every one of these is a WPT case (keypath_invalid, keypath).
+ *
+ * AND THE CONVERSION IS A COPY, ASSERTED FROM BOTH SIDES: it is not the store's own record (a page handed that
+ * could rewrite a live store's key path), and it is not the same Array twice — Web IDL §3.2.24's steps are
+ * "let A be a new Array object created as if by the expression []", so the same-instance identity §4.5's note
+ * requires belongs to §2.2.1's HANDLE and not to this. It is EXTENSIBLE, which is the executable form of the
+ * claim that a sequence is not a FrozenArray. */
+static JSValue idb_selftest_list(JSContext *ctx, const char *const *items, uint32_t n)
+{
+    JSValue a = JS_NewArray(ctx);
+    uint32_t i;
+
+    CHECK(!JS_IsException(a), "the fixture's key-path list could not be allocated");
+    for (i = 0; i < n; i++)
+        JS_DefinePropertyValueUint32(ctx, a, i, JS_NewString(ctx, items[i]), JS_PROP_C_W_E);
+    return a;
+}
+
+static void idb_selftest_path_valid(JSContext *ctx, JSValue path, bool expect, const char *why)  /* CONSUMES */
+{
+    CHECK(idb_key_path_value_is_valid(ctx, path) == expect, why);
+    JS_FreeValue(ctx, path);
+}
+
+static void idb_key_path_selftest(JSContext *ctx, JSValueConst conn, JSValueConst db)
+{
+    static const char *const AB[] = { "a", "b" };
+    static const char *const SPACED[] = { "array with space" };
+    static const char *const EMPTY_ENTRY[] = { "" };
+    static const char *const STRINGIFIED[] = { "multi_array", "a,b" };
+    JSValue tx, store, first, second, held, entry;
+    const char *s;
+
+    idb_selftest_path_valid(ctx, JS_NewString(ctx, "a.b"), true,
+                            "§2.5: \"a string consisting of two or more identifiers separated by periods\"");
+    idb_selftest_path_valid(ctx, JS_NewString(ctx, ".a"), false,
+                            "§2.5: a leading period leaves an empty identifier, which is no key path");
+    idb_selftest_path_valid(ctx, idb_selftest_list(ctx, AB, 2), true,
+                            "§2.5's last bullet: a non-empty list of valid string key paths IS a key path");
+    idb_selftest_path_valid(ctx, idb_selftest_list(ctx, AB, 0), false,
+                            "§2.5's last bullet is a NON-EMPTY list, and the emptiness is the LIST's own rule "
+                            "— a loop over the entries answers true for the empty list, since there is no "
+                            "entry to refuse it");
+    idb_selftest_path_valid(ctx, idb_selftest_list(ctx, SPACED, 1), false,
+                            "§2.5's note — \"spaces are not allowed within a key path\" — applies to every "
+                            "entry of a list and not only to a key path spelled as one string");
+    idb_selftest_path_valid(ctx, idb_selftest_list(ctx, EMPTY_ENTRY, 1), true,
+                            "§2.5's list holds \"strings conforming to the ABOVE requirements\", the first of "
+                            "which is the empty string — WPT's keypath.any.js states what it then means: "
+                            "\"[''] uses value as [key]\"");
+    idb_selftest_path_valid(ctx, idb_selftest_list(ctx, STRINGIFIED, 2), false,
+                            "a nested list arrives already ToString'd by §3.2.20's sequence conversion, so "
+                            "['multi_array', ['a','b']] is refused for the COMMA in 'a,b' — a validity that "
+                            "looked for nesting instead would accept it");
+
+    tx = idb_selftest_tx(ctx, conn, JS_UNDEFINED, IDB_TX_VERSIONCHANGE);
+    store = idb_object_store_create(ctx, tx, db, "kp", idb_selftest_list(ctx, AB, 2), false);
+    first = idb_object_store_key_path_value(ctx, store);
+    second = idb_object_store_key_path_value(ctx, store);
+    held = idb_object_store_key_path(ctx, store);
+    CHECK(JS_IsArray(first) && JS_IsArray(second),
+          "§4.5: a list key path is \"converted as ... a sequence<DOMString> (if a list of strings)\", and Web "
+          "IDL §3.2.24 makes that an Array");
+    CHECK(JS_VALUE_GET_PTR(first) != JS_VALUE_GET_PTR(held),
+          "§4.5's keyPath answered with the object store's OWN record. \"The returned value is not the same "
+          "instance that was used when the object store was created\" and \"changing the properties of the "
+          "object has no effect on the object store\" — a page holding that record could rewrite the key path "
+          "of a live store");
+    CHECK(JS_VALUE_GET_PTR(first) != JS_VALUE_GET_PTR(second),
+          "§4.5's conversion answered the SAME Array twice. Web IDL §3.2.24's own steps mint one per "
+          "conversion, so the identity §4.5's note requires (\"the same object instance every time it is "
+          "inspected\") is the handle's cache — a conversion that memoised here would hand every handle of "
+          "this store one Array, which is the half of that note WPT's idbobjectstore_keyPath denies");
+    CHECK(JS_IsExtensible(ctx, first) == 1,
+          "§4.5's keyPath answered a NON-EXTENSIBLE Array. Web IDL §3.2.24 converts a sequence to a plain "
+          "Array; `FrozenArray<T>` is a different parameterized type (§3.2.27) that neither this attribute's "
+          "declaration (`readonly attribute any keyPath`) nor §4.5's prose names, so freezing it would be a "
+          "property of the answer that no sentence of either standard asks for");
+    entry = JS_GetPropertyUint32(ctx, first, 1);
+    s = JS_ToCString(ctx, entry);
+    CHECK(s != NULL && strcmp(s, "b") == 0,
+          "§4.5's conversion did not carry the store's key path across in order");
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, entry);
+    JS_FreeValue(ctx, held);
+    JS_FreeValue(ctx, second);
+    JS_FreeValue(ctx, first);
+    JS_FreeValue(ctx, store);
+    idb_selftest_finish(ctx, tx);
+}
+
 /* WHAT A HANDLE ANSWERS AFTER THE REVERT — the name of a handle is checked with, and against, the name of the
    store it is a handle for. */
 static void idb_selftest_handle_named(JSContext *ctx, JSValueConst handle, const char *expect, const char *why)
@@ -2636,6 +2752,7 @@ static void idb_store_selftest(JSContext *ctx)
     /* The upgrade transaction ends the way §5.4's commit task ends it, so the records above are the state the
        next transaction finds — which is what §5.5 step 2 has to put back. */
     idb_selftest_finish(ctx, tx);
+    idb_key_path_selftest(ctx, conn, db);
     idb_revert_selftest(ctx, conn, db, store);
     /* §5.5 step 3 runs on the state step 2 has just put back, so §5.8's fixture runs on the state this one
        left — the database at the 0 it was created with, and the store back under the name it had. */
@@ -3090,10 +3207,18 @@ int main(int argc, char **argv) {
     /* §4.8.5: an inserted iframe got a child navigable, its proxy is STABLE across reads, and a read through it
        resolved to the peer's answer. */
     int ifnav_tt = (strstr(js, "\"/api/iframenav\"") && strstr(js, "ifnav"));
-    /* §2.7 + §2.8: a request placed against an active transaction was returned pending, completed in its own
-       task with the value §6.2 answered, fired `success` at the page's listener with its done flag already
-       set, and the transaction then committed itself and fired `complete`. */
-    int idbreq_tt = (strstr(js, "\"/api/idbreq\"") && strstr(js, "readonly:pending:99:done"));
+    /* §5.1's open through to `success`, §2.7 + §2.8's request inside it, and §2.5's LIST key path over the
+       store the same upgrade creates — the marker's own sentence-by-sentence account is beside the statement
+       that builds it.
+       THIS ROW READ AN ENDPOINT NOTHING EMITS. It was written for the `idbTransaction`/`idbGet` host edges the
+       fixture used before `indexedDB.open` existed, and the commit that replaced them with the page's own door
+       deleted both the edges and the `/api/idbreq` they fetched — and left this line reading it, and reading a
+       `readonly:` marker the upgrade transaction never produced. So it has been 0 for every full-document run
+       since, which is CLAUDE.md's greppable tell exactly: a name READ in one place and WRITTEN in none. The
+       whole marker is named here rather than a fragment of it, because a fragment is what let the first half
+       of this string go on looking right after the second half stopped existing. */
+    int idbopen_tt = (strstr(js, "\"/api/idbopen\"") &&
+                     strstr(js, "0:1:versionchange:pending:a+b:same:plain:99:done:a+b:perhandle:1:fixture"));
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -3373,7 +3498,7 @@ int main(int argc, char **argv) {
         { "nav-open", navopen_tt, 1 }, { "proxy-sop", sop_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 }, { "timer-order", timer_tt, 1 }, { "iframe-nav", ifnav_tt, 1 },
         /* DOC_FULL: the statement is in the full document only. The minimal one is the per-change MEMORY gate
            and every branch added to it multiplies its fork tree, which is the whole reason it is small. */
-        { "idb-request", idbreq_tt, DOC_FULL },
+        { "idb-open", idbopen_tt, DOC_FULL },
         /* DOC_MIN ONLY, and that is a MEASUREMENT, not a preference. The whole-map constraint copy that used to
            kill this run at the FIRST script is gone (concolic.c is a segment chain now), and the walk runs — but
            the flow walking it is never outranked, so it holds the thread and the frontier behind it never

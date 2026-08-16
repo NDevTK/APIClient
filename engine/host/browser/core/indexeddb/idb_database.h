@@ -106,6 +106,23 @@ JSValue idb_object_store_name(JSContext *ctx, JSValueConst store);
 JSValue idb_object_store_key_path(JSContext *ctx, JSValueConst store);
 bool    idb_object_store_uses_key_generator(JSContext *ctx, JSValueConst store);
 
+/* §4.5's `keyPath` GETTER'S CONVERSION: "return this's object store's key path, or null if none. The key path
+ * is converted as a DOMString (if a string) or a sequence<DOMString> (if a list of strings), per [WEBIDL]."
+ *
+ * IT IS A COPY AND THAT IS THE POINT — the standard's own note is "the returned value is not the same instance
+ * that was used when the object store was created ... changing the properties of the object has no effect on
+ * the object store", and the record above is state a page must not be handed a reference to. Web IDL §3.2.24
+ * is the conversion and it is exactly what a list gets here: "let A be a new Array object created as if by the
+ * expression []", then CreateDataPropertyOrThrow for each entry. A PLAIN Array — extensible, writable,
+ * configurable. It is NOT a frozen array: `FrozenArray<T>` is a different parameterized type (§3.2.27) that
+ * neither this attribute's declaration (`readonly attribute any keyPath`) nor the prose above names, and
+ * freezing what the spec says is a sequence would be a property no page can otherwise observe on an Array.
+ * The identity the note DOES require ("it returns the same object instance every time it is inspected") is the
+ * HANDLE's, not the store's — WPT's idbobjectstore_keyPath asserts both halves, that one handle answers with
+ * one Array and that two handles for one store answer with two — so the cache belongs to §2.2.1's handle and
+ * this entry mints. OWNED. */
+JSValue idb_object_store_key_path_value(JSContext *ctx, JSValueConst store);
+
 /* §4.4's `deleteObjectStore` last step, "Destroy store", and the question every member of §4.5 asks first
    ("if store has been DELETED, throw an InvalidStateError"). A destroyed store leaves its database's set and
    is MARKED, because a handle the page already holds goes on naming it — §4.5's own note is that "although
