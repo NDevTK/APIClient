@@ -12,6 +12,17 @@
 
 enum { IT_GET_ITERFN = 0, IT_CALL_ITERFN, IT_GET_NEXT, IT_CALL_NEXT, IT_GET_DONE, IT_GET_VALUE };
 
+/* See idl_iter.h. GetMethod's steps 2 to 4, over the answer its step 1 already obtained. */
+int idl_get_method(JSContext *ctx, JSValueConst method, const char *what)
+{
+    if (JS_IsUndefined(method) || JS_IsNull(method)) return 0;   /* step 2 */
+    if (!JS_IsFunction(ctx, method)) {                           /* step 3 */
+        JS_ThrowTypeError(ctx, "%s is not callable", what);
+        return -1;
+    }
+    return 1;                                                    /* step 4 */
+}
+
 void iter_cursor_init(IterCursor *c)
 {
     memset(c, 0, sizeof *c);
@@ -60,7 +71,12 @@ int iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst sr
         if (r > 0) return r;
         if (r < 0) return -1;
         in = JS_UNDEFINED;
-        if (!JS_IsFunction(ctx, c->iterfn)) {
+        /* GetIterator step 1.b is a SECOND step past GetMethod, and only here: this cursor iterates
+           unconditionally, so an ABSENT @@iterator is its own TypeError, while §3.2.25's union reads the same
+           0 as "take the other arm". The cursor keeps `iterfn` on either throw — its `visit` names it. */
+        r = idl_get_method(ctx, c->iterfn, "the value's @@iterator");
+        if (r < 0) return -1;
+        if (r == 0) {
             JS_ThrowTypeError(ctx, "the value is not iterable");
             return -1;
         }

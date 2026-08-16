@@ -434,8 +434,13 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                              out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
-        UC_GOTO(hdr, s, JS_IsFunction(ctx, itf) ? UC_SEQ_PAIR : UC_KEY_PAIR);
+        /* §6.2's init is a union with a sequence member, so Web IDL §3.2.25 step 12.2 chooses the arm and it is
+           `? GetMethod(V, %Symbol.iterator%)` — a PRESENT non-callable is a TypeError there, never the record
+           arm. `new URLSearchParams({[Symbol.iterator]: 1})` reached that arm and serialized an empty query. */
+        r = idl_get_method(ctx, itf, "a URLSearchParams init's @@iterator");
         JS_FreeValue(ctx, itf);
+        if (r < 0) return -1;
+        UC_GOTO(hdr, s, r ? UC_SEQ_PAIR : UC_KEY_PAIR);
         return JS_STEP_YIELD;
     }
 

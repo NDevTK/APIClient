@@ -966,16 +966,16 @@ static int idl_union_seq_arm(JSContext *ctx, JSIdlArgsState *s, JSValueConst v, 
         *pin = JS_UNDEFINED;
         if (r > 0) return r;      /* parked INSIDE the page's @@iterator getter or its Proxy trap */
         if (r < 0) return -1;
-        /* ECMAScript's GetMethod, which is the operation §3.2.25 step 12.2 names and not a plain [[Get]]:
-           undefined and null are "there is no method" and fall through to the string arm, and anything else
-           that is not callable is a TypeError rather than a quiet second arm. */
-        if (JS_IsUndefined(method) || JS_IsNull(method)) {
+        /* ECMAScript's GetMethod, which is the operation §3.2.25 step 12.2 names and not a plain [[Get]]. Its
+           three steps after the read are stated ONCE, in idl_iter.c: undefined and null are "there is no
+           method" and fall through to the string arm, and anything else that is not callable is a TypeError
+           rather than a quiet second arm. The copy that stood here was the same three lines, and the two other
+           unions in the tree each spelled the question a third way. */
+        r = idl_get_method(ctx, method, "the value's @@iterator");
+        if (r <= 0) {
             JS_FreeValue(ctx, method);
+            if (r < 0) return -1;
             s->uni_phase = IDL_UNI_STRING;
-        } else if (!JS_IsFunction(ctx, method)) {
-            JS_FreeValue(ctx, method);
-            JS_ThrowTypeError(ctx, "the value's @@iterator is not callable");
-            return -1;
         } else {
             /* THE STATE IS COMPLETE BEFORE THE METHOD IS HANDED OVER: the list is placed on the machine
                first, so a failure here tears down through the same `visit` that would have named it, and the

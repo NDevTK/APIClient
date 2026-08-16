@@ -771,25 +771,25 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         in = JS_UNDEFINED;
         f->phase = FILL_ITER_ASKED;
     }
-    /* WHICH ARM: Web IDL picks `sequence<sequence<ByteString>>` over `record<ByteString, ByteString>` by whether
-       the init is ITERABLE, and that is a [[Get]] of @@iterator — an accessor or a Proxy trap away from being
-       the page's code, so it is a request like every other read here. It was JS_IsArray, which is a DIFFERENT
-       question: `new Headers(new Map(...))` is iterable and is not an array, so it took the record arm, found no
-       own string keys, and produced an EMPTY header list — the request would have gone out missing exactly the
-       headers the page set. */
+    /* WHICH ARM: Web IDL §3.2.25 step 12.2 picks `sequence<sequence<ByteString>>` over
+       `record<ByteString, ByteString>` by `? GetMethod(V, %Symbol.iterator%)`, whose [[Get]] is an accessor or a
+       Proxy trap away from being the page's code — so it is a request like every other read here. It was
+       JS_IsArray, which is a DIFFERENT question: `new Headers(new Map(...))` is iterable and is not an array, so
+       it took the record arm, found no own string keys, and produced an EMPTY header list — the request would
+       have gone out missing exactly the headers the page set. Then it was the [[Get]] with `JS_IsFunction` on
+       the result, which is a different question AGAIN: GetMethod makes a PRESENT non-callable a TypeError, so
+       `new Headers({[Symbol.iterator]: 1})` walked the record arm — quietly, and to an empty list — where the
+       standard throws. The three steps that decide that are ECMAScript's and are stated once, in idl_iter.c. */
     if (f->phase == FILL_ITER_ASKED) {
         JSValue itf;
         r = step_getprop_run(ctx, h, init, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR), in, &itf, out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
         in = JS_UNDEFINED;
-        if (JS_IsFunction(ctx, itf)) {
-            JS_FreeValue(ctx, itf);
-            f->phase = FILL_SEQ_PAIR;
-        } else {
-            JS_FreeValue(ctx, itf);
-            f->phase = FILL_KEY_PAIR;
-        }
+        r = idl_get_method(ctx, itf, "a Headers init's @@iterator");
+        JS_FreeValue(ctx, itf);
+        if (r < 0) return -1;
+        f->phase = r ? FILL_SEQ_PAIR : FILL_KEY_PAIR;
     }
 
     /* THE SEQUENCE ARM: `sequence<sequence<ByteString>>`. The outer cursor yields one PAIR per turn and the

@@ -21,6 +21,26 @@ typedef struct {
     int     done;
 } IterCursor;
 
+/* ECMAScript 7.3.10 GetMethod MINUS its step 1, the `? GetV(value, propertyKey)`, which is the ONE step of it
+   that cannot live in a helper: the read is a request in this engine, so it is issued by the caller's own step
+   machine and what is shared is the DECISION made on its answer. The other three steps ARE that decision, and
+   they are not the question "is this a function":
+     - step 2, "If func is either undefined or null, return undefined" — there is NO method, which is not an
+       error and not a second arm;
+     - step 3, "If IsCallable(func) is false, throw a TypeError exception" — NOT a quiet fall-through.
+   Web IDL §3.2.25's sequence arm is `Let method be ? GetMethod(V, %Symbol.iterator%)` and a union chooses that
+   arm by it, so a union spelling the test as `Get(V, @@iterator) is not undefined` took its OTHER arm for a
+   value the standard rejects: `new Headers({[Symbol.iterator]: 1})` walked the record arm and produced an empty
+   header list where a browser throws. ECMAScript's GetIterator adds a step of its own (an ABSENT method is also
+   a TypeError there), which is why a caller that iterates unconditionally reads a `0` as its own failure.
+   `method` is the value the [[Get]] answered and stays the CALLER'S to release, on every one of the three
+   outcomes — the sequence arm hands the same value on to iter_cursor_init_from_method, which consumes it.
+   `what` NAMES THE READ, not the property — GetMethod is defined over any P, and its callers here read
+   @@iterator, so the subject is spelled out by the one that made the read ("a Headers init's @@iterator") and
+   the message is about the value ("... is not callable").
+   Returns 1 (callable: the method), 0 (there is no method), or -1 with step 3's TypeError live. */
+int idl_get_method(JSContext *ctx, JSValueConst method, const char *what);
+
 void iter_cursor_init(IterCursor *c);
 void iter_cursor_visit(JSContext *ctx, IterCursor *c, JSStepVisit *v);
 void iter_cursor_release(JSContext *ctx, IterCursor *c);
