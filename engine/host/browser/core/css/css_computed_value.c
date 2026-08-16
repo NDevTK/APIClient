@@ -776,7 +776,7 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
                   "is the one member that is not a `<color>`: css-backgrounds-3 §7.2 makes it a comma-separated "
                   "list of shadows, each two to four LENGTHS plus a colour plus an optional `inset`, and the "
                   "used value resolves the colour of each (a shadow with no colour is `currentcolor`) and "
-                  "absolutizes each length. Every piece it needs exists — `css_cv_used_color_value` below "
+                  "absolutizes each length. Every piece it needs exists — `css_cv_used_color_value` above "
                   "resolves the colour and css_length.h absolutizes the lengths — and what does not is the "
                   "GRAMMAR: `<shadow>#` is a list this file does not parse and lexbor's registry hands back as "
                   "one serialized string. BUILD the `<shadow>` list as its own component, since css-backgrounds "
