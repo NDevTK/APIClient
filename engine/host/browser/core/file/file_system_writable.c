@@ -865,15 +865,34 @@ void fs_writable_free(JSRuntime *rt)
     g_id_write = g_id_seek = g_id_truncate = -1;
     /* THE ATOMS ARE GIVEN BACK, and the sentence that used to stand here — "the atoms and the class id belong
        to a runtime that is going away with them" — was HALF true and that is what made it dangerous. It is
-       true of the class id, which is a registration and not a reference. It is false of an atom: JS_NewAtom
-       takes a COUNTED reference in the runtime's own table, and JS_FreeRuntime walks that table and reports
-       every id still holding one. So this function nulled five handles and dropped none of the references,
-       and four of them (`__fileSystemWritableSlots`, `type`, `data`, `position` — `size` is one of quickjs's
-       own built-in atoms) were named by the atom walk on 118 of the 190 files of `css/cssom`.
+       true of the class id, which is a registration and not a reference. It is false of an INTERNED name:
+       JS_NewAtom takes a COUNTED reference in the runtime's own table, and JS_FreeRuntime walks that table and
+       reports every id still holding one. This function nulled five handles and dropped no reference at all,
+       and FOUR of the five — `__fileSystemWritableSlots`, `type`, `data`, `position` — were named by the atom
+       walk on 118 of the 190 files of `css/cssom`.
        IT COULD NOT HAVE DONE OTHERWISE: this release took `void`, so it had no runtime to free them against.
        That is the same defect as the one that kept element_free off core/platform.h's release column, one
        level down — a row whose release cannot express what the component holds is a row that silently holds
        it — and the fix is the same one: take the JSRuntime the column already has.
+
+       `size` IS THE FIFTH AND IT NEVER LEAKED, WHICH IS WORTH THE PARAGRAPH BECAUSE THE WRONG RULE IS THE
+       TEMPTING ONE. It is one of quickjs's own built-in atoms (`quickjs-atom.h`'s `DEF(size, "size")`), and the
+       whole atom API is refcount-INVARIANT on those: `__JS_NewAtom`'s found-in-hash branch increments only
+       `if (!__JS_AtomIsConst(i))`, and JS_DupAtom/JS_DupAtomRT/JS_FreeAtom/JS_FreeAtomRT each open with the
+       same test and return. So `JS_NewAtom(ctx, "size")` takes NOTHING, its refcount is whatever JS_InitAtoms
+       set and nothing moves it, and the line below for it is a test and a return. The commit that wrote this
+       release justified that line as "JS_NewAtom took a reference and a release must give it back", which is
+       true of the four above and FALSE of this one.
+       IT IS STILL CALLED, and deliberately, because the two candidate rules are not equally safe. "Free every
+       name you interned" is correct for every atom and requires the caller to know nothing — the guard lives
+       in the API, not here. "Free every name you interned EXCEPT the built-in ones" would make this release's
+       correctness depend on a table inside the submodule that is synced to upstream, so an upstream edit
+       removing `DEF(size, …)` would turn a deliberate omission into a silent leak with nothing to say so. A
+       no-op call is the cheaper of the two mistakes by a wide margin.
+       WHAT MUST NOT BE GENERALISED FROM THIS FILE is the reverse reading: a built-in atom SURVIVING to
+       JS_FreeRuntime's census is not a missing JS_FreeAtom and never can be — it is a leaked JSValue, because
+       `__JS_AtomToValue` is the one path that hands the struct out as a string and dups it. The census says so
+       itself now.
        The prototypes are the realms' and go with their contexts. */
     JS_FreeAtomRT(rt, g_slot_key);
     JS_FreeAtomRT(rt, g_atom_type);
