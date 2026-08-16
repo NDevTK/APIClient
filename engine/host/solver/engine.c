@@ -1399,6 +1399,42 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     sib->dom_base = dom_cow_fork();
     sib->dec_blob = dec_blob;
     sib->pin_blob = pin_blob;
+    /* AND SO DOES THE @S SUBSTITUTION, which is the same sentence about a different identity: this sibling
+       resumes the same candidate session's frame from the fork point, in a heap where the injected payload has
+       ALREADY been read, and it carries on into the other arm of the branch. Three fields were missing here and
+       the failure was silent in both directions at once.
+         - solve_flow_begin installs the running flow's substitution UNCONDITIONALLY (its own comment says why),
+           so a sibling with no `cand_src` re-reads the attacker source as the ordinary concolic value from its
+           very next switch-in. Its world is then half-injected: the prefix ran under the payload, the suffix
+           does not, and nothing anywhere describes that state.
+         - solve_flow_end records a PoC only for a flow that HAS a `cand_src`, so a breakout that fires in the
+           sibling's arm — which is precisely the arm a gate was hiding — fired and was never reported. §@S says
+           only firing proves it; this dropped the proof.
+         - endpoint_suppress is keyed on the same field, so the sibling recorded @H endpoints built out of a
+           fabricated breakout string as if they were observed. §Attacker-sources: COMPUTE OR SHAPE, NEVER
+           INVENT.
+       `cand_fired` DOES travel, unlike at the cold tier where dropping it is what keeps a finding an
+       observation: a fire before the branch is a thing BOTH timelines performed, and record_sink dedups the two
+       reports. `cand_verifying` does not, for the reason it does not cross the tier either — solve_flow_begin
+       re-derives it from `cand_src` on every switch-in. */
+    if (parent->cand_src) {
+        DCHECK(parent->cand_payload && parent->cand_sink,
+               "a candidate session forked holding only part of its substitution — the source, the payload and "
+               "the sink class are one identity and the arm would inject nothing or be unable to say what fired");
+        sib->cand_src = strdup(parent->cand_src);
+        sib->cand_payload = strdup(parent->cand_payload);
+        CHECK(sib->cand_src && sib->cand_payload, "engine: OOM forking an @S candidate session's substitution");
+        sib->cand_sink = parent->cand_sink;   /* solve.c's static table text; not owned, so not copied */
+        sib->cand_fired = parent->cand_fired;
+    }
+    /* A FIELD ADDED TO THE CANDIDATE IDENTITY IS AN OBLIGATION HERE, and this is what says so — the same shape
+       as the queued job's realm below, and for the same reason: the three fields are copied out one by one
+       precisely so a fourth is visible, which is exactly how these three came to be missing. */
+    DCHECK(!!sib->cand_src == !!parent->cand_src && !!sib->cand_payload == !!parent->cand_payload &&
+           (sib->cand_sink != NULL) == (parent->cand_sink != NULL),
+           "an arm of an @S candidate session left the fork without the substitution that makes it one — it "
+           "would explore the other arm as an ordinary flow inside a heap the payload has already been read "
+           "into, report its requests as observed endpoints, and be unable to record a fire");
     /* THE ANSWER TOKEN TRAVELS: this sibling resumes the same operation's program from the fork point and
        completes it in its own timeline, so it owes the same peer an answer of its own. That is the multiplicity
        §7.2.5.1 has when a document's state is its flows — N answers under one token is a thing this fork is

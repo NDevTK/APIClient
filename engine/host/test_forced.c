@@ -1466,14 +1466,22 @@ static const char *HTML_MIN =
  * unstarted boot flow standing on nothing (engine/solvergate.mjs's `park` schedule). Every other arm of
  * cold_resume — the segment rebuild, the hex decode, the sink-class re-bind, the probe address — had never run.
  *   - A CONCOLIC BRANCH (`cfg.admin`), so flows stand on FROZEN DECISION SEGMENTS: the park then writes 's'
- *     records and the 'f' records that name them by ordinal, and the resume walks a chain instead of a stub.
- *   - A LOOP, so a flow is PREEMPTED mid-body and the residue holds a FRAMED flow — the one whose resume is a
- *     replay of its arms rather than a restart, which is the claim §Time-travel-resume actually makes.
+ *     records and the ordinals that name them, and the resume walks a chain instead of a stub.
+ *   - A LOOP, so the flows are PREEMPTED mid-body on their back-edges and the recorded path is one that was
+ *     suspended and rebuilt many times before it was written down.
  *   - AN @S SINK (`eval`), so solve.c seeds candidate sessions and the park writes 'c' records. They are the
  *     only records that carry ATTACKER TEXT, so they are the only path through park_hex/park_unhex, and their
  *     sink class is the only field that crosses the tier by NAME and has to be re-bound to a live pointer.
- *   - AN ENDPOINT, which is what makes this origin enter the endpoint surface — and that is the event that
- *     seeds the DISCOVERY probes whose whole identity is an address ('d').
+ *   - AN ENDPOINT, which is what makes this origin enter the endpoint surface at all.
+ *
+ * WHAT IT DOES NOT PRODUCE, said here because two claims that used to stand in this list were wrong about this
+ * tree and a reader would have gone looking for the arm that was missing. Candidates are seeded ONLY when the
+ * frontier drains with the host owing nothing (engine.c's stall seam), so at any moment a 'c' record exists
+ * there is no exploration flow and no unanswered probe left in the frontier: the residue this document produces
+ * is 's' + 'c', never 'f' and never 'd'. A park document holding those alongside a candidate is not a tuning
+ * question and not a bigger document — it is a PARTIAL self-park writing the exploration tail early and the
+ * candidates later into the same appendable document, which is the tier's own second mode and has no host seam
+ * yet (only the allocator's reclaim edge reaches cold_park_flow).
  * It is deliberately SMALL in every other respect: one fork and a six-iteration loop, so the document drains in
  * a second session rather than becoming a frontier this fixture cannot finish measuring. */
 static const char *HTML_COLD =
@@ -3053,15 +3061,27 @@ static char *tf_park_load(const char *path) {
  * writes every member of the frontier, so what this decides is when the residue leaves memory and never how
  * much of it there is.
  *
- * IT IS A CONDITION AND NOT A STEP COUNT, because a step count picks a moment whose CONTENTS nobody knows —
- * and what a residue is worth is entirely its contents. The two facts named here are the two that decide which
- * arms of the recipe grammar cross:
- *   - THE SEARCH HAS OPENED (`solve_candidate_count()`), so @S candidate sessions are members of the frontier.
- *     They are the only records that carry attacker text, hence the only path through park_hex/park_unhex and
- *     the only sink class that has to be re-bound from a NAME to a live pointer on the way back.
- *   - AND THE FRONTIER IS WAITING ON THIS HOST (`engine_host_owes`), which is the moment AFTER those candidates
- *     have run: each has re-entered the document, taken the branch — so it stands on a FROZEN DECISION SEGMENT
- *     and the park writes 's' records and the ordinals that name them — and then parked on a reply.
+ * IT ASKS ABOUT THE RESIDUE, WHICH IS THE THING IT IS DECIDING ABOUT, and the version that did not is the whole
+ * reason the read half of the cold tier had still never executed in any process. It was
+ *     solve_candidate_count() > 0 && engine_host_owes()
+ * and the second conjunct is FALSE BY CONSTRUCTION at the only point this seam is ever consulted: run_scheduler
+ * asks the hook at the TOP of its loop, and the bottom of the previous iteration paid the provider and then
+ * asserted, in two DCHECKs of its own, that `engine_pending_urls()` and `engine_host_requests()` are BOTH empty.
+ * engine_host_owes() walks for exactly the entries those two joins list, so it answered 0 every time it was
+ * asked, for every document, in every session. Nothing said so: an unsatisfiable predicate and one that is
+ * merely not true yet produce the identical run, and the @COLDPARK census reports zeroes for both. That is the
+ * defaulted-field defect one level up — a question whose answer is fixed, read as a measurement.
+ *
+ * SO THE FACTS ARE ASKED OF THE COLD TIER (solver/cold.h's ColdPreview), which is the component that owns what
+ * a residue IS, and the two named here are the two that decide which arms of the recipe grammar cross:
+ *   - A CANDIDATE SESSION IS A MEMBER OF THE FRONTIER (`cands`). They are the only records that carry attacker
+ *     text, hence the only path through park_hex/park_unhex, and their sink class is the only field that
+ *     crosses the tier by NAME and has to be re-bound to a live pointer on the way back.
+ *   - AND SOMETHING IN IT STANDS ON A FROZEN DECISION SEGMENT (`deep`), which is what makes the park write 's'
+ *     records and the ordinals that name them at all. It is what tells the moment AFTER the candidates have run
+ *     — each has re-entered the document and taken the branch — from the moment they were SEEDED, when they are
+ *     members standing on nothing and a park writes `c-,…` and not one segment. The old condition could not
+ *     express that difference at all, which is why it reached for the host's register to stand in for it.
  *
  * WHAT THIS MOMENT CANNOT ALSO CONTAIN, stated because it is structural rather than a shortcoming of the
  * condition: a DISCOVERY PROBE ('d'). Candidates are seeded only when the frontier drains with the host owing
@@ -3069,7 +3089,10 @@ static char *tf_park_load(const char *path) {
  * every probe has been answered and finished by the time the first candidate exists. A park holding both is
  * not a tuning question, it is a different park. */
 static int fixture_want_park(void) {
-    return solve_candidate_count() > 0 && engine_host_owes();
+    ColdPreview would;
+
+    cold_park_preview(&would);
+    return would.cands > 0 && would.deep > 0;
 }
 
 int main(int argc, char **argv) {
@@ -3646,10 +3669,22 @@ int main(int argc, char **argv) {
     int cold_resumed_any   = cold_resume_path && (cr.flows + cr.cands + cr.probes) > 0;
     int cold_resumed_segs  = cold_resume_path && cr.segs > 0;
     int cold_resumed_cand  = cold_resume_path && cr.cands > 0;
-    /* AND THE REPLAY ACTUALLY EXPLORED. A resumed flow re-runs the document under its recorded arms and forks
-       normally the moment the recipe runs out, so BOTH arms of the one branch must be in the session that
-       resumed — a session that rebuilt its flows and then went nowhere would satisfy every count above. */
-    int cold_arms = (strstr(js, "\"/api/cold/admin\"") && strstr(js, "\"/api/cold/public\"")) ? 1 : 0;
+    /* AND THE REPLAY REACHED ITS SINK AGAIN — the strongest thing a resumed residue can be asked to say, and a
+       correction of what this row used to ask. It read BOTH ARMS of the branch out of the @H surface, and that
+       is a statement about a program this session does not run: the moment fixture_want_park picks is the moment
+       the @S search is live, and candidates are seeded only once the exploring flows have drained, so every
+       member of the frontier at that instant is a CANDIDATE SESSION. solve_flow_begin suppresses endpoint
+       recording for exactly those, because a request built out of an injected breakout is an @S artifact and not
+       an observed endpoint — so a residue of candidates emits no endpoints BY DESIGN, and the old row could
+       only ever have passed because a candidate's fork used to drop its substitution and leave one arm behaving
+       like an exploration flow (engine_sibling_assemble now carries it).
+       WHAT THIS ASSERTS IS THE WHOLE ROUND TRIP AT ONCE, and nothing weaker satisfies it: the payload crossed as
+       hex and came back through park_unhex, the sink class crossed as a NAME and was re-bound to solve.c's own
+       table pointer by solve_resume_candidate, the flow replayed its recorded arms over the segments cold_resume
+       rebuilt, re-reached the eval sink and X9 FIRED there — which §@S says is the only thing that proves a PoC.
+       A session that rebuilt its flows and then went nowhere reports nothing here. */
+    int cold_fired = (strstr(js, "\"sink\":\"eval\"") && strstr(js, "{state}.code")
+                      && strstr(js, "';X9()//")) ? 1 : 0;
     /* The four answers, so a row states which program its fact came from. The values are chosen so that the
        rows already written keep their meaning: 0 was "full only" and 1 was "the minimal subset", which is BOTH.
        The two cold sessions are two ANSWERS and not one, because they are two programs' worth of statements:
@@ -3712,7 +3747,7 @@ int main(int argc, char **argv) {
         { "park-cand", cold_park_cand, DOC_PARK },
         /* SESSION TWO: what the resume REBUILT out of it, and that the rebuilt frontier then explored. */
         { "resumed", cold_resumed_any, DOC_RESUME },       { "resumed-segs", cold_resumed_segs, DOC_RESUME },
-        { "resumed-cand", cold_resumed_cand, DOC_RESUME }, { "resumed-arms", cold_arms, DOC_RESUME },
+        { "resumed-cand", cold_resumed_cand, DOC_RESUME }, { "resumed-fired", cold_fired, DOC_RESUME },
     };
     /* WHICH ROWS THIS INVOCATION CARRIES. DOC_BOTH means "the full document and the minimal one" — the two that
        were the whole world when it was named — so a COLD session runs neither it nor them: every one of those
@@ -3737,10 +3772,12 @@ int main(int argc, char **argv) {
     if (cold_doc)
         printf("%s\n", h_ok
             ? (cold_park_path
-                ? "PASS: the frontier was written to this host's cold-tier store as recipes carrying every "
-                  "record kind — resume it with --cold-resume over the same path"
-                : "PASS: the parked residue was rebuilt into the ONE frontier and the resumed flows explored "
-                  "both arms of the branch they were suspended past")
+                ? "PASS: the frontier was written to this host's cold-tier store as recipes — @S candidate "
+                  "sessions standing on the decision segments they forked at, which is every record kind this "
+                  "document can produce (see HTML_COLD for why 'f' and 'd' need a partial park and not a bigger "
+                  "document) — resume it with --cold-resume over the same path"
+                : "PASS: the parked residue was rebuilt into the ONE frontier, and a resumed @S candidate "
+                  "replayed its recorded arms back to the sink it was suspended in front of and FIRED there")
             : "FAIL: the cross-session round trip did not exercise the tier — read the 0 rows above and the "
               "@COLDPARK/@COLDRESUME census beside them");
     else

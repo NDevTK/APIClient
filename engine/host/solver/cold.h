@@ -170,6 +170,34 @@ typedef struct {
 } ColdParked;
 void cold_parked(ColdParked *out);
 
+/* WHAT A PARK TAKEN NOW WOULD WRITE — the same question ColdParked answers about a park that has happened,
+ * asked BEFORE one is taken, because that is the question a Level-1 eviction actually is. §scheduler puts the
+ * decision in the HOST ("the host orders live per-page engines by best-flow weight… an engine self-parks its
+ * residue to the IDB cold tier under pressure"), so the host has to see the residue in the RECIPE's own terms.
+ *
+ * A HOST THAT INSTEAD ASKS ONE OF THE ENGINE'S REGISTERS IS ASKING ABOUT SOMETHING ELSE, AND ONE DID — which is
+ * the whole reason this exists rather than each host writing its own walk. test_forced.c's park hook was
+ *     solve_candidate_count() > 0 && engine_host_owes()
+ * and the seam is consulted at exactly one point: the top of run_scheduler's loop, immediately after the
+ * provider has been paid, where that same loop's two asserts state that BOTH host registers are empty. So the
+ * second conjunct was FALSE BY CONSTRUCTION wherever the question is asked, the park was never once taken, and
+ * the entire read half of this file — park_unhex, solve_resume_candidate, the 's'/'c'/'d' rebuilds — had still
+ * never executed in any process. A predicate whose answer is fixed reads exactly like one that is merely not
+ * true yet, and nothing in the run says which: the @COLDPARK census reports zeroes either way.
+ *
+ * IT SHARES THE RECORD-KIND SELECTION WITH cold_park_flow, so the two cannot answer differently, and cold_park
+ * asserts the pair against each other at every park. `deep` is the flows whose record will NAME A SEGMENT —
+ * exactly the ones that make a park write 's' records at all — and it answers for the RUNNING flow too, whose
+ * decision state is live in decide.c rather than in its blob (the same split cold_census makes, and the reason
+ * this cannot be a hand-written loop over `f->dec_blob` in a host: at the moment the host is asked, one flow's
+ * blob is NULL because it holds the thread, not because it stands on nothing). Pure measurement: it takes no
+ * reference, mutates nothing, and assigns no ordinal. */
+typedef struct {
+    long flows, cands, probes;   /* the records a park taken now would write, per kind */
+    long deep;                   /* …of those, the ones standing on a frozen decision segment */
+} ColdPreview;
+void cold_park_preview(ColdPreview *out);
+
 /* …AND THE SAME DOCUMENT AS THE JSON ARRAY the result document carries, rendered from the records on demand —
    "[]" when there are none. IndexedDB is what the trusted zone has, so the array is what crosses to it; the
    render is where "no record needs JSON escaping" is asserted, once, instead of being trusted separately by

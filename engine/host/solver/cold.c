@@ -285,9 +285,9 @@ static void park_rec_cand(const Flow *f, long id)
            "an @S candidate was parked missing part of its substitution — the source, the payload and the sink "
            "class are one identity, and a record holding two of the three resumes a flow that injects nothing "
            "or cannot say what it fired");
-    DCHECK(f->disc_url == NULL,
-           "a flow is both an @S candidate and a discovery probe — those are two different identities seeded "
-           "by two different places, and whichever record kind is written would drop the other one");
+    /* THE DISJOINTNESS OF THE THREE IDENTITIES IS NOT ASSERTED HERE ANY MORE — it moved to park_kind_of, which
+       is the one place that CHOOSES between them and is therefore the one place asked about every flow rather
+       than only about the flows that already reached this writer. */
     /* THE SINK NAME IS THE ONE VARIABLE FIELD LEFT IN THE GRAMMAR'S OWN CHARSET, so it is asserted rather than
        hexed: it comes from solve.c's closed table and stays readable at the one point a human ever looks at
        this document. A ',' in it would move every field after it; a ';' would split the record in two. */
@@ -381,6 +381,56 @@ static long park_emit_chain(const void *seg)
     return id;
 }
 
+/* WHICH RECORD KIND A FLOW IS — asked in ONE place, because the park and the preview both have to answer it and
+   a second copy of a three-way choice is a third answer waiting to happen. The three identities are the whole of
+   what a flow can be to this file, and they are DISJOINT: that used to be asserted inside park_rec_cand, where
+   it was only ever asked of a flow that had already been selected as a candidate, so a probe carrying a
+   candidate's substitution would have been written as a probe with nothing to say so. Asked here it covers every
+   member of the frontier and every caller. */
+typedef enum { PARK_KIND_PROBE, PARK_KIND_CAND, PARK_KIND_FLOW } ParkKind;
+
+static ParkKind park_kind_of(const Flow *f)
+{
+    DCHECK(f->disc_url == NULL || f->cand_src == NULL,
+           "a flow is both an @S candidate and a discovery probe — those are two different identities seeded "
+           "by two different places, and whichever record kind is written would drop the other one");
+    if (f->disc_url) return PARK_KIND_PROBE;
+    if (f->cand_src) return PARK_KIND_CAND;
+    return PARK_KIND_FLOW;
+}
+
+/* DOES THIS FLOW'S RECORD NAME A SEGMENT — i.e. is it one of the flows that makes a park write 's' records at
+   all. It is the same question cold_park_flow asks one line before it writes (`f->dec_blob ? decide_blob_seg
+   : NULL`), asked of the RUNNING flow as well, and that second half is the reason a host may not write this
+   loop itself: decide.c keeps the running flow's evolving vector in its own globals and flow_switch_in FREES
+   its blob, so at the instant the host is consulted exactly one member has a NULL `dec_blob` for a reason that
+   has nothing to do with its path. cold_census makes the identical split for the identical reason. */
+static int park_flow_deep(const Flow *f)
+{
+    long e = 0, b = 0;
+
+    if (f->dec_blob) return decide_blob_seg(f->dec_blob) != NULL;
+    if (f == flow_running()) { decide_live_stats(&e, &b); return e > 0; }
+    return 0;   /* a flow that has not run, or ran and froze an empty chain: its record carries `-` */
+}
+
+void cold_park_preview(ColdPreview *out)
+{
+    const Flow *f;
+    int i;
+
+    DCHECK(out != NULL, "the cold tier was asked what a park would write into nothing");
+    memset(out, 0, sizeof *out);
+    for (i = 0; (f = flow_at(i)) != NULL; i++) {
+        switch (park_kind_of(f)) {
+        case PARK_KIND_PROBE: out->probes++; break;
+        case PARK_KIND_CAND:  out->cands++;  break;
+        case PARK_KIND_FLOW:  out->flows++;  break;
+        }
+        if (park_flow_deep(f)) out->deep++;
+    }
+}
+
 /* PARK ONE FLOW — the primitive, and the whole-frontier park below is the loop over it. See cold.h. */
 void cold_park_flow(Flow *f)
 {
@@ -456,24 +506,29 @@ void cold_park_flow(Flow *f)
        that URL. A resumed one re-issues the GET, which is not a weaker resume than the replay every other
        record gets: §Time-travel-resume says a resumed flow "re-derives example VALUES from CURRENT sources", and
        for this flow the fetch IS the work, so the residue comes back reading TODAY's published surface. */
-    if (f->disc_url) {
+    /* THE SAME THREE-WAY CHOICE THE PREVIEW MAKES, made by the same function — it was an if/else chain here and
+       the preview would have been a second copy of it, which is how the two ends of one round trip come to
+       disagree about what a flow is. */
+    switch (park_kind_of(f)) {
+    case PARK_KIND_PROBE:
         DCHECK(!f->started && f->dec_blob == NULL,
                "a discovery probe was parked carrying a decision path — a probe compiles no program and so can "
                "reach no branch, which means this flow ran something it has no business running and its record "
                "would resume it as a probe with a path nothing will replay");
         park_rec_url(f->val, f->disc_url);
         g_parked_census.probes++;
-    } else if (f->cand_src) {
-        /* AN @S CANDIDATE PARKS AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand. It is asked about after
-           the probe and before the plain flow because those three are the whole of what a flow's identity can
-           be, and each pair is asserted disjoint where it is written rather than left to this order. */
+        break;
+    case PARK_KIND_CAND:
+        /* AN @S CANDIDATE PARKS AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand. */
         park_rec_cand(f, id);
         g_parked_census.cands++;
-    } else {
+        break;
+    case PARK_KIND_FLOW:
         if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", f->val);
         else        snprintf(rec, sizeof rec, "f%ld,%.17g", id, f->val);
         park_rec(rec);
         g_parked_census.flows++;
+        break;
     }
     f->paged = 1;   /* its recipe exists: flow_release may now let its parked continuation go (flow.h) */
 }
@@ -482,6 +537,14 @@ void cold_park(void)
 {
     Flow *f;
     int i, wseg = 0, wsegf = 0;
+    /* WHAT THIS PARK IS ABOUT TO WRITE, AND WHAT IT DID — the two-sided half of the preview's contract. The
+       host DECIDED to evict on the strength of the preview, so the residue it gets has to be the residue it was
+       shown; the census ACCUMULATES across the several parks a session may take (a partial self-park writes a
+       tail and the whole-frontier park writes the rest into the same document), which is why the comparison is
+       against a delta and not against a total. */
+    ColdPreview would;
+    ColdParked before, after;
+    long deep_written = 0;
 
     /* AN EMPTY FRONTIER WRITES NOTHING, AND NOTHING IS A POSITIVE ANSWER — "[]" tells the host this document is
        fully explored and DELETES its cold entry. That is the right answer for a frontier that drained and the
@@ -503,7 +566,24 @@ void cold_park(void)
            "Build the cross-instance park: a foreign segment travels with the WORLD's name (solver/world.h), "
            "not with this document's flows, and the offscreen is what re-routes it to the instance that "
            "rebuilds the peer");
-    for (i = 0; (f = flow_at(i)) != NULL; i++) cold_park_flow(f);
+    cold_park_preview(&would);
+    cold_parked(&before);
+    for (i = 0; (f = flow_at(i)) != NULL; i++) {
+        if (park_flow_deep(f)) deep_written++;
+        cold_park_flow(f);
+    }
+    cold_parked(&after);
+    /* THE RESIDUE IS THE ONE THE HOST WAS SHOWN. Not a restatement of the loop above: the preview walks the
+       frontier and the park writes RECORDS, so this is where "one record per member, and of the kind the host
+       was told" is stated. It fires on a member that left between the two walks, on a kind added to one
+       selection and not the other, and on a cold_park_flow that returned without writing. */
+    DCHECK(after.flows - before.flows == would.flows &&
+           after.cands - before.cands == would.cands &&
+           after.probes - before.probes == would.probes &&
+           deep_written == would.deep,
+           "the park wrote a different residue from the one its own preview described — the host evicted this "
+           "engine on the strength of that description, so whatever it is storing is not what it was told it "
+           "was storing, and the difference is per record KIND rather than a count it could notice");
 }
 
 const char *cold_park_recipes(void)
