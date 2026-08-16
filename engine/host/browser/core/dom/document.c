@@ -1037,13 +1037,14 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
             JS_FreeCString(ctx, qname);
             return JS_EXCEPTION;
         }
-        el = lxb_dom_element_create(lxb_dom_interface_document(d->dom),
-                                    (const lxb_char_t *)local, strlen(local),
-                                    (const lxb_char_t *)ns, ns ? strlen(ns) : 0,
-                                    prefix_len ? (const lxb_char_t *)qname : NULL, prefix_len,
-                                    NULL, 0, false);
-        DCHECK(el != NULL, "createElementNS produced no element for a name the spec accepts — a page building "
-                           "its DOM would silently build nothing and every query after it would answer null");
+        /* §4.5's storage step, and NOT lxb_dom_element_create: that entry interns the namespace and the local
+           name through lexbor's case-folding hashes, so this method's two string arguments came back out of
+           `namespaceURI` and `localName` lowercased. element.c states which standard says each is a different
+           name; here the only thing to say is that the element is created from what the page passed. */
+        el = element_create_ns(lxb_dom_interface_document(d->dom),
+                               ns, ns ? strlen(ns) : 0,
+                               local, strlen(local),
+                               prefix_len ? qname : NULL, prefix_len);
         if (ns_in) JS_FreeCString(ctx, ns_in);
     }
     JS_FreeCString(ctx, qname);
@@ -1755,12 +1756,8 @@ static JSValue js_doc_set_html_member(JSContext *ctx, JSValueConst this_val, JSV
            graphics that a renderer reads it in front of. */
         el = doc_first_child_ns(de, LXB_NS_SVG, "title");
         if (!el) {
-            lxb_dom_element_t *made =
-                lxb_dom_element_create(lxb_dom_interface_document(d->dom),
-                                       (const lxb_char_t *)"title", 5,
-                                       (const lxb_char_t *)"http://www.w3.org/2000/svg", 26,
-                                       NULL, 0, NULL, 0, false);
-            CHECK(made != NULL, "document.title=: the SVG title element could not be created");
+            lxb_dom_element_t *made = element_create_ns(lxb_dom_interface_document(d->dom),
+                                                        "http://www.w3.org/2000/svg", 26, "title", 5, NULL, 0);
             el = lxb_dom_interface_node(made);
             dom_cow_note_created(el);
             if (de->first_child) dom_cow_insert_before(de->first_child, el);

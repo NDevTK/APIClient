@@ -75,5 +75,14 @@ lxb_dom_element_t *element_of_value(JSValueConst v);
    strings into the caller's buffers; `*ns` is NULL for an element in no namespace. */
 void element_ns_and_local(lxb_dom_element_t *el, const char **ns, const char **local,
                           char *nsbuf, size_t nscap, char *lobuf, size_t locap);
+/* DOM §4.5 "create an element internal"'s storage step — "Set element's namespace to namespace, namespace
+   prefix to prefix, local name to localName". The WRITER whose reader is the function above, which is why the
+   two are declared together: what the standard calls "as given" is a property of how those three strings are
+   interned, and lexbor's own element creation interns all three CASE-FOLDED. See element.c for the
+   measurement. `ns` and `prefix` are NULL when there is none (§1.4's null, not the empty string); all three
+   slices are borrowed and none is NUL-terminated. Never returns NULL — an allocation failure is fatal. */
+lxb_dom_element_t *element_create_ns(lxb_dom_document_t *doc, const char *ns, size_t ns_len,
+                                     const char *local, size_t local_len,
+                                     const char *prefix, size_t prefix_len);
 
 #endif
