@@ -23,8 +23,14 @@
 
 /* DOM §1.4 "valid element local name", the five steps exactly. Note that it is the ONLY one of the three that
    is an algorithm rather than a character set, and that it permits U+003D (=), which an attribute local name
-   does not — §1.4 was deliberately loosened to accept every name the HTML PARSER can produce, so a name the
-   XML productions reject (`1abc`, `<`, `a:b`) is valid here and setAttribute does not throw for it. */
+   does not — §1.4's stated intention is "to allow any name that is possible to construct using the HTML PARSER,
+   plus some additional possibilities", so a name XML 1.0 §2.3's `Name` production rejects (`a=b`, `a<b`, `A`
+   followed by U+00D7) is valid here and setAttribute does not throw for it. The three examples that stood here
+   were each WRONG in a way this file's own steps decide: `1abc` and `<` both fail step 3, which admits only
+   U+003A, U+005F and U+0080 and above once step 2's ASCII-alpha branch is not taken, and `a:b` is a perfectly
+   good Name because §2.3 requires a processor to accept the colon as a name character. The two predicates are
+   ORDERED — every Name is a valid element local name, never the reverse — and core/xml/xml_name.h, which owns
+   the `Name` production the DOM references for createProcessingInstruction, states that ordering from its side. */
 bool dom_valid_element_local_name(const char *name, size_t len);
 /* DOM §1.4 "valid namespace prefix": length >= 1, and no ASCII whitespace, U+0000, U+002F (/) or U+003E (>).
    Note what is NOT there: U+003D (=), which an attribute local name forbids and a prefix does not. */

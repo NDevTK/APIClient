@@ -60,6 +60,7 @@
 #include "core/dom/slot.h"
 #include "core/dom/document_type.h"
 #include "core/dom/dom_implementation.h"
+#include "core/xml/xml_name.h"   /* §4.13 step 1's `Name` production is XML's, referenced by the DOM */
 #include "core/idl_args.h"
 #include "core/realm.h"
 
@@ -895,10 +896,25 @@ static JSValue js_doc_create_xml_node(JSContext *ctx, JSValueConst this_val, int
     } else {
         target = JS_ToCStringLen(ctx, &tlen, argv[0]);
         if (!target) return JS_EXCEPTION;
+        /* STEP 1 of §4.13's "initialize a ProcessingInstruction node", which this algorithm reaches through
+           "create a processing instruction". It is XML 1.0 §2.3's `Name` production — the DOM REFERENCES that
+           production (its step links https://www.w3.org/TR/xml/#NT-Name) rather than restating it, and its own
+           §1.4 predicates in core/dom/names.h are a different, deliberately looser set that would accept `0`
+           and `\A` here. core/xml/xml_name.h owns the production for the same reason: every name an XML parser
+           scans is it. `xml:fail` IS a legal target — §2.3 requires a processor to accept the colon as a name
+           character, and narrowing it to an NCName is the namespace layer's job, not this one's.
+           It runs BEFORE the "?>" test below because that is the order the two steps are written in, and the
+           order decides which of the two DOMExceptions a page sees when both are wrong. */
+        if (!xml_name_is_name(target, tlen)) {
+            JS_FreeCString(ctx, target);
+            return JS_ThrowDOMException(ctx, "InvalidCharacterError",
+                                        "a processing instruction target must match the XML Name production");
+        }
     }
     data = JS_ToCStringLen(ctx, &dlen, argv[magic == 0 ? 0 : 1]);
     if (!data) { if (target) JS_FreeCString(ctx, target); return JS_EXCEPTION; }
-    /* STEP 2 in both algorithms: the one sequence the node's own serialization cannot survive. */
+    /* createCDATASection's STEP 2, and "initialize a ProcessingInstruction node"'s: the one sequence the
+       node's own serialization cannot survive. */
     if (magic == 0 ? (strstr(data, "]]>") != NULL) : (strstr(data, "?>") != NULL)) {
         JS_FreeCString(ctx, data);
         if (target) JS_FreeCString(ctx, target);
