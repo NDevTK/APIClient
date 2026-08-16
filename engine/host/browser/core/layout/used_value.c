@@ -450,12 +450,15 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *opposite, CssLength le
                   "margin's used value is NOT its computed value — the spec ignores the specified "
                   "`margin-right` (`margin-left` when the containing block's `direction` is `rtl`) and "
                   "recomputes it to make the constraint equation true. ONE thing is missing and it is which "
-                  "margin: `direction` is an INHERITED property and this engine's cascade has no inheritance "
-                  "step, so the containing block's computed `direction` cannot be read. The VALUE is no longer "
-                  "missing — the recomputed margin is the containing block's width minus the other six terms, "
-                  "and §10.1's chain answers that width now — so this crash is waiting on the cascade's "
-                  "defaulting and inheritance step (css_computed_value.c's CSS-wide-keyword DFAIL names the "
-                  "same one) and on nothing in this component");
+                  "margin: it is the containing block's computed `direction`, and `direction` is not among the "
+                  "properties css_computed_value.c models, so there is nothing to read it through. THE "
+                  "CASCADE'S INHERITANCE IS NO LONGER THE BLOCKER — CSS Cascade §7 is built "
+                  "(core/css/css_defaulting.h) and it knows `direction` inherits — and neither is the VALUE: "
+                  "the recomputed margin is the containing block's width minus the other six terms, and "
+                  "§10.1's chain answers that width. What is left is one row: css-writing-modes gives "
+                  "`direction` the `Computed value: specified keyword` line, so it is a row of "
+                  "css_computed_models' as-specified arm and a row of css_shorthand_complete_for, and this "
+                  "crash then becomes a branch");
         return len.px;
     }
     /* CSS 2.1 §8.3: a percentage margin "is calculated with respect to the WIDTH of the generated box's

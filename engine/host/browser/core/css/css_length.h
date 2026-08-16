@@ -18,9 +18,10 @@
  * happens once, before any used value is asked for — and each family resolves against a different thing:
  *
  *   A FONT-RELATIVE unit (`em`, `ex`, `ch`, `rem`, `cap`, `ic`, `lh`, `rlh`) resolves against a COMPUTED FONT
- *   SIZE, and this engine's cascade has no font-size chain at all — no inheritance step (css_computed_value.c's
- *   CSS-wide-keyword DFAIL states that gap), so no element has a computed `font-size` for one to resolve
- *   against. It CRASHES by name. media_query.c resolves `em` against the INITIAL font size and is right to:
+ *   SIZE, and no element has one: `font-size` is not among the properties css_computed_value.c models, and its
+ *   `Computed value:` line is the one that cannot be the as-specified arm (a percentage, an `em` and the
+ *   `larger`/`smaller` keywords each resolve against the PARENT's computed value). CSS Cascade §7's inheritance
+ *   step is built and is what would carry that chain a node at a time. It CRASHES by name. media_query.c resolves `em` against the INITIAL font size and is right to:
  *   Media Queries §4 evaluates a query before any element exists to have a font size, so the initial value is
  *   the spec's own answer there and is NOT a stand-in for the missing chain. On an ELEMENT it would be one,
  *   which is why this file crashes instead of borrowing that number.

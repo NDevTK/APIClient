@@ -45,15 +45,23 @@
  * value:" line says and what the length-valued ones' does not. The gap is not a judgement call to be made per
  * property by hand — every property definition in every CSS spec carries that line, `@webref/css` publishes it
  * as a `computedValue` field, and engine/idlgen.mjs already reads that package's IDL sibling. Wiring the CSS
- * half in the same way turns this file's default arm from an assumption into an assertion. Until then the one
- * case that is CERTAINLY wrong crashes: a CSS-wide keyword (`inherit`/`initial`/`unset`/`revert`) as the
- * cascade's winner is CSS Cascade §7's DEFAULTING step, and this engine's cascade has no inheritance at all. */
+ * half in the same way turns this file's default arm from an assumption into an assertion.
+ *
+ * BOTH ENTRIES RUN CSS Cascade §7's DEFAULTING FIRST, and that step is core/css/css_defaulting.h's. What the
+ * cascade answers is the value of the declaration that WON, which for almost every property on almost every
+ * element is no declaration at all; §7 is what turns that into the property's initial value or into the value
+ * the PARENT computed, and §7.3's CSS-wide keywords are what let a declaration ask for either by name. The
+ * fetch is performed HERE rather than there because the inherited value is the parent's COMPUTED value and
+ * this file is what computes one — and because it comes in two shapes: `char *` for a keyword-valued property,
+ * `CssLength` for a length-valued one, whose absolute arm carries the environment fact it derives from and
+ * would lose it if it were handed down the tree as text. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_VALUE_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_VALUE_H
 #include <stdbool.h>
 
 #include <lexbor/dom/dom.h>
 
+#include "core/css/css_defaulting.h"
 #include "core/css/css_length.h"
 #include "quickjs.h"
 
@@ -77,15 +85,6 @@ bool css_computed_models(const char *name);
 
 /* Is it a LENGTH — so `css_computed_length` is the entry and `css_computed_value` is not? */
 bool css_computed_models_length(const char *name);
-
-/* Is `value` one of CSS Cascade §7.3's CSS-WIDE KEYWORDS — `inherit`, `initial`, `unset`, `revert`,
-   `revert-layer`? Each is the ENTIRE value of a declaration when present, so this is an equality and not a
-   search, and each makes the value a product of §7's DEFAULTING step rather than of the declaration.
-   EXPORTED because a SHORTHAND carrying one "sets all of its sub-properties to that keyword" (CSS Cascade
-   §Shorthand Properties), which core/css/css_shorthand.h has to know BEFORE it tries the shorthand's own
-   grammar: `border: initial` is not a `<line-width> || <line-style> || <color>`, and a keyword that reached
-   that grammar would be classified as one of its terms. */
-bool css_wide_keyword(const char *value);
 
 /* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, which is not the
    parent element when a `display: contents` ancestor sits between them. OWNED, or NULL at the root. Exported

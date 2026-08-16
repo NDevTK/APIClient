@@ -11,13 +11,21 @@
 #include "quickjs.h"
 
 void cssom_init(JSContext *ctx);
-/* THE CASCADE'S WINNER for `name` on `el` — inline, then this flow's author rules, then css-cascade-5 §6.5's
-   author presentational hint origin (core/css/css_presentational_hints.h), then the UA sheet, then the
-   property's initial value — as text. It is the SPECIFIED value: the declaration that won, before the
-   property's own `Computed value:` line has been applied to it, which is core/css/css_computed_value.h's job
-   and is who this exists for. OWNED: the caller frees. NULL only for a property no layer declares and that has
-   no initial value in lexbor's registry (a custom property nobody set). */
+/* CSS Cascade §6's CASCADED VALUE for `name` on `el` — inline, then this flow's author rules, then
+   css-cascade-5 §6.5's author presentational hint origin (core/css/css_presentational_hints.h), then the UA
+   sheet — as text. OWNED: the caller frees.
+   NULL WHEN NO DECLARATION WON, which is the common case and a real answer rather than a missing one: §7.1 and
+   §7.2 are both written for it ("unless the cascade results in a value"), and telling it apart from a declared
+   initial value is what lets an INHERITED property ask the parent instead. §7's DEFAULTING is the step that
+   acts on it (core/css/css_defaulting.h), and the property's `Computed value:` line is applied after that
+   (core/css/css_computed_value.h) — three steps, in that order, and this is the first. */
 char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name);
+
+/* CSS Cascade §7.1's INITIAL VALUE of `name` — the property's own `Initial:` line, out of lexbor's registry and
+   out of this component's table of the eight border longhands the registry does not carry. OWNED; NULL for a
+   property with no initial value anywhere (a custom property nobody set), which §6.6.1 answers as the empty
+   string. Exported for §7's defaulting step, which is the only thing that reaches for it. */
+char *cssom_initial_value(const char *name);
 /* CSSOM §6.6.1's two prototypes for ONE realm — declared into core/realm.h's list, run once per realm. */
 void cssom_install_proto(JSContext *ctx);
 void cssom_free(JSRuntime *rt);

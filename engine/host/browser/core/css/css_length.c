@@ -108,7 +108,7 @@ static const struct { const char *unit; double px; } CSS_ABSOLUTE[] = {
 };
 
 /* §6.1.1's FONT-RELATIVE units, listed so the crash can name the ONE component whose absence covers all of
-   them — a computed `font-size`, which needs the cascade's inheritance step. */
+   them — a computed `font-size`, which is a length-valued property css_computed_value.c does not yet model. */
 static const char *const CSS_FONT_RELATIVE[] = {
     "em", "ex", "ch", "rem", "cap", "ic", "lh", "rlh",
 };
@@ -199,11 +199,13 @@ static CssPx css_len_viewport(JSContext *realm, const char *unit, double k)
     DFAIL("`vi` and `vb` are 1% of the viewport IN THE BOX'S INLINE AND BLOCK AXIS (css-values §6.1.2.2), so "
           "which of the two ICB dimensions they are a percentage of is a fact about the element's WRITING MODE "
           "— css-writing-modes §6's `writing-mode` and `direction`, whose mapping from logical to physical this "
-          "engine does not have and both of whose properties are INHERITED by a cascade with no inheritance "
-          "step (css_computed_value.c's CSS-wide-keyword DFAIL names the same one). BUILD the cascade's "
-          "defaulting and inheritance step, then css-writing-modes §6's logical-to-physical mapping, which the "
-          "logical box-model properties in CSSOM §9's own used-value list need before §10 can be asked about "
-          "them either");
+          "engine does not have. Both properties are INHERITED, and CSS Cascade §7's step that would carry "
+          "them is built now (core/css/css_defaulting.h) — what is missing is that neither is among the "
+          "properties css_computed_value.c models, so there is no computed `writing-mode` and no computed "
+          "`direction` to read. BOTH ARE `Computed value: specified keyword` lines, so each is a row of "
+          "css_computed_models' as-specified arm plus a row of css_shorthand_complete_for. BUILD the two rows, "
+          "then css-writing-modes §6's logical-to-physical mapping, which the logical box-model properties in "
+          "CSSOM §9's own used-value list need before §10 can be asked about them either");
     return css_px(0.0);
 }
 
@@ -304,15 +306,18 @@ CssLength css_length_parse(JSContext *realm, const char *value)
     if (css_len_in(CSS_FONT_RELATIVE, CSS_LEN_N(CSS_FONT_RELATIVE), unit)) {
         DFAIL("a FONT-RELATIVE length (`em`, `ex`, `ch`, `rem`, …) reached CSS Values §6.1.1's absolutization. "
               "Each of them resolves against the element's own COMPUTED `font-size` (`rem` against the root "
-              "element's), and this engine's cascade has NO INHERITANCE STEP — css_style_declaration.c resolves "
-              "inline, then the author rules, then the UA sheet, then the property's initial value, and never "
-              "takes a value from the parent — so `font-size` is an INHERITED property that no element has a "
-              "computed value for. media_query.c resolves `em` against the INITIAL font size and is right to: "
-              "Media Queries §4 evaluates a query before any element exists to have one, so there the initial "
-              "value IS the spec's answer. Borrowing that number here would make it a stand-in for the missing "
-              "chain. BUILD the cascade's defaulting and inheritance step (css_computed_value.c's CSS-wide-"
-              "keyword DFAIL names the same one), then `font-size`'s own computed value, which is where the "
-              "percentage-of-the-parent and the `smaller`/`larger` keywords are resolved");
+              "element's), and no element in this engine has a computed `font-size` for one to resolve "
+              "against. THE CASCADE'S INHERITANCE STEP IS NO LONGER THE BLOCKER — CSS Cascade §7 is built "
+              "(core/css/css_defaulting.h), it knows `font-size` is an inherited property, and it takes the "
+              "parent's computed value for every property css_computed_value.c models. `font-size` is not one "
+              "of them, and it is the one whose `Computed value:` line cannot be the as-specified arm: "
+              "css-fonts-4 makes it an ABSOLUTE LENGTH derived from the parent's, so a percentage, `em`, "
+              "`larger`, `smaller` and the seven `<absolute-size>` keywords each resolve against the value one "
+              "node up. BUILD `font-size` as a length-valued row of css_computed_models — the chain then IS "
+              "§7.2's, one node at a time, with `css_computed_length` carrying it. media_query.c resolves `em` "
+              "against the INITIAL font size and is right to: Media Queries §4 evaluates a query before any "
+              "element exists to have one, so there the initial value IS the spec's answer, and borrowing that "
+              "number here would make it a stand-in for the chain");
         return out;
     }
     if (css_len_is_viewport(unit)) {

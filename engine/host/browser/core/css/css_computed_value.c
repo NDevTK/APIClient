@@ -9,11 +9,13 @@
 
 #include "check.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_defaulting.h"
 #include "core/css/css_length.h"
 #include "core/css/css_property_applies.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
+#include "core/dom/shadow_root.h"
 #include "core/frame/viewport.h"
 #include "core/layout/used_value.h"
 
@@ -29,31 +31,62 @@ static bool css_cv_is(const char *v, const char *kw)
     return v != NULL && strcmp(v, kw) == 0;
 }
 
-/* CSS Cascade §7.3's CSS-WIDE KEYWORDS. See css_computed_value.h for the contract and for the second caller. */
-bool css_wide_keyword(const char *v)
-{
-    static const char *const WIDE[] = { "inherit", "initial", "unset", "revert", "revert-layer" };
-    unsigned i;
-    size_t n;
-
-    while (*v && isspace((unsigned char)*v)) v++;
-    for (n = strlen(v); n > 0 && isspace((unsigned char)v[n - 1]); n--) { }
-    for (i = 0; i < sizeof(WIDE) / sizeof(WIDE[0]); i++) {
-        size_t k = strlen(WIDE[i]);
-        size_t j;
-        if (k != n) continue;
-        for (j = 0; j < k; j++)
-            if ((char)tolower((unsigned char)v[j]) != WIDE[i][j]) break;
-        if (j == k) return true;
-    }
-    return false;
-}
-
 /* "The ROOT ELEMENT" — the element whose parent is the Document itself. CSS Display §2.8 gives it its own
    computed-value rules, and CSSOM VIEW §6 asks the same question of the same node. */
 static bool css_is_root_element(const lxb_dom_node_t *n)
 {
     return n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT;
+}
+
+/* ---- CSS Cascade §7's DEFAULTING, over the two shapes a computed value comes in ---------------------------- */
+
+/* §7.2's PARENT ELEMENT, "on the flattened element tree": the parent node when it is an element, and the HOST
+   when it is a SHADOW ROOT — a shadow tree's children inherit across the boundary, which is why §7.2 states the
+   flat tree rather than the node tree. NULL is the case §7.2 answers itself: "for the root element, which has
+   no parent element, the inherited value is the initial value", and an element whose parent is a Document or a
+   plain DocumentFragment, or which has no parent at all, has no parent element in exactly that sense. */
+static lxb_dom_element_t *css_cv_parent_element(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *p = lxb_dom_interface_node(el)->parent;
+
+    if (p == NULL) return NULL;
+    if (shadow_root_is(p)) return shadow_root_host(p);
+    if (p->type != LXB_DOM_NODE_TYPE_ELEMENT) return NULL;
+    return lxb_dom_interface_element(p);
+}
+
+/* CSS Cascade §7's SPECIFIED VALUE of a property whose value this file carries as TEXT — the cascaded value, or
+   §7.1's initial value, or §7.2's inherited value, decided by core/css/css_defaulting.h. OWNED, and NULL only
+   for a property that no layer declares AND that has no initial value to fall to (a custom property nobody
+   set), which is §6.6.1's empty string and not a hole.
+   §7.2's INHERITED VALUE IS THE PARENT'S COMPUTED VALUE, and this asks for it through the entry that derives
+   one where there is one: a property this file models goes to `css_computed_value`, and a property it does not
+   takes its computed value to BE its specified value (css_computed_value.h says why that is the majority of
+   CSS's own `Computed value:` lines and what ends the assumption), which is this same entry one node up. */
+static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
+{
+    char *cascaded = cssom_cascaded_value(el, name);
+    lxb_dom_element_t *parent;
+
+    switch (css_defaulting_of(name, cascaded)) {
+    case CSS_DEFAULTING_DECLARED:
+        return cascaded;
+    case CSS_DEFAULTING_INHERITED:
+        free(cascaded);
+        DCHECK(!css_computed_models_length(name),
+               "a LENGTH-valued property was inherited through the entry that answers TEXT. §7.2's inherited "
+               "value is the parent's COMPUTED value, which for one of these is an ABSOLUTE LENGTH carrying "
+               "the environment fact it derives from — serializing it here to hand it down the tree is exactly "
+               "the drop css_computed_value.h describes, and `css_computed_length` is the entry that carries "
+               "it whole");
+        parent = css_cv_parent_element(el);
+        if (parent == NULL) break;
+        return css_computed_models(name) ? css_computed_value(parent, name) : css_cv_specified(parent, name);
+    case CSS_DEFAULTING_INITIAL:
+        free(cascaded);
+        break;
+    }
+    return cssom_initial_value(name);
 }
 
 /* ---- css-overflow §3.1's computed value ------------------------------------------------------------------ */
@@ -82,14 +115,14 @@ static bool overflow_value(const char *v)
 static char *computed_overflow(lxb_dom_element_t *el, const char *name, char *spec)
 {
     bool xaxis = strcmp(name, "overflow-x") == 0;
-    char *other = cssom_cascaded_value(el, xaxis ? "overflow-y" : "overflow-x");
+    char *other = css_cv_specified(el, xaxis ? "overflow-y" : "overflow-x");
     const char *self_v, *other_v;
     char *out;
 
     DCHECK(other != NULL,
-           "the cascade produced no value for the other overflow axis — lexbor's property registry carries "
-           "`overflow-x` and `overflow-y` with an initial value of `visible`, so the cascade's last layer "
-           "always answers and a NULL here is a cascade that stopped early");
+           "§7's defaulting produced no SPECIFIED value for the other overflow axis — lexbor's property "
+           "registry carries `overflow-x` and `overflow-y` with an initial value of `visible`, so §7.1's "
+           "arm always answers and a NULL here is a defaulting step that stopped early");
     self_v = overflow_alias(spec);
     other_v = overflow_alias(other);
     DCHECK(overflow_value(self_v) && overflow_value(other_v),
@@ -148,9 +181,9 @@ char *css_box_parent_display(const lxb_dom_node_t *n)
     const lxb_dom_node_t *p;
 
     for (p = n->parent; p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT; p = p->parent) {
-        char *d = cssom_cascaded_value(lxb_dom_interface_element((lxb_dom_node_t *)p), "display");
+        char *d = css_cv_specified(lxb_dom_interface_element((lxb_dom_node_t *)p), "display");
 
-        DCHECK(d != NULL, "the cascade produced no `display` for an ancestor element — the UA layer answers "
+        DCHECK(d != NULL, "§7's defaulting produced no `display` for an ancestor element — the UA layer answers "
                           "`inline` for every element it does not name, so this cannot be unset");
         if (strcmp(d, "contents") != 0) return d;
         free(d);
@@ -226,7 +259,7 @@ static JSContext *css_cv_realm(lxb_dom_element_t *el)
    core/layout/used_value.h, and `auto` is a keyword no cascade step turns into a number.
    THE ABSOLUTIZATION IS WHERE THE FONT AND THE VIEWPORT ENTER, and core/css/css_length.h is the one component
    that knows it: `50vw` becomes a number out of §10.1's initial containing block and carries that rectangle's
-   environment fact the whole way to the page, and `2em` crashes naming the inheritance step it needs. */
+   environment fact the whole way to the page, and `2em` crashes naming the computed `font-size` it needs. */
 static CssLength computed_length(JSContext *realm, char *spec)
 {
     CssLength len = css_length_parse(realm, spec);
@@ -286,14 +319,11 @@ static const struct { const char *kw; double px; } CSS_LINE_WIDTH[] = {
  * is that same number, so getComputedStyle answers `0px` either way. The reverse choice satisfies only one.
  * THE STYLE IS THEREFORE READ FIRST, which is why these two longhands cannot be derived independently and why
  * `border-style` had to be modelled before `border-width` could be. */
-static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, char *spec)
+static bool css_border_width_off(lxb_dom_element_t *el, int side)
 {
     char sibling[32];
-    int side = css_border_side_of(name, "width");
     char *style;
     bool off;
-    CssLength len;
-    unsigned i;
 
     DCHECK(side >= 0, "the `border-*-width` computed-value rule was asked for a property that is not one of "
                       "the four — css_computed_models and this switch are one list and have come apart");
@@ -301,11 +331,36 @@ static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, 
     style = css_computed_value(el, sibling);
     off = css_cv_is(style, "none") || css_cv_is(style, "hidden");
     free(style);
+    return off;
+}
+
+/* §8.5.1's SECOND CLAUSE applied to a width that is already a number — the half of the rule that is about THIS
+   element rather than about the declaration, which is why an INHERITED width takes it too: a child of a
+   `border-top-width: 4px` parent that declares `border-top-style: none` computes 0, and the parent's 4 is not
+   what it inherits. The snap is not re-applied: the parent's value is already a whole number of device pixels
+   at the ratio of the document the two share (a parent and a child are one document by construction), and
+   §6's algorithm is the identity on a length that has been through it. */
+static CssLength css_border_width_inherited(lxb_dom_element_t *el, int side, CssLength inherited)
+{
+    if (css_border_width_off(el, side)) return css_cv_px(css_px(0.0));
+    DCHECK(inherited.kind == CSS_LENGTH_ABSOLUTE,
+           "a `border-*-width` inherited a computed value that is not an ABSOLUTE LENGTH — §3.3's grammar "
+           "admits no percentage and no keyword past the computed value, and the arm below produces one of "
+           "§3.3's three pinned numbers or an absolutized length and nothing else");
+    return inherited;
+}
+
+static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, char *spec)
+{
+    int side = css_border_side_of(name, "width");
+    CssLength len;
+    unsigned i;
+
     /* §8.5.1's second clause is a NUMBER and not a snapped one: "0 if the border style is none or hidden" —
        zero is an integer number of device pixels at every ratio, so it is the same 0 on every display and it
        derives from no environment fact. That is the initial state of almost every element, which is why the
        device pixel ratio does not reach most of the tree. */
-    if (off) { free(spec); return css_cv_px(css_px(0.0)); }
+    if (css_border_width_off(el, side)) { free(spec); return css_cv_px(css_px(0.0)); }
     for (i = 0; i < sizeof(CSS_LINE_WIDTH) / sizeof(CSS_LINE_WIDTH[0]); i++) {
         if (strcmp(CSS_LINE_WIDTH[i].kw, spec) != 0) continue;
         free(spec);
@@ -358,13 +413,10 @@ bool css_computed_models(const char *name)
            css_border_side_of(name, "style") >= 0;
 }
 
-/* THE CASCADE'S WINNER, plus the three conditions every computed-value rule below is derived under. Both
-   entries go through it, so neither can be reached with a property whose shorthands are unexpanded or with a
-   CSS-wide keyword nothing can default. OWNED: the rule that takes it frees it. */
-static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
+/* THE THREE CONDITIONS EVERY COMPUTED-VALUE RULE BELOW IS DERIVED UNDER. Both entries go through it, so
+   neither can be reached with a property this component does not model or whose shorthands are unexpanded. */
+static void css_cv_modelled(lxb_dom_element_t *el, const char *name)
 {
-    char *spec;
-
     DCHECK(el != NULL && name != NULL, "a computed value was asked for with no element or no property name");
     DCHECK(css_computed_models(name),
            "a computed value was asked for a property this component does not derive. It answers a NAMED set "
@@ -377,35 +429,56 @@ static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
            "css_shorthand.c, so the cascade it reads may never have looked at the declaration that set it — a "
            "`margin: 0` two lines above a `margin-top` read is invisible, and the answer is a real number with "
            "nothing to say it is the initial value. Record the complete set in css_shorthand_complete_for");
-    spec = cssom_cascaded_value(el, name);
-    DCHECK(spec != NULL,
-           "the cascade produced nothing for a property this component models — every one of them is in "
-           "lexbor's registry with an initial value, so the cascade's last layer always answers");
-    DCHECK(!css_wide_keyword(spec),
-           "the cascade's winner is a CSS-WIDE KEYWORD (inherit / initial / unset / revert), and CSS Cascade "
-           "§7's DEFAULTING step is what turns one into a value: `inherit` takes the parent element's computed "
-           "value, `initial` the property's initial value, `unset` whichever of those the property's "
-           "inheritance says. css_style_declaration.c's cascade has NO inheritance step at all — not for the "
-           "keyword and not for an inherited property nobody declared — so there is nothing here to default "
-           "with. BUILD the defaulting step: the property's inherited-ness comes from its own spec "
-           "definition (@webref/css publishes it beside the `computedValue` line), and the parent's computed "
-           "value is this same entry one node up");
-    return spec;
 }
 
 CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
 {
-    char *spec;
+    int side;
+    char *cascaded;
 
     DCHECK(css_computed_models_length(name),
            "css_computed_length was asked for a property whose `Computed value:` line is a KEYWORD and not a "
            "length — `display`, `float`, `position`, `box-sizing`, an overflow axis or a `border-*-style`. "
            "There is nothing to absolutize and nothing for a `CssPx` to carry, so the entry that answers those "
            "is css_computed_value, and asking this one would report a keyword as the number zero");
-    spec = css_cv_specified(el, name);
-    if (css_border_side_of(name, "width") >= 0)
-        return computed_border_width(el, name, spec);
-    return computed_length(css_cv_realm(el), spec);
+    css_cv_modelled(el, name);
+    side = css_border_side_of(name, "width");
+    cascaded = cssom_cascaded_value(el, name);
+    switch (css_defaulting_of(name, cascaded)) {
+    case CSS_DEFAULTING_DECLARED:
+        break;
+    case CSS_DEFAULTING_INHERITED: {
+        /* §7.3.2: "the property's specified and computed values are the inherited value" — and the inherited
+           value is a `CssLength` that has ALREADY been absolutized against the environment it derives from, so
+           it is taken WHOLE rather than serialized and re-parsed. Every one of these properties' computed-value
+           lines is "the percentage as specified or the absolute length", which is the identity over a value
+           that is already one of those; the exception is a border width, whose rule reads THIS element's own
+           `border-*-style` and is therefore re-applied. */
+        lxb_dom_element_t *parent = css_cv_parent_element(el);
+
+        free(cascaded);
+        if (parent != NULL) {
+            CssLength inherited = css_computed_length(parent, name);
+
+            return side >= 0 ? css_border_width_inherited(el, side, inherited) : inherited;
+        }
+        cascaded = NULL;
+        break;
+    }
+    case CSS_DEFAULTING_INITIAL:
+        free(cascaded);
+        cascaded = NULL;
+        break;
+    }
+    /* §7.1's initial value, which is also §7.2's answer for the root element: "for the root element, which has
+       no parent element, the inherited value is the initial value of the property". */
+    if (cascaded == NULL) cascaded = cssom_initial_value(name);
+    DCHECK(cascaded != NULL,
+           "§7.1 produced no INITIAL value for a length-valued property this component models — every one of "
+           "them is in lexbor's registry with an initial value, or in css_style_declaration.c's table of the "
+           "eight border longhands the registry does not carry");
+    if (side >= 0) return computed_border_width(el, name, cascaded);
+    return computed_length(css_cv_realm(el), cascaded);
 }
 
 char *css_computed_value(lxb_dom_element_t *el, const char *name)
@@ -419,7 +492,12 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
            "rectangles are PICKED environment facts (core/frame/viewport.h) — so the answer is a `CssPx` and "
            "text would carry the number while dropping the domain behind it, which is the fork "
            "`getComputedStyle(el).width < 768` shares with `innerWidth < 768`. Ask css_computed_length");
+    css_cv_modelled(el, name);
     spec = css_cv_specified(el, name);
+    DCHECK(spec != NULL,
+           "§7's defaulting produced no SPECIFIED value for a keyword-valued property this component models — "
+           "every one of them is in lexbor's registry with an initial value, or in css_style_declaration.c's "
+           "table of the eight border longhands the registry does not carry");
     if (strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0)
         return computed_overflow(el, name, spec);
     if (strcmp(name, "display") == 0)
@@ -520,7 +598,7 @@ static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, cons
                "one of them and crashes rather than inventing a fourth");
         return JS_NewString(ctx, len.keyword);
     }
-    v = css_computed_models(name) ? css_computed_value(el, name) : cssom_cascaded_value(el, name);
+    v = css_computed_models(name) ? css_computed_value(el, name) : css_cv_specified(el, name);
     /* A property no cascade layer answers at all — a custom property nobody set — is the EMPTY STRING, which
        is §6.6.1's own answer for one that is not set rather than a default standing in for a value. */
     out = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
@@ -632,7 +710,8 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
               "`right` a PAIR rather than two values — both `auto` makes both 0, one `auto` makes it the "
               "negation of the other — so the entry has to be asked about the pair. (3) The over-constrained "
               "case of that pair, and §9's own THIRD conjunct which is stated over it, both turn on the "
-              "containing block's `direction`, which is INHERITED by a cascade with no inheritance step. An "
+              "containing block's `direction`, which the cascade inherits now (core/css/css_defaulting.h) and "
+              "which css_computed_value models no entry for. An "
               "ABSOLUTELY positioned box is a fourth thing again: §10.3.7 solves its insets from the same "
               "constraint equation as its width, against the PADDING EDGE of its nearest positioned ancestor, "
               "which used_value.c's §10.1 fourth case crashes for and names in full");
@@ -640,17 +719,23 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
     case CSS_RESOLVED_USED:
         DFAIL("CSSOM §9 makes this property's resolved value the USED value unconditionally — it is one of the "
               "COLOR properties, whose used value is the computed value with `currentcolor` resolved against "
-              "the element's own computed `color`, serialized as an absolute color per CSS Color §serializing "
-              "(`red` resolves to `rgb(255, 0, 0)`, which is what a page comparing against getComputedStyle "
-              "expects). Neither half exists here: css_style_declaration.c's cascade has NO INHERITANCE, and "
-              "`color` is an inherited property, so an element that declares none has no computed color for "
-              "`currentcolor` to resolve against in the first place. BUILD the cascade's defaulting and "
-              "inheritance step, then the absolute-color serialization (core/css/css_color.c already parses "
-              "and converts the color spaces)");
+              "the element's own computed `color`. THE INHERITANCE IS BUILT: CSS Cascade §7 "
+              "(core/css/css_defaulting.h) knows `color` is an inherited property, so an element that declares "
+              "none takes its parent's, and `css_cv_specified` above answers the specified value of every one "
+              "of these longhands. What is missing is the SERIALIZATION, and it is CSS Color 4 §16.2's LEGACY "
+              "sRGB form rather than a general one: a used color serializes as `rgb(255, 0, 0)` with the three "
+              "components rounded to integers in 0-255 and comma-separated, or as `rgba(r, g, b, a)` when the "
+              "alpha is not 1 — which is what a page comparing against getComputedStyle expects and is NOT the "
+              "`color(srgb ...)` form css_color_serialize_function writes. BUILD §16.2 beside it in "
+              "core/css/css_color.c (the parse, the color spaces and §16.5's number rules are already there), "
+              "then resolve `currentcolor` here: for the `color` property itself CSS Color 4 makes it compute "
+              "to `inherit`, and for every other one it is this element's own computed `color`");
         break;
     case CSS_RESOLVED_LINE_HEIGHT: {
-        /* "The resolved value is normal if the computed value is normal, or the used value otherwise." */
-        char *v = cssom_cascaded_value(el, name);
+        /* "The resolved value is normal if the computed value is normal, or the used value otherwise." The
+           computed value is asked for through §7's defaulting because `line-height` is an INHERITED property:
+           a child of a `line-height: 2` parent that declares none has a computed value of 2, not `normal`. */
+        char *v = css_cv_specified(el, name);
 
         if (css_cv_is(v, "normal")) { out = JS_NewString(ctx, v); free(v); return out; }
         free(v);
@@ -664,7 +749,7 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
     case CSS_RESOLVED_TRANSFORM: {
         /* css-transforms §3.2: "When the computed value is a <transform-list>, the resolved value is one
            matrix() function … For other computed values, the resolved value is the computed value." */
-        char *v = cssom_cascaded_value(el, name);
+        char *v = css_cv_specified(el, name);
 
         if (css_cv_is(v, "none")) { out = JS_NewString(ctx, v); free(v); return out; }
         free(v);

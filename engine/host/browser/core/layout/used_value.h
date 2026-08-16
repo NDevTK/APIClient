@@ -68,7 +68,8 @@
  *     `min-width`, whose initial 0 is always in effect and is therefore part of the answer rather than a
  *     second pass. What §10.3.3 still crashes for is its OVER-CONSTRAINED case, and it is not a layout gap:
  *     WHICH of the two margins is ignored is a fact about the containing block's computed `direction`, and
- *     `direction` is inherited by a cascade that has no inheritance step.
+ *     `direction` is not among the properties core/css/css_computed_value.h models — the cascade inherits it
+ *     now (core/css/css_defaulting.h), and there is no entry to read the computed value through.
  *   - AND §10.1's CONTAINING BLOCK, which every one of those percentages and every one of those `auto` values
  *     is stated against. It is a recursion — "the content edge of the nearest BLOCK CONTAINER ancestor box" —
  *     and it terminates because §10.1's first case makes the ROOT ELEMENT's containing block the INITIAL

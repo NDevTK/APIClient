@@ -1140,9 +1140,15 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
     { "border-bottom-style", "none" }, { "border-left-style", "none" },
 };
 
-/* LAYER 5 — the property's INITIAL value, straight out of Lexbor's registry, which is where the spec's own
-   initial values live, and out of the table above for the properties it has no entry for. */
-static char *cssd_initial_value(const char *name)
+/* CSS Cascade §7.1's INITIAL VALUE, straight out of Lexbor's registry, which is where the spec's own initial
+   values live, and out of the table above for the properties it has no entry for.
+   IT IS NOT A LAYER OF THE CASCADE, which is why it is no longer the last thing `cssom_cascaded_value` tries.
+   §6 answers which DECLARATION won and §7 is a separate step over that answer — and the difference is
+   observable the moment a property is INHERITED: folding the initial value into the cascade makes "nobody
+   declared it" indistinguishable from "somebody declared the initial value", and §7.2 has to tell those apart
+   to know whether to ask the parent. So the cascade reports the absence and this is exported for the step that
+   acts on it (core/css/css_defaulting.h). */
+char *cssom_initial_value(const char *name)
 {
     const lxb_css_entry_data_t *e = lxb_css_property_by_name((const lxb_char_t *)name, strlen(name));
     CssBuf b = { 0 };
@@ -1203,7 +1209,10 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
             return out;
         }
     }
-    return cssd_initial_value(name);
+    /* NO DECLARATION WON, which is a real answer and not a missing one — CSS Cascade §7.1 and §7.2 are both
+       written for exactly this state ("unless the cascade results in a value"), and which of them applies is
+       the property's own `Inherited:` line. §7's step is core/css/css_defaulting.h's and it runs above this. */
+    return NULL;
 }
 
 /* ---- §6.6's DECLARATIONS: where the two backings keep them, and how a member edits them ------------------- */
