@@ -57,9 +57,20 @@ function assertResultDocument(r) {
          "Send panel resolves a request body with. An absent one is every learned field, service, method and " +
          "OAuth scope arriving as nothing, and the Send panel offering an empty body for an endpoint the " +
          "server has already described");
-  DCHECK(typeof r._switches === "number",
-         "the engine's result document carries no _switches count — it is the one OBSERVABLE that the single " +
-         "BFS actually context-switches rather than running its flows FIFO");
+  /* THE SEVEN COST COUNTERS ARE ONE FIELD, because result.c writes them in ONE snprintf — there is no arm in
+     which four arrive and three do not. So the contract is all-of-them, and asserting a subset of a set that
+     is emitted atomically is not a weaker check, it is a check on the wrong thing: it passes for exactly the
+     document shapes it was meant to reject. `_switches` alone was asserted here while the other six were read
+     below with a `|| 0` beside each, which is the file's own recorded defect (see `_orphans` at the return)
+     re-spelt: a name the engine stops writing becomes a zero the diagnostic reports forever. */
+  for (const k of ["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun",
+                   "_worldSegments", "_worldSegmentsForked"]) {
+    DCHECK(typeof r[k] === "number",
+           "the engine's result document carries no " + k + " count — solver/result.c emits all seven cost " +
+           "counters in one snprintf, so a missing one is that composition having changed under this seam, " +
+           "not a run that happened not to do the thing. They are the only OBSERVABLE that the single BFS " +
+           "context-switches, forks and pumps jobs rather than running its flows FIFO");
+  }
   DCHECK(Array.isArray(r._park),
          "the engine's result document carries no _park array — that is the PARKED RESIDUE (solver/cold.h), " +
          "the recipes this zone writes to IndexedDB and hands back to qjs_begin next session. An absent one " +
@@ -100,48 +111,73 @@ function linesToAnalysis(lines, msg, expectResult) {
          "an engine session produced no @RESULT document at all — the one result document is what every " +
          "finding for this page travels in, and reporting its absence as an empty page is a false clean bill");
   if (expectResult && result) assertResultDocument(result);
-  result = result || {};
-  /* THE SCHEDULER'S OWN COUNTERS, so fairness/deep-preemption is OBSERVABLE (a real signal that the single BFS
-     context-switches rather than running FIFO) — and they are the fields solver/result.c ACTUALLY emits. This
-     read `_orphans`, `_work` and `_parked`, which nothing on the engine side has ever written, so the whole
-     diagnostic reported three zeroes forever and the `|| 0` beside each is what made that invisible. NOT
-     wrapped in a swallowing try/catch: every value here is a number off a document already asserted above. */
-  const m = { switches: result._switches || 0, flows: result._flows || 0, candidates: result._candidates || 0,
-              jobsQueued: result._jobsQueued || 0, jobsRun: result._jobsRun || 0,
-              worldSegments: result._worldSegments || 0, park: (result._park || []).length,
-              resumed: resumed, url: (msg && msg.sourceUrl) || "" };
+  /* THE TWO CASES ARE WRITTEN AS TWO CASES. `result = result || {}` merged them into one, and everything after
+     it then had to read a document that might not be there — which is where each `|| 0` and `|| []` below came
+     from, one per field, each individually reasonable and collectively the defaulting the rule forbids. With
+     the absent case handled ONCE, on its own arm, every read on the present arm is a read off a document
+     `assertResultDocument` has already checked field for field, so a default beside it can only ever hide that
+     assert being wrong. There are none left. */
+  const m = result
+    /* THE SCHEDULER'S OWN COUNTERS, so fairness/deep-preemption is OBSERVABLE (a real signal that the single
+       BFS context-switches rather than running FIFO) — and they are the fields solver/result.c ACTUALLY emits.
+       NOT wrapped in a swallowing try/catch: every value here is a number off a document asserted above. */
+    ? { switches: result._switches, flows: result._flows, candidates: result._candidates,
+        jobsQueued: result._jobsQueued, jobsRun: result._jobsRun,
+        worldSegments: result._worldSegments, worldSegmentsForked: result._worldSegmentsForked,
+        park: result._park.length, resumed: resumed, url: (msg && msg.sourceUrl) || "" }
+    /* A CRASH RECORD HAS NO DOCUMENT BY CONSTRUCTION, and the honest report of that is the ABSENCE, not seven
+       zeroes. Zeroes here read as "the engine ran and did nothing" — indistinguishable in the log from a real
+       run that explored nothing, which is a finding. `crashed` is the field that keeps the two apart, and the
+       counters are simply not present: nothing may compute a rate, a delta or a total out of a run that never
+       reported one. This arm is reachable only where the caller passed expectResult=false; the DCHECK above is
+       what makes any other path here a crash rather than a silent second producer of empty runs. */
+    : { crashed: true, resumed: resumed, url: (msg && msg.sourceUrl) || "" };
   self._engineMeta = m;
   // A per-run LOG (not a single overwritten global): concurrent cold-kick engines each report here, so the
   // full park->persist->rehydrate->resume SEQUENCE across all engines is observable, not just the last one.
   (self._engineLog = self._engineLog || []).push(m);
   if (self._engineLog.length > 200) self._engineLog.shift();
+  /* THE HOST-SIDE EMPTIES A CRASH RECORD IS MADE OF, named once. `chunkUrls` below already draws this exact
+     distinction in this file — an empty the HOST owns is not the same object as an engine field defaulted to
+     empty — and the crash arm is that distinction applied to the whole document: there is no engine answer to
+     default, so every field is the host's own empty and the engine's `_park`/counters are absent rather than
+     zero. The engine's own protocol errors still travel, because @E and @WHY are emitted on their own lines
+     and do not ride the result document; that is the whole reason a crash record is worth returning at all. */
+  const engineDoc = result || { fetchCallSites: [], securitySinks: [], pageErrors: [], probeResults: {},
+                                _switches: null, _park: [] };
   return {
-    _switches: result._switches || 0,
-    fetchCallSites: result.fetchCallSites || [],
+    _switches: engineDoc._switches,
+    fetchCallSites: engineDoc.fetchCallSites,
     /* THE ENGINE'S OWN PAGE ERRORS, WHICH IT CALLS `pageErrors`. This line read `resolverErrors` — a name
        nothing on the engine side has ever written — so every error the engine recorded while running the page
        was dropped here, and the `|| []` beside it is precisely what made the drop invisible: the field the
        brain reads existed, held the host's own errors, and looked complete. The consumer (popup.js,
        _dispatchDocument) reads {context, message, snippet}; the engine's are strings. */
-    resolverErrors: (result.pageErrors || []).map((e) => ({ context: "page", message: String(e), snippet: null, replyExample: null })).concat(extraErrors),
+    resolverErrors: engineDoc.pageErrors.map((e) => ({ context: "page", message: String(e), snippet: null, replyExample: null })).concat(extraErrors),
     /* The engine does NOT carry chunk URLs in the result document — they cross on their own ABI edge
        (qjs_chunks, drained and fetched every service round), so this is a host-side empty like the block
        below and never a defaulted engine field. */
     chunkUrls: [],
-    securitySinks: result.securitySinks || [],
+    securitySinks: engineDoc.securitySinks,
     /* THE SCHEMAS THE ENGINE LEARNED FROM THE APIs' OWN REJECTIONS — engine/host/solver/req2proto.c. Relayed
        VERBATIM, keyed exactly as the engine keyed it, because the key IS the endpoint identity `lib/send.js`
        looks a body schema up by: a host that re-keyed here would be the host owning structure again. NOT
        defaulted — the field is asserted above, and `|| {}` here would turn "the engine emitted nothing" into
        "this API describes no fields", which is a finding rather than a hole. */
-    probeResults: result.probeResults,
+    probeResults: engineDoc.probeResults,
     // sibling fields the brain reads unconditionally, present + empty so it never throws:
     protoEnums: [], protoFieldMaps: [], dangerousPatterns: [],
     esmImportUrls: [], inRunModuleUrls: [], domEndpoints: [],
     sourceMapTypes: [], sourceMapsByUrl: {}, traceMapsByUrl: {}, valueConstraints: [],
     sourceMapUrl: null, sourceMap: null, sourceUrl: (msg && msg.sourceUrl) || "",
-    _orphans: result._orphans || 0, _emitDone: result._emit != null ? ("emit=" + result._emit) : "",
-    _replyWant: [], _park: result._park || [],
+    /* `_orphans` AND `_emit` ARE NOT FIELDS THE ENGINE HAS EVER WRITTEN, and both were read here — the same
+       defect the comment above records for `_orphans`/`_work`/`_parked`, surviving in the returned document
+       nine lines under the place it was fixed in the meta block, because the `|| 0` and the `!= null` beside
+       them made a dead read look like a live one that had nothing to say. solver/result.c emits twelve fields
+       and these are not among them; grep finds no writer anywhere in engine/host. Nothing reads them here
+       either, so they are deleted rather than renamed: a diagnostic with no producer and no consumer is not a
+       diagnostic. The counters that ARE emitted travel in `_engineMeta` above, where they are asserted. */
+    _replyWant: [], _park: engineDoc._park,
   };
 }
 
@@ -1245,8 +1281,14 @@ const _hostOps = {
            instance that posts a cross-document message must stamp the origin the parked one had. */
         key: result._fkey, sourceUrl: eng.msg.sourceUrl, topLevelUrl: eng.msg.topLevelUrl, origin: eng.origin,
         html: eng.html, code: eng.code,
-        credentialed: !!eng.msg.credentialed, recipes: (result._park || []).join(";"),
-        emit: ((prior && prior.emit) || 0) + (result.fetchCallSites || []).length, visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
+        /* `_park` AND `fetchCallSites` ARE GUARANTEED BY `linesToAnalysis` ON BOTH ARMS — asserted off the
+           engine document when there is one, the host's own empty when the caller said there would not be —
+           so a `|| []` here cannot fire. What it CAN do is exactly what this file has already been burnt by
+           twice: outlive the guarantee. This entry is the cross-session frontier's residue, and the shape of
+           the failure it would hide is "the recipes joined to the empty string", which reads to the next
+           session as an origin that finished rather than one whose parked flows were dropped. */
+        credentialed: !!eng.msg.credentialed, recipes: result._park.join(";"),
+        emit: ((prior && prior.emit) || 0) + result.fetchCallSites.length, visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
       });
     }
     if (eng._cold) {
