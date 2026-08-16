@@ -2446,12 +2446,38 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
 
 /* ---- the AUTHOR CASCADE's view ----------------------------------------------------------------------------- */
 
-static bool cascade_emit(JSContext *ctx, JSValueConst list, RBuf *out, uint32_t *pn);
+/* The walk's own state: the text it is building, the per-emitted-rule layer it is building beside it, and the
+   §6.4.3 order it declares every layer it meets into. See css_rule.h for why the second and third exist. */
+typedef struct {
+    RBuf                 out;
+    const CssLayerNode **layer;
+    uint32_t             n, cap;
+    CssLayerOrder       *order;
+} CascadeEmit;
 
-/* One rule's contribution to the text the selector matcher re-parses. A STYLE rule contributes itself; a
-   CONDITIONAL GROUP rule contributes its children when its condition holds and nothing when it does not, which
-   is what `@media` MEANS and is the whole reason the cascade cannot simply read a sheet's top level. */
-static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, RBuf *out, uint32_t *pn)
+/* Record which cascade layer the rule just written into `e->out` belongs to. NULL is §6.4's non-style rules —
+   see the header for why the caller reads that as a statement rather than as a hole. */
+static void cascade_emit_mark(CascadeEmit *e, const CssLayerNode *layer)
+{
+    if (e->n == e->cap) {
+        uint32_t cap = e->cap ? e->cap * 2 : 16;
+        const CssLayerNode **grown = realloc(e->layer, (size_t)cap * sizeof(*grown));
+
+        CHECK(grown != NULL, "cssom: OOM recording a rule's cascade layer for the author cascade");
+        e->layer = grown;
+        e->cap = cap;
+    }
+    e->layer[e->n++] = layer;
+}
+
+static bool cascade_emit(JSContext *ctx, JSValueConst list, CascadeEmit *e, CssLayerNode *cur);
+
+/* One rule's contribution to the text the selector matcher re-parses, and to §6.4.3's layer order. A STYLE rule
+   contributes itself, in the layer it is nested in; a CONDITIONAL GROUP rule contributes its children when its
+   condition holds and nothing when it does not, which is what `@media` MEANS and is the whole reason the
+   cascade cannot simply read a sheet's top level. `cur` is the cascade layer this rule sits in — §6.4.3's
+   implicit outer layer at a sheet's top level, and the layer a `@layer` block declares inside it. */
+static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, CssLayerNode *cur)
 {
     CssRuleData *r = rule_of(rule);
     size_t sl = 0, bl = 0;
@@ -2468,9 +2494,14 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, RBuf *out, uint3
         bool ok;
 
         media_query_free(set);
+        /* §6.4.3: "Layers that are defined inside of a conditional group rule do not contribute to the layer
+           order unless the condition is true or unless the conditional group rule can evaluate differently for
+           different elements in the document." A `@media` is global to the document, so a false condition is
+           the first arm and the children — layers included — are simply not walked. The second arm is the
+           element-sensitive conditional (`@container`, `@scope`), which this build has no rule type for. */
         if (!applies) return true;
         kids = rule_child_rules(ctx, rule);
-        ok = cascade_emit(ctx, kids, out, pn);
+        ok = cascade_emit(ctx, kids, e, cur);
         JS_FreeValue(ctx, kids);
         return ok;
     }
@@ -2478,24 +2509,56 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, RBuf *out, uint3
        SELECTORS below are written against, so a sheet whose `@namespace svg url(...)` were dropped would hand
        lexbor `svg|a { … }` with no `svg` bound — an invalid selector, which the parse then drops, which
        silently un-styles every element the page selected that way. It goes in verbatim (the serialization is
-       the canonical form, terminated by its own `;`) and it COUNTS, because `*pn` is what the caller's
-       round-trip assertion compares the re-parse's rule count against. */
+       the canonical form, terminated by its own `;`) and it TAKES A SLOT in the layer list, because that list
+       is indexed by the re-parse's rule position and this rule occupies one — its entry is NULL, which is what
+       tells the caller the rule at that index matches no element rather than that its layer went missing. */
     if (r->type == RULE_TYPE_NAMESPACE) {
         RBuf one = { NULL, 0, 0 };
 
         if (!namespace_rule_serialize(ctx, r, &one)) { free(one.s); return false; }
-        rbuf_add(out, one.s);
+        rbuf_add(&e->out, one.s);
         free(one.s);
-        (*pn)++;
+        cascade_emit_mark(e, NULL);
         return true;
     }
-    /* AN `@import` AND AN `@font-face` CONTRIBUTE NO STYLE RULE TO THIS SHEET, and each for its own reason
-       rather than for a shared "not handled". An `@import`'s declarations belong to the IMPORTED sheet — CSS
-       Cascade §2 treats its contents "as if they were written in place of the @import rule" — and this build
-       fetches no imported sheet, which css_rule.h records as the gap that `styleSheet` is absent for. An
-       `@font-face` declares a FONT FACE and not a style: nothing it contains can match an element, so it is
-       not a rule the selector matcher has anything to do with. */
-    if (r->type == RULE_TYPE_IMPORT || r->type == RULE_TYPE_FONT_FACE) return true;
+    /* AN `@import` CONTRIBUTES NO STYLE RULE TO THIS SHEET AND STILL CONTRIBUTES TO THE LAYER ORDER. Its
+       declarations belong to the IMPORTED sheet — CSS Cascade §2 treats its contents "as if they were written
+       in place of the @import rule" — and this build fetches no imported sheet, which css_rule.h records as the
+       gap that `styleSheet` is absent for. But §6.4.1 lists it first among the three ways a cascade layer is
+       DECLARED ("using an @import rule with the layer keyword or layer() function, assigning the contents of
+       the imported file into that layer"), and §6.4.3 orders layers by where they are first declared — so
+       `@import url(a) layer(theme); @layer other { } @layer theme { }` puts `theme` FIRST, and an import whose
+       layer went unrecorded would order those two backwards for every rule in them. The sheet being unfetched
+       does not change where its layer sits. */
+    if (r->type == RULE_TYPE_IMPORT) {
+        char *ln = rule_opt_text(ctx, r->layer_name);
+        CssLayerNames names = { NULL, 0 };
+        bool named;
+
+        /* §6.4.4's `layerName` — NULL for an import that declares no layer, the EMPTY STRING for the anonymous
+           `layer` keyword (§6.4.2.1: "an @import rule uses the layer keyword (which does not provide a
+           <layer-name>) ... its layer name gains a unique anonymous segment"), and the name otherwise. */
+        if (!ln) return true;
+        named = css_prelude_layer_names(ln, strlen(ln), &names);
+        DCHECK(named,
+               "an `@import` rule's stored `layerName` is not a `<layer-name>`. CSS Cascade §2's grammar is "
+               "`[ layer | layer(<layer-name>) ]?` and a name outside that production makes the whole at-rule "
+               "invalid, so the refusal belongs in the import prelude's own parse — core/css/"
+               "css_at_rule_prelude.c takes the `layer()` function's RAW CONTENTS without putting them through "
+               "the `<layer-name>` grammar the two `@layer` at-rules share");
+        DCHECK(!named || names.n <= 1,
+               "an `@import` rule declares more than one cascade layer — §2's grammar admits `layer(...)` once "
+               "and its contents are a single `<layer-name>`, with no `#` multiplier on it");
+        if (named) css_layer_order_declare(e->order, cur, names.n ? names.v[0] : NULL);
+        css_layer_names_free(&names);
+        free(ln);
+        return true;
+    }
+    /* AN `@font-face` DECLARES A FONT FACE AND NOT A STYLE: nothing it contains can match an element, so it is
+       not a rule the selector matcher has anything to do with, and it declares no layer of its own — §6.4's own
+       note that at-rules "defined inside cascade layers also use the layer order" is about the layer they are
+       IN, which `cur` already is. */
+    if (r->type == RULE_TYPE_FONT_FACE) return true;
     /* AND NEITHER DOES AN `@page`, for a third reason of its own: its declarations style the PAGE BOX, which
        CSS Paged Media §3 makes a box outside the document tree. Its page selector list selects pages and not
        elements — `named:first` matches no element, and there is no element it could — so nothing in it can
@@ -2507,35 +2570,48 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, RBuf *out, uint3
        ANIMATION that names it (§4.1's `animation-name`), which is a step after the cascade rather than a rule
        in it — CSS Cascade §6.1 puts animations in an origin of their own, above every author declaration. */
     if (r->type == RULE_TYPE_KEYFRAMES) return true;
-    /* NOR DOES A §6.4.4.2 `@layer` STATEMENT, and its reason is the narrowest of the five: it is the at-rule
-       for "declaring a named layer WITHOUT ASSIGNING ANY RULES" (CSS Cascade §6.4.1), so there is nothing
-       inside it for a selector to match. What it does contribute is the layer ORDER — §6.4.3 sorts cascade
-       layers "by the order in which they first are declared" — and in this build nothing can be IN a layer for
-       that order to decide between: the only two things that put rules in one are a `@layer` BLOCK, whose arm
-       below crashes rather than answering, and an `@import ... layer(x)`, whose sheet css_rule.h records is
-       never fetched. So this is a real emptiness and not an omission. */
-    if (r->type == RULE_TYPE_LAYER_STATEMENT) return true;
-    /* AND A §6.4.4.1 `@layer` BLOCK IS THE ONE THAT CANNOT BE ANSWERED YET. Flattening its children into the
-       sheet the way the `@media` arm above flattens its own would be a WRONG answer rather than a missing one,
-       which is why this crashes instead. */
+    /* A §6.4.4.2 `@layer` STATEMENT CONTRIBUTES ONLY TO THE ORDER, which is the whole of what the at-rule is
+       for: it is "declaring a named layer WITHOUT ASSIGNING ANY RULES" (CSS Cascade §6.4.1), so there is
+       nothing inside it for a selector to match and nothing to emit. What it decides is where those layers sit
+       — §6.4.4.2's own note says so ("since layer ordering is defined by first occurrence of the layer name,
+       this rule allows a page to declare the order of its layers up front, so that their order is apparent
+       without having to read the entire style sheet") — and its names are declared LEFT TO RIGHT because
+       §6.4.4.2 says they are: "multiple comma-separated layer names can be provided in this syntax, declaring
+       each of the layers IN THE ORDER SPECIFIED." */
+    if (r->type == RULE_TYPE_LAYER_STATEMENT) {
+        char **names;
+        unsigned n, i;
+
+        if (!rule_layer_names(ctx, r, &names, &n)) return false;
+        DCHECK(n >= 1, "a §8.2 layer statement rule declares NO `<layer-name>` — §6.4.4.2's `#` multiplier has "
+                       "no zero-length arm, and its creator refuses a prelude with no name in it");
+        for (i = 0; i < n; i++) css_layer_order_declare(e->order, cur, names[i]);
+        serialized_free(names, n);
+        return true;
+    }
+    /* A §6.4.4.1 `@layer` BLOCK DECLARES A LAYER AND THEN CONTRIBUTES ITS CHILDREN INTO IT. §6.4.4.1 makes the
+       second half exactly the `@media` arm above — "such @layer block rules have the same restrictions and
+       processing as a conditional group rule [CSS-CONDITIONAL-3] with a TRUE condition" — so the only thing
+       this arm adds to that one is the layer the children are walked under. A rule that declares NO name is
+       §6.4.2.1's anonymous layer and gets a node of its own every time, which is why the name is handed on as
+       NULL rather than as an empty string: "each occurrence of an anonymous layer declaration represents a
+       unique cascade layer". */
     if (r->type == RULE_TYPE_LAYER_BLOCK) {
-        DFAIL("CSS Cascade §6.4's CASCADE LAYERS are a cascade SORT STEP this cascade does not have. §6.1 puts "
-              "Layers ABOVE Specificity in the sorting order — \"when comparing declarations that belong to "
-              "different layers, then for normal rules the declaration whose cascade layer is latest in the "
-              "layer order wins, and for important rules the declaration whose cascade layer is earliest "
-              "wins\" — so `@layer a { #x { color: red } } p { color: blue }` resolves to BLUE on a "
-              "`<p id=x>`, and no reordering of a flat sheet can express that, because order of appearance is "
-              "the LAST tiebreak and sits below specificity. Emitting the children here would therefore hand "
-              "the matcher a sheet that computes a real-looking wrong value with nothing to say so. BUILD "
-              "§6.4.3's LAYER ORDER (\"cascade layers are sorted by the order in which they first are "
-              "declared, with nested layers grouped within their parent layer. Unlayered rules are sorted "
-              "later than any layered rules within the same parent layer\") as one pass over these rule "
-              "objects, tag every matched declaration in css_style_declaration.c's author cascade with the "
-              "layer it came from, and resolve by ONE ordering pass — which is the SAME rebuild "
-              "css_defaulting.c's `revert`/`revert-layer` DFAIL asks for, so the two are one capability and "
-              "not two. Note that §6.4.3 also makes a layer declared inside a conditional group rule "
-              "contribute to the order only when its condition holds");
-        return false;
+        CssLayerNode *node;
+        char **names;
+        unsigned n;
+        JSValue kids;
+        bool ok;
+
+        if (!rule_layer_names(ctx, r, &names, &n)) return false;
+        DCHECK(n <= 1, "a §8.1 layer block rule declares more than one `<layer-name>` — §6.4.4.1's grammar is "
+                       "`<layer-name>?`, and its creator refuses a prelude carrying a list");
+        node = css_layer_order_declare(e->order, cur, n ? names[0] : NULL);
+        serialized_free(names, n);
+        kids = rule_child_rules(ctx, rule);
+        ok = cascade_emit(ctx, kids, e, node);
+        JS_FreeValue(ctx, kids);
+        return ok;
     }
     DCHECK(r->type == RULE_TYPE_STYLE, "the author cascade met a rule type it has no arm for");
     /* CSS NESTING IS NOT FLATTENED, and must not be: a nested style rule's selector is RELATIVE to its parent's
@@ -2559,23 +2635,23 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, RBuf *out, uint3
            "accepted, so an empty one means the string conversion itself failed");
     if (!sel) return false;
     block = rule_text_copy(ctx, r->block_text, &bl);
-    rbuf_add_n(out, sel, sl);
-    rbuf_add(out, "{");
-    if (block) rbuf_add_n(out, block, bl);
-    rbuf_add(out, "}");
+    rbuf_add_n(&e->out, sel, sl);
+    rbuf_add(&e->out, "{");
+    if (block) rbuf_add_n(&e->out, block, bl);
+    rbuf_add(&e->out, "}");
     free(sel);
     free(block);
-    (*pn)++;
+    cascade_emit_mark(e, cur);
     return true;
 }
 
-static bool cascade_emit(JSContext *ctx, JSValueConst list, RBuf *out, uint32_t *pn)
+static bool cascade_emit(JSContext *ctx, JSValueConst list, CascadeEmit *e, CssLayerNode *cur)
 {
     uint32_t n = array_len(ctx, list), i;
 
     for (i = 0; i < n; i++) {
         JSValue rule = JS_GetPropertyUint32(ctx, list, i);
-        bool ok = cascade_emit_one(ctx, rule, out, pn);
+        bool ok = cascade_emit_one(ctx, rule, e, cur);
 
         JS_FreeValue(ctx, rule);
         if (!ok) return false;
@@ -2583,18 +2659,40 @@ static bool cascade_emit(JSContext *ctx, JSValueConst list, RBuf *out, uint32_t 
     return true;
 }
 
-char *css_rule_cascade_text(JSContext *ctx, JSValueConst list, uint32_t *pn)
+void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s)
 {
-    RBuf out = { NULL, 0, 0 };
+    DCHECK(s != NULL, "the author cascade's view of a sheet was freed through nothing");
+    free(s->text);
+    free((void *)s->layer);
+    s->text = NULL;
+    s->layer = NULL;
+    s->n = 0;
+}
 
-    DCHECK(pn != NULL, "the author cascade's text was built with nowhere to report how many rules went in");
-    *pn = 0;
-    if (!cascade_emit(ctx, list, &out, pn)) {
-        free(out.s);
-        *pn = 0;
-        return NULL;
+bool css_rule_cascade_sheet(JSContext *ctx, JSValueConst list, CssLayerOrder *order,
+                            CssRuleCascadeSheet *out)
+{
+    CascadeEmit e = { { NULL, 0, 0 }, NULL, 0, 0, NULL };
+
+    DCHECK(out != NULL, "the author cascade's view of a sheet was built with nowhere to report it");
+    DCHECK(order != NULL,
+           "a sheet was flattened for the author cascade with no §6.4.3 LAYER ORDER to declare its layers "
+           "into. Every `@layer` rule the walk meets declares one, and the order is what §6.1's Layers "
+           "criterion sorts by — a walk with nowhere to put them would answer every layer's rules as if they "
+           "were unlayered, which inverts the cascade for the whole sheet");
+    e.order = order;
+    if (!cascade_emit(ctx, list, &e, css_layer_order_root(order))) {
+        free(e.out.s);
+        free(e.layer);
+        return false;
     }
-    return out.s;
+    out->text = e.out.s;
+    out->layer = e.layer;
+    out->n = e.n;
+    DCHECK(out->n == 0 || out->text != NULL,
+           "the author cascade emitted rules and no text to hold them — the two are written by one call per "
+           "rule and cannot disagree about whether a rule went in");
+    return true;
 }
 
 /* ---- the interfaces -------------------------------------------------------------------------------------- */

@@ -63,4 +63,26 @@ bool css_property_inherited(const char *name);
    disagree about `revert-rule`, and one of them did. */
 bool css_wide_keyword(const char *value);
 
+/* WHICH OF §7.3's THREE CASCADE-DEPENDENT KEYWORDS a value is, if it is one. §7.3's own opening sentence names
+ * them as a set and says what makes them different from the other three: "The keywords revert, revert-layer,
+ * and revert-rule are CASCADE-DEPENDENT keywords; some contexts may restrict their use while allowing the other
+ * CSS-wide keywords."
+ *
+ * IT IS ASKED BY THE CASCADE AND NOT BY THIS COMPONENT, which is what the distinction means in code. §7.3.1
+ * through §7.3.3 are answered from the property alone — `initial` is its initial value, `inherit` is the
+ * parent's computed value, `unset` is one of those two — and that is a question §7's defaulting step can ask.
+ * These three are answered from the cascade the declaration SAT IN: §7.3.4's behaviour "depends on the cascade
+ * origin to which the declaration belongs", §7.3.5's on its cascade layer, §7.3.6's on its style rule, and none
+ * of those three facts survives into a cascaded value. So core/css/css_cascade.h resolves them by re-running
+ * its own sort with that origin, layer or rule removed, and what reaches `css_defaulting_of` is never one of
+ * them — the assertion there says so from the other side. */
+typedef enum {
+    CSS_ROLLBACK_NONE = 0,
+    CSS_ROLLBACK_ORIGIN,   /* §7.3.4's `revert` */
+    CSS_ROLLBACK_LAYER,    /* §7.3.5's `revert-layer` */
+    CSS_ROLLBACK_RULE,     /* §7.3.6's `revert-rule` */
+} CssRollback;
+
+CssRollback css_rollback_keyword(const char *value);
+
 #endif

@@ -106,6 +106,7 @@
 #include <stdint.h>
 
 #include "quickjs.h"
+#include "core/css/css_layer_order.h"
 
 void css_rule_init(JSContext *ctx);
 /* Every §6.4 and §7.x rule prototype for ONE realm — declared into core/realm.h's list. */
@@ -151,15 +152,34 @@ void css_rule_build_sheet(JSContext *ctx, JSValueConst list, JSValueConst parent
                           const char *text, size_t len);
 
 /* THE AUTHOR CASCADE'S VIEW of a rule list: the STYLE rules that apply in `ctx`'s environment, flattened out of
-   the conditional group rules whose condition holds, each serialized as `selector{block}` for the SELECTOR
-   MATCHER to re-parse — a parsed selector being the one thing the rule objects cannot carry — preceded by the
-   sheet's `@namespace` rules, which go in verbatim because the selectors are written against the prefixes they
-   bind. `*pn` is how many rules were emitted, which is what the caller's round-trip assertion compares the
-   re-parse against.
-   OWNED. NULL when the sheet cannot be resolved at all: a stored text that could not be read back, which
-   leaves a pending exception on `ctx`, or a rule the cascade has no answer for — which in a DEV build has
-   already aborted at the rule (CSS Cascade §6.4's cascade layers are the one such rule), so the whole-sheet
-   abandonment is what RELEASE does with a capability release cannot add. */
-char *css_rule_cascade_text(JSContext *ctx, JSValueConst list, uint32_t *pn);
+ * the conditional group rules whose condition holds, each serialized as `selector{block}` for the SELECTOR
+ * MATCHER to re-parse — a parsed selector being the one thing the rule objects cannot carry — preceded by the
+ * sheet's `@namespace` rules, which go in verbatim because the selectors are written against the prefixes they
+ * bind.
+ *
+ * IT IS TEXT AND A LAYER PER RULE, NOT TEXT ALONE, because CSS Cascade §6.1 puts Layers ABOVE Specificity and
+ * a flat text cannot say which layer a rule was in. Flattening `@layer a { #x { color: red } }` beside
+ * `p { color: blue }` produces a sheet that resolves to RED on a `<p id=x>` where the standard resolves BLUE,
+ * and the wrongness is invisible because both are real values. So the walk carries §6.4.3's layer as it
+ * descends — declaring every layer it meets into `order`, in document order, which is what makes
+ * first-declaration order the walk's own order — and reports the node each emitted rule belongs to.
+ *
+ * `layer[i]` PAIRS WITH THE i-TH RULE THE TEXT PARSES BACK TO, and NULL is a positive statement: the emitted
+ * rule at that index is not a style rule (an `@namespace`, which is emitted for its prefix bindings and matches
+ * no element). A caller reads it only for a rule it is about to match, and asserting the two agree at every
+ * index is a stronger round-trip check than comparing the totals — a rule that re-parsed as two while its
+ * neighbour re-parsed as none keeps the total right and shifts every layer after it.
+ *
+ * False when the sheet cannot be resolved at all: a stored text that could not be read back, which leaves a
+ * pending exception on `ctx`. Nothing is allocated in that case. */
+typedef struct {
+    char                *text;    /* the flattened sheet. OWNED. NULL when the sheet emitted nothing. */
+    const CssLayerNode **layer;   /* one entry per emitted rule, in emission order. OWNED. */
+    uint32_t             n;       /* how many rules were emitted, and how long `layer` is */
+} CssRuleCascadeSheet;
+
+bool css_rule_cascade_sheet(JSContext *ctx, JSValueConst list, CssLayerOrder *order,
+                            CssRuleCascadeSheet *out);
+void css_rule_cascade_sheet_free(CssRuleCascadeSheet *s);
 
 #endif

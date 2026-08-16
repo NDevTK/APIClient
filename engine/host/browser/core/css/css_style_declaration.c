@@ -31,15 +31,18 @@
  * COW delta through the record's accessor, so two flows can disagree about `rule.style.color` exactly as they
  * can about an inline style. Nothing is cached in between, for the reason the cascade caches nothing.
  *
- * THE CASCADE IS RESOLVED LIVE, per read, from THE RUNNING FLOW'S OWN OBJECTS: inline, then the author rules of
- * the CSS STYLE SHEETS in §6.2's list for this element's root — the sheet objects a page holds, whose rules it
- * inserts, deletes and retargets — then css-cascade-5 §6.5's AUTHOR PRESENTATIONAL HINT ORIGIN
- * (core/css/css_presentational_hints.h, which is where HTML's own markup enters the cascade and why it is an
- * origin of its own rather than a row of the UA table), then the UA default, then the property's initial value.
- * The order IS §6.1's origin precedence and each layer is asked once. Nothing is cached
- * across a read, because a cache would be shared state that the flow machinery does not swap; and reading the
- * OBJECTS rather than re-parsing each `<style>` element's text is what makes the objects load-bearing instead
- * of inert, which is the whole of why §6.1, §6.2 and §6.4 exist.
+ * THE CASCADE IS RESOLVED LIVE, per read, from THE RUNNING FLOW'S OWN OBJECTS: the author rules of the CSS
+ * STYLE SHEETS in §6.2's list for this element's root — the sheet objects a page holds, whose rules it inserts,
+ * deletes and retargets — the element's own style attribute, css-cascade-5 §6.5's AUTHOR PRESENTATIONAL HINT
+ * ORIGIN (core/css/css_presentational_hints.h, which is where HTML's own markup enters the cascade and why it
+ * is an origin of its own rather than a row of the UA table), and the UA default. THEY ARE COLLECTED, NOT ASKED
+ * IN TURN: each contributes its declarations into ONE list and core/css/css_cascade.h sorts that list by §6.1's
+ * six criteria, because the criteria are LEXICOGRAPHIC and asking the origins in sequence silently reorders
+ * them (it puts §6.1's Element-Attached criterion above its Origin-and-Importance one, and it cannot express
+ * §6.4's Layers criterion at all, which sits above Specificity). Nothing is cached across a read, because a
+ * cache would be shared state that the flow machinery does not swap; and reading the OBJECTS rather than
+ * re-parsing each `<style>` element's text is what makes the objects load-bearing instead of inert, which is
+ * the whole of why §6.1, §6.2 and §6.4 exist.
  *
  * AND THE CASCADE IS WHERE THIS FILE STOPS. What it produces is the SPECIFIED value — the declaration that won
  * — which is neither the computed value a spec algorithm reads nor the resolved value getComputedStyle
@@ -63,7 +66,9 @@
 #include "core/dom/document.h"
 #include "core/dom/element.h"
 #include "core/dom/selector_match.h"
+#include "core/css/css_cascade.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_defaulting.h"
 #include "core/css/css_keyframes.h"
 #include "core/css/css_page.h"
 #include "core/css/css_presentational_hints.h"
@@ -195,7 +200,7 @@ static lxb_css_parser_t *g_parser;
  * field writes) and then uses it as the live selector state for the whole parse.
  *
  * That is a write through a dangling pointer, and for a while it was invisible for the worst possible reason:
- * `cssd_author_value` was reached from ONE call chain, so the stale address was re-materialised as the same
+ * the author collection was reached from ONE call chain, so the stale address was re-materialised as the same
  * slot of the same frame at the same depth every time — self-consistent by accident. The moment the computed
  * value gained a second and a third caller at different depths (element_view.c's ancestor walk for `display`,
  * and css_computed_value.c's own walk to the box parent), the stale address pointed at a LIVE frame instead,
@@ -478,12 +483,36 @@ static void cssd_decls_from_list(const lxb_css_rule_declaration_list_t *list, Cs
         const lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(r);
         char *name, *value;
 
+        if (r->type != LXB_CSS_RULE_DECLARATION) continue;
         /* CSS Syntax's INVALID DECLARATION is not in the block, so it is not in the block's declarations
            either. Lexbor keeps one in the list as a `__UNDEF` holding the property id and the RAW UNPARSED
            TOKENS so that a serializer can round-trip the block it came from — and a cascade that read it back
-           without this line handed those tokens on as if they were a value: `display: bogus` won the cascade
-           and `getComputedStyle(el).display` answered "bogus", a string no property's grammar admits. */
-        if (r->type != LXB_CSS_RULE_DECLARATION || d->type == LXB_CSS_PROPERTY__UNDEF) continue;
+           without this test handed those tokens on as if they were a value: `display: bogus` won the cascade
+           and `getComputedStyle(el).display` answered "bogus", a string no property's grammar admits.
+           EXCEPT WHEN THOSE TOKENS ARE A CSS-WIDE KEYWORD, WHICH IS A VALID DECLARATION OF EVERY PROPERTY.
+           §7.3: "As specified in CSS Values and Units, ALL CSS PROPERTIES CAN ACCEPT THESE VALUES." Lexbor's
+           value grammar carries `initial`, `inherit`, `unset` and `revert` and predates css-cascade-5's §7.3.5
+           and §7.3.6, so `height: revert-layer` fails that grammar and arrives here as an invalid declaration
+           while `translate: revert-layer` — a property the grammar does not type at all — arrives as a value.
+           Dropping the first would make a CSS-wide keyword mean something different depending on which
+           properties the vendored parser happens to know, which is a wrong answer per property rather than a
+           missing capability. `undef->type` carries the real property id and `undef->value` the raw source
+           span (the `!important` is a separate offset and is already on the declaration), so both halves of
+           the declaration survive. */
+        if (d->type == LXB_CSS_PROPERTY__UNDEF) {
+            char *raw = cssd_decl_value(d);
+            bool wide = raw != NULL && css_wide_keyword(raw);
+
+            if (wide) {
+                name = cssd_decl_name(d);   /* NULL when lexbor has no id for the property either */
+                if (name) {
+                    cssd_decls_collect_declaration(out, name, raw, d->important);
+                    free(name);
+                }
+            }
+            free(raw);
+            continue;
+        }
         name = cssd_decl_name(d);
         if (!name) continue;
         value = cssd_decl_value(d);   /* the trimmed value — see its note */
@@ -605,9 +634,10 @@ static bool cssd_property_important(const char *text, size_t len, const char *na
     return all;
 }
 
-/* LAYER 1 — the INLINE declaration for `name`, or NULL. The highest-weight layer short of !important, and the
-   one that is per-flow because the attribute it reads is. The CASCADE reaches it with an element and no
-   declaration object, which is why this takes one rather than a block. */
+/* §6.1's ELEMENT-ATTACHED declaration for `name`, or NULL — the contents of the style attribute, which is
+   per-flow because the attribute it reads is. The CASCADE reaches it with an element and no declaration object,
+   which is why this takes one rather than a block, and it reports the IMPORTANCE because §6.1 compares that
+   first: attached-ness is the criterion BELOW origin and importance, not above it. */
 static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pimportant)
 {
     size_t len = 0;
@@ -616,7 +646,7 @@ static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pi
     return cssd_value_in_block(text, len, name, pimportant);
 }
 
-/* LAYER 2 — the AUTHOR cascade, resolved from THE SHEET OBJECTS of the element's root.
+/* THE AUTHOR ORIGIN's declarations, collected from THE SHEET OBJECTS of the element's root.
  *
  * IT USED TO RE-WALK THE `<style>` ELEMENTS AND RE-PARSE THEIR TEXT, AND THAT WAS TWO MECHANISMS DESCRIBING ONE
  * FACT — the one that answered questions was not the one the page mutated. §6.1's sheets, §6.4's rules and
@@ -630,8 +660,13 @@ static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pi
  * A SHEET'S TEXT IS REBUILT FROM ITS RULES, not kept beside them. The rules are the authority (css_rule.h: a
  * rule is TEXT because a lexbor arena has no cross-tier identity), so the sheet's serialization is derived
  * from them per read and handed to lexbor for the SELECTOR MATCHER — which needs a parsed selector, and which
- * is the one thing the objects cannot carry. The parse's count is asserted against the rule list's, so a rule
- * whose stored text does not round-trip crashes here instead of silently shifting every rule after it.
+ * is the one thing the objects cannot carry. The parse is asserted against the emission AT EVERY INDEX, so a
+ * rule whose stored text does not round-trip crashes here instead of silently shifting every rule after it.
+ *
+ * WHAT THE TEXT CANNOT CARRY IS THE CASCADE LAYER, so the emission reports one per rule beside it. §6.1 puts
+ * §6.4's Layers criterion ABOVE Specificity, which is why flattening a `@layer` block's children into the
+ * sheet is a WRONG answer and not an approximate one — and why the index correspondence above is load-bearing
+ * rather than a tidiness check: the layer is looked up BY the rule's position in the re-parse.
  *
  * IT IS REDONE PER READ ON PURPOSE, exactly as the element walk was: a cache would be shared state the flow
  * machinery does not swap, so a rule one arm inserted would decide another arm's computed values. Reading the
@@ -642,29 +677,33 @@ static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pi
  * file held a second one, so "does this element match this selector" had two implementations that could
  * disagree — and the arena is scratch either way: the match cleans its own pools before it returns. */
 
-/* The sheet's serialization, rebuilt from its RULE OBJECTS, and how many STYLE rules went into it. OWNED.
-   THE FLATTENING IS core/css/css_rule.h's, because deciding which rules apply is §6.4's business and not this
-   file's: a conditional group rule contributes its children only when its condition holds, so what the matcher
-   re-parses is not the sheet's top level at all. */
-static char *cssd_sheet_text(JSContext *ctx, JSValueConst sheet, uint32_t *pn)
+/* The sheet's serialization, rebuilt from its RULE OBJECTS, with the §6.4.3 cascade layer of every rule that
+   went into it. THE FLATTENING IS core/css/css_rule.h's, because deciding which rules apply is §6.4's business
+   and not this file's: a conditional group rule contributes its children only when its condition holds, so what
+   the matcher re-parses is not the sheet's top level at all — and neither is the layer a rule is in something a
+   flat text could carry. */
+static bool cssd_sheet_view(JSContext *ctx, JSValueConst sheet, CssLayerOrder *order, CssRuleCascadeSheet *out)
 {
     JSValue rules = css_style_sheet_rules(ctx, sheet);
-    char *out = css_rule_cascade_text(ctx, rules, pn);
+    bool ok = css_rule_cascade_sheet(ctx, rules, order, out);
 
     JS_FreeValue(ctx, rules);
-    return out;
+    return ok;
 }
 
-static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
+/* EVERY AUTHOR-ORIGIN DECLARATION OF `name` ON `el`, added to `cascade` — not the one that wins. §6.1's sort is
+   over the whole list at once and §7.3's roll-backs re-run it with a part removed, so a collector that kept
+   only a running best would have thrown away exactly what both need. `*pseq` is the document-order counter
+   §6.1's Order of Appearance reads, carried across the sheets so it is one sequence and not one per sheet, and
+   bumped per RULE so it also names the rule §7.3.6's `revert-rule` removes. */
+static void cssd_author_collect(lxb_dom_element_t *el, const char *name, CssCascade *cascade,
+                                CssLayerOrder *order, uint32_t *pseq)
 {
     lxb_dom_node_t *self = lxb_dom_interface_node(el);
     /* THE REALM IS THE ELEMENT'S OWN DOCUMENT'S, never the running one: the sheets hang off the root's WRAPPER,
        and a wrapper belongs to the realm whose record owns that document. css_length.c's viewport DFAIL asks
        for the same plumbing from the other end and names this entry. */
     JSContext *ctx = document_realm_of(self);
-    lxb_css_selector_specificity_t best_spec = 0;
-    bool best_important = false, have = false;
-    char *out = NULL;
     JSValue sheets;
     uint32_t ns = 0, si;
 
@@ -674,7 +713,7 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
            "document nobody built a record for has no author style at all rather than an empty one. Give the "
            "caller's document a record, or establish that this element cannot reach a computed value");
     sheets = style_sheet_list_of(ctx, node_root(self));
-    if (!JS_IsArray(sheets)) { JS_FreeValue(ctx, sheets); return NULL; }
+    if (!JS_IsArray(sheets)) { JS_FreeValue(ctx, sheets); return; }
     {
         JSValue len = JS_GetPropertyStr(ctx, sheets, "length");
 
@@ -683,10 +722,9 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
     }
     for (si = 0; si < ns; si++) {
         JSValue sheet = JS_GetPropertyUint32(ctx, sheets, si);
+        CssRuleCascadeSheet view = { NULL, NULL, 0 };
         lxb_css_memory_t *smem;
         lxb_css_stylesheet_t *sst = NULL;
-        uint32_t nrules = 0;
-        char *text;
 
         DCHECK(css_style_sheet_is(sheet),
                "§6.2's list holds something that is not a CSS style sheet — its add is the one thing that ever "
@@ -695,15 +733,18 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
            is applied". `sheet.disabled = true` and `<style disabled>`'s forwarding both land here, and until
            the cascade read the objects neither could do anything at all. */
         if (css_style_sheet_disabled(sheet)) { JS_FreeValue(ctx, sheet); continue; }
-        text = cssd_sheet_text(ctx, sheet, &nrules);
+        if (!cssd_sheet_view(ctx, sheet, order, &view)) { JS_FreeValue(ctx, sheet); continue; }
         JS_FreeValue(ctx, sheet);
-        if (!text) continue;                       /* a sheet with no rules declares nothing */
+        /* A SHEET CAN DECLARE LAYERS AND EMIT NO RULES — `@layer a, b;` alone is a whole sheet establishing an
+           order for the sheets after it — so the emptiness is tested on the emission and the walk that just
+           happened has already done the part that matters. */
+        if (!view.text) { css_rule_cascade_sheet_free(&view); continue; }
         smem = lxb_css_memory_create();
         if (smem && lxb_css_memory_init(smem, 128) == LXB_STATUS_OK) {
             sst = lxb_css_stylesheet_create(smem);
             lxb_css_parser_memory_set(g_parser, smem);
-            if (sst && lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)text,
-                                                strlen(text)) != LXB_STATUS_OK)
+            if (sst && lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)view.text,
+                                                strlen(view.text)) != LXB_STATUS_OK)
                 sst = NULL;
             lxb_css_parser_memory_set(g_parser, NULL);
             cssd_selectors_intact();
@@ -715,47 +756,47 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
             for (r = lxb_css_rule_list(sst->root)->first; r; r = r->next) {
                 lxb_css_rule_style_t *st = lxb_css_rule_style(r);
                 lxb_css_selector_specificity_t spec = 0;
+                const CssLayerNode *layer;
                 CssDecls rd = { 0 };
+                uint32_t at_rule = back++;
                 int at;
 
-                back++;
+                /* THE ROUND TRIP IS ASSERTED PER RULE, NOT PER SHEET. Every rule the emission wrote must come
+                   back as exactly one rule AT THE SAME INDEX, because the index is what names its cascade
+                   layer: a rule that re-parsed as two while its neighbour re-parsed as none keeps a total
+                   right and shifts every layer after it, which is the silent version of the whole sheet
+                   cascading in the wrong order. The layer entry is NULL for exactly the non-style rules the
+                   emission writes (an `@namespace`), so the two questions answer each other. */
+                DCHECK(at_rule < view.n,
+                       "a CSS style sheet's rules did not ROUND-TRIP: the rule objects serialized to a text "
+                       "that parses back to MORE rules than went in. A rule holds the SERIALIZATION lexbor "
+                       "produced for it, so re-parsing it must yield exactly what it came from — find which "
+                       "rule's text does not, and fix the serializer that wrote it");
+                if (at_rule >= view.n) break;
+                layer = view.layer[at_rule];
+                DCHECK((r->type == LXB_CSS_RULE_STYLE) == (layer != NULL),
+                       "a CSS style sheet's rules did not ROUND-TRIP IN ORDER: the rule at this index parses "
+                       "back as a different KIND of rule than the one the author cascade emitted there. The "
+                       "emission records a cascade layer for a style rule and nothing for an `@namespace`, so "
+                       "a disagreement means the rules have shifted and every rule after this one would be "
+                       "cascaded in a neighbour's layer");
                 if (r->type != LXB_CSS_RULE_STYLE || !st->selector || !st->declarations) continue;
                 if (!selector_match_node(self, st->selector, &spec)) continue;
                 /* THE RULE'S OWN §6.6 DECLARATIONS, which is the same list its `rule.style` reports and the
                    same one an inline block is read through — expanded to longhands and collapsed to one per
                    property. A rule declaring a property twice has already been resolved by the collapse's own
-                   two criteria, so what arrives here is one declaration per property. */
+                   two criteria, so what arrives here is one declaration per property — which is also why one
+                   counter can be both §6.1's order of appearance and §7.3.6's identity of the rule. */
                 cssd_decls_from_list(st->declarations, &rd);
                 at = cssd_decls_index(&rd, name);
-                if (at >= 0 && rd.v[at].value) {
-                    bool important = rd.v[at].important;
-                    /* THE CASCADE, in the order §6.4 states it: IMPORTANCE first, then SPECIFICITY, then
-                       document ORDER. Order alone is what this compared at first, which is wrong in the
-                       most ordinary way there is — `#main { display:block }` written before
-                       `div { display:none }` would have lost, and every page puts its general rules last.
-                       selector_match_node reports the specificity that matched; throwing it away and
-                       calling document order "the cascade" was skipping the subproblem. */
-                    bool wins = !have
-                        || (important && !best_important)
-                        || (important == best_important && spec >= best_spec);
-
-                    if (wins) {
-                        free(out);
-                        out = cssd_strdup(rd.v[at].value);
-                        best_spec = spec;
-                        best_important = important;
-                        have = true;
-                    }
-                }
+                if (at >= 0 && rd.v[at].value)
+                    css_cascade_add(cascade, CSS_ORIGIN_AUTHOR, rd.v[at].important, false, layer,
+                                    (uint32_t)spec, *pseq + at_rule, rd.v[at].value);
                 cssd_decls_free(&rd);
             }
-            /* THE ROUND TRIP IS ASSERTED, NOT ASSUMED. Every rule the list holds was serialized into `text` and
-               must come back as exactly one rule: a count that disagrees means a stored selector or block no
-               longer re-parses as what produced it, and the silent version of that is every rule after the
-               offender matching under a neighbour's selector. */
-            DCHECK(back == nrules,
+            DCHECK(back == view.n,
                    "a CSS style sheet's rules did not ROUND-TRIP: the rule objects serialized to a text that "
-                   "parses back to a different number of rules. A rule holds the SERIALIZATION lexbor produced "
+                   "parses back to FEWER rules than went in. A rule holds the SERIALIZATION lexbor produced "
                    "for it, so re-parsing it must yield exactly what it came from — find which rule's text "
                    "does not, and fix the serializer that wrote it rather than tolerating the drift");
         }
@@ -766,10 +807,13 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
            its selectors are all allocated FROM this arena, so destroying the arena is what releases them;
            nothing here outlives it (every value this function keeps is copied out). */
         if (smem) lxb_css_memory_destroy(smem, true);
-        free(text);
+        /* §6.1's Order of Appearance across SHEETS: "declarations from style sheets independently linked by the
+           originating document are treated as if they were concatenated in linking order", so the next sheet's
+           first rule follows this sheet's last one rather than restarting. */
+        *pseq += view.n;
+        css_rule_cascade_sheet_free(&view);
     }
     JS_FreeValue(ctx, sheets);
-    return out;
 }
 
 /* ---- CSS Syntax's "parse a stylesheet's contents", for CSSOM §6.4's rule objects --------------------------
@@ -1343,7 +1387,12 @@ char *cssom_initial_value(const char *name)
    of those steps, and this is the one entry it reads the cascade through. */
 char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
 {
-    char *v;
+    CssLayerOrder *order;
+    CssCascade *cascade;
+    const char *ua;
+    uint32_t seq = 0;
+    bool important = false;
+    char *v, *out;
 
     DCHECK(g_ready, "the cascade was resolved before cssom_init built the CSS parser it parses every layer "
                     "with — the component is initialised with the DOM, so a caller reaching it first is a "
@@ -1356,27 +1405,48 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
            "never looked at. §6.6.1's getPropertyValue owns the shorthand step, and both paths that can be "
            "asked for one run it BEFORE reaching here — cssd_property_value over a block's declarations, and "
            "css_resolved_value over §7.2's resolved longhands. A third caller must run it too");
-    v = cssd_inline_value(el, name, NULL);
-    if (v) return v;
-    v = cssd_author_value(el, name);
-    if (v) return v;
-    /* LAYER 3 — css-cascade-5 §6.5's AUTHOR PRESENTATIONAL HINT ORIGIN, "between the regular user origin and
-       the author origin". It is asked HERE and not as a row of the UA table below because that is where the
-       origin sits: an author rule of any specificity outranks a hint, and a hint outranks the UA sheet. */
-    v = css_presentational_hint(el, name);
-    if (v) return v;
-    {
-        const char *ua = cssd_ua_value(el, name);
-        if (ua) {
-            char *out = strdup(ua);
-            CHECK(out != NULL, "cssom: OOM copying a UA-stylesheet value — a dropped one reads as undeclared");
-            return out;
-        }
+    /* EVERY ORIGIN CONTRIBUTES INTO ONE LIST, AND THE SORT DECIDES — which is §6.1 and is not what asking each
+       origin in turn does. The four used to be asked in precedence order and the first that answered won, and
+       that is a DIFFERENT ordering: it hoists §6.1's Element-Attached criterion above its Origin-and-Importance
+       one, so `<p style="color:blue">` beat `p { color: red !important }`, which §6.1 and §6.3 both say it
+       loses to ("an important declaration takes precedence over a normal declaration", and Element-Attached is
+       the criterion BELOW Origin and Importance, reached only when it ties). */
+    order = css_layer_order_create();
+    cascade = css_cascade_create(order);
+    cssd_author_collect(el, name, cascade, order, &seq);
+    /* §6.1's ELEMENT-ATTACHED STYLES: "declarations that are attached directly to an element (such as the
+       contents of a style attribute) rather than indirectly mapped by means of a style rule selector take
+       precedence over declarations the same importance that are mapped via style rule." It is in the AUTHOR
+       origin ([CSSSTYLEATTR]) and in no explicit cascade layer, and §6.1's Order of Appearance places it after
+       every style sheet ("declarations from style attributes ... are all placed after any style sheets"),
+       which is what the counter reaching here already is. */
+    v = cssd_inline_value(el, name, &important);
+    if (v) {
+        css_cascade_add(cascade, CSS_ORIGIN_AUTHOR, important, true, css_layer_order_root(order), 0, ++seq, v);
+        free(v);
     }
-    /* NO DECLARATION WON, which is a real answer and not a missing one — CSS Cascade §7.1 and §7.2 are both
-       written for exactly this state ("unless the cascade results in a value"), and which of them applies is
-       the property's own `Inherited:` line. §7's step is core/css/css_defaulting.h's and it runs above this. */
-    return NULL;
+    /* css-cascade-5 §6.5's AUTHOR PRESENTATIONAL HINT ORIGIN, "between the regular user origin and the author
+       origin". It is an ORIGIN and not a row of the UA table below because that is where §6.5 puts it: an
+       author rule of any specificity outranks a hint, and a hint outranks the UA sheet. */
+    v = css_presentational_hint(el, name);
+    if (v) {
+        css_cascade_add(cascade, CSS_ORIGIN_PRESENTATIONAL_HINT, false, false, NULL, 0, ++seq, v);
+        free(v);
+    }
+    ua = cssd_ua_value(el, name);
+    if (ua) css_cascade_add(cascade, CSS_ORIGIN_UA, false, false, NULL, 0, ++seq, ua);
+    /* §6.4.3's order is a fact about the WHOLE document's layers, so it is sealed once every sheet has been
+       walked and before the first index is read. Nothing below declares a layer. */
+    css_layer_order_seal(order);
+    /* NULL HERE IS "NO DECLARATION WON", which is a real answer and not a missing one — CSS Cascade §7.1 and
+       §7.2 are both written for exactly this state ("unless the cascade results in a value"), and which of them
+       applies is the property's own `Inherited:` line. §7's step is core/css/css_defaulting.h's and it runs
+       above this; §7.3's three cascade-dependent keywords are discharged BELOW it, inside the sort, because
+       each is defined by a fact only the sort holds. */
+    out = css_cascade_value(cascade);
+    css_cascade_free(cascade);
+    css_layer_order_free(order);
+    return out;
 }
 
 /* ---- §6.6's DECLARATIONS: where the two backings keep them, and how a member edits them ------------------- */

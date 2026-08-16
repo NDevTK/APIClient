@@ -198,4 +198,15 @@ typedef struct {
 bool css_prelude_layer_names(const char *prelude, size_t len, CssLayerNames *out);
 void css_layer_names_free(CssLayerNames *p);
 
+/* ONE serialized `<layer-name>` back into its SEGMENTS — `reset.type` into `reset` and `type`, `a\.b` into the
+   single segment `a\.b`. Never fails and never answers zero segments: the empty name is not one this component
+   ever produces, and §6.4.2.1's anonymous layer is the ABSENCE of a name rather than an empty one.
+   IT IS HERE BECAUSE THE JOIN IS. §6.4.2 gives a layer name its identity by its segments ("layer names
+   represent the same cascade layer if they contain the same segments in the same order"), so CSS Cascade
+   §6.4.3's order (core/css/css_layer_order.h) has to compare them one segment at a time — and the convention
+   that decides where one segment ends is the escaping this file writes when it joins them. Two files reading
+   that convention could disagree about `a\.b`, and one of them would be wrong about which cascade layer a rule
+   is in. OWNED through `css_layer_names_free`. */
+void css_layer_name_segments(const char *name, CssLayerNames *out);
+
 #endif

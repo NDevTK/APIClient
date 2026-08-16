@@ -623,3 +623,31 @@ fail:
     pre_close(&p);
     return false;
 }
+
+void css_layer_name_segments(const char *name, CssLayerNames *out)
+{
+    CssLayerNames got = { NULL, 0 };
+    size_t i = 0, start = 0;
+
+    DCHECK(name != NULL && out != NULL,
+           "a `<layer-name>` was split with no name, or with nowhere to report its segments");
+    DCHECK(name != NULL && name[0] != '\0',
+           "an EMPTY `<layer-name>` was split into segments. The production's first term is an `<ident>` and "
+           "the parse above answers false without one, so no rule in this build stores an empty name — "
+           "§6.4.2.1's ANONYMOUS layer is the ABSENCE of a name, reported as such at the caller, and a layer "
+           "named by the empty string would unify with every other empty one instead of being unique");
+    /* THE ESCAPE IS WHAT MAKES THIS A SCAN AND NOT A `strchr` LOOP. Every segment came out of
+       `css_serialize_identifier` above, which writes a period inside a segment as `\.` (a period is not one of
+       §2.1's escape-as-code-point cases, so it takes the escape-a-character arm) and a backslash as `\\`. So a
+       BACKSLASH consumes exactly the next byte — which is what tells `a\.b`, ONE segment, from `a.b`, two, and
+       what keeps `a\\` followed by `.b` reading as two. Nothing else in a serialized identifier can be a bare
+       period, so a period this scan reaches is always §6.4.2's separator. */
+    for (;;) {
+        if (name[i] == '\\' && name[i + 1] != '\0') { i += 2; continue; }
+        if (name[i] != '.' && name[i] != '\0') { i++; continue; }
+        pre_layer_names_push(&got, pre_copy(name + start, i - start));
+        if (name[i] == '\0') break;
+        start = ++i;
+    }
+    *out = got;
+}

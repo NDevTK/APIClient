@@ -11,14 +11,20 @@
 #include "quickjs.h"
 
 void cssom_init(JSContext *ctx);
-/* CSS Cascade §6's CASCADED VALUE for `name` on `el` — inline, then this flow's author rules, then
-   css-cascade-5 §6.5's author presentational hint origin (core/css/css_presentational_hints.h), then the UA
-   sheet — as text. OWNED: the caller frees.
+/* CSS Cascade §6's CASCADED VALUE for `name` on `el`, as text. Every origin this engine has contributes its
+   declarations into ONE list — this flow's author style rules, the element's own style attribute, css-cascade-5
+   §6.5's author presentational hint origin (core/css/css_presentational_hints.h) and the UA sheet — and
+   core/css/css_cascade.h sorts that list by §6.1's criteria, §6.4.3's layer order included. OWNED: the caller
+   frees.
    NULL WHEN NO DECLARATION WON, which is the common case and a real answer rather than a missing one: §7.1 and
    §7.2 are both written for it ("unless the cascade results in a value"), and telling it apart from a declared
    initial value is what lets an INHERITED property ask the parent instead. §7's DEFAULTING is the step that
    acts on it (core/css/css_defaulting.h), and the property's `Computed value:` line is applied after that
-   (core/css/css_computed_value.h) — three steps, in that order, and this is the first. */
+   (core/css/css_computed_value.h) — three steps, in that order, and this is the first.
+   §7.3's THREE CASCADE-DEPENDENT KEYWORDS NEVER COME OUT OF HERE, because they are discharged INSIDE the sort:
+   `revert`, `revert-layer` and `revert-rule` are defined by the origin, layer and rule the declaration sat in,
+   and none of those survives into a cascaded value. The one exception is the one §7.3.4 states — a `revert` in
+   the user-agent origin "is equivalent to unset" — which is answered as that keyword for §7 to resolve. */
 char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name);
 
 /* CSS Cascade §7.1's INITIAL VALUE of `name` — the property's own `Initial:` line, out of lexbor's registry and
