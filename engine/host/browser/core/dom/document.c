@@ -61,12 +61,19 @@
 #include "core/dom/document_type.h"
 #include "core/dom/dom_implementation.h"
 #include "core/xml/xml_name.h"   /* §4.13 step 1's `Name` production is XML's, referenced by the DOM */
+#include "core/dom/names.h"      /* §1.4's validate-and-extract — createElementNS's step 1, ONE implementation */
 #include "core/idl_args.h"
 #include "core/realm.h"
 
 /* Every member here takes DOMStrings; createElementNS takes two. Declared, not masked. */
 static const IdlArgType IDL_1STR[1] = { IDL_DOMSTRING };
 static const IdlArgType IDL_2STR[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
+/* `Element createElementNS(DOMString? namespace, DOMString qualifiedName, …)` — the FIRST argument is nullable
+   and `createElementNS(null, "div")` is the ordinary way a page asks for the null namespace. Declared as a
+   plain DOMString it was ToString'd, so the body received the four characters `null` and built an element
+   whose namespaceURI was that string. Not shared with IDL_2STR: createProcessingInstruction's two arguments
+   are both non-nullable, and one array across both would say the wrong thing about one of them. */
+static const IdlArgType IDL_NSSTR_STR[2] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRING };
 #include "core/dom/node.h"
 #include <lexbor/css/css.h>
 #include <lexbor/selectors/selectors.h>
@@ -959,64 +966,38 @@ static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int 
     return node_wrap(ctx, lxb_dom_interface_node(c));
 }
 
-/* DOM 4.5.3 "validate and extract" — the whole of it, because every one of its failures is a DOMException the
-   spec names and a page catches. `""` MEANS NULL: a namespace of the empty string is set to null before
-   anything else, and skipping that step handed Lexbor a zero-length namespace it refuses, which is what made
-   `document.createElementNS("", "div")` — a shape five WPT documents open with — produce no element at all.
-   Returns 0 and leaves an exception pending on failure; on success *local points into qname. */
-static int validate_and_extract(JSContext *ctx, const char **ns, const char *qname,
-                                const char **local, size_t *prefix_len)
-{
-    static const char XML_NS[]   = "http://www.w3.org/XML/1998/namespace";
-    static const char XMLNS_NS[] = "http://www.w3.org/2000/xmlns/";
-    const char *colon;
-
-    if (*ns && **ns == 0)
-        *ns = NULL;                       /* 1. "If namespace is the empty string, set it to null." */
-    if (!*qname) {
-        JS_ThrowDOMException(ctx, "InvalidCharacterError", "the qualified name is empty");
-        return 0;
-    }
-    colon = strchr(qname, ':');
-    *local = colon ? colon + 1 : qname;
-    *prefix_len = colon ? (size_t)(colon - qname) : 0;
-    if (colon && (*prefix_len == 0 || **local == 0 || strchr(*local, ':'))) {
-        JS_ThrowDOMException(ctx, "InvalidCharacterError", "'%s' is not a valid qualified name", qname);
-        return 0;
-    }
-    if (colon && !*ns) {
-        JS_ThrowDOMException(ctx, "NamespaceError", "a prefixed name needs a namespace");
-        return 0;
-    }
-    if (colon && *prefix_len == 3 && memcmp(qname, "xml", 3) == 0 && strcmp(*ns, XML_NS) != 0) {
-        JS_ThrowDOMException(ctx, "NamespaceError", "the xml prefix is bound to the XML namespace");
-        return 0;
-    }
-    {
-        int q_is_xmlns = strcmp(qname, "xmlns") == 0;
-        int p_is_xmlns = colon && *prefix_len == 5 && memcmp(qname, "xmlns", 5) == 0;
-        if ((q_is_xmlns || p_is_xmlns) && (!*ns || strcmp(*ns, XMLNS_NS) != 0)) {
-            JS_ThrowDOMException(ctx, "NamespaceError", "xmlns is bound to the XMLNS namespace");
-            return 0;
-        }
-        if (*ns && strcmp(*ns, XMLNS_NS) == 0 && !q_is_xmlns && !p_is_xmlns) {
-            JS_ThrowDOMException(ctx, "NamespaceError", "the XMLNS namespace only binds xmlns");
-            return 0;
-        }
-    }
-    return 1;
-}
-
 /* 4.5.3 createElementNS(namespace, qualifiedName). createElement's element creation over the validated triple —
    the element carries the NAMESPACE the page asked for, so `el.namespaceURI` and a namespaced selector answer
    what they should. testharness.js reaches it on every completed document (`createElementNS(xhtml_ns, "style")`
    in Output.show_results), and a missing one threw inside the completion-callback list, silencing documents
-   whose tests had all already run. */
+   whose tests had all already run.
+
+   §1.4's "validate and extract" IS core/dom/names.c's, and there is no longer a second one here. The copy that
+   stood in this file was written before that component existed and had drifted from it in three ways that a
+   page can see, each one a consequence of being STRING-BASED where the algorithm is length-carrying:
+     - it never validated the LOCAL NAME at all, so `createElementNS(SVG_NS, "a b")` and `createElementNS(null,
+       "1")` built elements out of names §1.4 step 6 rejects, where the shared algorithm throws the
+       InvalidCharacterError the step names;
+     - `strchr`/`strcmp` stop at U+0000, which DOM §1.4 treats as an ordinary code point a page may write, so
+       `createElementNS(ns, "a\0:b")` found no colon and `createElementNS("http://…/xmlns/\0x", "xmlns")`
+       compared equal to the XMLNS namespace it is not;
+     - it validated a prefix only by "non-empty and no second colon", where §1.4 step 4.3 is the valid-namespace-
+       prefix predicate.
+   The shared one also takes the CONTEXT — `createElementNS` is an ELEMENT context, and that is a real
+   difference rather than a parameter for tidiness: `a=b` is a valid element local name and not a valid
+   attribute one, and the private copy validated neither.
+
+   The FIRST ARGUMENT IS `DOMString?` AND IS NOW DECLARED SO. It was declared IDL_DOMSTRING, which is ToString,
+   so `document.createElementNS(null, "div")` reached this body holding the four characters `null` and built an
+   element in a namespace of that name — and the JS_IsNull test below, which is the shape every other nullable
+   member here uses, was unreachable code that made it look handled. The one remaining reader of that test is
+   §4.5.1's createDocument, which calls the internal steps with a real JS_NULL. */
 static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)magic;
-    const char *ns = NULL, *qname, *local;
-    size_t prefix_len = 0;
+    const char *ns = NULL, *qname;
+    size_t ns_len = 0, qname_len = 0;
+    DomQName qn;
     lxb_dom_element_t *el;
     Document *d = doc_receiver(ctx, this_val);
     JSValue r;
@@ -1024,29 +1005,27 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
     if (!d) return JS_EXCEPTION;
     if (argc < 2) return JS_ThrowTypeError(ctx, "createElementNS requires a namespace and a qualified name");
     if (!JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0])) {
-        ns = JS_ToCString(ctx, argv[0]);
+        ns = JS_ToCStringLen(ctx, &ns_len, argv[0]);
         if (!ns) return JS_EXCEPTION;
     }
-    qname = JS_ToCString(ctx, argv[1]);
+    /* LENGTH-CARRYING on both, because §1.4 decides about U+0000 and `strlen` decides about the prefix of the
+       string in front of it. names.h says the same thing from the component's side. */
+    qname = JS_ToCStringLen(ctx, &qname_len, argv[1]);
     if (!qname) { if (ns) JS_FreeCString(ctx, ns); return JS_EXCEPTION; }
 
-    {
-        const char *ns_in = ns;   /* validate_and_extract may null it; the ORIGINAL is what must be freed */
-        if (!validate_and_extract(ctx, &ns, qname, &local, &prefix_len)) {
-            if (ns_in) JS_FreeCString(ctx, ns_in);
-            JS_FreeCString(ctx, qname);
-            return JS_EXCEPTION;
-        }
-        /* §4.5's storage step, and NOT lxb_dom_element_create: that entry interns the namespace and the local
-           name through lexbor's case-folding hashes, so this method's two string arguments came back out of
-           `namespaceURI` and `localName` lowercased. element.c states which standard says each is a different
-           name; here the only thing to say is that the element is created from what the page passed. */
-        el = element_create_ns(lxb_dom_interface_document(d->dom),
-                               ns, ns ? strlen(ns) : 0,
-                               local, strlen(local),
-                               prefix_len ? qname : NULL, prefix_len);
-        if (ns_in) JS_FreeCString(ctx, ns_in);
+    if (!dom_validate_and_extract(ctx, ns, ns_len, qname, qname_len, DOM_NAME_ELEMENT, &qn)) {
+        if (ns) JS_FreeCString(ctx, ns);
+        JS_FreeCString(ctx, qname);
+        return JS_EXCEPTION;          /* the DOMException §1.4's own step names is already thrown */
     }
+    /* §4.5's storage step, and NOT lxb_dom_element_create: that entry interns the namespace and the local
+       name through lexbor's case-folding hashes, so this method's two string arguments came back out of
+       `namespaceURI` and `localName` lowercased. element.c states which standard says each is a different
+       name; here the only thing to say is that the element is created from what the page passed — and the
+       three slices validate-and-extract hands back ARE what it passed. */
+    el = element_create_ns(lxb_dom_interface_document(d->dom),
+                           qn.ns, qn.ns_len, qn.local, qn.local_len, qn.prefix, qn.prefix_len);
+    if (ns) JS_FreeCString(ctx, ns);
     JS_FreeCString(ctx, qname);
     r = element_wrap(ctx, el);
     return r;
@@ -1886,7 +1865,7 @@ static void document_declare_members(JSContext *ctx)
        which it was not, and `new Document()` is how a page gets an XML document without DOMImplementation. */
     g_id_doc_ctor = idl_method_id(ctx, NULL, 0, js_doc_ctor, 0);
     g_id_create_fragment = idl_method_id(ctx, NULL, 0, js_doc_create_fragment, 0);
-    g_id_create_element_ns = idl_method_id(ctx, IDL_2STR, 2, js_doc_create_element_ns, 0);
+    g_id_create_element_ns = idl_method_id(ctx, IDL_NSSTR_STR, 2, js_doc_create_element_ns, 0);
     {
         /* §4.5: `(Node root, optional unsigned long whatToShow = 0xFFFFFFFF, optional NodeFilter? filter =
            null)`, twice. */
