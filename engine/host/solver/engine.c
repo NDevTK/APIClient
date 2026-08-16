@@ -2258,10 +2258,16 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    URL that does not parse is HTML §7.4.2.3.2's abrupt evaluation, which produces no Document and
                    no navigation — `<a href="javascript:{{{">` is a link that does nothing, not an engine bug. A
                    PAGE script that does not compile is a different thing entirely and still asserts. */
+                /* FOR A MODULE THIS IS THE COMPILE AND ONLY THE COMPILE. It used to name linking too, and that
+                   stopped being true when loading became its own phase: §8.1.3.3's module entry now LOADS the
+                   graph (16.2.1.6.1.1, asynchronous — the host fetches each specifier) and links it only upon
+                   that load's fulfilment, so a graph that fails to load or to link REJECTS the evaluation
+                   promise and is reported by module_report_rejection, exactly as HTML's "set moduleScript's
+                   error to rethrow" says. What can still fail before a module starts is 16.2.1.7.1 ParseModule,
+                   which is the page's own SyntaxError. */
                 DCHECK(kind != DYN_PAGE_SCRIPT,
-                       "flow_step: a page <script>/chunk did not start — a classic script that did not COMPILE, "
-                       "or a module script whose graph did not LINK (the two ways §8.1.3.3's entries fail "
-                       "before they run)");
+                       "flow_step: a page <script>/chunk did not start — its source did not COMPILE (a classic "
+                       "script's program, or a module script's 16.2.1.7.1 ParseModule)");
                 /* A CROSS-AGENT OPERATION'S PROGRAM IS THE ENGINE'S OWN TEXT (core/frame/remote_op.c), so it
                    parses or this engine wrote it wrong — and skipping it would leave the peer's flow parked on
                    an answer that is now never coming. */
