@@ -539,14 +539,67 @@ static bool resolved_display_generates_a_box(lxb_dom_element_t *el)
     return box;
 }
 
+/* §6.6.1's getPropertyValue SHORTHAND STEP, over RESOLVED values — "for each longhand property longhand that
+   property maps to, IN CANONICAL ORDER ... if declaration is null, then return the empty string ... return the
+   serialization of list". A COMPUTED block reaches it here rather than through the block's own declarations
+   because §7.2's declarations are not stored: they are "the resolved value of every longhand property", derived
+   per read, so the list this step builds is built by asking for each longhand's resolved value.
+   THE CASCADE IS OVER LONGHANDS, so a shorthand that fell past this would reach cssom_cascaded_value, which
+   asserts against exactly that: no layer declares a shorthand, and the answer would be the property's initial
+   value with nothing to say the longhands that DID set it were never looked at. */
+static JSValue css_resolved_shorthand(JSContext *ctx, lxb_dom_element_t *el, const char *name,
+                                      const char *const *lh, unsigned n)
+{
+    JSValue parts[CSS_SHORTHAND_MAX_LONGHANDS];
+    const char *values[CSS_SHORTHAND_MAX_LONGHANDS];
+    unsigned i, held = 0, converted = 0;
+    bool all = true;
+    char *value = NULL;
+    JSValue out;
+
+    CHECK(n <= CSS_SHORTHAND_MAX_LONGHANDS,
+          "cssom: a shorthand's longhand list outgrew the array §9's resolved value sized from it");
+    for (i = 0; i < n && all; i++) {
+        parts[i] = css_resolved_value(ctx, el, lh[i]);
+        if (JS_IsException(parts[i])) { all = false; break; }
+        held = i + 1;
+        /* A RESOLVED VALUE THAT IS NOT A PLAIN STRING carries a DOMAIN — a used value derived from the viewport
+           or the device pixel ratio — and §6.7.2's consolidation is a joint function of all of them, so the
+           result would have to carry every operand's fact the way css_px_combine does. Serializing the example
+           out of it here would drop the fork instead. */
+        DCHECK(JS_IsString(parts[i]),
+               "a shorthand's longhand resolved to a value carrying a DOMAIN rather than a plain string, and "
+               "§6.7.2's serialize-a-CSS-value over a list has no way to combine four of those into one. BUILD "
+               "the combination in core/css/css_length.h's terms — css_px_combine is the shape: the result "
+               "carries every operand's environment fact — and let this step produce a concolic string rather "
+               "than a concrete one");
+        values[i] = JS_ToCString(ctx, parts[i]);
+        if (!values[i]) { all = false; break; }
+        converted = i + 1;
+        /* "If declaration is null, then return the empty string" — which is the answer for a longhand this
+           build resolves no value for, and therefore for every shorthand one of whose longhands it does not. */
+        if (*values[i] == '\0') all = false;
+    }
+    if (all) value = css_shorthand_serialize_value(name, (const char *const *)values);
+    for (i = 0; i < converted; i++) JS_FreeCString(ctx, values[i]);
+    for (i = 0; i < held; i++) JS_FreeValue(ctx, parts[i]);
+    out = value ? JS_NewString(ctx, value) : JS_NewStringLen(ctx, "", 0);
+    free(value);
+    return out;
+}
+
 JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name)
 {
+    const char *const *lh;
+    unsigned nlh;
     JSValue out;
 
     DCHECK(ctx != NULL, "a resolved value was asked for with no realm to answer it in — the string is created "
                         "there, and a used value derived from the viewport mints its domain in the element's "
                         "document's realm, which is a different one and is read from the element itself");
     DCHECK(el != NULL && name != NULL, "a resolved value was asked for with no element or no property name");
+    lh = css_shorthand_longhands(name, &nlh);
+    if (lh) return css_resolved_shorthand(ctx, el, name, lh, nlh);
     switch (css_resolved_kind(name)) {
     case CSS_RESOLVED_COMPUTED:
         break;
