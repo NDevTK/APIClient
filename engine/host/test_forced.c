@@ -64,6 +64,9 @@
 #include "core/encoding/text_stream.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/fetch.h"
+#include "core/indexeddb/idb_database.h"
+#include "core/indexeddb/idb_key.h"
+#include "core/indexeddb/idb_key_range.h"
 #include "solver/endpoint.h"
 #include "solver/req2proto.h"
 #include "solver/result.h"
@@ -1883,6 +1886,185 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
     return ctx;
 }
 
+/* INDEXED DATABASE §2.1/§2.2 AND §6.1/§6.2 — THE ROUND TRIP, which is the whole statement of what an object
+ * store IS: a value a `put` writes is the value a `get` reads back, filed under the ordering §2.4 defines, and
+ * a TAINTED value comes back still tainted.
+ *
+ * WHY IT IS ASSERTED HERE AND NOT THROUGH THE INTERFACES. §4.5's `put` is a request, on a transaction, on a
+ * connection, opened by §5.1 — and every one of those decides WHEN the two algorithms below run rather than
+ * what they do. They are the next subproblem; this is the one that says the operation they will schedule is
+ * finished before anything is built on top of it. That is a different thing from the self-test §Security warns
+ * about: these algorithms answer over a store's own list of records, so no caller changes their answer, and
+ * what this cannot exercise — the scheduling — it does not claim to.
+ *
+ * THE SORT IS ASSERTED THROUGH THE RETRIEVAL rather than through an accessor that would exist only for this:
+ * §6.2 answers the FIRST record whose key is in range, so an UNBOUNDED range answers the SMALLEST key. The
+ * records below go in as 3, 1, 2 and the answer must be 1. */
+static JSValue idb_selftest_key(JSContext *ctx, JSValue v)      /* CONSUMES v */
+{
+    JSValue key;
+
+    CHECK(idb_key_from_value(ctx, v, &key) == 0, "§7.4 refused a value this fixture files a record under");
+    JS_FreeValue(ctx, v);
+    return key;
+}
+
+static JSValue idb_selftest_range(JSContext *ctx, JSValue v)    /* CONSUMES v */
+{
+    JSValue range;
+
+    CHECK(idb_key_range_from_value(ctx, v, false, &range) == 0, "§2.9 refused a value this fixture queries by");
+    JS_FreeValue(ctx, v);
+    return range;
+}
+
+static int32_t idb_selftest_int(JSContext *ctx, JSValueConst v)
+{
+    int32_t n = -1;
+
+    CHECK(JS_ToInt32(ctx, &n, v) == 0, "a value this fixture stored as a number did not come back as one");
+    return n;
+}
+
+static void idb_selftest_put(JSContext *ctx, JSValueConst store, JSValueConst value, JSValueConst key)
+{
+    JSValue out = JS_UNDEFINED;
+
+    CHECK(idb_store_record(ctx, store, value, key, false, &out) == 0,
+          "§6.1 refused a record for a store with out-of-line keys and no key generator");
+    CHECK(!JS_IsUndefined(out), "§6.1's last step is \"Return key\", and it returned none");
+    JS_FreeValue(ctx, out);
+}
+
+static void idb_store_selftest(JSContext *ctx)
+{
+    static const int32_t ARRIVAL[] = { 3, 1, 2 };
+    JSValue db, found, store, key, range, got, tainted, value, out;
+    int i;
+
+    /* §2.1: "When a database is first created, its version is 0", and a storage key has ONE database per name
+       — the set answers with the database that was created and not with a copy of it. */
+    db = idb_database_create(ctx, "selftest");
+    CHECK(idb_database_version(ctx, db) == 0, "§2.1: a database is first created with version 0");
+    found = idb_database_find(ctx, "selftest");
+    CHECK(JS_VALUE_GET_PTR(found) == JS_VALUE_GET_PTR(db),
+          "§2.1: a storage key's set of databases must answer with the database created under that name");
+    JS_FreeValue(ctx, found);
+    found = idb_database_find(ctx, "never-created");
+    CHECK(JS_IsNull(found), "§2.1: a name this storage key holds no database for must answer with none");
+    JS_FreeValue(ctx, found);
+
+    /* §2.2: out-of-line keys, no key generator — the store §6.1's first step does not branch for. */
+    store = idb_object_store_create(ctx, db, "s", JS_NULL, false);
+    found = idb_object_store_find(ctx, db, "s");
+    CHECK(JS_VALUE_GET_PTR(found) == JS_VALUE_GET_PTR(store),
+          "§2.2: an object store's name is unique within its database and names that store");
+    JS_FreeValue(ctx, found);
+
+    for (i = 0; i < 3; i++) {
+        key = idb_selftest_key(ctx, JS_NewInt32(ctx, ARRIVAL[i]));
+        value = JS_NewInt32(ctx, ARRIVAL[i] * 10);
+        idb_selftest_put(ctx, store, value, key);
+        JS_FreeValue(ctx, value);
+        JS_FreeValue(ctx, key);
+    }
+
+    /* §2.2's ORDER, through §6.2's "first record ... whose key is in range" over an unbounded one. */
+    range = idb_selftest_range(ctx, JS_UNDEFINED);
+    got = idb_retrieve_key(ctx, store, range);
+    CHECK(idb_selftest_int(ctx, got) == 1,
+          "§2.2: the list of records is sorted by key in ascending order, so the first record in an unbounded "
+          "range is the smallest key and not the one that arrived first");
+    JS_FreeValue(ctx, got);
+    got = idb_retrieve_value(ctx, store, range);
+    CHECK(idb_selftest_int(ctx, got) == 10, "§6.2 answered the wrong record's value for the smallest key");
+    JS_FreeValue(ctx, got);
+    JS_FreeValue(ctx, range);
+
+    /* THE ROUND TRIP ITSELF, and then §6.1's step 3: a second put under one key REPLACES that record rather
+       than filing a second one — "There can never be multiple records in a given object store with the same
+       key" (§2.2), which the list's own invariant asserts as the write happens. */
+    range = idb_selftest_range(ctx, JS_NewInt32(ctx, 2));
+    got = idb_retrieve_value(ctx, store, range);
+    CHECK(idb_selftest_int(ctx, got) == 20, "§6.2 must read back the value §6.1 wrote under that key");
+    JS_FreeValue(ctx, got);
+    key = idb_selftest_key(ctx, JS_NewInt32(ctx, 2));
+    value = JS_NewInt32(ctx, 99);
+    idb_selftest_put(ctx, store, value, key);
+    JS_FreeValue(ctx, value);
+    got = idb_retrieve_value(ctx, store, range);
+    CHECK(idb_selftest_int(ctx, got) == 99, "§6.1's overwrite must replace the record filed under that key");
+    JS_FreeValue(ctx, got);
+
+    /* §6.1 STEP 2: the no-overwrite flag — what tells `add` from `put` — is a "ConstraintError", reported
+       BEFORE the value is copied, and it leaves the record it refused to overwrite exactly as it was. */
+    value = JS_NewInt32(ctx, 7);
+    out = JS_UNDEFINED;
+    CHECK(idb_store_record(ctx, store, value, key, true, &out) < 0,
+          "§6.1's no-overwrite flag must refuse a key the store already holds a record for");
+    {
+        JSValue exc = JS_GetException(ctx), name = JS_GetPropertyStr(ctx, exc, "name");
+        const char *s = JS_ToCString(ctx, name);
+
+        CHECK(s && !strcmp(s, "ConstraintError"),
+              "§6.1 reported its no-overwrite refusal as something other than a ConstraintError — a page tells "
+              "that apart from a DataError by name");
+        JS_FreeCString(ctx, s);
+        JS_FreeValue(ctx, name);
+        JS_FreeValue(ctx, exc);
+    }
+    JS_FreeValue(ctx, out);
+    JS_FreeValue(ctx, value);
+    got = idb_retrieve_value(ctx, store, range);
+    CHECK(idb_selftest_int(ctx, got) == 99, "a refused put must leave the record it refused to overwrite");
+    JS_FreeValue(ctx, got);
+    JS_FreeValue(ctx, key);
+    JS_FreeValue(ctx, range);
+
+    /* A TAINTED VALUE, which is the half a browser's own test suite cannot have. A page keeps its session in
+       here and reads it back into gated code; §Attacker-sources names IndexedDB as a source. A store that
+       refused this would take the whole surface out of reach, and a store that de-tainted it would answer
+       with a plausible datum and delete the fork the read should produce. */
+    tainted = concolic_new(ctx, "{hash}", "{hash}", JS_NewString(ctx, "session-token"));
+    key = idb_selftest_key(ctx, JS_NewInt32(ctx, 5));
+    idb_selftest_put(ctx, store, tainted, key);
+    JS_FreeValue(ctx, key);
+    range = idb_selftest_range(ctx, JS_NewInt32(ctx, 5));
+    got = idb_retrieve_value(ctx, store, range);
+    CHECK(concolic_is(got), "§6.2 must answer with the stored value still CONCOLIC");
+    CHECK(JS_VALUE_GET_PTR(got) == JS_VALUE_GET_PTR(tainted),
+          "the value came back as a SECOND symbol rather than the one that went in — a concolic stands for a "
+          "primitive and a primitive is its own copy, so every constraint a flow narrowed the source with has "
+          "to name what this read answers");
+    JS_FreeValue(ctx, got);
+    JS_FreeValue(ctx, range);
+    JS_FreeValue(ctx, tainted);
+
+    /* AND A TAINTED KEY — `store.get(location.hash.slice(1))` is the ordinary shape. §7.4's concolic arm takes
+       the TYPE from the example and carries the concolic as the key's value, so §7.3 hands it back as the
+       concolic rather than as a laundered copy of one, and §2.4's compare finds it by reading the example. */
+    tainted = concolic_new(ctx, "{hash}", "{hash}", JS_NewString(ctx, "u-42"));
+    key = idb_selftest_key(ctx, JS_DupValue(ctx, tainted));
+    value = JS_NewString(ctx, "by-tainted-key");
+    idb_selftest_put(ctx, store, value, key);
+    JS_FreeValue(ctx, value);
+    JS_FreeValue(ctx, key);
+    range = idb_selftest_range(ctx, JS_DupValue(ctx, tainted));
+    got = idb_retrieve_key(ctx, store, range);
+    CHECK(JS_VALUE_GET_PTR(got) == JS_VALUE_GET_PTR(tainted),
+          "§7.3 must hand a concolic KEY back as the concolic — a record found by attacker-chosen input is "
+          "found by comparing examples, and the key it answers with is the tainted value itself");
+    JS_FreeValue(ctx, got);
+    got = idb_retrieve_value(ctx, store, range);
+    CHECK(JS_IsString(got), "a record filed under a tainted key must be the record that key finds");
+    JS_FreeValue(ctx, got);
+    JS_FreeValue(ctx, range);
+    JS_FreeValue(ctx, tainted);
+
+    JS_FreeValue(ctx, store);
+    JS_FreeValue(ctx, db);
+}
+
 /* WHICH DOCUMENT THIS RUN DRIVES, asked of the ARGUMENT VECTOR because that is the only channel a host has to
    this program. It was `getenv("APICLIENT_ASAN_MIN")`, and emscripten's `ENV` is a fixed default set that never
    merges the launching process's environment — so the minimal document, the `min` probe subset and every
@@ -1933,6 +2115,11 @@ int main(int argc, char **argv) {
         tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", NULL, world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }
+
+    /* INDEXED DATABASE'S PUT/GET ROUND TRIP, at the BASELINE and before the time-travel hooks — the same
+       position core/file/file_system.c's two roots are built at, and for the same reason: a record written
+       here belongs to the pre-boot baseline rather than to whichever flow happened to run first. */
+    idb_store_selftest(ctx);
 
     /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
        and again in test_forced.c, and the pair had drifted. */

@@ -153,6 +153,48 @@ static bool range_contains(JSContext *ctx, const IdbRangeData *r, JSValueConst k
     return true;
 }
 
+/* ---- §2.9's two algorithms, as the operations over a store are stated in them ------------------------------- */
+
+int idb_key_range_from_value(JSContext *ctx, JSValueConst value, bool null_disallowed, JSValue *prange)
+{
+    JSValue key;
+
+    *prange = JS_UNDEFINED;
+    /* "If value is a key range, return value." The brand is the class, which is the same question §4.7's
+       members ask and the reason a page cannot hand a shape-alike object in. */
+    if (JS_GetClassID(value) == g_range_class) {
+        *prange = JS_DupValue(ctx, value);
+        return 0;
+    }
+    /* "If value is undefined or is null, then throw a DataError DOMException if null disallowed flag is true,
+       or return an UNBOUNDED key range otherwise" — §2.9's unbounded range is the one whose both bounds are
+       null, and "All keys are in an unbounded key range", which range_contains answers without a special
+       case because it reads a bound only where the bound is not null. */
+    if (JS_IsUndefined(value) || JS_IsNull(value)) {
+        if (null_disallowed) {
+            JS_ThrowDOMException(ctx, "DataError", "this member requires a key or a key range, not null");
+            return -1;
+        }
+        *prange = idb_key_range_new(ctx, JS_NULL, JS_NULL, false, false);
+        return 0;
+    }
+    if (idb_key_from_value(ctx, value, &key) < 0)
+        return -1;
+    /* "Return a key range containing only key" — the same two-bounds-equal range §4.7's `only` builds. */
+    *prange = idb_key_range_new(ctx, JS_DupValue(ctx, key), key, false, false);
+    return 0;
+}
+
+bool idb_key_range_contains(JSContext *ctx, JSValueConst range, JSValueConst key)
+{
+    const IdbRangeData *r = range_of(range);
+
+    DCHECK(r != NULL, "§2.9's membership test was asked of something that is not a key range — every range in "
+                      "this engine is built by this component, and an operation over a store converts its "
+                      "query through idb_key_range_from_value before it reaches the store");
+    return range_contains(ctx, r, key);
+}
+
 /* ---- §4.7's four static construction methods --------------------------------------------------------------- */
 
 /* "The only(value) method steps are: let key be the result of converting a value to a key with value. Rethrow

@@ -36,15 +36,122 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/structured_clone.h"
+#include "solver/concolic.h"
 
-/* §2.7.7's `memory` SEEDED WITH THE TRANSFER LIST, and §2.7.8's seeded with [[TransferredValues]] — a pair of
-   hooks on the engine's own writer and reader (JSTransferWriteHook / JSTransferReadHook), which is what makes a
-   transferable REACHED FROM INSIDE the message body serialize as its data holder and deserialize to the MOVED
-   object. Each is a PARAMETER of one serialization, so the two directions of a same-turn delivery never share
-   one map; NULL is an unseeded memory, which is every clone that transfers nothing. */
-static int sc_serialize(JSContext *ctx, JSValueConst v, StructuredData *out,
-                        const JSTransferWriteHook *transfer)
+/* ---- §2.7.1's `memory`, AND THE TWO THINGS THAT SEED IT ------------------------------------------------------
+ *
+ * §2.7.1 step 2 is "if memory[value] exists, then return memory[value]", and the standard SEEDS that map before
+ * the walk begins: §2.7.7 step 1 puts every entry of the transfer list in it, which is what makes a transferable
+ * reached from INSIDE the message body write its holder's index instead of being cloned or refused. §2.7.8's
+ * mirror is seeded with [[TransferredValues]], so the reference comes back as the MOVED object.
+ *
+ * A CONCOLIC SEEDS THE SAME MAP WITH ITSELF, and that is this mechanism rather than a second one. §Solver: a
+ * concolic is unknown EXTERNAL INPUT — a triple of (source identity, constraint domain, example) that STANDS FOR
+ * a primitive, which is why every operator carries a hook for it and why §2.7.3's FIRST arm ("If value is
+ * undefined, null, a Boolean, a Number, a BigInt, or a String, then return { [[Type]]: primitive ... }") is the
+ * arm it belongs in. A primitive is its own copy. So what comes back is THE SAME concolic and never a rebuilt
+ * one: its source identity is what correlates every constraint the flow narrowed it with, and a deep copy would
+ * mint a SECOND symbol about which that narrowing says nothing — a WRONG answer, not a lossy one.
+ *
+ * IT IS THE SAME-TURN CLONE THAT CARRIES IT, AND THE SPLIT PAIR THAT CANNOT. `structured_clone` deserializes in
+ * the same turn and in this heap, so "the value itself" names something on both ends of the round trip. The
+ * split pair hands BYTES to a later turn — a queued port delivery, a history entry, a broadcast, a message
+ * ROUTED to another instance — and §Security says a live JSValue crosses neither a park, a session nor an
+ * instance. That is not a rule this file invents for the occasion: window_message_send_remote already ABORTS on
+ * a routed message that carries data HOLDERS, for exactly this reason. So the write hook says the same thing at
+ * the same place for a concolic, naming what the arm has to be. */
+typedef struct {
+    JSValueConst transfer;   /* §2.7.7's materialized transfer list, or JS_UNDEFINED for a write with none */
+    uint32_t     n;          /* its length — the first n indices of the ONE numbering the reader resolves */
+    JSValue      leaves;     /* the values that are their own copy, in the order reached; JS_UNDEFINED on the
+                                path whose bytes outlive the turn */
+} SCWriteMemory;
+
+typedef struct {
+    JSValueConst values;     /* §2.7.8's [[TransferredValues]] — the first n of that same numbering */
+    uint32_t     n;
+    JSValueConst leaves;     /* the array the write filled, in the order it filled it */
+} SCReadMemory;
+
+/* §2.7.7 STEP 1's map, ANSWERED. The standard's is keyed by the transferable itself and its value is that
+   transferable's data holder; the holders are appended in list order at step 5, so the INDEX in the list names
+   the holder without the holder having to exist yet — which it does not, because step 3 serializes the body
+   first. Identity is the object pointer, which is what a map keyed by the value means, and is the same
+   comparison step 2's duplicate check already makes. */
+static int sc_memory_index(JSContext *ctx, void *opaque, JSValueConst obj)
 {
+    SCWriteMemory *m = opaque;
+    uint32_t i, ln;
+
+    for (i = 0; i < m->n; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, m->transfer, i);
+        bool same;
+
+        DCHECK(!JS_IsException(e), "reading an entry of the materialized transfer list threw — it is the "
+                                   "engine's own array and has no getters to run");
+        same = JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(obj);
+        JS_FreeValue(ctx, e);
+        if (same) return (int)i;
+    }
+    if (!concolic_is(obj)) return -1;
+    if (JS_IsUndefined(m->leaves)) {
+        DFAIL("HTML §2.7: a CONCOLIC reached the serializer on the path that hands BYTES to a LATER turn — a "
+              "queued port or window delivery, a history entry, a broadcast. A live value crosses neither a "
+              "park, a session nor an instance, so this arm is the triple written AS DATA (the source identity, "
+              "the display shape and the example) rebuilt by concolic_new where the bytes are read, riding the "
+              "same record the holders ride and refused at the routing edge the way a holder already is. The "
+              "SAME-TURN clone answers it by seeding `memory` with the value itself. Until this exists, a page "
+              "posting `location.hash` is refused where a real browser delivers a string");
+        return -1;
+    }
+    ln = structured_transfer_len(ctx, m->leaves);
+    for (i = 0; i < ln; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, m->leaves, i);
+        bool same = JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(obj);
+
+        JS_FreeValue(ctx, e);
+        if (same) return (int)(m->n + i);
+    }
+    /* A DEFINE and not an assignment: [[Set]] consults the prototype chain, and an index accessor a page put
+       on Array.prototype would swallow the entry — after which the read below would resolve this index to
+       nothing and the value would come back as something other than what went in. */
+    JS_DefinePropertyValueUint32(ctx, m->leaves, ln, JS_DupValue(ctx, obj), JS_PROP_C_W_E);
+    return (int)(m->n + ln);
+}
+
+/* §2.7.8's map, ANSWERED — the object the transfer-receiving steps already built for that holder, or the leaf
+   the write interned. It is THE SAME object in both halves, never a copy: a moved port reached from the message
+   body and the same port in the event's `ports` are one object and a page compares them, and a concolic reached
+   twice is one symbol or the constraints narrowed on it name nothing. */
+static JSValue sc_memory_value(JSContext *ctx, void *opaque, uint32_t index)
+{
+    const SCReadMemory *m = opaque;
+    JSValue v;
+
+    if (index < m->n) {
+        v = JS_GetPropertyUint32(ctx, m->values, index);
+        DCHECK(JS_IsObject(v), "a transfer reference resolved to something that is not a received object — the "
+                               "writer's index into the transfer list and this list of received values are the "
+                               "ONE numbering §2.7.7 and §2.7.8 build in step order, so a hole here means the "
+                               "two halves stopped agreeing about what that numbering counts");
+        return v;
+    }
+    v = JS_GetPropertyUint32(ctx, m->leaves, index - m->n);
+    DCHECK(concolic_is(v), "a reference past the transfer list resolved to something that is not a value that "
+                           "is its own copy — the leaves are appended by the write in the order it reached "
+                           "them and read back by that same index, so this is those two halves disagreeing");
+    return v;
+}
+
+/* THE ONE SERIALIZATION, under whatever seeded `memory` its caller has. There is no unseeded form: the map is
+   what answers for an object the writer would otherwise refuse, so a path that seeds nothing still supplies the
+   map that says so. */
+static int sc_serialize(JSContext *ctx, JSValueConst v, StructuredData *out, SCWriteMemory *memory)
+{
+    JSTransferWriteHook hook;
+
+    hook.index_of = sc_memory_index;
+    hook.opaque = memory;
     out->buf = NULL;
     out->len = 0;
     /* §2.7.1 STEP 1: a Symbol is a "DataCloneError" DOMException, and it is checked HERE because the engine's
@@ -59,7 +166,7 @@ static int sc_serialize(JSContext *ctx, JSValueConst v, StructuredData *out,
        §2.7.3's structuredClone(), and the whole of what a same-agent port delivery needs.
        JS_WRITE_OBJ_REFERENCE is `memory`: a value reached twice comes back as the SAME object on the other
        side, and a cycle terminates instead of recursing. Without it `const a = {}; a.self = a` is a hang. */
-    out->buf = JS_WriteObject3(ctx, &out->len, v, JS_WRITE_OBJ_REFERENCE, NULL, transfer);
+    out->buf = JS_WriteObject3(ctx, &out->len, v, JS_WRITE_OBJ_REFERENCE, NULL, &hook);
     if (!out->buf) {
         /* THE ENGINE'S REFUSAL IS THE STANDARD'S, RE-REPORTED. The writer throws its own error for a value it
            cannot encode — a function, a Proxy, a Promise — and every one of those is a value §2.7 refuses with
@@ -74,7 +181,12 @@ static int sc_serialize(JSContext *ctx, JSValueConst v, StructuredData *out,
 
 int structured_serialize(JSContext *ctx, JSValueConst v, StructuredData *out)
 {
-    return sc_serialize(ctx, v, out, NULL);
+    /* NO TRANSFER LIST AND NO LEAVES. These bytes are the half of §2.7 that is handed to a LATER turn — a
+       history entry, a broadcast, the byte record an ArrayBuffer's transfer steps build — so nothing live may
+       be named from them, and the map above is what states that rather than a silence. */
+    SCWriteMemory memory = { JS_UNDEFINED, 0, JS_UNDEFINED };
+
+    return sc_serialize(ctx, v, out, &memory);
 }
 
 void structured_data_free(JSContext *ctx, StructuredData *d)
@@ -104,15 +216,32 @@ JSValue structured_deserialize(JSContext *ctx, const StructuredData *in)
     return sc_deserialize(ctx, in, NULL);
 }
 
+/* THE SAME-TURN, SAME-HEAP COPY — StructuredDeserialize(StructuredSerialize(v)) with nothing between the two
+   halves. That is what lets `memory` be seeded with a value that is ITS OWN COPY: the read happens in this turn
+   and in this heap, so the leaf the write interned is still the same live symbol when the read resolves it.
+   Its callers are exactly the operations for which that is true — Streams §4.9.7's tee with cloneForBranch2 and
+   Indexed Database's §5.11/§6.2, whose store holds the copy as a live value. */
 JSValue structured_clone(JSContext *ctx, JSValueConst v)
 {
+    SCWriteMemory memory = { JS_UNDEFINED, 0, JS_UNDEFINED };
+    SCReadMemory back = { JS_UNDEFINED, 0, JS_UNDEFINED };
+    JSTransferReadHook hook;
     StructuredData d;
     JSValue out;
 
-    if (structured_serialize(ctx, v, &d) < 0)
+    memory.leaves = JS_NewArray(ctx);
+    CHECK(!JS_IsException(memory.leaves), "structured clone: the seeded `memory` could not be allocated");
+    if (sc_serialize(ctx, v, &d, &memory) < 0) {
+        JS_FreeValue(ctx, memory.leaves);
         return JS_EXCEPTION;
-    out = structured_deserialize(ctx, &d);
+    }
+    back.leaves = memory.leaves;
+    hook.value_at = sc_memory_value;
+    hook.count = structured_transfer_len(ctx, memory.leaves);
+    hook.opaque = &back;
+    out = sc_deserialize(ctx, &d, &hook);
     structured_data_free(ctx, &d);
+    JS_FreeValue(ctx, memory.leaves);
     return out;
 }
 
@@ -265,43 +394,6 @@ int structured_transfer_list(JSContext *ctx, JSValueConst list, JSValue *out)
     return 0;
 }
 
-/* §2.7.7 STEP 1's `memory`, ANSWERED. The standard's map is keyed by the transferable itself and its value is
-   that transferable's data holder; the holders are appended in list order at step 5, so the INDEX in the list
-   names the holder without the holder having to exist yet — which it does not, because step 3 serializes the
-   body first. Identity is the object pointer, which is what a map keyed by the value means, and is the same
-   comparison step 2's duplicate check already makes. */
-typedef struct { JSValueConst list; uint32_t n; } SCTransferOut;
-
-static int sc_transfer_index(JSContext *ctx, void *opaque, JSValueConst obj)
-{
-    const SCTransferOut *m = opaque;
-    uint32_t i;
-
-    for (i = 0; i < m->n; i++) {
-        JSValue e = JS_GetPropertyUint32(ctx, m->list, i);
-        bool same;
-        DCHECK(!JS_IsException(e), "reading an entry of the materialized transfer list threw — it is the "
-                                   "engine's own array and has no getters to run");
-        same = JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(obj);
-        JS_FreeValue(ctx, e);
-        if (same) return (int)i;
-    }
-    return -1;
-}
-
-/* §2.7.8's `memory`, ANSWERED: the object the transfer-receiving steps already built for that holder. It is
-   THE SAME object [[TransferredValues]] holds, never a copy — a moved port reached from the message body and
-   the same port in the event's `ports` are one object, and a page compares them. */
-static JSValue sc_transferred_value(JSContext *ctx, void *opaque, uint32_t index)
-{
-    JSValue v = JS_GetPropertyUint32(ctx, *(const JSValue *)opaque, index);
-    DCHECK(JS_IsObject(v), "a transfer reference resolved to something that is not a received object — the "
-                           "writer's index into the transfer list and this list of received values are the "
-                           "ONE numbering §2.7.7 and §2.7.8 build in step order, so a hole here means the two "
-                           "halves stopped agreeing about what that numbering counts");
-    return v;
-}
-
 int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst transfer,
                                   StructuredWithTransfer *out)
 {
@@ -344,9 +436,12 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
        written as its holder's index rather than cloned or refused. Nothing has been transferred yet, so a
        transferable is still whole here — the ArrayBuffer arm below reads its bytes AFTER this. */
     {
-        SCTransferOut m = { transfer, n };
-        JSTransferWriteHook hook = { sc_transfer_index, &m };
-        if (sc_serialize(ctx, v, &out->data, &hook) < 0)
+        /* NO LEAVES, for the reason the map's own comment gives: this record is DELIVERED in a later task, and
+           a routed one is delivered in another instance — window_message_send_remote already aborts rather
+           than dropping a holder, and a live leaf is the same fact one step earlier. */
+        SCWriteMemory memory = { transfer, n, JS_UNDEFINED };
+
+        if (sc_serialize(ctx, v, &out->data, &memory) < 0)
             return -1;
     }
 
@@ -426,7 +521,12 @@ JSValue structured_deserialize_transfer(JSContext *ctx, const StructuredWithTran
        resolves to the value that holder produced, so the message body carries the MOVED object and not a copy
        of it — and reached twice, the one object. */
     {
-        JSTransferReadHook hook = { sc_transferred_value, n, &values };
+        SCReadMemory back = { values, n, JS_UNDEFINED };
+        JSTransferReadHook hook;
+
+        hook.value_at = sc_memory_value;
+        hook.count = n;
+        hook.opaque = &back;
         return sc_deserialize(ctx, &in->data, &hook);
     }
 }

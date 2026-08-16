@@ -46,6 +46,7 @@
 #include "core/html/form_data.h"
 #include "core/html/html_iframe.h"
 #include "core/html/unhandled_rejection.h"
+#include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key_range.h"
 #include "core/indexeddb/indexed_db.h"
 #include "core/loader/cookie_jar.h"
@@ -110,6 +111,7 @@ static void d_fs_access(JSContext *c, const PlatformAgent *a) { (void)a; file_sy
 static void d_file_picker(JSContext *c, const PlatformAgent *a) { (void)a; file_picker_init(c); }
 static void d_idb_key_range(JSContext *c, const PlatformAgent *a) { (void)a; idb_key_range_init(c); }
 static void d_indexed_db(JSContext *c, const PlatformAgent *a) { (void)a; indexed_db_init(c); }
+static void d_idb_database(JSContext *c, const PlatformAgent *a) { (void)a; idb_database_init(c); }
 static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
 static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
 static void d_report_exception(JSContext *c, const PlatformAgent *a) { (void)a; report_exception_init(c); }
@@ -175,6 +177,9 @@ static void r_unhandled_rejection(JSRuntime *rt) { unhandled_rejection_free(rt);
 static void r_navigator(JSRuntime *rt) { (void)rt; navigator_free(); }
 static void r_screen(JSRuntime *rt) { (void)rt; screen_free(); }
 static void r_storage_manager(JSRuntime *rt) { (void)rt; storage_manager_free(); }
+/* INDEXED DATABASE §2.1's set of databases — one live record per storage key, holding every object store and
+   every record in them. It is the agent's for the reason its row states, so it is freed here. */
+static void r_idb_database(JSRuntime *rt) { idb_database_free(rt); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -283,11 +288,17 @@ static const PlatformComponent PLATFORM[] = {
        is the door the rest of the standard will be reached through. Neither row has a document half: both
        install per REALM (core/realm.h), because §3.7 gives every realm its own interface prototype and because
        the one IDBFactory `indexedDB` answers with is `[SameObject]` per realm.
-       WHAT THE TWO ROWS DO NOT BUILD is honestly absent and says so where a page reaches it: there is no
-       database, no connection, no transaction and no request yet, so `indexedDB.open` is a TypeError naming
-       the member rather than a shape-only object that would report a store nothing wrote to. */
+       WHAT THE ROWS DO NOT BUILD is honestly absent and says so where a page reaches it: there is no
+       connection, no transaction and no request yet, so `indexedDB.open` is a TypeError naming the member
+       rather than a shape-only object that would report a store nothing wrote to.
+       §2.1's DATABASE is the third row and it is an AGENT row with a RELEASE, which the two above it are not:
+       §2.1 says "each storage key has an associated set of databases", §Security makes an instance an
+       origin-keyed agent cluster, and storage is keyed by origin — so the set is the agent's, a same-origin
+       child navigable reaches THAT one rather than a second, and what a C static holds for the agent is freed
+       against the runtime here (core/platform.h's third column) rather than in each host's own teardown. */
     { "idb_key_range",       d_idb_key_range,       NULL },
     { "indexed_db",          d_indexed_db,          NULL },
+    { "idb_database",        d_idb_database,        NULL,        r_idb_database },
     { "event",               d_event,               i_event },
     /* Declared by the components that own the events they carry; the interface objects are this realm's. */
     { "message_event",       NULL,                  i_message_event },
