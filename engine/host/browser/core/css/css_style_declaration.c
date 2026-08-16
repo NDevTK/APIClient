@@ -1,4 +1,4 @@
-/* CSSOM — CSSStyleDeclaration, `element.style`, and getComputedStyle().
+/* CSSOM §6.6 — the CSS DECLARATION BLOCK, its two interfaces, and getComputedStyle().
  *
  * WHAT WAS HERE BEFORE: nothing. `el.style.display = 'none'` wrote an ordinary JS property on an object that
  * did not exist, and getComputedStyle was absent, so a page reading a computed value threw. Both are named in
@@ -7,16 +7,29 @@
  * `getComputedStyle(el).display === 'none'` routes differently on each side, and each side has its own
  * endpoints.
  *
+ * A BLOCK IS THE FIVE THINGS §6.6 SAYS IT IS, AND THAT IS WHAT DECIDES EVERY MEMBER'S ANSWER: the COMPUTED
+ * FLAG, the READONLY FLAG, the DECLARATIONS, the PARENT CSS RULE and the OWNER NODE. Three creators differ only
+ * in what they set those to — §7.1's `element.style` (owner node this, no parent rule, neither flag), §7.2's
+ * getComputedStyle (owner node the element, both flags) and §6.4.3's `rule.style` (NO owner node, parent rule
+ * the rule, neither flag). They used to be a two-valued `mode`, which could express the first two and had no
+ * room for the third, and whose "no element" arm answered the empty string for every member — so a block with
+ * no owner node, which is exactly what a rule's is, would have read as an empty declaration block rather than
+ * as the rule's own declarations.
+ *
  * LEXBOR OWNS THE CSS, and that is the point of binding to it rather than hand-rolling. It has the real
  * property registry (so the camel-cased IDL attributes are GENERATED FROM THE SPEC'S OWN PROPERTY LIST rather
  * than typed here), a real declaration parser, real value serializers, and a real selector matcher that answers
  * for a SINGLE node. Every layer below is Lexbor doing the parsing and this file doing the cascade.
  *
- * THE STORAGE IS THE `style` CONTENT ATTRIBUTE, which is the design decision the rest follows from. Lexbor can
- * also hold parsed styles on the element (an AVL keyed by property), and using that would have been faster and
- * WRONG: it lives outside the per-flow DOM delta, so a `style.color` written by one forked arm would be visible
- * to its sibling. The attribute IS captured, so storing there makes an inline style time-travel for free, and
- * the spec already defines the round-trip between the two.
+ * THE DECLARATIONS ARE THE BACKING'S OWN TEXT, which is the design decision the rest follows from. §6.6 models
+ * them as a list the block object holds and pushes back to the `style` attribute through "update style
+ * attribute"; this engine keeps the BACKING authoritative and derives the list per read, because the backing is
+ * what time-travels. For an element that backing is the `style` CONTENT ATTRIBUTE: lexbor can also hold parsed
+ * styles on the element (an AVL keyed by property), and using that would have been faster and WRONG — it lives
+ * outside the per-flow DOM delta, so a `style.color` written by one forked arm would be visible to its sibling,
+ * while the attribute IS captured. For a rule it is the rule record's block TEXT, captured by the same per-flow
+ * COW delta through the record's accessor, so two flows can disagree about `rule.style.color` exactly as they
+ * can about an inline style. Nothing is cached in between, for the reason the cascade caches nothing.
  *
  * THE CASCADE IS RESOLVED LIVE, per read, from the RUNNING FLOW'S TREE: inline, then the author rules in that
  * flow's own `<style>` elements matched with lxb_selectors_match_node, then the UA default, then the property's
@@ -44,29 +57,31 @@
 #include "core/dom/element.h"
 #include "core/dom/selector_match.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_rule.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
 #include "solver/dom_cow.h"
 
-/* The private key the declaration's own slots hang off — a Symbol, so a page cannot see or forge it, which is
-   also the brand check every member performs. */
-static JSValue g_key;
-/* PER REALM — §3.7, and here it decides ANSWERS: a C member runs in the realm that DEFINED it. Held in
-   quickjs's per-context class-proto slot. */
+/* TWO PRIVATE KEYS, BOTH SYMBOLS, AND THEY ARE TWO BECAUSE A SLOT IS A BRAND. `g_decl_key` hangs a block's own
+   §6.6 record off the block; `g_inline_key` hangs §7.1's [SameObject] block off the ELEMENT's wrapper. One key
+   served both, which made an element pass the block's brand check — `CSSStyleDeclaration.prototype.item.call(el,
+   0)` found the declaration object where the record belongs and read a field out of it — the same defect
+   style_sheet_list.c records for its own two keys. */
+static JSValue g_decl_key = JS_UNDEFINED, g_inline_key = JS_UNDEFINED;
+/* PER REALM — §3.7, and here it decides ANSWERS: a C member runs in the realm that DEFINED it. Every block this
+   engine builds is a §6.6.1 CSSStyleProperties (all three creators say so), so THAT is the class, and
+   CSSStyleDeclaration.prototype — the base nothing is an instance of — is a per-realm value slot beside it,
+   which is the same shape §6.1.1's StyleSheet and §6.4.2's CSSRule take. */
 static JSClassID g_cssd_class;
+static int       g_declaration_proto_slot = -1;
 /* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. The camel-cased
    attributes are GENERATED from Lexbor's property registry, so their setter ids are an array indexed the same
    way the registry is — one entry per property, declared once, installed into every realm. */
 static int g_set_css_text_id = -1, g_get_prop_id = -1, g_remove_prop_id = -1, g_get_priority_id = -1,
-           g_set_prop_id = -1, g_item_id = -1;
+           g_set_prop_id = -1, g_item_id = -1, g_put_forwards_id = -1;
 static int g_camel_set_id[LXB_CSS_PROPERTY__LAST_ENTRY];
 static int g_id_gcs;   /* getComputedStyle — declared once per agent, installed on each realm's window */
 static int     g_ready;
-
-/* WHICH VIEW of an element a declaration object is. Decided when the object is built and never asked again:
-   `element.style` is the inline block and is writable; getComputedStyle's is the resolved cascade and is
-   read-only, which is what the spec makes it. */
-enum { CSSD_INLINE = 0, CSSD_COMPUTED = 1 };
 
 /* ---- the text buffer every serializer writes into ------------------------------------------------------- */
 typedef struct { char *s; size_t n, cap; } CssBuf;
@@ -91,36 +106,58 @@ static void css_buf_free(CssBuf *b) { free(b->s); b->s = NULL; b->n = b->cap = 0
 
 static void css_buf_add(CssBuf *b, const char *s) { css_buf_cb((const lxb_char_t *)s, strlen(s), b); }
 
-/* ---- the element behind a declaration -------------------------------------------------------------------- */
-static JSValue cssd_slots(JSContext *ctx, JSValueConst v)
+/* ---- §6.6's five associated properties, as the record every member reads ---------------------------------- */
+
+/* The block's own record, BRAND-CHECKED. Every member of both interfaces is on a PROTOTYPE, so a page can apply
+   one to anything at all and §3.7.5's answer is a TypeError — which a page tells apart from the empty string
+   the "no element" arm used to hand back. Returns JS_EXCEPTION with the error already thrown. OWNED. */
+static JSValue cssd_block(JSContext *ctx, JSValueConst v)
 {
     JSAtom k;
-    JSValue slots;
+    JSValue slots = JS_UNDEFINED;
 
-    DCHECK(g_ready, "a CSSStyleDeclaration's slots were asked for before cssom_init ran");
-    if (!JS_IsObject(v)) return JS_UNDEFINED;
-    k = JS_ValueToAtom(ctx, g_key);
-    if (k == JS_ATOM_NULL) return JS_UNDEFINED;
-    if (JS_GetOwnSlot(ctx, &slots, v, k) <= 0)   /* an own SLOT, never a lookup — see event.c */
-        slots = JS_UNDEFINED;
-    JS_FreeAtom(ctx, k);
-    return slots;
+    DCHECK(g_ready, "a CSS declaration block's record was asked for before cssom_init ran");
+    if (JS_IsObject(v)) {
+        k = JS_ValueToAtom(ctx, g_decl_key);
+        CHECK(k != JS_ATOM_NULL, "the CSS declaration block key could not be interned");
+        if (JS_GetOwnSlot(ctx, &slots, v, k) <= 0)   /* an own SLOT, never a lookup — see event.c */
+            slots = JS_UNDEFINED;
+        JS_FreeAtom(ctx, k);
+        if (JS_IsObject(slots)) return slots;
+        JS_FreeValue(ctx, slots);
+    }
+    return JS_ThrowTypeError(ctx, "not a CSSStyleDeclaration");
 }
 
-static lxb_dom_element_t *cssd_element(JSContext *ctx, JSValueConst v, int *pmode)
+/* §6.6's COMPUTED FLAG and READONLY FLAG. Both are written once by the creator and never change, so they are
+   read as the booleans they are rather than inferred from which other field is set. */
+static bool cssd_flag(JSContext *ctx, JSValueConst block, const char *name)
 {
-    JSValue slots = cssd_slots(ctx, v), owner, m;
-    lxb_dom_node_t *n;
+    JSValue f = JS_GetPropertyStr(ctx, block, name);
+    bool set = JS_ToBool(ctx, f) != 0;
 
-    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return NULL; }
-    owner = JS_GetPropertyStr(ctx, slots, "element");
-    m = JS_GetPropertyStr(ctx, slots, "mode");
-    if (pmode) *pmode = JS_ToBool(ctx, m) ? CSSD_COMPUTED : CSSD_INLINE;
-    JS_FreeValue(ctx, m);
-    n = node_of(owner);
+    JS_FreeValue(ctx, f);
+    return set;
+}
+
+/* §6.6's OWNER NODE, as the element it is. NULL is a REAL state and not a failure: §6.4.3's block has none. */
+static lxb_dom_element_t *cssd_owner_element(JSContext *ctx, JSValueConst block)
+{
+    JSValue owner = JS_GetPropertyStr(ctx, block, "ownerNode");
+    lxb_dom_node_t *n = node_of(owner);
+
     JS_FreeValue(ctx, owner);
-    JS_FreeValue(ctx, slots);
-    return (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT) ? lxb_dom_interface_element(n) : NULL;
+    if (!n) return NULL;
+    DCHECK(n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "§6.6 types a CSS declaration block's owner node as an Element, and a creator handed over a node "
+           "that is not one");
+    return lxb_dom_interface_element(n);
+}
+
+/* §6.6's PARENT CSS RULE — JS_NULL for the two element-backed blocks. OWNED. */
+static JSValue cssd_parent_rule(JSContext *ctx, JSValueConst block)
+{
+    return JS_GetPropertyStr(ctx, block, "parentRule");
 }
 
 /* ---- the parser, and the declaration list of a chunk of CSS text ---------------------------------------- */
@@ -197,15 +234,6 @@ static char *cssd_decl_name(const lxb_css_rule_declaration_t *d)
     return b.s ? b.s : NULL;
 }
 
-static bool cssd_decl_named(const lxb_css_rule_declaration_t *d, const char *name)
-{
-    char *n = cssd_decl_name(d);
-    bool same = n && strcmp(n, name) == 0;
-
-    free(n);
-    return same;
-}
-
 /* A declaration's VALUE, serialized. CSS Syntax's CONSUME A DECLARATION ends with "while the last token in
    value is a <whitespace-token>, remove that token", and this is where that step lands. A declaration lexbor's
    registry TYPES is serialized back out of that typed value and carries no surrounding whitespace at all; one
@@ -268,12 +296,12 @@ static const char *cssd_inline_text(lxb_dom_element_t *el, size_t *plen)
     return (const char *)v;
 }
 
-/* LAYER 1 — the INLINE declaration for `name`, or NULL. The highest-weight layer short of !important, and the
-   one that is per-flow because the attribute it reads is. */
-static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pimportant)
+/* THE VALUE A DECLARATION BLOCK'S TEXT GIVES `name`, and whether that declaration carries `!important`. NULL
+   when the block declares it nowhere. This is what every reader of a declaration block goes through — the
+   cascade's inline layer below, and §6.6.1's `getPropertyValue`/`getPropertyPriority` over either backing —
+   because the two differ in WHERE the text is kept and in nothing else. OWNED. */
+static char *cssd_value_in_block(const char *text, size_t len, const char *name, bool *pimportant)
 {
-    size_t len = 0;
-    const char *text = cssd_inline_text(el, &len);
     lxb_css_memory_t *mem = NULL;
     lxb_css_rule_declaration_list_t *list;
     lxb_css_rule_t *r;
@@ -295,6 +323,17 @@ static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pi
     }
     if (mem) lxb_css_memory_destroy(mem, true);
     return out;   /* the LAST wins, which is what a declaration block means */
+}
+
+/* LAYER 1 — the INLINE declaration for `name`, or NULL. The highest-weight layer short of !important, and the
+   one that is per-flow because the attribute it reads is. The CASCADE reaches it with an element and no
+   declaration object, which is why this takes one rather than a block. */
+static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pimportant)
+{
+    size_t len = 0;
+    const char *text = cssd_inline_text(el, &len);
+
+    return cssd_value_in_block(text, len, name, pimportant);
 }
 
 /* LAYER 2 — the AUTHOR cascade, resolved from the RUNNING FLOW'S tree. Every `<style>` element in the document
@@ -389,19 +428,31 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
 
 /* ---- CSS Syntax's "parse a stylesheet's contents", for CSSOM §6.4's rule objects --------------------------
  *
- * §6.6's SERIALIZE A CSS DECLARATION BLOCK, as far as its LAST steps: each declaration as "name: value" plus
- * " !important" when its important flag is set, plus a ";", joined with a single SPACE. The spec's note is the
- * exact shape — "no whitespace appears before the first property name and no whitespace appears after the final
- * semicolon delimiter" — and it is NOT lexbor's serialization, which joins with "; " and emits no trailing
- * semicolon at all. A CSSOM member must answer CSSOM's string.
+ * §6.6's SERIALIZE A CSS DECLARATION, and the BLOCK serialization its entries are joined into with a single
+ * SPACE. The spec's note is the exact shape — "no whitespace appears before the first property name and no
+ * whitespace appears after the final semicolon delimiter" — and it is NOT lexbor's serialization, which joins
+ * with "; " and emits no trailing semicolon at all. A CSSOM member must answer CSSOM's string.
  *
- * WHAT IS NOT HERE IS THE SHORTHAND LOOP, and that is why nothing calls this for a `cssText` yet. §6.6's
- * algorithm re-consolidates a full set of longhands back into the shorthand that covers them (`margin-top`,
- * `-right`, `-bottom`, `-left` all present serialize as one `margin`), which needs the LONGHAND -> SHORTHAND
- * direction and the shorthands' preferred order; core/css/css_shorthand.h carries only the forward direction,
- * so consolidating is a component's worth of work and skipping it silently would make `cssText` a string no
- * browser produces. So this builds what a rule STORES, and §6.4.2's `cssText` is honestly absent until the
- * loop exists — the IDL audit reports it, which is the ledger. */
+ * WHAT IS NOT HERE IS THE SHORTHAND CONSOLIDATION LOOP. §6.6's algorithm re-consolidates a full set of
+ * longhands back into the shorthand that covers them (`margin-top`, `-right`, `-bottom`, `-left` all present
+ * serialize as one `margin`), which needs the LONGHAND -> SHORTHAND direction and the shorthands' preferred
+ * order; core/css/css_shorthand.h carries only the forward direction, so consolidating is a component's worth
+ * of work. §6.4.2's `cssText` — a whole RULE, selector and body — is honestly absent until it exists, and the
+ * IDL audit reports that, which is the ledger. */
+static void cssd_append_declaration(CssBuf *out, bool *first, const char *name, const char *value,
+                                    bool important)
+{
+    if (!*first) css_buf_add(out, " ");
+    *first = false;
+    css_buf_add(out, name);
+    css_buf_add(out, ": ");
+    /* §6.6's step 4 is conditional — "if value contains any non-whitespace characters, append value to s" — so
+       a valueless declaration serializes as `name: ;`, which is what the algorithm produces. */
+    if (value) css_buf_add(out, value);
+    if (important) css_buf_add(out, " !important");
+    css_buf_add(out, ";");
+}
+
 static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list)
 {
     CssBuf out = { 0 };
@@ -410,19 +461,35 @@ static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list)
 
     for (r = list ? list->first : NULL; r; r = r->next) {
         const lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(r);
+        char *name, *value;
 
         /* CSS Syntax's INVALID DECLARATION is not in the block, so it is not in the block's serialization
-           either — the same drop the cascade and the inline rewrite make, for the same `__UNDEF` reason. */
+           either — the same drop the cascade and the rewrite make, for the same `__UNDEF` reason. */
         if (r->type != LXB_CSS_RULE_DECLARATION || d->type == LXB_CSS_PROPERTY__UNDEF) continue;
-        if (!first) css_buf_add(&out, " ");
-        first = false;
-        lxb_css_property_serialize_name(d->u.user, d->type, css_buf_cb, &out);
-        css_buf_add(&out, ": ");
-        lxb_css_property_serialize(d->u.user, d->type, css_buf_cb, &out);
-        if (d->important) css_buf_add(&out, " !important");
-        css_buf_add(&out, ";");
+        name = cssd_decl_name(d);
+        value = cssd_decl_value(d);   /* the whitespace-trimmed one — see its own note */
+        if (name) cssd_append_declaration(&out, &first, name, value, d->important);
+        free(name);
+        free(value);
     }
     return out.s;   /* NULL for a block with no valid declaration, which IS the empty serialization */
+}
+
+/* The same, from the TEXT a backing keeps — which is what §6.6.1's `cssText` getter answers for both backings:
+   "return the result of serializing the declarations", where the declarations are what parsing that text
+   produced, NOT the bytes the page happened to write. `<div style="color:red">` therefore reads back as
+   "color: red;" exactly as it does in a browser. OWNED, NULL for a block that declares nothing. */
+static char *cssd_serialize_text(const char *text, size_t len)
+{
+    lxb_css_memory_t *mem = NULL;
+    lxb_css_rule_declaration_list_t *list;
+    char *out;
+
+    if (!text || !len) return NULL;
+    list = cssd_parse_block(text, len, &mem);
+    out = cssd_serialize_block(list);
+    if (mem) lxb_css_memory_destroy(mem, true);
+    return out;
 }
 
 unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *ud)
@@ -618,206 +685,388 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
     return cssd_initial_value(name);
 }
 
-/* WHAT A DECLARATION OBJECT'S READ ANSWERS, decided once by WHICH VIEW it is. `element.style` is the inline
-   declaration block ALONE — a property no inline declaration sets reads as the empty string there, not as the
-   value the page would see — and getComputedStyle's is CSSOM §9's RESOLVED value, which for most properties is
-   the computed value and for the box-model ones is the used value (css_computed_value.h). */
-static char *cssd_view_value(lxb_dom_element_t *el, const char *name, int mode)
+/* ---- §6.6's DECLARATIONS: where the two backings keep them, and how a member edits them ------------------- */
+
+/* THE TEXT the block's declarations are kept as — the element's `style` content attribute, or the rule's block
+   text. Both are per-flow, which is the whole reason each is where it is. OWNED, NULL for a block that declares
+   nothing. */
+static char *cssd_declarations_text(JSContext *ctx, JSValueConst block, size_t *plen)
 {
-    if (mode == CSSD_INLINE) return cssd_inline_value(el, name, NULL);
-    DCHECK(mode == CSSD_COMPUTED,
-           "a CSSStyleDeclaration was read through a view that is neither the inline block nor the computed "
-           "one — the mode is decided when the object is minted and there are exactly two");
-    return css_resolved_value(el, name);
+    JSValue rule = cssd_parent_rule(ctx, block);
+    lxb_dom_element_t *el;
+    const char *text;
+    size_t len = 0;
+    char *out;
+
+    DCHECK(!cssd_flag(ctx, block, "computed"),
+           "a COMPUTED declaration block's declarations were asked for as stored text, and there are none: "
+           "§7.2 states them as the resolved value of every longhand supported CSS property, which this engine "
+           "computes per read (css_computed_value.h) rather than holding. Every member that can meet a computed "
+           "block answers it from the resolved value before reaching here");
+    *plen = 0;
+    if (!JS_IsNull(rule)) {
+        out = css_rule_block_text(ctx, rule, plen);
+        JS_FreeValue(ctx, rule);
+        return out;
+    }
+    JS_FreeValue(ctx, rule);
+    el = cssd_owner_element(ctx, block);
+    DCHECK(el != NULL,
+           "a CSS declaration block has neither an owner node nor a parent CSS rule, so its declarations are "
+           "kept nowhere — every creator sets exactly one of the two");
+    text = cssd_inline_text(el, &len);
+    if (!text || !len) return NULL;
+    out = malloc(len + 1);
+    CHECK(out != NULL, "cssom: OOM copying a declaration block's text");
+    memcpy(out, text, len);
+    out[len] = '\0';
+    *plen = len;
+    return out;
 }
 
-/* ---- the interface ---------------------------------------------------------------------------------------- */
-
-/* Rewrite the inline block with `name` set to `value`, or removed when `value` is NULL. Through setAttribute's
-   own chokepoint, so the write is captured by the per-flow delta like every other DOM write. */
-static void cssd_write_inline(JSContext *ctx, lxb_dom_element_t *el, const char *name, const char *value)
+/* §6.6's UPDATE STYLE ATTRIBUTE, generalized to the backing the block actually has. For an element it goes
+   through setAttribute's own chokepoint, so the write is captured by the per-flow delta like every other DOM
+   write; for a rule it goes through the rule record's capturing accessor, which is the same guarantee one
+   component along. */
+static void cssd_declarations_write(JSContext *ctx, JSValueConst block, const char *text, size_t len)
 {
-    size_t len = 0;
-    const char *text = cssd_inline_text(el, &len);
+    JSValue rule = cssd_parent_rule(ctx, block);
+    lxb_dom_element_t *el;
+
+    DCHECK(!cssd_flag(ctx, block, "readOnly"),
+           "a READ-ONLY declaration block was written — §6.6.1 makes every mutating member throw a "
+           "NoModificationAllowedError before it reaches its steps, so a write that got here skipped that");
+    if (!JS_IsNull(rule)) {
+        css_rule_set_block_text(ctx, rule, text, len);
+        JS_FreeValue(ctx, rule);
+        return;
+    }
+    JS_FreeValue(ctx, rule);
+    el = cssd_owner_element(ctx, block);
+    DCHECK(el != NULL, "a CSS declaration block with no backing at all was written");
+    dom_cow_set_attribute(el, "style", text, len, JS_UNDEFINED);
+}
+
+/* §6.6.1's SET A CSS DECLARATION and REMOVE A CSS DECLARATION, over the block's serialization: the declarations
+   of `text` with `name` set to `value` and the given important flag, or REMOVED when `value` is NULL. The
+   declaration keeps the POSITION it had — the spec's own recommended algorithm updates the target declaration
+   in place, and its constraint is that exactly one declaration for the property exists afterwards — and a name
+   the block does not declare is appended. What comes out is §6.6's serialize-a-CSS-declaration-block. OWNED,
+   NULL for a block left with no declarations, which IS the empty serialization. */
+static char *cssd_block_with(const char *text, size_t len, const char *name, const char *value, bool important)
+{
     lxb_css_memory_t *mem = NULL;
     lxb_css_rule_declaration_list_t *list;
     CssBuf out = { 0 };
-    bool wrote = false;
+    bool first = true, wrote = false;
 
     if (text && len) {
         lxb_css_rule_t *r;
+
         list = cssd_parse_block(text, len, &mem);
-        if (list) {
-            for (r = list->first; r; r = r->next) {
-                lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(r);
-                /* The invalid declaration is dropped on the way OUT as well as on the way in — CSSOM
-                   serializes a declaration block from the declarations it holds, and lexbor's `__UNDEF`
-                   placeholder is not one of them (the one a bad block produces carries no property record at
-                   all, so serializing it reads through a null). */
-                if (r->type != LXB_CSS_RULE_DECLARATION || d->type == LXB_CSS_PROPERTY__UNDEF) continue;
-                if (cssd_decl_named(d, name)) {
-                    if (!value) continue;            /* removeProperty drops it */
-                    if (wrote) continue;             /* one entry per property */
-                    css_buf_add(&out, name); css_buf_add(&out, ": ");
-                    css_buf_add(&out, value); css_buf_add(&out, "; ");
-                    wrote = true;
-                    continue;
-                }
-                lxb_css_property_serialize_name(d->u.user, d->type, css_buf_cb, &out);
-                css_buf_add(&out, ": ");
-                lxb_css_property_serialize(d->u.user, d->type, css_buf_cb, &out);
-                if (d->important) css_buf_add(&out, " !important");
-                css_buf_add(&out, "; ");
+        for (r = list ? list->first : NULL; r; r = r->next) {
+            lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(r);
+            char *dname, *dvalue;
+
+            /* The invalid declaration is dropped on the way OUT as well as on the way in — CSSOM serializes a
+               declaration block from the declarations it holds, and lexbor's `__UNDEF` placeholder is not one
+               of them (the one a bad block produces carries no property record at all, so serializing it reads
+               through a null). */
+            if (r->type != LXB_CSS_RULE_DECLARATION || d->type == LXB_CSS_PROPERTY__UNDEF) continue;
+            dname = cssd_decl_name(d);
+            if (dname && strcmp(dname, name) == 0) {
+                free(dname);
+                if (!value) continue;            /* removeProperty drops it */
+                if (wrote) continue;             /* exactly one declaration per property */
+                cssd_append_declaration(&out, &first, name, value, important);
+                wrote = true;
+                continue;
             }
+            dvalue = cssd_decl_value(d);
+            if (dname) cssd_append_declaration(&out, &first, dname, dvalue, d->important);
+            free(dname);
+            free(dvalue);
         }
         if (mem) lxb_css_memory_destroy(mem, true);
     }
-    if (value && !wrote) {
-        css_buf_add(&out, name); css_buf_add(&out, ": ");
-        css_buf_add(&out, value); css_buf_add(&out, "; ");
-    }
-    dom_cow_set_attribute(el, "style", out.s ? out.s : "", out.s ? out.n : 0, JS_UNDEFINED);
-    css_buf_free(&out);
+    if (value && !wrote) cssd_append_declaration(&out, &first, name, value, important);
+    return out.s;
+}
+
+/* The whole of a member's write: read the declarations, edit them, put them back. */
+static void cssd_write_declaration(JSContext *ctx, JSValueConst block, const char *name, const char *value,
+                                   bool important)
+{
+    size_t len = 0;
+    char *text = cssd_declarations_text(ctx, block, &len);
+    char *next = cssd_block_with(text, len, name, value, important);
+
+    free(text);
+    cssd_declarations_write(ctx, block, next ? next : "", next ? strlen(next) : 0);
+    free(next);
+}
+
+/* ---- the interfaces --------------------------------------------------------------------------------------- */
+
+/* §6.6.1's NoModificationAllowedError, which every mutating member throws FIRST — before it converts anything
+   and before it looks at the declarations. It is keyed on the READONLY FLAG and not on "is this computed",
+   which are two different properties of a block that this engine's `mode` could not tell apart. */
+static JSValue cssd_readonly_throw(JSContext *ctx)
+{
+    return JS_ThrowDOMException(ctx, "NoModificationAllowedError",
+                                "the CSS declaration block's readonly flag is set");
 }
 
 /* magic 0 = getPropertyValue, 1 = removeProperty, 2 = getPropertyPriority */
 static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    int mode = CSSD_INLINE;
-    lxb_dom_element_t *el = cssd_element(ctx, this_val, &mode);
+    JSValue block = cssd_block(ctx, this_val);
     const char *name;
+    bool computed;
     JSValue r;
 
-    if (!el) return JS_NewStringLen(ctx, "", 0);
-    if (argc < 1) return JS_NewStringLen(ctx, "", 0);
+    if (JS_IsException(block)) return block;
+    computed = cssd_flag(ctx, block, "computed");
+    if (magic == 1 && cssd_flag(ctx, block, "readOnly")) {
+        JS_FreeValue(ctx, block);
+        return cssd_readonly_throw(ctx);
+    }
+    DCHECK(argc >= 1, "a §6.6.1 property member reached its body with no property name — its IDL argument is "
+                      "required, so the declaration's own argument-count check should have refused the call");
     name = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
-    if (!name) return JS_EXCEPTION;
+    if (!name) { JS_FreeValue(ctx, block); return JS_EXCEPTION; }
     if (magic == 1) {
-        char *old = cssd_inline_value(el, name, NULL);
-        /* §CSSOM: a read-only declaration throws rather than silently ignoring the write. */
-        if (mode == CSSD_COMPUTED) {
-            free(old);
-            JS_FreeCString(ctx, name);
-            return JS_ThrowDOMException(ctx, "NoModificationAllowedError",
-                                        "a computed style declaration is read-only");
-        }
-        cssd_write_inline(ctx, el, name, NULL);
+        /* §6.6.1's removeProperty: the value is read BEFORE the removal, because that value is what it
+           returns. */
+        size_t len = 0;
+        char *text = cssd_declarations_text(ctx, block, &len);
+        char *old = cssd_value_in_block(text, len, name, NULL);
+
+        free(text);
+        cssd_write_declaration(ctx, block, name, NULL, false);
         r = old ? JS_NewString(ctx, old) : JS_NewStringLen(ctx, "", 0);
         free(old);
     } else if (magic == 2) {
+        /* §6.6.1's getPropertyPriority. A COMPUTED block's declarations are resolved values and carry no
+           important flag at all, so the answer over its whole domain is the empty string — a positive
+           statement about that block, not a hole where its text would be. */
         bool important = false;
-        char *v = cssd_inline_value(el, name, &important);
+        char *v = NULL;
+
+        if (!computed) {
+            size_t len = 0;
+            char *text = cssd_declarations_text(ctx, block, &len);
+
+            v = cssd_value_in_block(text, len, name, &important);
+            free(text);
+        }
         r = JS_NewString(ctx, (v && important) ? "important" : "");
         free(v);
     } else {
-        char *v = cssd_view_value(el, name, mode);
+        char *v;
+
+        if (computed) {
+            /* CSSOM §9's RESOLVED value, which for most properties is the computed value and for the box-model
+               ones is the used value (css_computed_value.h). */
+            v = css_resolved_value(cssd_owner_element(ctx, block), name);
+        } else {
+            size_t len = 0;
+            char *text = cssd_declarations_text(ctx, block, &len);
+
+            v = cssd_value_in_block(text, len, name, NULL);
+            free(text);
+        }
         r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
         free(v);
     }
     JS_FreeCString(ctx, name);
+    JS_FreeValue(ctx, block);
     return r;
 }
 
 static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    int mode = CSSD_INLINE;
-    lxb_dom_element_t *el = cssd_element(ctx, this_val, &mode);
-    const char *name, *value;
+    JSValue block = cssd_block(ctx, this_val);
+    const char *name, *value, *priority;
+    bool important;
 
     (void)magic;
-    if (!el || argc < 2) return JS_UNDEFINED;
-    if (mode == CSSD_COMPUTED)
-        return JS_ThrowDOMException(ctx, "NoModificationAllowedError",
-                                    "a computed style declaration is read-only");
+    if (JS_IsException(block)) return block;
+    if (cssd_flag(ctx, block, "readOnly")) {
+        JS_FreeValue(ctx, block);
+        return cssd_readonly_throw(ctx);
+    }
+    DCHECK(argc >= 2, "§6.6.1's setProperty reached its body without the two arguments its IDL requires — the "
+                      "declaration's own §3.6.2 step 1 count is what should have refused the call");
     name = JS_ToCString(ctx, argv[0]);
     value = JS_ToCString(ctx, argv[1]);
-    if (!name || !value) {
+    /* §3.6.2's ABSENT OPTIONAL ARGUMENT, in both of its spellings: a call that stopped short of the position
+       arrives with a shorter argc, and one that reached it with `undefined` arrives with undefined in the slot —
+       "if the argument is optional and its value is undefined, it is absent". This member's IDL writes
+       `optional CSSOMString priority = ""`, so absent IS the empty string, which is a POSITIVE statement that
+       the page named no priority rather than a hole. Converting either would produce the four characters
+       "undefined" and abandon the call at step 4 below. */
+    priority = (argc >= 3 && !JS_IsUndefined(argv[2])) ? JS_ToCString(ctx, argv[2]) : NULL;
+    if (!name || !value || (argc >= 3 && !JS_IsUndefined(argv[2]) && !priority)) {
         if (name) JS_FreeCString(ctx, name);
         if (value) JS_FreeCString(ctx, value);
+        if (priority) JS_FreeCString(ctx, priority);
+        JS_FreeValue(ctx, block);
         return JS_EXCEPTION;
     }
-    /* §CSSOM: setting the empty string REMOVES the declaration. */
-    cssd_write_inline(ctx, el, name, *value ? value : NULL);
+    /* §6.6.1's step 4: "if priority is not the empty string and is not an ASCII case-insensitive match for the
+       string 'important', then return". An unrecognised priority is not a declaration written without one — it
+       abandons the call, so `setProperty('color','red','urgent')` leaves the block alone. The match is ASCII by
+       the spec's own word, so it is spelled out rather than left to a locale-dependent library compare. */
+    important = priority && *priority != '\0';
+    if (important) {
+        static const char IMPORTANT[] = "important";
+        size_t i;
+
+        for (i = 0; i < sizeof(IMPORTANT); i++)
+            if ((char)tolower((unsigned char)priority[i]) != IMPORTANT[i]) break;
+        if (i != sizeof(IMPORTANT)) {
+            JS_FreeCString(ctx, name);
+            JS_FreeCString(ctx, value);
+            JS_FreeCString(ctx, priority);
+            JS_FreeValue(ctx, block);
+            return JS_UNDEFINED;
+        }
+    }
+    /* §6.6.1's step 3: setting the empty string invokes removeProperty and returns. */
+    cssd_write_declaration(ctx, block, name, *value ? value : NULL, important);
     JS_FreeCString(ctx, name);
     JS_FreeCString(ctx, value);
+    JS_FreeCString(ctx, priority);
+    JS_FreeValue(ctx, block);
     return JS_UNDEFINED;
 }
 
-/* The camel-cased IDL attributes. `magic` is Lexbor's own property id, so the dashed name is read back out of
-   the registry rather than stored twice. */
+/* The camel-cased IDL attributes. §6.6.1 states both halves as a forward — the getter "must return the result
+   of invoking getPropertyValue()" and the setter "must invoke setProperty() ... and no third argument" — so
+   they answer out of the same two paths above and never grow a rule of their own. `magic` is Lexbor's own
+   property id, so the dashed name is read back out of the registry rather than stored twice. */
 static JSValue js_cssd_camel_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     const lxb_css_entry_data_t *e = lxb_css_property_by_id((uintptr_t)magic);
-    int mode = CSSD_INLINE;
-    lxb_dom_element_t *el = cssd_element(ctx, this_val, &mode);
+    JSValue block = cssd_block(ctx, this_val), r;
     char *v;
-    JSValue r;
 
     DCHECK(e != NULL, "a CSS attribute was declared with a property id the registry does not have");
-    if (!el || !e) return JS_NewStringLen(ctx, "", 0);
-    v = cssd_view_value(el, (const char *)e->name, mode);
+    if (JS_IsException(block)) return block;
+    if (cssd_flag(ctx, block, "computed")) {
+        v = css_resolved_value(cssd_owner_element(ctx, block), (const char *)e->name);
+    } else {
+        size_t len = 0;
+        char *text = cssd_declarations_text(ctx, block, &len);
+
+        v = cssd_value_in_block(text, len, (const char *)e->name, NULL);
+        free(text);
+    }
     r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
     free(v);
+    JS_FreeValue(ctx, block);
     return r;
 }
 
 static JSValue js_cssd_camel_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     const lxb_css_entry_data_t *e = lxb_css_property_by_id((uintptr_t)magic);
-    int mode = CSSD_INLINE;
-    lxb_dom_element_t *el = cssd_element(ctx, this_val, &mode);
+    JSValue block = cssd_block(ctx, this_val);
     const char *v;
 
     DCHECK(e != NULL, "a CSS attribute was declared with a property id the registry does not have");
-    if (!el || !e) return JS_UNDEFINED;
-    if (mode == CSSD_COMPUTED)
-        return JS_ThrowDOMException(ctx, "NoModificationAllowedError",
-                                    "a computed style declaration is read-only");
+    if (JS_IsException(block)) return block;
+    if (cssd_flag(ctx, block, "readOnly")) {
+        JS_FreeValue(ctx, block);
+        return cssd_readonly_throw(ctx);
+    }
     v = JS_ToCString(ctx, val);   /* a real string by now: the declaration converted it */
-    if (!v) return JS_EXCEPTION;
-    cssd_write_inline(ctx, el, (const char *)e->name, *v ? v : NULL);
+    if (!v) { JS_FreeValue(ctx, block); return JS_EXCEPTION; }
+    cssd_write_declaration(ctx, block, (const char *)e->name, *v ? v : NULL, false);
     JS_FreeCString(ctx, v);
+    JS_FreeValue(ctx, block);
     return JS_UNDEFINED;
 }
 
-/* §CSSOM cssText / length / item(i) — the declaration block as text and as an indexed list of its property
-   names. The INLINE block for both views: a computed declaration enumerates the properties it was asked for,
-   which is a resolved-value set this engine builds per read rather than holding. */
+/* §6.6.1's cssText. Getting it is two steps and the FIRST is the computed one: "if the computed flag is set,
+   then return the empty string", and only then "return the result of serializing the declarations". This used
+   to hand back the element's `style` attribute BYTES for both — which is a real string belonging to a different
+   question: it is not a serialization (`style="color:red"` reads back as `color: red;` in a browser), and for a
+   computed block it is the inline declarations of a block that has none. */
 static JSValue js_cssd_css_text(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = cssd_element(ctx, this_val, NULL);
+    JSValue block = cssd_block(ctx, this_val), r;
     size_t len = 0;
-    const char *text;
+    char *text, *out;
 
     (void)magic;
-    if (!el) return JS_NewStringLen(ctx, "", 0);
-    text = cssd_inline_text(el, &len);
-    return text ? JS_NewStringLen(ctx, text, len) : JS_NewStringLen(ctx, "", 0);
+    if (JS_IsException(block)) return block;
+    if (cssd_flag(ctx, block, "computed")) {
+        JS_FreeValue(ctx, block);
+        return JS_NewStringLen(ctx, "", 0);
+    }
+    text = cssd_declarations_text(ctx, block, &len);
+    out = cssd_serialize_text(text, len);
+    free(text);
+    r = out ? JS_NewString(ctx, out) : JS_NewStringLen(ctx, "", 0);
+    free(out);
+    JS_FreeValue(ctx, block);
+    return r;
 }
 
+/* Setting it: throw when readonly, then "empty the declarations" and parse the given value into them. Writing
+   the value through unparsed is what the backing then re-parses, and for a rule it is what `cssRules` reports —
+   so it goes through the same serialization every other write does, which is what drops an invalid declaration
+   here rather than at every later read. */
 static JSValue js_cssd_set_css_text(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    int mode = CSSD_INLINE;
-    lxb_dom_element_t *el = cssd_element(ctx, this_val, &mode);
+    JSValue block = cssd_block(ctx, this_val);
     const char *v;
+    char *out;
 
     (void)magic;
-    if (!el) return JS_UNDEFINED;
-    if (mode == CSSD_COMPUTED)
-        return JS_ThrowDOMException(ctx, "NoModificationAllowedError",
-                                    "a computed style declaration is read-only");
+    if (JS_IsException(block)) return block;
+    if (cssd_flag(ctx, block, "readOnly")) {
+        JS_FreeValue(ctx, block);
+        return cssd_readonly_throw(ctx);
+    }
     v = JS_ToCString(ctx, val);
-    if (!v) return JS_EXCEPTION;
-    dom_cow_set_attribute(el, "style", v, strlen(v), JS_UNDEFINED);   /* the attribute IS the block */
+    if (!v) { JS_FreeValue(ctx, block); return JS_EXCEPTION; }
+    out = cssd_serialize_text(v, strlen(v));
+    cssd_declarations_write(ctx, block, out ? out : "", out ? strlen(out) : 0);
+    free(out);
     JS_FreeCString(ctx, v);
+    JS_FreeValue(ctx, block);
     return JS_UNDEFINED;
 }
 
-/* The property NAMES the inline block declares, in order — what `length` counts and `item(i)` answers. */
-static int cssd_names(lxb_dom_element_t *el, char **out, int max)
+/* Web IDL §3.4.4's [PutForwards=cssText], which BOTH `style` attributes carry — §7.1's on an element and
+   §6.4.3's on a style rule. The attribute is readonly and yet `el.style = 'color:red'` works, because the
+   setter is "let Q be ? Get(esValue, id); if Type(Q) is not Object, throw a TypeError; perform
+   ? Set(Q, forwardId, V, true)" — a real property get by NAME through the getter, which is why one setter
+   serves both attributes and neither component needs its own. Installing the attribute without it was not a
+   missing feature but a WRONG one: the assignment was silently dropped in sloppy mode and threw a TypeError in
+   strict mode, where a browser sets the declaration block's text. */
+static JSValue js_cssd_put_forwards(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    size_t len = 0;
-    const char *text = cssd_inline_text(el, &len);
+    JSValue q = JS_GetPropertyStr(ctx, this_val, "style");
+    int ok;
+
+    (void)magic;
+    if (JS_IsException(q)) return q;
+    if (!JS_IsObject(q)) {
+        JS_FreeValue(ctx, q);
+        return JS_ThrowTypeError(ctx, "the attribute this assignment forwards to is not an object");
+    }
+    ok = JS_SetPropertyStr(ctx, q, "cssText", JS_DupValue(ctx, val));
+    JS_FreeValue(ctx, q);
+    return ok < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+}
+
+/* The property NAMES the block declares, in order — what `length` counts and `item(i)` answers. */
+static int cssd_names(const char *text, size_t len, char **out, int max)
+{
     lxb_css_memory_t *mem = NULL;
     lxb_css_rule_declaration_list_t *list;
     lxb_css_rule_t *r;
@@ -842,86 +1091,167 @@ static int cssd_names(lxb_dom_element_t *el, char **out, int max)
 
 #define CSSD_MAX_NAMES 256
 
+/* The names of the block's declarations, collected. Both §6.6.1 members that need them go through here, and
+   both assert the same premise: a COMPUTED block's declarations are NOT the ones its owner element declares
+   inline, so counting those is a real number belonging to another block. Returns the count. */
+static int cssd_declared_names(JSContext *ctx, JSValueConst block, char **names, int max)
+{
+    size_t len = 0;
+    char *text;
+    int n;
+
+    DCHECK(!cssd_flag(ctx, block, "computed"),
+           "§6.6.1's `length` and `item` count the CSS declarations of a COMPUTED block, and §7.2 states what "
+           "those are: every LONGHAND property that is a supported CSS property, in lexicographical order, plus "
+           "every custom property whose computed value is not the guaranteed-invalid value. This engine has no "
+           "such list — lexbor's registry carries the shorthands beside the longhands and says which is which "
+           "nowhere — so build the longhand set and enumerate it here. Until then these two answered out of the "
+           "element's INLINE attribute, which is a real number belonging to a different declaration block");
+    text = cssd_declarations_text(ctx, block, &len);
+    n = cssd_names(text, len, names, max);
+    free(text);
+    return n;
+}
+
 static JSValue js_cssd_length(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    lxb_dom_element_t *el = cssd_element(ctx, this_val, NULL);
+    JSValue block = cssd_block(ctx, this_val);
     char *names[CSSD_MAX_NAMES];
     int n, i;
 
     (void)magic;
-    if (!el) return JS_NewInt32(ctx, 0);
-    n = cssd_names(el, names, CSSD_MAX_NAMES);
+    if (JS_IsException(block)) return block;
+    n = cssd_declared_names(ctx, block, names, CSSD_MAX_NAMES);
     for (i = 0; i < n; i++) free(names[i]);
+    JS_FreeValue(ctx, block);
     return JS_NewInt32(ctx, n);
 }
 
 static JSValue js_cssd_item(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    lxb_dom_element_t *el = cssd_element(ctx, this_val, NULL);
+    JSValue block = cssd_block(ctx, this_val), r;
     char *names[CSSD_MAX_NAMES];
     int n, i;
     int64_t idx = 0;
-    JSValue r;
 
     (void)magic;
-    if (!el || argc < 1) return JS_NewStringLen(ctx, "", 0);
+    if (JS_IsException(block)) return block;
+    DCHECK(argc >= 1, "§6.6.1's `item` reached its body with no index — its IDL argument is required");
     JS_ToInt64(ctx, &idx, argv[0]);   /* a real number by now: the declaration converted it */
-    n = cssd_names(el, names, CSSD_MAX_NAMES);
+    n = cssd_declared_names(ctx, block, names, CSSD_MAX_NAMES);
+    /* "If there is no indexth object in the collection, then the method must return the empty string." */
     r = (idx >= 0 && idx < n) ? JS_NewString(ctx, names[idx]) : JS_NewStringLen(ctx, "", 0);
     for (i = 0; i < n; i++) free(names[i]);
+    JS_FreeValue(ctx, block);
     return r;
 }
 
-/* Build a declaration object bound to `owner` (an element WRAPPER, so the element cannot go away underneath it
-   and the identity table stays the one place a node is named). */
-static JSValue cssd_new(JSContext *ctx, JSValueConst owner, int mode)
+/* §6.6.1: "The parentRule attribute must return the parent CSS rule." It was a `null` DATA property on the
+   prototype — the right answer for the two element-backed blocks and a wrong one for §6.4.3's, which is the
+   rule itself, and a data property is shared by every block in the realm besides. */
+static JSValue js_cssd_parent_rule(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    JSValue obj, slots;
+    JSValue block = cssd_block(ctx, this_val), r;
+
+    (void)magic;
+    if (JS_IsException(block)) return block;
+    r = cssd_parent_rule(ctx, block);
+    JS_FreeValue(ctx, block);
+    return r;
+}
+
+/* §6.6.1's CSSStyleProperties.prototype FOR THIS REALM — which is the prototype every block gets, because
+   every one of them is a CSSStyleProperties. OWNED. */
+static JSValue cssd_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_cssd_class);
+
+    DCHECK(!JS_IsNull(proto),
+           "CSSStyleProperties.prototype was asked for in a realm that never ran its install");
+    return proto;
+}
+
+/* §6.6's CSS DECLARATION BLOCK, built with the four associated properties its three creators differ in. Exactly
+   one of the owner node and the parent CSS rule is non-null in every one of them, which is also what makes
+   "where are the declarations kept" answerable — so it is asserted here, at the only place a block is made,
+   rather than discovered by a read that finds neither. `owner_node` is an element WRAPPER, so the element
+   cannot go away underneath the block and the identity table stays the one place a node is named. */
+static JSValue cssd_new(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_rule,
+                        bool computed, bool readonly)
+{
+    JSValue obj, slots, proto;
     JSAtom k;
 
-    DCHECK(g_ready, "a CSSStyleDeclaration was minted before cssom_init ran");
-    {
-        JSValue cssd_proto = cssom_proto(ctx);
-        obj = JS_NewObjectProto(ctx, cssd_proto);
-        JS_FreeValue(ctx, cssd_proto);
-    }
+    DCHECK(g_ready, "a CSS declaration block was minted before cssom_init ran");
+    DCHECK(JS_IsNull(owner_node) != JS_IsNull(parent_rule),
+           "§6.6's owner node and parent CSS rule are not two independent fields for this engine: one of them "
+           "is where the declarations LIVE, so a block with both or with neither is a block whose declarations "
+           "are kept in two places or in none");
+    DCHECK(!computed || readonly,
+           "a COMPUTED declaration block was minted WRITABLE. §7.2 is the only creator that sets the computed "
+           "flag and it sets the readonly flag in the same breath — a writable one would take §6.6.1's set-a-"
+           "CSS-declaration path into a block whose declarations are computed per read and stored nowhere");
+    proto = cssd_proto(ctx);
+    obj = JS_NewObjectProto(ctx, proto);
+    JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) return obj;
     slots = idl_slots_new(ctx);
-    k = JS_ValueToAtom(ctx, g_key);
-    CHECK(!JS_IsException(slots) && k != JS_ATOM_NULL, "the CSSStyleDeclaration slot record allocation failed");
-    JS_SetPropertyStr(ctx, slots, "element", JS_DupValue(ctx, owner));
-    JS_SetPropertyStr(ctx, slots, "mode", JS_NewBool(ctx, mode == CSSD_COMPUTED));
+    k = JS_ValueToAtom(ctx, g_decl_key);
+    CHECK(!JS_IsException(slots) && k != JS_ATOM_NULL, "the CSS declaration block record allocation failed");
+    JS_SetPropertyStr(ctx, slots, "ownerNode", JS_DupValue(ctx, owner_node));
+    JS_SetPropertyStr(ctx, slots, "parentRule", JS_DupValue(ctx, parent_rule));
+    JS_SetPropertyStr(ctx, slots, "computed", JS_NewBool(ctx, computed));
+    JS_SetPropertyStr(ctx, slots, "readOnly", JS_NewBool(ctx, readonly));
     JS_SetProperty(ctx, obj, k, slots);
     JS_FreeAtom(ctx, k);
     return obj;
 }
 
-/* HTMLElement's `[SameObject] attribute CSSStyleDeclaration style`. SameObject is why the declaration is
+/* §6.4.3: "The style attribute must return a CSSStyleProperties object for the style rule" — computed flag
+   unset, readonly flag unset, declarations the rule's own, parent CSS rule THIS, owner node null. */
+JSValue cssom_style_properties_for_rule(JSContext *ctx, JSValueConst rule)
+{
+    DCHECK(css_rule_is(rule),
+           "§6.4.3's `style` was asked to back a declaration block with something that is not a CSS rule");
+    return cssd_new(ctx, JS_NULL, rule, false, false);
+}
+
+/* §7.1's ElementCSSInlineStyle: "The style attribute must return a CSSStyleProperties object whose readonly
+   flag is unset, whose parent CSS rule is null, and whose owner node is this." [SameObject] is why the block is
    remembered on the element rather than rebuilt: a page holds `el.style` and compares it, and a fresh object
    per read makes every such comparison false — the same rule node identity follows. It is stored as an own
    SLOT, so it is per-flow like everything else on the wrapper. */
 static JSValue js_el_get_style(JSContext *ctx, JSValueConst this_val, int magic)
 {
+    lxb_dom_node_t *n = node_of(this_val);
     JSAtom k;
     JSValue cur;
 
     (void)magic;
-    k = JS_ValueToAtom(ctx, g_key);
-    if (k == JS_ATOM_NULL) return JS_UNDEFINED;
+    /* Web IDL §3.7.5's brand check, and a THROW rather than an assert: the member is on a prototype and a page
+       reaches an accessor off one with `.call` on anything at all. Without it the block below would be minted
+       over an owner node that is not a node, and the first read of its declarations would crash on an engine
+       invariant that the page, not the engine, had broken. */
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT)
+        return JS_ThrowTypeError(ctx, "the style attribute was reached on something that is not an element");
+    k = JS_ValueToAtom(ctx, g_inline_key);
+    CHECK(k != JS_ATOM_NULL, "the inline-style slot key could not be interned");
     if (JS_GetOwnSlot(ctx, &cur, this_val, k) <= 0)
         cur = JS_UNDEFINED;
     if (!JS_IsObject(cur)) {
         JS_FreeValue(ctx, cur);
-        cur = cssd_new(ctx, this_val, CSSD_INLINE);
+        cur = cssd_new(ctx, this_val, JS_NULL, false, false);
         JS_SetProperty(ctx, (JSValue)this_val, k, JS_DupValue(ctx, cur));
     }
     JS_FreeAtom(ctx, k);
     return cur;
 }
 
-/* §CSSOM-VIEW getComputedStyle(elt, pseudoElt) — the RESOLVED value, read-only. The pseudo-element argument is
-   converted and rejected rather than ignored: this engine has no pseudo-element boxes, and answering the
-   ORIGINATING element's values for `::before` would be a wrong answer rather than a missing one. */
+/* §7.2's getComputedStyle(elt, pseudoElt) — "return a live CSSStyleProperties object" with the computed flag
+   SET, the readonly flag SET, the parent CSS rule null and the owner node the element. The pseudo-element
+   argument is converted and rejected rather than ignored: this engine has no pseudo-element boxes, and
+   answering the ORIGINATING element's values for `::before` would be a wrong answer rather than a missing
+   one. */
 static JSValue js_get_computed_style(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n;
@@ -941,7 +1271,7 @@ static JSValue js_get_computed_style(JSContext *ctx, JSValueConst this_val, int 
                                         "no pseudo-element boxes, and answering the originating element's "
                                         "values would be a wrong answer rather than a missing one");
     }
-    return cssd_new(ctx, argv[0], CSSD_COMPUTED);
+    return cssd_new(ctx, argv[0], JS_NULL, true, true);
 }
 
 void cssom_init(JSContext *ctx)
@@ -959,24 +1289,31 @@ void cssom_init(JSContext *ctx)
           "the CSS parser's selector state could not be allocated");
     g_selectors = lxb_css_parser_selectors(g_parser);
     CHECK(g_selectors != NULL, "the CSS parser accepted its selector state and then reported none");
-    g_key = JS_NewSymbol(ctx, "cssStyleDeclaration", false);
-    CHECK(!JS_IsException(g_key), "the CSSStyleDeclaration key allocation failed");
+    g_decl_key = JS_NewSymbol(ctx, "cssDeclarationBlock", false);
+    g_inline_key = JS_NewSymbol(ctx, "elementInlineStyle", false);
+    CHECK(!JS_IsException(g_decl_key) && !JS_IsException(g_inline_key),
+          "the CSS declaration block key allocations failed");
     {
-        JSClassDef d = { "CSSStyleDeclaration" };
+        /* EVERY block this engine builds is a §6.6.1 CSSStyleProperties — all three creators say so — so the
+           CLASS is that one, and §6.6.1's CSSStyleDeclaration base gets a per-realm value slot instead. */
+        JSClassDef d = { "CSSStyleProperties" };
         JS_NewClassID(JS_GetRuntime(ctx), &g_cssd_class);
         JS_NewClass(JS_GetRuntime(ctx), g_cssd_class, &d);
     }
+    g_declaration_proto_slot = realm_value_declare(ctx, "CSSOM §6.6.1 CSSStyleDeclaration.prototype");
     g_ready = 1;
     {
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
         static const IdlArgType ONE_LONG[1] = { IDL_LONG };
         static const IdlArgType THREE_STR[3] = { IDL_DOMSTRING, IDL_DOMSTRING, IDL_DOMSTRING };
         g_set_css_text_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_set_css_text, 0);
+        g_put_forwards_id = idl_setter_id(ctx, IDL_ANY, false, js_cssd_put_forwards, 0);
         g_get_prop_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 0);
         g_remove_prop_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 1);
         g_get_priority_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 2);
         g_set_prop_id = idl_method_id(ctx, THREE_STR, 3, js_cssd_set_property, 0);
-        idl_optional_from(2);   /* CSSOM §6.7: `setProperty(property, value, optional priority)` */
+        /* §6.6.1: `setProperty(CSSOMString property, CSSOMString value, optional CSSOMString priority = "")` */
+        idl_optional_from(2);
         g_item_id = idl_method_id(ctx, ONE_LONG, 1, js_cssd_item, 0);
         {
             /* CSSOM §7.1: `getComputedStyle(elt, optional pseudoElt)`. DECLARED HERE with the rest — the
@@ -991,30 +1328,41 @@ void cssom_init(JSContext *ctx)
     realm_declare_intrinsic(cssom_install_proto);
 }
 
-/* CSSOM §6.7's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+/* CSSOM §6.6.1's TWO INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. They are two because the spec splits them:
+   `interface CSSStyleProperties : CSSStyleDeclaration` carries `cssFloat` and the per-property camel-cased
+   attributes, and CSSStyleDeclaration carries the block's own eight members. Installing all of them on one
+   object made `CSSStyleProperties` an absent global — an honest ReferenceError for an interface every one of
+   this engine's blocks IS — and made `Object.getOwnPropertyNames(CSSStyleDeclaration.prototype)` report three
+   hundred property attributes a browser does not have there. Nothing is an instance of the base, so it holds no
+   class of its own, exactly as §6.1.1's StyleSheet and §6.4.2's CSSRule do. */
 void cssom_install_proto(JSContext *ctx)
 {
-    JSValue proto, prev;
+    JSValue base, proto, prev;
     uintptr_t id;
 
-    DCHECK(g_ready, "a realm asked for CSSStyleDeclaration.prototype before the interface was declared");
+    DCHECK(g_ready, "a realm asked for the declaration-block prototypes before the interfaces were declared");
     prev = JS_GetClassProto(ctx, g_cssd_class);
     DCHECK(JS_IsNull(prev), "cssom_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "CSSStyleDeclaration.prototype could not be allocated");
-    idl_interface_tag(ctx, proto, "CSSStyleDeclaration");
-    JS_SetPropertyStr(ctx, proto, "parentRule", JS_NULL);   /* no CSSRule objects yet, and null is the answer */
-    idl_install_accessor(ctx, proto, "length", js_cssd_length, 0, -1);
-    idl_install_accessor(ctx, proto, "cssText", js_cssd_css_text, 0, g_set_css_text_id);
-    idl_install_method(ctx, proto, "getPropertyValue", 1, g_get_prop_id);
-    idl_install_method(ctx, proto, "removeProperty", 1, g_remove_prop_id);
-    idl_install_method(ctx, proto, "getPropertyPriority", 1, g_get_priority_id);
-    idl_install_method(ctx, proto, "setProperty", 2, g_set_prop_id);
-    idl_install_method(ctx, proto, "item", 1, g_item_id);
-    /* THE CAMEL-CASED IDL ATTRIBUTES, generated from LEXBOR'S OWN CSS PROPERTY REGISTRY. Web IDL states them as
-       "for each CSS property, a camel-cased attribute", so the registry IS the list — typing a hundred names
-       here would be a second copy of it that could disagree, and inventing them would be worse. */
+    base = JS_NewObject(ctx);
+    CHECK(!JS_IsException(base), "CSSStyleDeclaration.prototype could not be allocated");
+    idl_interface_tag(ctx, base, "CSSStyleDeclaration");
+    idl_install_accessor(ctx, base, "parentRule", js_cssd_parent_rule, 0, -1);
+    idl_install_accessor(ctx, base, "length", js_cssd_length, 0, -1);
+    idl_install_accessor(ctx, base, "cssText", js_cssd_css_text, 0, g_set_css_text_id);
+    idl_install_method(ctx, base, "getPropertyValue", 1, g_get_prop_id);
+    idl_install_method(ctx, base, "removeProperty", 1, g_remove_prop_id);
+    idl_install_method(ctx, base, "getPropertyPriority", 1, g_get_priority_id);
+    idl_install_method(ctx, base, "setProperty", 2, g_set_prop_id);
+    idl_install_method(ctx, base, "item", 1, g_item_id);
+
+    proto = JS_NewObjectProto(ctx, base);
+    CHECK(!JS_IsException(proto), "CSSStyleProperties.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "CSSStyleProperties");
+    /* THE CAMEL-CASED IDL ATTRIBUTES, generated from LEXBOR'S OWN CSS PROPERTY REGISTRY. §6.6.1 states them as
+       a partial interface "for each CSS property property that is a supported CSS property", so the registry IS
+       the list — typing a hundred names here would be a second copy of it that could disagree, and inventing
+       them would be worse. */
     for (id = 1; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
         const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
         char camel[64];
@@ -1034,37 +1382,44 @@ void cssom_install_proto(JSContext *ctx)
         idl_install_accessor(ctx, proto, camel, js_cssd_camel_get, (int)id, g_camel_set_id[id]);
     }
     JS_SetClassProto(ctx, g_cssd_class, proto);
+    realm_value_set(ctx, g_declaration_proto_slot, base);
 }
 
-JSValue cssom_proto(JSContext *ctx)
+int cssom_put_forwards_setter(void)
 {
-    JSValue proto = JS_GetClassProto(ctx, g_cssd_class);
-    DCHECK(!JS_IsNull(proto), "CSSStyleDeclaration.prototype was asked for in a realm that never ran its install");
-    return proto;   /* OWNED */
+    DCHECK(g_put_forwards_id >= 0,
+           "§3.4.4's [PutForwards] setter was asked for before cssom_init declared it — the two `style` "
+           "attributes that carry it are installed onto prototypes this component's init runs ahead of");
+    return g_put_forwards_id;
 }
 
 void cssom_install_style_attribute(JSContext *ctx, JSValueConst proto)
 {
     DCHECK(g_ready, "the style attribute was installed before cssom_init ran");
-    idl_install_accessor(ctx, proto, "style", js_el_get_style, 0, -1);
+    idl_install_accessor(ctx, proto, "style", js_el_get_style, 0, g_put_forwards_id);
 }
 
 void cssom_install(JSContext *ctx, JSValueConst global)
 {
-    DCHECK(g_ready, "CSSStyleDeclaration was installed before cssom_init ran");
-    {
-        JSValue proto = cssom_proto(ctx);
-        node_install_interface(ctx, global, "CSSStyleDeclaration", proto);
-        JS_FreeValue(ctx, proto);
-    }
+    JSValue base = realm_value_get(ctx, g_declaration_proto_slot);
+    JSValue proto = cssd_proto(ctx);
+
+    DCHECK(g_ready, "the declaration-block interfaces were installed before cssom_init ran");
+    DCHECK(JS_IsObject(base),
+           "the declaration-block interfaces were installed in a realm that never ran their prototype install");
+    node_install_interface(ctx, global, "CSSStyleDeclaration", base);
+    node_install_interface(ctx, global, "CSSStyleProperties", proto);
+    JS_FreeValue(ctx, base);
+    JS_FreeValue(ctx, proto);
     idl_install_method(ctx, global, "getComputedStyle", 1, g_id_gcs);
 }
 
 void cssom_free(JSContext *ctx)
 {
     if (!g_ready) return;
-    JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — released with their contexts */
-    g_key = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_decl_key);   /* the prototypes are the REALMS' — released with their contexts */
+    JS_FreeValue(ctx, g_inline_key);
+    g_decl_key = g_inline_key = JS_UNDEFINED;
     /* The selector state is released BY NAME: `lxb_css_parser_destroy` frees the parser's stack, rules, string
        buffer, log and tokenizer and does NOT touch `selectors`, so the record installed in cssom_init is this
        component's to free — and freeing it after the parser would read a pointer out of freed memory. */

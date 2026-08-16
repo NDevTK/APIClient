@@ -248,7 +248,14 @@ const INTERFACES = {
   Location:             "core/frame/location.c",
   URL:                  "core/url/url.c",
   URLSearchParams:     ["core/url/url_search_params.c", "core/idl_iter.c"],
+  /* CSSOM §6.6.1's two. CSSStyleDeclaration is the block's own eight members and nothing is an instance of it;
+     CSSStyleProperties CHAINS to it and carries `cssFloat` plus the per-property camel-cased attributes, which
+     are installed from LEXBOR'S REGISTRY in a loop — so their member names are not literals and the audit
+     reports them UNRESOLVED with file and line rather than crediting or omitting them. What the second row is
+     EXPECTED to report missing is exactly that set: `cssFloat` and the spec's three placeholder names
+     (`_camel_cased_attribute`, `_webkit_cased_attribute`, `_dashed_attribute`). */
   CSSStyleDeclaration:  "core/css/css_style_declaration.c",
+  CSSStyleProperties:   "core/css/css_style_declaration.c",
   /* CSSOM §6.1's two. StyleSheet is a base nothing instantiates, so its six members live on their own
      prototype and CSSStyleSheet.prototype CHAINS to it — both rows name the one component, and reporting
      StyleSheet's members absent from CSSStyleSheet would be the audit lying by direction. What each row is
@@ -266,8 +273,8 @@ const INTERFACES = {
      and CSSStyleRule.prototype CHAINS to it — both rows name the one component. What each is EXPECTED to
      report missing is real and named at the sites: CSSRule's `cssText` (§6.6's serialize-a-CSS-declaration-
      block needs its shorthand consolidation loop, and a cssText without it is a string no browser produces),
-     and CSSStyleRule's `style` (a CSSStyleProperties whose backing is a rule rather than an element) plus the
-     three CSSGroupingRule members it inherits in the IDL and cannot here. */
+     and on CSSStyleRule the three CSSGroupingRule members it inherits in the IDL and cannot here. `style` is
+     BUILT — the block over the rule's own declarations — so it is off this list rather than still named. */
   CSSRule:              "core/css/css_rule.c",
   CSSStyleRule:         "core/css/css_rule.c",
   CSSRuleList:          "core/css/css_rule_list.c",

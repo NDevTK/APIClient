@@ -1,4 +1,7 @@
-/* CSSOM — CSSStyleDeclaration, `element.style` and `getComputedStyle()`. */
+/* CSSOM §6.6 — the CSS DECLARATION BLOCK, its two interfaces (§6.6.1's CSSStyleDeclaration and the
+   CSSStyleProperties that carries the per-property attributes), and the cascade every block's computed view
+   reads through. A block is made by one of three creators and they differ only in §6.6's associated properties:
+   §7.1's `element.style`, §7.2's `getComputedStyle` and §6.4.3's `rule.style`. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_DECLARATION_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_DECLARATION_H
 #include <lexbor/dom/dom.h>
@@ -11,16 +14,26 @@ void cssom_init(JSContext *ctx);
    and is who this exists for. OWNED: the caller frees. NULL only for a property no layer declares and that has
    no initial value in lexbor's registry (a custom property nobody set). */
 char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name);
-/* CSSOM §6.7's prototype for ONE realm — declared into core/realm.h's list, run once per realm. */
+/* CSSOM §6.6.1's two prototypes for ONE realm — declared into core/realm.h's list, run once per realm. */
 void cssom_install_proto(JSContext *ctx);
-/* PER REALM. OWNED: the caller frees. */
-JSValue cssom_proto(JSContext *ctx);
 void cssom_free(JSContext *ctx);
-/* `CSSStyleDeclaration` as a global, and `getComputedStyle` on the one the Window IDL puts it on. */
+/* `CSSStyleDeclaration` and `CSSStyleProperties` as globals, and `getComputedStyle` on the one the Window IDL
+   puts it on. */
 void cssom_install(JSContext *ctx, JSValueConst global);
-/* HTMLElement's `[SameObject] attribute CSSStyleDeclaration style` — installed by the html layer, because the
-   attribute is HTMLElement's and the object is this component's. */
+/* §7.1's ElementCSSInlineStyle `[SameObject, PutForwards=cssText] readonly attribute CSSStyleProperties style`
+   — installed by the html layer, because the attribute is HTMLElement's and the object is this component's. */
 void cssom_install_style_attribute(JSContext *ctx, JSValueConst proto);
+
+/* §6.4.3's `style`: a CSSStyleProperties whose DECLARATIONS are `rule`'s — computed flag unset, readonly flag
+   unset, parent CSS rule the rule, owner node null. Every read and every write goes back through the rule's own
+   record, so two flows disagree about `rule.style.color` exactly as they disagree about an inline style.
+   OWNED: the caller frees. */
+JSValue cssom_style_properties_for_rule(JSContext *ctx, JSValueConst rule);
+
+/* Web IDL §3.4.4's [PutForwards=cssText] SETTER, declared once and shared by the two attributes that carry it
+   — §7.1's `element.style` and §6.4.3's `rule.style`. It reads the attribute back by NAME through its own
+   getter, which is what §3.4.4 states, so one declaration serves both and neither component writes its own. */
+int cssom_put_forwards_setter(void);
 
 /* CSS SYNTAX'S "PARSE A STYLESHEET'S CONTENTS", through THE AGENT'S ONE CSS PARSER.
  *

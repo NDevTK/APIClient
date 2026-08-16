@@ -29,6 +29,9 @@ typedef struct CssRuleData {
     JSValue parent_rule;         /* §6.4.2 "parent CSS rule" (OWNED) */
     JSValue selector_text;       /* §6.4.3's associated selector list, serialized (OWNED) */
     JSValue block_text;          /* the rule's associated declarations, serialized (OWNED) — see the header */
+    /* §6.4.3's `[SameObject] style` — the CSSStyleProperties over `block_text`, minted once because a page
+       holds `rule.style` and compares it. JS_UNDEFINED until something asks. (OWNED) */
+    JSValue style;
 } CssRuleData;
 
 static JSClassID g_rule_class;
@@ -40,8 +43,9 @@ static const uint16_t RULE_VALS[] = {
     (uint16_t)offsetof(CssRuleData, parent_rule),
     (uint16_t)offsetof(CssRuleData, selector_text),
     (uint16_t)offsetof(CssRuleData, block_text),
+    (uint16_t)offsetof(CssRuleData, style),
 };
-static const CowRecord RULE_REC = { sizeof(CssRuleData), RULE_VALS, 4 };
+static const CowRecord RULE_REC = { sizeof(CssRuleData), RULE_VALS, 5 };
 
 /* THE ACCESSOR, AND THEREFORE THE CAPTURE POINT. */
 static CssRuleData *rule_of(JSValueConst v)
@@ -80,6 +84,7 @@ static void rule_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, r->parent_rule);
     JS_FreeValueRT(rt, r->selector_text);
     JS_FreeValueRT(rt, r->block_text);
+    JS_FreeValueRT(rt, r->style);
     free(r);
 }
 
@@ -92,6 +97,7 @@ static void rule_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
     JS_MarkValue(rt, r->parent_rule, mark_func);
     JS_MarkValue(rt, r->selector_text, mark_func);
     JS_MarkValue(rt, r->block_text, mark_func);
+    JS_MarkValue(rt, r->style, mark_func);
 }
 
 JSValue css_style_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
@@ -115,6 +121,9 @@ JSValue css_style_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSVa
     r->parent_rule = JS_DupValue(ctx, parent_rule);
     r->selector_text = JS_NewString(ctx, selector_text);
     r->block_text = JS_NewString(ctx, block_text);
+    /* A calloc'd JSValue is not JS_UNDEFINED — its tag is whatever zero means — so the one field no creator
+       supplies is placed EXPLICITLY, like every other value the record owns. */
+    r->style = JS_UNDEFINED;
     JS_SetOpaque(obj, r);
     realm_awaits(ctx, "CSSGroupingRule",
                  "CSSOM §6.4.3 declares `CSSStyleRule : CSSGroupingRule`, and css_rule_install_proto chains "
@@ -220,6 +229,67 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
     return JS_UNDEFINED;
 }
 
+/* ---- §6.4.3's `style`, and the DECLARATIONS behind it ----------------------------------------------------- */
+
+/* §6.4.3: "The style attribute must return a CSSStyleProperties object for the style rule, with the following
+   properties: computed flag unset, readonly flag unset, declarations THE DECLARED DECLARATIONS IN THE RULE,
+   parent CSS rule THIS, owner node null." [SameObject], so the block is remembered on the record — a page holds
+   `rule.style` and compares it, and a fresh object per read makes every such comparison false.
+   IT IS MINTED THROUGH THE CAPTURING ACCESSOR, which is what makes the memo per-flow: the block belongs to the
+   flow that first asked for it, and a sibling that asks gets its own over the same declarations. */
+static JSValue js_rule_style(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    CssRuleData *r = rule_here(ctx, this_val);
+
+    (void)magic;
+    if (!r) return JS_EXCEPTION;
+    if (!JS_IsObject(r->style)) {
+        JS_FreeValue(ctx, r->style);
+        r->style = cssom_style_properties_for_rule(ctx, this_val);
+    }
+    return JS_DupValue(ctx, r->style);
+}
+
+/* THE RULE'S DECLARATIONS, as the text they are. §6.6's block reads them through here and writes them back
+   through the setter below, so the two components share ONE storage rather than each keeping a copy that could
+   disagree — which is the same reason an element's block is the `style` attribute and not a parsed cache.
+   OWNED: the caller frees. NULL for a rule whose body is empty. */
+char *css_rule_block_text(JSContext *ctx, JSValueConst rule, size_t *plen)
+{
+    CssRuleData *r = rule_of(rule);
+    const char *c;
+    size_t len = 0;
+    char *out;
+
+    DCHECK(r != NULL, "a rule's declaration block was read off something that is not a CSS rule");
+    DCHECK(plen != NULL, "a rule's declaration block was read with nowhere to report its length");
+    *plen = 0;
+    c = JS_ToCStringLen(ctx, &len, r->block_text);
+    if (!c) return NULL;                        /* the conversion threw; the caller's read answers empty */
+    if (len == 0) { JS_FreeCString(ctx, c); return NULL; }
+    out = malloc(len + 1);
+    CHECK(out != NULL, "cssom: OOM copying a rule's declaration block");
+    memcpy(out, c, len);
+    out[len] = '\0';
+    JS_FreeCString(ctx, c);
+    *plen = len;
+    return out;
+}
+
+/* The write half. It goes through `rule_of`, so the per-flow COW delta has already taken a copy of the record
+   and one arm's `rule.style.color = 'red'` is invisible to its sibling and to every flow the frontier resumes
+   afterwards — the same guarantee `selectorText`'s setter has, for the same reason and at the same site. */
+void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text, size_t len)
+{
+    CssRuleData *r = rule_of(rule);
+
+    DCHECK(r != NULL, "a rule's declaration block was written on something that is not a CSS rule");
+    DCHECK(text != NULL, "a rule's declaration block was written with no text — an emptied block is the empty "
+                         "string, which is what serializing no declarations produces");
+    JS_FreeValue(ctx, r->block_text);
+    r->block_text = JS_NewStringLen(ctx, text, len);
+}
+
 /* ---- the interfaces -------------------------------------------------------------------------------------- */
 
 /* §6.4.2's historical constants, which the IDL declares on the interface AND its prototype. */
@@ -277,6 +347,7 @@ void css_rule_install_proto(JSContext *ctx)
     CHECK(!JS_IsException(proto), "CSSStyleRule.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "CSSStyleRule");
     idl_install_accessor(ctx, proto, "selectorText", js_rule_get, CR_SELECTOR_TEXT, g_id_set_selector);
+    idl_install_accessor(ctx, proto, "style", js_rule_style, 0, cssom_put_forwards_setter());
     JS_SetClassProto(ctx, g_rule_class, proto);
     realm_value_set(ctx, g_cssrule_proto_slot, base);
 }
