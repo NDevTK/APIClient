@@ -30,6 +30,7 @@
 #include "core/dom/node.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* PER REALM — §3.7. The class is the agent's; the prototype lives in its per-context slot. */
 static JSClassID g_impl_class;
@@ -136,7 +137,7 @@ static JSValue js_impl_create_html_document(JSContext *ctx, JSValueConst this_va
     /* §3.7.5's brand check. The associated document is not read past it — §4.5.1 step 8 gives the new document
        that one's ORIGIN, and an origin-keyed agent cluster has exactly one, which is this realm's. */
     if (!impl_doc(ctx, this_val)) return JS_EXCEPTION;
-    dom = lxb_html_document_create();
+    dom = dom_document_create();
     CHECK(dom != NULL, "createHTMLDocument: OOM building a second Document");
     CHECK(lxb_html_document_parse(dom, (const lxb_char_t *)SKELETON, sizeof SKELETON - 1) == LXB_STATUS_OK,
           "createHTMLDocument: the skeleton its own steps 3-5 and 7 describe did not parse");
@@ -215,7 +216,7 @@ static JSValue js_impl_create_document(JSContext *ctx, JSValueConst this_val, in
                                                              : "application/xml";
     if (ns) JS_FreeCString(ctx, ns);
 
-    dom = lxb_html_document_create();
+    dom = dom_document_create();
     CHECK(dom != NULL, "createDocument: OOM building a second Document");
     /* Step 1's document has NO tree at all — not even a document element — which is why this is a create and
        not a parse. §4.5's own steps 4 and 5 are what put nodes in it, if the arguments name any. */

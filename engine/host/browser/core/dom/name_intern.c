@@ -7,8 +7,6 @@
 
 #include "check.h"
 #include "core/dom/name_intern.h"
-#include "core/dom/node_interface.h"   /* a namespace id born here is one lexbor's destroy table has no column
-                                          for — see that header for the whole of it */
 
 /* Lexbor's, exported and declared in no lexbor header — its own dom/interfaces/node.c and attr.c declare them
    at the call site in exactly this form, which is why the declarations are copied rather than invented. The two
@@ -45,11 +43,6 @@ lxb_ns_id_t dom_intern_namespace(lxb_dom_document_t *doc, const char *ns, size_t
     DCHECK((lxb_ns_id_t)data > LXB_NS__LAST_ENTRY,
            "an interned namespace landed at an address a static namespace id already names");
     data->ns_id = (lxb_ns_id_t)data;
-    /* AND THE DOCUMENT NOW DESTROYS ITS OWN NODES. This line is the only thing in the engine that produces a
-       namespace id outside the domain lexbor's `res_destructor[tag][ns]` indexes, so it is the only thing that
-       can create the obligation, and it takes it here rather than at each of the members that ask — an
-       element, an attribute and §4.4's import all reach this one mint. See node_interface.h. */
-    dom_document_own_node_interfaces(doc);
     return data->ns_id;
 }
 

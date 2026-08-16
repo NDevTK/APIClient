@@ -84,6 +84,7 @@ static const IdlArgType IDL_NSSTR_STR[2] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRI
 #include "core/dom/node_iterator.h"
 #include "core/dom/tree_walker.h"
 #include "core/dom/range.h"
+#include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* THE DOCUMENT'S OWN STATE, HELD ON THE REALM THAT IS THIS DOCUMENT — not on the file.
  *
@@ -868,7 +869,7 @@ static JSValue js_doc_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
     lxb_html_document_t *dom;
 
     (void)new_target; (void)argc; (void)argv; (void)magic;
-    dom = lxb_html_document_create();
+    dom = dom_document_create();
     CHECK(dom != NULL, "new Document(): OOM building a second Document");
     /* The ORIGIN is the constructing realm's document's, which document_new takes from the realm it runs in —
        the same rule createDocument's step 6 states, and the reason this is not `document_install`. */
@@ -2387,7 +2388,7 @@ lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_do
     if (d->is_inert_template)      /* "a Document created by this algorithm": it is its own owner */
         return d->dom;
     if (!d->inert_template) {
-        lxb_html_document_t *dom = lxb_html_document_create();
+        lxb_html_document_t *dom = dom_document_create();
 
         CHECK(dom != NULL, "HTML §4.12.3: OOM creating an inert template document");
         /* "If document is an HTML document, then mark newDocument as an HTML document also." What makes a

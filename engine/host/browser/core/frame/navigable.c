@@ -19,6 +19,7 @@
 #include "core/realm.h"              /* §8.1.3.1's environment: the creator's top-level creation URL */
 #include "solver/engine.h"
 #include "solver/world.h"
+#include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 static RealmBuilder g_realm_builder;
 
@@ -168,7 +169,7 @@ static bool child_in_this_agent(const Origin *child_origin)
 static lxb_html_document_t *child_document(const char *body, size_t body_len)
 {
     static const char EMPTY[] = "<!doctype html><html><head></head><body></body></html>";
-    lxb_html_document_t *dom = lxb_html_document_create();
+    lxb_html_document_t *dom = dom_document_create();
 
     /* WHAT ACTUALLY FILLED THE HEAP WHEN THIS FIRES IS NOT DOCUMENTS — see the realm list in navigable_realm.
        The message says so, because a `@WHY` is read at the site and "OOM" alone sends the reader here. It names

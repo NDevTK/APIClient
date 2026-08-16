@@ -86,6 +86,7 @@
 #include "browser/core/timing/timer.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/loader/module_loader.h"
+#include "browser/core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 #include "solver/absent.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
@@ -332,7 +333,7 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
     concolic_install_hooks();
     concolic_install_source_overlay();   /* a SOLVER host: attacker-controlled values are symbolic sources */
 
-    g_dom = lxb_html_document_create();
+    g_dom = dom_document_create();
     CHECK(g_dom != NULL, "the document allocation failed");
     if (lxb_html_document_parse(g_dom, (const lxb_char_t *)(html ? html : ""),
                                 html ? strlen(html) : 0) != LXB_STATUS_OK)

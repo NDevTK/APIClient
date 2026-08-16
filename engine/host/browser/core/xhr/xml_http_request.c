@@ -73,6 +73,7 @@
 #include "core/xhr/xml_http_request.h"
 #include "solver/cow.h"
 #include "solver/engine.h"
+#include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* §3's five states, in the order the constants number them. */
 enum { XHR_UNSENT = 0, XHR_OPENED, XHR_HEADERS_RECEIVED, XHR_LOADING, XHR_DONE };
@@ -932,7 +933,7 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
     mime_type_free(&final_mime);
     bytes = JS_ToCStringLen(ctx, &len, d->received);
     if (!bytes) { free(content_type); return; }
-    dom = lxb_html_document_create();
+    dom = dom_document_create();
     CHECK(dom != NULL, "XMLHttpRequest: OOM building the response document");
     /* Step 5's charset: the final encoding, then the prescan, then UTF-8. lexbor's parser takes UTF-8 and the
        received bytes reach it as the JS string's UTF-8, so a document whose declared charset is not UTF-8 is

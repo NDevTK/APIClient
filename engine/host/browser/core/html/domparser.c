@@ -55,6 +55,7 @@
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* PER REALM — §3.7. The class is the AGENT's; the prototype lives in quickjs's per-context class-proto slot. */
 static JSClassID g_class;
@@ -168,7 +169,7 @@ static JSValue domparser_concrete(JSContext *ctx, JSValueConst v)
  * DOMParser-parseFromString-html.html's last subtest asserts. */
 static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const char *html, size_t len)
 {
-    lxb_html_document_t *dom = lxb_html_document_create();
+    lxb_html_document_t *dom = dom_document_create();
     lxb_dom_node_t *root;
     JSValue doc;
 

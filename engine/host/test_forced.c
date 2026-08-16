@@ -85,6 +85,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* the eval host-edge: a code-execution sink — funnel into the @S solver. */
 static JSValue js_eval_sink(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -1934,7 +1935,7 @@ static void document_policy_selftest(void)
            this page as permitting eval. */
         "<meta HTTP-EQUIV='content-security-policy' content=\"script-src 'self'\">"
         "</head><body></body></html>";
-    lxb_html_document_t *dom = lxb_html_document_create();
+    lxb_html_document_t *dom = dom_document_create();
     PolicyContainer *p, *empty;
     lxb_html_document_t *plain;
     const Origin *self_origin = origin_parse("https://x.test");
@@ -1949,7 +1950,7 @@ static void document_policy_selftest(void)
 
     /* A page with no CSP at all is the overwhelmingly common one, and the scan must not invent a policy for
        it — an empty container that answered "blocked" would suppress every real finding on every such page. */
-    plain = lxb_html_document_create();
+    plain = dom_document_create();
     lxb_html_document_parse(plain, (const lxb_char_t *)"<html><body></body></html>", 26);
     empty = document_policy_new(plain, NULL, self_origin);
     CHECK(policy_allows(empty, POLICY_INLINE_HANDLER), "a document with no meta CSP must permit everything");
@@ -3140,7 +3141,7 @@ int main(int argc, char **argv) {
            "a foreign world's segment and that document opens child navigables, so this run would abort in "
            "cold_park naming the cross-instance park rather than measuring the tier");
     const char *doc = cold_doc ? HTML_COLD : (min_doc ? HTML_MIN : HTML);
-    lxb_html_document_t *dom = lxb_html_document_create();
+    lxb_html_document_t *dom = dom_document_create();
     lxb_html_document_parse(dom, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
     {

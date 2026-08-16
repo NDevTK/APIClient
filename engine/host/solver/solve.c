@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 enum { SINK_EVAL = 0, SINK_HTML = 1, SINK_URL = 2 };   /* JS / HTML / URL context -> different candidate set + fire oracle */
 
@@ -396,7 +397,7 @@ static void html_fire_walk(lxb_dom_node_t *node) {
     }
 }
 static void html_fire(const char *html) {
-    lxb_html_document_t *doc = lxb_html_document_create();
+    lxb_html_document_t *doc = dom_document_create();
     if (!doc) return;
     if (lxb_html_document_parse(doc, (const lxb_char_t *)html, strlen(html)) == LXB_STATUS_OK) {
         lxb_dom_element_t *root = lxb_dom_document_element(&doc->dom_document);

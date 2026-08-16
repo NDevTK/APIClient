@@ -539,12 +539,6 @@ static void node_set_node_document(lxb_dom_node_t *n, lxb_dom_document_t *doc)
            "DOM §4.5 adopt step 3.1 tried to set a DOCUMENT's node document — a document IS its own node "
            "document, and `adoptNode` throws NotSupportedError rather than reaching one");
     if (n->owner_document == doc) return;
-    /* THE ID ARRIVES WITHOUT BEING MINTED HERE. Adopt re-points the node document and does NOT re-intern the
-       node's names, so a node created in A with a namespace outside lexbor's static table is from now on
-       destroyed through B's dispatcher — and lexbor's would index its eight-column destructor table with that
-       namespace id, which is a heap address. This is the second and last of the two ways a document acquires
-       such a node; dom_intern_namespace is the first. See node_interface.h. */
-    dom_document_own_node_interfaces(doc);
     /* THROUGH THE CHOKEPOINT, because a node document is shared baseline state exactly like a parent link: the
        delta now has an entry kind for it, so a flow that adopts a subtree moves those nodes in ITS timeline
        and a sibling arm that never adopted still reads the document it knew. */
@@ -1807,7 +1801,7 @@ static lxb_dom_node_t *clone_a_document(lxb_dom_document_t *src)
     DCHECK(realm != NULL, "§4.4 creates a document copy in the SOURCE document's relevant realm, and this "
                           "document has no realm — it came from neither document_install nor document_new, so "
                           "there is no realm for its copy's prototypes either");
-    copy = lxb_html_document_create();
+    copy = dom_document_create();
     CHECK(copy != NULL, "clone a single node: OOM creating the Document copy");
     cd = lxb_dom_interface_document(copy);
     cd->compat_mode = src->compat_mode;      /* "…and MODE": the quirks flag compatMode reports */

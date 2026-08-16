@@ -114,6 +114,7 @@
 #include "core/encoding/text_stream.h"
 #include "core/idl_args.h"
 #include "core/idl_async_iter.h"
+#include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* testharness.js reports through a callback; the callback reports through this. One line per subtest, so the
    driver never has to parse prose. */
@@ -1330,7 +1331,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
        measured in it a number about a different browser. */
     navigable_set_realm_builder(wpt_child_realm);
 
-    g_wpt_dom = lxb_html_document_create();
+    g_wpt_dom = dom_document_create();
     CHECK(g_wpt_dom != NULL, "the runner's document allocation failed");
     CHECK(lxb_html_document_parse(g_wpt_dom, (const lxb_char_t *)src, html_n) == LXB_STATUS_OK,
           "the runner's document did not parse");

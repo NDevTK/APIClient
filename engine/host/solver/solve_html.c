@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* THE ELIDE TOKEN MUST BE THE LOCATOR'S LENGTH, because renaming the other occurrences is how each occurrence
    is measured in its own state and the rename must not move a single byte offset. Checked by the compiler
@@ -227,7 +228,7 @@ static int quote_ends_value(const char *witness, size_t at, char q) {
 
     ins[0] = q; ins[1] = 0;
     w = splice(witness, at, ins, &wl);
-    doc = lxb_html_document_create();
+    doc = dom_document_create();
     CHECK(doc != NULL, "solve_html: OOM creating an attribute-state discrimination parse");
     if (lxb_html_document_parse(doc, (const lxb_char_t *)w, wl) == LXB_STATUS_OK) {
         Locate lo;
@@ -246,7 +247,7 @@ static int quote_ends_value(const char *witness, size_t at, char q) {
 static int space_starts_attribute(const char *witness, size_t at) {
     size_t wl = 0;
     char *w = splice(witness, at, " " SOLVE_HTML_PAD, &wl);
-    lxb_html_document_t *doc = lxb_html_document_create();
+    lxb_html_document_t *doc = dom_document_create();
     int found = 0;
 
     CHECK(doc != NULL, "solve_html: OOM creating an attribute-state discrimination parse");
@@ -342,7 +343,7 @@ static int construct(HoleState st, const Locate *lo, SolveHtmlEmit emit, void *u
    with no escape rule CRASHES here naming itself — that is the work queue, and it is a different thing from a
    search that has not solved (CLAUDE.md forbids asserting on THAT). */
 static int breakouts_at(const char *witness, size_t after, SolveHtmlEmit emit, void *user) {
-    lxb_html_document_t *doc = lxb_html_document_create();
+    lxb_html_document_t *doc = dom_document_create();
     Locate lo;
     int n = 0;
 
