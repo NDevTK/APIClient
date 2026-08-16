@@ -49,7 +49,12 @@ enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
    map_op selects the inverse pair — ADD (apply re-adds, unapply deletes), OVERWRITE (apply sets cur, unapply
    restores map_old), DELETE (apply deletes, unapply re-adds map_old). Entries replay forward on apply and invert
    in reverse on unapply, so a sequence of mutations to the same key reconstructs correctly with NO dedup and no
-   SameValueZero key-hashing. Never slot-keyed (kept out of the hash index, like gendata). */
+   SameValueZero key-hashing. Never slot-keyed (kept out of the hash index, like gendata).
+   map_pos is WHERE a re-added record goes, and it is the fourth thing a record's state is made of: a Set/Map
+   iterates in INSERTION order and that order is observable, so a DELETE whose inverse APPENDS rebuilds a
+   different collection — `m.delete('a')` on ['a','b','c'] unapplied to ['b','c','a'], and a clear() came back
+   reversed. A DELETE carries the position it was removed from; an ADD and an OVERWRITE carry JS_MAP_POS_TAIL,
+   which is the append an add replays and the nothing an overwrite places (its record is already there). */
 /* A FIFTH entry kind (is_state=1) is an opaque STATE BLOB over internal fields no property hook can see:
    a_base is the baseline state this flow found, a_cur the state this flow produced (saved at unapply, replayed
    at apply) — the same base/cur shape as a property slot. THREE TARGETS share it because they are one concept,
@@ -89,7 +94,7 @@ enum { COW_STATE_ASYNC = 0, COW_STATE_MODULE = 1, COW_STATE_HOST = 2, COW_STATE_
        COW_STATE_BUFFER = 4 };
 typedef struct { JSValue obj; JSAtom atom; int existed; JSPropertyDescriptor base; JSPropertyDescriptor cur;
                  int cur_state; void *vref;
-                 int is_gendata; void *g0; void *g1; int is_map; int map_op; JSValue map_old;
+                 int is_gendata; void *g0; void *g1; int is_map; int map_op; int map_pos; JSValue map_old;
                  int is_state; int state_kind; void *target; size_t a_len; void *a_base; void *a_cur;
                  const CowRecord *rec; } CowEntry;
 
@@ -106,6 +111,7 @@ static void cow_entry_init(CowEntry *e) {
     e->base.value = e->base.getter = e->base.setter = JS_UNDEFINED;
     e->cur.value = e->cur.getter = e->cur.setter = JS_UNDEFINED;
     e->map_old = JS_UNDEFINED;
+    e->map_pos = JS_MAP_POS_TAIL;   /* an add appends; only a DELETE's inverse has a place to put a record back */
     e->cur_state = COW_CUR_UNRECORDED;
     e->state_kind = COW_STATE_ASYNC;
 }
@@ -201,7 +207,12 @@ static void cow_hash_rebuild(CowDelta *d) {   /* size to >= 2*n (power of two), 
     CHECK(nh, "cow: OOM hash index");
     d->hash = nh; d->hash_cap = nc;
     memset(d->hash, 0, (size_t)d->hash_cap * sizeof(int));
-    for (int i = 0; i < d->n; i++) if (!d->e[i].is_gendata && !d->e[i].is_state) cow_hash_put(d, i);   /* gendata/async aren't slot-keyed */
+    /* gendata / state / MAP entries are not slot-keyed. The map arm was missing, so a rebuild put every map
+       entry into the index under (collection, JS_ATOM_NULL) — an entry the CowEntry comment says is kept out of
+       it, indexed under a key no capture ever looks up. It never returned a wrong entry; it filled the table
+       with rows nothing could find, which is the same statement being true in one place and false in another. */
+    for (int i = 0; i < d->n; i++)
+        if (!d->e[i].is_gendata && !d->e[i].is_state && !d->e[i].is_map) cow_hash_put(d, i);
 }
 /* Record entry (d->n-1) in the hash, growing/rebuilding the table when it would exceed half-full. */
 static void cow_hash_add_last(CowDelta *d) {
@@ -482,7 +493,7 @@ void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSV
 /* Capture a reversible OVERWRITE / DELETE of an existing Set/Map record (JSTimeTravelHooks.map_mutate) as an
    undo-log entry — see the CowEntry comment. op is COW_MAP_OVERWRITE (base=key, cur=new, map_old=old) or
    COW_MAP_DELETE (base=key, map_old=old). Flow-private collections are skipped. */
-void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op) {
+void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op, int pos) {
     if (g_capturing || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip */
@@ -496,6 +507,7 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
     e->cur_state = COW_CUR_PRESENT;   /* the record's value is the entry's own, not a slot read back off the heap */
     e->is_map = 1;
     e->map_op = (op == JS_MAP_MUTATE_DELETE) ? COW_MAP_DELETE : COW_MAP_OVERWRITE;
+    e->map_pos = pos;                         /* where the inverse must put the record back — see CowEntry */
     e->map_old = JS_DupValue(ctx, old_val);   /* the prior value, restored on unapply */
     g_capturing = 0;
 }
@@ -793,7 +805,9 @@ static void cow_restore_base(JSContext *ctx, CowEntry *e) {
     if (e->is_state) { cow_state_restore(ctx, e, e->a_base); return; }
     if (e->is_map) {   /* invert the flow's record mutation: ADD->delete, OVERWRITE/DELETE->restore old value */
         if (e->map_op == COW_MAP_ADD) JS_MapDeleteRecord(ctx, e->obj, e->base.value);
-        else JS_MapAddRecord(ctx, e->obj, e->base.value, e->map_old);
+        /* AT ITS POSITION — a DELETE's inverse CREATES the record, and where it lands is observable. An
+           OVERWRITE's carries JS_MAP_POS_TAIL and never reaches the placement: its record is still there. */
+        else JS_MapAddRecord(ctx, e->obj, e->base.value, e->map_old, e->map_pos);
         return;
     }
     if (e->vref) {
@@ -881,7 +895,10 @@ static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
         if (e->is_state) { cow_state_restore(ctx, e, e->a_cur); continue; }   /* re-install what this flow produced */
         if (e->is_map) {   /* replay the flow's record mutation: ADD/OVERWRITE->set new value, DELETE->delete */
             if (e->map_op == COW_MAP_DELETE) JS_MapDeleteRecord(ctx, e->obj, e->base.value);
-            else JS_MapAddRecord(ctx, e->obj, e->base.value, e->cur.value);
+            /* AT THE TAIL, and that is the OPERATION's position rather than the entry's: an add appended when
+               it happened, and a forward replay runs the entries in the order they were captured over the state
+               they were captured against, so appending reproduces it. */
+            else JS_MapAddRecord(ctx, e->obj, e->base.value, e->cur.value, JS_MAP_POS_TAIL);
             continue;
         }
         if (e->cur_state == COW_CUR_UNRECORDED) continue;   /* never switched out: nothing of this flow's to replay */

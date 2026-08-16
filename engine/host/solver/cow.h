@@ -136,8 +136,11 @@ void      cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key
 
 /* Install as JSTimeTravelHooks.map_mutate: capture a reversible OVERWRITE / DELETE of an existing Set/Map record
    as an undo-log entry (apply replays it, unapply inverts it), completing cow_capture_map_add's add-only capture
-   so ALL shared Set/Map mutations are per-flow isolated. op is JS_MAP_MUTATE_OVERWRITE / _DELETE. */
-void      cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op);
+   so ALL shared Set/Map mutations are per-flow isolated. op is JS_MAP_MUTATE_OVERWRITE / _DELETE.
+   `pos` is WHERE the inverse must put a deleted record back — its POSITION is part of its state, because a
+   Set/Map iterates in insertion order and that order is observable. JS_MAP_POS_TAIL for an OVERWRITE, whose
+   inverse creates nothing. */
+void      cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op, int pos);
 /* Install as JSTimeTravelHooks.async_state: capture a shared promise's settlement (state + result + pending
    reactions) or a resolving-function pair's already_resolved latch before this flow changes it, so each arm of
    a fork settles a pre-fork promise on its OWN timeline. */
