@@ -65,13 +65,13 @@ void structured_register_transferable(const StructuredTransferable *t);
  * (GetMethod(@@iterator), its call, one `next()` per element, a `done` and a `value` read), and every one of
  * those is a rest point a declared member parks on — which is why IDL_SEQUENCE_DOMSTRING and
  * IDL_SEQUENCE_INTERFACE are DECLARED TYPES in idl_args.h rather than walks a body performs. IDL_SEQUENCE_OBJECT
- * is now the third, `structuredClone` takes it, and this function's `length`-and-indices walk is the array-like
- * algorithm — a different algorithm wearing this one's name, and one that runs the page's accessors and Proxy
- * traps from an activation with no flow base. So a non-empty list DFAILs here rather than being walked: what is
- * left to build is the second argument of window.postMessage — `(USVString or WindowPostMessageOptions)` with
- * `sequence<object> transfer` third — and of MessagePort.postMessage —
- * `(sequence<object> or StructuredSerializeOptions)`. Declare those two and this function goes with its last
- * caller.
+ * is now the third, `structuredClone` and window.postMessage take it, and this function's `length`-and-indices
+ * walk is the array-like algorithm — a different algorithm wearing this one's name, and one that runs the page's
+ * accessors and Proxy traps from an activation with no flow base. So a non-empty list DFAILs here rather than
+ * being walked, and ONE caller is left: MessagePort.postMessage, whose two overload entries are BOTH two
+ * positions long (`sequence<object> transfer` against `optional StructuredSerializeOptions options = {}`), so
+ * §3.6 step 4 removes neither and step 12 chooses by performing GetMethod(V, @@iterator) — the page's code, and
+ * so a rest point before either arm exists. See the DFAIL for what that costs.
  *
  * Returns 0 with `*out` an owned Array (empty for an absent list), or -1 with a throw live. */
 int structured_transfer_list(JSContext *ctx, JSValueConst list, JSValue *out);

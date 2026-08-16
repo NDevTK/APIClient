@@ -39,6 +39,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/dom/document.h"
 #include "core/url/url.h"
+#include "solver/concolic.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/world.h"
@@ -338,11 +339,27 @@ void window_message_route(JSContext *ctx, const char *tail, const char *sender_d
     free(want);
 }
 
-/* §9.4.4's `postMessage(message, options)` and the legacy `postMessage(message, targetOrigin, transfer)`. */
+/* §9.4.4's `WindowPostMessageOptions.targetOrigin` DEFAULT, STATED ONCE and read from two places that must not
+   drift. The declaration places it on the converted dictionary (§3.2.17 step 4.1.5), so `postMessage(m, {})`
+   arrives here carrying it; a call passing NO second argument never reaches the conversion at all, and §3.6
+   step 15 answers that with `optional WindowPostMessageOptions options = {}`'s own default — a dictionary
+   whose every member takes ITS default, which is this same value. `postMessage(m)` therefore posts to the
+   sender's own origin, not to "*", which is what a second literal here would quietly have made it. */
+#define POST_TARGET_ORIGIN_DEFAULT "/"
+
+/* §9.4.4's `postMessage(message, options)` and the legacy `postMessage(message, targetOrigin, transfer)`.
+ *
+ * THE ARGUMENTS ARRIVE CONVERTED, AND THE OVERLOAD IS ALREADY RESOLVED. Both of this member's second-argument
+ * shapes were read from C: `targetOrigin` with a JS_GetPropertyStr and a ToString on whatever came back, and
+ * the transfer list with a `length`-and-indices walk — a getter, a Proxy trap and a `toString` of the page's,
+ * in an activation with no flow base under any of them. The declaration performs all three now
+ * (IDL_USVSTRING_OR_DICT for §3.6's split, IDL_SEQUENCE_OBJECT for §3.2.21's iterator protocol), so what this
+ * body sees at position 1 is either a real STRING or an engine-built OBJECT holding converted members, and
+ * asking which is reading the arm back off a value the engine made rather than duck-typing the page's. */
 static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValueConst second = argc > 1 ? argv[1] : JS_UNDEFINED;
-    JSValue raw = JS_UNDEFINED, transfer, want = JS_NULL, entry, buf;
+    JSValue transfer = JS_UNDEFINED, tov, want = JS_NULL, entry, buf;
     StructuredWithTransfer swt;
     const char *to = NULL;
     /* §9.4.4 POSTS TO THE WINDOW IT WAS CALLED ON, and the receiver is how that is known. This discarded
@@ -354,37 +371,62 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
 
     (void)magic;
     DCHECK(!JS_IsUndefined(target), "postMessage ran before this window's WindowProxy existed");
-    /* THE TWO OVERLOADS. A STRING second argument is the legacy targetOrigin form, with the transfer list
-       third; anything else is the options dictionary. A page still writing `postMessage(m, '*')` is most of
-       the code that uses this at all, so it is not a legacy path in any practical sense. */
+    /* UNKNOWN EXTERNAL INPUT CROSSES A DECLARED POSITION AS ITSELF, which means §3.6 chose NO overload for it
+       and there is no arm to read back. It is not a wrong value to route past — the target origin decides
+       §9.4.4 step 7.1's same-origin check, so a concolic one makes BOTH deliveries feasible and the post is a
+       FORK rather than one queue entry. That mechanism does not exist, and the alternative every earlier
+       version of this line took was to fall into the dictionary arm and read `targetOrigin` off the attacker's
+       own value, which manufactures a plausible datum out of a measurement nobody made. */
+    if (concolic_is(second))
+        DFAIL("postMessage was given a CONCOLIC target origin — §9.4.4 step 4 parses it and step 7.1 compares "
+              "it against the target document's origin, so an unpinned one leaves both the delivered and the "
+              "dropped arm feasible. Fork the post: queue the entry under each arm of the origin comparison, "
+              "the way a branch on unknown external input forks anywhere else, rather than deciding it here");
+    /* THE OVERLOAD, READ BACK OFF THE CONVERTED VALUE. A STRING is §3.6's longer entry — the legacy
+       `(message, targetOrigin, transfer)` — and an OBJECT is the options dictionary the declaration built.
+       UNDEFINED is the second argument not being there at all, which is the dictionary with every member at
+       its default; idl_dict_get answers exactly that for it, so the two share one path. */
+    DCHECK(JS_IsString(second) || JS_IsObject(second) || JS_IsUndefined(second),
+           "postMessage's second argument reached the body as neither a string, a dictionary nor absent — "
+           "IDL_USVSTRING_OR_DICT resolves to one of those three and nothing else");
+    DCHECK(JS_IsString(second) || argc <= 2,
+           "postMessage was called with three arguments and a second that is not a string — §3.6 step 4 "
+           "removes the options entry at that arity, so the conversion owed a USVString here");
     if (JS_IsString(second)) {
-        to = JS_ToCString(ctx, second);
-        if (!to) return JS_EXCEPTION;
-        raw = argc > 2 ? JS_DupValue(ctx, argv[2]) : JS_UNDEFINED;
-    } else if (JS_IsObject(second)) {
-        JSValue t = JS_GetPropertyStr(ctx, second, "targetOrigin");
-        if (JS_IsException(t)) return JS_EXCEPTION;
-        if (!JS_IsUndefined(t)) {
-            to = JS_ToCString(ctx, t);
-            if (!to) { JS_FreeValue(ctx, t); return JS_EXCEPTION; }
-        }
-        JS_FreeValue(ctx, t);
-        raw = JS_GetPropertyStr(ctx, second, "transfer");
-        if (JS_IsException(raw)) { if (to) JS_FreeCString(ctx, to); return JS_EXCEPTION; }
+        tov = JS_DupValue(ctx, second);
+        transfer = argc > 2 ? JS_DupValue(ctx, argv[2]) : JS_UNDEFINED;
+    } else {
+        tov = idl_dict_get(ctx, second, "targetOrigin");
+        transfer = idl_dict_get(ctx, second, "transfer");
     }
-    /* §3.2.21's `sequence<object>`, MATERIALIZED before anything else reads it — the one place the page's code
-       runs, and everything downstream walks the engine's own array. See structured_clone.h. */
-    if (structured_transfer_list(ctx, raw, &transfer) < 0) {
-        JS_FreeValue(ctx, raw);
-        if (to) JS_FreeCString(ctx, to);
-        return JS_EXCEPTION;
+    if (JS_IsUndefined(tov)) tov = JS_NewString(ctx, POST_TARGET_ORIGIN_DEFAULT);
+    if (JS_IsException(tov)) { JS_FreeValue(ctx, transfer); return JS_EXCEPTION; }
+    DCHECK(JS_IsString(tov), "postMessage's target origin is not a string — the declaration converts it as a "
+                             "USVString and places the IDL's own default when the page wrote none");
+    /* §2.7.6's `= []`: no `transfer` member is a transfer list of nothing. That is the IDL's own default and
+       not a hole filled at the reader — see js_structured_clone, which states the same thing about the same
+       dictionary member. Everything downstream walks THIS array, which the engine built. */
+    if (JS_IsUndefined(transfer)) {
+        transfer = JS_NewArray(ctx);
+        if (JS_IsException(transfer)) { JS_FreeValue(ctx, tov); return JS_EXCEPTION; }
     }
-    JS_FreeValue(ctx, raw);
+    DCHECK(JS_IsArray(transfer), "postMessage's transfer list is not the materialized sequence — "
+                                 "IDL_SEQUENCE_OBJECT is what §3.2.21 builds, and reading the page's object "
+                                 "again here would run its iterator a second time");
+    /* A REAL STRING, so this runs none of the page's code — the ToString §3.2.11 owed happened at the
+       conversion, on the tramp, where a `toString` could park. */
+    to = JS_ToCString(ctx, tov);
+    JS_FreeValue(ctx, tov);
+    if (!to) { JS_FreeValue(ctx, transfer); return JS_EXCEPTION; }
 
     /* §9.4.4 step 4. "*" is any origin; "/" is the SENDER's own; anything else is a URL whose origin is taken,
        and a URL that does not parse is a SyntaxError — which is thrown HERE, at the call, because it is the
-       page's mistake and not the delivery's. */
-    if (to && strcmp(to, "*") != 0) {
+       page's mistake and not the delivery's.
+       THERE IS NO "THE PAGE NAMED NO ORIGIN" CASE. It used to read `to && …`, which made an absent
+       `targetOrigin` mean "*" — the widest possible delivery, arrived at by a C null rather than by anything
+       the IDL says. §9.4.4 has no such state: the member's default IS "/", so a page that writes neither
+       argument posts to its own origin. */
+    if (strcmp(to, "*") != 0) {
         if (!strcmp(to, "/")) {
             /* "/" IS THE SENDER'S OWN ORIGIN, and the queue carries a SERIALIZATION because this entry may
                cross an instance (window_message_send_remote reads this very slot). A serialization can name a
@@ -416,7 +458,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
             free(o);
         }
     }
-    if (to) JS_FreeCString(ctx, to);
+    JS_FreeCString(ctx, to);
 
     /* §9.4.4 step 6: serialize and transfer NOW — the DataCloneError belongs to this call. */
     if (structured_serialize_transfer(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, transfer, &swt) < 0) {
@@ -493,7 +535,23 @@ void window_message_install_proto(JSContext *ctx)
    carries that same one. */
 void window_message_init(JSContext *ctx)
 {
-    static const IdlArgType POST_ARGS[3] = { IDL_ANY, IDL_ANY, IDL_ANY };
+    /* §9.4.4's TWO OVERLOADS, AS ONE DECLARATION — the longest type list the effective overload set has, with
+       the position the two split at carrying that split as its type:
+
+           undefined postMessage(any message, USVString targetOrigin, optional sequence<object> transfer = []);
+           undefined postMessage(any message, optional WindowPostMessageOptions options = {});
+
+       §3.6 steps 3-4 remove the options entry the moment a third argument is passed, which is why position 1
+       can be one row (IDL_USVSTRING_OR_DICT states exactly that) rather than a shape test in the body. */
+    static const IdlArgType POST_ARGS[3] = { IDL_ANY, IDL_USVSTRING_OR_DICT, IDL_SEQUENCE_OBJECT };
+    /* `dictionary WindowPostMessageOptions : StructuredSerializeOptions { USVString targetOrigin = "/"; };`
+       §3.2.17 reads the INHERITED members first, so `transfer` (StructuredSerializeOptions, level 0) precedes
+       `targetOrigin` (level 1) — an order no single sorted list produces, which is what `level` is for. */
+    static const IdlDictMember POST_OPTS[] = {
+        { "transfer",     IDL_SEQUENCE_OBJECT, false, NULL, 0 },
+        { "targetOrigin", IDL_USVSTRING,       false, NULL, 1, NULL,
+          IDL_DEFAULT_STRING, POST_TARGET_ORIGIN_DEFAULT },
+    };
 
     /* THE DELIVERY TASK'S CALLEE IS THE AGENT'S — one function object for the whole runtime. It was minted in
        the per-DOCUMENT install, so a second same-origin realm overwrote it and the first realm's copy became
@@ -501,7 +559,8 @@ void window_message_init(JSContext *ctx)
        gate doing exactly its job. */
     g_deliver_fn = JS_NewCFunction(ctx, js_window_deliver, "", 2);
     CHECK(JS_IsFunction(ctx, g_deliver_fn), "the window delivery task's callee could not be allocated");
-    g_id_post = idl_method_id(ctx, POST_ARGS, 3, js_window_post, 0);
+    g_id_post = idl_method_id_dict(ctx, POST_ARGS, 3, POST_OPTS,
+                                   (int)(sizeof POST_OPTS / sizeof POST_OPTS[0]), js_window_post, 0);
     idl_optional_from(1);
     realm_declare_intrinsic(window_message_install_proto);
 }

@@ -372,14 +372,21 @@ int structured_transfer_list(JSContext *ctx, JSValueConst list, JSValue *out)
        accessor or a Proxy trap, which is the page's code in an activation with no flow base — a loop in it
        drives to completion — and length-plus-indices is not §3.2.21 at all, it is the array-like algorithm, so
        an iterable that is not an array converts to nothing here where the standard iterates it.
-       IDL_SEQUENCE_OBJECT is the declared type that performs it on the tramp, and `structuredClone` already
-       takes it. The two members still reaching this are window.postMessage — whose second argument is
-       `(USVString or WindowPostMessageOptions)` with `sequence<object> transfer` third — and
-       MessagePort.postMessage, whose second is `(sequence<object> or StructuredSerializeOptions)`. Declare
-       those two and this function goes with its last caller. */
-    DFAIL("§3.2.21's `sequence<object>` was converted from C — declare it as IDL_SEQUENCE_OBJECT on "
-          "window.postMessage and MessagePort.postMessage, whose second argument is still IDL_ANY, and delete "
-          "structured_transfer_list");
+       IDL_SEQUENCE_OBJECT is the declared type that performs it on the tramp; `structuredClone` takes it, and
+       so does window.postMessage — whose §3.6 overload split is IDL_USVSTRING_OR_DICT and whose third position
+       is the sequence itself. ONE caller is left, and it is the one whose overload this file cannot yet
+       express: MessagePort.postMessage's second argument is `sequence<object> transfer` in one entry and
+       `optional StructuredSerializeOptions options = {}` in the other, and BOTH entries are two positions
+       long — so §3.6 step 4 removes neither and step 12 decides between them by performing
+       GetMethod(V, @@iterator), which is the page's code and therefore a REST POINT before either arm is
+       chosen. IterCursor already performs that read as its first phase (IT_GET_ITERFN) but THROWS "not
+       iterable" where §3.6 needs the answer reported, and the method it found must be handed to §3.2.21
+       rather than read a second time. Give the cursor that probe, declare the row, and this function goes
+       with its last caller. */
+    DFAIL("§3.2.21's `sequence<object>` was converted from C — MessagePort.postMessage's second argument is "
+          "still IDL_ANY. Declare §3.6's `sequence<object>`-or-dictionary split (the arm is chosen by "
+          "GetMethod(V, @@iterator), so IterCursor must REPORT an absent @@iterator instead of throwing, and "
+          "keep the method it found for the walk), then delete structured_transfer_list");
     if (!JS_IsObject(list)) {
         JS_FreeValue(ctx, arr);
         JS_ThrowTypeError(ctx, "the transfer list is not a sequence");

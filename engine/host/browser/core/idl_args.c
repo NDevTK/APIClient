@@ -1243,11 +1243,24 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            member's tail is `any...` in every case here, which is exactly what not-listed already means. */
         IdlArgType t = (s->i < m->nargs) ? m->types[s->i]
                      : (m->variadic ? m->types[m->nargs - 1] : IDL_ANY);
+        /* §3.6 STEPS 3-4, WHICH RUN BEFORE ANY VALUE IS LOOKED AT: argcount is min(maxarg, args) and every
+           entry of the effective overload set whose type list is not that long is REMOVED. The only shape of
+           that this platform declares is a position where one of two overloads ENDS (see IDL_USVSTRING_OR_DICT
+           in idl_args.h) — so a call reaching past this position has already deleted the shorter entry, and
+           what is left is the longer one's own type at this index. */
+        bool step4_only_longer = (t == IDL_USVSTRING_OR_DICT && s->hdr.argc > s->i + 1);
+
+        if (step4_only_longer) t = IDL_USVSTRING;
 
         /* §3.6.2: an optional argument given `undefined` is ABSENT, so nothing is converted and the body sees
            undefined — which is what lets it tell "no base" from the base "undefined". A VARIADIC TAIL is not
-           one of those positions (see idl_declared_positions): every value passed to a `T...` is converted. */
-        if (s->i < idl_declared_positions(m) && s->i >= m->first_optional && JS_IsUndefined(a)) {
+           one of those positions (see idl_declared_positions): every value passed to a `T...` is converted.
+           OPTIONALITY IS THE SURVIVING ENTRY'S, NOT THE DECLARATION'S. §3.6 step 14 reads it "at index i in the
+           list of optionality values of the remaining entry", and the entry that made this position optional is
+           exactly the one step 4 just removed — so `postMessage(m, undefined, [p])` converts the string
+           "undefined" rather than treating the target origin as absent. */
+        if (!step4_only_longer &&
+            s->i < idl_declared_positions(m) && s->i >= m->first_optional && JS_IsUndefined(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             *slot = JS_UNDEFINED;
@@ -1293,6 +1306,17 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             DCHECK(m->dict_n > 0, "a `(DOMString or D)` argument was declared with no dictionary members — the "
                                   "dictionary is half of what that type states");
             t = (JS_IsObject(a) || JS_IsNull(a) || JS_IsUndefined(a)) ? IDL_DICT : IDL_DOMSTRING;
+        }
+        /* §3.6 STEP 12 over the two entries step 4 left, and it reaches here only at the arity where BOTH
+           survive — the longer one was already taken above. The clause order is the same one the union arm
+           above follows and for the same reason: null and undefined name the entry declaring a dictionary at
+           this index, so does ANY Object, and every remaining value reaches the string clause. It is likewise
+           resolved AFTER the concolic pass-through, since unknown external input IS an object and asking the
+           overload first would read `targetOrigin` off an attacker's value. */
+        if (t == IDL_USVSTRING_OR_DICT) {
+            DCHECK(m->dict_n > 0, "a member declared an overload splitting at a dictionary argument with no "
+                                  "dictionary members — the dictionary is half of what that type states");
+            t = (JS_IsObject(a) || JS_IsNull(a) || JS_IsUndefined(a)) ? IDL_DICT : IDL_USVSTRING;
         }
 
         if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST) {
@@ -2065,7 +2089,7 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
         int ndict = 0;
         for (k = 0; k < nargs; k++)
             if (types[k] == IDL_DICT || types[k] == IDL_DICT_OR_BOOL_FIRST ||
-                types[k] == IDL_STRING_OR_DICT) ndict++;
+                types[k] == IDL_STRING_OR_DICT || types[k] == IDL_USVSTRING_OR_DICT) ndict++;
         DCHECK(ndict == 1, "a member declared dictionary members but not exactly one dictionary argument — the "
                            "conversion cursor is per-member, so a second dictionary would read the first's "
                            "names");

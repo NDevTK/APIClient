@@ -153,6 +153,30 @@ typedef enum {
        two ordinary cases and disagrees on `allowElement(null)`, which must be a TypeError from the missing
        `name` rather than the four characters "null". The dictionary is named beside the member. */
     IDL_STRING_OR_DICT,
+    /* THE POSITION AT WHICH TWO OVERLOADS SPLIT, one of them ending here and the other continuing — §3.6's
+       resolution algorithm rather than §3.2.25's union, and the difference between the two is why this is its
+       own row and not IDL_STRING_OR_DICT with a USVString arm. HTML §9.4.4's `postMessage` is what declares it:
+
+           undefined postMessage(any message, USVString targetOrigin, optional sequence<object> transfer = []);
+           undefined postMessage(any message, optional WindowPostMessageOptions options = {});
+
+       §3.6 steps 3-4 come FIRST and they are decided by the ARGUMENT COUNT alone: argcount is
+       min(maxarg, args), and every entry whose type list is not that long is removed. The dictionary entry's
+       type list ENDS at this position, so a call that passes anything BEYOND it removes that entry outright —
+       `postMessage(m, {}, [])` is the three-argument overload, whose second argument is a required USVString,
+       and the four characters "[object Object]" are then a "SyntaxError" from the URL parser. Which also means
+       this position is REQUIRED at that arity, so its `undefined` is the string "undefined" and not an absent
+       optional: the optionality §3.6 step 14 reads belongs to the entry that SURVIVED step 4, never to the
+       declaration as a whole.
+       Only once the longer entry is gone does step 12 choose between the two remaining ones, and there the
+       rule is IDL_STRING_OR_DICT's own order: null and undefined take the dictionary (step 12.2 — and step
+       12.1 before it, since the dictionary entry is the one declaring this position optional), ANY Object
+       takes it (the callback-interface/dictionary/record clause), and everything else falls through to the
+       string clause. `postMessage(m, 123)` is therefore the target origin "123", which is a SyntaxError, and
+       not an options dictionary with no members.
+       The string arm is a USVString (§3.2.11's scalar value conversion), which is what §9.4.4's IDL writes and
+       what every other member of the URL surface takes. The dictionary is named beside the member. */
+    IDL_USVSTRING_OR_DICT,
     /* A DICTIONARY. Web IDL converts one by READING each declared member IN ORDER and converting each by ITS
        OWN type — so a dictionary is that member list plus this very machine, not a second kind of thing. A read
        is one accessor or Proxy trap away from being the page's code, and so is each member's conversion, so
