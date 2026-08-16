@@ -141,6 +141,17 @@ void      cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key
    Set/Map iterates in insertion order and that order is observable. JS_MAP_POS_TAIL for an OVERWRITE, whose
    inverse creates nothing. */
 void      cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op, int pos);
+/* Install as JSTimeTravelHooks.obj_state: capture a shared object's OWN state — its EXTENSIBLE bit, its
+   PROTOTYPE, and its [[PrimitiveValue]]/[[DateValue]]/[[ErrorData]] internal slot — before this flow changes
+   any of them. None is a property slot and none is a class opaque record, so no other capture here could see
+   them: a flow's `Object.freeze(sharedCfg)`, `Object.setPrototypeOf(shared, x)` or `d.setHours(0)` on a
+   baseline Date stood for every sibling, permanently. The prototype is not only fidelity — §@S names
+   PROTOTYPE-POLLUTION as a gadget class this engine solves BY RUNNING it, which needs the arm that pollutes to
+   be isolated from the arm that must not see it. ONE capture for the three because they are one object.
+   The blob is engine-owned (JS_ObjStateSave/Restore/Free): two of the three fields are engine-internal and
+   each holds a reference, so a byte copy would be the uncounted-reference bug cow_capture_host_state warns of. */
+void      cow_capture_obj_state(JSContext *ctx, JSValueConst obj);
+
 /* Install as JSTimeTravelHooks.async_state: capture a shared promise's settlement (state + result + pending
    reactions) or a resolving-function pair's already_resolved latch before this flow changes it, so each arm of
    a fork settles a pre-fork promise on its OWN timeline. */

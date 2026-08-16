@@ -89,9 +89,18 @@ enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
  *                        record whose owner never moves it, while an ArrayBuffer's storage is FREED by a detach
  *                        and REALLOCATED by a resize, so this entry names the buffer OBJECT and asks it for the
  *                        bytes at each save and restore (JS_GetBufferBytes / JS_SetBufferBytes). Why the unit is
- *                        the bytes and not the element is in cow.h. */
+ *                        the bytes and not the element is in cow.h.
+ *   COW_STATE_OBJECT   — a JSObject's OWN state (obj is the object; target unused): its EXTENSIBLE bit, its
+ *                        PROTOTYPE, and its [[PrimitiveValue]]/[[DateValue]]/[[ErrorData]] internal slot. Not
+ *                        a property and not the class's opaque record, so no hook here could see any of them:
+ *                        `Object.freeze(sharedCfg)`, `Object.setPrototypeOf(shared, x)` and `d.setHours(0)` on
+ *                        a baseline Date were each permanent for every sibling — and the prototype one is what
+ *                        makes an exploration arm's PROTOTYPE-POLLUTION gadget visible to the arm that must not
+ *                        see it. ONE kind for the three because they are one object and a flow that reaches any
+ *                        of them may write any of them; the blob is the engine's (JS_ObjStateSave) because two
+ *                        of the three are engine-internal and each owns a reference. */
 enum { COW_STATE_ASYNC = 0, COW_STATE_MODULE = 1, COW_STATE_HOST = 2, COW_STATE_HOST_REC = 3,
-       COW_STATE_BUFFER = 4 };
+       COW_STATE_BUFFER = 4, COW_STATE_OBJECT = 5 };
 typedef struct { JSValue obj; JSAtom atom; int existed; JSPropertyDescriptor base; JSPropertyDescriptor cur;
                  int cur_state; void *vref;
                  int is_gendata; void *g0; void *g1; int is_map; int map_op; int map_pos; JSValue map_old;
@@ -323,6 +332,12 @@ static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
         }
         return blob;
     }
+    case COW_STATE_OBJECT: {
+        void *blob = JS_ObjStateSave(ctx, e->obj);
+        CHECK(blob, "cow: OOM saving an object's own state — a lost prototype or freeze leaks one flow's write "
+                    "into every sibling");
+        return blob;
+    }
     case COW_STATE_BUFFER: {
         /* THE BYTES ARE ASKED OF THE BUFFER, never read through a pointer the entry kept: a detach frees that
            storage and a resize reallocates it, which is the whole reason this is not the HOST arm above. */
@@ -384,6 +399,9 @@ static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
                              "context switch that parked this flow did not run");
         JS_SetBufferBytes(e->obj, blob, (uint32_t)e->a_len);
         break;
+    case COW_STATE_OBJECT:
+        JS_ObjStateRestore(ctx, e->obj, blob);   /* asserts the blob's presence itself, at the field it needs */
+        break;
     default:
         DCHECK(e->state_kind == COW_STATE_ASYNC, "a COW state entry names a target kind with no restore");
         JS_AsyncStateRestore(ctx, e->obj, blob);
@@ -398,6 +416,7 @@ static void cow_state_free(JSRuntime *rt, const CowEntry *e, void *blob) {
     case COW_STATE_MODULE: JS_ModuleEvalStateFree(rt, blob); break;
     case COW_STATE_HOST:
     case COW_STATE_BUFFER: free(blob); break;   /* both are POD bytes: nothing in them holds a reference */
+    case COW_STATE_OBJECT: JS_ObjStateFree(rt, blob); break;   /* it holds a proto and an internal-slot value */
     case COW_STATE_HOST_REC:
         if (blob) {
             int i;
@@ -691,6 +710,29 @@ void cow_capture_buffer_lifetime(JSContext *ctx, JSValueConst abuf) {
                "the new length and this flow's writes — build the buffer-LIFETIME entry (the buffer object's "
                "byte length, its detached state, and the count each view over it carries), swapped like every "
                "other entry, beside COW_STATE_BUFFER");
+}
+
+/* A SHARED OBJECT'S OWN STATE — see cow.h and the COW_STATE_OBJECT arm above. Captured per OBJECT and not per
+   field, because the three fields are one object and the flow that reached one may write any of them; the
+   dedup is therefore what makes six mutation sites cost one entry. */
+void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
+    if (g_capturing || !g_current) return;
+    CowDelta *d = g_current;
+    DCHECK(JS_IsObject(obj), "an object's own state was captured with no object");
+    if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
+    for (int i = 0; i < d->n; i++)                  /* one entry per object: the FIRST state is the baseline */
+        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_OBJECT &&
+            JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj)) return;
+    g_capturing = 1;
+    if (cow_room_for_one(d, "cow: OOM growing delta (obj_state) — a lost freeze/prototype/internal slot leaks "
+                            "one flow's write into every sibling"))
+        cow_hash_rebuild(d);
+    CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
+    e->obj = JS_DupValue(ctx, obj);
+    e->is_state = 1; e->state_kind = COW_STATE_OBJECT;
+    e->a_base = cow_state_save(ctx, e);   /* the object as this flow found it */
+    g_capturing = 0;
 }
 
 /* THE SESSION'S CONTEXT — see cow.h. One document, one context; the DOM delta keeps its own for the same
@@ -1183,7 +1225,7 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork)
         .buf_lifetime = cow_capture_buffer_lifetime,
         .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate,
         .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval,
-        .async_fork = cow_capture_async_fork };
+        .obj_state = cow_capture_obj_state, .async_fork = cow_capture_async_fork };
     DCHECK(gen_fork != NULL,
            "the time-travel hooks were installed with no generator-fork handler — a concolic branch inside a "
            "generator body would fork a sibling that shares the parent's execution state");
