@@ -16,7 +16,7 @@
  */
 import { spawnSync, spawn } from "node:child_process";
 import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync, readFileSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, relative, sep } from "node:path";
 import { cpus } from "node:os";
 import { fileURLToPath } from "node:url";
 import { stampArtifact } from "./gate_revision.mjs";
@@ -28,8 +28,17 @@ const OUT = join(HOST, "out");
 const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge.js imports the engine from
 
 /* `--list-sources` answers WHAT THE PROGRAM IS and exits — check_recursion.sh shells back into this file to ask,
-   and a list with build output in front of it is not a list. */
+   and a list with build output in front of it is not a list.
+   `--list-include-roots` answers WHERE ITS HEADERS COME FROM, for the same reason and to the same rule: the
+   compiler is handed these roots and nobody else may restate them. gate_revision.mjs's dangling-include check
+   had its own copy of the list — four roots, hand-written — and the browser process's `-I BPROC_DIR` made that
+   copy wrong the day it landed, so the check declared a revision that BUILDS to be one that "cannot be built by
+   anyone who checks it out". A confident false red is worse than a silent miss: it is the phantom §Testing
+   describes, and the next real dangling include arrives in a report nobody believes. The answer is per SOURCE
+   SET and not a flat union, because a union would ACCEPT a renderer unit including "network/corb.h" — a header
+   its compiler is never given — and that is precisely the include this check exists to catch. */
 const LIST_SOURCES = process.argv.includes("--list-sources");
+const LIST_INCLUDE_ROOTS = process.argv.includes("--list-include-roots");
 
 const WORK = join(ENGINE, ".work");
 const EMSDK = join(WORK, "emsdk");
@@ -158,6 +167,16 @@ const ENTRY_ABI   = join(HOST, "main.c");
    algorithm in two programs, the way Chromium's net/ links into both of its. */
 const BPROC_DIR = join(HOST, "browser_process");
 const BPROC_SOURCES = walkC(BPROC_DIR).concat([join(HOST, "browser", "core", "mime", "mime_type.c")]).sort();
+
+/* THE HEADER ROOTS EACH SET'S COMPILER IS GIVEN, DECLARED ONCE. CFLAGS and BPCFLAGS below are BUILT from these
+   rather than spelling them again, and `--list-include-roots` reports them, so the compiler, the build and any
+   checker are reading one statement. The two lists differ deliberately: only a browser_process unit is given
+   BPROC_DIR, which is what makes `#include "network/corb.h"` legal there and a build failure anywhere else.
+   Include by FULL path from the host root — a browser component is "core/dom/dom_element.h", a solver component
+   "solver/concolic.h" — so a cross-layer include always names its layer and no bare-name shortcut hides one. */
+const ENGINE_INCLUDE_ROOTS = [QJS, HOST, join(HOST, "browser"), LEXBOR_INC];
+const BPROC_INCLUDE_ROOTS = [HOST, join(HOST, "browser"), BPROC_DIR];
+const dashI = (roots) => roots.flatMap((r) => ["-I", r]);
 const BPROC_OUT = join(ENGINE, "..", "extension", "lib", "bproc");
 const SHARED_SOURCES = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
   .map((f) => join(QJS, f))
@@ -189,6 +208,24 @@ const sources = [...new Set(SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI], BPRO
    and the checker reads it. */
 if (LIST_SOURCES) {
   console.log(sources.join("\n"));
+  process.exit(0);
+}
+
+/* THE HEADER ROOTS, PER SOURCE SET, EMITTED FROM THE ONE PLACE THAT HANDS THEM TO THE COMPILER. The two sets
+   differ and the difference is the whole point: a browser_process unit is given `-I BPROC_DIR` so it may write
+   `#include "network/corb.h"`, and a renderer unit is NOT, so the same line in a renderer file is a build
+   failure that a consumer of this manifest must be able to SEE. Emitting a flat union would answer "fine" to
+   both and turn the check into the diagnostic that always says yes.
+   The roots are repo-relative because the consumer resolves them against a git revision rather than a path on
+   this disk, and they are derived from the same CFLAGS/BPCFLAGS arrays the links use rather than restated —
+   this file may not hold a second copy either, or it becomes the thing it is fixing. */
+if (LIST_INCLUDE_ROOTS) {
+  const rel = (p) => relative(join(ENGINE, ".."), p).split(sep).join("/");
+  console.log(JSON.stringify([
+    { name: "engine", roots: ENGINE_INCLUDE_ROOTS.map(rel),
+      sources: sources.filter((f) => !BPROC_SOURCES.includes(f)).map(rel) },
+    { name: "browser_process", roots: BPROC_INCLUDE_ROOTS.map(rel), sources: BPROC_SOURCES.map(rel) },
+  ], null, 1));
   process.exit(0);
 }
 
@@ -361,9 +398,7 @@ abiCheck("browser process", join(BPROC_DIR, "main.c"), "BP_EXPORT", "bp_", BP_AB
    The two programs differ ONLY in which entry object enters the link, so compiling once into shared objects
    and linking twice costs one extra link and closes that hole completely. */
 const CFLAGS = [
-  "-I", QJS,
-  "-I", HOST, "-I", join(HOST, "browser"),   // include by FULL path from the host root: a browser component is "core/dom/dom_element.h", a solver component "solver/concolic.h" — the layer is always explicit (no bare-name -I solver shortcut, so a cross-layer include names its layer)
-  "-I", LEXBOR_INC,           // <lexbor/html/html.h> etc for main.c's DOM host-edges
+  ...dashI(ENGINE_INCLUDE_ROOTS),   // declared once beside the source sets; see ENGINE_INCLUDE_ROOTS
   /* -Werror ON IMPLICIT DECLARATIONS, and the reason `-w` is NOT here beside it. A missing #include makes C
      assume `int (...)`, so a returned 64-bit POINTER comes back TRUNCATED — a segfault with no diagnostic, and
      it happened: window.c called window_proxy_name without its header and the whole corpus segfaulted inside
@@ -497,7 +532,7 @@ link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs")
   mkdirSync(BPROC_OUT, { recursive: true });
   const bpObj = (src) => join(OBJDIR, "bp_" + resolve(src).replace(/[\\/:]/g, "_") + ".o");
   const BPCFLAGS = [
-    "-I", HOST, "-I", join(HOST, "browser"), "-I", BPROC_DIR,   // "network/corb.h" and "core/mime/mime_type.h"
+    ...dashI(BPROC_INCLUDE_ROOTS),   // declared once beside the source sets; "network/corb.h" resolves ONLY here
     "-O1", "-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
     "-Werror=implicit-function-declaration",
     "-D_GNU_SOURCE",

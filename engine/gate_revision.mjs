@@ -49,6 +49,18 @@ function ask(cwd, ...a) {
   return r.status === 0 ? r.stdout.trim() : `<git ${a.join(" ")} failed: ${(r.stderr || "").trim()}>`;
 }
 
+/* THE SAME CONTRACT AS `ask`, FOR A QUESTION PUT TO THE BUILD RATHER THAN TO GIT — the answer or the failure,
+   never neither, and never a remembered answer standing in for a failed one. The build is asked because it is
+   the only thing that knows what it hands the compiler; a parse error or a non-zero exit is returned as the
+   finding it is, so a checker that cannot ask says so instead of quietly checking something else. */
+function askJson(cwd, argv) {
+  const r = spawnSync(process.execPath, argv, { cwd, encoding: "utf8" });
+  if (r.status !== 0)
+    return `<${argv.join(" ")} failed: ${((r.stderr || "") + (r.stdout || "")).trim().split("\n").slice(-3).join(" | ")}>`;
+  try { return JSON.parse(r.stdout); }
+  catch (e) { return `<${argv.join(" ")} did not answer JSON: ${String(e && e.message)}>`; }
+}
+
 /* THE PORCELAIN LINES FOR ONE CONE, as a list. `--porcelain` names each path with its two status columns, and
    both columns matter: a staged edit and an unstaged one are equally not-in-HEAD, which is the only question
    this file asks. An untracked `.c` under the cone is in the cone too — the walk that builds a gate's source
@@ -99,16 +111,64 @@ function danglingIncludes(rev) {
      will ever be: the "diagnostic that always says yes" failure this file names two functions up, reproduced
      inside the fix for it. A report that some file somewhere includes a missing header is a search, not a
      finding, so the path is the deliverable and its absence is what makes the whole check inert. */
+  /* THE ROOTS COME FROM THE BUILD, BECAUSE THE BUILD IS WHAT HANDS THEM TO THE COMPILER. This list used to be
+     four paths written out here, and the browser process's `-I BPROC_DIR` made the copy wrong the day it
+     landed: `network/corb.c` includes "network/corb.h", the header is right there and the link succeeds, and
+     this check announced that the revision "cannot be built by anyone who checks it out". That is the phantom
+     §Testing describes — a confident false red costs more than a silent miss, because the next REAL dangling
+     include arrives in a report already known to lie. A second copy of a build's configuration is the same
+     defect as a second copy of its source list, which the paragraph above `--list-sources` in build.mjs was
+     written about.
+     PER SET, NOT A UNION. Only browser_process units are given BPROC_DIR, so a RENDERER file writing
+     `#include "network/corb.h"` must still fail — a flat union would answer "fine" to both and turn this into
+     the diagnostic that always says yes. A source compiled by BOTH sets (core/mime/mime_type.c is) must
+     satisfy BOTH, which is what its own link requires.
+     IF THE BUILD CANNOT ANSWER, THAT IS THE FINDING. There is no fallback to a remembered list here: a stale
+     list is exactly what produced the false red, and a checker that quietly reverts to one when the question
+     fails is a checker whose answer nobody can interpret. */
+  const manifest = askJson(ROOT, ["engine/build.mjs", "--list-include-roots"]);
+  if (typeof manifest === "string") return [manifest];
   const bad = [];
+  const setsFor = (owner) => {
+    const named = manifest.filter((g) => g.sources.includes(owner));
+    if (named.length) return named;
+    /* A HEADER is compiled by whichever unit includes it, so it is checked against every set whose roots could
+       reach it — the sets that can name it are the sets whose compilers could be looking at it. */
+    /* NOT ONLY HEADERS. `engine/build.mjs` is not the whole build system — `engine/wpt.mjs` compiles
+       `engine/host/wpt_runner.c` with its own flags — so a source absent from this manifest is a source whose
+       roots this file does not know, NOT a source nobody builds. An earlier draft of this check said "compiled
+       by NO build target, so nothing checks its includes or its syntax" about exactly that file, which is the
+       same overreach it was written to remove. What can still be said soundly is the at-least-one question. */
+    const reach = manifest.filter((g) => g.roots.some((r) => owner.startsWith(r + "/")));
+    if (reach.length) return { any: reach };
+    return null;
+  };
   for (const line of out.split("\n")) {
     const m = /^([^:]+):([^:]+):(\d+):\s*#\s*include\s+"([^"]+)"/.exec(line);
     if (!m) continue;
     const [, , owner, no, inc] = m;
-    const cands = [join(dirname(owner), inc), join("engine/host", inc),
-                   join("engine/host/browser", inc), join("engine/qjs", inc)];
-    const ok = cands.some((c) => tracked.has(c) ||
-                                 (c.startsWith("engine/qjs/") && inQjs.has(c.slice("engine/qjs/".length))));
-    if (!ok) bad.push(`${owner}:${no} includes "${inc}", which no file at this revision provides`);
+    const groups = setsFor(owner);
+    if (!groups) {
+      bad.push(`${owner}:${no} includes "${inc}", and the file sits under no include root this build declares`);
+      continue;
+    }
+    const has = (c) => tracked.has(c) ||
+                       (c.startsWith("engine/qjs/") && inQjs.has(c.slice("engine/qjs/".length)));
+    /* A .c IS CHECKED AGAINST EVERY SET THAT COMPILES IT, because each of those links really does hand it that
+       root list and all of them must succeed. A .h CANNOT BE — which unit includes a header is not a fact a
+       grep for `#include` lines has, and requiring every set whose roots merely REACH it is provably wrong: a
+       browser-only header sits under `engine/host`, which is a root of both sets, while the browser process
+       never compiles a translation unit that includes it. So the header question is AT LEAST ONE, and it is an
+       approximation stated as one rather than a stricter-looking answer that reports healthy files. */
+    const gs = Array.isArray(groups) ? groups : groups.any;
+    const resolves = (g) => [join(dirname(owner), inc), ...g.roots.map((r) => join(r, inc))].some(has);
+    if (Array.isArray(groups)) {
+      for (const g of gs)
+        if (!resolves(g))
+          bad.push(`${owner}:${no} includes "${inc}", which nothing provides on the ${g.name} include path`);
+    } else if (!gs.some(resolves)) {
+      bad.push(`${owner}:${no} includes "${inc}", which nothing provides on any include path that can reach it`);
+    }
   }
   return bad;
 }
