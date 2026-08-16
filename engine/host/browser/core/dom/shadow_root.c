@@ -31,8 +31,10 @@
  *     other; a C pointer on the lexbor element would be one answer for every flow, which is the defect class
  *     CLAUDE.md names as one fact answered from one place for many agents. A property write is captured.
  *
- * WHAT IS HONESTLY ABSENT, BY NAME — see SPEC_STEPS.md §17.6. HTML's `DocumentOrShadowRoot` addition
- * `styleSheets`.
+ * WHAT IS HONESTLY ABSENT, BY NAME — see SPEC_STEPS.md §17.6. The `DocumentOrShadowRoot` addition
+ * `adoptedStyleSheets`, which is an `ObservableArray<CSSStyleSheet>` of CONSTRUCTED sheets and is absent with
+ * CSSOM §6.1.2's constructor. Its sibling `styleSheets` is NOT among them any more — core/css/style_sheet_list.c
+ * installs it on this prototype, over this shadow root's own list.
  * `delegatesFocus` HAS ITS EFFECT as of HTML §6.6.4: it is what makes a host NOT a focusable area (§6.6.2's
  * row 1) and what sends `get the focusable area` to the FOCUS DELEGATE, and core/html/focus.c reads it through
  * shadow_root_flag below. The mixin's other addition, `activeElement`, is installed on this prototype by the
@@ -55,6 +57,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/css/style_sheet_list.h"
 #include "core/dom/document.h"
 #include "core/dom/document_fragment.h"
 #include "core/dom/element.h"
@@ -731,6 +734,11 @@ void shadow_root_install_proto(JSContext *ctx)
        focused area, and it is the RECEIVER that decides the answer: §4.8's retargeting against `this` is what
        turns a focused node inside this tree into the node an observer of this tree may see. */
     focus_install_shadow_root_members(ctx, proto);
+    /* CSSOM §6.2.3's `styleSheets` — the SAME mixin member Document carries, over a DIFFERENT list: §6.2's
+       collection belongs to "the document OR SHADOW ROOT", and a `<style>` whose root is this shadow root is
+       in this one. That is why the member is installed here rather than inherited: DocumentFragment does not
+       include DocumentOrShadowRoot, so nothing on the chain below could have supplied it. */
+    style_sheet_list_install_mixin(ctx, proto);
     /* §4.8's ONE event handler IDL attribute. It is declared on ShadowRoot itself and not through
        GlobalEventHandlers, which is why it needs its own bit rather than riding EH_GLOBAL's mask. */
     event_target_install_handlers(ctx, proto, EH_SHADOW_ROOT);

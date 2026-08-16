@@ -35,6 +35,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/css/css_style_sheet.h"
+#include "core/css/style_sheet_list.h"
 #include "core/dom/node.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -223,6 +224,24 @@ void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled)
     s->disabled = disabled;
 }
 
+/* §6.2's two questions about a sheet it is placing. Both go through the capturing accessor like every other
+   read, and both assert the brand rather than answering for a stranger. */
+lxb_dom_node_t *css_style_sheet_owner_node(JSValueConst sheet)
+{
+    CssStyleSheetData *s = sheet_of(sheet);
+
+    DCHECK(s != NULL, "the owner node was read off something that is not a CSS style sheet");
+    return node_of(s->owner_node);
+}
+
+JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet)
+{
+    CssStyleSheetData *s = sheet_of(sheet);
+
+    DCHECK(s != NULL, "the title was read off something that is not a CSS style sheet");
+    return sheet_title_concept(ctx, s);
+}
+
 /* ---- §6.1's "create a CSS style sheet" and §6.2's "remove a CSS style sheet" ------------------------------ */
 
 JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_style_sheet,
@@ -253,14 +272,10 @@ JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueC
        and this asserts it rather than leaving the reader to work out that a zeroed bool means unset. */
     DCHECK(!s->disabled, "a newly created CSS style sheet came out with its disabled flag already set");
     JS_SetOpaque(obj, s);
-    /* §6.1's create step 2 — "run the add a CSS style sheet steps for the newly created CSS style sheet" —
-       adds it to the document's list. The day that list exists, this creator has to run those steps. */
-    realm_awaits(ctx, "Document.prototype.styleSheets",
-                 "CSSOM §6.1's create-a-CSS-style-sheet step 2, \"run the add a CSS style sheet steps for the "
-                 "newly created CSS style sheet\" — §6.2's add adds it to the list of document or shadow root "
-                 "CSS style sheets at the appropriate location and then decides its disabled flag from the "
-                 "preferred CSS style sheet set name. Neither the list nor the set names exist yet; the moment "
-                 "`styleSheets` does, both halves belong here");
+    /* §6.1's create step 2 — "then run the add a CSS style sheet steps for the newly created CSS style sheet".
+       The sheet is COMPLETE before this line: the add reads the owner node to decide where in tree order the
+       sheet belongs, and reads the title to decide what the style-sheet-set steps have to say about it. */
+    style_sheet_list_add(ctx, obj, owner_node);
     return obj;
 }
 
@@ -273,12 +288,10 @@ void css_style_sheet_remove(JSContext *ctx, JSValueConst sheet)
     JSValue title;
 
     DCHECK(s != NULL, "§6.2's remove a CSS style sheet was invoked on something that is not a CSS style sheet");
-    /* §6.2's remove step 1 is "remove the CSS style sheet from the list of document or shadow root CSS style
-       sheets", and there is no such list to remove it from. */
-    realm_awaits(ctx, "Document.prototype.styleSheets",
-                 "CSSOM §6.2's remove-a-CSS-style-sheet step 1, \"remove the CSS style sheet from the list of "
-                 "document or shadow root CSS style sheets\" — only step 2 runs while there is no list, so a "
-                 "removed sheet would stay in `styleSheets` forever the moment that collection lands");
+    /* STEP 1 — "remove the CSS style sheet from the list of document or shadow root CSS style sheets". It runs
+       BEFORE step 2 nulls the owner node, and that order is load-bearing rather than incidental: the list a
+       sheet is in is the one its add recorded, and step 2 is what makes the sheet stop naming a tree at all. */
+    style_sheet_list_remove(ctx, sheet);
     /* THE TITLE IS FROZEN BEFORE THE OWNER NODE GOES, which is the whole of why the record carries one: §6.2
        nulls the owner node and says nothing about the title, so after this line there is nothing left to read
        it off and the last value the live read produced IS the title from here on. */

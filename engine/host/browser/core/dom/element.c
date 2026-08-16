@@ -54,6 +54,7 @@
 #include "core/idl_indexed.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_style_sheet.h"
+#include "core/css/style_sheet_list.h"
 #include <lexbor/ns/ns.h>
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
@@ -2101,6 +2102,7 @@ void element_init(JSContext *ctx)
     html_script_init(ctx);    /* §4.12.1's `already started` slot, which the fragment parse below writes */
     cssom_init(ctx);          /* CSSStyleDeclaration, which HTMLElement's `style` attribute names */
     css_style_sheet_init(ctx);   /* CSSOM §6.1's StyleSheet and CSSStyleSheet, which a `<style>` element creates */
+    style_sheet_list_init(ctx);  /* CSSOM §6.2's collections, which §6.1's create adds every sheet to */
     /* HTML §4.2.6's association between the two. AFTER the sheet interface it creates, and after
        node_add_tree_hook's list above, because its own registration is on §4.2.3's children-changed family and
        the standard numbers that family after the mutation record the list's last entry queues. */
@@ -2211,6 +2213,7 @@ void element_free(JSContext *ctx)
     element_view_free();
     html_element_free(ctx);
     html_style_element_free(ctx);   /* before the sheet interface whose objects it holds */
+    style_sheet_list_free(ctx);
     css_style_sheet_free(ctx);
     cssom_free(ctx);
     selector_match_free();   /* after every component that can still match a selector */

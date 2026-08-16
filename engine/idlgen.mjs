@@ -257,6 +257,11 @@ const INTERFACES = {
      (§6.4's CSSRule and CSSRuleList are not built either). */
   StyleSheet:           "core/css/css_style_sheet.c",
   CSSStyleSheet:        "core/css/css_style_sheet.c",
+  /* CSSOM §6.2.2. §6.2.3's `styleSheets` is installed by this same component onto Document.prototype and
+     ShadowRoot.prototype, so Document's row names it too. ShadowRoot has no row at all — it is one of the
+     interfaces this map is still silent about, which is the audit lying by omission rather than by direction,
+     and it is not this change's to decide. */
+  StyleSheetList:       "core/css/style_sheet_list.c",
   /* HTML §4.2.6's `disabled` and CSSOM §6.3.2's LinkStyle `sheet` are installed onto HTMLStyleElement's
      prototype by their own component, for the same reason §4.10's rows name theirs. */
   HTMLStyleElement:    ["core/html/html_style_element.c", "core/html/html_element.c"],
@@ -343,7 +348,7 @@ const INTERFACES = {
      `readyState` are document_metadata.c's, and §7.1.1.2's `domain` is document_domain.c's, each for the
      reason its own header gives. */
   Document:            ["core/dom/document.c", "core/dom/document_metadata.c", "core/dom/document_domain.c",
-                        "core/dom/node.c", "core/events/event_target.c"],
+                        "core/dom/node.c", "core/events/event_target.c", "core/css/style_sheet_list.c"],
   /* DOM §4.5.1 and §4.6 — the interface that BUILDS a document and the interface a doctype IS. DocumentType's
      file list carries node.c for the reason Element's does: it inherits Node, and node.c is also where the
      ChildNode mixin it INCLUDES is installed. DOMImplementation inherits nothing, so it names only its own. */

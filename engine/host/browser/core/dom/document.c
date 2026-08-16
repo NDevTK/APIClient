@@ -41,6 +41,7 @@
 #include "core/dom/selector_match.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_style_sheet.h"
+#include "core/css/style_sheet_list.h"
 #include "core/dom/document.h"
 #include "core/dom/document_domain.h"
 #include "core/dom/document_metadata.h"
@@ -1960,6 +1961,11 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     /* §7.1.1.2's `domain`, the fifth member of that partial interface — see document_domain.h for why the
        origin-mutating one is not in the component that reads the resource's metadata. */
     document_domain_install(ctx, proto);
+    /* CSSOM §6.2.3's `styleSheets`, one of the two members its `partial interface mixin DocumentOrShadowRoot`
+       adds. ShadowRoot gets the same call from its own component, because a `<style>` in a shadow tree is in
+       THAT tree's collection and not in this one. `adoptedStyleSheets`, the mixin's other member, is an
+       `ObservableArray<CSSStyleSheet>` of CONSTRUCTED sheets and is absent with the constructor. */
+    style_sheet_list_install_mixin(ctx, proto);
 }
 
 /* HTML §7.2.6's container for THIS document, from BOTH halves of the policy list.
@@ -2529,6 +2535,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     html_element_install(ctx, global);   /* HTMLElement and every per-tag interface object */
     cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
     css_style_sheet_install(ctx, global); /* CSSOM §6.1.1 StyleSheet and §6.1.2 CSSStyleSheet */
+    style_sheet_list_install(ctx, global); /* CSSOM §6.2.2 StyleSheetList */
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
     element_internals_install(ctx, global);  /* §4.13.7 ElementInternals, CustomStateSet, ValidityState */
     dom_token_list_install(ctx, global);    /* §7.1 DOMTokenList */

@@ -22,6 +22,8 @@
 
 #include <stdbool.h>
 
+#include <lexbor/dom/dom.h>
+
 #include "quickjs.h"
 
 void css_style_sheet_init(JSContext *ctx);
@@ -50,6 +52,16 @@ void css_style_sheet_remove(JSContext *ctx, JSValueConst sheet);
 
 /* Is `v` a CSSStyleSheet? The class brand, for a caller holding something it took off a slot. */
 bool css_style_sheet_is(JSValueConst v);
+
+/* §6.1's OWNER NODE, as a node — for §6.2's "at the appropriate location", which is tree order over the owner
+   nodes, and for nothing else. BORROWED; NULL for a sheet that has none (one that has been removed, or one no
+   node created). */
+lxb_dom_node_t *css_style_sheet_owner_node(JSValueConst sheet);
+
+/* §6.1's TITLE, the CONCEPT — not §6.1.1's `title` attribute, which turns the empty string into null. §6.2's
+   add-a-CSS-style-sheet steps branch on whether it is the empty string, which is why the concept is what is
+   exposed. OWNED (a JS string). */
+JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet);
 
 /* §6.1's DISABLED FLAG, reached by name because HTML §4.2.6's `HTMLStyleElement.disabled` is defined as a
    forwarding to it and not as a content-attribute reflection. Both go through this component's capture
