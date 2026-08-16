@@ -52,6 +52,8 @@
 #include "browser/core/html/unhandled_rejection.h"
 #include "browser/core/dom/document.h"
 #include "browser/core/dom/element.h"
+#include "browser/core/geometry/dom_rect.h"
+#include "browser/core/geometry/dom_rect_list.h"
 #include "browser/core/idl_args.h"
 #include "browser/core/idl_async_iter.h"
 #include "browser/core/events/event.h"
@@ -447,6 +449,10 @@ QJS_EXPORT void qjs_teardown(void)
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
     iframe_free(g_ctx);
     element_free(g_ctx);    /* the wrapper identity table and the DOM interface prototypes */
+    /* GEOMETRY INTERFACES, after the CSSOM VIEW members that return one: §4's list holds a private Symbol
+       and an interned atom, and §3 holds only pool ids. */
+    dom_rect_list_free(g_ctx);
+    dom_rect_free();
     event_target_free(g_ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
     window_message_free(g_ctx);

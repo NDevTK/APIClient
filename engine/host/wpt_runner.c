@@ -99,6 +99,8 @@
 #include "core/rendering/rendering.h"
 #include <lexbor/html/html.h>
 #include "core/dom/element.h"
+#include "core/geometry/dom_rect.h"
+#include "core/geometry/dom_rect_list.h"
 #include "core/dom/document.h"
 #include "core/loader/document_scripts.h"
 #include "core/frame/history.h"
@@ -1771,6 +1773,8 @@ int main(int argc, char **argv)
     document_free(ctx);
     iframe_free(ctx);
     element_free(ctx);
+    dom_rect_list_free(ctx);   /* GEOMETRY §4's slot Symbol; §3 below holds only pool ids */
+    dom_rect_free();
     window_free(ctx);
     remote_object_free(ctx);
     window_proxy_free(ctx);

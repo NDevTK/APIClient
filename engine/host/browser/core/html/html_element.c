@@ -19,8 +19,10 @@
  * built — is written once in element.c and here. An interface with no reflections is still an entry, because
  * `instanceof` is observable even when the member list is not.
  *
- * WHAT IS HONESTLY ABSENT. The interfaces that need layout (offsetWidth, getBoundingClientRect) are not here;
- * the IDL audit names their members. §4.8.11's media elements no longer belong on that list — HTMLMediaElement
+ * WHAT IS HONESTLY ABSENT. CSSOM VIEW §7's `partial interface HTMLElement` — offsetParent, offsetTop,
+ * offsetLeft, offsetWidth, offsetHeight — is not here; the IDL audit names its members. `getBoundingClientRect`
+ * has LEFT that list: it is §6's, it is on Element.prototype (core/dom/element_view.c), and every interface in
+ * the table below inherits it. §4.8.11's media elements no longer belong on that list either — HTMLMediaElement
  * is a real state machine over a modelled device (core/html/media_element.c), and this file's table names it as
  * the PARENT of the two interfaces whose IDL inherits from it. A tag whose interface this table does not list
  * gets HTMLUnknownElement, which is what HTML says for an unknown element — not a shrug. */

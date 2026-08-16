@@ -49,11 +49,28 @@
  * every scroll position here — stays concrete, for the reason viewport.h gives: a fact with a writer is per-flow
  * state in the COW delta, not an environment source. Nothing in this file branches in C on a concolic.
  *
- * WHAT IS HONESTLY ABSENT: `getClientRects`, `getBoundingClientRect`, `checkVisibility`, `scrollIntoView`,
- * `scroll`, `scrollTo`, `scrollBy` and `currentCSSZoom`. The first four need real box FRAGMENTS (a DOMRect per
- * fragment, a flat-tree walk over computed `content-visibility` and `opacity`), which is the layout named
- * below; the three scroll methods are §6's Promise-returning form of the setter below and arrive with the
- * Promise the perform-a-scroll steps return. The IDL audit reports all of them, which is correct. */
+ * AND A RECTANGLE IS THE SAME SPLIT AGAIN, WHICH IS WHY `getClientRects` AND `getBoundingClientRect` ARE HERE
+ * RATHER THAN ON THE ABSENT LIST. getClientRects' STEP 1 — "if the element does not have an associated box
+ * return an empty DOMRectList" — is decided by the predicate above and by nothing else, and get-the-bounding-box
+ * then answers an empty list with "a DOMRect whose x, y, width and height members are zero". That is a value
+ * the SPEC computes, identically in every user agent, for every element that generates no box; it is not a zero
+ * standing in for a number this engine does not have, and it is CONCRETE for viewport.h's reason — a domain of
+ * one point has no arm to explore. The branch that reaches a real box's FRAGMENTS has no answer here and
+ * DFAILs, naming the layout, exactly as every other §6 member's does.
+ *
+ * A BOX'S GEOMETRY IS NOT A UA CHOICE, so it is not the kind of thing a concolic answers. viewport.h states the
+ * test: a member is an environment SOURCE when the model PICKED one point out of a range the environment leaves
+ * free (the viewport's size, the device pixel ratio, the refresh rate), and CONCRETE when it DERIVED the only
+ * value the rest of the model permits. A border box's position and size are neither — they are what a LAYOUT
+ * ALGORITHM determines from this tree and this cascade, and the algorithm is unbuilt rather than unknowable. A
+ * concolic there would put an engine's own missing component under the vocabulary reserved for what the
+ * environment does not tell us, invent an example for `rect.top` that nothing computed, and silence the crash
+ * that is the only thing asking for the layout to be built.
+ *
+ * WHAT IS HONESTLY ABSENT: `checkVisibility`, `scrollIntoView`, `scroll`, `scrollTo`, `scrollBy` and
+ * `currentCSSZoom`. `checkVisibility` needs a flat-tree walk over computed `content-visibility`, `visibility`
+ * and `opacity`; the three scroll methods are §6's Promise-returning form of the setter below and arrive with
+ * the Promise the perform-a-scroll steps return. The IDL audit reports all of them, which is correct. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_ELEMENT_VIEW_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_ELEMENT_VIEW_H
 

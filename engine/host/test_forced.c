@@ -31,6 +31,8 @@
 #include "core/html/trusted_types.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
+#include "core/geometry/dom_rect.h"
+#include "core/geometry/dom_rect_list.h"
 #include "core/frame/history.h"
 #include "core/frame/navigation.h"
 #include "core/frame/navigation_history_entry.h"
@@ -2448,6 +2450,8 @@ int main(int argc, char **argv) {
     document_free(ctx);   /* the window reference the lifecycle holds */
     iframe_free(ctx);
     element_free(ctx);    /* the wrapper identity table and the DOM interface prototypes */
+    dom_rect_list_free(ctx);   /* GEOMETRY §4's slot Symbol; §3 below holds only pool ids */
+    dom_rect_free();
     event_target_free(ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
     message_port_free(ctx);

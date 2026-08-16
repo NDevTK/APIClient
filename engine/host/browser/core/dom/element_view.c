@@ -15,6 +15,8 @@
 #include "core/dom/node.h"
 #include "core/frame/viewport.h"
 #include "core/frame/window_proxy.h"
+#include "core/geometry/dom_rect.h"
+#include "core/geometry/dom_rect_list.h"
 #include "core/idl_args.h"
 #include "solver/concolic.h"
 
@@ -28,6 +30,7 @@ typedef enum {
 } ElementViewMember;
 
 static int g_id_set_scroll_top = -1, g_id_set_scroll_left = -1;
+static int g_id_client_rects = -1, g_id_bounding_rect = -1;
 
 /* EVERY MEMBER OF §6 OPENS WITH THE SAME FOUR QUESTIONS ABOUT THE ELEMENT AND ITS DOCUMENT, so they are asked
    once, here, rather than by each member — and asked of the ELEMENT'S node document, never of the running
@@ -40,6 +43,14 @@ typedef struct {
     lxb_dom_node_t *node;    /* the element */
     lxb_dom_node_t *doc;     /* its node document */
     JSContext      *dctx;    /* the realm whose active document `doc` is, or NULL */
+    /* THE ELEMENT'S RELEVANT REALM — where a `[NewObject]` this member returns is created, and a DIFFERENT
+       question from `dctx`. Web IDL makes a new platform object in the relevant realm of `this`, which for an
+       element is the realm of its node document, so `iframe.contentDocument.body.getBoundingClientRect()`
+       written through the PARENT's Element.prototype answers with an instance of the CHILD's DOMRect. A
+       Document that is nobody's active document still has one, which is why the two fields cannot be merged:
+       `new DOMParser().parseFromString(…, "text/html").body.getBoundingClientRect()` returns a real rectangle
+       out of the realm that parsed it while `dctx` is correctly NULL. */
+    JSContext      *rctx;
     bool            quirks;  /* §4.5's compat mode, read off the tree the parser built */
     bool            is_root; /* "the element is the root element" */
     bool            is_body; /* "the element is the body element" */
@@ -63,6 +74,11 @@ static bool ev_target(JSContext *ctx, JSValueConst this_val, EvTarget *t)
            "belongs to the document that created it, so a null owner is a tree built outside the DOM layer");
     t->doc     = lxb_dom_interface_node(t->node->owner_document);
     t->dctx    = document_active_realm_of(t->doc);
+    t->rctx    = document_realm_of(t->node);
+    DCHECK(t->rctx != NULL,
+           "a CSSOM VIEW §6 member was reached on an element whose node document has no realm — every Document "
+           "a page can hold a node of was built by one, and the only trees without a record are the solver's "
+           "own scratch parses, which are handed to nobody");
     t->quirks  = t->node->owner_document->compat_mode == LXB_DOM_DOCUMENT_CMODE_QUIRKS;
     t->is_root = document_document_element_of(t->doc) == t->node;
     t->is_body = document_body_of(t->doc) == t->node;
@@ -336,6 +352,89 @@ static JSValue ev_client_edge(JSContext *ctx, const EvTarget *t)
     return ev_long(ctx, 0.0);
 }
 
+/* ---- §6's `getClientRects()` and `getBoundingClientRect()` ----------------------------------------------- */
+
+/* §6's getClientRects() STEPS, AS THE INTERNAL ALGORITHM. §2 is explicit that a member "said to call another
+   method or attribute" invokes the algorithm and not the page-visible member, and getBoundingClientRect's step
+   1 is exactly such a call — so a page that overwrites `Element.prototype.getClientRects` cannot change what
+   `getBoundingClientRect()` measures.
+   STEP 1 IS THE ONE THIS ENGINE ANSWERS FOR REAL, and it is a DERIVATION and not a stand-in: an element with
+   no associated box generates no fragments in ANY user agent, so the empty list is the whole domain of the
+   answer rather than one point picked out of it. element_view.h's one predicate is what decides it, so this
+   branch covers a disconnected element, an element of a document nothing is presenting (a DOMParser parse, a
+   `<template>`'s contents, the document of a destroyed navigable) and anything under a `hidden` attribute —
+   which is most of what a lazy-loading bundle measures before it inserts anything. */
+static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
+{
+    (void)ctx;
+    /* step 1 */
+    if (!t->has_box) return dom_rect_list_new(t->rctx, JS_NewArray(t->rctx));
+    /* Steps 2 and 3 are two different geometries and this engine has neither. Step 2 wants the SVG bounding box
+       with the transforms of the element and its ancestors applied; step 3 wants one DOMRect per BOX FRAGMENT
+       describing its border area, in content order, again with transforms applied, with the table/caption boxes
+       included for a `display: table` element and every anonymous block box replaced by its children. */
+    DFAIL("CSSOM VIEW §6's getClientRects() steps 2 and 3 describe the element's BOX FRAGMENTS — one DOMRect per "
+          "fragment's border area (or the SVG bounding box), in content order, with the transforms of the "
+          "element and its ancestors applied. This engine gives geometry to exactly one box, the initial "
+          "containing block (element_view.h), and it has no fragments at all: there is no line box, so an "
+          "inline element spanning two lines cannot be two rectangles, and no answer for a single one is "
+          "derivable from the viewport for an element that is not the root. BUILD A LAYOUT that produces box "
+          "fragments — CSS 2.1 §10.3.3 resolves the root element's used width from the ICB viewport.c already "
+          "models, which is where one starts — and the computed `display` and `transform` the two constraints "
+          "read (css_style_declaration.c resolves the cascade for longhands and exposes it to no C caller)");
+    /* A RELEASE BUILD CANNOT BUILD THE LAYOUT, so it answers what every other §6 member here answers past its
+       own DFAIL: the value for the case this engine does model. */
+    return dom_rect_list_new(t->rctx, JS_NewArray(t->rctx));
+}
+
+/* §6's GET THE BOUNDING BOX steps. Step 1 is the call above; step 2 is the answer for an element that generates
+   no box, and it is the spec's OWN number — "a DOMRect object whose x, y, width and height members are zero" —
+   for every user agent, which is what makes it a computed value and not a zero standing in for one this engine
+   does not have. It stays CONCRETE for viewport.h's reason: a domain of one point has no arm to explore, and a
+   concolic there would model an ignorance this engine does not have. */
+static JSValue ev_bounding_rect(JSContext *ctx, const EvTarget *t)
+{
+    JSValue list = ev_client_rects(ctx, t), len;
+    uint32_t n = 0;
+
+    DCHECK(JS_IsObject(list), "§6's get-the-bounding-box step 1 got no list back from getClientRects — that "
+                              "algorithm answers a DOMRectList on every path it has");
+    len = JS_GetPropertyStr(t->rctx, list, "length");
+    JS_ToUint32(t->rctx, &n, len);
+    JS_FreeValue(t->rctx, len);
+    JS_FreeValue(t->rctx, list);
+    /* step 2 */
+    if (n == 0) return dom_rect_new(t->rctx, 0.0, 0.0, 0.0, 0.0);
+    /* Steps 3 and 4. They are unreachable while step 1 above cannot produce a non-empty list, and they are
+       written as the assertion that says so rather than as a comment: the moment a layout makes that list real,
+       this is the line that has to decide between them. */
+    DFAIL("CSSOM VIEW §6's get-the-bounding-box steps 3 and 4 are the two ways a NON-EMPTY client-rect list is "
+          "reduced: step 3 returns the FIRST rectangle when every one of them has a zero width or a zero "
+          "height, and step 4 otherwise returns the smallest rectangle enclosing all of those whose width and "
+          "height are not both zero. Neither is written, because getClientRects() above cannot yet produce a "
+          "list to reduce — WRITE BOTH here when it can, and note that the union in step 4 is over the "
+          "rectangles' edges, so it goes through Geometry Interfaces §3's derived edges rather than around them");
+    return dom_rect_new(t->rctx, 0.0, 0.0, 0.0, 0.0);
+}
+
+static JSValue js_ev_client_rects(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    EvTarget t;
+
+    (void)argc; (void)argv; (void)magic;
+    if (!ev_target(ctx, this_val, &t)) return JS_EXCEPTION;
+    return ev_client_rects(ctx, &t);
+}
+
+static JSValue js_ev_bounding_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    EvTarget t;
+
+    (void)argc; (void)argv; (void)magic;
+    if (!ev_target(ctx, this_val, &t)) return JS_EXCEPTION;
+    return ev_bounding_rect(ctx, &t);
+}
+
 /* ---- the members, the declaration and the per-realm install ---------------------------------------------- */
 
 static JSValue js_ev_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -368,6 +467,8 @@ void element_view_init(JSContext *ctx)
        `el.scrollTop = NaN` is a scroll to 0 rather than a TypeError. */
     g_id_set_scroll_top  = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_ev_set, EV_SCROLL_TOP);
     g_id_set_scroll_left = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_ev_set, EV_SCROLL_LEFT);
+    g_id_client_rects    = idl_method_id(ctx, NULL, 0, js_ev_client_rects, 0);
+    g_id_bounding_rect   = idl_method_id(ctx, NULL, 0, js_ev_bounding_rect, 0);
 }
 
 void element_view_install(JSContext *ctx, JSValueConst proto)
@@ -383,10 +484,13 @@ void element_view_install(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "clientLeft",   js_ev_get, EV_CLIENT_LEFT,   -1);
     idl_install_accessor(ctx, proto, "clientWidth",  js_ev_get, EV_CLIENT_WIDTH,  -1);
     idl_install_accessor(ctx, proto, "clientHeight", js_ev_get, EV_CLIENT_HEIGHT, -1);
+    idl_install_method(ctx, proto, "getClientRects", 0, g_id_client_rects);
+    idl_install_method(ctx, proto, "getBoundingClientRect", 0, g_id_bounding_rect);
 }
 
 void element_view_free(void)
 {
-    /* The setter ids are the AGENT's, and the pool they live in goes with the runtime. */
+    /* The member ids are the AGENT's, and the pool they live in goes with the runtime. */
     g_id_set_scroll_top = g_id_set_scroll_left = -1;
+    g_id_client_rects = g_id_bounding_rect = -1;
 }

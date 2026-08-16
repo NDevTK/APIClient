@@ -41,6 +41,8 @@
 #include "core/frame/window.h"
 #include "core/frame/window_message.h"
 #include "core/frame/window_proxy.h"
+#include "core/geometry/dom_rect.h"
+#include "core/geometry/dom_rect_list.h"
 #include "core/html/form_data.h"
 #include "core/html/html_iframe.h"
 #include "core/html/unhandled_rejection.h"
@@ -135,6 +137,8 @@ static void d_rendering(JSContext *c, const PlatformAgent *a) { (void)a; renderi
 static void d_fetch(JSContext *c, const PlatformAgent *a) { (void)a; fetch_init(c); }
 static void d_abort(JSContext *c, const PlatformAgent *a) { (void)a; abort_init(c); }
 static void d_observable(JSContext *c, const PlatformAgent *a) { (void)a; observable_init(c); }
+static void d_dom_rect(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_init(c); }
+static void d_dom_rect_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_list_init(c); }
 static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_init(c); }
 static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_init(c); }
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
@@ -183,6 +187,8 @@ static void i_media_query_list(JSContext *c, JSValueConst g, const PlatformDocum
 static void i_fetch(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; fetch_install(c, g); }
 static void i_abort(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; abort_install(c, g); }
 static void i_observable(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; observable_install(c, g); }
+static void i_dom_rect(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_install(c, g); }
+static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
 static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
     document_install(c, g, d->dom, d->url, d->csp, d->doc_id, d->nav_proxy);
@@ -307,6 +313,12 @@ static const PlatformComponent PLATFORM[] = {
     { "fetch",               d_fetch,               i_fetch },
     { "abort",               d_abort,               i_abort },
     { "observable",          d_observable,          i_observable },
+    /* GEOMETRY INTERFACES §3 and §4, before the component that returns one. Neither reads anything of the DOM's
+       — a rectangle is four numbers — so their position is decided only by their CONSUMER: CSSOM VIEW §6's
+       `getBoundingClientRect` is installed on Element.prototype by the row below, and it mints a DOMRect out of
+       the element's own realm, so both prototypes must already be in every realm the list has built. */
+    { "dom_rect",            d_dom_rect,            i_dom_rect },
+    { "dom_rect_list",       d_dom_rect_list,       i_dom_rect_list },
     { "element",             d_element,             NULL },
     { "html_iframe",         d_iframe,              NULL },
     /* RFC 6265 §5.3's COOKIE STORE, before the component whose §3.1.4 members read it. It is the first row with
@@ -371,6 +383,8 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "PromiseRejectionEvent", "unhandled_rejection" },
     { "PageRevealEvent",       "page_reveal" },
     { "AbortController",       "abort" },
+    { "DOMRect",               "dom_rect" },
+    { "DOMRectList",           "dom_rect_list" },
     { "IDBKeyRange",           "idb_key_range" },
     { "indexedDB",             "indexed_db" },
     { "Observable",            "observable" },

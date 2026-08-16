@@ -257,8 +257,18 @@ const INTERFACES = {
   Range:               ["core/dom/range.c", "core/dom/abstract_range.c"],
   NodeList:            "core/dom/collections.c",
   HTMLCollection:      "core/dom/collections.c",
+  /* GEOMETRY INTERFACES §3 and §4. DOMRect's file list is its own alone because it IS its own: the eight
+     attributes DOMRectReadOnly declares are installed on that prototype and reached through the chain, and the
+     four DOMRect redeclares with `inherit attribute` really are installed a second time on ITS prototype —
+     Web IDL §3.7.6 defines every regular attribute of an interface on that interface's own prototype, the
+     inheriting ones included, which is what gives them a setter. */
+  DOMRectReadOnly:      "core/geometry/dom_rect.c",
+  DOMRect:              "core/geometry/dom_rect.c",
+  DOMRectList:          "core/geometry/dom_rect_list.c",
+  /* CSSOM VIEW §6's `partial interface Element` lands on Element.prototype, so element_view.c is one of
+     Element's files — the same rule every mixin row here states. */
   Element:             ["core/dom/element.c", "core/dom/node.c", "core/events/event_target.c",
-                        "core/dom/dom_token_list.c"],
+                        "core/dom/dom_token_list.c", "core/dom/element_view.c"],
   /* The HTML layer. Each interface's files are its own plus everything it INHERITS from — HTMLElement on
      Element on Node — because a member installed on a base really is reachable, and reporting it absent is the
      audit lying in the direction that gets a real gap ignored. */
