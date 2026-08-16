@@ -139,10 +139,14 @@ void engine_set_park_hook(int (*want_park)(void));
    anything over it has offered the scheduler nothing across four hundred slices' worth of thread it actually
    burned. A DIAGNOSTIC on the same terms as the one above — no truncation, no drop, absent in release. */
 #define ENGINE_SEAMLESS_CPU_US ((int64_t)ENGINE_QUANTUM_MS * 1000 * 400)
-/* WHAT THE HOST IS OWED. The scheduler asks this ONE seam before it decides the frontier is exhausted; a
-   non-zero answer means STALLED rather than DONE. It is a question, not policy: the scheduler holds no idea of
-   what a reply is, and the host holds no idea of what a flow is. */
-void engine_set_stall_hook(int (*owed)(void));
+/* WHAT THE HOST IS OWED — non-zero if ANY member of the frontier is still waiting on something only the host
+   can supply, which is the scheduler's own last question before it may call a frontier exhausted (STALLED
+   rather than DONE). It is the union of the two lists below and is answered from the same registers they walk,
+   which is the correction: this was a host CALLBACK, every host restated it, and main.c restated it wrong by
+   naming only the reply register — so a frontier suspended entirely inside cross-instance reads reported
+   exhausted and its continuations died with the session. A host may still ask it (the fixture's park hook does,
+   because a park wants the same moment), but nothing has to TELL the engine any more. */
+int engine_host_owes(void);
 
 /* THIS INSTANCE'S DOCUMENT IS ONE ANOTHER INSTANCE HOLDS A REFERENCE INTO, so its timelines may not RUN OUT.
    A document's state IS its flows (engine_perform says so where it attaches an operation to every one of

@@ -383,19 +383,19 @@ QJS_EXPORT unsigned qjs_bundle_id(void)
     return g_bundle_id;
 }
 
-/* What the host still owes the frontier: the replies parked flows are waiting on. The scheduler asks this
-   before it decides the frontier is exhausted. */
-static int qjs_owed(void)
-{
-    return *engine_pending_urls() != '\0';
-}
+/* THERE IS NO STALL HOOK HERE ANY MORE, and the one that stood here is why: it answered
+   `*engine_pending_urls() != 0` and never engine_host_requests(), so this host told the scheduler its frontier
+   was EXHAUSTED whenever every member was suspended inside a cross-instance read with no fetch outstanding.
+   The scheduler then seeded candidates over those flows and closed the session on top of them. Both C drivers
+   asked both registers; the SHIPPED one asked half, which is §Testing's own sentence about which entry point
+   rots. The question is the engine's, over the engine's registers (engine.h's engine_host_owes), and no host
+   restates it. */
 
 /* PHASE 2 — seed the frontier. */
 QJS_EXPORT void qjs_begin(const char *recipes)
 {
     DCHECK(g_ctx != NULL, "qjs_begin ran before qjs_init built the context");
     DCHECK(!g_begun, "qjs_begin ran twice — the frontier is seeded once and stepped thereafter");
-    engine_set_stall_hook(qjs_owed);
     /* THE PARKED RESIDUE SEEDS THE FRONTIER, INSTEAD OF THE BOOT FLOW — solver/cold.h. What the host stored is
        a set of RECIPES: each names the path one suspended flow had taken, as arms over shared frozen segments,
        and each resumes by REPLAYING that path while it re-runs this document from its first script. The flow's

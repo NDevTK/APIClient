@@ -194,10 +194,6 @@ static JSValue js_last_child_mark(JSContext *ctx, JSValueConst this_val, int arg
    harness's business. */
 static int hostreq_answer_all(JSContext *ctx);   /* the SYNCHRONOUS half — see the machine below */
 
-/* THE HOST OWES SOMETHING while a fetch reply is outstanding OR a flow is blocked on a synchronous request.
-   Both are "the trusted zone has work to do"; only the second stops a flow dead, which is why the engine keeps
-   them on one register and the fixture answers both here. */
-static int fixture_owed(void) { return engine_pending_urls()[0] != 0 || engine_host_requests()[0] != 0; }
 
 static int fixture_provide(JSContext *ctx) {
     const char *urls = engine_pending_urls();
@@ -2245,7 +2241,7 @@ static char *tf_park_load(const char *path) {
  *   - THE SEARCH HAS OPENED (`solve_candidate_count()`), so @S candidate sessions are members of the frontier.
  *     They are the only records that carry attacker text, hence the only path through park_hex/park_unhex and
  *     the only sink class that has to be re-bound from a NAME to a live pointer on the way back.
- *   - AND THE FRONTIER IS WAITING ON THIS HOST (`fixture_owed`), which is the moment AFTER those candidates
+ *   - AND THE FRONTIER IS WAITING ON THIS HOST (`engine_host_owes`), which is the moment AFTER those candidates
  *     have run: each has re-entered the document, taken the branch — so it stands on a FROZEN DECISION SEGMENT
  *     and the park writes 's' records and the ordinals that name them — and then parked on a reply.
  *
@@ -2255,7 +2251,7 @@ static char *tf_park_load(const char *path) {
  * every probe has been answered and finished by the time the first candidate exists. A park holding both is
  * not a tuning question, it is a different park. */
 static int fixture_want_park(void) {
-    return solve_candidate_count() > 0 && fixture_owed();
+    return solve_candidate_count() > 0 && engine_host_owes();
 }
 
 int main(int argc, char **argv) {
@@ -2336,7 +2332,6 @@ int main(int argc, char **argv) {
     idl_args_seal();
 
     /* The trusted host's half: what it is owed, and how it pays. */
-    engine_set_stall_hook(fixture_owed);
     engine_set_provider(fixture_provide);
 
     DocScripts scripts = document_exec_scripts(dom);   /* each <script> its own program body — no concat */

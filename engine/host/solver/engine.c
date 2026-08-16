@@ -940,6 +940,53 @@ const char *engine_pending_urls(void) {
     return join;
 }
 
+/* IS ANYTHING OUTSTANDING ON THE WHOLE FRONTIER — the third answer over the same two walks above, and the one
+ * the scheduler consults before it may call a frontier exhausted.
+ *
+ * IT USED TO BE A HOST CALLBACK (`engine_set_stall_hook`), justified as "the scheduler holds no idea of what a
+ * reply is, and the host holds no idea of what a flow is". That was false in the only direction that matters:
+ * the two lists a host would answer from are engine_pending_urls() and engine_host_requests(), which are THIS
+ * FILE's walks of THIS FILE's registers, so every host implemented the hook by restating an engine fact — and
+ * a fact restated in three places is a fact three places can get wrong. One of them did. main.c — the SHIPPED
+ * host, the one §Testing says is the one that rots — asked `*engine_pending_urls() != '\0'` and never the
+ * synchronous register, while test_forced.c and wpt_runner.c asked both (wpt_runner's own comment spells out
+ * why: "a flow parked on either is a flow that has not finished"). So a frontier whose every member was
+ * suspended inside a cross-instance read, with no fetch outstanding, reported NOT STALLED to the extension and
+ * to engine/route.mjs: the slice fell straight past the report the host reads, seeded candidates over it and
+ * declared the session exhausted, killing every one of those continuations. engine/route.mjs aborts on exactly
+ * that, at the `!flow_blocked` assert a few lines past the report — a §7.2.5.1 `w.length` read, which is the
+ * one member of the cross-origin twelve that only the peer instance can answer.
+ *
+ * ASKED OF THE FLOWS, not of the joins, because the joins BUILD TEXT and this needs a yes or no — and because
+ * `pending_outstanding` is already the exact predicate ("is the host still owed anything on this register"),
+ * so the two cannot drift the way three copies of a condition did. The DCHECK in the loop is what keeps the
+ * two answers the same one: an outstanding entry the host cannot be TOLD about would make this say STALLED
+ * over work no host will ever be handed, which is the livelock the callback's failure was the mirror of. */
+int engine_host_owes(void) {
+    for (int i = 0; i < flow_count(); i++) {
+        Flow *f = flow_at(i);
+        if (!pending_outstanding(f->pending)) continue;
+#if APICLIENT_DEV
+        for (int j = 0, m = pending_count(f->pending); j < m; j++) {
+            JSValue e = pending_entry(f->pending, j);
+            JSValue uv = pending_get(e, PEND_URL);
+            int tellable = pending_get_int(e, PEND_HAVE_VALUE) ||
+                           JS_IsString(uv) ||
+                           pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ;
+            JS_FreeValue(pending_ctx(), uv);
+            JS_FreeValue(pending_ctx(), e);
+            DCHECK(tellable,
+                   "a flow is waiting on a register entry the host can never be shown — engine_pending_urls "
+                   "lists the unanswered entries that carry an ADDRESS and engine_host_requests the unanswered "
+                   "SYNCHRONOUS ones, so an entry that is neither makes this report a stall the host is handed "
+                   "no record for, and the frontier waits on it for the rest of the session");
+        }
+#endif
+        return 1;
+    }
+    return 0;
+}
+
 /* Deliver a body for `url` into every flow parked on it. The value lands on the flow's OWN pending entry, so the
    reaction the resolve enqueues belongs to that flow and to its COW delta — which is why this is here and not in
    a register beside it. Returns how many entries it filled. */
@@ -2871,9 +2918,6 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
    CPU actually consumed (solver/quantum.h says what each host can measure) and it is NOT a cap: nothing is
    dropped, starved, reordered or forgotten across it — the next call resumes the same top flow on the same
    frontier, which is the razor §scheduler states. */
-static int (*g_stall_hook)(void);
-void engine_set_stall_hook(int (*owed)(void)) { g_stall_hook = owed; }
-
 void engine_set_referenced(int referenced) {
     g_referenced = referenced;
     /* AND EVERY MEMBER IS ASKABLE AGAIN, because this flag is one of the answers. A flow with nothing left to
@@ -3325,9 +3369,10 @@ static int engine_sched_slice(void) {
                "and the exploration of that timeline stops here for no reason at all");
     }
     /* STALLED, not exhausted: the run-queue is empty but flows are parked on something only the host can
-       supply. Ask the one seam BEFORE closing — the session and every parked snapshot stay live, and the host
-       steps again once it has provided. */
-    if (g_stall_hook && g_stall_hook())
+       supply. Asked BEFORE closing — the session and every parked snapshot stay live, and the host steps again
+       once it has provided. It is the ENGINE's own question over the ENGINE's own registers now; it used to be
+       a host callback, and the shipped host answered half of it. See engine_host_owes. */
+    if (engine_host_owes())
         return ENGINE_STEP_STALLED;
     /* The exploration found sinks; each breakout is a FLOW on this same frontier, seeded once the exploring
        flows are done so a candidate never re-fires against a half-explored page. Seeding adds members, so the

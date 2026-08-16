@@ -504,17 +504,6 @@ static int wpt_provide_pending(JSContext *ctx)
     return filled;
 }
 
-/* WHAT THIS HOST OWES THE FRONTIER, asked by the scheduler before it may call a frontier exhausted (engine.h's
-   engine_set_stall_hook). Both registers, because both are answered at the same boundary and a flow parked on
-   either is a flow that has not finished: a reply it is waiting for, and a synchronous request it is suspended
-   inside. Without this the scheduler closes the session over them and every one of those continuations dies
-   with it — the session's own asserts then name flows that were dropped, which is the honest report of the
-   wrong thing. */
-static int wpt_owed(void)
-{
-    return *engine_pending_urls() != '\0' || *engine_host_requests() != '\0';
-}
-
 /* THE HOST'S HALF, pumped between resumes.
  *
  * NOTICES ARE ONE-WAY and are drained here. `navigable.create` announces a document the engine has already
@@ -1188,7 +1177,6 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        register, and the two lines below are the other half of it — what this host still owes the frontier, and
        who reports a page error while the programs are the scheduler's rather than this file's. */
     { static const FetchProvider P = { wpt_owe }; fetch_set_provider(&P); }
-    engine_set_stall_hook(wpt_owed);
     result_set_page_error_hook(wpt_page_error);
 
     agent.origin = origin;
@@ -1764,8 +1752,8 @@ int main(int argc, char **argv)
         if (wpt_provide_pending(ctx) > 0) did = 1;
         if (r == ENGINE_STEP_DONE) break;
         if (r == ENGINE_STEP_STALLED) {
-            /* THE TWO ANSWERS THIS HOST GIVES ABOUT ONE QUESTION MUST AGREE. The scheduler stalls because
-               wpt_owed said something is outstanding; if the very next thing this host does is fill NOTHING,
+            /* THE TWO ANSWERS ABOUT ONE QUESTION MUST AGREE. The scheduler stalls because engine_host_owes
+               found something outstanding; if the very next thing this host does is fill NOTHING,
                the two disagree and the frontier is parked on something that is never coming — a spin, not a
                wait. In release there is nothing to fix it with, so the run ends with the flows parked and the
                teardown names what was dropped. */
