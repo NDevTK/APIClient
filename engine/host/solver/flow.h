@@ -263,7 +263,9 @@ int64_t flow_service_notch(const Flow *f);
 /* THE LOWEST-PRIORITY MEMBER OTHER THAN `exclude` — the TAIL the cold tier gives up first at the RAM floor, and
  * the SAME comparator as flow_best read in the other direction. Not a second ranking: the flow that is paged
  * out has to be the flow the WFQ would have run last, or the engine evicts what it was about to do and keeps
- * what it was starving. Asserted against flow_best where it is computed.
+ * what it was starving. Asserted where it is computed, by RE-DERIVING the minimum over the same candidate set
+ * — not, as it used to say here, "against flow_best": that comparison was a minimum against a maximum, which
+ * is arithmetic and holds for every frontier that can exist.
  * EVERY MEMBER, not only the runnable ones — a flow waiting on the host is the cheapest thing here to page (its
  * recipe re-issues the request and gets today's answer), and filtering it out would leave the flows that cannot
  * run holding the RAM the flows that can need.

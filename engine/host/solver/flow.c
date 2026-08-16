@@ -597,6 +597,24 @@ Flow *flow_next_to_run(const Flow *incumbent) { return flow_pick(incumbent, NULL
    value yield would compare a flow against itself. */
 Flow *flow_rival_of(const Flow *cur) { return flow_pick(NULL, cur, 1, 0); }
 
+/* IS `tail` THE LOWEST-WEIGHT CANDIDATE? — the assert's own scan below, deliberately NOT flow_pick's, and a
+   FUNCTION rather than a loop at the call site for two reasons that are the same reason. A DCHECK condition
+   must be side-effect-free, and this reads weights and returns a bool and does nothing else — no out-param, no
+   accumulator the caller has to hold. And because it is evaluated only inside the condition, a release build
+   never runs the scan at all: the cost is a dev-build scan on the reclaim path, which is reached only at the
+   RAM floor. The ORDER function stays single (this calls flow_weight and nothing else); only the SCAN is
+   independent, which is the whole point of a re-derivation. Ties pass — the question is whether anything is
+   STRICTLY below the tail, since flow_pick is free to return either of two equal minima. */
+static int flow_is_min_weight(const Flow *tail, const Flow *exclude) {
+    double tw = flow_weight(tail);
+    int i;
+    for (i = 0; i < g_flows_n; i++) {
+        if (g_flows[i] == exclude || g_flows[i] == tail) continue;
+        if (flow_weight(g_flows[i]) < tw) return 0;
+    }
+    return 1;
+}
+
 Flow *flow_worst(const Flow *exclude) {
     Flow *tail = flow_pick(NULL, exclude, 0, 1);
     /* EVERY MEMBER, RUNNABLE OR NOT — and that is not an oversight in the filter, it is what eviction is about.
@@ -604,17 +622,27 @@ Flow *flow_worst(const Flow *exclude) {
        occupying RAM, and it is the CHEAPEST thing in the frontier to page, because its recipe re-issues the
        request it is waiting on and gets today's answer instead. Filtering the tail by runnability would leave
        exactly the flows that cannot run holding the memory the flows that can need.
-       ONE ORDERING, ASSERTED. The tail may never outrank the head: if it ever does, the pager and the scheduler
-       have come to disagree about what this frontier is worth, and the flow written to disk is one the WFQ was
-       about to run. Costs a second scan on the reclaim path, which runs only at the RAM floor.
        THE ONE INVERSION THIS ALLOWS IS `exclude` ITSELF and it is unavoidable rather than tolerated: the flow
        the scheduler is switched into cannot be written out (its decision state is live in decide.c, its delta
        applied to the heap), so if IT is the lowest-weight member the tail taken is one that outranks it. It
-       corrects itself at the next context switch, when that flow is parked like any other. */
-    DCHECK(!tail || flow_weight(tail) <= flow_weight(flow_best()),
-           "the flow the pager chose to page out outranks the flow the scheduler would run — the tail and the "
-           "head are two readings of ONE comparator, so this means a second ranking has appeared and the "
-           "engine is evicting the work it was about to do");
+       corrects itself at the next context switch, when that flow is parked like any other.
+
+       ONE ORDERING, ASSERTED — AND THE FORM THAT STOOD HERE ASSERTED NOTHING. It read
+       `flow_weight(tail) <= flow_weight(flow_best())`: the MINIMUM over this scan's candidates against the
+       MAXIMUM over every member, and a minimum of a subset is never above a maximum of its superset. The
+       condition therefore held for every frontier that can exist, in every build, and the sentence above it
+       was checked by nothing at all — the stale-DFAIL shape exactly, authoritative to read and silent in
+       fact. Comparing the tail against a head over the SAME set is no better: min <= max is the same
+       arithmetic, so there is no version of "the tail may never outrank the head" that can fail.
+       WHAT IS ACTUALLY AT RISK IS THE PAGER ACQUIRING A RANKING OF ITS OWN — a size estimate, an age, a
+       cheapest-to-rebuild score — and that IS falsifiable: the tail must be the lowest-weight candidate, and
+       the moment the eviction path stops answering with that minimum this re-derived scan disagrees with it.
+       It is also what catches a flow_weight that is not a pure function of the flow, which the seeded scan
+       above could never notice because it only ever asks each weight once. */
+    DCHECK(!tail || flow_is_min_weight(tail, exclude),
+           "the flow the pager chose to page out is not the lowest-weight member of the frontier — the tail and "
+           "the head are two readings of ONE comparator, so a tail that is not the minimum means a second "
+           "ranking has appeared and the engine is evicting work the WFQ had not finished with");
     return tail;
 }
 
