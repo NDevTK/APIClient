@@ -1023,6 +1023,20 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             i++;
             continue;
         }
+        /* AND A SYNCHRONOUS REQUEST'S ANSWER IS NOT THIS WALK'S TO TAKE, which is the same sentence the `else`
+           branch below states as an assertion — said HERE, where the entry is still on the register, because
+           there is no way to state it below without the answer having already been removed. `pending_ready`
+           decides WHETHER this drain runs and now asks the kind (solver/pending.h); this decides what it TOUCHES
+           once it is running, and both are needed: a register can hold a fetch reply and an answered HOSTREQ at
+           the same instant, and it is the fetch reply that brought the walk here. The answer stays where the
+           machine parked at the call site will take it (engine_host_take), so it is skipped exactly as an
+           unanswered entry is — never swap-removed, or the flow that asked resumes into a rendezvous whose
+           record is gone and waits at that line for the rest of the session. */
+        if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ) {
+            JS_FreeValue(ctx, p);
+            i++;
+            continue;
+        }
         /* TAKEN OFF THE REGISTER BEFORE IT IS DELIVERED, and that ordering is the record's own lifetime. The
            delivery below runs the PAGE's code — 27.2.1.3.2 step 8 reads `Get(resolution,"then")` off an object
            whose prototype the page owns — and that code can issue another fetch, which appends to this very
@@ -1945,6 +1959,17 @@ static const char *g_step_unit = "(none)";
    accessors that publish them; this is the definition, and it has to precede its first use. */
 static long g_finished;
 static int  g_deepest = -1;
+/* AND THE OTHER END OF THE SAME PROGRAM — the highest index this document has ever run to COMPLETION. It is a
+   separate fact from `g_deepest` and the difference between them is the whole diagnosis, which is exactly why
+   one number could not carry both: `deepest 1` says a flow STARTED the second <script>, and it was read — in
+   two independent analyses of this engine, and in the sentence that commissioned this one — as "no flow has
+   ever begun the second <script>". Neither reading is checkable against the other from one number. With both,
+   `deepest 1, completed 0` states it exactly: some flow finished program 0, no flow has ever finished program
+   1, and therefore nothing this document loads AFTER program 1 — a lazy chunk, an injected <script>, a fired
+   PoC, the whole surface §What-the-tool-produces calls the headline moat — has ever been compiled by anything.
+   `deepest` alone cannot say that, because a flow that starts program i proves only that SOME flow completed
+   i-1, and says nothing about how many programs the document has left to run. */
+static int  g_completed = -1;
 
 /* HTML §8.1.3.3 "run a module script", step 6: "If preventErrorReporting is false, then upon rejection of
  * evaluationPromise with reason, report an exception given by reason for script's settings object's global
@@ -2343,6 +2368,12 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 return 0;
             }
         }
+        /* THE PROGRAM RAN TO ITS END — the ONE event that moves this document's completed depth, recorded here
+           because this is the only line in the engine at which a program's own completion is the fact in hand.
+           The three other sites that advance `script_i` are not completions and must not be counted as ones: a
+           module has evaluated to a PROMISE rather than a value, a detached base has handed its continuation to
+           an awaited promise, and a compile failure never started. See g_completed. */
+        if (f->script_i > g_completed) g_completed = f->script_i;
         JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; f->script_i++;   /* this script done -> next */
         return 0;
     }
@@ -3125,6 +3156,25 @@ static int engine_sched_slice(void) {
                    declared the whole frontier stalled while runnable siblings had never been asked — which in
                    the smoke host ends the run over them (the provider answers nothing and run_scheduler
                    breaks). A no-progress count is in §NO-BOUNDS' own list, and this is why. */
+                /* AND THE MARK IS A CLAIM ABOUT THE HOST, ASSERTED WHERE IT IS MADE. A marked flow leaves the
+                   pick until a HOST EVENT clears it, so the mark is only ever true if there is something the
+                   host has actually been shown and can still answer: an entry on this flow's register with no
+                   value — which is in engine_pending_urls or engine_host_requests by construction, since both
+                   walk every flow's register and select exactly the unanswered — or the one case with no entry
+                   at all, a document a peer holds a reference into. Anything else is a flow that has left the
+                   run queue for good, and NOTHING would say so: `live` still counts it, `blocked` and `owed`
+                   still report it as waiting, and the whole timeline behind it simply never runs again.
+                   THE FRONTIER-WIDE FORM OF THIS EXISTS ALREADY AND CANNOT SEE IT (the stall claim below).
+                   That one is checked only when the pick finds NO runnable member, so a single permanently
+                   marked flow is invisible for as long as its siblings keep the loop busy — which is exactly
+                   the state in which a document stops getting deeper while every number about it looks
+                   healthy. It is also the STRICTER predicate: `pending_count > 0` is satisfied by a register
+                   whose every entry has already been ANSWERED, and a flow stuck on one of those is precisely
+                   the shape no host event can ever clear. Asked per flow, at the instant the mark is made. */
+                DCHECK(pending_outstanding(cur->pending) || g_referenced,
+                       "a flow was marked host-owed while the host owes it NOTHING — every entry on its "
+                       "register has already been answered, so no host event can clear this mark and the flow "
+                       "is out of the pick for the rest of the session with its whole timeline unexplored");
                 flow_set_host_owed(cur);
             }
             /* AND NOTHING IS CLEARED BY PROGRESS, which is a statement about what a slice can do rather than an
@@ -3173,10 +3223,14 @@ static int engine_sched_slice(void) {
        answers one at a time — it is this set being REGENERATED by forking, since a fork re-issues its parent's
        unanswered synchronous request under the sibling's own world (engine_fork_finalize). */
     for (int i = 0; i < flow_count(); i++) {
-        DCHECK(pending_count(flow_at(i)->pending) > 0 || g_referenced,
+        /* OUTSTANDING, NOT MERELY PRESENT — the same correction the per-flow assert at the mark carries, and
+           the reason it is a correction rather than a tightening: `pending_count > 0` is true of a register
+           whose every entry has already been ANSWERED, and that is not a member waiting on the host, it is a
+           member nothing can wake. Counted, it read as a healthy stall; asked this way it names itself. */
+        DCHECK(pending_outstanding(flow_at(i)->pending) || g_referenced,
                "the frontier reported a STALL while one of its members owed the host NOTHING — its mark says it "
-               "cannot progress and its register is empty, so it was marked while it still had work to do and "
-               "the exploration of that timeline stops here for no reason at all");
+               "cannot progress and the host owes it nothing, so it was marked while it still had work to do "
+               "and the exploration of that timeline stops here for no reason at all");
     }
     /* STALLED, not exhausted: the run-queue is empty but flows are parked on something only the host can
        supply. Ask the one seam BEFORE closing — the session and every parked snapshot stay live, and the host
@@ -3358,38 +3412,34 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
         r = engine_sched_step();
         if (r == ENGINE_STEP_DONE)
             break;
-        /* THE HOST OWES A REPLY, so this is where it pays. Without this seam the loop had nowhere to answer a
-           stall from and a request the trusted host must make simply ended the run: every flow that fetched
-           stopped at its fetch, and its continuation — the part that reads the reply — never ran at all.
-           IT PAYS ONLY AT A STALL, AND THAT IS A KNOWN DEFECT WITH A KNOWN COST — read the paragraph below
-           before "fixing" it, because the obvious fix is the one that was tried and reverted.
-           The defect: a flow's reply is conditional on every OTHER flow in the document also becoming blocked,
-           since the run-queue must empty before a stall is reached at all. That is a cross-flow coupling the
-           scheduler forbids everywhere else, and main.c does NOT have it — the bridge folds STALLED into YIELD
-           and pulls qjs_pending and qjs_host_requests after every return, so in the product a blocked flow is
-           answered at the next quantum. This host is therefore the odd one out and it should not be.
-           THE FIX THAT IS NOT THE FIX: replacing this branch with an unconditional `g_provider(ctx)` per slice
-           makes the smoke fixture ABORT in the fetch delivery at its first replies —
-             fetch.c  "the host delivered a reply carrying no `urlList`"
-           — reached with `flows 1`, i.e. before the boot flow's first fork. The provider itself is not the
-           producer of that record: every reply it builds goes through fetch_reply_new with §2.2.6's list
-           (test_forced.c), and both registers are empty by the time it returns. So the record reaching the
-           delivery is one this file put on a RESOLVE entry, and the shape that can do that is a HOSTREQ answer
-           landing on a register the drain then walks — `pending_ready` answers YES for an ANSWERED HOSTREQ, and
-           at a stall that state cannot exist because the asking machine consumes its answer through
-           engine_host_take on the very next step, while at a quantum boundary nothing guarantees the asking
-           machine is the next thing to run. The drain's own assert (flow_drain_pending, strengthened below to
-           name the entry) is what will identify it; until it does, this stays a stall-only seam rather than a
-           change that leaves the fixture red for every agent.
-           WHAT MUST HAPPEN NEXT, in order: turn the seam on again, read the record the drain now names, and
-           fix the producer. This is not a bound and not a fallback — it is one host's payment schedule, and the
-           schedule is wrong. */
-        if (r == ENGINE_STEP_STALLED) {
-            /* NOBODY CAN SUPPLY IT, so this driver stops driving — and STOPPING IS NOT THE SAME AS THE SESSION
-               ENDING, which is why the close is below rather than here. The frontier that remains is real
-               (every flow parked on a reply that never came), and it is handed to the teardown as SNAPSHOTS. */
-            if (!g_provider || g_provider(ctx) == 0)
-                break;
+        /* THE HOST PAYS EVERY SLICE. It used to pay only at a STALL, and that was recorded here as a known
+           defect with the fix written out in order; this is that fix, and the reason it could not be taken
+           before is one line in solver/pending.h that has now been corrected.
+           WHAT THE OLD SCHEDULE COST, and it is the answer to why this document never got deeper than its
+           second <script>. A stall is reached only when the pick finds NO runnable member, so under a stall-only
+           seam a flow's reply is conditional on EVERY OTHER FLOW in the document also becoming blocked. One
+           flow's progress is then a function of 511 siblings' states — a cross-flow coupling this scheduler
+           forbids everywhere else — and the coupling gets WORSE as exploration succeeds, because every fork adds
+           a member that must also block before anybody is paid, and a fork RE-ISSUES its parent's unanswered
+           synchronous request under a fresh id (engine_sibling_assemble), so the set to be blocked on is
+           regenerated by the very thing that makes progress. The leading flow — the one furthest into the
+           document, the only one that can reach a lazily-loaded chunk — is the flow this hurts most: it is the
+           first to block on the host and the last to be answered.
+           THE PRODUCT NEVER HAD IT, which is why this host was the odd one out rather than the canary. main.c
+           folds STALLED into YIELD and pulls qjs_pending and qjs_host_requests after EVERY return, so in the
+           extension a blocked flow is answered at the next quantum. This driver now speaks the same schedule,
+           which is also what makes it a fair oracle for the product: a difference in findings between the two
+           hosts should be a difference in the ENGINE, and a payment schedule is not one.
+           WHY IT ABORTED WHEN IT WAS TRIED, and it was neither the provider nor the reply record. `pending_ready`
+           answered YES for an ANSWERED HOSTREQ, so a synchronous answer arriving between two slices made the
+           register look deliverable, flow_step called the fetch drain, and the drain swap-removed the rendezvous
+           record and pushed it through a `resolve` capability it does not have. At a stall that state cannot
+           exist, because the asking machine consumes its answer on the very next step; at a quantum boundary
+           nothing guarantees the asking machine runs next. Both halves are fixed at the root — the predicate
+           asks the KIND (solver/pending.h) and the drain LEAVES a synchronous answer where its machine will take
+           it (flow_drain_pending) — so the shape this branch was avoiding no longer exists to be avoided. */
+        {
+            int filled = g_provider ? g_provider(ctx) : 0;
             /* AND THE PAYMENT WAS COMPLETE, asserted at the seam instead of inferred from a census line six
                minutes later. This provider answers out of its OWN tables — a reply record it builds, a peer's
                answer it stands in for — so unlike the extension's it has no asynchronous half and nothing it
@@ -3397,16 +3447,29 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                never handed or one it walked past. `blocked` and `owed` cannot say which: they report the LEVEL
                of unanswered work, and a frontier that keeps issuing requests reads identically whether the host
                is paying promptly or has silently skipped a record. This says which, at the moment it happens,
-               and it names the two registers separately because they are two questions. */
-            DCHECK(*engine_host_requests() == '\0',
-                   "the smoke host paid and a SYNCHRONOUS request is still outstanding — this provider answers "
-                   "every record it is handed out of its own tables, so the flow blocked on this one is parked "
-                   "at a call site nothing is going to resume, and its whole timeline is lost with nothing but "
-                   "a `blocked` count to say which record it was");
-            DCHECK(*engine_pending_urls() == '\0',
-                   "the smoke host paid and a reply is still owed — the same silence one register over: the "
-                   "flow that issued this fetch keeps its snapshot and its continuation and is never handed the "
-                   "body, so everything the page does behind that reply is missing from the run");
+               and it names the two registers separately because they are two questions.
+               UNCONDITIONAL NOW, rather than inside the stall branch: the claim is about what the provider
+               leaves behind and is equally true of a slice at which nothing was outstanding (both registers are
+               empty either way), so guarding it by the stall would only have narrowed where it can fire. */
+            if (g_provider) {
+                DCHECK(*engine_host_requests() == '\0',
+                       "the smoke host paid and a SYNCHRONOUS request is still outstanding — this provider "
+                       "answers every record it is handed out of its own tables, so the flow blocked on this "
+                       "one is parked at a call site nothing is going to resume, and its whole timeline is lost "
+                       "with nothing but a `blocked` count to say which record it was");
+                DCHECK(*engine_pending_urls() == '\0',
+                       "the smoke host paid and a reply is still owed — the same silence one register over: the "
+                       "flow that issued this fetch keeps its snapshot and its continuation and is never handed "
+                       "the body, so everything the page does behind that reply is missing from the run");
+            }
+            /* NOBODY CAN SUPPLY IT, so this driver stops driving — and STOPPING IS NOT THE SAME AS THE SESSION
+               ENDING, which is why the close is below rather than here. The frontier that remains is real
+               (every flow parked on a reply that never came), and it is handed to the teardown as SNAPSHOTS.
+               The condition is unchanged: a STALL the payment could not move. A stall with nothing filled is a
+               frontier waiting on something outside this host's tables — in the smoke driver, the referenced-
+               document case, which no reply can answer. */
+            if (r == ENGINE_STEP_STALLED && filled == 0)
+                break;
         }
         /* Either enough work has happened to be worth a line, or the SEARCH grew — a new candidate is the event
            that changes what the rest of the run will cost, so it is worth saying when it happens. */
@@ -3459,8 +3522,12 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                    on a DISCOVERY probe or on a fetch reply is host-OWED without being host-BLOCKED, so `owed`
                    counts a superset of `blocked` — and neither counts what has already been settled, which is
                    the only thing that distinguishes a paid frontier from a starved one. */
+                /* AND `completed` BESIDE `deepest`, because one number was carrying two facts and the readings
+                   of it disagreed — see g_completed. `deepest` is the highest program STARTED; this is the
+                   highest program this document has ever run to its END. */
                 printf("@COLD {\"flows\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
-                       "\"finished\":%ld,\"deepest\":%d,\"hostAsked\":%ld,\"hostAnswered\":%ld,"
+                       "\"finished\":%ld,\"deepest\":%d,\"completed\":%d,"
+                       "\"hostAsked\":%ld,\"hostAnswered\":%ld,"
                        "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                        "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
                        "\"dynKiB\":%ld,\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
@@ -3468,7 +3535,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                        "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                        "\"sharedKiB\":%ld,\"stepMachines\":%d}\n",
                        c.flows, c.framed, c.blocked, flow_host_owed_count(),
-                       g_finished, g_deepest, g_host_asked, g_host_answered,
+                       g_finished, g_deepest, g_completed, g_host_asked, g_host_answered,
                        c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                        c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
                        c.pend_bytes / 1024, c.dyn_bytes / 1024, c.misc_bytes / 1024,

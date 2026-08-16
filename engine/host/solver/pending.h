@@ -165,8 +165,26 @@ int64_t pending_get_int(JSValueConst e, int field);
    tag test — flow_blocked is asked at every suspend point the interpreter offers. */
 int  pending_blocked(JSValueConst reg);
 
-/* Is any entry deliverable (its value has arrived)? */
+/* IS ANY ENTRY DELIVERABLE — and DELIVERABLE ASKS THE KIND, exactly as pending_blocked one line above does.
+   The two predicates read the same register and only one of them was asking what an entry IS, and that
+   asymmetry is the defect rather than an omission: a SYNCHRONOUS request's answer is TAKEN by the machine that
+   asked (engine_host_take), never drained, so an answered HOSTREQ is not a reply anybody can deliver. Read
+   without the kind it made the register "ready", flow_step called the fetch drain, and the drain swap-removed
+   the answer and pushed it through a `resolve` capability the record does not have — the asking flow then
+   parked at the call site that asked, forever, with its answer converted into somebody's fetch reply.
+   THAT IS WHY THE SMOKE HOST PAYS ONLY AT A STALL. The shape is unreachable while the host is asked only when
+   the whole frontier is blocked (the asking machine consumes its answer on the very next step), and it is
+   reachable the moment the host pays per slice — which is the schedule §scheduler actually requires, and which
+   run_scheduler had to leave switched off because of this line. */
 int  pending_ready(JSValueConst reg);
+
+/* IS THE HOST STILL OWED ANYTHING ON THIS REGISTER — the exact question `flow_set_host_owed`'s mark is a claim
+   about, and the one `pending_count(reg) > 0` cannot answer. A register holding one ANSWERED entry has a
+   non-zero count while the host owes it nothing, so a flow stuck on such an entry passes a count test and is
+   marked "waiting on the host" forever: the mark is cleared only by a host event, and no host event is coming.
+   Counting outstanding entries is what makes that state a crash at the mark instead of a flow that silently
+   leaves the pick and never comes back. */
+int  pending_outstanding(JSValueConst reg);
 
 /* APPEND an entry of `kind` with every field present at its default (no URL, no answer, scriptI -1, req 0).
    Creates the register if this is the flow's first. Returns the new entry, OWNED by the caller. */
