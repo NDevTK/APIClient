@@ -276,6 +276,30 @@ char *css_rule_block_text(JSContext *ctx, JSValueConst rule, size_t *plen)
     return out;
 }
 
+/* §6.4.3's ASSOCIATED SELECTOR LIST, serialized — the same string `selectorText` answers, for the CASCADE,
+   which re-parses it to match against an element. OWNED: the caller frees. */
+char *css_rule_selector_text(JSContext *ctx, JSValueConst rule, size_t *plen)
+{
+    CssRuleData *r = rule_of(rule);
+    const char *c;
+    size_t len = 0;
+    char *out;
+
+    DCHECK(r != NULL, "a rule's selector list was read off something that is not a CSS rule");
+    DCHECK(plen != NULL, "a rule's selector list was read with nowhere to report its length");
+    *plen = 0;
+    c = JS_ToCStringLen(ctx, &len, r->selector_text);
+    if (!c) return NULL;
+    if (len == 0) { JS_FreeCString(ctx, c); return NULL; }
+    out = malloc(len + 1);
+    CHECK(out != NULL, "cssom: OOM copying a rule's selector list");
+    memcpy(out, c, len);
+    out[len] = '\0';
+    JS_FreeCString(ctx, c);
+    *plen = len;
+    return out;
+}
+
 /* The write half. It goes through `rule_of`, so the per-flow COW delta has already taken a copy of the record
    and one arm's `rule.style.color = 'red'` is invisible to its sibling and to every flow the frontier resumes
    afterwards — the same guarantee `selectorText`'s setter has, for the same reason and at the same site. */

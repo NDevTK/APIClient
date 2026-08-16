@@ -255,6 +255,20 @@ lxb_dom_node_t *css_style_sheet_owner_node(JSValueConst sheet)
     return node_of(s->owner_node);
 }
 
+/* §6.1's CSS RULES, as the very Array `cssRules` shares — the CASCADE reads the rule OBJECTS through here, so
+   an `insertRule` the running flow made is in the cascade that flow resolves and in no sibling's. Through the
+   capturing accessor like every other read. OWNED. */
+JSValue css_style_sheet_rules(JSContext *ctx, JSValueConst sheet)
+{
+    CssStyleSheetData *s = sheet_of(sheet);
+
+    DCHECK(s != NULL, "the CSS rules were read off something that is not a CSS style sheet");
+    DCHECK(JS_IsArray(s->rules),
+           "a CSS style sheet's rules are not an Array — the create allocates one before the sheet is handed "
+           "to anybody, and nothing replaces it");
+    return JS_DupValue(ctx, s->rules);
+}
+
 JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet)
 {
     CssStyleSheetData *s = sheet_of(sheet);

@@ -79,4 +79,11 @@ JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet);
 bool css_style_sheet_disabled(JSValueConst sheet);
 void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled);
 
+/* §6.1's CSS RULES, as the very Array §6.1.2's [SameObject] `cssRules` shares — for the CASCADE, which resolves
+   the author layer from the RULE OBJECTS. That sharing is the whole point: it is what makes `insertRule`,
+   `deleteRule`, `selectorText =` and `rule.style.color =` change what `getComputedStyle` answers, and what
+   keeps every one of those per-flow, because the Array's mutations are property writes the delta captures.
+   OWNED. */
+JSValue css_style_sheet_rules(JSContext *ctx, JSValueConst sheet);
+
 #endif

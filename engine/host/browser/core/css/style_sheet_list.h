@@ -22,6 +22,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_STYLE_SHEET_LIST_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_STYLE_SHEET_LIST_H
 
+#include <lexbor/dom/dom.h>
+
 #include "quickjs.h"
 
 void style_sheet_list_init(JSContext *ctx);
@@ -46,5 +48,15 @@ void style_sheet_list_add(JSContext *ctx, JSValueConst sheet, JSValueConst owner
    root CSS style sheets". The list it is in is the one the add recorded, never the one its owner node's current
    root names. */
 void style_sheet_list_remove(JSContext *ctx, JSValueConst sheet);
+
+/* THE LIST ITSELF, FOR THE CASCADE — `root`'s CSS style sheets in tree order, as the very JS Array §6.2.3's
+   collection shares, so a sheet the running flow added is in it and its sibling's is not.
+   IT DOES NOT CREATE ONE. The two callers above are placing a sheet and may mint the list; a READ must not,
+   because a document that declares no styles would otherwise grow one on the first computed-value read of the
+   first flow that took one — a heap write attributed to whichever flow happened to ask first. JS_UNDEFINED is
+   the answer for a root with no list, and for a `root` that is neither a Document nor a ShadowRoot: a
+   DISCONNECTED subtree's root is a real state (its own top element), and §6.2 gives it no collection at all.
+   OWNED. */
+JSValue style_sheet_list_of(JSContext *ctx, lxb_dom_node_t *root);
 
 #endif

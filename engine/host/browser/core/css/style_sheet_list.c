@@ -242,6 +242,21 @@ void style_sheet_list_remove(JSContext *ctx, JSValueConst sheet)
     JS_FreeValue(ctx, root_wrap);
 }
 
+JSValue style_sheet_list_of(JSContext *ctx, lxb_dom_node_t *root)
+{
+    JSValue w, cur;
+
+    DCHECK(g_atom_sheets != JS_ATOM_NULL, "§6.2's list was read before style_sheet_list_init ran");
+    if (!root || (root->type != LXB_DOM_NODE_TYPE_DOCUMENT && !shadow_root_is(root))) return JS_UNDEFINED;
+    w = node_wrap(ctx, root);
+    DCHECK(JS_IsObject(w), "§6.2's list could not reach the wrapper of the root that holds it");
+    if (JS_GetOwnSlot(ctx, &cur, w, g_atom_sheets) <= 0) cur = JS_UNDEFINED;
+    JS_FreeValue(ctx, w);
+    if (JS_IsArray(cur)) return cur;
+    JS_FreeValue(ctx, cur);
+    return JS_UNDEFINED;   /* no `<style>` has ever been placed in this tree — see the header on not minting */
+}
+
 /* ---- §6.2.2's StyleSheetList ----------------------------------------------------------------------------- */
 
 /* THE BRAND is the own slot this component put on the object — an indexed-property object is what anything with

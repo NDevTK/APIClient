@@ -45,9 +45,13 @@ JSValue css_style_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSVa
 /* Is `v` a CSSRule? The class brand, for a caller holding something it took out of a rule list. */
 bool css_rule_is(JSValueConst v);
 
-/* THE RULE'S DECLARATIONS, as the text they are stored as — §6.6's declaration block reads them through here.
-   OWNED: the caller frees. NULL, with `*plen` zero, for a rule whose body declares nothing. */
+/* THE RULE'S DECLARATIONS, as the text they are stored as — §6.6's declaration block reads them through here,
+   and so does the CASCADE, which resolves the author layer from these objects rather than from the `<style>`
+   element's bytes. OWNED: the caller frees. NULL, with `*plen` zero, for a rule whose body declares nothing. */
 char *css_rule_block_text(JSContext *ctx, JSValueConst rule, size_t *plen);
+
+/* And §6.4.3's associated SELECTOR LIST, serialized — what the cascade matches against an element. OWNED. */
+char *css_rule_selector_text(JSContext *ctx, JSValueConst rule, size_t *plen);
 
 /* Replace them. The write goes through the record's capturing accessor, so it rides the running flow's COW
    delta exactly as `selectorText`'s does. */

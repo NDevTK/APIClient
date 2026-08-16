@@ -31,10 +31,12 @@
  * COW delta through the record's accessor, so two flows can disagree about `rule.style.color` exactly as they
  * can about an inline style. Nothing is cached in between, for the reason the cascade caches nothing.
  *
- * THE CASCADE IS RESOLVED LIVE, per read, from the RUNNING FLOW'S TREE: inline, then the author rules in that
- * flow's own `<style>` elements matched with lxb_selectors_match_node, then the UA default, then the property's
- * initial value. Nothing is cached across a read, because a cache would be shared state that the flow machinery
- * does not swap — the same reason the storage is the attribute.
+ * THE CASCADE IS RESOLVED LIVE, per read, from THE RUNNING FLOW'S OWN OBJECTS: inline, then the author rules of
+ * the CSS STYLE SHEETS in §6.2's list for this element's root — the sheet objects a page holds, whose rules it
+ * inserts, deletes and retargets — then the UA default, then the property's initial value. Nothing is cached
+ * across a read, because a cache would be shared state that the flow machinery does not swap; and reading the
+ * OBJECTS rather than re-parsing each `<style>` element's text is what makes the objects load-bearing instead
+ * of inert, which is the whole of why §6.1, §6.2 and §6.4 exist.
  *
  * AND THE CASCADE IS WHERE THIS FILE STOPS. What it produces is the SPECIFIED value — the declaration that won
  * — which is neither the computed value a spec algorithm reads nor the resolved value getComputedStyle
@@ -45,6 +47,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include <lexbor/css/css.h>
 
@@ -54,12 +57,15 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/node.h"
+#include "core/dom/document.h"
 #include "core/dom/element.h"
 #include "core/dom/selector_match.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_rule.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/css_style_sheet.h"
+#include "core/css/style_sheet_list.h"
 #include "solver/dom_cow.h"
 
 /* TWO PRIVATE KEYS, BOTH SYMBOLS, AND THEY ARE TWO BECAUSE A SLOT IS A BRAND. `g_decl_key` hangs a block's own
@@ -336,93 +342,194 @@ static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pi
     return cssd_value_in_block(text, len, name, pimportant);
 }
 
-/* LAYER 2 — the AUTHOR cascade, resolved from the RUNNING FLOW'S tree. Every `<style>` element in the document
-   is parsed, every style rule's selector is matched against THIS element with Lexbor's own matcher, and the
-   winner is the highest specificity, later document order breaking a tie — which is the cascade. It is redone
-   per read on purpose: a cache would be shared state the flow machinery does not swap, so a `<style>` one arm
-   injected would decide another arm's computed values.
-   THE MATCH ITSELF IS core/dom/selector_match.c's, which is where the agent's one lxb_selectors_t lives. This
-   file held a second one, so "does this element match this selector" had two implementations that could
-   disagree — and the arena is scratch either way: the match cleans its own pools before it returns. */
+/* LAYER 2 — the AUTHOR cascade, resolved from THE SHEET OBJECTS of the element's root.
+ *
+ * IT USED TO RE-WALK THE `<style>` ELEMENTS AND RE-PARSE THEIR TEXT, AND THAT WAS TWO MECHANISMS DESCRIBING ONE
+ * FACT — the one that answered questions was not the one the page mutated. §6.1's sheets, §6.4's rules and
+ * their §6.6 declaration blocks are the document's style; the elements are where they came FROM. So
+ * `insertRule('p{color:red}')` changed `cssRules` and left `getComputedStyle` alone, `deleteRule` deleted
+ * nothing anybody could see, `rule.selectorText = '#other'` retargeted a rule that still matched the old
+ * selector, `rule.style.color = 'red'` was inert, and `sheet.disabled = true` disabled a sheet that went on
+ * styling the page. Every one of those is now a real change to what the cascade resolves, because the cascade
+ * reads the objects the page holds.
+ *
+ * A SHEET'S TEXT IS REBUILT FROM ITS RULES, not kept beside them. The rules are the authority (css_rule.h: a
+ * rule is TEXT because a lexbor arena has no cross-tier identity), so the sheet's serialization is derived
+ * from them per read and handed to lexbor for the SELECTOR MATCHER — which needs a parsed selector, and which
+ * is the one thing the objects cannot carry. The parse's count is asserted against the rule list's, so a rule
+ * whose stored text does not round-trip crashes here instead of silently shifting every rule after it.
+ *
+ * IT IS REDONE PER READ ON PURPOSE, exactly as the element walk was: a cache would be shared state the flow
+ * machinery does not swap, so a rule one arm inserted would decide another arm's computed values. Reading the
+ * OBJECTS is what makes that per-flow rather than merely uncached — the sheet list is an Array on the root's
+ * wrapper and the rules are an Array on the sheet's record, so both are the running flow's own.
+ *
+ * THE MATCH ITSELF IS core/dom/selector_match.c's, which is where the agent's one lxb_selectors_t lives. This
+ * file held a second one, so "does this element match this selector" had two implementations that could
+ * disagree — and the arena is scratch either way: the match cleans its own pools before it returns. */
+
+/* The sheet's serialization, rebuilt from its RULE OBJECTS, and how many rules went into it. OWNED. */
+static char *cssd_sheet_text(JSContext *ctx, JSValueConst sheet, uint32_t *pn)
+{
+    JSValue rules = css_style_sheet_rules(ctx, sheet);
+    CssBuf out = { 0 };
+    uint32_t n, i;
+
+    {
+        JSValue len = JS_GetPropertyStr(ctx, rules, "length");
+
+        n = 0;
+        JS_ToUint32(ctx, &n, len);
+        JS_FreeValue(ctx, len);
+    }
+    for (i = 0; i < n; i++) {
+        JSValue rule = JS_GetPropertyUint32(ctx, rules, i);
+        size_t sl = 0, bl = 0;
+        char *sel, *block;
+
+        DCHECK(css_rule_is(rule),
+               "a CSS style sheet's rule list holds something that is not a CSS rule — §6.4's insert is the "
+               "only thing that ever puts one in, and it asserts the same premise from the other side");
+        sel = css_rule_selector_text(ctx, rule, &sl);
+        block = css_rule_block_text(ctx, rule, &bl);
+        JS_FreeValue(ctx, rule);
+        /* A rule with NO selector text cannot be serialized into a sheet at all, and there is no partial answer
+           worth giving: an empty prelude would make lexbor drop the rule and every index after it would name a
+           neighbour's declarations, and a `*` stand-in would make the rule match EVERY element. §6.4.3's
+           selector list is non-empty for every rule this build can make — both creators keep only what lexbor
+           accepted as one — so this is the pending-exception path, and the whole sheet is abandoned. */
+        DCHECK(sel != NULL,
+               "a §6.4.3 style rule has no serialized selector list. Both things that write one — the parse in "
+               "css_style_sheet.c and `selectorText =` in css_rule.c — go through cssom_parse_rules and store "
+               "only what lexbor accepted, so an empty one means the string conversion itself failed");
+        if (!sel) {
+            free(block);
+            css_buf_free(&out);
+            JS_FreeValue(ctx, rules);
+            *pn = 0;
+            return NULL;
+        }
+        css_buf_add(&out, sel);
+        css_buf_add(&out, "{");
+        if (block) css_buf_add(&out, block);
+        css_buf_add(&out, "}");
+        free(sel);
+        free(block);
+    }
+    JS_FreeValue(ctx, rules);
+    *pn = n;
+    return out.s;
+}
 
 static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
 {
-    lxb_dom_node_t *self = lxb_dom_interface_node(el), *root, *n;
+    lxb_dom_node_t *self = lxb_dom_interface_node(el);
+    /* THE REALM IS THE ELEMENT'S OWN DOCUMENT'S, never the running one: the sheets hang off the root's WRAPPER,
+       and a wrapper belongs to the realm whose record owns that document. css_length.c's viewport DFAIL asks
+       for the same plumbing from the other end and names this entry. */
+    JSContext *ctx = document_realm_of(self);
     lxb_css_selector_specificity_t best_spec = 0;
     bool best_important = false, have = false;
     char *out = NULL;
+    JSValue sheets;
+    uint32_t ns = 0, si;
 
-    for (root = self; root->parent; root = root->parent) { }
-    for (n = root; n; ) {
-        lxb_char_t *text;
-        size_t tlen = 0;
-        size_t nlen = 0;
-        const lxb_char_t *tag;
+    DCHECK(ctx != NULL,
+           "the author cascade was asked to resolve for an element whose document has NO REALM RECORD — the "
+           "author layer IS §6.2's list of CSS style sheets, which lives on that document's root wrapper, so a "
+           "document nobody built a record for has no author style at all rather than an empty one. Give the "
+           "caller's document a record, or establish that this element cannot reach a computed value");
+    sheets = style_sheet_list_of(ctx, node_root(self));
+    if (!JS_IsArray(sheets)) { JS_FreeValue(ctx, sheets); return NULL; }
+    {
+        JSValue len = JS_GetPropertyStr(ctx, sheets, "length");
 
-        tag = (n->type == LXB_DOM_NODE_TYPE_ELEMENT)
-                  ? lxb_dom_element_local_name(lxb_dom_interface_element(n), &nlen) : NULL;
-        if (tag && nlen == 5 && memcmp(tag, "style", 5) == 0 &&
-            (text = lxb_dom_node_text_content(n, &tlen)) != NULL) {
-            lxb_css_memory_t *smem = lxb_css_memory_create();
-            lxb_css_stylesheet_t *sst = NULL;
-            if (smem && lxb_css_memory_init(smem, 128) == LXB_STATUS_OK) {
-                sst = lxb_css_stylesheet_create(smem);
-                lxb_css_parser_memory_set(g_parser, smem);
-                if (sst && lxb_css_stylesheet_parse(sst, g_parser, text, tlen) != LXB_STATUS_OK) sst = NULL;
-                lxb_css_parser_memory_set(g_parser, NULL);
-                cssd_selectors_intact();
-            }
-            if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST) {
-                lxb_css_rule_t *r;
-                for (r = lxb_css_rule_list(sst->root)->first; r; r = r->next) {
-                    lxb_css_rule_style_t *st = lxb_css_rule_style(r);
-                    lxb_css_selector_specificity_t spec = 0;
-                    lxb_css_rule_t *dr;
-                    if (r->type != LXB_CSS_RULE_STYLE || !st->selector || !st->declarations) continue;
-                    if (!selector_match_node(self, st->selector, &spec)) continue;
-                    for (dr = st->declarations->first; dr; dr = dr->next) {
-                        lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(dr);
-                        char *v;
-                        bool wins;
-                        if (dr->type != LXB_CSS_RULE_DECLARATION) continue;
-                        v = cssd_decl_value_for(d, name);
-                        if (!v) continue;
-                        /* THE CASCADE, in the order §6.4 states it: IMPORTANCE first, then SPECIFICITY, then
-                           document ORDER. Order alone is what this compared at first, which is wrong in the
-                           most ordinary way there is — `#main { display:block }` written before
-                           `div { display:none }` would have lost, and every page puts its general rules last.
-                           selector_match_node reports the specificity that matched; throwing it away and
-                           calling document order "the cascade" was skipping the subproblem. */
-                        wins = !have
-                            || (d->important && !best_important)
-                            || (d->important == best_important && spec >= best_spec);
-                        if (!wins) { free(v); continue; }
-                        free(out);
-                        out = v;
-                        best_spec = spec;
-                        best_important = d->important;
-                        have = true;
-                    }
+        JS_ToUint32(ctx, &ns, len);
+        JS_FreeValue(ctx, len);
+    }
+    for (si = 0; si < ns; si++) {
+        JSValue sheet = JS_GetPropertyUint32(ctx, sheets, si);
+        lxb_css_memory_t *smem;
+        lxb_css_stylesheet_t *sst = NULL;
+        uint32_t nrules = 0;
+        char *text;
+
+        DCHECK(css_style_sheet_is(sheet),
+               "§6.2's list holds something that is not a CSS style sheet — its add is the one thing that ever "
+               "puts one in");
+        /* §6.1.1's DISABLED FLAG, which is what it is FOR: "the disabled attribute ... whether the style sheet
+           is applied". `sheet.disabled = true` and `<style disabled>`'s forwarding both land here, and until
+           the cascade read the objects neither could do anything at all. */
+        if (css_style_sheet_disabled(sheet)) { JS_FreeValue(ctx, sheet); continue; }
+        text = cssd_sheet_text(ctx, sheet, &nrules);
+        JS_FreeValue(ctx, sheet);
+        if (!text) continue;                       /* a sheet with no rules declares nothing */
+        smem = lxb_css_memory_create();
+        if (smem && lxb_css_memory_init(smem, 128) == LXB_STATUS_OK) {
+            sst = lxb_css_stylesheet_create(smem);
+            lxb_css_parser_memory_set(g_parser, smem);
+            if (sst && lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)text,
+                                                strlen(text)) != LXB_STATUS_OK)
+                sst = NULL;
+            lxb_css_parser_memory_set(g_parser, NULL);
+            cssd_selectors_intact();
+        }
+        if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST) {
+            lxb_css_rule_t *r;
+            uint32_t back = 0;
+
+            for (r = lxb_css_rule_list(sst->root)->first; r; r = r->next) {
+                lxb_css_rule_style_t *st = lxb_css_rule_style(r);
+                lxb_css_selector_specificity_t spec = 0;
+                lxb_css_rule_t *dr;
+
+                back++;
+                if (r->type != LXB_CSS_RULE_STYLE || !st->selector || !st->declarations) continue;
+                if (!selector_match_node(self, st->selector, &spec)) continue;
+                for (dr = st->declarations->first; dr; dr = dr->next) {
+                    lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(dr);
+                    char *v;
+                    bool wins;
+                    if (dr->type != LXB_CSS_RULE_DECLARATION) continue;
+                    v = cssd_decl_value_for(d, name);
+                    if (!v) continue;
+                    /* THE CASCADE, in the order §6.4 states it: IMPORTANCE first, then SPECIFICITY, then
+                       document ORDER. Order alone is what this compared at first, which is wrong in the
+                       most ordinary way there is — `#main { display:block }` written before
+                       `div { display:none }` would have lost, and every page puts its general rules last.
+                       selector_match_node reports the specificity that matched; throwing it away and
+                       calling document order "the cascade" was skipping the subproblem. */
+                    wins = !have
+                        || (d->important && !best_important)
+                        || (d->important == best_important && spec >= best_spec);
+                    if (!wins) { free(v); continue; }
+                    free(out);
+                    out = v;
+                    best_spec = spec;
+                    best_important = d->important;
+                    have = true;
                 }
             }
-            /* THE ARENA IS THE ONE OWNER, and it is freed outright. This used to read
-               `lxb_css_stylesheet_destroy(sst, true)` under a comment saying that "takes its arena with it",
-               and it does not: `lxb_css_stylesheet_create` REF-INCREMENTS the memory it is handed (to 2, since
-               `lxb_css_memory_init` starts it at 1) and that destroy only ref-DECREMENTS (back to 1), so the
-               arena — the stylesheet, every rule, every selector and every string in it — was never freed at
-               all. One leaked arena per `<style>` element per read, which the ancestor walks then multiplied by
-               the depth of the chain. The stylesheet, its rules and its selectors are all allocated FROM this
-               arena, so destroying the arena is what releases them; nothing here outlives it (every value this
-               function keeps is copied out with strdup). */
-            if (smem) lxb_css_memory_destroy(smem, true);
-            lxb_dom_document_destroy_text(n->owner_document, text);
+            /* THE ROUND TRIP IS ASSERTED, NOT ASSUMED. Every rule the list holds was serialized into `text` and
+               must come back as exactly one rule: a count that disagrees means a stored selector or block no
+               longer re-parses as what produced it, and the silent version of that is every rule after the
+               offender matching under a neighbour's selector. */
+            DCHECK(back == nrules,
+                   "a CSS style sheet's rules did not ROUND-TRIP: the rule objects serialized to a text that "
+                   "parses back to a different number of rules. A rule holds the SERIALIZATION lexbor produced "
+                   "for it, so re-parsing it must yield exactly what it came from — find which rule's text "
+                   "does not, and fix the serializer that wrote it rather than tolerating the drift");
         }
-        /* A pre-order walk over the flow's own tree, with an explicit cursor — the same reason every walk in
-           node.c has one: the depth is the page's, so a recursive one is an unbounded C stack. */
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n && !n->next) n = (n == root) ? NULL : n->parent;
-        n = n ? n->next : NULL;
+        /* THE ARENA IS THE ONE OWNER, and it is freed outright. `lxb_css_stylesheet_create` REF-INCREMENTS the
+           memory it is handed (to 2, since `lxb_css_memory_init` starts it at 1) and `lxb_css_stylesheet_destroy`
+           only ref-DECREMENTS (back to 1), so that destroy frees nothing at all — one leaked arena per sheet per
+           read, which the ancestor walks then multiply by the depth of the chain. The stylesheet, its rules and
+           its selectors are all allocated FROM this arena, so destroying the arena is what releases them;
+           nothing here outlives it (every value this function keeps is copied out). */
+        if (smem) lxb_css_memory_destroy(smem, true);
+        free(text);
     }
+    JS_FreeValue(ctx, sheets);
     return out;
 }
 
