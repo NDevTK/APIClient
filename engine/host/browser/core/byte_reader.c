@@ -18,12 +18,14 @@
  * Performed with a JS_Call from C it would run in an activation with no flow base, so a loop in that getter
  * would drive to completion. The resolving function is a CALL REQUEST instead, and the read happens on the tramp
  * where it can suspend and fork. */
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/byte_reader.h"
+#include "core/encoding/encoding.h"   /* §6's UTF-8 decode — what BOTH specs' `text()` and `json()` name */
 #include "core/streams/readable_stream.h"
 
 /* HOW MANY READERS ONE INTERFACE CAN DECLARE. Fetch declares five and File API three, so the ceiling is a
@@ -249,17 +251,44 @@ void byte_reader_install(JSContext *ctx, JSValueConst proto, int handle)
 
 JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
-    /* UTF-8 decode, which is what JS_NewStringLen performs over the host's bytes. */
+    /* Fetch §5.2 / File API §3.3.3: "run consume body with this and UTF-8 decode" — ENCODING §6's UTF-8 decode,
+       which is a named algorithm and not a synonym for whatever the host's string constructor does. This read
+       `JS_NewStringLen`, and quickjs's decoder is not that algorithm in either direction: cutils.h converts an
+       encoding error to U+FFFD "and uses a single byte" (Encoding consumes the whole maximal subpart) and it
+       "accepts UTF-8 encoded surrogates as JavaScript allows them in strings" (Encoding answers U+FFFD). It
+       also does not run §6's step 2, the three-byte peek that DROPS a leading UTF-8 BOM, so `res.text()` on a
+       BOM'd body answered a string starting U+FEFF. The difference was invisible while the body reaching this
+       reader was itself the output of a decode; it is not invisible now that a body is bytes. */
+    char *text;
+    size_t n = 0;
+    JSValue out;
+
     (void)recv;
-    return JS_NewStringLen(ctx, bytes, len);
+    text = encoding_utf8_decode(bytes, len, &n);
+    CHECK(text != NULL, "byte reader: OOM running §6's UTF-8 decode over a body");
+    out = JS_NewStringLen(ctx, text, n);
+    free(text);
+    return out;
 }
 
 JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
-    /* The REAL parser, so a malformed body rejects with the SyntaxError the page would actually catch rather
-       than a placeholder this engine invented. */
+    /* Fetch §5.2's `json()` is "run consume body with this and parse JSON from bytes", and Infra's parse JSON
+       FROM BYTES is TWO steps: "let string be the result of running UTF-8 decode on bytes", then parse JSON
+       from string. Handing the bytes straight to the parser ran quickjs's lenient decoder instead, so a body
+       whose bytes are not well-formed UTF-8 parsed as something Encoding's decoder would have replaced.
+       The REAL parser runs on the decoded string, so a malformed body rejects with the SyntaxError the page
+       would actually catch rather than a placeholder this engine invented. */
+    char *text;
+    size_t n = 0;
+    JSValue out;
+
     (void)recv;
-    return JS_ParseJSON(ctx, bytes, len, "<body>");
+    text = encoding_utf8_decode(bytes, len, &n);
+    CHECK(text != NULL, "byte reader: OOM running §6's UTF-8 decode over a body before parsing it");
+    out = JS_ParseJSON(ctx, text, n, "<body>");
+    free(text);
+    return out;
 }
 
 /* A COPY, for both of these, because what the page gets is ITS OWN to detach, transfer or write through —

@@ -5,9 +5,13 @@
  * JS/JSON a server returns is the richest source of real example values." The host had that reading spread over
  * `extension/lib/response-decode.js`, `lib/protocol-parsers.js` and `lib/protobuf.js` — jsaudit step 2 names
  * THIS FILE as what all three become — and `extension/lib/discovery.js` (step 1) held two of their callees: the
- * magic-byte classifier and the React Flight parser. The classifier moved to its own standard
- * (core/mime/mime_sniff.c, WHATWG MIME Sniffing); the Flight parser is here, because a wire protocol's framing
- * is what this component is for.
+ * magic-byte classifier and the React Flight parser. The classifier became its own standard
+ * (core/mime/mime_sniff.c, WHATWG MIME Sniffing) — and that standard is the NETWORK SERVICE'S, so this file
+ * does not call it: §7 sniffs bytes, CORB gates on the result, and a renderer that sniffs for itself can mine a
+ * cross-origin body a real renderer would never have been shown. What this file asks instead is Fetch §4's
+ * extract a MIME type, the server's own STATEMENT, which the renderer legitimately parses because the same
+ * record is what `Blob.type` and `accept` matching are read off. The Flight parser is here, because a wire
+ * protocol's framing is what this component is for.
  *
  * WHERE IT IS CALLED FROM, AND WHY THERE. `engine_provide` is the ONE point every fetched reply crosses exactly
  * once — a URL two flows parked on is answered there once — so a reply is read for its content beside

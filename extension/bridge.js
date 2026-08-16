@@ -391,7 +391,15 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   const M = await createQJS({ print: sink, printErr: errsink, noInitialRun: true });
   const ptrs = [];
   const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
-  const arg = (s) => { const p = cstr(s); ptrs.push(p); return p; };
+  /* THE SAME PLACEMENT FOR BYTES, and it is not a second kind of argument — `stringToUTF8` is an ENCODE, so
+     both spellings put UTF-8 bytes at an address and neither DECODES anything. A document reaches qjs_init
+     one of two ways and they differ in what the browser already did: content.js ships a SERIALIZED DOM (the
+     renderer parsed the response and this is its characters, so they are encoded here), while a child
+     navigable's document is the response's own BYTES off safeFetch (so they are placed unchanged). Decoding
+     the second into a string on the way would be this zone running HTML §13.2.3.2's encoding sniffing —
+     badly, as UTF-8 — which is the defect this whole change removes from the fetch path. */
+  const cbytes = (b) => { const p = M._malloc(b.length + 1); M.HEAPU8.set(b, p); M.HEAPU8[p + b.length] = 0; return p; };
+  const arg = (s) => { const p = (s instanceof Uint8Array) ? cbytes(s) : cstr(s); ptrs.push(p); return p; };
   // PHASE 1 — parse + boot; the engine computes the stable bundle IDENTITY from its Lexbor <script> scan.
   /* THE WHOLE RESPONSE HEADER LIST CROSSES, not one header out of it. This used to pull
      `content-security-policy` out of the map and hand the engine that single string, and three things HTML
@@ -444,6 +452,17 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   /* qjs_init ANSWERS, and this discarded the answer. Its C body is a wall of CHECKs whose failures abort the
      instance, so the only value it can return is 0 — which is exactly why reading it costs nothing and why a
      non-zero would be an entry that started reporting a failure this zone was not listening for. */
+  /* qjs_init TAKES THE DOCUMENT AS A NUL-TERMINATED C STRING and `strlen`s it, so a document whose bytes
+     contain a 0x00 is parsed truncated at it — silently, with the rest of the page simply absent. HTML
+     §13.2.5's tokenizer has a rule for that byte (it emits U+FFFD), which is the proof it is a byte a document
+     may legitimately contain. What to build is the LENGTH beside the pointer, the way qjs_provide now carries
+     one, and with it §13.2.3.2's encoding sniffing algorithm so that the document's own encoding is decided by
+     the engine rather than assumed to be UTF-8. */
+  DCHECK(!(html instanceof Uint8Array) || html.indexOf(0) < 0,
+         "a fetched document's bytes contain a 0x00 and qjs_init takes a NUL-terminated C string — the parse " +
+         "would stop there and the rest of the document would be absent with nothing to say so. Give qjs_init " +
+         "a LENGTH beside the pointer (qjs_provide now carries one) and run HTML §13.2.3.2's encoding " +
+         "sniffing over those bytes in the engine");
   const _initrc = M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number"],
     [arg(html || ""), arg((msg && msg.sourceUrl) || ""), arg(_docId), arg(_headers), arg(_tlu)]);
   DCHECK(_initrc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
@@ -491,12 +510,21 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   }
   const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
   /* THE REPLY RECORD THE ENGINE PARSES, which is the ONE shape every host of this engine delivers —
-     `{status, statusText, headers: [[name, value], …], body, urlList}`, the same record the C hosts build with
-     fetch_reply_new. It used to hand back the BODY'S BYTES alone, so everything this zone had actually seen was
-     dropped at this line and re-invented on the other side: the engine reported status 200, status message
-     "OK", no headers, and — because Fetch §2.2.6's URL LIST is what `response.url` and `response.redirected`
-     are — no redirect, ever, for any reply. `null` is a NETWORK ERROR (the engine rejects with §5.6's
-     TypeError), which is what a URL this zone must not or cannot fetch honestly is; it is NOT an empty 200. */
+     `{status, statusText, headers: [[name, value], …], urlList}` PLUS the body's BYTES beside it, the same
+     record the C hosts build with fetch_reply_new. It used to hand back the BODY'S BYTES alone, so everything
+     this zone had actually seen was dropped at this line and re-invented on the other side: the engine reported
+     status 200, status message "OK", no headers, and — because Fetch §2.2.6's URL LIST is what `response.url`
+     and `response.redirected` are — no redirect, ever, for any reply. `null` is a NETWORK ERROR (the engine
+     rejects with §5.6's TypeError), which is what a URL this zone must not or cannot fetch honestly is; it is
+     NOT an empty 200.
+     THE BODY IS NOT IN THE RECORD, AND THAT IS THE POINT. §2.2.5 makes a response's body a BYTE SEQUENCE, and
+     JSON cannot carry one: `JSON.stringify` on a Uint8Array answers `{"0":72,"1":101,…}` — a plausible record
+     whose body is not the body. The only ways to put bytes in JSON are to encode them (base64: a CODEC on both
+     sides to get wrong, 4/3 on the wire for bodies that are whole JS bundles, and a second copy of the
+     expanded text held by the parse) or to DECODE them, which is what `resp.text()` was doing and is the whole
+     defect — a UTF-8 decode run in the zone that owns SOP/CORS and owns no semantics, before HTML §8.1.4.2's
+     own decode could look at the charset the response declared. So the record travels as text and the bytes
+     travel as bytes, copied straight into the engine's linear memory. */
   const fetched = async (u, asScript) => {
     if (!canFetch || hasHole(u)) return null;
     try {
@@ -523,10 +551,13 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
          on every path it has, including every blocked one. `if (!r || typeof r.body !== "string") return null`
          was a malformed answer being turned into a NETWORK ERROR, which is a real Fetch outcome the engine
          acts on: the page's request would report as having failed on the wire when what actually happened is
-         that this zone's own chokepoint answered something it never answers. */
-      DCHECK(r && typeof r === "object" && typeof r.body === "string" && typeof r.status === "number",
+         that this zone's own chokepoint answered something it never answers.
+         AND THE BODY IS BYTES, asserted rather than assumed: a string here is safeFetch back to running Fetch
+         §5.2's `text()`, which no assert further down could ever have caught — the bytes it disagrees with
+         would already be gone. */
+      DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number",
              "safeFetch answered with something other than its reply record — the engine builds a Response " +
-             "out of this and a page reads status/headers/body off it");
+             "out of this and a page reads status/headers/body off it, and §2.2.5's body is a BYTE SEQUENCE");
       /* §2.2.6's URL list, straight from the chokepoint that performed the fetch. safeFetch always reports at
          least the URL it requested — §4.1's "If internalResponse's URL list is empty, then set it to a clone of
          request's URL list" — and the engine DCHECKs that at both ends, so an empty one is a bug here rather
@@ -542,8 +573,12 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
          zone must not or cannot fetch honestly is» — names that case, and the record was crossing anyway: the
          page saw a real reply whose status was a number no server returns, instead of §5.6's TypeError. */
       if (r.status === 0) return null;
-      return { status: r.status, statusText: r.statusText || "", headers: Object.entries(r.headers),
-               body: r.body, urlList: r.urlList };
+      /* TWO PIECES OF ONE REPLY, because they cross on two channels — `meta` is the JSON qjs_provide parses
+         and `bytes` is what it copies into the engine's heap beside it. They are handed over together so a
+         caller cannot deliver one without the other. */
+      return { meta: { status: r.status, statusText: r.statusText || "", headers: Object.entries(r.headers),
+                       urlList: r.urlList },
+               bytes: r.body };
     } catch (e) {
       /* A THROWN fetch IS §5.6's network error and `null` is how it crosses. AN INVARIANT ABORT IS NOT: the
          asserts above throw through this same catch, and returning null for one would deliver a broken host
@@ -555,24 +590,29 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   // §7.4 STEP 14's RESPONSE, which is the SAME safeFetch and a DIFFERENT answer: a Document is judged against
   // the policy its response carried, so the header travels with the bytes. `fetched` above cannot serve this —
   // it returns the body alone, and answering a child document with no policy is how a page whose CSP kills a
-  // sink gets reported as exploitable. A load that does not load is `{body:null}`, which is a navigable that
-  // still exists showing an error page, exactly as the engine's own child_document reads it.
+  // sink gets reported as exploitable. A load that does not load answers `bytes: null`, which is a navigable
+  // that still exists showing an error page, exactly as the engine's own child_document reads it.
   const fetchedDocument = async (u) => {
-    if (!canFetch) return { body: null, csp: null };
+    if (!canFetch) return { csp: null, bytes: null };
     try {
       const abs = new URL(u, msg.sourceUrl).href;
       // Never `as:"script"` — these bytes are PARSED as a document, not run as code — and never credentialed:
       // §7.4's fetch is a navigation this engine initiated, not a learned GET being replayed for its reply.
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl });
-      DCHECK(r && typeof r === "object" && typeof r.body === "string" && r.headers && typeof r.headers === "object",
+      DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
              "safeFetch answered a document load with something other than its reply record — §7.4 step 14 " +
              "reads the BODY and the POLICY off it, and a Document judged under no policy is how a page whose " +
              "CSP kills a sink gets reported as exploitable");
       /* NOT OK IS A LOAD THAT DID NOT LOAD — the navigable still exists and shows an error page, which is what
-         `{body:null}` means to the engine's child_document. That is a real §7.4 outcome, not a softening. */
-      if (!r.ok) return { body: null, csp: null };
-      return { body: r.body, csp: r.headers["content-security-policy"] || null };
-    } catch (e) { RETHROW_FATAL(e); return { body: null, csp: null }; }
+         a null body means to the engine's child_document. That is a real §7.4 outcome, not a softening. */
+      if (!r.ok) return { csp: null, bytes: null };
+      /* THE BYTES, because a Document is PARSED from a byte sequence. This answered `r.body` while that was
+         `resp.text()`'s UTF-8 decode, so a document served in any other encoding reached lexbor already
+         replaced with U+FFFD and HTML §13.2.3.2's encoding sniffing — the BOM, then the transport charset,
+         then §13.2.3.3's prescan — had nothing left to decide. The engine owes that algorithm; this zone owes
+         it the bytes. */
+      return { csp: r.headers["content-security-policy"] || null, bytes: r.body };
+    } catch (e) { RETHROW_FATAL(e); return { csp: null, bytes: null }; }
   };
   /* THE ROUTING TABLE IS THE POOL. `docId` is which document this instance holds and `origin` is the value
      this zone stamps on everything it sends — both are read only by the notice router below, which is the
@@ -592,8 +632,8 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
     DCHECK(q && typeof q === "object" && typeof q.url === "string" && q.url,
            "the engine's xhr.send record names no URL — the chokepoint decides SOP, CORS, method and " +
            "credentials, and cannot decide about a request it was never told");
-    if (!q || typeof q.url !== "string") return { body: null, status: 0, statusText: "", headers: [] };
-    if (!canFetch) return { body: null, status: 0, statusText: "", headers: [] };
+    if (!q || typeof q.url !== "string") return { meta: { body: null, status: 0, statusText: "", headers: [] }, bytes: null };
+    if (!canFetch) return { meta: { body: null, status: 0, statusText: "", headers: [] }, bytes: null };
     try {
       const abs = new URL(q.url, msg.sourceUrl).href;
       /* @security-finding  THREE OF THESE FOUR ARGUMENTS ARE NOT READ BY THE CHOKEPOINT, AND ITS REFUSAL IS
@@ -609,17 +649,22 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
          safeFetch's "analyzer probe headers only" comment is no longer the whole truth. */
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, method: q.method, headers: q.headers,
                                             body: q.body, credentials: q.credentials });
-      DCHECK(r && typeof r === "object" && typeof r.body === "string" && typeof r.status === "number" &&
+      DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",
              "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
-             "built from it and the page reads status, statusText and every header off that");
-      return { body: r.body, status: r.status, statusText: r.statusText || "",
-               headers: Object.entries(r.headers) };
+             "built from it and the page reads status, statusText and every header off that, and §2.2.5's " +
+             "body is a BYTE SEQUENCE");
+      /* THE BYTES BESIDE THE RECORD, for the reason `fetched` states: §3.6.6's "get a text response" DECODES
+         the received bytes with the FINAL encoding, and until those bytes crossed as bytes that algorithm was
+         decoding a re-encoding of this zone's own UTF-8 guess. `responseType = "arraybuffer"` handed the page
+         the same round trip in place of the server's bytes. */
+      return { meta: { status: r.status, statusText: r.statusText || "", headers: Object.entries(r.headers) },
+               bytes: r.body };
     } catch (e) {
       /* §3.5.6's "handle errors": a THROWN fetch is the network error that becomes the page's `error` event.
          An invariant abort is not one and travels on. */
       RETHROW_FATAL(e);
-      return { body: null, status: 0, statusText: "", headers: [] };
+      return { meta: { body: null, status: 0, statusText: "", headers: [] }, bytes: null };
     }
   };
   /* THE PRINCIPAL IS BROWSER-STATED, NEVER PARSED OFF THE ADDRESS. This read `originOf(msg.sourceUrl)`, and a
@@ -662,17 +707,53 @@ function engineWeight(eng) {
                              "array order and call it value-of-information");
   return w;
 }
+/* A BODY INTO THE ENGINE'S OWN LINEAR MEMORY, which is the only place a WASM instance can read bytes from.
+   `null` is "this answer carries no body at all" — a network error, a load that did not load — and it is a
+   POSITIVE statement the C entry reads as one rather than a hole: `qjs_provide`/`qjs_host_answer` assert that
+   a null pointer arrives with a zero length, and `fetch_reply_set_body` asserts the JSON did not also carry a
+   decoded body. Answers [ptr, len]; the caller FREES the pointer, because the engine copies the bytes onto its
+   own heap (an ArrayBuffer the flow's Response, script decode or XHR reads) and does not adopt this block.
+   The one extra byte is so a zero-length body still has an address of its own: `_malloc(0)` may answer 0, and 0
+   is what the C entry reads as "no body at all", which a 204 is not. */
+function engineBodyBytes(M, bytes) {
+  if (bytes === null || bytes === undefined) return [0, 0];
+  DCHECK(bytes instanceof Uint8Array,
+         "a reply body reached the engine edge as something other than a byte sequence — §2.2.5 makes a body " +
+         "one, safeFetch answers one, and anything else here is a zone that ran a decode the engine owns");
+  const p = M._malloc(bytes.length + 1);
+  /* CHECK AND NOT DCHECK: an allocation failure is CLAUDE.md's named always-fatal case, and the work item
+     dropped here is the reply a suspended flow is waiting on — in release as much as in dev. */
+  CHECK(p !== 0, "OOM copying a fetched body into the engine's linear memory — the flow parked on this reply " +
+                 "would resume reading a successful response with nothing in it");
+  M.HEAPU8.set(bytes, p);
+  return [p, bytes.length];
+}
+/* ONE DELIVERY, both channels, so no call site can carry the record and forget the bytes. `r` is what
+   `fetched` answered: `null` for §5.6's network error (the JSON `null` the engine rejects with a TypeError),
+   or `{meta, bytes}`. */
+function engineProvide(M, url, r) {
+  DCHECK(r === null || (r && typeof r === "object" && r.meta && r.bytes instanceof Uint8Array),
+         "`fetched` answered neither §5.6's network error (null) nor a reply — a reply is its JSON metadata " +
+         "and its BYTES together, and a record arriving without one of the two is half a response");
+  const [p, n] = engineBodyBytes(M, r && r.bytes);
+  try { M.ccall("qjs_provide", "void", ["string", "string", "number", "number"],
+                [url, JSON.stringify(r === null ? null : r.meta), p, n]); }
+  finally { if (p) M._free(p); }
+}
 async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
   const M = eng.M;
-  /* THE REPLY CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer does. A bare
-     string could not say `null` for a network error without it being the four characters "null", and could not
-     carry the URL list, the status or the headers at all. */
+  /* THE REPLY'S METADATA CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer
+     does. A bare string could not say `null` for a network error without it being the four characters "null",
+     and could not carry the URL list, the status or the headers at all. Its BODY crosses as BYTES beside it,
+     because JSON can say none of the 256 values a byte has without first running an algorithm over them, and
+     the algorithm this zone used to run (Fetch §5.2's `text()`, a UTF-8 decode) destroyed exactly the evidence
+     HTML §8.1.4.2's classic-script decode exists to read. */
   const replies = engineOwedList(M, "qjs_pending");
   for (const u of replies)
-    M.ccall("qjs_provide", "void", ["string", "string"], [u, JSON.stringify(await eng.fetched(u, false))]);
+    engineProvide(M, u, await eng.fetched(u, false));
   const chunks = engineOwedList(M, "qjs_chunks");
   for (const u of chunks)
-    M.ccall("qjs_provide", "void", ["string", "string"], [u, JSON.stringify(await eng.fetched(u, true))]);
+    engineProvide(M, u, await eng.fetched(u, true));
   await engineServiceHostRequests(eng);
 }
 /* EVERY OWED LIST CROSSES THE SAME WAY — newline-joined records, or "" for none — so it is read in one place
@@ -755,7 +836,15 @@ async function hostNotice(eng, line) {
        `noopener` severed it. So the child's cluster key is (creator's group, the origin of the URL this zone
        fetched) — which is what makes two cross-origin children of ONE page at the SAME origin one cluster, the
        way HTML says they are, instead of two heaps for a pair that can script each other. */
-    const msg = { type: "AST_ANALYZE", pageHtml: (loaded && loaded.body) || "", sourceUrl: f[3],
+    /* THE CHILD'S DOCUMENT, AS BYTES. `(loaded && loaded.body) || ""` was a defaulted read of a producer's
+       field — and the field it defaulted was a STRING this zone had decoded, so a cross-origin child served in
+       any encoding but UTF-8 was provisioned from a document already replaced with U+FFFD. The bytes go
+       through `arg` unchanged (see engineCreate); a load that did not load carries none, and the empty byte
+       sequence is the `about:blank`-shaped document the engine's own child_document builds for one. */
+    DCHECK(loaded && (loaded.bytes === null || loaded.bytes instanceof Uint8Array),
+           "the document load answered neither bytes nor the null that means it did not load");
+    const _childBytes = loaded.bytes === null ? new Uint8Array(0) : loaded.bytes;
+    const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: f[3],
                   origin: originOf(f[3]), groupId: eng.groupId,
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* THE POLICY IS THE RESPONSE'S, AND THE CREATOR'S CLONE IS THE FALLBACK — §7.2.6/§7.4 in the order the
@@ -938,15 +1027,28 @@ async function engineServiceHostRequests(eng) {
       // zone fetched bytes rather than running another instance's program, so it has nothing to have thrown
       // in. A relayed cross-agent operation answers with 1 and the thrown value, which is what lets the
       // asking page's `try`/`catch` around it run.
-      M.ccall("qjs_host_answer", "void", ["number", "string", "number"], [id, JSON.stringify(r), 0]);
+      engineAnswer(M, id, r.meta, r.bytes);
       continue;
     }
     if (!op.startsWith("document.fetch\t")) continue;
     const r = await eng.fetchedDocument(op.slice("document.fetch\t".length));
-    // JSON, because the answer carries its TYPE across this seam: `{body:null}` is a load that did not load,
-    // and the string "null" is a one-word document.
-    M.ccall("qjs_host_answer", "void", ["number", "string", "number"], [id, JSON.stringify(r), 0]);
+    // JSON, because the answer carries its TYPE across this seam: a null body is a load that did not load, and
+    // the string "null" is a one-word document. The BODY is not in that JSON — a Document is parsed from a
+    // BYTE SEQUENCE, and this seam carries one (see engineBodyBytes).
+    engineAnswer(M, id, { csp: r.csp }, r.bytes);
   }
+}
+/* THE SAME TWO CHANNELS FOR A SYNCHRONOUS ANSWER. Two of the requests this zone can genuinely answer carry a
+   fetched BODY — XHR §3.5.6's fetch and §7.4 step 14's document load — and a body is a byte sequence for the
+   same reason a reply's is. `bytes === null` says this answer has none, which is what every other request kind
+   is: an answer that is a number or a document NAME has no bytes beside it. The trailing 0 is ECMA-262 6.2.4's
+   NORMAL completion — this zone fetched bytes rather than running another instance's program, so it has
+   nothing to have thrown in. */
+function engineAnswer(M, id, meta, bytes) {
+  const [p, n] = engineBodyBytes(M, bytes);
+  try { M.ccall("qjs_host_answer", "void", ["number", "string", "number", "number", "number"],
+                [id, JSON.stringify(meta), 0, p, n]); }
+  finally { if (p) M._free(p); }
 }
 function engineFinalize(eng) {
   /* ASK THE ENGINE FOR ITS RESULT — the ABI entry that exists for exactly this and had NO CALLER anywhere in

@@ -36,8 +36,29 @@
 // over-restrictive `connect-src` — the CSP must allow https:/http:.
 //
 // Returns a plain object { ok, status, statusText, headers (lowercased), body
-// (text), urlList } — NOT a Response — so it is identical in the offscreen document
-// and the Worker.
+// (BYTES — a Uint8Array), urlList } — NOT a Response — so it is identical in the
+// offscreen document and the Worker.
+//
+// THE BODY IS BYTES, AND THAT IS A LAYERING RULE RATHER THAN A TYPE PREFERENCE.
+// It was `await resp.text()`, which is Fetch §5.2's `text()`: "run consume body
+// with this and UTF-8 DECODE". A decode is a SEMANTIC, and CLAUDE.md §Architecture
+// puts every semantic in the C engine and leaves this zone a BRIDGE, never logic —
+// so this chokepoint was running an algorithm that is not its, and running the
+// WRONG one: UTF-8 always, the response's charset ignored. HTML §8.1.4.2's "fetch a
+// classic script" says "let sourceText be the result of DECODING bodyBytes to
+// Unicode, using encoding as the fallback encoding", whose whole point is that the
+// `Content-Type` charset (Fetch §3.5's legacy extract an encoding) and a BOM decide
+// the decoder; the engine implements exactly that in core/loader/script_fetch.c, and
+// it was being handed bytes that algorithm's label had never touched. A
+// `charset=windows-1252` chunk arrived pre-mangled and there was no assert anywhere
+// downstream that could ever have caught it — the evidence was destroyed in
+// TRANSIT, so what the engine saw was a plausible string.
+// Nothing about the SECURITY invariants moves with it: SOP/CORS/PNA/method/
+// credentials are decided from the URL, the principal and the headers and never from
+// the body, and the one check that does read the body — CORB's sniff below — still
+// runs here, on these bytes, at the same point in this function. It decodes what it
+// needs for its own comparison, which is a check reading its evidence rather than a
+// transform applied to what crosses.
 // urlList is Fetch §2.2.6's RESPONSE URL LIST, and this is the ONLY zone that can
 // report it: the redirect chain exists here and nowhere else. §5.5 defines
 // `response.url` as its LAST item and `response.redirected` as "its size is greater
@@ -71,12 +92,17 @@ function _corbProtectedMime(m) {
     /\+xml$/.test(m) || m === "application/json" || /\+json$/.test(m) ||
     /^multipart\//.test(m);
 }
-function _sniffsProtected(s) {
-  var h = String(s == null ? "" : s).slice(0, 4096).replace(/^﻿/, "");
-  h = h.replace(/^\s+/, "");
+// CORB's own sniff, over BYTES — the check decoding the evidence it judges, which is
+// what Chrome's ORB does too (it attempts a JSON parse of the body). The head is
+// decoded first and the whole body only in the branch that actually needs it, so a
+// multi-megabyte JS chunk (which starts with none of `<`, `{`, `[`) costs one 4 KiB
+// decode rather than a full one.
+function _sniffsProtected(bytes) {
+  var dec = new TextDecoder("utf-8");   // strips a UTF-8 BOM, exactly as resp.text() did
+  var h = dec.decode(bytes.subarray(0, 4096)).replace(/^﻿/, "").replace(/^\s+/, "");
   if (h.charAt(0) === "<") return true; // HTML/XML/SVG/markup
   if (h.charAt(0) === "{" || h.charAt(0) === "[") {
-    try { JSON.parse(s); return true; } catch (e) {
+    try { JSON.parse(new TextDecoder("utf-8").decode(bytes)); return true; } catch (e) {
       try { JSON.parse(h); return true; } catch (_) {}
     }
   }
@@ -89,6 +115,10 @@ function _sniffsProtected(s) {
 // anything — not even another "null". A real origin is the only form containing
 // "://"; "null" / "" / "null:<uuid>" do not, so this one test distinguishes them.
 function _isRealOrigin(o) { return typeof o === "string" && o.indexOf("://") > 0; }
+// The EMPTY byte sequence, which is what every blocked path's body is. It is not the
+// empty STRING: a caller that must tell "no bytes" from "bytes I cannot read" reads
+// `ok`/`status`, and a body is one type on every path this function has.
+function _NO_BYTES() { return new Uint8Array(0); }
 function _corbAllowsScript(mime, nosniff, body, scriptUrl, pageOrigin) {
   mime = String(mime || "").split(";")[0].trim().toLowerCase();
   var cross = true;
@@ -186,10 +216,10 @@ async function safeFetch(url, opts) {
   try { parsed = new URL(String(url)); }
   // No URL at all, so there is no URL list either — « » is the honest report, and
   // the engine's `response.url` is then the empty string the spec names for it.
-  catch (e) { return { ok: false, status: 0, statusText: "bad-url", headers: {}, body: "", urlList: [] }; }
+  catch (e) { return { ok: false, status: 0, statusText: "bad-url", headers: {}, body: _NO_BYTES(), urlList: [] }; }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:")
-    return { ok: false, status: 0, statusText: "blocked-scheme:" + parsed.protocol, headers: {}, body: "",
-             urlList: [parsed.href] };
+    return { ok: false, status: 0, statusText: "blocked-scheme:" + parsed.protocol, headers: {},
+             body: _NO_BYTES(), urlList: [parsed.href] };
   // Origin-relative SSRF (see header). The PRINCIPAL is the analyzed PAGE's origin,
   // passed PER CALL as opts.pageUrl — NOT a shared global: two grinds run
   // concurrently in one worker, so a worker-global principal would let one page's
@@ -202,8 +232,8 @@ async function safeFetch(url, opts) {
   var _pageHost = ""; try { if (_po) _pageHost = new URL(_po).hostname; } catch (e) {}
   var _pagePrivate = _isPrivateHost(_pageHost);
   if (_isPrivateHost(parsed.hostname) && !_pagePrivate)
-    return { ok: false, status: 0, statusText: "blocked-private-from-public", headers: {}, body: "",
-             urlList: [parsed.href] };
+    return { ok: false, status: 0, statusText: "blocked-private-from-public", headers: {},
+             body: _NO_BYTES(), urlList: [parsed.href] };
   // opts.credentialed: replay a learned GET with the user's COOKIES to fetch the REAL
   // authenticated reply (the logged-in API surface), instead of a useless 401. Still
   // GET-only (method is forced below) so a well-designed server performs no account
@@ -224,12 +254,19 @@ async function safeFetch(url, opts) {
   // request itself for extension fetches; this stops the data from being ingested.)
   try {
     if (resp.url && _isPrivateHost(new URL(resp.url).hostname) && !_pagePrivate)
-      return { ok: false, status: 0, statusText: "blocked-private-redirect", headers: {}, body: "",
-               urlList: [parsed.href] };
+      return { ok: false, status: 0, statusText: "blocked-private-redirect", headers: {},
+               body: _NO_BYTES(), urlList: [parsed.href] };
   } catch (e) {}
   var headers = {};
   try { resp.headers.forEach(function (v, k) { headers[String(k).toLowerCase()] = v; }); } catch (e) {}
-  var body = await resp.text();
+  /* §2.2.5's BODY, READ AS THE BYTE SEQUENCE IT IS — after both SSRF checks (the
+     initial URL above, and the post-redirect final URL immediately above this), which
+     is where they were and where they must stay: nothing internal is ingested before
+     the target is judged. `arrayBuffer()` is Fetch §5.2's "consume body" with NO
+     decode after it, which is the whole difference from the `text()` this used to be:
+     what the engine receives is what the server sent, and every standard that has an
+     opinion about how those bytes become characters gets to hold it. */
+  var body = new Uint8Array(await resp.arrayBuffer());
   // CORB policy by LOAD TYPE (opts.as). "script" = bytes that will RUN as code
   // (chunk/import, under QuickJS control) -> must be JS-typed/same-origin. Other
   // loads ("sourcemap"/"config"/data — not executed) are exempt. Whether the
@@ -239,7 +276,7 @@ async function safeFetch(url, opts) {
       !_corbAllowsScript(headers["content-type"] || "",
         (headers["x-content-type-options"] || "").toLowerCase().indexOf("nosniff") >= 0,
         body, parsed.href, opts.pageOrigin || ""))
-    return { ok: false, status: 0, statusText: "blocked-corb", headers: headers, body: "",
+    return { ok: false, status: 0, statusText: "blocked-corb", headers: headers, body: _NO_BYTES(),
              urlList: _urlList(parsed.href, resp) };
   // OWN SOP/CORS for a CREDENTIALED reply. The browser does NOT apply the same-origin
   // policy to an extension fetch with host_permissions (it can read any origin), so
@@ -270,8 +307,8 @@ async function safeFetch(url, opts) {
       var _acao = headers["access-control-allow-origin"] || "";
       var _acac = (headers["access-control-allow-credentials"] || "").toLowerCase();
       if (!_isRealOrigin(_pageOrigin) || _acao !== _pageOrigin || _acac !== "true")
-        return { ok: false, status: 0, statusText: "blocked-cors-credentialed", headers: {}, body: "",
-                 urlList: _urlList(parsed.href, resp) };
+        return { ok: false, status: 0, statusText: "blocked-cors-credentialed", headers: {},
+                 body: _NO_BYTES(), urlList: _urlList(parsed.href, resp) };
     }
   }
   return { ok: resp.ok, status: resp.status, statusText: resp.statusText, headers: headers, body: body,

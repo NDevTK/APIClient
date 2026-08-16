@@ -878,8 +878,12 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                response needs them. */
             csp = header_list_get(&h, "content-security-policy");
             header_list_free(&h);
+            /* §2.2.5's BODY IS A BYTE SEQUENCE, and this answer carries one as one. It was
+               `JS_NewStringLen`, which is quickjs's own UTF-8 decode, so a corpus document served in any
+               other encoding reached lexbor already replaced with U+FFFD — a decode run by the zone that
+               FETCHED, on bytes HTML's own encoding sniffing had not looked at yet. */
             JS_SetPropertyStr(ctx, v, "body",
-                              body ? JS_NewStringLen(ctx, body, len) : JS_NULL);
+                              body ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)body, len) : JS_NULL);
             JS_SetPropertyStr(ctx, v, "csp", csp ? JS_NewString(ctx, csp) : JS_NULL);
             free(body);
             free(csp);

@@ -61,7 +61,18 @@ const LEDGER = [
   { f: "bridge.js", zone: "BRIDGE:1,2,5",
     why: "loads the engine WASM, drives qjs_step, relays every byte through safeFetch, persists the frontier to IDB, routes cross-instance notices. The Level-1 WFQ lives here because one WASM instance is one document and no instance can rank the others." },
   { f: "lib/safe-fetch.js", zone: "BRIDGE:1",
-    why: "THE network chokepoint. SOP/CORS/PNA/CORB/GET-only cannot live inside the untrusted WASM — SECURITY.md §Network." },
+    why: "THE network chokepoint. SOP/CORS/PNA/CORB/GET-only cannot live inside the untrusted WASM — " +
+         "SECURITY.md §Network. THIS ROW WAS FALSE UNTIL THE BODY BECAME BYTES: the file ended in " +
+         "`await resp.text()`, which is Fetch §5.2's `text()` — \"run consume body with this and UTF-8 " +
+         "decode\" — so a BRIDGE:1 row was carrying a SEMANTIC, and the one semantic this architecture can " +
+         "least afford here, because a decode run in transit destroys the evidence every downstream assert " +
+         "would have needed to catch it. HTML §8.1.4.2's classic-script decode (core/loader/script_fetch.c) " +
+         "honours the response's charset LABEL, and it had never once been handed the bytes that label " +
+         "describes. The chokepoint now answers a Uint8Array on every path and each consumer runs the decode " +
+         "ITS standard names. What keeps this row BRIDGE is that nothing left is an algorithm over content: " +
+         "SOP/CORS/PNA/GET-only are decided from the URL, the principal and the headers, and CORB's sniff is " +
+         "a CHECK decoding the bytes it judges — the one read of a body here, and it stays because a " +
+         "cross-origin data body must never reach QuickJS as code." },
   { f: "lib/persistence.js", zone: "BRIDGE:2",
     why: "IndexedDB open/get/put/clear. The WASM cannot reach IDB." },
   { f: "background.js", zone: "BRIDGE:3",

@@ -2163,10 +2163,13 @@ static int hostreq_answer_all(JSContext *ctx)
                    the peer above, so the load's suspend/resume runs end to end. `{body, csp}` is ONE answer
                    because a policy is a property of THE RESPONSE. The body is a DOCUMENT WITH A SCRIPT,
                    because the only thing that proves a navigation happened is the loaded document RUNNING. */
-                v = JS_NewObject(ctx);
-                JS_SetPropertyStr(ctx, v, "body", JS_NewString(ctx,
+                static const char DOC[] =
                     "<!doctype html><html><head></head><body>"
-                    "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>"));
+                    "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>";
+                v = JS_NewObject(ctx);
+                /* AS BYTES: §2.2.5's body is a byte sequence, and a Document is parsed from one. */
+                JS_SetPropertyStr(ctx, v, "body",
+                                  JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC, sizeof DOC - 1));
                 JS_SetPropertyStr(ctx, v, "csp", JS_NULL);
             } else {
                 v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));

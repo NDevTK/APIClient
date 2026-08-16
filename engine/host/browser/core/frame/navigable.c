@@ -16,6 +16,7 @@
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
 #include "core/url/url.h"
 #include "core/encoding/encoding.h"   /* §6's UTF-8 decode, which §7.4.2.3.2 step 3 runs on a percent-decoding */
+#include "core/fetch/fetch.h"          /* §2.2.5's body: a response's bytes, which is what a Document is parsed from */
 #include "core/idl_args.h"
 #include "core/realm.h"              /* §8.1.3.1's environment: the creator's top-level creation URL */
 #include "solver/engine.h"
@@ -328,7 +329,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     NavLoadState *s = st;
     JSValueConst proxy = step_arg(&s->hdr, 0);
     JSValueConst answer = JS_UNDEFINED;
-    const char *addr, *csp = NULL, *body = NULL, *tlu;
+    const char *addr, *csp = NULL, *tlu;
+    const uint8_t *body = NULL;
     const Origin *origin, *tlo;
     JSValue bodyv = JS_UNDEFINED, cspv = JS_UNDEFINED;
     const char *self_origin = NULL;
@@ -379,7 +381,17 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     if (fetches) {
         bodyv = JS_GetPropertyStr(ctx, answer, "body");
         cspv  = JS_GetPropertyStr(ctx, answer, "csp");
-        if (!JS_IsUndefined(bodyv) && !JS_IsNull(bodyv)) body = JS_ToCStringLen(ctx, &body_len, bodyv);
+        /* THE RESPONSE'S BYTES, WHICH IS WHAT A DOCUMENT IS PARSED FROM. This was `JS_ToCStringLen` over a
+           field the trusted zone had built with Fetch §5.2's `text()` — a UTF-8 decode run before HTML could
+           run its own — so a document served in any other encoding reached lexbor already replaced with U+FFFD
+           and the algorithm that decides its encoding had nothing left to decide. §2.2.5's body is a byte
+           sequence and the host now hands one over (core/fetch/fetch.h). WHAT IS STILL OWED HERE IS THE DECODE
+           ITSELF: HTML §13.2.3.2's "encoding sniffing algorithm" — the BOM sniff, then the transport layer's
+           charset, then §13.2.3.3's prescan of the first 1024 bytes — and lexbor's parser takes UTF-8, so this
+           arm hands it the bytes as they arrived and is right exactly for the documents that are UTF-8. That is
+           a decoding gap with a name and a component to build it in, which is what it was NOT while the bytes
+           were being destroyed one zone earlier. */
+        if (!JS_IsUndefined(bodyv) && !JS_IsNull(bodyv)) body = fetch_body_bytes(ctx, bodyv, &body_len);
     }
     /* §7.2.6: the RESPONSE'S policy when it carried one, and otherwise the INHERITED clone — which the job
        carries because whose clone it is belongs to the operation (navigable_load_enqueue). A document made
@@ -443,12 +455,13 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "engine determined that origin when the navigation was enqueued, before the response existed. Move "
            "§7.3.1's determine-the-origin for a navigation to the point the response arrives (here), keeping "
            "the enqueue-time answer only for the `about:` destinations that have no response");
-    cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, body, body_len, csp,
+    cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, (const char *)body, body_len, csp,
                            inherited ? self_origin : origin_serialized(origin), final_flags);
     window_proxy_navigate(ctx, proxy, cctx, doc, addr, tlu, tlo, origin);
     JS_FreeCString(ctx, self_origin);
     JS_FreeCString(ctx, csp);
-    JS_FreeCString(ctx, body);
+    /* NO `JS_FreeCString(ctx, body)`: `body` points INTO `bodyv`'s own buffer and owns nothing, so its whole
+       lifetime is that value's — which is why the release below must stay AFTER navigable_realm. */
     JS_FreeValue(ctx, cspv);
     JS_FreeValue(ctx, bodyv);
     if (s->req) {

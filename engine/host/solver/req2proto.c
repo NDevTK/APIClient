@@ -6,6 +6,7 @@
 
 #include "check.h"
 #include "core/json_buf.h"
+#include "core/fetch/fetch.h"   /* §2.2.5's body, and Infra's parse JSON from bytes over it */
 
 /* THE PROTOBUF TYPE NAMES ARE `descriptor.proto`'s OWN ENUM-VALUE NAMES — FieldDescriptorProto.Type — and the
    transcoder prints them verbatim into the violation description, so this is a decode of a wire vocabulary and
@@ -371,7 +372,7 @@ static void learn_error_info(JSContext *ctx, Rpc *r, JSValueConst detail) {
 }
 
 void req2proto_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply) {
-    char *body, *www_auth;
+    char *www_auth;
     JSValue parsed, err, details;
     int n = 0;
     Rpc *r;
@@ -388,14 +389,13 @@ void req2proto_learn(JSContext *ctx, const char *method, const char *url, JSValu
        an `if (!reply) return` past a broken invariant. */
     if (!JS_IsObject(reply)) return;
 
-    body = prop_str(ctx, reply, "body");
-    if (!body) return;
-    /* THE REAL CODEC, RUN — §A JS-engine encoding builtin is modeled FAITHFULLY, never re-implemented. Most
-       replies are not JSON at all (an HTML error page, a script, an image), and that is an ordinary fact about
-       the web rather than an engine invariant: the exception is TAKEN and dropped here because there is nothing
-       to report, exactly as the fetch drain drops a rejected delivery the page owns. */
-    parsed = JS_ParseJSON(ctx, body, strlen(body), "<reply>");
-    free(body);
+    /* THE REAL CODEC, RUN, OVER THE REAL BYTES — §A JS-engine encoding builtin is modeled FAITHFULLY, never
+       re-implemented. Most replies are not JSON at all (an HTML error page, a script, an image), and that is an
+       ordinary fact about the web rather than an engine invariant: the exception is TAKEN and dropped here
+       because there is nothing to report, exactly as the fetch drain drops a rejected delivery the page owns.
+       This read the record's `body` as a STRING; §2.2.5 makes a body a BYTE SEQUENCE, and Infra's "parse JSON
+       from bytes" is UTF-8 decode THEN parse — one algorithm, in the component that owns this record. */
+    parsed = fetch_reply_parse_json(ctx, reply);
     if (JS_IsException(parsed)) { JS_FreeValue(ctx, JS_GetException(ctx)); return; }
 
     err = JS_IsObject(parsed) ? JS_GetPropertyStr(ctx, parsed, "error") : JS_UNDEFINED;

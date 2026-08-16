@@ -94,7 +94,12 @@ typedef struct {
     JSValue response_headers;  /* the response's header list — an Array of [name, value] */
     JSValue status_text;       /* the response's status message — a JS string */
     JSValue response_url;      /* the response's URL — a JS string */
-    JSValue received;          /* received bytes — a JS string */
+    /* §3's RECEIVED BYTES, and they are BYTES: an ArrayBuffer, which is what a byte sequence is in this heap.
+       It was a JS string, so the response reached every reader below already decoded — by whichever zone built
+       the reply record, with UTF-8 and no charset — and §3.6.6's "get a text response", whose entire job is to
+       decode with the FINAL encoding, was decoding a re-encoding of that. `responseType = "arraybuffer"` copied
+       the same round trip out to the page as the server's bytes. */
+    JSValue received;          /* §3's received bytes — an ArrayBuffer */
     JSValue response_object;   /* the response object — an object, or JS_NULL for §3's null */
     uint32_t timeout;          /* §3's timeout, in milliseconds */
     int32_t  status;           /* the response's status */
@@ -469,7 +474,7 @@ static void xhr_reset_request(JSContext *ctx, XhrData *d)
     JS_FreeValue(ctx, d->response_headers);
     d->response_headers = JS_NewArray(ctx);
     JS_FreeValue(ctx, d->received);
-    d->received = JS_NewString(ctx, "");
+    d->received = JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0);
     JS_FreeValue(ctx, d->response_object);
     d->response_object = JS_NULL;
     d->response_object_failure = 0;
@@ -878,22 +883,24 @@ static JSValue js_xhr_set_response_type(JSContext *ctx, JSValueConst this_val, J
 /* §3.6.6 "get a text response": decode the received bytes with the final encoding, defaulting to UTF-8. */
 static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
 {
-    const char *bytes;
+    const uint8_t *bytes;
     size_t len = 0;
     int enc;
     EncDecoder *dec;
     JSValue out;
 
     if (d->network_error) return JS_NewString(ctx, "");
-    bytes = JS_ToCStringLen(ctx, &len, d->received);
-    if (!bytes) return JS_EXCEPTION;
+    /* THE RECEIVED BYTES, DECODED HERE AND NOWHERE EARLIER. This decode is the point of the algorithm, and
+       until the reply record carried bytes it was the SECOND one: the trusted zone had already run UTF-8 over
+       the response, so a `charset=shift_jis` reply arrived as U+FFFD and `xhr_final_encoding` chose a decoder
+       for bytes that no longer existed. */
+    bytes = fetch_body_bytes(ctx, d->received, &len);
     enc = xhr_final_encoding(ctx, d);
     if (enc < 0) enc = encoding_lookup("utf-8", 5);
     dec = enc_decoder_new(enc, /*fatal*/ false, /*ignore_bom*/ false);
     CHECK(dec != NULL, "XMLHttpRequest: OOM building the response decoder");
-    out = enc_decoder_decode(ctx, dec, (const uint8_t *)bytes, len, /*stream*/ false);
+    out = enc_decoder_decode(ctx, dec, bytes, len, /*stream*/ false);
     enc_decoder_free(dec);
-    JS_FreeCString(ctx, bytes);
     return out;
 }
 
@@ -904,7 +911,7 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
 {
     MimeType final_mime;
     char *content_type;
-    const char *bytes;
+    const uint8_t *bytes;
     size_t len = 0;
     lxb_html_document_t *dom;
     const char *url;
@@ -932,17 +939,17 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
        essence is what a document holds, and the parameters stay on the record this algorithm read them from. */
     content_type = mime_type_essence(&final_mime);
     mime_type_free(&final_mime);
-    bytes = JS_ToCStringLen(ctx, &len, d->received);
-    if (!bytes) { free(content_type); return; }
+    bytes = fetch_body_bytes(ctx, d->received, &len);
     dom = dom_document_create();
     CHECK(dom != NULL, "XMLHttpRequest: OOM building the response document");
-    /* Step 5's charset: the final encoding, then the prescan, then UTF-8. lexbor's parser takes UTF-8 and the
-       received bytes reach it as the JS string's UTF-8, so a document whose declared charset is not UTF-8 is
-       decoded by the string boundary rather than by the prescan — the one place this arm is not yet the
-       spec's, and it is a decoding gap rather than a parse one. */
+    /* Step 5's charset: the final encoding, then the prescan, then UTF-8. lexbor's parser takes UTF-8, and the
+       received bytes now reach it AS THE BYTES THE SERVER SENT — they used to arrive re-encoded out of a JS
+       string the reply record's producer had already decoded, so the sentence that stood here ("decoded by the
+       string boundary rather than by the prescan") described a boundary that no longer exists. What is still
+       owed is the prescan itself: §3.6.6 step 5 runs the final encoding, then HTML §13.2.3.3's meta-charset
+       prescan, then UTF-8, and this arm runs the third of those three. */
     CHECK(lxb_html_document_parse(dom, (const lxb_char_t *)bytes, len) == LXB_STATUS_OK,
           "XMLHttpRequest: the response document could not be parsed");
-    JS_FreeCString(ctx, bytes);
     url = JS_ToCString(ctx, d->response_url);
     JS_FreeValue(ctx, d->response_object);
     /* Steps 8-11: the document's encoding, content type, URL and origin. document_new takes the address and
@@ -992,11 +999,12 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     }
     if (d->response_type == RT_ARRAYBUFFER) {                                    /* step 5 */
         size_t len = 0;
-        const char *bytes = JS_ToCStringLen(ctx, &len, d->received);
+        const uint8_t *bytes = fetch_body_bytes(ctx, d->received, &len);
         JSValue buf;
-        if (!bytes) return JS_STEP_ABRUPT;
-        buf = JS_NewArrayBufferCopy(ctx, (const uint8_t *)bytes, len);
-        JS_FreeCString(ctx, bytes);
+        /* A COPY, because §3.6.9 step 5 makes a NEW ArrayBuffer the page owns and may detach: handing back the
+           received bytes themselves would let `structuredClone(xhr.response, {transfer:[…]})` detach the
+           response the object still holds. */
+        buf = JS_NewArrayBufferCopy(ctx, bytes, len);
         if (JS_IsException(buf)) {
             /* "If this throws an exception, then set this's response object to failure and return null." */
             JS_FreeValue(ctx, JS_GetException(ctx));
@@ -1008,7 +1016,7 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         d->response_object = buf;
     } else if (d->response_type == RT_BLOB) {
         size_t len = 0;
-        const char *bytes = JS_ToCStringLen(ctx, &len, d->received);
+        const uint8_t *bytes = fetch_body_bytes(ctx, d->received, &len);
         /* Step 6: "a new Blob object representing this's received bytes with type set to the result of get a
            final MIME type" — the RECORD, and a Blob's type is a string, so it is §4.5's serialization. The
            essence alone dropped the `charset` a page reads straight back off `blob.type`. */
@@ -1017,24 +1025,28 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         xhr_final_mime(ctx, d, &m);
         type = mime_type_serialize(&m);
         mime_type_free(&m);
-        if (!bytes) { free(type); return JS_STEP_ABRUPT; }
         JS_FreeValue(ctx, d->response_object);
-        d->response_object = blob_new(ctx, bytes, len, type);
-        JS_FreeCString(ctx, bytes);
+        d->response_object = blob_new(ctx, (const char *)bytes, len, type);
         free(type);
     } else if (d->response_type == RT_DOCUMENT) {
         xhr_set_document_response(ctx, d);
     } else {
-        size_t len = 0;
-        const char *bytes;
+        size_t len = 0, text_n = 0;
+        const uint8_t *bytes;
+        char *text;
         JSValue parsed;
         DCHECK(d->response_type == RT_JSON, "the response getter reached an arm §3.6.9 does not have");
         if (d->network_error) { *presult = JS_NULL; return 0; }
-        bytes = JS_ToCStringLen(ctx, &len, d->received);
-        if (!bytes) return JS_STEP_ABRUPT;
-        /* "parse JSON from bytes"; a throw is answered with null and the object stays unset. */
-        parsed = JS_ParseJSON(ctx, bytes, len, "<xhr response>");
-        JS_FreeCString(ctx, bytes);
+        bytes = fetch_body_bytes(ctx, d->received, &len);
+        /* Step 7's "parse JSON from bytes", which is TWO steps and not one: Infra's algorithm is "let string be
+           the result of running UTF-8 decode on bytes", THEN `JSON.parse` on that string. The decode is what
+           turns a malformed sequence into a U+FFFD the parser can see — handing the raw bytes to JS_ParseJSON
+           instead runs quickjs's own lenient decoder, which accepts UTF-8-encoded surrogates JSON's grammar
+           does not produce. A throw is answered with null and the object stays unset. */
+        text = encoding_utf8_decode((const char *)bytes, len, &text_n);
+        CHECK(text != NULL, "XMLHttpRequest: OOM decoding a JSON response's bytes");
+        parsed = JS_ParseJSON(ctx, text, text_n, "<xhr response>");
+        free(text);
         if (JS_IsException(parsed)) {
             JS_FreeValue(ctx, JS_GetException(ctx));
             *presult = JS_NULL;
@@ -1238,8 +1250,14 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
     int32_t status = 0;
 
     if (!JS_IsObject(reply)) return;
+    /* §2.2.5's body, as the byte sequence every producer of this record now writes (core/fetch/fetch.h). A
+       `null` or absent one is the network error §3.5.6 leaves the response as. */
     bd_v = JS_GetPropertyStr(ctx, reply, "body");
     if (JS_IsNull(bd_v) || JS_IsUndefined(bd_v)) { JS_FreeValue(ctx, bd_v); return; }
+    DCHECK(JS_IsArrayBuffer(bd_v),
+           "an XMLHttpRequest's reply carried a body that is not a byte sequence — the host answers §3.5.6's "
+           "fetch with the reply record fetch_reply_new builds, whose body is an ArrayBuffer, and a STRING "
+           "here is a zone that ran a decode §3.6.6 owns");
     st_v = JS_GetPropertyStr(ctx, reply, "status");
     stx_v = JS_GetPropertyStr(ctx, reply, "statusText");
     hs_v = JS_GetPropertyStr(ctx, reply, "headers");
@@ -1531,9 +1549,11 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->length = xhr_response_length(ctx, d);
         {
             size_t len = 0;
-            const char *b = JS_ToCStringLen(ctx, &len, d->received);
-            s->transmitted = b ? (double)len : 0;
-            if (b) JS_FreeCString(ctx, b);
+            (void)fetch_body_bytes(ctx, d->received, &len);
+            /* THE RECEIVED BYTES' COUNT, which is now the response's own byte count. It was the length of a JS
+               string re-encoded to UTF-8, so `progress.loaded` disagreed with `Content-Length` for every
+               response holding a byte outside ASCII. */
+            s->transmitted = (double)len;
         }
         s->hdr.stage = XR_RSC_LOADING;
     }
@@ -1999,7 +2019,7 @@ static int js_xhr_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     d->response_headers = JS_NewArray(ctx);
     d->status_text = JS_NewString(ctx, "");
     d->response_url = JS_NewString(ctx, "");
-    d->received = JS_NewString(ctx, "");
+    d->received = JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0);
     d->state = XHR_UNSENT;
     d->network_error = 1;   /* §3: "response — a response, initially a network error" */
     JS_SetOpaque(obj, d);

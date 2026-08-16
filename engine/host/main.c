@@ -621,22 +621,34 @@ QJS_EXPORT const char *qjs_chunks(void)
     return module_loader_chunks();
 }
 
-/* THE REPLY CROSSES AS TEXT AND CARRIES ITS TYPE — JSON, exactly as qjs_host_answer's does and for the same
-   reason. It used to cross as the BODY'S BYTES and nothing else, so everything the trusted zone had actually
-   seen was thrown away at this line and re-invented on the other side: the engine's drain built a reply with
-   status 200, status message "OK", no headers, and no URL LIST — which is what `response.url` and
+/* THE REPLY'S METADATA CROSSES AS TEXT AND CARRIES ITS TYPE — JSON, exactly as qjs_host_answer's does and for
+   the same reason. It used to cross as the BODY'S BYTES and nothing else, so everything the trusted zone had
+   actually seen was thrown away at this line and re-invented on the other side: the engine's drain built a
+   reply with status 200, status message "OK", no headers, and no URL LIST — which is what `response.url` and
    `response.redirected` are, so every reply in the extension reported no redirect however many the fetch had
-   followed. The record is `{status, statusText, headers: [[name, value], …], body, urlList: [url, …]}`, which
-   is the SAME record fetch_reply_new builds for the hosts that fetch in C; JSON `null` is a NETWORK ERROR, and
-   the delivery machine already rejects with the TypeError §5.6 names.
+   followed. The record is `{status, statusText, headers: [[name, value], …], urlList: [url, …]}`, which is the
+   SAME record fetch_reply_new builds for the hosts that fetch in C; JSON `null` is a NETWORK ERROR, and the
+   delivery machine already rejects with the TypeError §5.6 names.
+   …AND THE BODY CROSSES AS BYTES, BESIDE IT, BECAUSE JSON CANNOT SAY A BYTE SEQUENCE. §2.2.5 makes a response's
+   body one, and the only way to put one in JSON is to run an algorithm over it first — which is exactly the
+   defect: `safe-fetch.js` ran Fetch §5.2's `text()`, "run consume body with this and UTF-8 decode", so a script
+   served `charset=windows-1252` reached HTML §8.1.4.2's classic decode already mangled and the label that
+   algorithm exists to honour decided nothing. The trusted zone owns SOP/CORS/PNA/CORB and owns no decodes; the
+   bytes are copied into this instance's own linear memory and read here without a transform in between. A
+   NETWORK ERROR carries none (`body == NULL`, `body_len == 0`), which is a different statement from a 204's
+   empty one.
    ONE delivery for every parked request. A fetch's reply, the DOCUMENT's own external script and a lazy CHUNK's
    source all settle a park the flow registered before it suspended, and one engine_provide fills every entry
    naming that URL whatever its kind — so there is ONE record and the kinds read the fields they need. */
-QJS_EXPORT void qjs_provide(const char *url, const char *reply)
+QJS_EXPORT void qjs_provide(const char *url, const char *reply, const char *body, unsigned body_len)
 {
     DCHECK(g_begun, "a reply was provided to an engine that never ran");
     DCHECK(reply != NULL, "a reply was provided with no text at all — a network error is the JSON `null`, "
                           "which is a value the engine's delivery distinguishes from a reply it never got");
+    DCHECK(body != NULL || body_len == 0,
+           "a reply's body arrived as a null pointer with a length — the pointer and the length describe ONE "
+           "byte sequence, so a host with an empty body passes an address and a zero, and a host with no reply "
+           "at all passes the JSON `null` beside a null pointer");
     {
         JSValue v = JS_ParseJSON(g_ctx, reply, strlen(reply), "<reply>");
         int n;
@@ -649,6 +661,16 @@ QJS_EXPORT void qjs_provide(const char *url, const char *reply)
                   "and a bare body sent through this edge is a host still delivering only bytes");
             v = JS_NULL;
         }
+        /* §2.2.5's BODY ONTO §2.2's RESPONSE, in the component that owns both halves of that record
+           (core/fetch/fetch.h). A network error is the one arm with nothing to write: it has no response at
+           all, so a body arriving with one is a host answering a failure and a payload in one breath. */
+        if (JS_IsObject(v))
+            fetch_reply_set_body(g_ctx, v, (const uint8_t *)body, (size_t)body_len);
+        else
+            DCHECK(body_len == 0,
+                   "a NETWORK ERROR arrived carrying bytes — §5.6's network error is a response with no body "
+                   "at all, and the delivery machine rejects on it rather than reading one, so these bytes "
+                   "name a reply the trusted zone did and did not have at the same time");
         n = engine_provide(g_ctx, url, v);
         JS_FreeValue(g_ctx, v);
         /* NOBODY IS PARKED ON IT, AND THERE ARE NOW TWO WAYS THAT HAPPENS. The one this asserts against is the
@@ -701,12 +723,20 @@ QJS_EXPORT const char *qjs_host_notices(void)
    arrive at the asking flow as `undefined` and the page's `try`/`catch` around the operation would never run —
    the identical hole the cross-instance grammar had one layer up. It is a PARAMETER and not a second entry
    point beside this one, so a zone answering a request has to say which completion it is answering with. */
-QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned completion)
+/* `body`/`body_len` are the SAME byte side-channel qjs_provide takes, and for the same reason: two of the
+   requests this entry answers carry a fetched BODY — XHR §3.5.6's fetch, and §7.4 step 14's `{body, csp}` — and
+   a body is a byte sequence that JSON cannot carry. A host with no body for this answer passes (NULL, 0), which
+   is what every other request kind is: an answer that is a NUMBER or a document NAME has no bytes beside it. */
+QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned completion,
+                                const char *body, unsigned body_len)
 {
     DCHECK(g_begun, "an answer was provided to an engine that never ran");
     DCHECK(completion == ENGINE_COMPLETION_NORMAL || completion == ENGINE_COMPLETION_THROW,
            "the trusted zone answered a request with a completion type ECMA-262 6.2.4 does not have — an "
            "operation performed in another instance returns or throws, and nothing else crosses a call site");
+    DCHECK(body != NULL || body_len == 0,
+           "an answer's body arrived as a null pointer with a length — the pointer and the length describe ONE "
+           "byte sequence, so an answer with no body at all passes both as nothing");
     {
         JSValue v = json ? JS_ParseJSON(g_ctx, json, strlen(json), "<host-answer>") : JS_UNDEFINED;
         /* A MALFORMED ANSWER IS THE HOST'S BUG, not the page's. Delivering the exception instead would surface
@@ -714,6 +744,17 @@ QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned complet
         DCHECK(!JS_IsException(v), "the host answered a synchronous request with text that is not JSON — the "
                                    "answer crosses as JSON so that it carries its type, and a bare string is "
                                    "not one (it is the JSON text `\"...\"`)");
+        /* THE BODY, IF THIS ANSWER HAS ONE. `body == NULL` is the positive statement "this answer carries no
+           bytes" and not a hole — an answer that is a number, a name or a completion has none — so the write
+           happens exactly where the host said there were bytes, and `fetch_reply_set_body` asserts the JSON
+           did not also carry a decoded one. */
+        if (body && JS_IsObject(v))
+            fetch_reply_set_body(g_ctx, v, (const uint8_t *)body, (size_t)body_len);
+        else
+            DCHECK(body == NULL,
+                   "the host answered with BYTES beside something that is not a record — an answer's body is a "
+                   "field of the answer, so bytes arriving next to a number, a string or a `null` name a "
+                   "record the host did not build");
         /* Routed to ONE call site by id — never broadcast the way a fetched body is, because the answer was
            computed under the ASKING FLOW's world. A zero return means that flow is gone, which is not an
            error: nobody is waiting on the answer. */

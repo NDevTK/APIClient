@@ -124,7 +124,20 @@ async function child(docPath, schedName) {
     const M = await boot();
     const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
     const str = (f, ...a) => String(M.ccall(f, "string", a.map(() => "number"), a.map(cs)) ?? "");
-    return { M, cs, str };
+    /* §2.2.5's BODY, INTO THE INSTANCE'S LINEAR MEMORY — beside the record's JSON, never inside it. JSON
+       cannot say a byte sequence, and each way of making it able to is an algorithm run by the zone that
+       FETCHED: that is what Fetch §5.2's `text()` was doing in safe-fetch.js, and it is why HTML §8.1.4.2's
+       classic-script decode had never once seen the bytes whose charset it exists to honour. The mock body is
+       written as source text here, so this is an ENCODE. */
+    const provide = (u, reply, body) => {
+      const b = new TextEncoder().encode(body);
+      const p = M._malloc(b.length + 1);
+      M.HEAPU8.set(b, p);
+      try { M.ccall("qjs_provide", "void", ["number", "number", "number", "number"],
+                    [cs(u), cs(JSON.stringify(reply)), p, b.length]); }
+      finally { M._free(p); }
+    };
+    return { M, cs, str, provide };
   }
 
   /* WHAT THE HOST OWES, and what it must REFUSE to owe. A corpus document that emits a host notice or a
@@ -150,8 +163,8 @@ async function child(docPath, schedName) {
     for (const u of answer) {
       const reply = { status: 200, statusText: "OK",
                       headers: [["content-type", "application/json"]],
-                      body: MOCK_BODY, urlList: [new URL(u, url).href] };
-      e.M.ccall("qjs_provide", "void", ["number", "number"], [e.cs(u), e.cs(JSON.stringify(reply))]);
+                      urlList: [new URL(u, url).href] };
+      e.provide(u, reply, MOCK_BODY);
     }
   }
 

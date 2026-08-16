@@ -391,6 +391,17 @@ void mime_sniff_compute(MimeType *out, const char *content_type_value, bool no_s
     char *essence;
     bool undefined_type, unknown_essence;
 
+    /* §7 IS THE NETWORK SERVICE'S, AND THIS PROCESS IS THE RENDERER — see mime_sniff.h. Reached from here, a
+       computed type is one the untrusted side voted on, and a body classified in this process is one that may
+       never have been CORB-gated on that classification at all: the endpoints mined out of it would be surface
+       the page could not have obtained. `solver/reply_decode.c` was the one caller and now asks Fetch §4's
+       extract a MIME type instead (the server's own statement, which the renderer legitimately parses). What to
+       build is the BROWSER-PROCESS WASM instance that runs this beside safe-fetch.js's SOP/CORS, and the
+       computed type it produces then crosses on the reply record like the sender's origin on a message —
+       stamped by the trusted zone, never minted by the sandbox. */
+    DFAIL("MIME Sniffing §7 ran in the RENDERER — sniffing is the network service's algorithm and CORB gates on "
+          "its result, so a type computed here is the untrusted side deciding what it is allowed to read. Build "
+          "the browser-process WASM instance and stamp the computed type onto the reply record from there");
     DCHECK(out != NULL, "§7 was asked to compute a MIME type into nothing");
     DCHECK(header != NULL || header_n == 0,
            "a resource header of non-zero length was passed as a null pointer — §5.2's buffer is a byte "

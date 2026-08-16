@@ -61,9 +61,58 @@ bool fetch_parse_url(JSContext *ctx, UrlRecord *rec, const char *url, size_t len
    (its size > 1) are read off nothing else. A host that followed no redirect reports the one URL it requested
    — §4.1's "If internalResponse's URL list is empty, then set it to a clone of request's URL list" — so the
    list is never empty and the DCHECKs at both ends say so. Only the FIRST and LAST items are ever exposed to
-   script, which is why a host that cannot enumerate the middle of a chain still reports a faithful list. */
+   script, which is why a host that cannot enumerate the middle of a chain still reports a faithful list.
+   `body`/`body_len` are §2.2.5's BODY, which is a BYTE SEQUENCE and reaches the record as one. */
 JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
                         const char *body, size_t body_len, const char *const *url_list, int url_list_n);
+
+/* ---- §2.2.5's BODY, WHICH IS A BYTE SEQUENCE AND CROSSES AS ONE ------------------------------------------
+ *
+ * "A response has an associated body (null or a body)", and a body's is "a byte sequence". It was a JS STRING
+ * on this record, at every producer, and that is not a representation choice — it is a DECODE, run by whoever
+ * built the record, before any standard's own decode could run:
+ *
+ *   • the extension's trusted zone ran Fetch §5.2's `text()` — "run consume body with this and UTF-8 decode" —
+ *     so a script served `charset=windows-1252` arrived already mangled and HTML §8.1.4.2's classic decode
+ *     (core/loader/script_fetch.h), whose whole job is to honour that label, was handed the wrong bytes;
+ *   • `fetch_reply_new` ran `JS_NewStringLen`, which is quickjs's own UTF-8 decode, so EVERY C host destroyed
+ *     the same evidence a step earlier than the extension did. cutils.h states its error mode outright —
+ *     "encoding errors are converted as 0xFFFD and use a single byte" — so a lone 0x81 became U+FFFD, and
+ *     `JS_ToCStringLen` on the other side re-encoded that as EF BF BD. The classic decode has therefore never
+ *     once received a byte a server actually sent, on any host.
+ *
+ * A decode is a SEMANTIC and semantics are the engine's (CLAUDE.md §Architecture), so the record carries the
+ * bytes and each consumer runs the algorithm ITS OWN standard names: §8.1.4.2's two script decodes, Fetch's
+ * "parse JSON from bytes" (UTF-8 decode, then JSON.parse), XHR §3.6.6's final encoding, MIME Sniffing §7 over
+ * the bytes themselves. An ArrayBuffer is what a byte sequence is in this heap — it is already what
+ * `pending_set_bytes` stores a REQUEST body as — and it is the one JS value whose contents survive a round
+ * trip unexamined. */
+
+/* WRITE the body onto a record whose other fields arrived as JSON. The bytes cross beside that text rather
+   than inside it, because JSON cannot say a byte sequence: `JSON.stringify` on a Uint8Array answers
+   `{"0":72,…}`, a plausible record carrying a body that is not the body. Asserts the record did NOT already
+   carry one — a producer still sending a decoded string is the defect this edge exists to make impossible. */
+void fetch_reply_set_body(JSContext *ctx, JSValueConst reply, const uint8_t *bytes, size_t n);
+
+/* READ it: the record's body VALUE, a reference the caller frees. A network error (the JSON `null`) has no
+   record and answers the EMPTY byte sequence — which is what a script that did not load runs, and what a
+   reader of a reply that never arrived measures. */
+JSValue fetch_reply_body(JSContext *ctx, JSValueConst reply);
+
+/* …and the BYTES of a body value. The pointer is into the value's own buffer, so it is valid exactly as long
+   as the caller holds that value — there is nothing to free. Never NULL: an empty body answers a zero length
+   and a pointer that may be read zero times, so no caller needs a null test that a body of length 0 would be
+   the only thing to exercise. */
+const uint8_t *fetch_body_bytes(JSContext *ctx, JSValueConst body, size_t *out_n);
+
+/* A REPLY'S BODY AS JSON, which is Infra's "parse JSON from bytes" and therefore TWO steps: "let string be the
+   result of running UTF-8 decode on bytes", then parse JSON from string. It is here rather than at each asker
+   because the solver has two of them — an API's own rejection envelope (req2proto.c) and its published
+   description (discovery.c) — and both used to reach for the record's `body` as a STRING, which after this
+   change is a read that answers nothing at all: a body is a byte sequence. A reply that is not JSON (an HTML
+   error page, a script, an image) answers JS_EXCEPTION with the real SyntaxError live, which is an ordinary
+   fact about the web that each caller takes and drops. */
+JSValue fetch_reply_parse_json(JSContext *ctx, JSValueConst reply);
 
 /* …AND THE READ OF IT, in the component that owns the WRITE. The record's `headers` field is an Array of
    [name, value] pairs — a LIST and not a map, because §5.1 never combines two entries and Fetch §2.2.2's "get"

@@ -4,6 +4,7 @@
 #include "solver/discovery.h"
 #include "solver/endpoint.h"
 #include "solver/flow.h"
+#include "core/fetch/fetch.h"   /* §2.2.5's body, and Infra's parse JSON from bytes over it */
 #include "check.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -448,7 +449,7 @@ static void learn_openapi(JSContext *ctx, JSValueConst doc, const char *fallback
 }
 
 void discovery_reply(JSContext *ctx, const char *url, JSValueConst reply) {
-    char *body, *origin, *kind;
+    char *origin, *kind;
     JSValue parsed;
     int is_google, is_openapi;
 
@@ -460,13 +461,13 @@ void discovery_reply(JSContext *ctx, const char *url, JSValueConst reply) {
        past a broken invariant — most candidates legitimately answer nothing. */
     if (!JS_IsObject(reply)) return;
 
-    body = prop_str(ctx, reply, "body");
-    if (!body) return;
-    /* THE REAL CODEC, RUN. §A JS-engine encoding builtin is modeled FAITHFULLY — a 404 HTML page is not JSON
-       and that is an ordinary fact about the web, so the exception is taken and dropped exactly as the fetch
-       drain drops a rejected delivery. */
-    parsed = JS_ParseJSON(ctx, body, strlen(body), "<discovery>");
-    free(body);
+    /* THE REAL CODEC, RUN, OVER THE REAL BYTES. §A JS-engine encoding builtin is modeled FAITHFULLY — a 404
+       HTML page is not JSON and that is an ordinary fact about the web, so the exception is taken and dropped
+       exactly as the fetch drain drops a rejected delivery. This read the record's `body` as a STRING, which
+       §2.2.5 says a body is not: it is a byte sequence, and Infra's "parse JSON from bytes" is UTF-8 decode
+       THEN parse. `fetch_reply_parse_json` is that algorithm, in the component that owns this record, shared
+       with `Response.json()` and with req2proto's envelope reader. */
+    parsed = fetch_reply_parse_json(ctx, reply);
     if (JS_IsException(parsed)) { JS_FreeValue(ctx, JS_GetException(ctx)); return; }
     if (!JS_IsObject(parsed)) { JS_FreeValue(ctx, parsed); return; }
 

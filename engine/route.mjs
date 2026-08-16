@@ -79,10 +79,33 @@ async function makeEngine(html, url, docId, csp, topLevelUrl) {
   const M = await boot();
   const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
   const str = (f, ...a) => String(M.ccall(f, 'string', a.map(() => 'number'), a.map(cs)) ?? '');
+  /* §2.2.5's BODY, INTO THIS INSTANCE'S LINEAR MEMORY. It crosses beside the record's JSON rather than inside
+     it, because JSON cannot say a byte sequence and every way of making it able to is an algorithm run by the
+     zone that fetched — which is what the extension's `resp.text()` was, and what left the classic-script
+     decode with nothing of the response's charset to honour. `bytes` may be a string here, and that is an
+     ENCODE (this file's fixtures are written as source text), never a decode. */
+  const bs = (b) => {
+    const u8 = typeof b === 'string' ? new TextEncoder().encode(b) : b;
+    const p = M._malloc(u8.length + 1);
+    M.HEAPU8.set(u8, p);
+    return [p, u8.length];
+  };
+  const provide = (u, reply, body) => {
+    const [p, n] = bs(body);
+    try { M.ccall('qjs_provide', 'void', ['number','number','number','number'],
+                  [cs(u), cs(JSON.stringify(reply)), p, n]); }
+    finally { M._free(p); }
+  };
+  const answer = (id, meta, body) => {
+    const [p, n] = bs(body);
+    try { M.ccall('qjs_host_answer', 'void', ['number','number','number','number','number'],
+                  [id, cs(JSON.stringify(meta)), 0, p, n]); }
+    finally { M._free(p); }
+  };
   M.ccall('qjs_init', 'number', ['number','number','number','number','number'],
     [cs(html), cs(url), cs(docId), cs(csp || ''), cs(topLevelUrl)]);
   M.ccall('qjs_begin', 'void', ['number'], [cs('')]);
-  return { M, cs, str, docId, docUrl: url, origin: new URL(url).origin, done: false };
+  return { M, cs, str, provide, answer, docId, docUrl: url, origin: new URL(url).origin, done: false };
 }
 
 const engines = [];
@@ -114,9 +137,12 @@ async function service(e) {
        zone follows no redirect, so Fetch §4.1 gives the response a clone of the REQUEST's URL list — one item,
        RESOLVED against this document's address because a URL list holds URLs and `response.url` serializes the
        last of them. */
-    const reply = { status: 200, statusText: 'OK', headers: [], body: '{}',
+    const reply = { status: 200, statusText: 'OK', headers: [],
                     urlList: [new URL(u, e.docUrl).href] };
-    e.M.ccall('qjs_provide', 'void', ['number','number'], [e.cs(u), e.cs(JSON.stringify(reply))]);
+    /* THE BODY TRAVELS AS BYTES, beside that JSON and never inside it: §2.2.5 makes a response's body a BYTE
+       SEQUENCE, and the only ways to put one in JSON are to encode it or to DECODE it — and a decode run by
+       the zone that FETCHED is exactly what left HTML §8.1.4.2's classic-script decode nothing to decode. */
+    e.provide(u, reply, '{}');
   }
   /* ONE OP IS ANSWERED, exactly as the offscreen answers exactly one: a `document.fetch` is a network fetch this
      zone can genuinely perform. Every other request is left UNANSWERED — the asking flow stays parked with its
@@ -156,8 +182,9 @@ async function service(e) {
     if (!op.startsWith('document.fetch\t')) continue;
     /* THE TRAILING 0 IS THE NORMAL COMPLETION — an answer is a completion record, and this zone fetched bytes
        rather than relaying another instance's program, so it has nothing to have thrown in. */
-    e.M.ccall('qjs_host_answer', 'void', ['number','number','number'],
-              [id, e.cs(JSON.stringify({ body: HTML_B, csp: null })), 0]);
+    /* §7.4 step 14's answer: the POLICY as JSON, the document as BYTES. A Document is parsed from a byte
+       sequence, and this zone hands one over rather than a string it decoded first. */
+    e.answer(id, { csp: null }, HTML_B);
   }
   for (const n of e.str('qjs_host_notices').split('\n').filter(Boolean)) {
     const f = n.split('\t');

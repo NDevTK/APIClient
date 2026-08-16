@@ -1105,19 +1105,6 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
    rather than spinning on a drain that would resolve nothing. */
 static int flow_pending_ready(const Flow *f) { return pending_ready(f->pending); }
 
-/* THE BODY OUT OF THE HOST'S REPLY RECORD. Every kind on the register is filled by ONE engine_provide call —
-   a URL two flows parked on for two different reasons gets one value — so the record is the same shape for all
-   three, and the two PROGRAM kinds read the field they need out of it. A network error (JS_NULL) is a script
-   that did not load, which runs nothing; the fetch kind rejects on the same value, in the delivery machine. */
-static JSValue reply_body_of(JSContext *ctx, JSValueConst reply) {
-    DCHECK(JS_IsObject(reply) || JS_IsNull(reply),
-           "a provided reply is neither the host's reply record nor a network error — qjs_provide parses the "
-           "trusted zone's JSON and every host builds the same record");
-    if (JS_IsNull(reply))
-        return JS_NewString(ctx, "");
-    return JS_GetPropertyStr(ctx, reply, "body");
-}
-
 /* HTML §8.1.4.2'S processResponseConsumeBody STEP THAT MAKES SOURCE TEXT — the point at which a fetched BYTE
    SEQUENCE becomes a script's text, and the one this engine ran neither half of. The bytes used to go from the
    host's reply record to the compiler unchanged: one byte no UTF-8 sequence contains made a whole minified
@@ -1128,33 +1115,33 @@ static JSValue reply_body_of(JSContext *ctx, JSValueConst reply) {
    §6.1's decode, whose BOM sniff can overrule that label), and a module script is UTF-8 whatever the response
    says. `doc_ctx` is the realm of the document the program belongs to, and it is read ONLY on the classic arm —
    §4.12.1 says so about the element too: "if el's type is `module`, this encoding will be ignored."
+   AND `bodyBytes` IS NOW ACTUALLY BYTES. This read was `JS_ToCStringLen` over a record field that every
+   producer had already run a decode to build — the extension's `resp.text()` and, one step earlier, C's own
+   `JS_NewStringLen` — so the classic entry's whole reason to exist, honouring the response's charset LABEL,
+   was being asked to honour it over bytes that label had never touched. §2.2.5's body is a byte sequence and
+   crosses as one (fetch.h); this reads it back without a transform in between.
    Answers malloc'd source text the caller frees; `*out_n` is its length. */
 static char *reply_source_text(JSContext *ctx, JSValueConst reply, ScriptType stype, JSContext *doc_ctx,
                                size_t *out_n)
 {
-    JSValue bv = reply_body_of(ctx, reply);
+    JSValue bv = fetch_reply_body(ctx, reply);
     size_t body_len = 0;
-    /* WITH ITS LENGTH. `bodyBytes` is a byte sequence, and a strlen would end it at the first 0x00 the server
-       sent — the decode's job is to answer what those bytes ARE, so it must be given all of them. */
-    const char *body = JS_ToCStringLen(ctx, &body_len, bv);
+    const uint8_t *body = fetch_body_bytes(ctx, bv, &body_len);
     char *src;
 
-    /* A CHECK AND NOT A DCHECK: `reply_body_of` answers a string or the record's own `body`, and the only way
-       this read fails is the allocator. A dropped script body is a flow that resumes running nothing. */
-    CHECK(body != NULL, "engine: OOM reading a fetched script's body out of the host's reply record");
     if (stype == SCRIPT_TYPE_MODULE) {
-        src = script_fetch_module_source_text(body, body_len, out_n);
+        src = script_fetch_module_source_text((const char *)body, body_len, out_n);
     } else {
         HeaderList hl = { 0 };
         char *content_type;
 
         fetch_reply_header_list(ctx, reply, &hl);
         content_type = header_list_get(&hl, "content-type");   /* NULL is Fetch's "values is null" = failure */
-        src = script_fetch_classic_source_text(body, body_len, content_type, document_encoding(doc_ctx), out_n);
+        src = script_fetch_classic_source_text((const char *)body, body_len, content_type,
+                                               document_encoding(doc_ctx), out_n);
         free(content_type);
         header_list_free(&hl);
     }
-    JS_FreeCString(ctx, body);
     JS_FreeValue(ctx, bv);
     return src;
 }

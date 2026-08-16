@@ -10,9 +10,18 @@
   const EVENT_NAME = "__uasr_resp";
 
   // Decide whether to read a body as bytes (base64 for transport) vs. text.
-  // background.js later uses body magic bytes to classify asset vs API, so
-  // media/fonts/archives must reach the service worker uncorrupted — reading
-  // them via Response.text() decodes as UTF-8 and destroys non-ASCII bytes.
+  // THE CONSUMER IS lib/response-decode.js IN THE OFFSCREEN, not background.js —
+  // that name was checked and is wrong: the service worker is STATELESS and never
+  // relays page data (SECURITY.md), and the magic-byte classification that needs
+  // these bytes is `classifyResponseAsset`, called from response-decode.js.
+  // The fact the name was attached to is still true and is the reason this split
+  // exists: reading a body via Response.text() decodes it as UTF-8 and destroys
+  // every non-ASCII byte, so a body classified by its leading bytes must not be
+  // read that way. It is the same reading safe-fetch.js now takes for EVERY body
+  // it fetches, where the decode belongs to the engine and the bytes cross as
+  // bytes — the difference is that this classifier still decides PER BODY which
+  // ones survive, and a content type it has not heard of is the case it gets
+  // wrong in the direction that loses data.
   function isBinary(ct) {
     if (!ct) return false;
     const l = ct.toLowerCase().split(";")[0].trim();

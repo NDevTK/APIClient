@@ -33,6 +33,7 @@
 #include "core/fetch/headers.h"
 #include "core/fetch/port_blocking.h"
 #include "core/fetch/body.h"
+#include "core/byte_reader.h"   /* Infra's parse JSON from bytes, shared with `Response.json()` */
 #include "core/fetch/response.h"
 #include "core/streams/readable_stream.h"
 #include "core/fetch/request.h"
@@ -193,10 +194,12 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             JSValue stx_v = JS_GetPropertyStr(ctx, body_v, "statusText");
             JSValue bd_v = JS_GetPropertyStr(ctx, body_v, "body");
             const char *stx = JS_ToCString(ctx, stx_v);
-            /* WITH ITS LENGTH: a reply is a byte sequence, and the interior NUL a strlen stops at is exactly
-               what `arrayBuffer()` would then have under-reported. */
+            /* THE BODY, AS BYTES. §2.2.5 makes a response's body a byte sequence and the record now carries one
+               (fetch.h), so this is a read of the bytes rather than a re-encode of a string somebody else had
+               already decoded — which is what `arrayBuffer()` used to under-report at the first interior NUL
+               and what `text()` used to answer U+FFFD for on every byte its own charset would have named. */
             size_t body_len = 0;
-            const char *body = JS_ToCStringLen(ctx, &body_len, bd_v);
+            const uint8_t *body = fetch_body_bytes(ctx, bd_v, &body_len);
             HeaderList hl = { 0 };
             int32_t status = 200;
 
@@ -212,10 +215,9 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
                    "the host delivered a reply carrying no `urlList` — §2.2.6's URL list is what `url` and "
                    "`redirected` are, and the host is the only zone that performed the fetch that grew it");
             s->value = response_new(ctx, ul_v, (int)status, stx ? stx : "",
-                                    hl.n ? &hl : NULL, body ? body : "", body ? body_len : 0);
+                                    hl.n ? &hl : NULL, (const char *)body, body_len);
             header_list_free(&hl);
             if (stx) JS_FreeCString(ctx, stx);
-            if (body) JS_FreeCString(ctx, body);
             JS_FreeValue(ctx, ul_v);
             JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, stx_v);
             JS_FreeValue(ctx, bd_v);
@@ -282,6 +284,85 @@ void fetch_reply_header_list(JSContext *ctx, JSValueConst reply, HeaderList *out
     JS_FreeValue(ctx, hs_v);
 }
 
+/* ---- §2.2.5's BODY on that same record — see fetch.h for why it is bytes and not text ------------------- */
+
+void fetch_reply_set_body(JSContext *ctx, JSValueConst reply, const uint8_t *bytes, size_t n)
+{
+    JSValue v;
+
+    DCHECK(JS_IsObject(reply),
+           "a body was written onto something that is not the host's reply record — a network error is the "
+           "JSON `null` and carries no body at all, so a body arriving with one is a host that answered a "
+           "failure and a payload in the same breath");
+    DCHECK(bytes != NULL || n == 0,
+           "a reply's body arrived as a null pointer with a length — the two describe ONE byte sequence, and a "
+           "host with no body at all passes an empty one");
+#if APICLIENT_DEV
+    {
+        /* THE HALF OF THE SEAM THAT CANNOT BE SEEN FROM THE OTHER SIDE. The trusted zone's record is JSON, so
+           the only way a decoded string can still reach the engine is a producer that kept writing `body` into
+           that text — and it would arrive here as a plausible reply whose body is a STRING, which every reader
+           below would then read as zero bytes. Asked before the write, because after it the field is ours. */
+        JSValue had = JS_GetPropertyStr(ctx, reply, "body");
+        DCHECK(JS_IsUndefined(had),
+               "the host's reply record already carried a `body` — the bytes cross BESIDE that JSON and never "
+               "inside it, so a record that arrived with one is a producer still running Fetch §5.2's `text()` "
+               "(a UTF-8 decode, whatever the response's charset says) in a zone that does not own decodes");
+        JS_FreeValue(ctx, had);
+    }
+#endif
+    v = JS_NewArrayBufferCopy(ctx, bytes ? bytes : (const uint8_t *)"", n);
+    CHECK(!JS_IsException(v), "fetch: OOM copying a delivered reply's body into the engine's heap — the flow "
+                              "parked on it would resume reading a successful response with nothing in it");
+    CHECK(JS_SetPropertyStr(ctx, reply, "body", v) >= 0, "fetch: a reply record refused its body");
+}
+
+JSValue fetch_reply_body(JSContext *ctx, JSValueConst reply)
+{
+    DCHECK(JS_IsObject(reply) || JS_IsNull(reply),
+           "a body was asked of something that is not the host's reply record — qjs_provide parses the trusted "
+           "zone's JSON and every host builds the same record, and a network error is the JSON `null`");
+    /* A NETWORK ERROR HAS NO BODY, and the empty byte sequence is what its readers measure: a script that did
+       not load runs nothing, and a reader of a reply that never arrived reads zero bytes. The fetch kind never
+       reaches here — it rejects on the same value, in the delivery machine. */
+    if (!JS_IsObject(reply))
+        return JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0);
+    return JS_GetPropertyStr(ctx, reply, "body");
+}
+
+const uint8_t *fetch_body_bytes(JSContext *ctx, JSValueConst body, size_t *out_n)
+{
+    static const uint8_t EMPTY[1] = { 0 };
+    size_t n = 0;
+    uint8_t *p;
+
+    /* ASKED BEFORE `JS_GetArrayBuffer`, WHICH THROWS. A body that is not a byte sequence is a producer that
+       did not build this record, and leaving that as a live TypeError would surface three frames later inside
+       whatever the caller does next — a page's own error, for a host's mistake. */
+    DCHECK(JS_IsArrayBuffer(body),
+           "a reply's body is not a byte sequence — Fetch §2.2.5 makes a body one, every producer of this "
+           "record writes an ArrayBuffer, and a STRING here is a zone that ran a decode this engine owns");
+    if (!JS_IsArrayBuffer(body)) { if (out_n) *out_n = 0; return EMPTY; }
+    p = JS_GetArrayBuffer(ctx, &n, body);
+    DCHECK(p != NULL || n == 0,
+           "a reply's body answered no bytes and a non-zero length — the only way JS_GetArrayBuffer does that "
+           "is a DETACHED buffer, and nothing in this engine transfers a reply's body away from it");
+    if (out_n) *out_n = n;
+    return p ? p : EMPTY;
+}
+
+JSValue fetch_reply_parse_json(JSContext *ctx, JSValueConst reply)
+{
+    JSValue bv = fetch_reply_body(ctx, reply);
+    size_t n = 0;
+    const uint8_t *b = fetch_body_bytes(ctx, bv, &n);
+    /* THE ONE IMPLEMENTATION of Infra's parse JSON from bytes — the same one `Response.json()` runs, because a
+       second copy of "UTF-8 decode, then JSON.parse" is a second place the decode can be forgotten. */
+    JSValue out = byte_reader_json(ctx, JS_UNDEFINED, (const char *)b, n);
+    JS_FreeValue(ctx, bv);
+    return out;
+}
+
 /* THE REPLY, as one engine-built object every host delivers. It is engine-built, so the reads on the other
    side run none of the page's code — which is why this is an object and not a second provider callback.
    `url_list` is §2.2.6's URL list, and it is a PARAMETER rather than a field this function invents: a host
@@ -327,7 +408,13 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
     v = JS_NewString(ctx, status_text ? status_text : "");
     CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's status message");
     CHECK(JS_SetPropertyStr(ctx, o, "statusText", v) >= 0, "fetch: a reply record refused its status message");
-    v = JS_NewStringLen(ctx, body ? body : "", body_len);
+    /* §2.2.5's BODY, AS THE BYTE SEQUENCE IT IS. This was `JS_NewStringLen`, and that call is a DECODE — the
+       lenient UTF-8 one cutils.h describes ("encoding errors are converted as 0xFFFD and use a single byte"),
+       run by the record's BUILDER on bytes no standard had looked at yet. So every C host destroyed the
+       evidence HTML §8.1.4.2's classic decode exists to read, a step before the extension's own `resp.text()`
+       did: a `charset=windows-1252` script's 0x92 reached script_fetch.c as C2 92 at best and as EF BF BD when
+       the byte stood alone. The record carries bytes now and each consumer runs its own standard's decode. */
+    v = JS_NewArrayBufferCopy(ctx, (const uint8_t *)(body ? body : ""), body_len);
     CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's body — a body that silently became empty is a "
                               "page reading a successful response with nothing in it");
     CHECK(JS_SetPropertyStr(ctx, o, "body", v) >= 0, "fetch: a reply record refused its body");
