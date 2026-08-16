@@ -70,9 +70,12 @@ CowDelta *cow_current(void);
    delta.
    A DELETE IS ONE OF THOSE WRITES — delete_property calls this before it removes the slot, and the entry
    therefore has to be able to say that the flow does NOT have the slot. It records a PAIR on each side (does
-   the slot exist, and only then its value): the baseline's read here, the flow's read at unapply. Without the
-   flow's absent case a deletion came back as `obj.x = undefined`, so the property returned inside the flow that
-   deleted it and two flows disagreed about the shape of shared state. See CowEntry in cow.c. */
+   the slot exist, and only then its §6.2.6 DESCRIPTOR — the value or the accessor pair, and the C/W/E bits):
+   the baseline's read here, the flow's read at unapply. Without the flow's absent case a deletion came back as
+   `obj.x = undefined`, so the property returned inside the flow that deleted it and two flows disagreed about
+   the shape of shared state; without the ATTRIBUTES a flow's `Object.freeze` on shared state could not be
+   widened back and a slot the flow created non-configurable could not be removed at all. See CowEntry in
+   cow.c. */
 void      cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom prop);
 
 /* Install as JSTimeTravelHooks.cell_write: called before a write to a shared CLOSURE CELL; captures it into the

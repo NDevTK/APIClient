@@ -6,9 +6,18 @@
 #include <string.h>
 
 /* ONE CAPTURED SLOT IS TWO STATES OF IT, AND A STATE IS A PAIR: does the slot EXIST, and — only then — what
-   value does it hold. The baseline's pair is (existed, base), read once at capture and restored by unapply; the
-   running flow's is (cur_state, cur), read at unapply and replayed by apply. The round trip IS those two pairs,
-   which is why each is asserted where it is read.
+   DESCRIPTOR does it hold. The baseline's pair is (existed, base), read once at capture and restored by unapply;
+   the running flow's is (cur_state, cur), read at unapply and replayed by apply. The round trip IS those two
+   pairs, which is why each is asserted where it is read.
+   THE STATE IS A §6.2.6 PROPERTY DESCRIPTOR AND NOT A VALUE, which is what it used to be. A slot is
+   {[[Value]],[[Writable]]} XOR {[[Get]],[[Set]]}, both carrying [[Enumerable]] and [[Configurable]], and an
+   entry that held only the value could express NONE of the rest: a flow's `Object.freeze(shared)` came back
+   still frozen because the unapply had no attributes to widen; a flow's `Object.defineProperty(shared,"x",{})`
+   — whose C/W/E all default to false — created a slot no delete could remove, so the flow's own creation stood
+   in the baseline for every sibling; and an accessor slot could only ABORT, on both sides, because half a
+   record cannot say which shape a slot is in. It is JSPropertyDescriptor, the engine's own record for exactly
+   this, so the read fills one and the write consumes one with nothing packed or unpacked in between; the
+   accessor bit inside `flags` IS the kind field, so there is no second `is_accessor` spelling to drift from it.
    THE FLOW'S HALF OF THE PAIR HAD NO ABSENT CASE, and `cur` alone cannot spell one. So a flow's own
    `delete obj.x` unapplied correctly — the baseline value came back — and then replayed on apply as
    `obj.x = undefined`: the property came back with it, `'x' in obj` answered true inside the very flow that
@@ -25,8 +34,9 @@
 enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
 /* A delta entry is EITHER a property slot (vref==NULL: obj/atom/existed) OR a closure cell (vref!=NULL: the
    shared JSVarRef, whose value is read/written via JS_VarRefGet/SetValue; obj/atom/existed unused). base/cur
-   hold the baseline/flow values either way. A cell has no ABSENT state — it holds a value or does not exist at
-   all — so its cur_state is only ever PRESENT, and apply asserts that rather than assuming it. */
+   hold the baseline/flow states either way — a CELL is not a property, so only their `.value` is its state and
+   the attributes stay zero (the cell arms assert that). A cell has no ABSENT state — it holds a value or does
+   not exist at all — so its cur_state is only ever PRESENT, and apply asserts that rather than assuming it. */
 /* A THIRD entry kind (is_gendata) swaps a shared COROUTINE object's execution-state pointer per flow: obj is
    the object, g0 its original state, g1 the per-flow clone (owned by this delta). Apply installs g1, unapply
    restores g0 — a fixed toggle, no cur/base value tracking. TWO OBJECT KINDS share it because they are one
@@ -34,7 +44,8 @@ enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
    GENERATOR object (is_gendata=1) and an async resolve/reject CLOSURE (is_gendata=2), whose activation is
    consumed by being resumed. */
 /* A FOURTH entry kind (is_map=1) is a reversible Set/Map record mutation by this flow (an UNDO-LOG entry, not a
-   deduped slot): obj is the Set/Map, base holds the record's key, cur its new value, map_old its prior value.
+   deduped slot): obj is the Set/Map, base.value holds the record's key, cur.value its new value, map_old its
+   prior value — a record is a key and a value and has no attributes, so the descriptors' other fields stay zero.
    map_op selects the inverse pair — ADD (apply re-adds, unapply deletes), OVERWRITE (apply sets cur, unapply
    restores map_old), DELETE (apply deletes, unapply re-adds map_old). Entries replay forward on apply and invert
    in reverse on unapply, so a sequence of mutations to the same key reconstructs correctly with NO dedup and no
@@ -76,10 +87,46 @@ enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
  *                        the bytes and not the element is in cow.h. */
 enum { COW_STATE_ASYNC = 0, COW_STATE_MODULE = 1, COW_STATE_HOST = 2, COW_STATE_HOST_REC = 3,
        COW_STATE_BUFFER = 4 };
-typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_state; void *vref;
+typedef struct { JSValue obj; JSAtom atom; int existed; JSPropertyDescriptor base; JSPropertyDescriptor cur;
+                 int cur_state; void *vref;
                  int is_gendata; void *g0; void *g1; int is_map; int map_op; JSValue map_old;
                  int is_state; int state_kind; void *target; size_t a_len; void *a_base; void *a_cur;
                  const CowRecord *rec; } CowEntry;
+
+/* EVERY FIELD OF A NEW ENTRY, IN ONE PLACE. Eleven producers each spelled the whole struct out, which is a list
+   that drifts exactly as §Architecture's hand-copied `_install` lines do: a field added to the struct is a field
+   ten of them do not mention, and the one that forgets it hands the swap a value nobody wrote — a JSValue read
+   as whatever the last entry at that address held. Each producer now writes only the fields ITS KIND owns, and
+   what a kind leaves alone is a positive statement (a cell has no attributes; a map record has no atom) rather
+   than a hole. */
+static void cow_entry_init(CowEntry *e) {
+    memset(e, 0, sizeof *e);
+    e->obj = JS_UNDEFINED;
+    e->atom = JS_ATOM_NULL;
+    e->base.value = e->base.getter = e->base.setter = JS_UNDEFINED;
+    e->cur.value = e->cur.getter = e->cur.setter = JS_UNDEFINED;
+    e->map_old = JS_UNDEFINED;
+    e->cur_state = COW_CUR_UNRECORDED;
+    e->state_kind = COW_STATE_ASYNC;
+}
+/* ONE STATE, DUPLICATED — a restore hands the slot write a descriptor it CONSUMES, and the entry must still
+   hold its own for the next switch. Every owned half is dup'd; which halves are live is the flags' business
+   and not this function's, because an absent half is JS_UNDEFINED and a dup of that is free. */
+static JSPropertyDescriptor cow_desc_dup(JSContext *ctx, const JSPropertyDescriptor *d) {
+    JSPropertyDescriptor c;
+    c.flags = d->flags;
+    c.value = JS_DupValue(ctx, d->value);
+    c.getter = JS_DupValue(ctx, d->getter);
+    c.setter = JS_DupValue(ctx, d->setter);
+    return c;
+}
+static void cow_desc_free(JSContext *ctx, JSPropertyDescriptor *d) {
+    JS_FreeValue(ctx, d->value);
+    JS_FreeValue(ctx, d->getter);
+    JS_FreeValue(ctx, d->setter);
+    d->flags = 0;
+    d->value = d->getter = d->setter = JS_UNDEFINED;
+}
 
 /* forked = has this flow snapshot-forked a sibling yet? Until it has, every object it CREATED (flow_local) is
    truly private — no other flow can observe it — so capturing its mutations is pure waste (keeps the delta
@@ -361,23 +408,20 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     if (cow_hash_find(d, JS_VALUE_GET_PTR(obj), atom, NULL) >= 0) return;   /* capture each slot ONCE (O(1)) */
 
     g_capturing = 1;
-    JSValue base;
-    /* the SLOT, not [[GetOwnProperty]]: this runs inside a write hook, so a Proxy trap or an accessor's getter
-       here would be the page's code with no flow base. JS_GetOwnSlot asserts that neither is reachable. */
-    int existed = JS_GetOwnSlot(ctx, &base, obj, atom) > 0;
+    JSPropertyDescriptor base;
+    /* the SLOT, not [[GetOwnProperty]]: this runs inside a write hook, so a Proxy trap here would be the page's
+       code with no flow base, and JS_GetOwnSlotDesc asserts that it is not reachable. An ACCESSOR is READ, not
+       refused: its getter and setter are function objects the descriptor carries and neither side ever calls
+       one, so a flow redefining a shared accessor is isolated like any other slot. */
+    int existed = JS_GetOwnSlotDesc(ctx, &base, obj, atom) > 0;
 
     cow_room_for_one(d, "cow: OOM growing delta — a lost baseline write leaks state across flows");
     CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
     e->atom = JS_DupAtom(ctx, atom);
     e->existed = existed;
     e->base = base;
-    e->cur = JS_UNDEFINED;
-    e->cur_state = COW_CUR_UNRECORDED;
-    e->vref = NULL;
-    e->is_gendata = 0;
-    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL; e->rec = NULL;
-    e->is_map = 0;
     cow_hash_add_last(d);
     g_capturing = 0;
 }
@@ -386,7 +430,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
    sibling that shares the cell is isolated on write. Captured once per cell (first write is the baseline). */
 /* Record a KNOWN-NEW fast-array APPEND slot (JSTimeTravelHooks.arr_append): the index == the array's current
    length, so it cannot already be in the delta (dedup unneeded) and its baseline is ABSENT (existed=0, no
-   JS_GetOwnSlot). O(1) — this is the accumulator hot path (a shared array built one element at a time);
+   JS_GetOwnSlotDesc). O(1) — this is the accumulator hot path (a shared array built one element at a time);
    routing it through cow_capture_hook's O(n) dedup scan makes an N-element build O(N^2). The flow-private skip is
    still applied (a post-fork private array — e.g. a per-flow accumulator built after the fork — is not captured). */
 void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
@@ -396,15 +440,10 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     g_capturing = 1;
     cow_room_for_one(d, "cow: OOM growing delta (arr_append)");
     CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
     e->atom = JS_DupAtom(ctx, atom);   /* a tagged-int index atom: dup is a no-op, kept for uniform free */
     e->existed = 0;                    /* an append creates the slot; unapply truncates it away */
-    e->base = JS_UNDEFINED;
-    e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
-    e->vref = NULL;
-    e->is_gendata = 0;
-    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL; e->rec = NULL;
-    e->is_map = 0;
     cow_hash_add_last(d);   /* in the index so a later OVERWRITE of this index dedups to the append entry */
     g_capturing = 0;
 }
@@ -419,17 +458,13 @@ void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSV
     g_capturing = 1;
     cow_room_for_one(d, "cow: OOM growing delta (map_add) — a lost Set/Map record leaks across flows");
     CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
-    e->atom = JS_ATOM_NULL;
-    e->existed = 0;
-    e->base = JS_DupValue(ctx, key);   /* the record's key (owned) */
-    e->cur = JS_DupValue(ctx, val);    /* the record's value (owned; UNDEFINED for a Set) */
+    e->base.value = JS_DupValue(ctx, key);   /* the record's key (owned) */
+    e->cur.value = JS_DupValue(ctx, val);    /* the record's value (owned; UNDEFINED for a Set) */
     e->cur_state = COW_CUR_PRESENT;   /* the record's value is the entry's own, not a slot read back off the heap */
-    e->vref = NULL;
-    e->is_gendata = 0;
-    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL; e->rec = NULL;
     e->is_map = 1;                     /* not slot-keyed — kept out of the hash index, like gendata */
-    e->map_op = COW_MAP_ADD; e->map_old = JS_UNDEFINED;
+    e->map_op = COW_MAP_ADD;
     g_capturing = 0;
 }
 
@@ -443,15 +478,11 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
     g_capturing = 1;
     cow_room_for_one(d, "cow: OOM growing delta (map_mutate) — a lost Set/Map mutation leaks across flows");
     CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
-    e->atom = JS_ATOM_NULL;
-    e->existed = 0;
-    e->base = JS_DupValue(ctx, key);
-    e->cur = JS_DupValue(ctx, val);        /* the new value (OVERWRITE); UNDEFINED for DELETE */
+    e->base.value = JS_DupValue(ctx, key);
+    e->cur.value = JS_DupValue(ctx, val);  /* the new value (OVERWRITE); UNDEFINED for DELETE */
     e->cur_state = COW_CUR_PRESENT;   /* the record's value is the entry's own, not a slot read back off the heap */
-    e->vref = NULL;
-    e->is_gendata = 0;
-    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL; e->rec = NULL;
     e->is_map = 1;
     e->map_op = (op == JS_MAP_MUTATE_DELETE) ? COW_MAP_DELETE : COW_MAP_OVERWRITE;
     e->map_old = JS_DupValue(ctx, old_val);   /* the prior value, restored on unapply */
@@ -484,13 +515,9 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
     if (cow_room_for_one(d, "cow: OOM growing delta (async_state) — a lost settlement leaks a flow's timeline"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
-    e->atom = JS_ATOM_NULL; e->existed = 0;
-    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
-    e->vref = NULL;
-    e->is_gendata = 0; e->g0 = e->g1 = NULL;
-    e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
-    e->is_state = 1; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = blob; e->a_cur = NULL; e->rec = NULL;
+    e->is_state = 1; e->state_kind = COW_STATE_ASYNC; e->a_base = blob;
     g_capturing = 0;
 }
 
@@ -528,9 +555,8 @@ void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_dat
     if (cow_room_for_one(d, "cow: OOM growing delta (async_fork) — a lost activation swap corrupts a flow's timeline"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
-    memset(e, 0, sizeof *e);
+    cow_entry_init(e);
     e->obj = JS_DupValue(ctx, closure);
-    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->map_old = JS_UNDEFINED;
     /* The POINTER is swapped, not the ownership: the closure's own reference stays on the original exactly as a
        generator object's stays on its object-owned state, and the delta owns the clone by adopting its creation
        reference. */
@@ -550,13 +576,8 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
     if (cow_room_for_one(d, "cow: OOM growing delta (module_eval)"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
-    e->obj = JS_UNDEFINED;
-    e->atom = JS_ATOM_NULL; e->existed = 0;
-    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
-    e->vref = NULL;
-    e->is_gendata = 0; e->g0 = e->g1 = NULL;
-    e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
-    e->is_state = 1; e->state_kind = COW_STATE_MODULE; e->target = mod; e->a_len = 0; e->a_base = blob; e->a_cur = NULL; e->rec = NULL;
+    cow_entry_init(e);
+    e->is_state = 1; e->state_kind = COW_STATE_MODULE; e->target = mod; e->a_base = blob;
     g_capturing = 0;
 }
 
@@ -590,13 +611,9 @@ void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t 
     if (cow_room_for_one(d, "cow: OOM growing delta (host_state)"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
     e->obj = JS_DupValue(ctx, owner);
-    e->atom = JS_ATOM_NULL; e->existed = 0;
-    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
-    e->vref = NULL;
-    e->is_gendata = 0; e->g0 = e->g1 = NULL;
-    e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
-    e->is_state = 1; e->state_kind = COW_STATE_HOST; e->target = p; e->a_len = n; e->a_cur = NULL; e->rec = NULL;
+    e->is_state = 1; e->state_kind = COW_STATE_HOST; e->target = p; e->a_len = n;
     e->a_base = cow_state_save(ctx, e);   /* the bytes as this flow found them */
     g_capturing = 0;
 }
@@ -624,14 +641,9 @@ void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
     if (cow_room_for_one(d, "cow: OOM growing delta (buffer bytes)"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
     e->obj = JS_DupValue(ctx, abuf);
-    e->atom = JS_ATOM_NULL; e->existed = 0;
-    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
-    e->vref = NULL;
-    e->is_gendata = 0; e->g0 = e->g1 = NULL;
-    e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
-    e->is_state = 1; e->state_kind = COW_STATE_BUFFER; e->target = NULL; e->a_len = len; e->a_cur = NULL;
-    e->rec = NULL;
+    e->is_state = 1; e->state_kind = COW_STATE_BUFFER; e->a_len = len;
     e->a_base = cow_state_save(ctx, e);   /* the bytes as this flow found them */
     g_capturing = 0;
 }
@@ -673,14 +685,9 @@ void cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec) 
     if (cow_room_for_one(d, "cow: OOM growing delta (host_record)"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
     e->obj = JS_DupValue(ctx, owner);
-    e->atom = JS_ATOM_NULL; e->existed = 0;
-    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
-    e->vref = NULL;
-    e->is_gendata = 0; e->g0 = e->g1 = NULL;
-    e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
-    e->is_state = 1; e->state_kind = COW_STATE_HOST_REC; e->target = p; e->a_len = 0; e->a_cur = NULL;
-    e->rec = rec;
+    e->is_state = 1; e->state_kind = COW_STATE_HOST_REC; e->target = p; e->rec = rec;
     e->a_base = cow_state_save(ctx, e);   /* the record as this flow found it */
     g_capturing = 0;
 }
@@ -692,14 +699,11 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
     g_capturing = 1;
     cow_room_for_one(d, "cow: OOM growing delta (var_ref)");
     CowEntry *e = &d->e[d->n++];
-    e->obj = JS_UNDEFINED; e->atom = JS_ATOM_NULL; e->existed = 0;
-    e->base = JS_VarRefGetValue(vref);   /* owned dup of the cell's current (baseline) value */
-    e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
+    cow_entry_init(e);
+    e->base.value = JS_VarRefGetValue(vref);   /* owned dup of the cell's current (baseline) value; a cell has
+                                                  no attributes and no accessor half, so the rest stays zero */
     e->vref = vref;
     JS_VarRefRef(vref);                  /* the DELTA owns it: the cell's own frames may die before the delta does */
-    e->is_gendata = 0;
-    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL; e->rec = NULL;
-    e->is_map = 0;
     cow_hash_add_last(d);
     g_capturing = 0;
 }
@@ -719,12 +723,9 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
     }
     cow_room_for_one(d, "cow: OOM growing delta (gendata) — a lost generator swap corrupts per-flow state");
     CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
     e->obj = JS_DupValue(ctx, genobj);
-    e->atom = JS_ATOM_NULL; e->existed = 0; e->base = JS_UNDEFINED;
-    e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED; e->vref = NULL;
-    e->is_gendata = 1; e->g0 = base_gd; e->g1 = cur_gd;
-    e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL; e->rec = NULL;   /* adopts cur_gd's creation ref (freed on delta free) */
-    e->is_map = 0;
+    e->is_gendata = 1; e->g0 = base_gd; e->g1 = cur_gd;   /* adopts cur_gd's creation ref (freed on delta free) */
 }
 
 /* PASS 1 of an unapply — READ this entry's flow-side state off the live heap. Writes nothing to the heap. */
@@ -736,19 +737,19 @@ static void cow_save_cur(JSContext *ctx, CowEntry *e) {
         return;
     }
     if (e->is_map) return;       /* an UNDO-LOG entry: it inverts, it does not read the collection back */
-    if (e->vref) {               /* closure cell */
-        if (e->cur_state != COW_CUR_UNRECORDED) JS_FreeValue(ctx, e->cur);
-        e->cur = JS_VarRefGetValue(e->vref); e->cur_state = COW_CUR_PRESENT;
+    if (e->vref) {               /* closure cell: a value, never a descriptor — see the CowEntry comment */
+        if (e->cur_state != COW_CUR_UNRECORDED) cow_desc_free(ctx, &e->cur);
+        e->cur.value = JS_VarRefGetValue(e->vref); e->cur_state = COW_CUR_PRESENT;
         return;
     }
-    JSValue cur;
-    int has = JS_GetOwnSlot(ctx, &cur, e->obj, e->atom);
+    JSPropertyDescriptor cur;
+    int has = JS_GetOwnSlotDesc(ctx, &cur, e->obj, e->atom);
     DCHECK(has >= 0, "reading back a captured slot threw — a delta holds something that is not an object, "
                      "and a context switch has no flow base to run an exception on");
-    DCHECK(has > 0 || JS_IsUndefined(cur),
-           "an ABSENT slot was recorded carrying a value — apply would write it back and re-create the "
+    DCHECK(has > 0 || (JS_IsUndefined(cur.value) && cur.flags == 0),
+           "an ABSENT slot was recorded carrying a descriptor — apply would write it back and re-create the "
            "property this flow deleted");
-    if (e->cur_state != COW_CUR_UNRECORDED) JS_FreeValue(ctx, e->cur);
+    if (e->cur_state != COW_CUR_UNRECORDED) cow_desc_free(ctx, &e->cur);
     e->cur = cur;
     e->cur_state = has > 0 ? COW_CUR_PRESENT : COW_CUR_ABSENT;
 }
@@ -758,25 +759,35 @@ static void cow_restore_base(JSContext *ctx, CowEntry *e) {
     if (e->is_gendata) { cow_gd_install(e, e->g0); return; }   /* restore the shared original */
     if (e->is_state) { cow_state_restore(ctx, e, e->a_base); return; }
     if (e->is_map) {   /* invert the flow's record mutation: ADD->delete, OVERWRITE/DELETE->restore old value */
-        if (e->map_op == COW_MAP_ADD) JS_MapDeleteRecord(ctx, e->obj, e->base);
-        else JS_MapAddRecord(ctx, e->obj, e->base, e->map_old);
+        if (e->map_op == COW_MAP_ADD) JS_MapDeleteRecord(ctx, e->obj, e->base.value);
+        else JS_MapAddRecord(ctx, e->obj, e->base.value, e->map_old);
         return;
     }
-    if (e->vref) { JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->base)); return; }
+    if (e->vref) {
+        DCHECK(e->base.flags == 0 && JS_IsUndefined(e->base.getter),
+               "a closure cell was recorded carrying property ATTRIBUTES — a cell is storage and not a "
+               "property, so whatever wrote those read the cell as something it is not");
+        JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->base.value));
+        return;
+    }
     uint32_t ai;
     if (e->existed)
-        /* THE BASELINE VALUE, PUT BACK — as a SLOT WRITE, which is the same thing the read side has always been.
-           This was a JS_SetProperty: a [[Set]], an operation THROUGH the slot, which walks the prototype chain,
-           calls a setter, and consults `writable` and `extensible` — and refuses by THROWING (it carries
-           JS_PROP_THROW) inside a context switch with no flow base to run the exception on. Three shapes reached
-           it and each left a pending TypeError belonging to no flow, which the next thing to check for an
-           exception read as its own: a slot the flow narrowed with a define (Object.freeze, `{writable:false}`);
-           a slot the flow DELETED off a non-extensible object; and a SPURIOUS capture whose write then threw
-           (`Math.PI = 1` in a flow captures, fails, and comes back here to put back a value the slot never
-           stopped holding). None of them can arise now: JS_SetOwnSlot asks none of those questions, so there is
-           no status here to check and nothing left for an assert to report. What the entry still cannot express
-           is the slot's ATTRIBUTES — the descriptor entry, which the asserts that name it still guard. */
-        JS_SetOwnSlot(ctx, e->obj, e->atom, JS_DupValue(ctx, e->base));
+        /* THE BASELINE DESCRIPTOR, PUT BACK — as a SLOT WRITE, which is the same thing the read side has
+           always been. This was a JS_SetProperty: a [[Set]], an operation THROUGH the slot, which walks the
+           prototype chain, calls a setter, and consults `writable` and `extensible` — and refuses by THROWING
+           (it carries JS_PROP_THROW) inside a context switch with no flow base to run the exception on. Three
+           shapes reached it and each left a pending TypeError belonging to no flow, which the next thing to
+           check for an exception read as its own: a slot the flow narrowed with a define (Object.freeze,
+           `{writable:false}`); a slot the flow DELETED off a non-extensible object; and a SPURIOUS capture
+           whose write then threw (`Math.PI = 1` in a flow captures, fails, and comes back here to put back a
+           value the slot never stopped holding). None of them can arise: JS_SetOwnSlotDesc asks none of those
+           questions. And what it puts back is now the WHOLE state — the C/W/E bits and, where the slot is an
+           accessor, its getter/setter pair — so the flow's own `Object.freeze` on shared state comes back off,
+           which is the half that used to have an assert standing where the mechanism belonged. */
+        {
+            JSPropertyDescriptor d = cow_desc_dup(ctx, &e->base);
+            JS_SetOwnSlotDesc(ctx, e->obj, e->atom, &d);
+        }
     else if (JS_IsArrayIndexSlot(e->obj, e->atom, &ai))
         /* flow-CREATED array append: TRUNCATE the array to this index (frees the tail), removing it. Entries
            are processed in reverse (highest index first), so a contiguous run of appends shrinks one-by-one
@@ -784,16 +795,13 @@ static void cow_restore_base(JSContext *ctx, CowEntry *e) {
            would convert the fast array to slow and leave the LENGTH standing, which nothing else would take
            back down — the array's length is derived from these entries rather than captured as the slot it is. */
         JS_ArraySetLength(ctx, e->obj, ai);
-    else {
-        /* THE FLOW'S OWN CREATION, REMOVED — and the removal is CHECKED, which is the same omission the value
-           restore above had: the result was dropped on the floor, so a slot this delta cannot take back out
-           stood in the baseline for every sibling with nothing to say so. The mirror of cow_apply_entries'
-           re-delete assert, and it names the same missing half. */
-        int deleted = JS_DeleteProperty(ctx, e->obj, e->atom, 0);
-        DCHECK(deleted > 0, "a slot this flow CREATED could not be removed from the baseline: a define made it "
-                            "non-configurable and an entry records a slot's VALUE and never its ATTRIBUTES, so "
-                            "build the descriptor entry beside the value");
-    }
+    else
+        /* THE FLOW'S OWN CREATION, REMOVED — as a SLOT REMOVAL, for the reason the write above is a slot write.
+           This was JS_DeleteProperty, the [[Delete]] OPERATION, which 10.1.10.1 makes refuse a non-configurable
+           slot: `Object.defineProperty(shared,"x",{value:1})` defaults C/W/E to false, so the commonest way a
+           flow creates a slot was one the unapply could not take back out — it stood in the baseline for every
+           sibling, and the assert that reported it is gone because the mechanism it named is here. */
+        JS_DeleteOwnSlot(ctx, e->obj, e->atom);
 }
 
 /* A SAVE IS A READ OF THE SAME HEAP A RESTORE WRITES, so ALL of one segment's entries are read BEFORE ANY of
@@ -834,8 +842,8 @@ static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
         if (e->is_gendata) { cow_gd_install(e, e->g1); continue; }   /* install this flow's own clone */
         if (e->is_state) { cow_state_restore(ctx, e, e->a_cur); continue; }   /* re-install what this flow produced */
         if (e->is_map) {   /* replay the flow's record mutation: ADD/OVERWRITE->set new value, DELETE->delete */
-            if (e->map_op == COW_MAP_DELETE) JS_MapDeleteRecord(ctx, e->obj, e->base);
-            else JS_MapAddRecord(ctx, e->obj, e->base, e->cur);
+            if (e->map_op == COW_MAP_DELETE) JS_MapDeleteRecord(ctx, e->obj, e->base.value);
+            else JS_MapAddRecord(ctx, e->obj, e->base.value, e->cur.value);
             continue;
         }
         if (e->cur_state == COW_CUR_UNRECORDED) continue;   /* never switched out: nothing of this flow's to replay */
@@ -843,29 +851,28 @@ static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
             DCHECK(e->cur_state == COW_CUR_PRESENT,
                    "a closure cell was recorded ABSENT — a cell holds a value or does not exist at all, so "
                    "there is no deletion of one for apply to replay");
-            JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->cur));
+            JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->cur.value));
         } else if (e->cur_state == COW_CUR_PRESENT) {
-            /* THE FLOW'S OWN VALUE, REPLAYED — the same slot write cow_restore_base makes, and for the same
+            /* THE FLOW'S OWN STATE, REPLAYED — the same slot write cow_restore_base makes, and for the same
                reason, with one difference that made it worse here: it was a JS_SetProperty whose result nothing
-               looked at at all. An entry records a VALUE and never the ATTRIBUTES, so a slot narrowed to
-               non-writable — by this flow's own `Object.freeze` on shared state, which the unapply has no
-               descriptor to widen back, or by a sibling's — refused the replay by THROWING a TypeError into a
-               context switch that had no flow to own it, and the flow then resumed without the value it wrote. */
-            JS_SetOwnSlot(ctx, e->obj, e->atom, JS_DupValue(ctx, e->cur));
+               looked at at all, so a slot narrowed to non-writable (by this flow's own `Object.freeze` on
+               shared state, or by a sibling's) refused the replay by THROWING a TypeError into a context switch
+               that had no flow to own it, and the flow then resumed without the value it wrote. The descriptor
+               carries the flow's own attributes with its value, so a freeze this flow made is re-applied as the
+               freeze it was rather than lost or refused. */
+            JSPropertyDescriptor d = cow_desc_dup(ctx, &e->cur);
+            JS_SetOwnSlotDesc(ctx, e->obj, e->atom, &d);
         } else {
             /* THE FLOW'S OWN DELETE, REPLAYED AS A DELETE. The chain below has just put the slot back (it is
                baseline state, which is the only kind that gets captured), and writing `cur` over it would put
                back a PROPERTY holding undefined — the slot this flow removed, standing in the flow that
                removed it. A deletion is not a value, so it is replayed by the operation the flow performed.
-               It cannot be refused: the flow reached ABSENT by removing the slot (so it was configurable) or
-               by never creating it, and a non-configurable slot is one delete_property leaves standing, which
-               is a PRESENT record. So a refusal says the slot below is non-configurable and was NOT when this
-               flow deleted it, and the only way it got that way is a sibling whose redefinition the delta
-               could not take back out. */
-            int deleted = JS_DeleteProperty(ctx, e->obj, e->atom, 0);
-            DCHECK(deleted > 0, "a slot this flow does not own could not be re-deleted: it is non-configurable "
-                                "below and was not when this flow deleted it — an entry records a slot's VALUE "
-                                "and never its ATTRIBUTES, so build the flags capture beside the value");
+               It cannot be refused, and that is now true by CONSTRUCTION rather than by an argument about
+               what the chain below can hold: JS_DeleteOwnSlot removes the slot whatever its attributes, so
+               there is no status left for an assert to read. The argument it replaced was also wrong — it
+               reasoned that a non-configurable slot below could only come from a sibling, and the flow's own
+               `Object.defineProperty` on shared state makes one every time. */
+            JS_DeleteOwnSlot(ctx, e->obj, e->atom);
         }
     }
 }
@@ -1081,18 +1088,22 @@ static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
             cow_state_free(JS_GetRuntime(ctx), &e[i], e[i].a_cur);
             continue;
         }
-        if (e[i].is_map) {   /* obj + key(base) + new(cur) + old(map_old); atom is NULL */
+        if (e[i].is_map) {   /* obj + key(base.value) + new(cur.value) + old(map_old); atom is NULL */
             JS_FreeValue(ctx, e[i].obj);
-            JS_FreeValue(ctx, e[i].base);
-            JS_FreeValue(ctx, e[i].cur);
+            cow_desc_free(ctx, &e[i].base);
+            cow_desc_free(ctx, &e[i].cur);
             JS_FreeValue(ctx, e[i].map_old);
             continue;
         }
         JS_FreeValue(ctx, e[i].obj);
         JS_FreeAtom(ctx, e[i].atom);
-        JS_FreeValue(ctx, e[i].base);
+        /* THE WHOLE DESCRIPTOR, BOTH SIDES — an accessor entry owns two function objects where a data entry
+           owns one value, and a free that knew only about the value would have leaked the pair. That is the
+           obligation §Architecture names: a field added to the record is an obligation at every clone and every
+           free, which is why the dup and this free are one pair (cow_desc_dup / cow_desc_free). */
+        cow_desc_free(ctx, &e[i].base);
         if (e[i].vref) JS_VarRefUnref(ctx, e[i].vref);   /* the delta's own reference on the cell */
-        if (e[i].cur_state != COW_CUR_UNRECORDED) JS_FreeValue(ctx, e[i].cur);   /* ABSENT holds undefined */
+        if (e[i].cur_state != COW_CUR_UNRECORDED) cow_desc_free(ctx, &e[i].cur);   /* ABSENT holds nothing */
     }
 }
 
