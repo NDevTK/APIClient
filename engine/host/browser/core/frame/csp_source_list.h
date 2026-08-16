@@ -85,8 +85,12 @@ CspMatch csp_source_list_match_url(const CspDirective *directive, const UrlRecor
 
 /* §6.7.2.8 "does url match expression in origin with redirect count?" — ONE source expression, exposed beside
    the list because it is the whole of §6.7.2.7's body and because it is the unit a fixture can state a
-   grammar case in (`*`, `https:`, `*.example.com`, `https://x:*/a/`, `'self'`) without building a directive
-   around each one. `expression` is one token of §2.3's value. */
+   grammar case in (`*`, `https:`, `*.example.com`, a port wildcard `https://x:*`, a path `https://x/a/`,
+   `'self'`) without building a directive around each one. `expression` is one token of §2.3's value.
+   THE PORT WILDCARD AND THE PATH ARE NAMED SEPARATELY, and not as the one example that shows both, because
+   `https://x:*` immediately followed by `/a/` spells `*` `/` inside a block comment — which ENDS IT. That is
+   not a style note: it is why this file did not compile, and the three errors it produced named a type `a`,
+   an unexpected `§`, and an undeclared `csp_source_match_url` — none of which mentions a comment. */
 CspMatch csp_source_match_url(CspToken expression, const UrlRecord *url, const Origin *self_origin,
                               int redirect_count);
 
