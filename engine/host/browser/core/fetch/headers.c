@@ -385,19 +385,49 @@ static int header_value_has_forbidden_method(const char *v)
     }
 }
 
+/* §5.1's OWN list, in the standard's own order and containing nothing else — so a name added to or removed
+   from this array is a diff against the spec text and can be read as one. Fetch's list is not the whole of the
+   platform's, and the way a reader tells the difference is that the other standards' entries are BELOW, each
+   under the sentence that adds it. */
+static const char *const FORBIDDEN_REQUEST_FETCH[] = {
+    "accept-charset", "accept-encoding", "access-control-request-headers",
+    "access-control-request-method", "connection", "content-length", "cookie", "cookie2", "date", "dnt",
+    "expect", "host", "keep-alive", "origin", "referer", "set-cookie", "te", "trailer",
+    "transfer-encoding", "upgrade", "via",
+};
+
+/* PRIVATE NETWORK ACCESS §3.4.4 "Forbidden header names", in full: "A new entry is added to the list of
+   forbidden request-header names: `Access-Control-Request-Private-Network`." (Draft Community Group Report,
+   26 September 2024, https://wicg.github.io/private-network-access/#forbidden-header-names.) The note under it
+   gives the reason this component cares: "The user agent should have full control over this header, just as it
+   does over other CORS headers."
+ *
+ * IT IS KEPT, AND THIS IS THE DECISION RATHER THAN AN ACCIDENT. `private-network` does not occur anywhere in
+ * fetch.spec.whatwg.org, and an entry that matched only Chrome's behaviour would be exactly the kind of
+ * hardcoded string this codebase deletes. It is not one: the platform's list is the union of Fetch's plus every
+ * standard that adds to it, and this is a live specification adding to it in those words — so keeping it IS
+ * "implement the spec at the root", and Chrome shipping it is the CONFIRMATION, in that order and not the
+ * other. The array it lives in is separate so that stays legible without a reader having to trust a comment:
+ * two lists, two standards, and the Fetch one still diffs clean against §5.1.
+ *
+ * The consequence this engine is built for follows the same way. What a request CARRIES is the report's claim,
+ * and a header the user agent strips is a header the report must not carry — so a bundle that sets this name
+ * gets the browser's answer (dropped, `get` answers null) rather than a fabricated one. The rest of Private
+ * Network Access is a network-layer feature (target IP address space, the preflight that would send this
+ * header); none of it is scriptable and none of it changes what this list answers. */
+static const char *const FORBIDDEN_REQUEST_PNA[] = {
+    "access-control-request-private-network",
+};
+
 /* §5.1 "forbidden request-header". The name arrives LOWERCASED (header_lower is what every entry point runs
    first), so these comparisons are the spec's byte-case-insensitive match. */
 static int header_is_forbidden_request(const char *lower_name, const char *value)
 {
-    static const char *const NAMES[] = {
-        "accept-charset", "accept-encoding", "access-control-request-headers",
-        "access-control-request-method", "access-control-request-private-network", "connection",
-        "content-length", "cookie", "cookie2", "date", "dnt", "expect", "host", "keep-alive", "origin",
-        "referer", "set-cookie", "te", "trailer", "transfer-encoding", "upgrade", "via",
-    };
     size_t i;
-    for (i = 0; i < sizeof(NAMES) / sizeof(NAMES[0]); i++)
-        if (header_ci_eq(lower_name, NAMES[i])) return 1;
+    for (i = 0; i < sizeof(FORBIDDEN_REQUEST_FETCH) / sizeof(FORBIDDEN_REQUEST_FETCH[0]); i++)
+        if (header_ci_eq(lower_name, FORBIDDEN_REQUEST_FETCH[i])) return 1;
+    for (i = 0; i < sizeof(FORBIDDEN_REQUEST_PNA) / sizeof(FORBIDDEN_REQUEST_PNA[0]); i++)
+        if (header_ci_eq(lower_name, FORBIDDEN_REQUEST_PNA[i])) return 1;
     /* the two PREFIXES the spec reserves for the browser and for the platform */
     if (!strncmp(lower_name, "proxy-", 6) || !strncmp(lower_name, "sec-", 4)) return 1;
     /* the method-override family is forbidden only for the VALUES that would smuggle a forbidden method */
