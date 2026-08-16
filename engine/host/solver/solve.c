@@ -1,6 +1,7 @@
 /* @S solver — see solve.h. Forced-exec candidate: derive the breakout from the sink's lexical CONTEXT, inject
    it at the source, re-run the REAL code, and verify it FIRES. */
 #include "solver/solve.h"
+#include "solver/solve_html.h"
 #include "core/json_buf.h"
 #include "core/frame/policy_container.h"
 #include "core/html/trusted_types.h"
@@ -36,10 +37,23 @@ static void set_fired(void)      { int *p = fired_slot(); if (p) *p = 1; }
    inside a lazily-imported chunk, inside an injected <script src> — is discovered after the frontier has already
    drained once, and a one-shot "the candidates are seeded" latch meant it never got any. That latch was a cap:
    it bounded verification by WHEN a sink was found rather than by whether it had been searched. */
-/* `tried` is the COUNT of breakouts this sink's search has run, not a bit: a sink with no PoC is REPORTED as a
-   parked search, and "parked after 0 candidates" and "parked after 5" are different states of the search that a
-   flag cannot tell apart. Non-zero also means seeded, so the idempotence the re-seed depends on is unchanged. */
-typedef struct { char *src; int sink; int tried; } Cand;
+/* `tried` is the COUNT of candidate runs this sink's search has had, not a bit: a sink with no PoC is REPORTED
+   as a parked search, and "parked after 0 candidates" and "parked after 5" are different states of the search
+   that a flag cannot tell apart. It counts RUNS and not breakouts, because for a derived-context sink the
+   first of them is the CONTEXT PROBE, which re-runs the whole page exactly as a breakout does and is the run
+   that produced every breakout after it — reporting it as free would say the search cost less than it did. */
+typedef struct {
+    char *src; int sink; int tried;
+    /* THE BREAKOUTS THIS SINK'S SEARCH HAS, IN ORDER, AND HOW MANY OF THEM ARE ALREADY FLOWS. A derived-context
+       sink does not KNOW its breakouts when it is detected — a probe run reads them off the sink's own parse —
+       so the list GROWS after seeding has already happened, and a one-shot "this sink is seeded" latch cannot
+       express that. A cursor can: seeding takes everything past it, so a breakout derived at any later moment
+       is picked up by the next drain and none is ever seeded twice.
+       TEXT, never an index into the class table: a candidate flow carries its payload to the cold tier and back
+       (cold.c parks `cand_payload` as bytes for exactly this reason), so a recipe parked this session must
+       still mean the same thing to a build whose tables have changed. */
+    char **pl; int npl, plcap, seeded;
+} Cand;
 static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
 
 /* THE SINK CLASS TABLE, defined below its candidate sets. Everything a report says about a sink is a row of
@@ -72,10 +86,19 @@ static void fire_js(const char *src, size_t len) {
     free(body);
 }
 
-/* Breakout CANDIDATES — one per common JS context. We do NOT statically detect which context applies (that
-   needs a JS lexer + loses to filters/encoders the code may apply); instead we try each through the REAL code
-   and the one that FIRES is the verified PoC. Re-execution is the oracle, so this survives any quoting/filter
-   the code imposes and needs no lexer. */
+/* THE BREAKOUTS A SINK CLASS STARTS ITS SEARCH FROM, where they are WRITTEN DOWN rather than derived.
+   §@S allows exactly one reason to write one down, and CANDS_URL is it: the sink IS a single context, so there
+   is nothing to derive — navigating a URL executes the `javascript:` scheme and nothing else does. Its row
+   says which context makes it the only answer.
+   CANDS_JS IS NOT THAT, and this comment does not pretend otherwise. An eval sink's argument lands in a JS
+   LEXICAL state — bare expression, string, template, comment — exactly as a markup sink's lands in a tokenizer
+   state, so this list is the same guess-spray CANDS_HTML was and it goes the same way: solve_js.c's
+   construct_js_breakout, its own diff, next.
+   CANDS_HTML IS GONE. Five guessed markup payloads tried at every markup sink, and the defect was not that it
+   was inelegant: a sink whose lexical context none of the five fitted was unsolvable BY CONSTRUCTION and the
+   search could not say so — it reported `parked, tried 5` while never stating what it had failed to escape.
+   solve_html.c reads that context off the REAL parse of the sink's OWN output and CRASHES on a state it cannot
+   name, which is the difference between a search that has not solved and a capability that is not built. */
 static const char *CANDS_JS[] = {
     "X9()",           /* statement / expression position — the input runs directly */
     "';X9();//",      /* single-quoted string context */
@@ -84,19 +107,18 @@ static const char *CANDS_JS[] = {
     "${X9()}",        /* template interpolation */
     NULL
 };
-static const char *CANDS_HTML[] = {
-    "<svg onload=X9()>",           /* HTML-text context: an auto-firing element */
-    "<img src=x onerror=X9()>",    /* HTML-text: img onerror fires on the bad src */
-    "\"><svg onload=X9()>",        /* break out of a double-quoted attribute, then a firing element */
-    "'><svg onload=X9()>",         /* single-quoted attribute */
-    "></textarea><svg onload=X9()>", /* rawtext element (textarea/title/...) — close it first */
-    NULL
-};
 static const char *CANDS_URL[] = {
     "javascript:X9()",     /* URL context: the vector IS the javascript: scheme (one fixed context) */
     "javascript:X9()//",
     NULL
 };
+
+/* HOW A SINK CLASS GETS ITS BREAKOUT. This is ROUTING between two GENUINELY DIFFERENT algorithms and not a
+   fallback selecting against a legacy body — the test §C-stack states: delete the derivation and a
+   single-context sink still needs its one stated vector, delete the vector list and a derived sink still needs
+   its parser, so neither is the other's leftover. A class declares exactly ONE of the two and solve_init
+   asserts it, which is what stops a class being added with neither and reported as parked forever. */
+enum { SINK_DERIVE_NONE = 0, SINK_DERIVE_HTML };
 /* THE SINK CLASSES — one row per lexical context the solver breaks out of, and the row holds everything that
    is a fact about THE SINK rather than about a run. They are one row because they are one thing: the sink's
    FIRE ORACLE. Before this they were four scattered statements of it, and one of the four did not exist:
@@ -109,8 +131,9 @@ static const char *CANDS_URL[] = {
      - the eval oracle hands the sink's own argument to the flow's program queue, because that is what the sink
        itself does with it — so a fired eval PoC runs the instant the page reaches that call;
      - html_fire_walk runs `onload` and `onerror` and NOTHING else (the AUTO-firing handlers — `onmouseover`
-       needs interaction) over markup it has just parsed, and CANDS_HTML is auto-firing elements for exactly
-       that reason, so a fired HTML PoC runs at insertion and never needs a click;
+       needs interaction) over markup it has just parsed, and solve_html.c's constructed escapes end in an
+       auto-firing element for exactly that reason, so a fired HTML PoC runs at insertion and never needs a
+       click;
      - url_fire runs a URL's JS only when the scheme is `javascript:`, which is code that runs when the
        NAVIGATION happens — for this engine's URL sink, a form whose action the page wrote, on submission.
    THE TRUSTED TYPES COLUMN IS THE SPEC'S, NOT THIS ENGINE'S CODE PATH: TT §3.8 makes the markup sinks
@@ -121,17 +144,34 @@ static const char *CANDS_URL[] = {
    on resume; `sink_class_of_name` is that binding. */
 struct SinkClass {
     const char       *name;      /* the display name a report and a parked entry carry */
-    const char      **cands;     /* the breakout set this lexical context needs */
+    const char      **vectors;   /* the FIXED breakouts of a SINGLE-CONTEXT sink, NULL where `derive` builds them */
+    int               derive;    /* SINK_DERIVE_* — which parser reads this sink's OWN output for its context */
     PolicyScriptKind  policy;    /* which of CSP's four script questions a fired breakout turns on */
     int               tt;        /* the TrustedTypeKind gating this sink, or -1 — the spec makes it no TT sink */
     const char       *fires_on;  /* what makes the fired breakout RUN, from the oracle above */
 };
 static const SinkClass SINKS[] = {
-    [SINK_EVAL] = { "eval",      CANDS_JS,   POLICY_EVAL,            TRUSTED_TYPE_SCRIPT, "sink-evaluates" },
-    [SINK_HTML] = { "innerHTML", CANDS_HTML, POLICY_INLINE_HANDLER,  TRUSTED_TYPE_HTML,   "parse-insert"   },
-    [SINK_URL]  = { "location",  CANDS_URL,  POLICY_JAVASCRIPT_URL,  -1,                  "navigation"     },
+    [SINK_EVAL] = { "eval",      CANDS_JS,  SINK_DERIVE_NONE, POLICY_EVAL,           TRUSTED_TYPE_SCRIPT, "sink-evaluates" },
+    [SINK_HTML] = { "innerHTML", NULL,      SINK_DERIVE_HTML, POLICY_INLINE_HANDLER, TRUSTED_TYPE_HTML,   "parse-insert"   },
+    [SINK_URL]  = { "location",  CANDS_URL, SINK_DERIVE_NONE, POLICY_JAVASCRIPT_URL, -1,                  "navigation"     },
 };
 #define SINK_CLASS_N ((int)(sizeof SINKS / sizeof SINKS[0]))
+
+/* WHAT A DERIVED-CONTEXT SINK'S SEARCH OPENS WITH: an inert LOCATOR injected at the source in place of a
+   breakout, so that ONE re-run of the real page shows the derivation where the attacker's bytes actually land
+   — after the page's own filters, concatenations and re-encodings, which is the observation §@S(2) requires
+   and which no static shape of the expression can make. It is a candidate flow like every other: it re-runs
+   the page, so it costs what a breakout costs and it counts as one in `tried`. */
+static const char *derive_probe(int derive) {
+    switch (derive) {
+    case SINK_DERIVE_HTML: return SOLVE_HTML_LOCATOR;
+    default: break;
+    }
+    DFAIL("a sink class declared a context derivation this file has no probe for - the probe is the run the "
+          "derivation reads its context from, so a derivation without one seeds no candidates at all and the "
+          "sink reports as parked forever");
+    return NULL;
+}
 
 /* CHECK rather than DCHECK: every row of the report is written straight out of this table, so an index it does
    not have is the report reading past its own data. */
@@ -159,32 +199,83 @@ void solve_init(JSContext *ctx) {
     g_pending = NULL; g_pending_n = g_pending_cap = 0;
     g_cands_seeded = 0;
     g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
-    /* EVERY SINK CLASS DECLARES ITS WHOLE ROW. A row IS the sink's contract — the breakout set a candidate is
-       seeded with, the CSP question, the Trusted Types question, and the fire semantics a PoC states — and a
-       row added with a field left out does not fail: it emits a finding missing exactly that fact, which is
-       the silent half-envelope this record exists to end.
+    /* EVERY SINK CLASS DECLARES ITS WHOLE ROW. A row IS the sink's contract — where its breakout comes from,
+       the CSP question, the Trusted Types question, and the fire semantics a PoC states — and a row added with
+       a field left out does not fail: it emits a finding missing exactly that fact, which is the silent
+       half-envelope this record exists to end.
+       WHERE THE BREAKOUT COMES FROM IS ONE ANSWER, NOT TWO, so the assert is an EXCLUSIVE OR and not two
+       presence checks: a class carrying both a written-down vector set and a context derivation would run the
+       derivation and then also spray the list it was built to delete, and a class carrying neither is seeded
+       nothing at all and reports as parked forever with no search having run.
        (`tt` is deliberately not asserted non-negative: -1 is the POSITIVE statement that the standard makes
        this sink no Trusted Types sink at all, which is what the URL row means.) */
     for (int i = 0; i < SINK_CLASS_N; i++) {
-        DCHECK(SINKS[i].name && SINKS[i].cands && SINKS[i].cands[0] && SINKS[i].fires_on,
-               "a sink class was declared without its display name, its breakout set or the fire semantics its "
-               "oracle gives it — a PoC cannot state how it reproduces without that row being whole");
+        DCHECK(SINKS[i].name && SINKS[i].fires_on,
+               "a sink class was declared without its display name or the fire semantics its oracle gives it — "
+               "a PoC cannot state how it reproduces without that row being whole");
+        DCHECK(!!(SINKS[i].vectors && SINKS[i].vectors[0]) != (SINKS[i].derive != SINK_DERIVE_NONE),
+               "a sink class declared both a fixed vector set and a context derivation, or neither — a "
+               "breakout comes from exactly one of the two, and a class with neither is seeded no candidates");
     }
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "X9", JS_NewCFunction(ctx, js_x9, "X9", 0));
     JS_FreeValue(ctx, g);
 }
 
-static void add_pending(const char *src, int sink) {
-    for (int i = 0; i < g_pending_n; i++) if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return;   /* dedup */
+/* THE ONE PLACE A SINK BECOMES PENDING — find-or-create, answering WHICH of the two it did. The distinction is
+   load-bearing and used to be spelled as a `tried` test at the seeder: only a NEWLY detected sink opens a
+   search (its class's written-down vectors, or its context probe), because a resumed parked candidate is
+   already ONE of that search's flows and re-opening it would seed the whole search a second time. */
+static Cand *pending_entry(const char *src, int sink, int *created) {
+    Cand *e;
+
+    DCHECK(src && created, "a sink was registered as pending with no source, or with nowhere to say whether "
+                           "this call is the one that opened its search");
+    *created = 0;
+    for (int i = 0; i < g_pending_n; i++)
+        if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return &g_pending[i];
     if (g_pending_n >= g_pending_cap) { g_pending_cap = g_pending_cap ? g_pending_cap * 2 : 8; g_pending = realloc(g_pending, (size_t)g_pending_cap * sizeof(Cand)); CHECK(g_pending, "solve: OOM pending"); }
     /* EVERY field, because the array is realloc'd and never zeroed: leaving `tried` as whatever the allocator
        held made a sink look already-searched and it got no candidate at all. */
-    g_pending[g_pending_n].src = strdup(src);
-    g_pending[g_pending_n].sink = sink;
-    g_pending[g_pending_n].tried = 0;
-    g_pending_n++;
+    e = &g_pending[g_pending_n++];
+    e->src = strdup(src);
+    CHECK(e->src, "solve: OOM pending");
+    e->sink = sink;
+    e->tried = 0;
+    e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0;
+    *created = 1;
     flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
+    return e;
+}
+
+/* ADD A BREAKOUT TO THIS SINK'S SEARCH, deduped by its TEXT. A probe run reaches one sink as often as the page
+   writes it (a loop over innerHTML), and two occurrences of the source can land in the same tokenizer state,
+   so the same constructed escape arrives more than once — and each duplicate would otherwise be a whole extra
+   re-run of the page that can only reproduce a result already had. */
+static void push_breakout(Cand *e, const char *payload) {
+    DCHECK(e && payload && *payload, "a breakout was queued onto no sink, or with no bytes in it");
+    for (int i = 0; i < e->npl; i++) if (!strcmp(e->pl[i], payload)) return;
+    if (e->npl >= e->plcap) {
+        e->plcap = e->plcap ? e->plcap * 2 : 8;
+        e->pl = realloc(e->pl, (size_t)e->plcap * sizeof(char *));
+        CHECK(e->pl, "solve: OOM recording a breakout for a sink search");
+    }
+    e->pl[e->npl] = strdup(payload);
+    CHECK(e->pl[e->npl], "solve: OOM recording a breakout for a sink search");
+    e->npl++;
+}
+
+/* A DETECTED SINK OPENS ITS SEARCH. A single-context class states its breakouts; every other class states the
+   probe whose run the derivation reads its context from. */
+static void add_pending(const char *src, int sink) {
+    int created = 0;
+    Cand *e = pending_entry(src, sink, &created);
+    const SinkClass *sc;
+
+    if (!created) return;
+    sc = sink_class(sink);
+    if (sc->vectors) { for (int c = 0; sc->vectors[c]; c++) push_breakout(e, sc->vectors[c]); }
+    else             push_breakout(e, derive_probe(sc->derive));
 }
 
 static void record_sink(int cls, const char *source, const char *poc) {
@@ -280,6 +371,33 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
     add_pending(src ? src : (shape ? shape : "?"), SINK_URL);
 }
 
+/* THE CONTEXT PROBE CAME BACK — the observation §@S(2) asks for, and the reason the HTML breakout is not a
+   list. This flow injected the inert locator at the source instead of a breakout, so the string handed to the
+   sink is what the page's OWN code built around the attacker's bytes: its concatenations, its filter, its
+   re-encoding, all of them run. solve_html.c reads the tokenizer state each surviving occurrence sits in and
+   constructs that state's minimal escape; every escape joins THIS sink's search and the next drain seeds it. */
+static void queue_derived(void *user, const char *breakout) { push_breakout((Cand *)user, breakout); }
+
+static void derive_html_context(const char *html) {
+    Flow *f = flow_running();
+    int created = 0;
+    Cand *e;
+
+    DCHECK(f && f->cand_src && f->cand_sink,
+           "the @S HTML context locator reached a sink outside a candidate flow — nothing but a probe flow "
+           "injects it, so a string carrying it was built by something that is not this search");
+    DCHECK(sink_class_of_name(f->cand_sink) == SINK_HTML,
+           "the @S HTML context locator reached the markup sink while the running candidate belongs to another "
+           "sink class — one flow carries one substitution, so the breakouts derived here would be filed "
+           "against a search that never asked for them");
+    e = pending_entry(f->cand_src, SINK_HTML, &created);
+    DCHECK(!created,
+           "the markup sink a context probe is running for was not on the pending list — the probe exists only "
+           "because detection put it there, so an absent entry means this search was dropped and the "
+           "breakouts about to be derived have no seeded flow to belong to");
+    solve_html_breakouts(html, queue_derived, e);
+}
+
 /* innerHTML = arg: an HTML-context sink. Detection records the source; the candidate run re-parses the injected
    HTML and fires its handlers. */
 void solve_html_sink(JSContext *ctx, JSValueConst arg) {
@@ -287,14 +405,19 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
         if (concolic_is(arg)) return;   /* injection didn't reach this write */
         const char *html = JS_ToCString(ctx, arg);
         if (html) {
-            /* ONLY THE MARKER CAN FIRE, so a string without it cannot — and this is EXACT rather than a
+            /* TWO CANDIDATE KINDS REACH THIS WRITE, and each is told apart by the bytes IT injects — which the
+               other cannot contain. The CONTEXT PROBE carries the inert locator and no X9 (that is what makes
+               it inert); a derived BREAKOUT carries X9 and no locator (it is built from the tokenizer state,
+               not from the probe's own token). So this is not a heuristic ordering, it is a partition.
+               ONLY THE MARKER CAN FIRE, so a string without it cannot — and this too is EXACT rather than a
                heuristic: html_fire's only path to a report is an auto-firing handler whose code calls X9, and a
                parse cannot invent the marker out of bytes that do not contain it.
                It matters because "the injection did not reach this write" was being tested by "the value is not
                concolic", which is also true of every literal the page writes. So each candidate flow built a
                whole document and parsed EVERY innerHTML in the page — the fixture's own markup, once per
                candidate — and the cost is the page's markup times the number of breakouts tried. */
-            if (strstr(html, "X9")) html_fire(html);
+            if (strstr(html, SOLVE_HTML_LOCATOR)) derive_html_context(html);
+            else if (strstr(html, "X9")) html_fire(html);
             JS_FreeCString(ctx, html);
         }
         return;
@@ -331,16 +454,17 @@ const char *solve_resume_candidate(const char *src, const char *sink_name) {
               "record; resuming it as an ordinary flow would report a search that never ran");
         return NULL;
     }
-    /* PENDING FIRST, then the count on the entry it just guaranteed exists. add_pending dedups, so a session
-       that resumes five candidates for one sink registers it once and raises `tried` five times — which is
-       exactly the number of breakouts that sink's search has run, and exactly what the parked-search entry
-       reports. */
-    add_pending(src, cls);
-    for (i = 0; i < g_pending_n; i++)
-        if (g_pending[i].sink == cls && !strcmp(g_pending[i].src, src)) { g_pending[i].tried++; break; }
-    DCHECK(i < g_pending_n,
-           "the sink a resumed candidate names is not on the pending list after being added to it — the count "
-           "that keeps seeding idempotent has nowhere to land, so this sink is about to be searched twice");
+    /* PENDING, then the count on the entry the same call handed back. NOT `add_pending`: that OPENS a search
+       (the class's written-down vectors, or its context probe), and this sink's search is already open — the
+       flow being rebuilt is one of its candidates. Opening it again would seed the whole search a second time,
+       which is precisely what the park's write-once assert exists to prevent, arriving through the other door.
+       It dedups, so a session that resumes five candidates for one sink registers it once and raises `tried`
+       five times — exactly the number of candidate runs that sink's search has had, and exactly what the
+       parked-search entry reports. */
+    {
+        int created = 0;
+        pending_entry(src, cls, &created)->tried++;
+    }
     /* IT COSTS WHAT A FRESH ONE COSTS, so it counts as one. This number is what says whether a run got slower
        because there were more searches or because each search grew, and a resumed candidate re-runs the whole
        page exactly as a newly-seeded one does. */
@@ -348,23 +472,28 @@ const char *solve_resume_candidate(const char *src, const char *sink_name) {
     return SINKS[cls].name;
 }
 
+/* THE CURSOR IS WHAT MAKES A DERIVED BREAKOUT REACHABLE. The old test was `if (tried) continue` — a sink was
+   seeded once, out of a list its class knew before the page ever ran, and never looked at again. A derived
+   context is not known then: the probe flow has to RUN first, and it appends what it constructs to a search
+   that has already been seeded once. Taking everything past the cursor says both things at once — nothing is
+   seeded twice, and nothing appended later is missed. */
 int solve_seed_candidates(JSContext *ctx) {
     int added = 0;
     for (int i = 0; i < g_pending_n; i++) {
-        const char **cands;
-        if (g_pending[i].tried) continue;
-        cands = sink_class(g_pending[i].sink)->cands;
-        for (int c = 0; cands[c]; c++) {
+        Cand *e = &g_pending[i];
+        for (; e->seeded < e->npl; e->seeded++) {
             Flow *f = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* a candidate session runs from the baseline */
-            f->cand_src     = strdup(g_pending[i].src);
-            f->cand_payload = strdup(cands[c]);
-            f->cand_sink    = sink_name(g_pending[i].sink);
+            f->cand_src     = strdup(e->src);
+            f->cand_payload = strdup(e->pl[e->seeded]);
+            f->cand_sink    = sink_name(e->sink);
             CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
             added++;
             g_cands_seeded++;
-            g_pending[i].tried++;
+            e->tried++;
         }
-        DCHECK(g_pending[i].tried > 0, "a detected sink was marked searched with no candidate seeded");
+        DCHECK(e->npl > 0 || e->tried > 0,
+               "a detected sink has neither a candidate to run nor a run behind it — its class opened no "
+               "search for it, so it would be reported as parked forever with nothing ever tried");
     }
     return added;
 }
@@ -433,7 +562,7 @@ static void emit_delivery(JsonBuf *b, const char *src) {
    REACHES, and a reader cannot tell that silence apart from "no attacker input gets here" — which is the
    "safe"/"verified:false" verdict solve.h forbids, arrived at by omission instead of by claim. A sink without a
    PoC is a PARKED SEARCH: reached, searched this far, not broken out of YET.
-   It carries the two facts that make it actionable rather than a shrug: how many breakouts have been run, and
+   It carries the two facts that make it actionable rather than a shrug: how many candidate runs it has had, and
    the bytes the source's own component percent-encodes — the constraint every candidate had to survive. For
    `innerHTML` fed from `location.hash` that set contains `<`, which is why no HTML-context candidate can fire
    and why the same source's JS-context sink does; the entry states the constraint, it does not claim the sink
@@ -501,7 +630,11 @@ char *solve_json_array(JSContext *ctx) {
 int solve_count(void) { return g_sinks_n; }
 
 void solve_free(void) {
-    for (int i = 0; i < g_pending_n; i++) free(g_pending[i].src);
+    for (int i = 0; i < g_pending_n; i++) {
+        for (int c = 0; c < g_pending[i].npl; c++) free(g_pending[i].pl[c]);
+        free(g_pending[i].pl);
+        free(g_pending[i].src);
+    }
     free(g_pending); g_pending = NULL; g_pending_n = g_pending_cap = 0;
     for (int i = 0; i < g_sinks_n; i++) { free(g_sinks[i].source); free(g_sinks[i].poc); }
     free(g_sinks); g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;

@@ -714,8 +714,9 @@ static const char *HTML =
        can tell "the transform is applied" apart from "the solver is failing to solve": the apostrophe survives
        the fragment set so the JS sink FIRES (through `'#';X9();//'` — the leading `#` included), while `<` does
        not survive so the HTML sink CANNOT, and it is reported as a PARKED SEARCH rather than omitted. The
-       negative half costs the run five extra candidate re-fires that are known not to fire; that cost buys the
-       one property the @S half must never lose, so it is paid on every build. */
+       negative half costs the run TWO extra candidate re-fires that are known not to fire — the markup sink's
+       context PROBE and the one escape solve_html.c derives from it — where the deleted CANDS_HTML spray cost
+       five; that cost buys the one property the @S half must never lose, so it is paid on every build. */
     "eval(\"'\" + location.hash + \"'\");"
     "var lhHost = document.createElement('div'); document.body.appendChild(lhHost);"
     "lhHost.innerHTML = location.hash;"
