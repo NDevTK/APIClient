@@ -30,6 +30,7 @@
 #include "core/frame/location.h"
 #include "core/dom/document.h"
 #include "core/fetch/headers.h"
+#include "core/fetch/port_blocking.h"
 #include "core/fetch/body.h"
 #include "core/fetch/response.h"
 #include "core/streams/readable_stream.h"
@@ -372,6 +373,36 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
 
         url_record_init(&rec);
         scheme = fetch_parse_url(ctx, &rec, u, strlen(u)) ? rec.scheme : NULL;
+        /* WHETHER THIS FLOW HAS A URL AT ALL, asked ONCE because two different steps below turn on the same
+           one fact. A parse that FAILED produced no record, and a CONCOLIC's parse produced a record out of a
+           DISPLAY FORM: its shape `/api/u?uid={state}.id` does parse, and it is not the address the request
+           will go to — §5.3 step 2's URL is unknown for exactly as long as the value is. Every algorithm that
+           reads a URL record as the request's URL is therefore off for both, which is why the serialization
+           below and §2.9 above it read this and not the parse's own success. */
+        bool url_is_real = scheme && !concolic_is(url);
+
+        /* §4.1 MAIN FETCH STEP 7, and it runs HERE — before §4.3's scheme fetch, which is step 12 — because
+           that is the order the two steps are in. "If should request be blocked due to a bad port … returns
+           blocked, then set response to a network error", and §5.6 step 12's processResponse step 3 makes a
+           network error a rejected TypeError. It is the same settle §4.3's two local schemes reject through,
+           and it returns before the host is owed anything: a blocked request must never become a pending
+           entry, or the flow parks forever on a reply the trusted zone was never asked for.
+           A CONCOLIC IS ALLOWED, and soundly so rather than by omission: §2.9 asks whether the port is one of
+           83 numbers, an unknown value answers neither yes nor no, and the solver's rule for an undecided
+           predicate is that uncertainty KEEPS the arm. Blocking on the accident that a shape's text carried
+           `:25` would delete a real endpoint from the surface. */
+        if (url_is_real && fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED) {
+            JSValue value;
+
+            JS_ThrowTypeError(ctx, "Failed to fetch");
+            value = JS_GetException(ctx);
+            url_record_free(&rec);
+            fetch_settle_local(ctx, resolving, value, /*reject*/ 1);
+            JS_FreeCString(ctx, u);
+            JS_FreeValue(ctx, resolving[0]);
+            JS_FreeValue(ctx, resolving[1]);
+            return promise;
+        }
         if (scheme && !strcmp(scheme, "data")) {
             /* §4.3's "data" step: §6's processor, and the response it names — status message `OK`, one
                `Content-Type` header carrying the struct's MIME type SERIALIZED, and the struct's body. There
@@ -485,7 +516,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
            URL. `/api/u?uid={state}.id` does parse — the parser percent-encodes the braces — and serializing it
            would hand back `%7Bstate%7D.id`, which is the quiet de-tainting the projection above exists to
            prevent. A shape stays the shape. */
-        if (scheme && !concolic_is(url))
+        if (url_is_real)
             abs = url_serialize(&rec, /*exclude_fragment*/ false);
         url_record_free(&rec);
     }

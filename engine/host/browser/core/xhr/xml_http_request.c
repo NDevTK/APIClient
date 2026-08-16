@@ -62,6 +62,7 @@
 #include "core/fetch/data_url.h"
 #include "core/fetch/fetch.h"
 #include "core/fetch/headers.h"
+#include "core/fetch/port_blocking.h"
 #include "core/fetch/request.h"
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
@@ -1312,28 +1313,49 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
     return json_buf_take(&b);
 }
 
-/* Fetch §4.3 SCHEME FETCH, for the request §3.5.6 sends. Returns true when the URL's scheme is one this agent
-   answers ITSELF — the response is already on the record when it does, either as a reply taken or as the
-   network error §3 says the response starts as.
+/* Fetch §4.1 MAIN FETCH, for the request §3.5.6 sends, as far as it is answered inside this agent. Returns true
+   when the request is one this agent answers ITSELF — the response is already on the record when it does,
+   either as a reply taken or as the network error §3 says the response starts as — so the trusted host is owed
+   nothing and there is nothing to wait for.
  *
  * IT IS THE ROUTING §4.3 IS, not a test that selects a fallback: a `data:` URL has nothing for the trusted
  * host to request, and it used to be handed to it anyway. The wire then carried
  * `GET text/xml,<template …> HTTP/1.1` with an empty `Host:` and wptserve answered 400 — a malformed request
  * to a server that had never heard of the URL, for every `xhr.open("GET", "data:…")` in the corpus.
  *
+ * STEP 7 IS HERE AND NOT ONLY IN core/fetch, because §3.5.6 step 4 is "Fetch req" and the fetch it names is the
+ * SAME algorithm `fetch()` performs — a component that owns a second door onto the network owns every step in
+ * front of it. Answering it anywhere else would leave `xhr.open("GET", "http://host:25/")` reaching the trusted
+ * zone with the one request the standard says must never be made.
+ *
  * THE OTHER SCHEMES ARE ABSENT HERE ON PURPOSE. §4.3's "about" and "blob" arms are reachable from `fetch()`
  * and not from this component (XHR §3.5.1 has no blob URL entry to capture), and the day one is, it is
  * another case of this switch rather than another place that decides. */
-static bool xhr_scheme_fetch_local(JSContext *ctx, XhrData *d)
+static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
 {
     const char *u = JS_ToCString(ctx, d->url);
     UrlRecord rec;
     DataUrlStruct ds;
-    bool local;
+    bool parsed, local;
 
     CHECK(u != NULL, "XMLHttpRequest: OOM reading the request URL back to switch on its scheme");
     url_record_init(&rec);
-    local = fetch_parse_url(ctx, &rec, u, strlen(u)) && rec.scheme && !strcmp(rec.scheme, "data");
+    /* §3.5.1 step 6 parsed this URL and step 11 stored it SERIALIZED, so the record is absolute and carries a
+       scheme; a re-parse that refuses it is this component having stored something that is not a URL. */
+    parsed = fetch_parse_url(ctx, &rec, u, strlen(u)) && rec.scheme;
+    DCHECK(parsed, "XMLHttpRequest: the URL §3.5.1 stored will not parse back — open() step 6 parses the URL "
+                   "and step 11 stores its SERIALIZATION, and every item of that form is absolute");
+    /* §4.1 MAIN FETCH STEP 7: "If should request be blocked due to a bad port … returns blocked, then set
+       response to a network error." §3's response IS a network error already, so blocking is nothing written
+       and everything not done: the request is never placed, and the lifecycle machine's "handle errors" fires
+       the request error steps on the way out — which for §3.5.6 is an `error` event, or a NetworkError thrown
+       out of a synchronous send. */
+    if (parsed && fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED) {
+        url_record_free(&rec);
+        JS_FreeCString(ctx, u);
+        return true;
+    }
+    local = parsed && !strcmp(rec.scheme, "data");
     JS_FreeCString(ctx, u);
     if (local && data_url_process(&rec, &ds)) {
         /* §4.3's "data" step's response, through the ONE reply object every answer to this component takes —
@@ -1380,9 +1402,10 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         s->transmitted = s->length = 0;
         if (mode == XHR_MODE_ERROR) { s->hdr.stage = XR_ERR_BEGIN; goto error_steps; }
-        /* Fetch §4.3: the scheme decides WHO answers. A scheme this agent answers itself has its response on
-           the record already and owes the host nothing, so the wait below has nothing to wait for. */
-        if (xhr_scheme_fetch_local(ctx, d)) {
+        /* Fetch §4.1: main fetch decides WHO answers. A request this agent answers itself — a port §2.9 blocks,
+           or a scheme §4.3 resolves here — has its response on the record already and owes the host nothing, so
+           the wait below has nothing to wait for. */
+        if (xhr_main_fetch_local(ctx, d)) {
             s->req = 0;
             s->hdr.stage = XR_WAIT;
         } else {
