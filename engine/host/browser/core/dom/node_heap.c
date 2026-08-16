@@ -81,21 +81,29 @@ void node_heap_detach(lxb_dom_document_t *doc)
     if (--g_documents == 0) {
         /* THE HEAP IS EMPTY WHEN THE LAST DOCUMENT IS GONE, and lexbor's `ref_count` states it exactly: it is
            incremented by every alloc and decremented by every free, so a non-zero count here is memory no
-           document, no tree and no wrapper names any more. It is a DCHECK and not a leak report because the
-           two ways to reach it are both unbuilt capabilities and each names itself:
-             - HTML §4.12.3's TEMPLATE CONTENTS. A `<template>`'s contents are a DocumentFragment that is NOT a
-               child of the inert template-contents-owner document (core/dom/document.c says so at
-               `document_template_contents_owner`), and lexbor's `lxb_html_template_element_interface_destroy`
-               frees the fragment WITHOUT its children. So nothing reaches them: `destroy a document` needs a
-               worklist over the template contents it owns, and it is not written.
-             - A node no tree and no wrapper names. The per-flow delta's kind-4 entry frees what a FLOW created;
-               a node created outside one and then detached has nobody left to free it. */
+           document, no tree and no wrapper names any more.
+           HTML §4.12.3's TEMPLATE CONTENTS USED TO BE NAMED HERE and are not any more: a `<template>`'s
+           contents are freed with the element by core/dom/node_interface.c's destroy dispatcher, which is the
+           one point every node death converges on, so the document tree walk, the per-flow delta's kind-4
+           release and every other destroy carry them. What is left are the trees a walk of CHILDREN still
+           cannot reach and no C pointer names:
+             - A SHADOW ROOT. DOM §4.8's shadow root is a second tree exactly as a template's contents are, and
+               the element→shadow-root edge is on the host's WRAPPER (core/dom/shadow_root.c writes it as a slot
+               on the element's JS object, which is what `shadow_root_of_element` peeks), so no C walk can see
+               it and only the delta's kind-4 entry frees one. A shadow root attached while capture was off has
+               no owner at all, and node_interface.c's dispatcher cannot become that owner: it holds no realm,
+               so the edge it would have to follow is one it cannot read.
+             - A node created while capture was off and then DETACHED. Kind 4 frees what a FLOW created; a
+               creation outside one is baseline and its owner is the document it was made in, which frees its
+               TREE and nothing that left it.
+             - AND AN ORDER, not a leak: every delta must be released BEFORE the last document detaches, since a
+               kind-4 node freed after this line is freed out of an arena that is gone. */
         DCHECK(g_nodes->ref_count == 0 && g_text->ref_count == 0,
                "the agent's DOM heap still holds live allocations after the last document that could name them "
-               "was destroyed — the two known sources are a <template>'s contents (HTML §4.12.3 owns them "
-               "through an inert document whose own tree is empty, and lexbor's template destructor frees the "
-               "fragment and not what is in it) and a node created outside a captured flow and then detached; "
-               "build `destroy a document`'s walk over the template contents it owns");
+               "was destroyed — either a per-flow delta was released after this point rather than before it, or "
+               "a node is reachable from no document's tree and no delta: a DOM §4.8 shadow root, whose edge "
+               "from its host is a slot on the host's WRAPPER and which no C walk can reach, or a node created "
+               "while capture was off and then detached");
         g_nodes = lexbor_mraw_destroy(g_nodes, true);
         g_text  = lexbor_mraw_destroy(g_text, true);
     }

@@ -1,10 +1,13 @@
 /* See node_interface.h. */
+#include <stdlib.h>
+
 #include <lexbor/html/html.h>
 #include <lexbor/html/interface.h>
 #include <lexbor/dom/interfaces/document_type.h>
 #include <lexbor/dom/interfaces/element.h>
 
 #include "check.h"
+#include "core/dom/node.h"          /* node_template_content — the ONE spelling of where a template's markup is */
 #include "core/dom/node_heap.h"
 #include "core/dom/node_interface.h"
 
@@ -22,7 +25,7 @@
  * `lxb_dom_document_create_text_node` and `_create_comment` pass it to create-interface, `lxb_dom_document_init`
  * assigns LXB_TAG__DOCUMENT — so the assert is the standing check that the next creator to forget crashes with
  * a name instead of running another interface's destructor over these bytes. */
-static lxb_dom_interface_t *dom_node_interface_destroy(lxb_dom_interface_t *intrfc)
+static lxb_dom_interface_t *dom_node_interface_free(lxb_dom_interface_t *intrfc)
 {
     lxb_dom_node_t *node = intrfc;
 
@@ -40,6 +43,111 @@ static lxb_dom_interface_t *dom_node_interface_destroy(lxb_dom_interface_t *intr
            "its creator never wrote — the table answers with another interface's destructor, which is how a "
            "doctype came to be freed as an element; answer this type by its TYPE, above");
     return lxb_html_interface_destroy(intrfc);
+}
+
+/* HTML §4.12.3'S TEMPLATE CONTENTS ARE REACHED FROM NOWHERE ELSE, AND lexbor FREES THE FRAGMENT WITHOUT THEM.
+ * "Each template element has an associated DocumentFragment object that is its template contents", and "The
+ * template contents of a template element are not children of the element itself" — DOM §4.7 says the same from
+ * its own side, "A DocumentFragment node has an associated host (null or an element in a DIFFERENT node tree)".
+ * The OWNERSHIP of that fragment is an inert Document's: §4.12.3 gives "each Document not created by this
+ * algorithm … a single Document to act as its proxy for owning the template contents of all its template
+ * elements, so that they aren't in a browsing context and thus remain inert (e.g. scripts do not run)"
+ * (https://html.spec.whatwg.org/multipage/scripting.html#the-template-element). That Document owns them in the
+ * standard's sense and reaches them with nothing: the fragment is not a child of it either, so its own tree
+ * stays EMPTY (core/dom/document.c says exactly that at `document_template_contents_owner`). So in the entire
+ * heap the only pointer to a page's template markup is the ELEMENT's `content` field — and
+ * `lxb_html_template_element_interface_destroy` destroys that fragment's STRUCT and returns, having freed
+ * nothing that was in it. Upstream gets away with it because upstream nukes a per-document arena; this engine
+ * has one heap for the agent (core/dom/node_heap.h) and frees node by node, so those nodes are now memory
+ * nothing names and node_heap_detach's `ref_count == 0` is what said so.
+ *
+ * THE OWNER OF THE CONTENTS' LIFETIME IS THE ELEMENT, SO THIS IS WHERE THE FREE GOES — the ONE point every node
+ * death converges on, exactly like the interface question above. Putting it in `dom_document_destroy` alone
+ * would have covered the smallest of the paths that destroy a template: the per-flow delta's release of a node
+ * a flow created (solver/dom_cow.c kind 4) is where `el.innerHTML = '<template>…'` templates die, because
+ * `dom_cow_take_private` records every top-level node the fragment parse produced as that flow's creation and
+ * the delta destroys it deep when it is discarded. `replaceChildren`, the sanitizer's removal walk and
+ * `dom_cow_discard_private` are three more. A destroy that only some callers perform is the shape a leak comes
+ * back through.
+ *
+ * IT IS A WORKLIST AND THE WORKLIST IS THE MODULE'S. `<template><template><template>` is ordinary markup, so
+ * template nesting is depth the PAGE chooses; destroying a nested template from inside this function would
+ * re-enter it through `lxb_dom_node_destroy_deep` and spend one C frame per level, which is the C stack this
+ * engine does not have. So the queue is a module static and only the OUTERMOST entry drains it: a re-entrant
+ * call pushes and returns, and the one drain loop below does the work at constant C depth. Nothing is bounded —
+ * a queue that cannot grow is a CHECK, never a truncation, because the queue is the only remaining name for
+ * those nodes.
+ *
+ * THE CHILDREN ARE DETACHED BEFORE THEY ARE QUEUED, because lexbor's template destructor frees the fragment
+ * struct a few lines later and a queued node whose `parent` still named it would read freed memory at its own
+ * `lxb_dom_node_remove`. It is `_wo_events` and not the removal: §4.2.3's removing steps belong to a DOM
+ * operation observed by the page, and this is a teardown of a fragment that is ceasing to exist. */
+static lxb_dom_node_t **g_tpl_queue;
+static size_t g_tpl_n, g_tpl_cap;
+static int g_tpl_draining;
+
+static void tpl_queue_push(lxb_dom_node_t *n)
+{
+    /* THE NODE DOCUMENT MUST STILL HOLD THE AGENT'S HEAP, and this is the one site that can say so. §4.12.3's
+       "establish the template contents" creates the fragment with the INERT owner as its node document, and its
+       adopting steps keep it there — a Document whose own tree is empty, so it is destroyed without ever
+       reaching these nodes and `node_heap_detach` NULLs its `mraw` on the way out. Freeing one of them
+       afterwards hands `lexbor_mraw_free` a NULL arena. The inert owner has to outlive every document whose
+       templates it owns; when this fires, that ordering is what to build, never a skipped free.
+       IT IS REACHED TODAY ONLY THROUGH ADOPT, and that is a fidelity gap rather than a reprieve: lexbor's
+       `lxb_html_template_element_interface_create` stamps the fragment with the document holding the ELEMENT,
+       and core/dom/node.c's §4.5 step 3.4 is the only place this engine writes §4.12.3's answer. When the
+       creation writes it too, every template's contents name the inert owner and this assertion covers them
+       all rather than the adopted ones. */
+    DCHECK(n->owner_document != NULL && n->owner_document->mraw != NULL,
+           "a <template>'s contents are being queued for destruction with their NODE DOCUMENT already detached "
+           "from the agent's DOM heap — HTML §4.12.3 gives the contents to an inert owner document whose own "
+           "tree is empty, so that document was destroyed without ever reaching them; order the inert owner's "
+           "destroy after every document whose templates it owns");
+    if (g_tpl_n == g_tpl_cap) {
+        size_t want = g_tpl_cap ? g_tpl_cap * 2 : 8;
+        /* PLAIN realloc, NOT solver/reclaim.h's: this runs on the FREE path, and selling a flow to fund it
+           would re-enter the delta release that is walking the very tree being torn down. */
+        lxb_dom_node_t **v = realloc(g_tpl_queue, sizeof *v * want);
+
+        CHECK(v != NULL, "a <template>'s contents could not be queued for destruction — this queue is the only "
+                         "remaining name for those nodes, so a failed grow is the page's whole template tree "
+                         "leaked and there is no bound to trade against it");
+        g_tpl_queue = v;
+        g_tpl_cap = want;
+    }
+    g_tpl_queue[g_tpl_n++] = n;
+}
+
+static lxb_dom_interface_t *dom_node_interface_destroy(lxb_dom_interface_t *intrfc)
+{
+    lxb_dom_node_t *node = intrfc, *content, *child;
+    lxb_dom_interface_t *r;
+
+    if (node == NULL)
+        return NULL;
+    content = node_template_content(node);
+    if (content != NULL) {
+        while ((child = content->first_child) != NULL) {
+            lxb_dom_node_remove_wo_events(child);
+            tpl_queue_push(child);
+        }
+    }
+    r = dom_node_interface_free(intrfc);
+    if (!g_tpl_draining) {
+        g_tpl_draining = 1;
+        /* Every entry is an independent DETACHED subtree, so the order among them is free; LIFO keeps the queue
+           shallow, and each `destroy_deep` re-enters the function above, which pushes rather than descends. */
+        while (g_tpl_n > 0)
+            lxb_dom_node_destroy_deep(g_tpl_queue[--g_tpl_n]);
+        g_tpl_draining = 0;
+        /* The buffer goes back with the work: a queue kept between destroys is an allocation the agent's own
+           teardown has nobody to name. */
+        free(g_tpl_queue);
+        g_tpl_queue = NULL;
+        g_tpl_cap = 0;
+    }
+    return r;
 }
 
 /* An INHERITED document (§13.4's fragment parser, element.c's `own_context` document) is built by

@@ -858,18 +858,62 @@ static void dom_forget_node_attrs(JSContext *ctx, lxb_dom_node_t *n)
     attr_shadow_forget(ctx, lxb_dom_interface_element(n));
 }
 
-static void dom_forget_wrappers(JSContext *ctx, lxb_dom_node_t *root)
+/* A <template>'S CONTENTS ARE IN THE SUBTREE FOR EVERY LIFETIME PURPOSE, and that is the half this walk did not
+ * have. HTML §4.12.3's template contents are a DocumentFragment that is not a CHILD of the template element, so
+ * the climb below never enters it — while every node in it is WRAPPED the moment the page reads `t.content` or
+ * anything under it. That was a leak the runtime's own gc_obj_list walk counted and nothing else said; now that
+ * core/dom/node_interface.c's destroy dispatcher frees those nodes with the element, a wrapper left behind is
+ * the identity map naming FREED memory — which a pool allocator turns into the next node inheriting a dead
+ * wrapper, the exact failure this function exists to prevent, one tree over.
+ * THE SECOND TREES ARE A QUEUE, NOT A DESCENT, for the two reasons the destroy's queue is one: a fragment has
+ * no parent to climb back out through, and `<template><template>` is depth the PAGE chooses. Discovery order
+ * puts an outer fragment strictly before every fragment nested inside it, so appending while iterating
+ * terminates — and it is `node_template_content`, the ONE spelling of where a template's markup is, because two
+ * spellings is how one of them stops covering it. */
+typedef struct { lxb_dom_node_t **v; size_t n, cap; } DomTplRoots;
+
+static void dom_tpl_roots_push(DomTplRoots *q, lxb_dom_node_t *frag)
 {
-    lxb_dom_node_t *n = root;
+    if (q->n == q->cap) {
+        size_t want = q->cap ? q->cap * 2 : 8;
+        /* PLAIN realloc, NOT reclaim.h's: this is the free path, and selling a flow to fund it would re-enter
+           the delta release that is standing in the tree being torn down. */
+        lxb_dom_node_t **v = realloc(q->v, sizeof *v * want);
+
+        CHECK(v != NULL, "the wrapper walk could not record a <template>'s contents — a fragment it cannot "
+                         "reach is a subtree whose wrappers stay in the identity map naming nodes the destroy "
+                         "is about to free");
+        q->v = v;
+        q->cap = want;
+    }
+    q->v[q->n++] = frag;
+}
+
+static void dom_forget_one_tree(JSContext *ctx, lxb_dom_node_t *root, DomTplRoots *q)
+{
+    lxb_dom_node_t *n = root, *content;
 
     for (;;) {
         dom_forget_node_attrs(ctx, n);
         node_wrap_forget(ctx, n);
+        content = node_template_content(n);
+        if (content) dom_tpl_roots_push(q, content);
         if (n->first_child) { n = n->first_child; continue; }
         while (n != root && !n->next) n = n->parent;
         if (n == root) return;
         n = n->next;
     }
+}
+
+static void dom_forget_wrappers(JSContext *ctx, lxb_dom_node_t *root)
+{
+    DomTplRoots q = { NULL, 0, 0 };
+    size_t i;
+
+    dom_forget_one_tree(ctx, root, &q);
+    for (i = 0; i < q.n; i++)   /* `q` GROWS here: a <template> inside another template's contents */
+        dom_forget_one_tree(ctx, q.v[i], &q);
+    free(q.v);
 }
 
 /* THE NODE OWNERSHIP CONTRACT: a node a flow CREATED dies with that flow's delta.
@@ -1061,8 +1105,10 @@ void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children) {
 }
 
 /* DESTROY ONE NODE OF a private tree — see dom_cow.h. `lxb_dom_node_destroy` detaches before it frees, and it
-   frees through the DOCUMENT's per-interface destructor, which for a `<template>` is what releases the empty
-   template contents fragment along with the element. */
+   frees through the DOCUMENT's per-interface destructor, which for a `<template>` is what releases the template
+   contents fragment along with the element AND, since core/dom/node_interface.c owns that dispatcher, the
+   markup HTML §4.12.3 put inside it — which the `first_child == NULL` assertion below does not cover and
+   never could, because a template's contents are not its children. */
 void dom_cow_discard_private(lxb_dom_node_t *root, lxb_dom_node_t *node) {
     dom_private_check(root);
     DCHECK(node && node != root && dom_root_of(node) == root,
