@@ -67,7 +67,12 @@ void      cow_set_current(CowDelta *d);
 CowDelta *cow_current(void);
 
 /* Install as JSTimeTravelHooks.prop_write: called before a write to a baseline object; appends to the current
-   delta. */
+   delta.
+   A DELETE IS ONE OF THOSE WRITES — delete_property calls this before it removes the slot, and the entry
+   therefore has to be able to say that the flow does NOT have the slot. It records a PAIR on each side (does
+   the slot exist, and only then its value): the baseline's read here, the flow's read at unapply. Without the
+   flow's absent case a deletion came back as `obj.x = undefined`, so the property returned inside the flow that
+   deleted it and two flows disagreed about the shape of shared state. See CowEntry in cow.c. */
 void      cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom prop);
 
 /* Install as JSTimeTravelHooks.cell_write: called before a write to a shared CLOSURE CELL; captures it into the

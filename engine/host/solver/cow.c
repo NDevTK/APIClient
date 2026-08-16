@@ -5,12 +5,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* One captured baseline slot: base = the value the shared baseline holds (restored on unapply); cur = the
-   running flow's latest value for it (saved on unapply, replayed on apply). existed = did the baseline own the
-   slot (else the flow CREATED it, so unapply deletes and apply re-creates). */
+/* ONE CAPTURED SLOT IS TWO STATES OF IT, AND A STATE IS A PAIR: does the slot EXIST, and — only then — what
+   value does it hold. The baseline's pair is (existed, base), read once at capture and restored by unapply; the
+   running flow's is (cur_state, cur), read at unapply and replayed by apply. The round trip IS those two pairs,
+   which is why each is asserted where it is read.
+   THE FLOW'S HALF OF THE PAIR HAD NO ABSENT CASE, and `cur` alone cannot spell one. So a flow's own
+   `delete obj.x` unapplied correctly — the baseline value came back — and then replayed on apply as
+   `obj.x = undefined`: the property came back with it, `'x' in obj` answered true inside the very flow that
+   deleted it, and two flows disagreed about the SHAPE of shared state, which is the isolation this file exists
+   to provide. The same hole swallowed every capture whose write never landed (the hook runs BEFORE the write,
+   and delete_property's runs before it even knows the slot is there), each of which apply turned into a
+   property nobody ever created.
+   One field with three states, so "recorded, but neither present nor absent" cannot be written down:
+     COW_CUR_UNRECORDED — this flow has not been switched out since the capture, so there is nothing to replay.
+     COW_CUR_ABSENT     — the flow does NOT own the slot. Apply DELETES it; `cur` is undefined and carries
+                          nothing, which the DCHECK at the recording point holds it to.
+     COW_CUR_PRESENT    — the flow owns the slot with value `cur`, which apply writes.
+   The baseline's pair needs no UNRECORDED: a capture reads it before it returns. */
+enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
 /* A delta entry is EITHER a property slot (vref==NULL: obj/atom/existed) OR a closure cell (vref!=NULL: the
    shared JSVarRef, whose value is read/written via JS_VarRefGet/SetValue; obj/atom/existed unused). base/cur
-   hold the baseline/flow values either way. */
+   hold the baseline/flow values either way. A cell has no ABSENT state — it holds a value or does not exist at
+   all — so its cur_state is only ever PRESENT, and apply asserts that rather than assuming it. */
 /* A THIRD entry kind (is_gendata) swaps a shared COROUTINE object's execution-state pointer per flow: obj is
    the object, g0 its original state, g1 the per-flow clone (owned by this delta). Apply installs g1, unapply
    restores g0 — a fixed toggle, no cur/base value tracking. TWO OBJECT KINDS share it because they are one
@@ -50,7 +66,7 @@
  *                        byte arm above cannot serve it: a memcpy of a JSValue makes a reference it does not
  *                        count, so the next restore frees a value the blob still names. See cow.h. */
 enum { COW_STATE_ASYNC = 0, COW_STATE_MODULE = 1, COW_STATE_HOST = 2, COW_STATE_HOST_REC = 3 };
-typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_valid; void *vref;
+typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_state; void *vref;
                  int is_gendata; void *g0; void *g1; int is_map; int map_op; JSValue map_old;
                  int is_state; int state_kind; void *target; size_t a_len; void *a_base; void *a_cur;
                  const CowRecord *rec; } CowEntry;
@@ -321,7 +337,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->existed = existed;
     e->base = base;
     e->cur = JS_UNDEFINED;
-    e->cur_valid = 0;
+    e->cur_state = COW_CUR_UNRECORDED;
     e->vref = NULL;
     e->is_gendata = 0;
     e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL; e->rec = NULL;
@@ -348,7 +364,7 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->atom = JS_DupAtom(ctx, atom);   /* a tagged-int index atom: dup is a no-op, kept for uniform free */
     e->existed = 0;                    /* an append creates the slot; unapply truncates it away */
     e->base = JS_UNDEFINED;
-    e->cur = JS_UNDEFINED; e->cur_valid = 0;
+    e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
     e->vref = NULL;
     e->is_gendata = 0;
     e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL; e->rec = NULL;
@@ -372,7 +388,7 @@ void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSV
     e->existed = 0;
     e->base = JS_DupValue(ctx, key);   /* the record's key (owned) */
     e->cur = JS_DupValue(ctx, val);    /* the record's value (owned; UNDEFINED for a Set) */
-    e->cur_valid = 1;
+    e->cur_state = COW_CUR_PRESENT;   /* the record's value is the entry's own, not a slot read back off the heap */
     e->vref = NULL;
     e->is_gendata = 0;
     e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL; e->rec = NULL;
@@ -396,7 +412,7 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
     e->existed = 0;
     e->base = JS_DupValue(ctx, key);
     e->cur = JS_DupValue(ctx, val);        /* the new value (OVERWRITE); UNDEFINED for DELETE */
-    e->cur_valid = 1;
+    e->cur_state = COW_CUR_PRESENT;   /* the record's value is the entry's own, not a slot read back off the heap */
     e->vref = NULL;
     e->is_gendata = 0;
     e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL; e->rec = NULL;
@@ -434,7 +450,7 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, obj);
     e->atom = JS_ATOM_NULL; e->existed = 0;
-    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_valid = 0;
+    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
     e->vref = NULL;
     e->is_gendata = 0; e->g0 = e->g1 = NULL;
     e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
@@ -500,7 +516,7 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_UNDEFINED;
     e->atom = JS_ATOM_NULL; e->existed = 0;
-    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_valid = 0;
+    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
     e->vref = NULL;
     e->is_gendata = 0; e->g0 = e->g1 = NULL;
     e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
@@ -540,7 +556,7 @@ void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t 
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, owner);
     e->atom = JS_ATOM_NULL; e->existed = 0;
-    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_valid = 0;
+    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
     e->vref = NULL;
     e->is_gendata = 0; e->g0 = e->g1 = NULL;
     e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
@@ -588,7 +604,7 @@ void cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec) 
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, owner);
     e->atom = JS_ATOM_NULL; e->existed = 0;
-    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_valid = 0;
+    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
     e->vref = NULL;
     e->is_gendata = 0; e->g0 = e->g1 = NULL;
     e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
@@ -607,7 +623,7 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_UNDEFINED; e->atom = JS_ATOM_NULL; e->existed = 0;
     e->base = JS_VarRefGetValue(vref);   /* owned dup of the cell's current (baseline) value */
-    e->cur = JS_UNDEFINED; e->cur_valid = 0;
+    e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
     e->vref = vref;
     JS_VarRefRef(vref);                  /* the DELTA owns it: the cell's own frames may die before the delta does */
     e->is_gendata = 0;
@@ -634,7 +650,7 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, genobj);
     e->atom = JS_ATOM_NULL; e->existed = 0; e->base = JS_UNDEFINED;
-    e->cur = JS_UNDEFINED; e->cur_valid = 0; e->vref = NULL;
+    e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED; e->vref = NULL;
     e->is_gendata = 1; e->g0 = base_gd; e->g1 = cur_gd;
     e->is_state = 0; e->state_kind = COW_STATE_ASYNC; e->target = NULL; e->a_len = 0; e->a_base = e->a_cur = NULL; e->rec = NULL;   /* adopts cur_gd's creation ref (freed on delta free) */
     e->is_map = 0;
@@ -656,16 +672,21 @@ static void cow_unapply_entries(JSContext *ctx, CowEntry *ents, int n) {
             continue;
         }
         if (e->vref) {                        /* closure cell: save its current value, restore the baseline */
-            if (e->cur_valid) JS_FreeValue(ctx, e->cur);
-            e->cur = JS_VarRefGetValue(e->vref); e->cur_valid = 1;
+            if (e->cur_state != COW_CUR_UNRECORDED) JS_FreeValue(ctx, e->cur);
+            e->cur = JS_VarRefGetValue(e->vref); e->cur_state = COW_CUR_PRESENT;
             JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->base));
             continue;
         }
-        JSValue cur;                          /* save the flow's CURRENT value so apply can restore it */
-        JS_GetOwnSlot(ctx, &cur, e->obj, e->atom);
-        if (e->cur_valid) JS_FreeValue(ctx, e->cur);
+        JSValue cur;                          /* save the flow's CURRENT STATE so apply can restore it */
+        int has = JS_GetOwnSlot(ctx, &cur, e->obj, e->atom);
+        DCHECK(has >= 0, "reading back a captured slot threw — a delta holds something that is not an object, "
+                         "and a context switch has no flow base to run an exception on");
+        DCHECK(has > 0 || JS_IsUndefined(cur),
+               "an ABSENT slot was recorded carrying a value — apply would write it back and re-create the "
+               "property this flow deleted");
+        if (e->cur_state != COW_CUR_UNRECORDED) JS_FreeValue(ctx, e->cur);
         e->cur = cur;
-        e->cur_valid = 1;
+        e->cur_state = has > 0 ? COW_CUR_PRESENT : COW_CUR_ABSENT;
         uint32_t ai;
         if (e->existed) JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->base));   /* -> baseline */
         else if (JS_IsArrayIndexSlot(e->obj, e->atom, &ai))
@@ -700,9 +721,29 @@ static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
             else JS_MapAddRecord(ctx, e->obj, e->base, e->cur);
             continue;
         }
-        if (!e->cur_valid) continue;
-        if (e->vref) JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->cur));   /* closure cell */
-        else JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->cur));
+        if (e->cur_state == COW_CUR_UNRECORDED) continue;   /* never switched out: nothing of this flow's to replay */
+        if (e->vref) {
+            DCHECK(e->cur_state == COW_CUR_PRESENT,
+                   "a closure cell was recorded ABSENT — a cell holds a value or does not exist at all, so "
+                   "there is no deletion of one for apply to replay");
+            JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->cur));
+        } else if (e->cur_state == COW_CUR_PRESENT) {
+            JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->cur));
+        } else {
+            /* THE FLOW'S OWN DELETE, REPLAYED AS A DELETE. The chain below has just put the slot back (it is
+               baseline state, which is the only kind that gets captured), and writing `cur` over it would put
+               back a PROPERTY holding undefined — the slot this flow removed, standing in the flow that
+               removed it. A deletion is not a value, so it is replayed by the operation the flow performed.
+               It cannot be refused: the flow reached ABSENT by removing the slot (so it was configurable) or
+               by never creating it, and a non-configurable slot is one delete_property leaves standing, which
+               is a PRESENT record. So a refusal says the slot below is non-configurable and was NOT when this
+               flow deleted it, and the only way it got that way is a sibling whose redefinition the delta
+               could not take back out. */
+            int deleted = JS_DeleteProperty(ctx, e->obj, e->atom, 0);
+            DCHECK(deleted > 0, "a slot this flow does not own could not be re-deleted: it is non-configurable "
+                                "below and was not when this flow deleted it — an entry records a slot's VALUE "
+                                "and never its ATTRIBUTES, so build the flags capture beside the value");
+        }
     }
 }
 
@@ -928,7 +969,7 @@ static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
         JS_FreeAtom(ctx, e[i].atom);
         JS_FreeValue(ctx, e[i].base);
         if (e[i].vref) JS_VarRefUnref(ctx, e[i].vref);   /* the delta's own reference on the cell */
-        if (e[i].cur_valid) JS_FreeValue(ctx, e[i].cur);
+        if (e[i].cur_state != COW_CUR_UNRECORDED) JS_FreeValue(ctx, e[i].cur);   /* ABSENT holds undefined */
     }
 }
 
