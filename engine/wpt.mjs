@@ -101,6 +101,28 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       XML parser exists — including the two that do both, which abort partway. A count is not
                       quoted here on purpose: this row says what is measured, not what it measures. */
                    "domparsing",
+                   /* THE CSS STANDARDS THIS ENGINE HAS COMPONENTS FOR, and until now `grep '"css'` over this
+                      file answered ZERO. That is the excluded-test failure at its largest here: core/css holds
+                      the cascade, the computed and used value paths, CSSOM's style sheets, rules and
+                      declaration blocks, and core/layout holds the containing-block chain — and not one line of
+                      any of it had a spec directory checked out. A component whose spec directory is not
+                      collected is a component whose gate cannot fail.
+                      NAMED PER STANDARD, and only the three whose components exist, because `css` is the
+                      largest tree in the corpus and most of it is REFTESTS — files that render two documents
+                      and compare pixels. This gate collects a test by whether it loads
+                      `/resources/testharness.js`, so a reftest is materialized on disk and collected by
+                      nothing: adding `css` whole would cost tens of thousands of files to measure the same
+                      subtests these three already name. `css/cssom` is CSSStyleDeclaration, CSSStyleSheet,
+                      CSSRule and serialize-a-declaration-block; `css/cssom-view` is clientTop/clientLeft,
+                      clientWidth/clientHeight and the scrolling area; `css/css-values` is the viewport units
+                      and the length grammar. The standards whose components are NOT built — css-backgrounds
+                      beyond the border longhands, css-sizing, css-cascade, css-logical — are deliberately
+                      absent rather than silently included, and each becomes a row the day its component does.
+                      Expect bad first numbers, including aborts: a `width: auto` box with a real border is a
+                      joint function of the ICB and the device pixel ratio, and css_px_combine crashes on that
+                      multi-fact domain by design. That crash's frequency IS the size of the next subproblem,
+                      which is what a first measurement is for. */
+                   "css/cssom", "css/cssom-view", "css/css-values",
                    /* THE COMPONENTS' OWN SPEC DIRECTORIES, each named because the component exists in
                       engine/host/browser/core and its tests were not being collected: request.c and body.c
                       (fetch/api/headers and .../response were checked out and their two siblings were not),
