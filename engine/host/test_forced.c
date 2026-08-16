@@ -1558,23 +1558,86 @@ static void policy_container_selftest(void)
               "a present script-src must REPLACE default-src for scripts, not inherit its 'unsafe-inline'");
         policy_container_free(overridden);
     }
-    /* §6.1's granular forms, and the fact that they are chosen per KIND: script-src-attr governs handlers and
-       javascript: URLs, script-src-elem governs script elements, and eval falls past both to script-src. */
+    /* §6.8.2 + §6.8.4's granular forms, chosen per KIND: script-src-attr governs event handlers, script-src-
+       elem governs script elements AND javascript: navigations, and eval reads script-src past both.
+       The javascript: line is the one this suite had BACKWARDS. It asserted that script-src-attr governs a
+       javascript: URL too, which is what policy_container.c's own enum comment claimed and what its directive
+       choice implemented — so this policy reported a javascript: URL as blocked where a real browser runs it.
+       §6.8.2 maps the inline type "navigation" to script-src-elem, and §6.1.11 says the same from the other
+       side. The two lines below now differ, which is the whole content of the fix. */
     {
         PolicyContainer *granular =
             policy_container_new("script-src 'unsafe-inline' 'unsafe-eval'; script-src-attr 'none'", NULL);
         CHECK(!policy_allows(granular, POLICY_INLINE_HANDLER), "script-src-attr 'none' must kill a handler");
-        CHECK(!policy_allows(granular, POLICY_JAVASCRIPT_URL), "script-src-attr governs javascript: URLs too");
+        CHECK(policy_allows(granular, POLICY_JAVASCRIPT_URL),
+              "§6.8.2 maps a `navigation` inline check to script-src-elem, so script-src-attr must not touch it");
         CHECK(policy_allows(granular, POLICY_INLINE_SCRIPT),
               "script-src-attr must not govern a script ELEMENT — that is script-src-elem's fallback to script-src");
         CHECK(policy_allows(granular, POLICY_EVAL), "eval has no granular form and reads script-src");
         policy_container_free(granular);
+    }
+    /* ...and the same policy with the granular form that DOES govern a navigation kills it, which is what
+       makes the line above a statement about which directive rather than about which answer. */
+    {
+        PolicyContainer *elem =
+            policy_container_new("script-src 'unsafe-inline'; script-src-elem 'none'", NULL);
+        CHECK(!policy_allows(elem, POLICY_JAVASCRIPT_URL), "script-src-elem 'none' must kill a javascript: URL");
+        CHECK(!policy_allows(elem, POLICY_INLINE_SCRIPT), "script-src-elem 'none' must kill a script element");
+        CHECK(policy_allows(elem, POLICY_INLINE_HANDLER), "script-src-elem must not govern an event handler");
+        policy_container_free(elem);
+    }
+    /* §6.7.3.2's OTHER two overrides of 'unsafe-inline', neither of which this file could answer before: a
+       HASH source and 'strict-dynamic' both make the whole directive stop allowing all inline behavior. Every
+       one of these policies used to ABORT the process — the old parser recorded any source expression it did
+       not model and then DCHECKed on it, which is most of the real web. */
+    {
+        PolicyContainer *hashed =
+            policy_container_new("script-src 'unsafe-inline' 'sha256-YWJj'", NULL);
+        CHECK(!policy_allows(hashed, POLICY_INLINE_SCRIPT), "a hash source must make 'unsafe-inline' ignored");
+        CHECK(!policy_allows(hashed, POLICY_INLINE_HANDLER),
+              "a hash source overrides 'unsafe-inline' for the WHOLE directive, handlers included");
+        policy_container_free(hashed);
+    }
+    {
+        /* `'sha1-…'` is not a hash-source: §2.3.1's hash-algorithm is exactly sha256/sha384/sha512, so this is
+           an unrecognised expression, which §6.7.3.2 IGNORES rather than treats as an override. The two lines
+           differ by the digest length alone and must not agree. */
+        PolicyContainer *not_a_hash = policy_container_new("script-src 'unsafe-inline' 'sha1-YWJj'", NULL);
+        CHECK(policy_allows(not_a_hash, POLICY_INLINE_SCRIPT),
+              "an expression outside the grammar must be ignored by §6.7.3.2, not read as a hash source");
+        policy_container_free(not_a_hash);
+    }
+    {
+        PolicyContainer *strict = policy_container_new("script-src 'unsafe-inline' 'strict-dynamic'", NULL);
+        CHECK(!policy_allows(strict, POLICY_INLINE_SCRIPT), "'strict-dynamic' must override 'unsafe-inline'");
+        CHECK(!policy_allows(strict, POLICY_JAVASCRIPT_URL),
+              "'strict-dynamic' covers the navigation type as well as script and script attribute");
+        policy_container_free(strict);
+    }
+    /* HOST AND SCHEME SOURCES ARE NOT AN INLINE ANSWER AT ALL — §6.7.3.2 never looks at them — so a policy
+       made of them permits exactly what its keywords permit. This is the shape almost every real policy has,
+       and it is the one the old parser aborted on. */
+    {
+        PolicyContainer *hosts =
+            policy_container_new("script-src https: https://*.example.com:443/a/b 'unsafe-inline'", NULL);
+        CHECK(policy_allows(hosts, POLICY_INLINE_HANDLER),
+              "host and scheme sources are invisible to §6.7.3.2, so 'unsafe-inline' still allows all inline");
+        CHECK(!policy_allows(hosts, POLICY_EVAL), "and none of them is 'unsafe-eval'");
+        policy_container_free(hosts);
     }
     /* §2.2.1: within ONE policy a repeated directive is IGNORED, so the first wins... */
     {
         PolicyContainer *dup = policy_container_new("script-src 'unsafe-inline'; script-src 'self'", NULL);
         CHECK(policy_allows(dup, POLICY_INLINE_HANDLER), "a repeated directive in one policy must be ignored");
         policy_container_free(dup);
+    }
+    /* ...and §2.2.1 lowercases the name before that containment test, so the repeat is a repeat however it is
+       spelled — `script-SRC 'none'` and `ScRiPt-sRc 'none'` are the standard's own example of equivalence. */
+    {
+        PolicyContainer *cased = policy_container_new("SCRIPT-SRC 'unsafe-inline'; script-src 'none'", NULL);
+        CHECK(policy_allows(cased, POLICY_INLINE_HANDLER),
+              "a directive name is matched ASCII case-insensitively, so the second one is the ignored repeat");
+        policy_container_free(cased);
     }
     /* ...but §2.2's policy LIST is comma-delimited and enforced INDEPENDENTLY, so the very same two directives
        as two POLICIES must intersect instead. These two lines differ by one character and must not agree. */

@@ -72,9 +72,11 @@ bool trusted_types_attribute_data(const char *element_ns, const char *element_lo
 JSValue trusted_types_compliant_attribute_value(JSContext *ctx, const char *element_ns, const char *element_local,
                                                 const char *attr_ns, const char *attr_local, JSValueConst value);
 
-/* THE SAME QUESTION OVER A SERIALIZED CSP LIST, which is what makes the directive parse exercisable with one
-   fixture and no document — the document half above is one line over this. `csp_text` may be NULL, which is
-   what "no Content-Security-Policy" is. */
+/* THE SAME QUESTION OVER A SERIALIZED CSP LIST, which is what makes the directive lookup exercisable with one
+   fixture and no document. It is the ONLY entry that parses: a Document's policy container parses its list
+   once when the Document is created, and the half above reads that, because this question is asked at every
+   HTML and script sink the platform has. `csp_text` may be NULL, which is what "no Content-Security-Policy"
+   is. */
 bool trusted_types_required_by(const char *csp_text, TrustedTypeKind expected);
 
 #endif

@@ -21,6 +21,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "core/frame/csp_directive_list.h"
 #include "core/frame/sandboxing.h"
 
 typedef struct PolicyContainer PolicyContainer;
@@ -37,17 +38,35 @@ PolicyContainer *policy_container_new(const char *csp_text, const char *referrer
 PolicyContainer *policy_container_clone(const PolicyContainer *src);
 void policy_container_free(PolicyContainer *p);
 
-/* The serialized policy, for a report that has to name what blocked it. BORROWED; NULL for no policy. */
+/* THE CONTAINER EXPORTS ITS CSP TWICE, and the two are for two different things.
+   The TEXT is what the container TRAVELS as and what a report has to quote — §7.4's clone across an instance
+   or a session is this string, re-parsed. BORROWED; NULL for no policy. */
 const char *policy_container_csp(const PolicyContainer *p);
+/* The PARSED §2.2 list is what a component ASKS. Every directive question in the engine goes through it, so
+   the parse happens once per container rather than once per sink — and so that there is exactly one reading of
+   CSP's grammar in the tree (core/frame/csp_directive_list.h says why that matters). BORROWED, and NULL for a
+   container that does not exist, which is the same answer as a list of zero policies and is the reason no
+   caller needs a second branch for it. */
+const CspList *policy_container_csp_list(const PolicyContainer *p);
 
 /* WOULD THIS RUN? §S says a firing breakout in the model is not an exploit until it survives the page's actual
    policy — an inline `onerror` is dead under `script-src 'self'`, and the honest report is then "sink REAL,
-   CSP blocks: needs X" rather than a bare XSS. These are the four questions a breakout turns on. */
+   CSP blocks: needs X" rather than a bare XSS. These are the four questions a breakout turns on, and each one
+   names the CSP algorithm that answers it — three are §4.2.3's inline check under a `type`, and the fourth is
+   not an inline check at all. */
 typedef enum {
-    POLICY_INLINE_SCRIPT = 0,   /* <script>…</script> injected into the document */
-    POLICY_INLINE_HANDLER,      /* onerror=…, onload=… — cannot carry a nonce */
-    POLICY_JAVASCRIPT_URL,      /* a javascript: URL navigated to — cannot carry a nonce either */
-    POLICY_EVAL,                /* eval, new Function, setTimeout(string) */
+    POLICY_INLINE_SCRIPT = 0,   /* <script>…</script> injected into the document — §4.2.3 type "script" */
+    POLICY_INLINE_HANDLER,      /* onerror=…, onload=… — §4.2.3 type "script attribute" */
+    /* A javascript: URL navigated to — §4.2.4's second half, whose inline check runs with type "navigation"
+       and a NULL element. §6.8.2 maps "navigation" to `script-src-elem`, NOT to `script-src-attr`: such a
+       navigation is governed with the script ELEMENT, which §6.1.11 states from the other side ("script-src-
+       elem applies to inline checks whose type is 'script' and 'navigation'"). This entry used to read
+       "cannot carry a nonce either" and the code was written to match that reading of it, so
+       `script-src 'unsafe-inline'; script-src-attr 'none'` reported a javascript: URL as BLOCKED where a real
+       browser runs it. Both halves of the old line are true and only one of them is the reason: the URL
+       indeed carries no nonce, and the directive that governs it is the element one all the same. */
+    POLICY_JAVASCRIPT_URL,
+    POLICY_EVAL,                /* eval, new Function, setTimeout(string) — §4.4.1: no element, no type */
 } PolicyScriptKind;
 bool policy_allows(const PolicyContainer *p, PolicyScriptKind kind);
 

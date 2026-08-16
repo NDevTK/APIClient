@@ -7,13 +7,14 @@
  * exploitable on a document whose policy kills the assignment before the markup is ever parsed. §S says the
  * same thing about CSP for the PoC; this is the same rule one algorithm earlier.
  *
- * THE DIRECTIVE IS READ OFF THE SERIALIZED CSP LIST, not off a parsed directive set, because the policy
- * container exports its list as text and its parse models the four SCRIPT questions a breakout turns on —
- * `require-trusted-types-for` is a fifth, and the parser that answers it belongs beside those four in
- * core/frame/policy_container.c the moment that file gains a directive this component can ask for. Reading the
- * serialized list here is the same grammar over the same bytes (CSP §2.2: policies comma-delimited, directives
- * `;`-delimited within a policy, a directive is a name followed by ASCII-whitespace-separated values), so the
- * answer is the standard's, not an approximation of it. */
+ * THE DIRECTIVE IS ASKED OF CSP'S OWN MODEL, and this file used to carry a SECOND parser instead. It had its
+ * own ASCII-whitespace predicate, its own case-insensitive token compare and its own two-level split of the
+ * serialized list, standing beside a third scan of the same grammar in core/frame/policy_container.c. Two
+ * readings of one grammar is one reading too many: §2.2.1 has a strip rule, an ASCII rule and a
+ * FIRST-ONE-WINS duplicate rule, and a scanner written per question implements whichever of them its author
+ * remembered — this one implemented none of the three, so a `require-trusted-types-for` repeated in one policy
+ * was read LAST-one-wins and a non-ASCII byte anywhere in a directive did not discard it. That parser is
+ * deleted; core/frame/csp_directive_list.h is the one parse, and this is a lookup in its result. */
 #include <stdio.h>
 #include <string.h>
 
@@ -21,107 +22,67 @@
 #include "quickjs.h"
 #include "core/dom/document.h"
 #include "core/events/event_target.h"
+#include "core/frame/csp_directive_list.h"
 #include "core/frame/policy_container.h"
 #include "core/html/trusted_types.h"
 
-/* ASCII whitespace, as CSP §2.2 splits on it. */
-static bool tt_space(char c)
+/* THE SINK GROUP a type belongs to, spelled as the directive's value spells it. The ONLY group the standard
+   defines is "script" and all three types belong to it; this is a switch rather than a constant so that a
+   second group added to the standard lands here, at the one place that decides it, instead of being a string
+   spelled at every sink. It is QUOTED because the value writes a sink group as a quoted keyword and the
+   comparison is against the value token as parsed — an unquoted `require-trusted-types-for script` therefore
+   names no group at all. */
+static const char *tt_sink_group(TrustedTypeKind expected)
 {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
-}
-
-/* An ASCII-case-insensitive token compare — a CSP directive name is matched case-insensitively. */
-static bool tt_token_is(const char *tok, size_t n, const char *name)
-{
-    size_t k = strlen(name), i;
-
-    if (n != k) return false;
-    for (i = 0; i < n; i++) {
-        char a = tok[i];
-        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
-        if (a != name[i]) return false;
+    switch (expected) {
+    case TRUSTED_TYPE_HTML:
+    case TRUSTED_TYPE_SCRIPT:
+    case TRUSTED_TYPE_SCRIPT_URL:
+        return "'script'";
     }
-    return true;
+    DFAIL("a sink asked whether trusted types are required for a type the standard does not define");
+    return NULL;
 }
 
-/* Does ONE `;`-delimited directive of one policy require trusted types for `group`? The directive is
-   `require-trusted-types-for` and its value is a list of sink groups, each written as a quoted keyword —
-   `require-trusted-types-for 'script'`. A directive with no value requires nothing, which is what the grammar
-   says and not a lenient reading: the value IS the set of groups it covers. */
-static bool tt_directive_requires(const char *d, size_t len, const char *group)
+/* §4.2.3 over a parsed CSP list. The policies are enforced INDEPENDENTLY, so trusted types are required as
+   soon as ANY policy requires them — the opposite quantifier from policy_allows over the same list, and for
+   the same reason: a second policy can only narrow.
+   A NULL list is a document with no Content-Security-Policy, which requires nothing; a directive with NO VALUE
+   covers no group, because the value IS the set of groups it covers. */
+static bool tt_list_requires(const CspList *list, const char *quoted_group)
 {
-    size_t i = 0, start;
-    bool named = false;
+    size_t i;
 
-    while (i < len && tt_space(d[i])) i++;
-    start = i;
-    while (i < len && !tt_space(d[i])) i++;
-    if (!tt_token_is(d + start, i - start, "require-trusted-types-for")) return false;
-    while (i < len) {
-        while (i < len && tt_space(d[i])) i++;
-        start = i;
-        while (i < len && !tt_space(d[i])) i++;
-        if (i > start) {
-            const char *v = d + start;
-            size_t n = i - start;
-            /* The grammar writes a sink group as a quoted keyword; the quotes are part of it, so they are
-               stripped here rather than matched, and an UNQUOTED value is not the keyword. */
-            if (n >= 2 && v[0] == '\'' && v[n - 1] == '\'' && tt_token_is(v + 1, n - 2, group))
-                named = true;
-        }
-    }
-    return named;
-}
-
-/* §4.2.3 over the serialized list. CSP §2.2: the policies are enforced INDEPENDENTLY, so trusted types are
-   required as soon as ANY policy requires them — the opposite quantifier from policy_allows, and for the same
-   reason: a second policy can only narrow. */
-static bool tt_list_requires(const char *csp, const char *group)
-{
-    size_t i = 0, n;
-
-    if (!csp) return false;
-    n = strlen(csp);
-    while (i < n) {
-        size_t pol_end = i;
-        while (pol_end < n && csp[pol_end] != ',') pol_end++;
-        {
-            size_t j = i;
-            while (j < pol_end) {
-                size_t d_end = j;
-                while (d_end < pol_end && csp[d_end] != ';') d_end++;
-                if (tt_directive_requires(csp + j, d_end - j, group)) return true;
-                j = d_end + 1;
-            }
-        }
-        i = pol_end + 1;
+    if (!list) return false;
+    for (i = 0; i < list->n_policies; i++) {
+        const CspDirective *d = csp_policy_directive(&list->policies[i], "require-trusted-types-for");
+        size_t j;
+        if (!d) continue;
+        for (j = 0; j < d->n_value; j++)
+            if (csp_token_is(d->value[j], quoted_group)) return true;
     }
     return false;
 }
 
 bool trusted_types_required(JSContext *ctx, TrustedTypeKind expected)
 {
-    return trusted_types_required_by(policy_container_csp(document_policy(ctx)), expected);
+    /* THE DOCUMENT PATH NEVER RE-PARSES. This question is asked at every HTML and script sink the platform
+       has, so it reads the list the container parsed once when the Document was created rather than the text
+       it also keeps. Only the fixture entry below has bytes and no container. */
+    return tt_list_requires(policy_container_csp_list(document_policy(ctx)), tt_sink_group(expected));
 }
 
 bool trusted_types_required_by(const char *csp_text, TrustedTypeKind expected)
 {
-    /* The ONLY sink group the standard defines is "script", and all three types belong to it. This is a switch
-       rather than a constant so that a second group added to the standard lands here, at the one place that
-       decides it, instead of being a string spelled at every sink. */
-    const char *group;
+    CspList list;
+    bool required;
 
-    switch (expected) {
-    case TRUSTED_TYPE_HTML:
-    case TRUSTED_TYPE_SCRIPT:
-    case TRUSTED_TYPE_SCRIPT_URL:
-        group = "script";
-        break;
-    default:
-        DFAIL("a sink asked whether trusted types are required for a type the standard does not define");
-        return false;
-    }
-    return tt_list_requires(csp_text, group);
+    if (!csp_text) return false;
+    memset(&list, 0, sizeof list);
+    csp_list_parse(&list, csp_text, strlen(csp_text));
+    required = tt_list_requires(&list, tt_sink_group(expected));
+    csp_list_free(&list);
+    return required;
 }
 
 JSValue trusted_types_compliant_string(JSContext *ctx, TrustedTypeKind expected, JSValueConst input,
