@@ -366,10 +366,23 @@ const HOT_RAM_BUDGET = 512 * 1024 * 1024;   // bytes of summed live WASM memory 
    report its working set" into "this instance occupies no memory", which admits another engine against RAM
    that is already spoken for. engineRecordFacts writes the number at the end of every round this zone has with
    an instance — the first of them before the record ever reaches the pool — so an absent one is a producer
-   that stopped writing rather than an engine of size zero, and it CRASHES. */
+   that stopped writing rather than an engine of size zero, and it CRASHES.
+   A RESERVATION IS NOT A TERM IN THIS SUM, AND ITS ABSENCE FROM IT IS ANSWERED BY A STATE RATHER THAN BY A
+   NUMBER. An engine that has not booted has reported nothing, and there is no honest figure to stand in: 0 is
+   the exact default this comment already refuses (it admits another engine against RAM that is about to be
+   spent), and an invented floor would be a number the producer never stated. So the sum is over the instances
+   that HAVE reported, and `_admissionHasHeadroom` — not this function — is where a reservation says "not
+   yet", by COUNTING ITSELF rather than by contributing a byte count nobody said. The states are enumerated
+   rather than defaulted past: a fourth one has to be classified here before it can be silently summed or
+   silently skipped. */
 function _residentBytes() {
   let b = 0;
   for (const e of _pool) {
+    if (e.state === "booting") continue;   // has reported nothing; _admissionHasHeadroom reads the state instead
+    DCHECK(e.state === "hot" || e.state === "fetching",
+           "an engine is in the pool in state `" + e.state + "`, which the RAM floor has no classification " +
+           "for — it would be summed as if it had reported or skipped as if it never will, and neither is a " +
+           "decision this function may take about a state it has never heard of");
     DCHECK(typeof e.residentBytes === "number",
            "a live engine is in the pool with no reported working set — the RAM floor is the sum of what each " +
            "instance last reported, and an engine missing from that sum is admission running against memory " +
@@ -377,6 +390,25 @@ function _residentBytes() {
     b += e.residentBytes;
   }
   return b;
+}
+/* THE RESERVATIONS IN FLIGHT — the POSITIVE form of "that sum is not complete yet". */
+function _bootingCount() {
+  let n = 0;
+  for (const e of _pool) if (e.state === "booting") n++;
+  return n;
+}
+/* WHETHER ANOTHER INSTANCE MAY BE BUILT, ASKED IN THE ONE PLACE THAT DECIDES IT. This condition was written out
+   three times (the waiting-document loop, the cold-rehydration gate, and that gate's inner break) — three
+   copies of a rule that has just gained a term, and a term is exactly what a copy forgets.
+   A RESERVATION BLOCKS ADMISSION, and that is the honest reading of an incomplete sum rather than a cautious
+   one: while an instance is being provisioned the working set is a LOWER BOUND, so admitting against it is
+   admitting against memory that is already spoken for and merely not yet counted. It is not a stall —
+   provisioning always settles (a reservation that fails leaves the pool), hostSchedule's wait arm waits on the
+   very promise that clears this, and the next iteration re-asks. */
+function _admissionHasHeadroom() {
+  if (_pool.length === 0) return true;     // always admit >= 1 so a lone document runs
+  if (_bootingCount() > 0) return false;   // an instance that has not reported is a term the sum is missing
+  return _residentBytes() < HOT_RAM_BUDGET;
 }
 
 /* THE NAVIGATION RESPONSE'S HEADER LIST, IN THE ONE FORM THAT CROSSES AN ABI — the HTTP field lines the
@@ -429,7 +461,7 @@ function responseFieldLines(h) {
    does not compute the key, does not admit and does not rank — and this is the zone that owns that question,
    so the name it passes in IS the answer (SECURITY.md's `(browsing-context group, origin)`), which is also
    what makes a frame in the offscreen's DOM identifiable as the instance the pool is talking about. */
-async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
+function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold) {
   /* THE ONE WAY TO BUILD AN INSTANCE, ASSERTED RATHER THAN DISCOVERED AS A TypeError. Without this the failure
      of a load-order change (renderer-host.js is a <script> before this one in ast-worker.html) arrives as
      "self.rendererCreate is not a function" inside admit's catch, which reports it as a BOOT ABORT of the
@@ -439,16 +471,127 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
          "renderer-host.js is not loaded in this zone — it is the only thing that can build an engine now " +
          "that no Module is instantiated in this realm, so every document would be reported as a crashed " +
          "instance rather than as a bridge that is missing half of itself");
-  const r = await self.rendererCreate(clusterKeyOf(msg));
-  try { return await engineRoot(r, code, html, msg, persist, docName, topLevelUrl); }
-  catch (e) { r.destroy(); throw e; }
+  DCHECK(typeof cold === "boolean",
+         "an instance was started without saying whether it has a live caller — `_cold` decides at finalize " +
+         "whether this document's findings are RETURNED to a requester or MERGED to the moat, and it is a " +
+         "fact about the call site (a child navigable and a resumed recipe have no requester; an admitted " +
+         "document does), so it belongs on the record from the instant the pool can see it");
+  const cluster = clusterKeyOf(msg);
+  /* THE POOL IS THE REGISTER OF WHO HOLDS WHAT, AND ASKING IT IS THE CALLER'S JOB — this asserts they did.
+     Every site that builds an instance has already answered "does this agent cluster have one?" (admit's
+     `hostClusterOf`, the create notice's, and the cold tier's key, which is unique per recipe by construction),
+     so a hit here is a caller that skipped the question or a reservation that did not take. */
+  DCHECK(hostClusterOf(cluster) === null,
+         "a second instance was started for an agent cluster that already has one (" + cluster + ") — two " +
+         "heaps for one similar-origin window agent is the split SECURITY.md's one-instance-per-cluster rule " +
+         "exists to forbid, and the pool already held the answer on the line that asked");
+  /* THE DOCUMENT ID IS MINTED HERE, BEFORE THE FIRST AWAIT, because the reservation is answerable by NAME from
+     the instant it exists: `hostHolderOf` is what routes a cross-document message, and a reservation with no
+     name is a document that this zone reports as held by nothing for as long as its instance takes to boot.
+     A LIVE ROOT DOCUMENT IS NAMED BY THE NAME THE BROWSER ALREADY GAVE IT. The counter answered "which
+     document is this?" with a fresh number every time it was asked, so the pool could not tell one document
+     delivered twice (content.js re-ships its CONTENT_HTML when the offscreen brain broadcasts RESHIP) from
+     two documents, and built a second WASM instance for it — two instances behind one principal, which is
+     the one thing SECURITY.md's "one instance per ORIGIN-KEYED AGENT CLUSTER" forbids. A document a peer
+     engine CREATED arrives already named (`docName`, minted in that engine's navigable.create notice); a
+     rehydrated cold recipe has no browser document to name it and takes the counter. */
+  const docId = docName || (msg && msg.documentId ? String(msg.documentId) : String(++nextDocumentId));
+  const eng = engineReserve(cluster, docId, msg, cold);
+  /* THE PROVISIONING ITSELF, WHICH IS THE ONLY PART THAT SUSPENDS, AND THE PROMISE IS WHAT SAYS *WHEN*. It
+     never carries the instance — the caller already holds the record, which is the point — and it settles on
+     BOTH outcomes, because the thing waiting on it is hostSchedule's wait arm and a document that merely
+     failed to boot may not take the Level-1 loop down with it. So an ENGINE abort resolves it: that is a
+     RECORDED outcome, answered on this record's own callers by engineBootFailed, which is also what takes the
+     reservation back out of the pool. The one thing it rejects for is an INVARIANT abort, which is this zone's
+     contract with the engine breaking and must not be reported as a page that failed to analyse.
+     IT IS ASSIGNED BEFORE ANYTHING CAN OBSERVE THE RECORD: the async body runs synchronously to its first
+     await, and this whole function is synchronous, so there is no turn in which the pool holds a reservation
+     nothing can wait on. */
+  eng._readyP = (async () => {
+    try {
+      eng.r = await self.rendererCreate(cluster);
+      await engineRoot(eng, code, html, msg, persist, docName, topLevelUrl);
+      /* A CLEAR THAT LANDED MID-BOOT TAKES THE FRAME HERE, for the reason serviceFetch takes it there:
+         hostClear cannot destroy a renderer this path has a call outstanding on, so it marks the record and
+         the operation that owns the outstanding call removes the frame when it lands. */
+      if (eng._dropped) eng.r.destroy();
+      _reserveStats.rooted++;
+    } catch (e) {
+      engineBootFailed(eng, e);
+      RETHROW_FATAL(e);
+    }
+  })();
+  return eng;
 }
-/* THE PARAMETER IS `rend` AND THE FIELD IS `eng.r`, which is not an inconsistency: the three fetch closures
+/* THE POOL SLOT, TAKEN SYNCHRONOUSLY — the whole point of this record existing before the instance does.
+   `hostNotice`'s create arm checked `hostClusterOf` and then AWAITED a document fetch, a frame boot and three
+   ABI round trips before pushing, and detached service rounds run concurrently with admit, so two arrivals for
+   one agent cluster could both pass that check and both build. Two heaps claiming to be one similar-origin
+   window agent is not a duplicated cost: `iframe.contentDocument.body.appendChild(sub)` inserts a node one of
+   them created into a tree the other owns, and a live `frame.contentWindow.onunload` closure is a function
+   object neither can call, so the pair is unrepresentable rather than slow. The window is closed by taking the
+   slot BEFORE the first suspension, so the second arrival finds a record and joins it.
+   IT CARRIES ONLY WHAT IS KNOWN WITHOUT ASKING THE INSTANCE, and nothing is stubbed in beside it. There is no
+   `residentBytes: 0` and no `topWeight: -Infinity` here: the first is the default that makes admission run
+   against memory already spoken for, and the second is the engine's own word for a frontier with no runnable
+   flow (355a03d2) — a drained instance, which is a different thing from one that has not started. Both facts
+   are ABSENT until engineRecordFacts states them, and every reader of either reads the STATE first. */
+function engineReserve(cluster, docId, msg, cold) {
+  /* `_readyP` IS DECLARED NULL AND FILLED BY engineCreate ON THE VERY NEXT LINE, which is a stated hole rather
+     than a placeholder promise: a stand-in built here would be a second promise that resolves at a different
+     moment than the provisioning does, and the wait arm would then be released by whichever of the two the
+     next reader happened to reach for. The arm asserts it is there. */
+  const eng = { state: "booting", cluster, docId, msg, groupId: msg && msg.groupId,
+                origin: (msg && msg.origin) || "", _cold: cold, _resolvers: [], _remoteAsked: new Set(),
+                r: null, _readyP: null };
+  _pool.push(eng);
+  _reserveStats.made++;
+  const n = _bootingCount();
+  if (n > _reserveStats.peakBooting) _reserveStats.peakBooting = n;
+  return eng;
+}
+/* A RESERVATION THAT DID NOT BECOME AN INSTANCE LEAVES THE POOL, and it leaves it HERE rather than at each of
+   the three call sites, because a reservation left behind is worse than the race it replaced: every later
+   arrival for that cluster finds it, joins it, and waits forever on a boot that already failed — a phantom
+   holding an agent cluster that will never have an instance, with nothing anywhere to say so. */
+function engineBootFailed(eng, e) {
+  const i = _pool.indexOf(eng);
+  DCHECK(i >= 0 || eng._dropped,
+         "a reservation failed to boot and was already out of the pool with no Clear having taken it — the " +
+         "slot it holds is this function's to release, so something else removing it means two owners for one " +
+         "record and the surviving one will free a frame twice");
+  if (i >= 0) _pool.splice(i, 1);
+  eng.state = "failed";
+  /* THE FRAME GOES WITH IT. `rendererCreate` destroys its own frame when the boot handshake fails, so `r` is
+     null exactly when there is nothing to remove; anything that threw after it is this path's to reclaim, and
+     an iframe nobody reaches is a whole WASM instance resident under a document that does not reload. */
+  if (eng.r) eng.r.destroy();
+  /* ONE INSTANCE FAILING IS ONE CRASH, however many documents were waiting on it — which is why the banner
+     fires once here and the RECORD is built per caller. crashResult bundled the two, so answering N joined
+     callers would have counted N crashes for one aborted boot and the probe's `crashes` would read the number
+     of documents that happened to share a cluster. */
+  const m = String((e && e.message) || e);
+  crashBanner("create", m);
+  for (const w of eng._resolvers) w.resolve(crashRecord("create", m, w.msg));
+  eng._resolvers.length = 0;
+  _reserveStats.failed++;
+}
+/* THE LOCAL IS `rend` AND THE FIELD IS `eng.r`, which is not an inconsistency: the three fetch closures
    below each bind `const r = await self.safeFetch(...)` — Fetch's reply record — and a renderer named `r` in
    this scope would be SHADOWED by it inside exactly the functions that deliver bytes into that renderer. The
    shadow would be silent, because none of them needs the renderer today; the next one that does would reach
-   for `r` and get a Response. */
-async function engineRoot(rend, code, html, msg, persist, docName, topLevelUrl) {
+   for `r` and get a Response.
+   IT FILLS THE RESERVATION AND RETURNS NOTHING. The record in the pool is the one every question about this
+   agent cluster has been answered by since the instant provisioning began, so building a second object here
+   would leave the pool holding the reservation while every caller held the instance — one document with two
+   records, which is the defect the reservation exists to close wearing a different hat. */
+async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
+  const rend = eng.r;
+  DCHECK(rend && rend.name === eng.cluster,
+         "a renderer was provisioned under a name that is not its instance's agent cluster — the frame's " +
+         "title is how this zone identifies which instance the pool is talking about, and the pool keys the " +
+         "same instance by `cluster`, so two spellings of one identity is a routing table that disagrees with " +
+         "the DOM");
   /* THE ENGINE'S OUTPUT, WHICH IS THE RENDERER'S LINE BUFFER AND NOT A SECOND COPY OF IT. renderer-host.js
      appends every drained line to this array as each reply lands, so `eng.lines` and `r.lines` are one array:
      engineCrash's backwards scan for the ROOT @WHY, streamPartial's scan for the last @RESULT and
@@ -480,15 +623,11 @@ async function engineRoot(rend, code, html, msg, persist, docName, topLevelUrl) 
   // SCOPE, stated rather than assumed: this counter is unique across the instances ALIVE in this offscreen,
   // which is exactly the set that can message each other today. It is not yet persisted, because a parked
   // foreign segment does not yet outlive a session; when segments park, this becomes a persisted allocator.
-  /* A LIVE ROOT DOCUMENT IS NAMED BY THE NAME THE BROWSER ALREADY GAVE IT. The counter answered "which
-     document is this?" with a fresh number every time it was asked, so the pool could not tell one document
-     delivered twice (content.js re-ships its CONTENT_HTML when the offscreen brain broadcasts RESHIP) from
-     two documents, and built a second WASM instance for it — two instances behind one principal, which is
-     the one thing SECURITY.md's "one instance per ORIGIN-KEYED AGENT CLUSTER" forbids. `hostHolderOf` was
-     already the answer to that question for a document a peer engine CREATED ("already provisioned: the
-     engine announces a document once"); naming the root by its own documentId is what lets it be asked for
-     a root too. A rehydrated cold recipe has no browser document to name it, and takes the counter. */
-  const _docId = docName || (msg && msg.documentId ? String(msg.documentId) : String(++nextDocumentId));
+  /* AND IT IS MINTED ON THE RESERVATION RATHER THAN HERE, which is why there is no local for it below:
+     `hostHolderOf` routes a cross-document message by this name, and a document whose instance is still
+     booting would otherwise be one this zone reports as held by nothing for the whole of that boot. A second
+     name for it here would be a second answer to "which document is this?" waiting to disagree with the pool's.
+     engineCreate states the provenance rules. */
   // HTML §8.1.3.1's TOP-LEVEL CREATION URL. THREE PROVENANCES AND ALL THREE ARE BROWSER-STATED, never
   // derived here: a document a PEER engine created carries its creator's §7.4 decision on the navigable.create
   // notice (hostNotice below, which passes it as the argument); a document a content script reported carries
@@ -531,7 +670,7 @@ async function engineRoot(rend, code, html, msg, persist, docName, topLevelUrl) 
   const _initrc = await rend.call("qjs_init", "number",
     [_docBytes ? { t: "cbytes", i: 0 } : { t: "cstr", v: html || "" },
      { t: "cstr", v: (msg && msg.sourceUrl) || "" },
-     { t: "cstr", v: _docId },
+     { t: "cstr", v: eng.docId },
      { t: "cstr", v: _headers },
      { t: "cstr", v: _tlu }],
     _docBytes ? [html] : []);
@@ -766,15 +905,23 @@ async function engineRoot(rend, code, html, msg, persist, docName, topLevelUrl) 
      RETAINED (qjs_init's five arguments) lives as long as the module does, the module dies with the frame, and
      the frame is removed at finalize — so there is nothing left in this realm to free, and nothing in this
      realm that can read an untrusted instance's memory. */
-  const eng = { r: rend, lines, fkey, prior, msg, persist, fetched, fetchedDocument, fetchedXhr, code, html, state: "hot",
-                docId: _docId, cluster: rend.name, groupId: msg && msg.groupId,
-                origin: (msg && msg.origin) || "", _resolvers: [], _forceparkSteps, _remoteAsked: new Set() };
+  eng.lines = lines; eng.fkey = fkey; eng.prior = prior; eng.persist = persist;
+  eng.fetched = fetched; eng.fetchedDocument = fetchedDocument; eng.fetchedXhr = fetchedXhr;
+  eng.code = code; eng.html = html; eng._forceparkSteps = _forceparkSteps;
+  DCHECK(eng.msg === msg,
+         "the reservation this instance is being rooted into carries a different message record than the one " +
+         "this document was parsed, fetched and keyed from — the reservation's is what hostNotice stamps a " +
+         "cross-document delivery's origin from and what finish() writes the cold recipe out of, so two " +
+         "records for one document is a message stamped with one document's principal and persisted under " +
+         "another's address");
   /* THE FIRST ROUND'S RECORD, TAKEN BEFORE THIS INSTANCE IS RANKABLE. `qjs_begin` above is what seeded the
      frontier, so this line is the earliest moment a top-flow weight exists at all — and it is earlier than the
-     pool, which is what makes "an engine the ranking has never heard from" a state that cannot occur rather
-     than a case to default. */
+     moment this record leaves the `booting` state, which is what makes "an engine the ranking has never heard
+     from" a state that cannot occur rather than a case to default. THE ORDER IS THE INVARIANT: the two facts
+     are written first and the state that makes them readable is written second, so there is no instant at
+     which the ranking or the RAM floor can see a hot engine that has not reported. */
   await engineRecordFacts(eng);
-  return eng;
+  eng.state = "hot";
 }
 /* THE LEVEL-1 RANKING'S TWO FACTS, RECORDED WHERE THE INSTANCE ANSWERS THEM RATHER THAN READ WHERE THE RANKING
    NEEDS THEM. Both were SYNCHRONOUS reaches into the module on every ranking pass — a `qjs_top_weight` ccall
@@ -835,8 +982,18 @@ async function engineRecordFacts(eng) {
    invariant silently replaced by whichever engine happened to be first; that is asserted above, where the
    engine answers it. What is asserted HERE is that there is an answer at all, because an absent number and a
    stale one are different things and only one of them may be ranked. */
+/* AND A NON-HOT ENGINE IS NOT RANKED LOW, IT IS NOT RANKED. `if (eng.state !== "hot") return -Infinity` stood
+   here and was dead in both directions: hostSchedule ranks the HOT set it filtered a line earlier, so nothing
+   ever reached it — and if anything had, -Infinity is the wrong answer to give. 355a03d2 established that
+   -Infinity is the ENGINE's own word for a frontier holding no runnable flow, so answering it for a
+   RESERVATION would report an instance that has not started as one that has finished, and the step that
+   follows a bottom-ranked engine is the DONE path: a booting engine would be finalized before it existed. The
+   two states are distinguished by not answering for either. */
 function engineWeight(eng) {
-  if (eng.state !== "hot") return -Infinity;
+  DCHECK(eng.state === "hot",
+         "the Level-1 ranking was asked for the weight of an engine in state `" + eng.state + "` — it ranks " +
+         "the hot set it filtered a line earlier, so a fetching or BOOTING engine arriving here is that filter " +
+         "and this function disagreeing about which engines are rankable");
   DCHECK(typeof eng.topWeight === "number",
          "a hot engine carries no recorded top-flow weight — engineRecordFacts writes one at the end of every " +
          "round this zone has with an instance, the first of them before the record ever reaches the pool, so " +
@@ -1003,20 +1160,28 @@ async function hostNotice(eng, line) {
            "the engine sent a create notice for a child in its OWN agent cluster — a same-origin child is a " +
            "second REALM in that heap and never leaves it, so this zone and navigable.c's child_in_this_agent " +
            "have answered one origin question two ways");
+    /* AND THE QUESTION IS ASKED OF THE RESERVATIONS TOO, which is what makes asking it worth anything here.
+       This check stood a document fetch, a frame boot and three ABI round trips away from the push that made
+       its answer true, and detached service rounds run concurrently with admit — so two arrivals for one
+       cluster could both be told "no instance" and both build one. engineCreate takes the pool slot before its
+       first await now, so a cluster that is merely BEING provisioned answers here exactly as a provisioned one
+       does, and the case below is reached only when it is genuinely a second document. */
     if (hostClusterOf(_ckey)) {
       DFAIL("a second cross-origin document of ONE agent cluster was announced — its cluster already has an " +
-            "instance, and the two documents are one similar-origin window agent that HTML puts in one heap. " +
-            "This needs an ABI entry beside qjs_init that JOINS a document to a LIVE instance (a second Lexbor " +
-            "parse, a realm through main.c's engine_child_realm, and its scripts seeded on the same frontier), " +
-            "which does not exist yet; provisioning a second instance instead is the split this key deleted");
+            "instance (or a reservation for one), and the two documents are one similar-origin window agent " +
+            "that HTML puts in one heap. This needs an ABI entry beside qjs_init that JOINS a document to a " +
+            "LIVE instance (a second Lexbor parse, a realm through main.c's engine_child_realm, and its " +
+            "scripts seeded on the same frontier), which does not exist yet; provisioning a second instance " +
+            "instead is the split this key deleted");
       return;
     }
-    const child = await engineCreate("", msg.pageHtml, msg, false, f[1], f[5]);
     /* A CHILD DOCUMENT IS A DOCUMENT: it joins the ONE pool and is ranked, sliced, parked and finalized by the
        one host WFQ like every other. It has no caller to resolve to, so its findings merge the way a
-       rehydrated cold engine's do rather than being returned to a requester that never asked for it. */
-    child._cold = true;
-    _pool.push(child);
+       rehydrated cold engine's do rather than being returned to a requester that never asked for it — which
+       is `cold`, stated at the reservation because it is a fact about this call site and not about how the
+       boot turns out. AWAITED, because the notices of one round are acted on IN ORDER: a page opens a window
+       and posts to it in the same turn, so the instance must exist before the post that names it is routed. */
+    await engineCreate("", msg.pageHtml, msg, false, f[1], f[5], true)._readyP;
     return;
   }
   if (f[0] === "windowproxy.post") {
@@ -1025,6 +1190,16 @@ async function hostNotice(eng, line) {
     DCHECK(target !== null, "a message was posted to a document no instance in this pool holds — the create " +
                             "notice naming it was dropped, or that instance was finalized while a peer still " +
                             "held a WindowProxy for it");
+    /* A TARGET MID-BOOT IS STILL THE TARGET, AND THE DELIVERY WAITS FOR IT. The reservation carries the
+       document's name from the instant its provisioning began, so hostHolderOf answers with a record whose
+       instance does not exist yet — and the honest thing to do with a message for a document that is being
+       built is to hold it until it is, which is the same suspension every other cross-instance operation in
+       this zone takes. Routing it now would post into `null`; refusing it would drop a delivery the engine has
+       already handed the page a WindowProxy for. */
+    if (target.state === "booting") await target._readyP;
+    DCHECK(target.state === "hot" || target.state === "fetching",
+           "a message was posted to a document whose instance never became one — the reservation holding that " +
+           "name failed to boot, so the send is a delivery with nowhere to go rather than a message in flight");
     /* THE STAMP IS THE SENDER'S BROWSER-STATED ORIGIN, SERIALIZED. An empty one means this instance was
        rehydrated from a cold recipe written before the principal was part of it — this zone then does not know
        whose message this is, and the one thing it may not do is invent it (a wrong `event.origin` makes the
@@ -1279,9 +1454,13 @@ function engineCrash(eng, stage, e) {
 }
 // A crash BEFORE the engine object exists (creation/boot abort). Same rule: LOUD, findings discarded,
 // marked _engineCrashed — never a quiet "degenerate result" the reviewer reads as a boring empty page.
-function crashResult(stage, e, msg) {
-  const m = String((e && e.message) || e);
-  crashBanner(stage, m);
+/* THE BANNER IS NO LONGER PART OF THIS FUNCTION, and the split is what one aborted boot costs: `crashBanner`
+   increments the crash COUNT, and a reservation may have several documents attached to it (a RESHIP
+   re-delivery, a sub-frame, a second arrival that joined it while it booted), each of which needs its OWN
+   record because each is answering a different caller. Bundled, answering N callers counted N crashes for one
+   instance that failed to boot, and the probe's `crashes` would have read the number of documents that
+   happened to share a cluster. engineBootFailed banners once and calls this per caller. */
+function crashRecord(stage, m, msg) {
   /* NO RESULT DOCUMENT IS EXPECTED HERE, and this is the only caller that may say so: the instance aborted
      before it could answer, so its absence is the crash rather than a broken contract. */
   const r = linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, false);
@@ -1314,10 +1493,21 @@ async function hostSchedule(pool, ops) {
     if (ops.admit) await ops.admit();   // gate creation to cap: seat waiting docs into freed slots
     if (!pool.length) break;
     const hot = pool.filter((e) => e.state === "hot");
-    if (!hot.length) {   // every live engine is mid-fetch: wait for the earliest body, then re-rank
-      const fetching = pool.filter((e) => e.state === "fetching");
-      if (!fetching.length) break;
-      await Promise.race(fetching.map((e) => e._fetchP));
+    if (!hot.length) {   // every live engine is mid-something: wait for the earliest to become hot, then re-rank
+      /* TWO STATES REACH THIS ARM AND THEY ARE ONE KIND OF THING: not rankable YET, on a promise that says
+         when. An engine awaiting a reply body is one; a RESERVATION whose instance is still being provisioned
+         is the other, and it was missing. Without it an empty hot set with a booting engine in the pool fell
+         through to the `break` below — and the pool is NOT empty (the reservation is in it), so _hostKick's
+         `finally` re-entered immediately: a full-speed spin through admit on a condition that only the boot
+         it refused to wait for could change. */
+      const pending = pool.filter((e) => e.state === "fetching" || e.state === "booting");
+      if (!pending.length) break;
+      for (const e of pending)
+        DCHECK(e._readyP && typeof e._readyP.then === "function",
+               "an engine in state `" + e.state + "` carries no readiness promise — this arm is the only " +
+               "thing that resumes the pool when nothing is hot, so an engine it cannot wait on is one the " +
+               "loop spins on or abandons, and both are silent");
+      await Promise.race(pending.map((e) => e._readyP));
       continue;
     }
     /* Level-1 WFQ pick + the RUNNER-UP's weight (the value yield floor). ONE reading per engine: every weight
@@ -1394,7 +1584,11 @@ async function hostSchedule(pool, ops) {
          NON-BLOCKING, the way the unreachable branch was: the engine drops out of the hot set while its round
          runs, so a slow reply on this document never stalls another's. */
       target.state = "fetching";
-      target._fetchP = ops.serviceFetch(target).then(
+      /* ONE FIELD FOR ONE QUESTION, WHICH IS "WHEN DOES THIS ENGINE BECOME RANKABLE AGAIN". It was `_fetchP`,
+         and a boot is not a fetch — naming the reservation's provisioning promise after the reply round would
+         be one name answering two different facts, which is how the wait arm above would come to be read as
+         "wait for a body" by the next person to add a state to it. */
+      target._readyP = ops.serviceFetch(target).then(
         () => { target.state = "hot"; },
         (e) => {
           /* A THROW OUT OF A SERVICE ROUND IS AN INVARIANT FAILURE — every assert in the reply builders, the
@@ -1411,10 +1605,23 @@ async function hostSchedule(pool, ops) {
 }
 
 // ---- Engine-bound ops + the live pool ----
-const _pool = [];        // HOT/fetching engines (<= POOL_CAP resident wasm instances)
+const _pool = [];        // BOOTING/hot/fetching engines — one record per agent cluster, bounded by the RAM floor
 const _waiting = [];      // documents awaiting a slot: { code, html, msg, persist, resolve } — NO instance built yet
 let _hostDriving = false;
-let _engineFactory = engineCreate;   // injectable for tests
+/* THE RESERVATION LEDGER, WHICH IS CUMULATIVE BECAUSE THE STATE IT DESCRIBES IS TRANSIENT. A probe that reads
+   the pool after an analysis settles sees an empty array whether the reservation mechanism ran or was never
+   reached — the exact shape renderer-host's provisioned/destroyed counters exist for, one level up. So every
+   reservation is counted where it is made and every exit is counted where it is taken, and the probe asserts
+   the arithmetic: the pool never holds more booting records than there are provisionings still running, which
+   is the statement that no reservation was ever left behind as a phantom holding an agent cluster nothing
+   will ever provision.
+   `joinedBooting` IS THE ONE THAT PROVES THE RACE IS CLOSED. It counts second arrivals for a cluster whose
+   instance was still being provisioned — the window in which the pool used to answer "no instance" and build
+   a second heap for one similar-origin window agent. `joinedRooted` is the pre-existing case beside it (a
+   RESHIP re-delivery, a sub-frame of an instance already running), kept apart so one cannot be read as the
+   other. `peakBooting` is the high-water mark of simultaneous reservations, which is what says whether this
+   run ever had two provisionings in flight at once. */
+const _reserveStats = { made: 0, rooted: 0, failed: 0, joinedBooting: 0, joinedRooted: 0, peakBooting: 0 };
 const _hostOps = {
   weight: engineWeight,
   /* THE VALUE YIELD FLOOR — run until outranked by the runner-up. The `try {} catch (_) {}` around it is gone
@@ -1508,7 +1715,7 @@ const _hostOps = {
     /* AN INDEX WALK RATHER THAN A SHIFT, because one waiting document can be legitimately UNSEATABLE YET (the
        defer below) and a shift would either drop it or spin this loop forever re-reading it. */
     let i = 0;
-    while (i < _waiting.length && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {
+    while (i < _waiting.length && _admissionHasHeadroom()) {
       const job = _waiting[i];
       /* ONE INSTANCE PER AGENT CLUSTER, ASKED OF THE POOL — which IS the register of who holds what, so nothing
          here remembers a document it no longer holds. This asked ONE INSTANCE PER DOCUMENT, by documentId, and
@@ -1530,7 +1737,13 @@ const _hostOps = {
            through this same safeFetch chokepoint), so the instance is already running it as a realm of its own.
            The caller is therefore answered by that instance's finalize — its findings ARE this document's —
            which is the same path the RESHIP re-delivery of one document already took. What is deleted is the
-           branch beside it that built a second WASM instance, i.e. a second heap for one agent. */
+           branch beside it that built a second WASM instance, i.e. a second heap for one agent.
+           AND A RESERVATION ANSWERS THIS QUESTION EXACTLY AS AN INSTANCE DOES. A cluster whose instance is
+           still being PROVISIONED is a cluster that has one — the pool slot was taken before the first await
+           precisely so that this line cannot be reached during the boot and told "no" — so the join below
+           attaches this caller to the record that is going to hold its document, and the boot answering later
+           answers it too. That is the case the counter separates: `joinedBooting` is the window in which this
+           branch used to be skipped and a second heap built for one similar-origin window agent. */
         DCHECK(!isTop || cluster.docId === docId,
                "the TOP document of a browsing-context group arrived for a cluster whose instance is rooted at " +
                "a different document — the group's top was REPLACED (a same-origin navigation, or a COOP " +
@@ -1541,6 +1754,7 @@ const _hostOps = {
                "seeded on the same frontier) — neither exists yet, and neither is a second instance");
         cluster._resolvers.push(job);
         _waiting.splice(i, 1);
+        if (cluster.state === "booting") _reserveStats.joinedBooting++; else _reserveStats.joinedRooted++;
         continue;
       }
       /* A SUB-FRAME MAY NOT ROOT ITS OWN CLUSTER WHILE THE GROUP'S TOP IS SAME-ORIGIN WITH IT. Its cluster's
@@ -1553,41 +1767,64 @@ const _hostOps = {
          `originOf(topLevelUrl)`, and each is correctly its own cluster of one. */
       if (!isTop && _isRealOrigin(job.msg.origin) && originOf(job.msg.topLevelUrl) === job.msg.origin) { i++; continue; }
       _waiting.splice(i, 1);
-      try { const eng = await _engineFactory(job.code, job.html, job.msg, job.persist); eng._resolvers.push(job); _pool.push(eng); }
-      // boot/creation abort: LOUD failure, not a quiet degenerate result. An invariant abort from the creation
-      // path (the init return code, the bundle id, the frontier key's origin) is NOT a boot abort and must not
-      // be reported as one — it is this zone's own contract with the engine breaking.
-      catch (e) { RETHROW_FATAL(e); job.resolve(crashResult("create", e, job.msg)); }
+      /* THE JOB IS ATTACHED TO THE RESERVATION BEFORE ANYTHING SUSPENDS, which is what makes the boot's failure
+         path the ONE owner of every caller on this document. It used to be pushed after the await, so a
+         creation that aborted answered this job here (`crashResult`) while any caller that had joined in the
+         meantime was answered by nobody — two settlement owners for one record, split by timing.
+         boot/creation abort: LOUD failure, not a quiet degenerate result, and that is engineBootFailed's now:
+         it banners once, answers every attached caller with the crash record, destroys the frame and takes the
+         reservation back out of the pool. An invariant abort from the creation path (the init return code, the
+         bundle id, the frontier key's origin) is NOT a boot abort — it is this zone's contract with the engine
+         breaking — so it travels on through `_readyP` to hostSchedule's own failure arm. */
+      const eng = engineCreate(job.code, job.html, job.msg, job.persist, null, null, false);
+      DCHECK(hostClusterOf(key) === eng,
+             "engineCreate did not leave its reservation in the pool before returning — the whole point of " +
+             "the slot being taken synchronously is that the next arrival for this cluster finds it, so a " +
+             "pool that does not hold it is the race this reservation exists to close, still open");
+      eng._resolvers.push(job);
+      await eng._readyP;
     }
     // 2) ONE frontier: when no LIVE work is pending/running and RAM has headroom, rehydrate the highest-value
     //    COLD recipes into the SAME pool so they interleave with (and by) the one WFQ — not a second scheduler.
-    if (!_waiting.length && !_pool.some((e) => !e._cold) && (_pool.length === 0 || _residentBytes() < HOT_RAM_BUDGET)) {
+    if (!_waiting.length && !_pool.some((e) => !e._cold) && _admissionHasHeadroom()) {
       const cold = (await frontierAll()).filter((e) => e && e.recipes && !_pool.some((p) => p.fkey === e.key));
       cold.sort((a, b) => frontierWeight(b) - frontierWeight(a));   // one global value order
       for (const c of cold) {
-        if (_pool.length > 0 && _residentBytes() >= HOT_RAM_BUDGET) break;
-        try {
-          /* THE PRINCIPAL RESUMES WITH THE RECIPE. A parked flow's world is only the same world if the
-             document it resumes into is the same PRINCIPAL — and this zone cannot re-derive one from
-             c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. A recipe
-             written before this field carries "", and the stamp site refuses to deliver a message for it
-             rather than inventing one. */
-          /* A RESUMED RECIPE IS A CLUSTER OF ONE, and its GROUP says so rather than borrowing a tab's. The
-             browsing-context group it parked in is gone — the tab was closed, or the session was — so there is
-             no live document it may share a heap with, and the frontier key (origin|bundle, already unique per
-             recipe and never equal to a tab id) is the honest name for the group it resumes into. That is also
-             what lets the origin half stay "" for a recipe written before the principal was part of one: an
-             empty half of a key whose other half is unique collides with nothing, so nothing is invented. */
-          const msg = { type: "AST_ANALYZE", pageHtml: c.html, code: c.code, sourceUrl: c.sourceUrl,
-                        origin: c.origin || "", groupId: "cold:" + c.key,
-                        topLevelUrl: c.topLevelUrl, credentialed: c.credentialed, persist: true };
-          const eng = await engineCreate(c.code || "", c.html || "", msg, true);   // a rehydrated cold recipe always participates in the frontier
-          eng._cold = true; _pool.push(eng);
-        } catch (e) { RETHROW_FATAL(e); crashBanner("create-cold", String((e && e.message) || e)); }   // was silently swallowed — a cold-rehydration abort must be LOUD too
+        if (!_admissionHasHeadroom()) break;
+        /* THE PRINCIPAL RESUMES WITH THE RECIPE. A parked flow's world is only the same world if the
+           document it resumes into is the same PRINCIPAL — and this zone cannot re-derive one from
+           c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. A recipe
+           written before this field carries "", and the stamp site refuses to deliver a message for it
+           rather than inventing one. */
+        /* A RESUMED RECIPE IS A CLUSTER OF ONE, and its GROUP says so rather than borrowing a tab's. The
+           browsing-context group it parked in is gone — the tab was closed, or the session was — so there is
+           no live document it may share a heap with, and the frontier key (origin|bundle, already unique per
+           recipe and never equal to a tab id) is the honest name for the group it resumes into. That is also
+           what lets the origin half stay "" for a recipe written before the principal was part of one: an
+           empty half of a key whose other half is unique collides with nothing, so nothing is invented. */
+        const msg = { type: "AST_ANALYZE", pageHtml: c.html, code: c.code, sourceUrl: c.sourceUrl,
+                      origin: c.origin || "", groupId: "cold:" + c.key,
+                      topLevelUrl: c.topLevelUrl, credentialed: c.credentialed, persist: true };
+        /* THE `try {} catch` AROUND THIS IS GONE WITH THE REPORTING IT DID. A rehydration whose engine ABORTS
+           is now bannered by engineBootFailed, at the reservation, together with the pool slot it releases —
+           one place on every creation path rather than one arm per call site. What was left in the catch was
+           an invariant abort, which `RETHROW_FATAL` was already rethrowing, so the arm could only ever have
+           caught something it immediately gave back. A rehydrated cold recipe always participates in the
+           frontier and never has a caller, which is the `cold` argument. */
+        await engineCreate(c.code || "", c.html || "", msg, true, null, null, true)._readyP;
       }
     }
   },
   finish: async (eng) => {   // fully explored, or self-parked under RAM pressure -> persist residue to the cold tier + resolve/merge
+    /* A RESERVATION IS NEVER FINALIZED, AND THIS IS WHERE THAT IS SAID. Only the stepped engine reaches here
+       and the step is over the hot set, so a booting record cannot arrive — but everything below it reads an
+       instance that has answered (`eng.r` for the result document and the teardown, `eng.lines` for the
+       findings, `eng.fkey` for the cold recipe), and a record that had none would report a document this zone
+       never ran as a page that was analysed and found nothing. */
+    DCHECK(eng.state === "hot",
+           "an engine in state `" + eng.state + "` was finalized — finalize asks the instance for its one " +
+           "result document and then tears it down, and a reservation has no instance to ask, so its " +
+           "document would be reported as analysed and empty");
     const i = _pool.indexOf(eng); if (i >= 0) _pool.splice(i, 1);
     const result = await engineFinalize(eng);
     if (eng.persist && result._fkey) {   // persist into the GLOBAL frontier (cross-session cold tier)
@@ -1669,6 +1906,7 @@ self.rendererPoolProbe = function rendererPoolProbe() {
   DCHECK(typeof self.rendererStats === "function",
          "renderer-host.js is not loaded in this zone — it is what provisions every engine, so without it the " +
          "pool has no way to build an instance at all and this probe would be reporting on an empty document");
+  let booting = 0;
   const pool = _pool.map((eng) => {
     /* THE ASSERT THAT MAKES THIS PROBE WORTH RUNNING: not that a renderer exists, but that NOTHING ELSE does.
        An engine carrying a Module handle is a WASM instance living in the trusted zone's own realm with
@@ -1677,14 +1915,52 @@ self.rendererPoolProbe = function rendererPoolProbe() {
     DCHECK(!("M" in eng),
            "a pooled engine still carries a Module handle — the in-realm path is deleted, so an engine holding " +
            "one is an untrusted instance built in this realm rather than in a sandboxed opaque-origin frame");
+    /* A RESERVATION IS REPORTED AS ONE, and it is reported as a member of the pool because that is exactly
+       what it is: the record answering "which instance holds this agent cluster" for the whole of a document
+       fetch, a frame boot and three ABI round trips. Its two Level-1 facts read `null` rather than a number
+       because it has stated neither — `heapBytes: 0` would be the default that admits another engine against
+       RAM about to be spent, and `topWeight: -Infinity` would be the engine's own word for a DRAINED frontier
+       on a record whose engine has not started. `joined` is how many callers are already waiting on it. */
+    if (eng.state === "booting") {
+      booting++;
+      DCHECK(typeof eng.cluster === "string" && eng.cluster !== "" && typeof eng.docId === "string" && eng.docId !== "",
+             "a reservation is in the pool naming no agent cluster or no document — it is answered for by " +
+             "both (hostClusterOf for admission, hostHolderOf for routing), so a nameless one is a slot that " +
+             "blocks admission while answering nobody");
+      return { name: eng.cluster, docId: eng.docId, state: "booting",
+               framed: !!(eng.r && eng.r.frame.parentNode), heapBytes: null, topWeight: null,
+               cold: !!eng._cold, joined: eng._resolvers.length };
+    }
     DCHECK(eng.r && typeof eng.r.heapBytes === "number" && typeof eng.r.name === "string",
            "a pooled engine is not backed by a renderer that has reported itself — every instance is " +
            "provisioned by rendererCreate, which does not return until the frame's boot record has landed");
     return { name: eng.r.name, docId: eng.docId, state: eng.state, framed: !!eng.r.frame.parentNode,
-             heapBytes: eng.r.heapBytes, topWeight: eng.topWeight, cold: !!eng._cold };
+             heapBytes: eng.r.heapBytes, topWeight: eng.topWeight, cold: !!eng._cold,
+             joined: eng._resolvers.length };
   });
+  /* NO RESERVATION OUTLIVES ITS PROVISIONING, ASSERTED AS ARITHMETIC RATHER THAN LOOKED FOR. A reservation is
+     made once and takes exactly one exit — it roots into an instance or it fails — so `made - rooted - failed`
+     is the number of provisionings actually RUNNING, and the pool may never hold more booting records than
+     that. The failure it catches is the one that would otherwise be silent forever: a provisioning that ended
+     without transitioning or releasing its record leaves a phantom holding an agent cluster, and every later
+     arrival for that cluster joins it and waits on a boot that finished long ago.
+     IT IS `<=` AND NOT `===` BECAUSE hostClear IS ALLOWED TO TAKE A RESERVATION OUT FROM UNDER ITS OWN BOOT:
+     the Clear splices the record and the provisioning removes the frame when it lands, so between those two
+     moments a running provisioning legitimately has no pool slot. Equality would report the Clear path as the
+     phantom, which is the direction that cannot happen. */
+  const inFlight = _reserveStats.made - _reserveStats.rooted - _reserveStats.failed;
+  DCHECK(booting <= inFlight,
+         "the pool holds " + booting + " reservation(s) while only " + inFlight + " provisioning(s) are still " +
+         "running (" + _reserveStats.made + " made, " + _reserveStats.rooted + " rooted, " +
+         _reserveStats.failed + " failed) — the difference is a slot held by a record whose boot is over, " +
+         "which blocks admission forever and answers every later arrival for that agent cluster with a wait " +
+         "that never ends");
   return { renderers: self.rendererStats(), pool: pool, waiting: _waiting.length,
-           residentBytes: _residentBytes(), runs: self._engineLog.length, recent: self._engineLog.slice(-4),
+           residentBytes: _residentBytes(),
+           reservations: { made: _reserveStats.made, rooted: _reserveStats.rooted, failed: _reserveStats.failed,
+                           booting: booting, inFlight: inFlight, peakBooting: _reserveStats.peakBooting,
+                           joinedBooting: _reserveStats.joinedBooting, joinedRooted: _reserveStats.joinedRooted },
+           runs: self._engineLog.length, recent: self._engineLog.slice(-4),
            crashes: self._engineCrashOccurred };
 };
 
@@ -1719,7 +1995,13 @@ async function hostClear() {
      A ROUND IN FLIGHT KEEPS ITS FRAME UNTIL IT LANDS. `state === "fetching"` is exactly "this engine has a call
      outstanding", and destroying then would break renderer-host's rule that a destroyed renderer has no caller
      parked on an answer. `_dropped` is what the round reads on the way out (see serviceFetch). */
-  for (const eng of dropped) { eng._dropped = true; if (eng.state !== "fetching") eng.r.destroy(); }
+  /* AND A RESERVATION KEEPS ITS FRAME FOR THE SAME REASON, WHICH IS WHY THIS IS WRITTEN AS THE POSITIVE SET
+     RATHER THAN AS `!== "fetching"`. A booting engine has no `r` at all until rendererCreate answers, and from
+     that instant until engineRoot finishes it has an ABI call outstanding on every await in between — so it is
+     the same case the negative form would have missed twice over (a TypeError, then a broken renderer-host
+     rule). engineCreate reads `_dropped` when its provisioning lands and removes the frame there, on both
+     arms, exactly as the service round does. */
+  for (const eng of dropped) { eng._dropped = true; if (eng.state === "hot") eng.r.destroy(); }
   /* EVERY OUTSTANDING RENDEZVOUS BELONGED TO AN INSTANCE THAT IS NOW DROPPED — the whole pool went. Left
      behind, each entry holds its asking engine's wasm Module alive for the life of the offscreen, which is the
      one shape a map keyed on a live instance fails in. */
