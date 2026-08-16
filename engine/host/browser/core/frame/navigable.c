@@ -314,7 +314,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     JSValueConst proxy = step_arg(&s->hdr, 0);
     JSValueConst answer = JS_UNDEFINED;
     const char *addr, *csp = NULL, *body = NULL, *tlu;
-    const Origin *origin;
+    const Origin *origin, *tlo;
     JSValue bodyv = JS_UNDEFINED, cspv = JS_UNDEFINED;
     size_t body_len = 0;
     JSContext *cctx;
@@ -387,8 +387,15 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     DCHECK(tlu != NULL && *tlu,
            "a nested navigable was navigated with no top-level creation URL on its proxy — §7.4 gives every "
            "navigable one when it creates it, so a proxy without one was minted somewhere that did not");
+    /* AND §8.1.3.1's TOP-LEVEL ORIGIN, the same question asked of the same fact about the navigable: §7.11
+       gives a TOP-LEVEL traversable's new environment the origin of the document it is loading — this
+       document IS the top-level environment, and §7.3.1's answer for the response is the one computed above —
+       while a NESTED navigable keeps the pair its creation gave it, which is what makes a cross-origin frame's
+       permission key its EMBEDDER's (Permissions §5.1: "Most powerful features grant permission to the
+       top-level origin and delegate access to the requesting document via Permissions Policy"). */
+    tlo = window_proxy_is_top_level(proxy) ? origin : window_proxy_top_level_origin(proxy);
     cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, body, body_len, csp);
-    window_proxy_navigate(ctx, proxy, cctx, doc, addr, tlu, origin);
+    window_proxy_navigate(ctx, proxy, cctx, doc, addr, tlu, tlo, origin);
     JS_FreeCString(ctx, csp);
     JS_FreeCString(ctx, body);
     JS_FreeValue(ctx, cspv);
@@ -696,9 +703,21 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     JSValue creator_tlu = realm_top_level_creation_url(ctx);
     const char *creator_tlu_s = JS_ToCString(ctx, creator_tlu);
     const char *tlu;
+    /* AND THE OTHER HALF OF §8.1.3.1's PAIR, from the SAME sentence of §7.3.2.1 and answered differently: "Let
+       topLevelOrigin be origin if embedder is null; otherwise embedder's relevant settings object's top-level
+       origin", where `origin` is step 11's — the origin of the INITIAL about:blank Document this create makes
+       the navigable with, which is the one this same function hands window_proxy_new below. So a CHILD
+       inherits the creator's environment's field (read off the creator's own NAVIGABLE, which is where an
+       environment's copy of it lives until a realm is built) and an AUXILIARY one is its own top-level
+       environment. It is NOT the origin of `tlu`: §4.7 over `about:blank` mints a fresh opaque origin, and a
+       navigable keyed to one is same origin with nothing — which is exactly how a popup's permission key came
+       to disagree with its opener's. */
+    const Origin *creator_tlo = window_proxy_top_level_origin(document_window_proxy(ctx));
+    const Origin *tlo;
 
     CHECK(creator_tlu_s != NULL, "navigable: this realm's top-level creation URL would not convert");
     tlu = is_child ? creator_tlu_s : "about:blank";
+    tlo = is_child ? creator_tlo : origin_agent();
     if (!child_address(ctx, url, &addr, &origin)) {   /* the reference does not parse; the caller decides what that means */
         JS_FreeCString(ctx, creator_tlu_s);
         JS_FreeValue(ctx, creator_tlu);
@@ -760,6 +779,13 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                                     like the policy container, and for the same reason: the realm is built
                                     later and by whichever same-origin document reads through it first. */
                                  tlu,
+                                 /* AND §8.1.3.1's TOP-LEVEL ORIGIN, decided above from the same §7.3.2.1
+                                    sentence. For an AUXILIARY navigable it is the origin of the initial
+                                    about:blank Document this call is minting — the same `origin_agent()` this
+                                    call passes as that Document's origin — which is what makes a popup's
+                                    permission key its opener's rather than a fresh opaque one derived from
+                                    the `about:blank` its top-level creation URL is. */
+                                 tlo,
                                  is_child ? document_window_proxy(ctx) : JS_UNDEFINED,
                                  (is_child || (feat && feat->noopener)) ? JS_NULL
                                                                         : document_window_proxy(ctx));
