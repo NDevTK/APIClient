@@ -40,6 +40,8 @@
 #include "core/dom/attr_list.h"
 #include "core/dom/selector_match.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/css_rule.h"
+#include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
 #include "core/dom/document.h"
@@ -2536,6 +2538,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
     css_style_sheet_install(ctx, global); /* CSSOM §6.1.1 StyleSheet and §6.1.2 CSSStyleSheet */
     style_sheet_list_install(ctx, global); /* CSSOM §6.2.2 StyleSheetList */
+    css_rule_install(ctx, global);       /* CSSOM §6.4.2 CSSRule and §6.4.3 CSSStyleRule */
+    css_rule_list_install(ctx, global);  /* CSSOM §6.4.1 CSSRuleList */
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
     element_internals_install(ctx, global);  /* §4.13.7 ElementInternals, CustomStateSet, ValidityState */
     dom_token_list_install(ctx, global);    /* §7.1 DOMTokenList */

@@ -176,6 +176,20 @@ void html_style_element_update(lxb_dom_element_t *el)
         JS_FreeValue(realm, wrap);
         return;
     }
+    /* THE CSS RULES, which §4.2.6's table leaves "uninitialized" and its own note says should presumably be the
+       element's child text content (whatwg/html issue #2997). It has to be: the same section requires that
+       "the style rules must be immediately made available to script", and every engine parses the child text
+       content here. `lxb_dom_node_text_content` is the DESCENDANT text, which for a conforming `<style>` is its
+       one text child and for a non-conforming one is what a browser reads too. */
+    {
+        size_t clen = 0;
+        lxb_char_t *content = lxb_dom_node_text_content(n, &clen);
+
+        if (content) {
+            css_style_sheet_set_rules_from_text(realm, sheet, (const char *)content, clen);
+            lxb_dom_document_destroy_text(n->owner_document, content);
+        }
+    }
     style_set_sheet(realm, wrap, sheet);
     JS_FreeValue(realm, wrap);
 

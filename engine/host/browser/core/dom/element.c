@@ -53,6 +53,8 @@
 #include "core/dom/document_fragment.h"
 #include "core/idl_indexed.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/css_rule.h"
+#include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
 #include <lexbor/ns/ns.h>
@@ -2102,6 +2104,8 @@ void element_init(JSContext *ctx)
     html_script_init(ctx);    /* §4.12.1's `already started` slot, which the fragment parse below writes */
     cssom_init(ctx);          /* CSSStyleDeclaration, which HTMLElement's `style` attribute names */
     css_style_sheet_init(ctx);   /* CSSOM §6.1's StyleSheet and CSSStyleSheet, which a `<style>` element creates */
+    css_rule_init(ctx);          /* CSSOM §6.4.2 CSSRule and §6.4.3 CSSStyleRule, which a sheet's rules are */
+    css_rule_list_init(ctx);     /* CSSOM §6.4.1 CSSRuleList, the collection §6.1.2's cssRules hands back */
     style_sheet_list_init(ctx);  /* CSSOM §6.2's collections, which §6.1's create adds every sheet to */
     /* HTML §4.2.6's association between the two. AFTER the sheet interface it creates, and after
        node_add_tree_hook's list above, because its own registration is on §4.2.3's children-changed family and
@@ -2214,6 +2218,8 @@ void element_free(JSContext *ctx)
     html_element_free(ctx);
     html_style_element_free(ctx);   /* before the sheet interface whose objects it holds */
     style_sheet_list_free(ctx);
+    css_rule_list_free(ctx);
+    css_rule_free(ctx);
     css_style_sheet_free(ctx);
     cssom_free(ctx);
     selector_match_free();   /* after every component that can still match a selector */

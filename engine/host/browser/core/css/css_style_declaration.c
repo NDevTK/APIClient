@@ -387,6 +387,90 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
     return out;
 }
 
+/* ---- CSS Syntax's "parse a stylesheet's contents", for CSSOM §6.4's rule objects --------------------------
+ *
+ * §6.6's SERIALIZE A CSS DECLARATION BLOCK, as far as its LAST steps: each declaration as "name: value" plus
+ * " !important" when its important flag is set, plus a ";", joined with a single SPACE. The spec's note is the
+ * exact shape — "no whitespace appears before the first property name and no whitespace appears after the final
+ * semicolon delimiter" — and it is NOT lexbor's serialization, which joins with "; " and emits no trailing
+ * semicolon at all. A CSSOM member must answer CSSOM's string.
+ *
+ * WHAT IS NOT HERE IS THE SHORTHAND LOOP, and that is why nothing calls this for a `cssText` yet. §6.6's
+ * algorithm re-consolidates a full set of longhands back into the shorthand that covers them (`margin-top`,
+ * `-right`, `-bottom`, `-left` all present serialize as one `margin`), which needs the LONGHAND -> SHORTHAND
+ * direction and the shorthands' preferred order; core/css/css_shorthand.h carries only the forward direction,
+ * so consolidating is a component's worth of work and skipping it silently would make `cssText` a string no
+ * browser produces. So this builds what a rule STORES, and §6.4.2's `cssText` is honestly absent until the
+ * loop exists — the IDL audit reports it, which is the ledger. */
+static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list)
+{
+    CssBuf out = { 0 };
+    const lxb_css_rule_t *r;
+    bool first = true;
+
+    for (r = list ? list->first : NULL; r; r = r->next) {
+        const lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(r);
+
+        /* CSS Syntax's INVALID DECLARATION is not in the block, so it is not in the block's serialization
+           either — the same drop the cascade and the inline rewrite make, for the same `__UNDEF` reason. */
+        if (r->type != LXB_CSS_RULE_DECLARATION || d->type == LXB_CSS_PROPERTY__UNDEF) continue;
+        if (!first) css_buf_add(&out, " ");
+        first = false;
+        lxb_css_property_serialize_name(d->u.user, d->type, css_buf_cb, &out);
+        css_buf_add(&out, ": ");
+        lxb_css_property_serialize(d->u.user, d->type, css_buf_cb, &out);
+        if (d->important) css_buf_add(&out, " !important");
+        css_buf_add(&out, ";");
+    }
+    return out.s;   /* NULL for a block with no valid declaration, which IS the empty serialization */
+}
+
+unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *ud)
+{
+    lxb_css_memory_t *mem = lxb_css_memory_create();
+    lxb_css_stylesheet_t *sst = NULL;
+    unsigned n = 0;
+
+    DCHECK(g_ready, "CSS text was parsed before cssom_init built the parser it goes through");
+    DCHECK(text != NULL && cb != NULL, "a stylesheet parse was asked for with no text or nowhere to put it");
+    CHECK(mem != NULL, "cssom: the CSS arena allocation failed");
+    if (lxb_css_memory_init(mem, 128) != LXB_STATUS_OK) {
+        lxb_css_memory_destroy(mem, true);
+        return 0;
+    }
+    sst = lxb_css_stylesheet_create(mem);
+    lxb_css_parser_memory_set(g_parser, mem);
+    if (sst && lxb_css_stylesheet_parse(sst, g_parser, (const lxb_char_t *)text, len) != LXB_STATUS_OK)
+        sst = NULL;
+    lxb_css_parser_memory_set(g_parser, NULL);
+    cssd_selectors_intact();
+    if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST) {
+        lxb_css_rule_t *r;
+
+        for (r = lxb_css_rule_list(sst->root)->first; r; r = r->next) {
+            n++;
+            if (r->type != LXB_CSS_RULE_STYLE) { cb(ud, (unsigned)r->type, NULL, NULL); continue; }
+            {
+                lxb_css_rule_style_t *st = lxb_css_rule_style(r);
+                CssBuf sel = { 0 };
+                char *block;
+
+                lxb_css_selector_serialize_list_chain(st->selector, css_buf_cb, &sel);
+                block = cssd_serialize_block(st->declarations);
+                cb(ud, (unsigned)r->type, sel.s ? sel.s : "", block ? block : "");
+                free(block);
+                css_buf_free(&sel);
+            }
+        }
+    }
+    /* THE ARENA IS THE ONE OWNER and it is freed outright, for the reason the author cascade's is: creating a
+       stylesheet REF-INCREMENTS the memory it is handed, so `lxb_css_stylesheet_destroy(sst, true)` only
+       decrements it back and frees nothing. Every rule, selector and string above lives in here, which is
+       exactly why the callback got TEXT and why it got it before this line. */
+    lxb_css_memory_destroy(mem, true);
+    return n;
+}
+
 /* LAYER 3 — the UA DEFAULT. A headless run still has a user-agent stylesheet, and `display` is the property a
    bundle actually branches on. Modelling it is the difference between answering the spec's value and shrugging;
    what is NOT here — the rest of html.css — is honestly absent and reads as the property's initial value. */

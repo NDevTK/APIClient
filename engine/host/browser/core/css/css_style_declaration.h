@@ -22,4 +22,25 @@ void cssom_install(JSContext *ctx, JSValueConst global);
    attribute is HTMLElement's and the object is this component's. */
 void cssom_install_style_attribute(JSContext *ctx, JSValueConst proto);
 
+/* CSS SYNTAX'S "PARSE A STYLESHEET'S CONTENTS", through THE AGENT'S ONE CSS PARSER.
+ *
+ * IT IS AN ENTRY AND NOT A HANDLE ON THE PARSER, and that is the whole point. This component owns the parser
+ * because it owns the SELECTOR-STATE RECORD lexbor would otherwise leave on a dead stack frame — see the long
+ * note in css_style_declaration.c, and the segfault it describes — and that ownership is only worth anything
+ * while the arena swap, the parse and the "the record came back unchanged" assertion stay together in ONE
+ * place. Handing a second component the `lxb_css_parser_t *` would be handing it three steps to remember.
+ *
+ * Each TOP-LEVEL rule is handed to `cb` as TEXT, never as a lexbor pointer: the arena is destroyed before this
+ * returns, and CSSOM §6.4's objects have to outlive it — they park to the IDB cold tier and fork per flow, and
+ * a rule named by a pointer into a freed arena can do neither. `type` is lexbor's own rule type, so the caller
+ * decides what it has no interface for rather than this silently dropping it. For LXB_CSS_RULE_STYLE,
+ * `selector_text` is the serialized selector list and `block_text` the serialized declaration block; for any
+ * other type both are NULL, because how a rule splits into prelude and body is that rule interface's business.
+ * Both strings are BORROWED for the duration of the call.
+ *
+ * Returns how many top-level rules the text produced — which is what CSS Syntax's "parse a RULE" needs in
+ * order to be that instead of this: exactly one, or a syntax error. */
+typedef void (*CssomRuleFn)(void *ud, unsigned type, const char *selector_text, const char *block_text);
+unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *ud);
+
 #endif

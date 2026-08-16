@@ -21,6 +21,7 @@
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_SHEET_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -57,6 +58,15 @@ bool css_style_sheet_is(JSValueConst v);
    nodes, and for nothing else. BORROWED; NULL for a sheet that has none (one that has been removed, or one no
    node created). */
 lxb_dom_node_t *css_style_sheet_owner_node(JSValueConst sheet);
+
+/* CSS Syntax's "PARSE A STYLESHEET'S CONTENTS" over `text`, with the result becoming this sheet's CSS RULES —
+   the operation §6.1.2's `replaceSync` is stated over, minus the constructed-flag check that member adds.
+   HTML §4.2.6's create-a-CSS-style-sheet table says the CSS rules are "left uninitialized", and its own note
+   says that "doesn't seem right. Presumably we should be using the element's child text content?" (whatwg/html
+   issue #2997). Every engine uses the child text content, §4.2.6 further down REQUIRES it — "the style rules
+   must be immediately made available to script" — and a sheet whose rules were genuinely uninitialised would
+   make `document.styleSheets[0].cssRules` empty for every page. So this is what the creator calls. */
+void css_style_sheet_set_rules_from_text(JSContext *ctx, JSValueConst sheet, const char *text, size_t len);
 
 /* §6.1's TITLE, the CONCEPT — not §6.1.1's `title` attribute, which turns the empty string into null. §6.2's
    add-a-CSS-style-sheet steps branch on whether it is the empty string, which is why the concept is what is

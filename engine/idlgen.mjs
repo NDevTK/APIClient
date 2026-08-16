@@ -262,6 +262,15 @@ const INTERFACES = {
      interfaces this map is still silent about, which is the audit lying by omission rather than by direction,
      and it is not this change's to decide. */
   StyleSheetList:       "core/css/style_sheet_list.c",
+  /* CSSOM §6.4. CSSRule is an abstract base nothing instantiates, so its members live on their own prototype
+     and CSSStyleRule.prototype CHAINS to it — both rows name the one component. What each is EXPECTED to
+     report missing is real and named at the sites: CSSRule's `cssText` (§6.6's serialize-a-CSS-declaration-
+     block needs its shorthand consolidation loop, and a cssText without it is a string no browser produces),
+     and CSSStyleRule's `style` (a CSSStyleProperties whose backing is a rule rather than an element) plus the
+     three CSSGroupingRule members it inherits in the IDL and cannot here. */
+  CSSRule:              "core/css/css_rule.c",
+  CSSStyleRule:         "core/css/css_rule.c",
+  CSSRuleList:          "core/css/css_rule_list.c",
   /* HTML §4.2.6's `disabled` and CSSOM §6.3.2's LinkStyle `sheet` are installed onto HTMLStyleElement's
      prototype by their own component, for the same reason §4.10's rows name theirs. */
   HTMLStyleElement:    ["core/html/html_style_element.c", "core/html/html_element.c"],
