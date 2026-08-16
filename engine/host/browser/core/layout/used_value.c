@@ -132,6 +132,78 @@ static void uv_require_unclamped(lxb_dom_element_t *el, bool vertical)
           "MINIMUM SIZE, which is a content-based minimum and therefore a real layout");
 }
 
+/* THE FOUR TERMS OF css-sizing §5's CONVERSION BETWEEN THE TWO BOXES, on one axis, and the ONE place that
+   computes them. §5 converts a border box into a content box by "subtracting the border and padding widths of
+   the respective sides", and every arm below needs that sum or half of it — the `border-box` size ADDS it, the
+   padding edge subtracts it and adds the paddings back. Two copies of a four-term sum are two places for the
+   terms to come to disagree, which is the only way the padding edge and the size it is derived from can stop
+   describing the same box. */
+typedef struct {
+    double padding;   /* padding-left + padding-right, or padding-top + padding-bottom */
+    double border;    /* border-left-width + border-right-width, or the top/bottom pair */
+} UvSurround;
+
+static UvSurround uv_surround(lxb_dom_element_t *el, bool vertical)
+{
+    static const char *const PADDINGS[2][2] = {
+        { "padding-left", "padding-right" }, { "padding-top", "padding-bottom" },
+    };
+    static const char *const BORDERS[2][2] = {
+        { "border-left-width", "border-right-width" }, { "border-top-width", "border-bottom-width" },
+    };
+    int axis = vertical ? 1 : 0, i;
+    UvSurround s = { 0.0, 0.0 };
+
+    for (i = 0; i < 2; i++) {
+        char *bw = uv_computed(el, BORDERS[axis][i]);
+        CssLength len = css_length_parse(bw);
+
+        DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+               "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 "
+               "§3.3's `Computed value:` line is `absolute length` and every arm of that derivation produces "
+               "one — 0 for a `none`/`hidden` style, 1/3/5px for the three keywords, the absolutized length "
+               "otherwise — so a percentage or a keyword here is a rule that did not run");
+        free(bw);
+        s.border  += len.px;
+        s.padding += used_value_px(el, PADDINGS[axis][i]);
+    }
+    DCHECK(s.padding >= 0.0 && s.border >= 0.0,
+           "css-sizing §5's conversion between the content box and the border box was handed a NEGATIVE "
+           "surround. CSS 2.1 §8.4 states outright that 'negative values for padding properties are not "
+           "allowed' and css-backgrounds-3 §3.3's <line-width> is a non-negative <length>, so lexbor drops "
+           "either declaration — a negative here is a used value this component derived rather than one an "
+           "author wrote, and every box it is a term of would be smaller than the box it contains");
+    return s;
+}
+
+/* §5's SUM, as one function rather than as the expression `s.padding + s.border` written twice. That is not
+   tidiness: one direction of the conversion ADDS this sum and the other SUBTRACTS it, and IEEE addition is not
+   associative, so two spellings of the same sum can differ by an ulp and leave a content box a few times 10^-17
+   below zero — a real disagreement and a rounding artifact then look identical, and the assert that is supposed
+   to catch the first would be tripped by the second. Subtracting the very number that was added cancels
+   exactly, which is what makes that assert mean what it says. */
+static double uv_surround_total(UvSurround s)
+{
+    return s.padding + s.border;
+}
+
+/* css-sizing §5's `box-sizing`, asked as the ONE question both directions of its conversion turn on. The
+   grammar is `content-box | border-box` and lexbor validates the declaration against it, so a third value is a
+   cascade layer that answered without one — asserted HERE, at the classification, rather than by whichever arm
+   a not-content-box value happened to fall into. */
+static bool uv_is_border_box(lxb_dom_element_t *el)
+{
+    char *v = uv_computed(el, "box-sizing");
+    bool border = strcmp(v, "border-box") == 0;
+
+    DCHECK(border || strcmp(v, "content-box") == 0,
+           "a `box-sizing` computed to something that is neither of the two keywords css-sizing §5's "
+           "`content-box | border-box` grammar admits, and its `Computed value:` line is `specified keyword` — "
+           "so nothing between the declaration and here had a rule that could produce a third one");
+    free(v);
+    return border;
+}
+
 /* css-sizing §5's `box-sizing: border-box`, and the one sentence in it that decides what this function
    returns: "Used values, AS EXPOSED FOR INSTANCE THROUGH getComputedStyle(), also refer to the border box."
  * SO THE ANSWER IS THE BORDER BOX'S SIZE, NOT THE CONTENT BOX'S. What stood here said the opposite — that
@@ -150,31 +222,12 @@ static void uv_require_unclamped(lxb_dom_element_t *el, bool vertical)
  * and computing it needs exactly the four terms §10.3.3 was waiting on, two of which are the border widths. */
 static double uv_border_box_size(lxb_dom_element_t *el, double declared, bool vertical)
 {
-    static const char *const PADDINGS[2][2] = {
-        { "padding-left", "padding-right" }, { "padding-top", "padding-bottom" },
-    };
-    static const char *const BORDERS[2][2] = {
-        { "border-left-width", "border-right-width" }, { "border-top-width", "border-bottom-width" },
-    };
-    int axis = vertical ? 1 : 0, i;
-    double surround = 0.0;
+    UvSurround s = uv_surround(el, vertical);
+    double surround = uv_surround_total(s);
 
-    DCHECK(uv_computed_is(el, "box-sizing", "border-box"),
-           "css-sizing §5's border-box arm was reached for a `box-sizing` that is neither of the two keywords "
-           "its `content-box | border-box` grammar admits — lexbor validates the declaration against it, so a "
-           "third value here is a cascade layer that answered without one");
-    for (i = 0; i < 2; i++) {
-        char *bw = uv_computed(el, BORDERS[axis][i]);
-        CssLength len = css_length_parse(bw);
-
-        DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
-               "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 "
-               "§3.3's `Computed value:` line is `absolute length` and every arm of that derivation produces "
-               "one — 0 for a `none`/`hidden` style, 1/3/5px for the three keywords, the absolutized length "
-               "otherwise — so a percentage or a keyword here is a rule that did not run");
-        free(bw);
-        surround += len.px + used_value_px(el, PADDINGS[axis][i]);
-    }
+    DCHECK(uv_is_border_box(el),
+           "css-sizing §5's border-box arm was reached for a box whose `box-sizing` is `content-box` — the "
+           "declared length is then the CONTENT box's and this function would report it as the border box's");
     return declared > surround ? declared : surround;
 }
 
@@ -291,8 +344,7 @@ static double uv_size(lxb_dom_element_t *el, const char *computed, CssLength len
                   "first — the same §10.3.3 subproblem, one level up");
         uv_require_unclamped(el, vertical);
         /* css-sizing §5 decides which BOX EDGE the declared length is on, and the used value it exposes. */
-        if (!uv_computed_is(el, "box-sizing", "content-box"))
-            return uv_border_box_size(el, len.px, vertical);
+        if (uv_is_border_box(el)) return uv_border_box_size(el, len.px, vertical);
         return len.px;
     }
     if (len.kind == CSS_LENGTH_PERCENTAGE) {
@@ -331,6 +383,24 @@ static double uv_size(lxb_dom_element_t *el, const char *computed, CssLength len
               "and a font. BUILD the in-flow child walk first — the zero-child and block-level-children arms "
               "of §10.6.3 need no font at all, only every child's used height and vertical margins, and "
               "§8.3.1's margin COLLAPSING between them");
+    /* §10.3.5, §10.3.7 and §10.3.9 send an `auto` width to SHRINK-TO-FIT, which is a different algorithm from
+       §10.3.3's equation and is blocked on a different thing — so it gets its own message rather than the
+       block-level one below. It was always reachable through CSSOM §9's resolved value; CSSOM VIEW §6's
+       `clientWidth` on a floated or inline-block box is the ordinary way a page arrives here. */
+    if (box == UV_BOX_OUT_OF_FLOW || box == UV_BOX_INLINE_BLOCK)
+        DFAIL("CSS 2.1 §10.3.5 (floating) and §10.3.9 (inline-block) send an `auto` width to the SHRINK-TO-FIT "
+              "formula — 'min(max(preferred minimum width, available width), preferred width)' — and §10.3.7 "
+              "sends an absolutely positioned box's there too in its rules 1 and 3, which are the ones where "
+              "`left` or `right` is `auto` alongside `width` (its rule 5, with both offsets given, solves the "
+              "equation for `width` instead and is the block-level arm's subproblem rather than this one). TWO "
+              "of the formula's three terms are INTRINSIC SIZES of the box's own content "
+              "— css-sizing §5.1's max-content and min-content, 'the narrowest inline size that would fit' and "
+              "the size 'assuming no line breaks' — so this is not the containing-block subproblem the "
+              "block-level arm below is waiting on, and building that one answers nothing here. BUILD the "
+              "intrinsic size contributions: an inline formatting context that measures the box's text with a "
+              "real font and finds its break opportunities, over every in-flow descendant's own contribution. "
+              "The third term, the available width, is §10.1's containing block, so this arm needs BOTH and the "
+              "other needs one of them");
     DFAIL("CSS 2.1 §10.3.3: a `width` of `auto` on a block-level box 'follows from the resulting equality' — "
           "the used width is the CONTAINING BLOCK's width minus the six other terms of the constraint "
           "equation. ALL SEVEN TERMS ARE READABLE NOW: the margins and paddings are this component's own §8.3 "
@@ -393,4 +463,41 @@ double used_value_px(lxb_dom_element_t *el, const char *name)
     else                 out = uv_size(el, computed, len, box, vertical);
     free(computed);
     return out;
+}
+
+/* CSS 2.1 §8's BOX MODEL — "the padding edge surrounds the box padding", and the padding box is the content box
+   plus the padding on each side — over css-sizing §5, which is the only thing that varies: WHICH BOX the used
+   size is the size of. That is why the paddings are added ONCE below, to a content box the one `box-sizing`
+   question above derives, rather than in two arms that would each have to remember the other's convention.
+   THE ASSERT IS THE WHOLE MECHANISM AND IT IS TWO-SIDED. §5 floors the content box at zero — "as the content
+   width and height cannot be negative, this computation is floored at zero" — and `uv_border_box_size`
+   IMPLEMENTS that floor, by returning the LARGER of the declared length and the four-term surround rather than
+   the declared length alone. So under `border-box` the used size is a number that same sum already dominates,
+   and subtracting the sum back out cannot go below zero: the floored case cancels to exactly zero because it is
+   the identical `uv_surround_total` result going back, and the other case is a subtraction the `>` that chose
+   it already decided the sign of. A negative content box here is therefore not a strange page and not a
+   rounding artifact — it is the two derivations having stopped describing the same box: a used size that did
+   not come through §5's floor, or a surround computed from different terms than the one that produced it.
+   Under `content-box` the same assert says something simpler and just as necessary — CSS 2.1 §10.2's `width`
+   is a non-negative <length>, so a negative used size is a derivation that lost an operand. */
+double used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical)
+{
+    UvSurround s;
+    bool border_box;
+    double used, content;
+
+    DCHECK(el != NULL, "a padding edge's extent was asked for with no element");
+    s = uv_surround(el, vertical);
+    border_box = uv_is_border_box(el);
+    used = used_value_px(el, vertical ? "height" : "width");
+    content = border_box ? used - uv_surround_total(s) : used;
+    DCHECK(content >= 0.0,
+           "the CONTENT box derived from a used size is NEGATIVE. Under `box-sizing: border-box` css-sizing §5 "
+           "floors it at zero and this component's border-box arm implements that floor by taking the larger of "
+           "the declared length and the four-term surround, so subtracting that same sum back out cannot reach "
+           "a negative — a negative one means the used size and this surround were computed from "
+           "different terms and no longer describe the same box. Under `content-box` the used size IS the "
+           "content box, and CSS 2.1 §10.2's `width` is a non-negative <length>, so a negative one is a "
+           "derivation that lost an operand");
+    return content + s.padding;
 }

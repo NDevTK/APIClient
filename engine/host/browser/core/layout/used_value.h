@@ -17,7 +17,8 @@
  * neighbouring one's answer.
  *
  * WHAT THIS COMPONENT COMPUTES TODAY, AND WHY THAT SET AND NOT A LARGER ONE. Two of §10's arms need NO layout
- * at all, and they are not the small cases:
+ * at all, and they are not the small cases — and the last entry below is not one of §10's arms but a BOX EDGE
+ * stated over them, which is here for the reason its own paragraph gives:
  *   - A MARGIN OR PADDING whose computed value is an absolute length. Nothing in CSS 2.1 alters it. §10.3.3's
  *     constraint equation solves for `auto` values and, when the box is OVER-CONSTRAINED, for one horizontal
  *     margin; it never touches a vertical margin, and §10.6.3 gives the vertical pair exactly one rule (`auto`
@@ -38,6 +39,18 @@
  *     paddings and borders alone exceed it and the content box floors at zero (§5's own worked example: "the
  *     border-box size ends up at 120px, even though width: 100px is specified"). It is the LARGER of the two,
  *     and the four terms it needs are the two paddings and the two border widths.
+ *   - AND THE PADDING EDGE'S EXTENT, which is not a property at all and is exactly why it is an entry HERE
+ *     rather than arithmetic at the one caller that wants it. CSS 2.1 §8's box model makes the padding box the
+ *     CONTENT box plus the two paddings on the axis, and that one sentence is the whole derivation in BOTH
+ *     `box-sizing` modes — what differs between them is not the padding edge, it is which box the USED SIZE
+ *     above is the size OF. Under `content-box` that size IS the content box and the two paddings are added;
+ *     under `border-box` css-sizing §5 makes it the BORDER box, so the content box is that size minus the same
+ *     four terms §5's own conversion names, and the paddings are added back to THAT. A CALLER CANNOT WRITE
+ *     THIS: `used_value_px(el, "width")` plus the two paddings is the answer in one mode and DOUBLE-COUNTS
+ *     them in the other, and nothing in the number it got back says which mode produced it. So the four terms
+ *     are computed once, in one function, and both directions of §5's conversion are stated over that one
+ *     result — the double-count is not a mistake to avoid, it is a sentence there is no longer anywhere to
+ *     write.
  *
  * AND WHY THE ROOT ELEMENT'S `width: auto` IS STILL NOT AMONG THEM, WHICH IS THE ONE THING TO READ BEFORE
  * ADDING IT. §10.3.3's constraint equation has SEVEN terms,
@@ -81,6 +94,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_USED_VALUE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_USED_VALUE_H
 
+#include <stdbool.h>
+
 #include <lexbor/dom/dom.h>
 
 /* THE USED VALUE of `name` on `el`, in CSS pixels. `name` is one of the physical box-model lengths CSSOM §9
@@ -89,5 +104,19 @@
    is why nothing here re-asks them. A case CSS 2.1 §10 defines and this component does not compute crashes
    naming its own section; there is no fallback answer. */
 double used_value_px(lxb_dom_element_t *el, const char *name);
+
+/* THE USED EXTENT OF THE PADDING EDGE on one axis, in CSS pixels — the horizontal one for `vertical` false and
+   the vertical one for true. CSSOM VIEW §6's `clientWidth` and `clientHeight` step 3 is its caller, and the
+   header above derives it: the content box on that axis plus the two paddings, with css-sizing §5 deciding
+   which box `used_value_px` handed back.
+   IT IS AN EXTENT AND NOT AN EDGE POSITION, which is the whole reason these two §6 members can be answered
+   while `getClientRects()` cannot: a position is a coordinate in the viewport's space and needs §10.1's
+   containing-block chain, and a distance between two parallel edges of ONE box needs none of it.
+   The caller has already established §6's step 1 — the element has an associated box and that box is not
+   inline — which is what makes the size properties apply to it at all. Every arm CSS 2.1 §10 defines and this
+   component does not compute crashes through `used_value_px` naming its own section, so an ordinary block-level
+   box with `width: auto` reaches §10.3.3's constraint equation and the containing-block chain it is waiting
+   on. */
+double used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical);
 
 #endif

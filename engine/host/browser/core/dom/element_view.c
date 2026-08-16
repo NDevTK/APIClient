@@ -22,6 +22,7 @@
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
 #include "core/idl_args.h"
+#include "core/layout/used_value.h"
 #include "solver/concolic.h"
 
 /* THE MEMBERS. `scrollTop` and `scrollLeft` are the two the IDL declares as `attribute` rather than `readonly
@@ -102,14 +103,58 @@ static bool ev_target(JSContext *ctx, JSValueConst this_val, EvTarget *t)
     return true;
 }
 
-/* A member whose IDL type is `long`. Every length this component reports is a whole number of CSS pixels — it
-   is the viewport's own size or it is zero — so a fraction here is a derivation that produced something the
-   type cannot carry rather than a value to round. */
+/* A member whose IDL type is `long`, handed a value that is ALREADY an integer number of CSS pixels — the
+   viewport's own size, a border width css-backgrounds-3 §3.3 has snapped, or one of §6's own zeros. A fraction
+   here is a derivation that produced something the type cannot carry rather than a value to round; the one
+   member of §6 whose answer is a real length goes through the conversion below instead. */
 static JSValue ev_long(JSContext *ctx, double v)
 {
-    DCHECK(v == (double)(int32_t)v,
+    DCHECK(v == trunc(v),
            "a CSSOM VIEW §6 Element member declared `long` computed a value that is not an integer");
+    DCHECK(v >= -2147483648.0 && v <= 2147483647.0,
+           "a CSSOM VIEW §6 Element member declared `long` computed a whole number of CSS pixels that an IDL "
+           "`long` cannot carry. CSS Values §5 puts no upper bound on a <length> and Web IDL puts one on the "
+           "type §6 reports it through, so the two disagree for a box wider than 2^31 CSS pixels and the spec "
+           "says nothing about the disagreement. A real user agent never meets it because its layout carries a "
+           "coordinate in a SATURATING fixed-point type whose range is far smaller (Blink's LayoutUnit tops out "
+           "near 33 million CSS pixels), which is a decision about the layout's own arithmetic and not about "
+           "this member. BUILD that coordinate type in core/layout, where the used values are computed, so the "
+           "saturation happens once for every geometry rather than at each member that reports one");
     return JS_NewInt32(ctx, (int32_t)v);
+}
+
+/* A `long` MEMBER WHOSE ANSWER IS A REAL LENGTH — §6's step 3 for `clientWidth` and `clientHeight`, and the
+   only place in this component that has one. A padding edge is a used value in CSS pixels and NOTHING snaps it:
+   css-backgrounds-3 §3.3 snaps a border WIDTH and no other term of the box model, so `padding: 0.5px` makes a
+   padding edge that is not an integer, and that is exactly why `clientTop`/`clientLeft` could be answered
+   before these two could.
+   WHAT THE SPEC SAYS AND WHERE IT STOPS. §6 declares all six extents `long` and its own Changes section records
+   that as deliberate ("the scrollWidth, scrollHeight, clientTop, clientLeft, clientWidth and clientHeight IDL
+   attributes on Element were changed back to return integers"), so the TYPE is the normative statement: the
+   value reported is a whole number of CSS pixels. What the spec does not state anywhere is the conversion —
+   §3.2, its only WebIDL-values rule, is normalize-non-finite and is about the scroll setters' INPUT. So the
+   question left open is not whether to convert but which integer to convert to, and there are only three
+   answers: toward zero, away from zero, or to the nearest.
+   IT IS THE NEAREST, AND THAT IS A DERIVATION FROM WHAT THE MEMBER IS FOR. `clientWidth` is a MEASUREMENT — a
+   page reads it to find out how wide a box is — and rounding to the nearest integer is the only one of the
+   three whose error is bounded by half a CSS pixel in both directions. Truncation is a systematic UNDERSTATEMENT
+   that grows with the number of fractional terms (a `padding: 0.5px` on each side of a box loses a whole pixel,
+   in the same direction, every time), and a bias no user agent has is a fidelity bug and not a conservative
+   choice.
+   AND THE TIE IS NOT A DECISION HERE, WHICH IS WHY THIS FILE DOES NOT MAKE ONE. Round-half-up and
+   round-half-away-from-zero are the same function on non-negative numbers, and a padding edge is a content box
+   floored at zero plus two paddings CSS 2.1 §8.4 forbids to be negative. The assert below is what keeps that
+   true rather than a remark that it happens to be: the day something hands this a negative length the two
+   tie-breaks separate, and the crash stands at the line where the choice would have to be made. */
+static JSValue ev_length_long(JSContext *ctx, double px)
+{
+    DCHECK(isfinite(px) && px >= 0.0,
+           "§6's clientWidth/clientHeight step 3 was handed a padding edge that is not a NON-NEGATIVE FINITE "
+           "length. A padding edge is a content box floored at zero (css-sizing §5) plus two paddings CSS 2.1 "
+           "§8.4 forbids to be negative, so a negative or non-finite one is a used value that lost an operand — "
+           "and it would also make this conversion's tie-break observable, which the derivation above says it "
+           "is not");
+    return ev_long(ctx, floor(px + 0.5));
 }
 
 /* A `long` member that reports the VIEWPORT: the modelled geometry as the EXAMPLE of a concolic, minted
@@ -298,12 +343,14 @@ static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
     if (!t.has_box) return JS_UNDEFINED;
     /* step 11 */
     DFAIL("CSSOM VIEW §6's scrollTop/scrollLeft setter's last step SCROLLS THE ELEMENT, and the step before it "
-          "asks whether it has a scrolling box and whether it has any overflow — all three need the element's "
-          "own geometry, which this engine has none of: the scrolling area §2 defines for an element is its "
-          "padding edge extended by the margin edges of its descendants' boxes, and that is what a scroll "
-          "position is clamped against. BUILD A LAYOUT that produces box geometry (viewport.c already models "
-          "the initial containing block CSS 2.1 §10.3.3 resolves the root element's used width from), and make "
-          "an element's scroll position per-flow state in the COW delta");
+          "asks whether it has a scrolling box and whether it has any overflow. All three are the SCROLLING "
+          "AREA, and §2 defines that one by its four EDGES: the element's own top and left padding edges, and "
+          "the right-most and bottom-most of its padding edge and the margin edges of all of its descendants' "
+          "boxes. Every one of those is a POSITION, which is the half of a box this engine still does not have "
+          "— core/layout/used_value.h computes a padding edge's EXTENT (`clientWidth` above reports one) and an "
+          "extent locates nothing. BUILD the positions: CSS 2.1 §10.1's containing-block chain, whose base case "
+          "is the initial containing block viewport.c already models, and §9.4's flow layout that places each "
+          "in-flow box within it. Then make an element's scroll position per-flow state in the COW delta");
     return JS_UNDEFINED;
 }
 
@@ -341,10 +388,14 @@ static JSValue ev_scroll_extent(JSContext *ctx, const EvTarget *t, bool vertical
     if (!t->has_box) return ev_long(ctx, 0.0);
     /* step 7 */
     DFAIL("CSSOM VIEW §6's scrollWidth/scrollHeight step 7 returns THE WIDTH OF THE ELEMENT'S SCROLLING AREA — "
-          "§2's box, which is the element's padding edge extended by the margin edges of all of its "
-          "descendants' boxes. Every term of that is layout, and this engine gives geometry to exactly one box, "
-          "the initial containing block (element_view.h). BUILD A LAYOUT; there is no answer to derive from the "
-          "viewport for an element that is not the root");
+          "§2's box, whose right edge is 'the right-most edge of the element's right padding edge and the right "
+          "margin edge of all of the element's descendants' boxes, excluding boxes that have an ancestor of the "
+          "element as their containing block'. THAT IS NOT THE PADDING EDGE'S EXTENT, which "
+          "core/layout/used_value.h now computes and `clientWidth` above reports: it is a right-most POSITION "
+          "over the element's box and every descendant's, so it needs each of those boxes PLACED and it needs "
+          "to know which containing block each of them has. BUILD CSS 2.1 §10.1's containing-block chain and "
+          "the flow layout that positions a box inside one; there is no answer to derive from the viewport for "
+          "an element that is not the root, and an extent cannot stand in for one");
     return ev_long(ctx, 0.0);
 }
 
@@ -356,7 +407,8 @@ static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical
        decided from the computed `display` — the second one used to be waved through on the grounds that the two
        elements step 2 answers for can never be inline (CSS Display §2.7 blockifies the root, and §15.3.1 gives
        `body` `display: block`), which said nothing about the elements step 3 reaches. `span.clientWidth` is 0
-       in every user agent and used to reach step 3's DFAIL here. */
+       in every user agent, and this is where that is decided: an inline box has a padding edge in the box model
+       and §6 declines to report it, so step 3 below must never be asked about one. */
     if (!t->has_box || ev_box_is_inline(t)) return ev_long(ctx, 0.0);
     /* Step 2 — the ROOT ELEMENT outside quirks mode, and the BODY inside it, are answered with the VIEWPORT and
        never with their own box. `document.documentElement.clientWidth` is how most of the web asks how wide the
@@ -369,24 +421,15 @@ static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical
         return ev_env_long(ctx, t, vertical ? "clientHeight" : "clientWidth",
                            vertical ? viewport_height(t->dctx) : viewport_width(t->dctx));
     }
-    /* step 3 */
-    DFAIL("CSSOM VIEW §6's clientWidth/clientHeight step 3 returns THE UNSCALED WIDTH OF THE PADDING EDGE of "
-          "the element's box, for an element that is neither the root element outside quirks mode nor the body "
-          "inside it. THE LAYOUT THIS USED TO ASK FOR EXISTS AND IS core/layout/used_value.h, and the term it "
-          "used to name as missing — the `border-*-width` longhands lexbor's property registry does not carry "
-          "— IS BUILT (css_shorthand.c's four expansions and css_computed_value.c's two computed values, which "
-          "is what clientTop/clientLeft below now answers from). TWO THINGS ARE LEFT AND THEY ARE DIFFERENT "
-          "FROM EACH OTHER. (1) The padding edge is not a used value this component exposes: it is the CONTENT "
-          "box plus the two paddings under `box-sizing: content-box`, and the BORDER box minus the two border "
-          "widths under `border-box` — css-sizing §5 makes `used_value_px(width)` the BORDER box's size in "
-          "that mode, so a caller adding paddings to it would double-count. ADD the padding edge as its own "
-          "entry in used_value.h, where css-sizing §5 already is, rather than branching on `box-sizing` here. "
-          "(2) The ordinary box has `width: auto`, which is CSS 2.1 §10.3.3's constraint equation over §10.1's "
-          "containing-block chain, and used_value.c's own crash states what that costs. NOTE ALSO that these "
-          "two members are IDL `long` while a padding edge is not snapped to anything the way a border width "
-          "is (css-backgrounds-3 §3.3), so a fractional one needs §6's rounding decided — which is why "
-          "clientTop/clientLeft could land and these two could not");
-    return ev_long(ctx, 0.0);
+    /* Step 3 — "the unscaled width of the padding edge excluding the width of any rendered scrollbar between
+       the padding edge and the border edge". The scrollbar term is zero for the reason every other member here
+       reads the same way: this user agent renders none. UNSCALED is the other half of the step and it is
+       satisfied by construction rather than by undoing anything — a used value IS in CSS pixels, and §2.2's two
+       zooms are what would scale it into device pixels for painting. What is left is the padding edge itself,
+       which core/layout/used_value.h computes: `width: auto` reaches CSS 2.1 §10.3.3's constraint equation
+       there and crashes naming the containing-block chain it is waiting on, which is that component's own
+       subproblem and no longer this one's. */
+    return ev_length_long(ctx, used_value_padding_edge_px(lxb_dom_interface_element(t->node), vertical));
 }
 
 /* CSSOM VIEW §6's `clientTop`/`clientLeft`, in the spec's own two steps. Step 2 is "return the unscaled
@@ -450,8 +493,10 @@ static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
        included for a `display: table` element and every anonymous block box replaced by its children. */
     DFAIL("CSSOM VIEW §6's getClientRects() steps 2 and 3 describe the element's BOX FRAGMENTS — one DOMRect per "
           "fragment's border area (or the SVG bounding box), in content order, with the transforms of the "
-          "element and its ancestors applied. This engine gives geometry to exactly one box, the initial "
-          "containing block (element_view.h), and it has no fragments at all: there is no line box, so an "
+          "element and its ancestors applied. A border AREA is a rectangle and therefore a POSITION, and this "
+          "engine places exactly one box, the initial containing block (element_view.h) — a padding edge's "
+          "extent is computed for any box now and locates none of them. It has no fragments at all either: "
+          "there is no line box, so an "
           "inline element spanning two lines cannot be two rectangles, and no answer for a single one is "
           "derivable from the viewport for an element that is not the root. BUILD A LAYOUT that produces box "
           "fragments — CSS 2.1 §10.3.3 resolves the root element's used width from the ICB viewport.c already "

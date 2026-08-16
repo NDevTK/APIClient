@@ -13,27 +13,35 @@
  *   no box. §15.3.1's UA-stylesheet rule for the `hidden` content attribute is one input to that value and is
  *   applied where every other UA rule is, in the cascade, rather than a second time here.
  *
- *   NO BOX HAS AN EDGE except the INITIAL CONTAINING BLOCK, which viewport.c models — so a box's padding edge,
- *   its scrolling area, its position and its fragments do not exist to be read, and every §6 member below that
- *   reaches for one still crashes.
- *   WHAT HAS CHANGED, AND WHY THIS LINE IS NOT THE ONE IT WAS. It used to say "there is no layout", and there
- *   is one: core/layout/used_value.h is CSS 2.1 §10, and it computes the USED VALUE of a box-model length
- *   wherever §10 defines one without a containing block — every absolute-length margin and padding, and a
- *   `width` or `height` that is an absolute length, css-sizing §5's border box included. That is not an EDGE
- *   (an edge is a position, and a position needs the containing block chain), which is why the members here
- *   that want one still crash. `clientTop` and `clientLeft` are the two that never wanted one: §6 defines them
- *   as a COMPUTED VALUE and not as a geometry, so they are answered for real from
- *   core/css/css_computed_value.h's `border-*-width` — which is also the term §10.3.3's constraint equation
- *   used to be blocked on and no longer is. What §10.3.3 is waiting on now is §10.1's containing-block chain
- *   and the CONCOLIC width of the ICB at its base, which used_value.h states in full.
+ *   A BOX HAS AN EXTENT AND IT HAS NO POSITION, and that split is what decides which §6 member below answers
+ *   and which one crashes. It is not this component's distinction; it is the spec's own. An EXTENT is a
+ *   distance between two parallel edges of ONE box, and core/layout/used_value.h computes those: CSS 2.1 §10's
+ *   used value of every box-model length §10 defines without a containing block, and over them css-sizing §5's
+ *   border box and CSS 2.1 §8's PADDING EDGE. A POSITION is a coordinate in some other box's space, so it needs
+ *   §10.1's containing-block chain and the flow layout that places a box inside one, and NOTHING has a position
+ *   here except the INITIAL CONTAINING BLOCK that viewport.c models.
+ *   SO §6 SPLITS EXACTLY THERE, and each member's own text says which side it is on. `clientTop`/`clientLeft`
+ *   are neither — §6 defines them as a COMPUTED VALUE, core/css/css_computed_value.h's `border-*-width`, and
+ *   not as a geometry at all. `clientWidth`/`clientHeight` ask for "the unscaled width of the PADDING EDGE",
+ *   which is an extent, and are answered. `scrollWidth`/`scrollHeight`, the `scrollTop`/`scrollLeft` setter and
+ *   `getClientRects()` all reach for the element's SCROLLING AREA or its border AREA — §2 defines the first by
+ *   its four edges and the second is a rectangle, so both are positions over this box AND every descendant's —
+ *   and all three still crash, naming the chain rather than the extent. An extent cannot stand in for a
+ *   position, which is the one way this component could go wrong now that it has one.
+ *   WHAT THE EXTENTS ARE STILL BLOCKED ON, because it is one thing and not several: a `width: auto` box is CSS
+ *   2.1 §10.3.3's constraint equation, whose remaining unknown is that same §10.1 chain and the CONCOLIC width
+ *   of the ICB at its base. used_value.h states it in full, and it is the same subproblem the positions need,
+ *   which is why there is one queue here and not two.
  *
  * THOSE ARE TWO DIFFERENT ANSWERS AND THE SPEC ASKS THEM SEPARATELY, which is the whole reason this component
  * can answer anything at all. §6's algorithms use box EXISTENCE as a gate and then, in several branches, route
  * around the box entirely to the VIEWPORT: `clientWidth` on the root element returns the viewport width and
  * never looks at the root's box; `scrollWidth` on the root returns max(the viewport's scrolling area, the
  * viewport) and never looks at a descendant. Those branches are answered here, for real. A branch that reaches
- * the element's OWN geometry has no answer in this model and DFAILs, naming the layout it needs — never a zero
- * standing in for a number this engine does not have, which is the stub §NO STUBS is about.
+ * the element's own box is answered when what it wants is an EXTENT — `clientWidth` on an ordinary box is CSS
+ * 2.1 §8's padding edge over §10's used values — and DFAILs when what it wants is a POSITION, naming the layout
+ * it needs. Neither ever answers a zero standing in for a number this engine does not have, which is the stub
+ * §NO STUBS is about.
  *
  * WHAT WAS SAID HERE BEFORE, AND WHICH HALF OF IT WAS WRONG. viewport.c's §2 derivation said "this engine
  * generates no boxes — there is no layout", and core/html/focus.c's §6.6.2 row 1 said a connected element that
@@ -71,14 +79,22 @@
  * one point has no arm to explore. The branch that reaches a real box's FRAGMENTS has no answer here and
  * DFAILs, naming the layout, exactly as every other §6 member's does.
  *
- * A BOX'S GEOMETRY IS NOT A UA CHOICE, so it is not the kind of thing a concolic answers. viewport.h states the
- * test: a member is an environment SOURCE when the model PICKED one point out of a range the environment leaves
- * free (the viewport's size, the device pixel ratio, the refresh rate), and CONCRETE when it DERIVED the only
- * value the rest of the model permits. A border box's position and size are neither — they are what a LAYOUT
- * ALGORITHM determines from this tree and this cascade, and the algorithm is unbuilt rather than unknowable. A
- * concolic there would put an engine's own missing component under the vocabulary reserved for what the
- * environment does not tell us, invent an example for `rect.top` that nothing computed, and silence the crash
- * that is the only thing asking for the layout to be built.
+ * A BOX'S GEOMETRY IS NOT A UA CHOICE, so it is not the kind of thing a concolic answers, and the padding edge
+ * is now the case that DEMONSTRATES that rather than the case that postponed it. viewport.h states the test: a
+ * member is an environment SOURCE when the model PICKED one point out of a range the environment leaves free
+ * (the viewport's size, the device pixel ratio, the refresh rate), and CONCRETE when it DERIVED the only value
+ * the rest of the model permits. A box's size and position are neither — they are what a LAYOUT determines from
+ * this tree and this cascade — so `clientWidth` on a `width: 100px; padding: 10px` box reports 120 CONCRETELY,
+ * a number computed from the author's own declarations through used_value.h and not one picked out of a range.
+ * Where that layout is still unbuilt the member CRASHES, and the same reasoning is why: a concolic there would
+ * put an engine's own missing component under the vocabulary reserved for what the environment does not tell
+ * us, invent an example for `rect.top` that nothing computed, and silence the crash that is the only thing
+ * asking for the layout to be built.
+ * ONE EDGE OF THAT RULE IS ALREADY VISIBLE AND IS USED_VALUE.H'S TO CROSS, NOT THIS FILE'S: the root element's
+ * `width: auto` resolves against the ICB, whose width viewport.h mints as a concolic, so the first used value
+ * derived from it carries that domain and `clientWidth` will report a concolic for those boxes — by propagation
+ * from the operand, never by a second policy decided here. That lands with §10.3.3 and the containing-block
+ * chain, in the component that owns them.
  *
  * WHAT IS HONESTLY ABSENT: `checkVisibility`, `scrollIntoView`, `scroll`, `scrollTo`, `scrollBy` and
  * `currentCSSZoom`. `checkVisibility` needs a flat-tree walk over computed `content-visibility`, `visibility`
