@@ -23,5 +23,7 @@
 void document_domain_init(JSContext *ctx);
 /* The REALM's half: the accessor pair on Document.prototype. */
 void document_domain_install(JSContext *ctx, JSValueConst proto);
+/* Reached from document_agent_free — §7.1.1.2 is declared by document_init, so it is released by its declarer. */
+void document_domain_free(void);
 
 #endif

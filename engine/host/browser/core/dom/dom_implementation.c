@@ -337,3 +337,16 @@ void dom_implementation_install(JSContext *ctx, JSValueConst global)
                       idl_interface_object(ctx, "DOMImplementation", proto));
     JS_FreeValue(ctx, proto);
 }
+
+/* RELEASED BY ITS DECLARER — §4.5.1 is declared from document_init, so document_agent_free gives it back.
+   IT TAKES NO RUNTIME: the prototype is each REALM's and every DOMImplementation object is a GC object of the
+   realm that minted it, detached by its document's record. What a C static holds for the AGENT is the class,
+   the four pool entries and the latch, and all six go — a release that frees and then keeps its handles is
+   core/agent_state.h's fetch_free, whose four atom ids read as valid to the next agent and answered `<null>`. */
+void dom_implementation_free(void)
+{
+    DCHECK(g_ready, "§4.5.1's DOMImplementation was released in an agent that never declared it");
+    g_ready = 0;
+    g_impl_class = 0;
+    g_id_doctype = g_id_document = g_id_html_document = g_id_has_feature = -1;
+}

@@ -177,7 +177,20 @@ static int g_referenced;
 
 /* The browser layer's document-load lifecycle, asked when a flow has run everything the document gave it. */
 static int (*g_docdone_hook)(JSContext *ctx);
-void engine_set_document_done_hook(int (*fn)(JSContext *ctx)) { g_docdone_hook = fn; }
+void engine_set_document_done_hook(int (*fn)(JSContext *ctx))
+{
+    /* THE ASSERT COULD NOT BE WRITTEN UNTIL THE CLAIM MOVED, and that is why it was not. This slot was being
+       claimed from core/dom/document.c's per-DOCUMENT install, so a page with one <iframe> claimed it twice and
+       an assert here would have aborted every multi-document run before the release existed to make it true —
+       the crash without the fix. The claim is document_init's now and it is given back at document_agent_free,
+       so both halves hold: one claimant, and NULL is the release. A second claim on a one-entry slot silently
+       stops the first from running, which is a member doing half its job with nothing to say so. */
+    DCHECK(fn == NULL || g_docdone_hook == NULL,
+           "a second component claimed §13.2.7's document-load lifecycle step — one call of it answers for "
+           "EVERY document of this agent (it walks navigable_tree_order), so the claim is one per agent and was "
+           "being re-made once per DOCUMENT until core/dom/document.c moved the line into its declaration");
+    g_docdone_hook = fn;
+}
 
 /* THE EVENT LOOP'S TIMER STEP, registered by the timer component for the reason the document hook is: naming
    it here would make the scheduler depend on the browser half. Asked only where this flow has nothing else to
@@ -4042,6 +4055,10 @@ void solver_agent_free(JSContext *ctx)
     DCHECK(g_wrap_stats == NULL,
            "the wrapper-census hook was still registered when the solver's agent state was released — "
            "core/dom/node.c claimed it and gives it back at node_free, under the `element` row's cascade");
+    DCHECK(g_docdone_hook == NULL,
+           "§13.2.7's document-load lifecycle step was still registered when the solver's agent state was "
+           "released — core/dom/document.c claimed it at document_init and gives it back at "
+           "document_agent_free, which is a row on core/platform.h's release column and therefore runs first");
     flow_registry_free(ctx);
     attr_shadow_free(ctx);
     solve_free();

@@ -20,6 +20,8 @@
    one component every host that has a Document goes through, so pairing the declaration with the per-realm
    install is what keeps it off each host's hand-copied init list. */
 void autofocus_init(JSContext *ctx);
+/* Reached from document_agent_free — §6.6.7 is declared by document_init, so it is released by its declarer. */
+void autofocus_free(void);
 
 /* THIS REALM'S candidates list and processed flag, built WITH the realm so they belong to the pre-boot
    BASELINE — a record made on first touch would be made inside whichever flow happened to insert first, and

@@ -755,9 +755,13 @@ void slot_install_slottable_mixin(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "assignedSlot", js_slottable_assigned_slot, 0, -1);
 }
 
+/* RELEASED BY ITS DECLARER — §4.2.2 is declared from document_init, and was being released from element_free's
+   cascade instead. It is reached from document_agent_free now. */
 void slot_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
+    /* NOT `if (!g_ready) return;` — the release is the inverse of a declaration that is unconditional, so the
+       test could never be true and could only hide a release that had not finished. */
+    DCHECK(g_ready, "§4.2.2's slot machinery was released in an agent that never declared it");
     JS_FreeValueRT(rt, g_signal_slots);
     g_signal_slots = JS_UNDEFINED;
     JS_FreeAtomRT(rt, g_atom_assigned);

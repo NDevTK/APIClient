@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/agent_state.h"
 #include "solver/dom_cow.h"   /* dom_cow_note_created — a created node belongs to the flow's delta */
 #include "solver/cow.h"       /* cow_capture_host_state — the document's ADDRESS is per-flow state */
 #include "quickjs.h"
@@ -1869,6 +1870,14 @@ static JSValue js_doc_create_event(JSContext *ctx, JSValueConst this_val, int ar
 /* THE DECLARATIONS ARE THE AGENT'S, THE INSTALLS ARE THE REALM'S — the IDL pool is sealed after agent init, so
    a declaration minted from a per-realm install trips idl_declared_before_seal on the SECOND realm. */
 static JSClassID g_document_class;   /* §3.1.1's prototype slot, per realm */
+/* THE RUNTIME THIS COMPONENT DECLARED INTO, AND THE DECLARATION LATCH — one static answering both, the shape
+   core/dom/element.c's `g_element_rt` states for the group this one is declared beside. `document_init` had no
+   double-declaration assert at all, which is the defect core/agent_state.h records for window_message: a second
+   declaration in one process would have re-minted the class every existing wrapper is branded with, re-declared
+   fifteen members into a sealed pool, and left the first agent's sub-components holding handles nobody freed.
+   It is also what the release below is checked against — every atom and every value the cascade gives back is
+   freed against a runtime, and JS_FreeValueRT reports nothing at all when it is the wrong one. */
+static JSRuntime *g_document_rt;
 static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment = -1,
            g_id_create_fragment = -1, g_id_create_element_ns = -1, g_id_create_iterator = -1,
            g_id_create_walker = -1, g_id_create_range = -1, g_id_create_event = -1,
@@ -1936,6 +1945,25 @@ static void document_declare_members(JSContext *ctx)
        and the insertions below enqueue before the setter returns. */
     g_id_title_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_doc_set_html_member, DOC_TITLE);
     g_id_dir_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_doc_set_html_member, DOC_DIR);
+    /* EACH POOL ENTRY IS AGENT-LIFETIME STATE, DECLARED BESIDE THE LINE THAT MINTS IT (core/agent_state.h). A
+       release that gives the pool back and keeps these numbers is exactly what fetch_free did — the next agent's
+       `_init` reads one to decide it need not run, and every member then answers out of a pool a dead runtime
+       issued. They are declared here rather than at the end of document_init because here is where they are set. */
+    agent_state_id("document", &g_id_create_element, "§4.5's createElement machine");
+    agent_state_id("document", &g_id_create_text, "§4.5's createTextNode");
+    agent_state_id("document", &g_id_create_comment, "§4.5's createComment");
+    agent_state_id("document", &g_id_create_cdata, "§4.5's createCDATASection");
+    agent_state_id("document", &g_id_create_pi, "§4.5's createProcessingInstruction");
+    agent_state_id("document", &g_id_doc_ctor, "§4.5's `new Document()`");
+    agent_state_id("document", &g_id_create_fragment, "§4.5's createDocumentFragment");
+    agent_state_id("document", &g_id_create_element_ns, "§4.5's createElementNS");
+    agent_state_id("document", &g_id_create_iterator, "§4.5's createNodeIterator");
+    agent_state_id("document", &g_id_create_walker, "§4.5's createTreeWalker");
+    agent_state_id("document", &g_id_create_range, "§4.5's createRange");
+    agent_state_id("document", &g_id_create_event, "§4.5's createEvent");
+    agent_state_id("document", &g_id_adopt_node, "§4.5's adoptNode");
+    agent_state_id("document", &g_id_title_set, "§3.1.5's `title` setter");
+    agent_state_id("document", &g_id_dir_set, "§3.1.5's `dir` setter");
 }
 
 static void document_install_members(JSContext *ctx, JSValueConst proto)
@@ -2163,6 +2191,11 @@ void document_init(JSContext *ctx)
 {
     JSClassDef d = { "Document" };
 
+    DCHECK(g_document_rt == NULL,
+           "document_init ran twice — §4.5's interface, its fifteen member declarations and the ten "
+           "sub-components below are declared once per AGENT, and a second declaration re-mints the class every "
+           "wrapper of the first agent is already branded with");
+    g_document_rt = JS_GetRuntime(ctx);
     JS_NewClassID(JS_GetRuntime(ctx), &g_document_class);
     JS_NewClass(JS_GetRuntime(ctx), g_document_class, &d);
     node_claim_type(LXB_DOM_NODE_TYPE_DOCUMENT, g_document_class);
@@ -2204,6 +2237,20 @@ void document_init(JSContext *ctx)
        designating, and for the same reason. */
     autofocus_init(ctx);
     realm_declare_intrinsic(document_install_proto);
+    /* §13.2.7 "THE END" IS AN AGENT FACT AND WAS BEING STATED PER DOCUMENT. This line was the last statement of
+       document_install — the per-DOCUMENT half — so a page with one <iframe> claimed the ONE frontier's single
+       document-lifecycle slot twice, and nothing ever gave it back. That is §per-realm-fact read backwards, the
+       identical shape core/timing/timer.c's §8.1.7 timer step was in until its own line moved here: one agent
+       fact answered from as many places as there are documents. There is one such slot per agent because
+       document_lifecycle_step walks navigable_tree_order and answers for EVERY document of this agent in one
+       call — it never needed a per-document claim to reach a per-document answer. Claimed once, here, and given
+       back once, at document_agent_free; the setter asserts both halves now that it can. */
+    engine_set_document_done_hook(document_lifecycle_step);
+    agent_state_ptr("document", &g_document_rt,
+                    "the runtime §4.5's interface and its ten sub-components declared into, and the latch");
+    agent_state_class("document", &g_document_class, "§4.5's interface prototype slot and brand");
+    agent_state_id("document", &g_ready_slot, "the per-realm slot §3.1.5's current document readiness lives in");
+    agent_state_id("document", &g_showing_slot, "the per-realm slot §7.5.9's page showing lives in");
 }
 
 /* §3.1.1's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
@@ -2655,7 +2702,9 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        before the first script runs. AFTER the iframe walk, because an `<iframe autofocus>` is a candidate whose
        focusable area is its content navigable's active document. */
     autofocus_document_parsed(ctx);
-    engine_set_document_done_hook(document_lifecycle_step);
+    /* §13.2.7's load lifecycle is NOT claimed here any more — it is one slot on the ONE frontier and this is the
+       per-DOCUMENT half, so every document of this agent was re-claiming it. It is declared once, in
+       document_init, and given back once, in document_agent_free. */
 }
 
 /* THE DOCUMENT'S LIFECYCLE REFERENCES. Both are HELD across the lifecycle — `DOMContentLoaded` fires at the
@@ -2718,4 +2767,83 @@ void document_free(JSContext *ctx)
        no navigable names them and no peer can reach them. */
     world_doc_realm_set(d->doc, NULL);
     doc_rec_free(ctx, d);
+}
+
+/* THE AGENT'S HALF, UNDONE — core/platform.h's third column, and `document` is the one component that has BOTH
+ * halves rather than one. document_free above is the PER-REALM half: it reads `doc_of(ctx)`, clears that
+ * realm's own opaque and releases that realm's records, so it answers for ONE realm and runs once per realm.
+ * This one answers for the AGENT — the class, the fifteen member declarations, the two realm-value slot ids,
+ * the claim this component made on the ONE frontier, and the ten sub-components document_init declares.
+ *
+ * THE TWO HALVES RUN AT DIFFERENT PHASES, AND THE ORDER BETWEEN THEM IS NOT THIS COLUMN'S TO DECIDE. A CHILD
+ * navigable's document is released from quickjs's realm-teardown hook (core/frame/navigable.c), which fires
+ * when the JSContext dies — inside JS_RunGC or inside JS_FreeRuntime, and BOTH of those are after
+ * platform_agent_free. So there is no position on the release column, and no reordering of any host's teardown,
+ * under which every Document record is already gone when this runs: a page with one <iframe> has records that
+ * outlive the whole platform by construction. An assert demanding otherwise would fire on every such page,
+ * which is why there is not one.
+ *
+ * WHAT MAKES THAT SAFE IS A FACT ABOUT THE RECORDS, NOT ABOUT THE ORDER, and it is the reason this row can
+ * exist at all: document_free reads NO static of this file. It walks the record, releases the four references
+ * doc_rec_refs names, frees the policy container and destroys the trees the record owns — every one of those
+ * reached through the record itself. So a document released after the agent's half finds nothing missing, and
+ * this half may clear every handle it holds without waiting for a realm it cannot wait for.
+ *
+ * WHICH IS ALSO WHY §gc's MARK HOOK IS NOT GIVEN BACK HERE, and that is ASSERTED below rather than left to a
+ * comment. Its storage is `rt->ctx_mark` — the RUNTIME's, released by JS_FreeRuntime — so it is not a claim in
+ * the sense core/platform.h's fourth paragraph states (a slot in another COMPONENT, whose static outlives this
+ * release and would go on naming freed state), and no static of this file holds it to go stale for a second
+ * agent. Clearing it here would be actively WRONG: the collection a host runs after platform_agent_free is
+ * exactly what tears down the child realms whose records this hook reports, and a record whose references
+ * gc_decref cannot subtract is the uncollectable realm cycle doc_rec_new's own DCHECK exists to prevent,
+ * arriving from the other end. */
+void document_agent_free(JSRuntime *rt)
+{
+    /* NOT `if (!g_document_rt) return;`. The release is the inverse of the DECLARATION and rides the same row
+       of core/platform.c's one list, whose declare pass is unconditional and whose table asserts that a release
+       row has a declare. */
+    DCHECK(rt == g_document_rt,
+           "the Document component was released against a runtime that is not the one it declared in — every "
+           "atom and every value the sub-components below give back would have its reference subtracted from a "
+           "runtime that never took it, and JS_FreeValueRT reports nothing at all when it is the wrong one");
+    /* THE ONE CLAIM THIS COMPONENT MADE IN ANOTHER, GIVEN BACK FIRST. §13.2.7's load lifecycle is a slot on the
+       ONE frontier (solver/engine.c), which solver_agent_free releases AFTER the whole platform — so a release
+       that kept it would leave the scheduler holding a callback into a component whose class and member
+       declarations are gone. That is the defect core/agent_state.h records for Indexed Database §2.7.1, and it
+       is first for the reason element_free's two DOM-write hooks are: the very next call can run a finalizer. */
+    engine_set_document_done_hook(NULL);
+    /* THE TEN SUB-COMPONENTS document_init DECLARES, IN THE REVERSE OF THAT ORDER — the same rule
+       platform_agent_free runs its own list by, and for the same reason: a component declared after another may
+       hold what that one minted.
+       THREE OF THESE WERE BEING FREED FROM element_free's CASCADE, which is a release undoing somebody else's
+       work — the shape platform_check_table forbids one row above. Nothing declares document_fragment,
+       shadow_root or slot but document_init, so nothing may release them but this. They come back to their
+       declarer here, and element_free names the move at the lines they left. */
+    autofocus_free();
+    focus_free();
+    page_visibility_free();
+    dom_implementation_free();
+    document_type_free();
+    slot_free(rt);
+    shadow_root_free(rt);
+    document_fragment_free();
+    document_domain_free();
+    document_metadata_free();
+    /* THE PROTOTYPES ARE THE REALMS' — each is in its own class-proto slot and released with its context. What
+       this component itself holds is the class, the pool entries and the two realm-value slot ids. */
+    g_document_class = 0;
+    g_id_create_element = g_id_create_text = g_id_create_comment = g_id_create_fragment =
+        g_id_create_element_ns = g_id_create_iterator = g_id_create_walker = g_id_create_range =
+        g_id_create_event = g_id_create_cdata = g_id_create_pi = g_id_doc_ctor = g_id_adopt_node =
+        g_id_title_set = g_id_dir_set = -1;
+    g_ready_slot = g_showing_slot = -1;
+    DCHECK(JS_GetContextMarkHook(rt) == document_realm_mark,
+           "§gc's realm-mark hook was given back at the Document component's agent release — it must NOT be, "
+           "and this is where that is checked. The records it reports outlive this call (a child navigable's is "
+           "released from quickjs's realm-teardown hook, which fires inside JS_RunGC or JS_FreeRuntime), and "
+           "each of them holds four counted references back INTO its own realm. With the hook gone gc_decref "
+           "cannot subtract them, the realm reads as externally rooted, and the collection that would have "
+           "freed the record is the one the record prevents — which is exactly the cycle doc_rec_new asserts "
+           "the hook's presence to make impossible. Its storage is rt->ctx_mark and JS_FreeRuntime releases it");
+    g_document_rt = NULL;
 }

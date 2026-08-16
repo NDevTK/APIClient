@@ -19,6 +19,8 @@
    into each host's init list — the focused area is a DOCUMENT's state and document.c is the one component every
    host that has a Document goes through. */
 void focus_init(JSContext *ctx);
+/* Reached from document_agent_free — §6.6 is declared by document_init, so it is released by its declarer. */
+void focus_free(void);
 
 /* §6.6.6's `activeElement` (DocumentOrShadowRoot) and `hasFocus()` (Document), plus THIS REALM'S initial
    focused area — the record is built here for the reason document.c builds its readiness here: a record made on

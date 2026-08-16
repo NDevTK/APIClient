@@ -122,8 +122,17 @@ void platform_document_install(JSContext *ctx, JSValueConst global, const Platfo
  * Symbols; `timer_free` took one to give back two atoms; every one of them says in its own comment that "the
  * prototypes are the REALMS' — released with their contexts". The test is WHAT A RELEASE GIVES BACK, and the
  * signature follows from it: JS_FreeValue is JS_FreeValueRT(ctx->rt, v), so a release that only drops values
- * takes the runtime and becomes a row. `document` is the one component that genuinely fails the test — it reads
+ * takes the runtime and becomes a row. `document_free` is the one release that fails the test — it reads
  * `doc_of(ctx)` and clears the realm's own opaque — and it is the reason the paragraph exists, not a pattern.
+ *
+ * WHICH IS ABOUT A RELEASE AND NOT ABOUT A COMPONENT, and reading it the second way is what kept `document` off
+ * this column entirely while it held a class, fifteen pool entries, two realm-value slot ids, TEN
+ * sub-components and a claim on the ONE frontier. A component may have BOTH halves, and `document` is the one
+ * that does: `document_free` releases a REALM's records, once per realm; `document_agent_free` is its row here.
+ * THE TWO RUN AT DIFFERENT PHASES AND NEITHER IS ORDERED AGAINST THE OTHER, because a child navigable's
+ * document is released from quickjs's realm-teardown hook — inside JS_RunGC or JS_FreeRuntime, both after this
+ * whole list. What makes that safe is that the per-realm half reads no static of its file, which that file
+ * states and asserts at the release rather than leaving to an ordering nothing could arrange.
  *
  * A COMPONENT CAN ALSO HOLD A SLOT IN ANOTHER COMPONENT, and that is the fourth thing this column is for. A
  * hook, a tree walk, an activation behaviour, a census callback: the STORAGE is the other component's static

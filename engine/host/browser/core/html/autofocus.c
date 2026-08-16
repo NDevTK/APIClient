@@ -570,3 +570,14 @@ void autofocus_install_document(JSContext *ctx)
     JS_SetPropertyStr(ctx, rec, "processed", JS_FALSE);
     realm_value_set(ctx, g_slot, rec);
 }
+
+/* RELEASED BY ITS DECLARER — §6.6.7's machine is declared from document_init, so document_agent_free gives it
+   back. The per-realm candidates list and processed flag go with their contexts; the slot id, the flush
+   machine's pool entry and the latch are the agent's. */
+void autofocus_free(void)
+{
+    DCHECK(g_ready, "§6.6.7's autofocus machine was released in an agent that never declared it");
+    g_ready = 0;
+    g_slot = -1;
+    g_id_flush = -1;
+}

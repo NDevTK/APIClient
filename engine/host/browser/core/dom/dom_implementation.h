@@ -9,6 +9,8 @@ void dom_implementation_init(JSContext *ctx);
 void dom_implementation_install_proto(JSContext *ctx);
 /* The interface OBJECT on a realm's global, so `document.implementation instanceof DOMImplementation` holds. */
 void dom_implementation_install(JSContext *ctx, JSValueConst global);
+/* Reached from document_agent_free — §4.5.1 is declared by document_init, so it is released by its declarer. */
+void dom_implementation_free(void);
 
 /* THE ONE DOMImplementation OBJECT FOR ONE DOCUMENT — §4.5's `[SameObject]`. `doc_obj` is that document's
    wrapper, which is what the object's "associated document" is; document.c holds the result on the document's

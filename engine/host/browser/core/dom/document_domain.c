@@ -242,3 +242,11 @@ void document_domain_install(JSContext *ctx, JSValueConst proto)
                                  "the AGENT's and the install is the REALM's");
     idl_install_accessor(ctx, proto, "domain", js_doc_domain, 0, g_id_domain_set);
 }
+
+/* RELEASED BY ITS DECLARER — §7.1.1.2's `domain` is declared from document_init, so document_agent_free gives
+   it back. The accessor is each REALM's; the setter's pool entry is the agent's. */
+void document_domain_free(void)
+{
+    DCHECK(g_id_domain_set >= 0, "§7.1.1.2's `domain` was released in an agent that never declared it");
+    g_id_domain_set = -1;
+}

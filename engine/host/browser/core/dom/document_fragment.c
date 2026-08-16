@@ -111,9 +111,18 @@ JSValue document_fragment_proto(JSContext *ctx)
     return proto;   /* OWNED */
 }
 
-void document_fragment_free(JSRuntime *rt)
+/* RELEASED BY ITS DECLARER. §4.7 is declared from document_init and was being released from element_free's
+   cascade — a release undoing another row's work — so it is reached from document_agent_free now.
+   IT TAKES NO RUNTIME because it gives back no value and no atom: the prototypes are the REALMS', released with
+   their contexts, and what this component holds for the agent is the CLASS and the latch. The class was the
+   half that was missing — cleared here now, because a class id kept past its runtime is what core/agent_state.h
+   found in dom_rect and dom_rect_list, and the only reader of a stale one is the next agent's init deciding it
+   need not run. */
+void document_fragment_free(void)
 {
-    if (!g_ready) return;
-    /* the prototypes are the REALMS' — released with their contexts */
+    /* NOT `if (!g_ready) return;` — the release is the inverse of a declaration that is unconditional, so the
+       test could never be true and could only hide a release that had not finished. */
+    DCHECK(g_ready, "§4.7's DocumentFragment was released in an agent that never declared it");
     g_ready = 0;
+    g_frag_class = 0;
 }

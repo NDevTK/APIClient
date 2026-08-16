@@ -1828,8 +1828,10 @@ int main(int argc, char **argv)
     solver_agent_free(ctx);
     document_free(ctx);
     /* THE WHOLE DOM GROUP — element_free's cascade, the <iframe> element and GEOMETRY INTERFACES §3/§4 — is a
-       set of ROWS on core/platform.h's release column now, run by the platform_agent_free above. `document`
-       stays: document_free releases a REALM's record, not the agent's. See main.c's teardown. */
+       set of ROWS on core/platform.h's release column now, run by the platform_agent_free above. This LINE
+       stays: document_free releases a REALM's record, not the agent's. The component's other half —
+       document_agent_free — is a row on that column, and the two are not ordered against each other. See
+       main.c's teardown. */
     window_free(ctx);
     remote_object_free(ctx);
     window_proxy_free(ctx);

@@ -263,9 +263,19 @@ static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
    than after it. Reverse declaration order puts them in exactly the sequence the hand-written lists had them
    in — iframe, element, dom_rect_list, dom_rect — so nothing about the group's internal order changes; taking
    only the middle one would have reordered it against its own neighbours.
-   `document` is NOT here, and the reason is the rule this column is stated by: document_free reads
-   `doc_of(ctx)` and clears the realm's own opaque, so what it releases is a REALM's record and not the agent's.
-   A row that wanted a JSContext is a per-realm component in the wrong column. */
+   `document` IS here now, and the sentence that used to stand in its place was half a rule read as a whole
+   one. `document_free` really does read `doc_of(ctx)` and clear the realm's own opaque, and it really is a
+   per-realm release that this column cannot express — but that is one of TWO halves this component has, and the
+   other one had no home at all. `document_init` mints §4.5's class, declares fifteen pool entries and two
+   realm-value slots, and declares TEN sub-components; three of those (§4.7, §4.8, §4.2.2) were being released
+   from element_free's cascade, which is a release undoing another row's declaration, and the other seven were
+   released by nobody. It also CLAIMED §13.2.7's document-load lifecycle slot on the ONE frontier — out of the
+   per-DOCUMENT install, so every <iframe> re-claimed it and nothing ever gave it back.
+   THE HALVES RUN AT DIFFERENT PHASES AND NEITHER ORDER IS THIS COLUMN'S TO PICK: a child navigable's
+   document_free is reached from quickjs's realm-teardown hook, which fires inside JS_RunGC or JS_FreeRuntime —
+   both after this whole list. What makes that safe is stated and asserted at document_agent_free rather than
+   arranged here: the per-realm half reads NO static of that file, and §gc's realm-mark hook is deliberately NOT
+   given back, because the collection that runs after this list is exactly what tears those child realms down. */
 /* THE FOURTH THING A COMPONENT CAN HOLD FOR AN AGENT: A SLOT IN ANOTHER COMPONENT. These five were on no
  * column at all, and the reason was the same signature that kept the DOM group off it — each `_free` took a
  * JSContext, so it could not be a row, so it stayed a line in three hosts' hand-written teardowns. Not one of
@@ -295,6 +305,7 @@ static void r_message_port(JSRuntime *rt) { message_port_free(rt); }
 static void r_timer(JSRuntime *rt) { timer_free(rt); }
 static void r_structured_clone(JSRuntime *rt) { structured_clone_free(rt); }
 static void r_rendering(JSRuntime *rt) { rendering_free(rt); }
+static void r_document(JSRuntime *rt) { document_agent_free(rt); }
 static void r_element(JSRuntime *rt) { element_free(rt); }
 static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
 static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
@@ -503,7 +514,7 @@ static const PlatformComponent PLATFORM[] = {
        standard's own words and an instance is one origin-keyed agent cluster, so it belongs to the JSRuntime
        and not to any JSContext — which means nothing frees it when a realm goes. */
     { "cookie_jar",          d_cookie_jar,          NULL,        r_cookie_jar },
-    { "document",            d_document,            i_document },
+    { "document",            d_document,            i_document,  r_document },
     /* HTML §8.5.1's DOMParser, AFTER `document` — not because its install needs one (it puts an interface
        object on the global and nothing else) but because that is what this list's order MEANS: every member of
        this interface builds a second Document through core/dom/document.h's `document_new`, so the component

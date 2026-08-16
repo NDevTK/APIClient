@@ -1623,3 +1623,17 @@ void focus_install_window_members(JSContext *ctx, JSValueConst global)
     DCHECK(g_ready, "§6.6's Window member was installed before focus_init ran");
     idl_install_method(ctx, global, "focus", 0, g_id_win_focus);
 }
+
+/* RELEASED BY ITS DECLARER — §6.6's focused area is declared from document_init, so document_agent_free gives
+   it back. The RECORDS are the realms', released with their contexts; what a C static holds for the agent is
+   the realm slot id, the six pool entries and the latch. Every one of them goes, because a release that gives
+   its state back and keeps the number is core/agent_state.h's fetch_free: the only reader is the next agent's
+   init, and it reads it to decide that it need not run. */
+void focus_free(void)
+{
+    DCHECK(g_ready, "§6.6's focus machinery was released in an agent that never declared it");
+    g_ready = 0;
+    g_focus_slot = -1;
+    g_id_el_focus = g_id_el_blur = g_id_win_focus = g_id_has_focus = -1;
+    g_id_viewport = g_id_autofocus = -1;
+}

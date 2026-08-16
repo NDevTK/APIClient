@@ -2350,11 +2350,15 @@ void element_free(JSRuntime *rt)
     collections_free(rt);
     attr_free(rt);
     if (g_attrs_key != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_attrs_key); g_attrs_key = JS_ATOM_NULL; }
-    document_fragment_free(rt);
-    shadow_root_free(rt);
+    /* §4.7's DocumentFragment, §4.8's ShadowRoot and §4.2.2's slots WERE FREED HERE and are not any more. Not
+       one of the three is declared by element_init — all three are declared by document_init — so this cascade
+       was undoing another row's work, which is the shape core/platform.c's own table check forbids one level
+       up ("a platform component releases agent state it never declared"). They are released from
+       document_agent_free now, and `document` is declared after `element`, so reverse declaration order gives
+       them back BEFORE this cascade runs: nothing here reads a slot key or a class of theirs.
+       fragment_serializer and sanitizer stay, because element_init is what declares them. */
     fragment_serializer_free();
     sanitizer_free();
-    slot_free(rt);
     idl_indexed_free(rt);
     /* the prototypes are the REALMS' — each is released with its context */
     g_reflect_n = 0;

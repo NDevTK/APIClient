@@ -31,6 +31,8 @@
    record. */
 void page_visibility_init(JSContext *ctx);
 void page_visibility_install(JSContext *ctx, JSValueConst proto);
+/* Reached from document_agent_free — §6.6 is declared by document_init, so it is released by its declarer. */
+void page_visibility_free(void);
 
 /* §6.6's UPDATE THE VISIBILITY STATE. HTML §7.5.9 calls it with "hidden" while unloading a document, between
    the pagehide event and the unload event. A state that is already the new one changes nothing and fires

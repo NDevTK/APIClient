@@ -764,9 +764,14 @@ void shadow_root_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, proto);
 }
 
+/* RELEASED BY ITS DECLARER — §4.8 is declared from document_init, and was being released from element_free's
+   cascade instead. It is reached from document_agent_free now. */
 void shadow_root_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
+    /* NOT `if (!g_ready) return;` — the release is the inverse of a declaration that is unconditional, so the
+       test could never be true and could only hide a release that had not finished, which is what the missing
+       class id below was. */
+    DCHECK(g_ready, "§4.8's ShadowRoot was released in an agent that never declared it");
     /* The slot keys are the AGENT's — a Symbol nobody frees is a live GC object the runtime's own walk counts
        as a leak. The prototypes are the REALMS', released with their contexts. */
     JS_FreeAtomRT(rt, g_atom_slots);
@@ -776,5 +781,6 @@ void shadow_root_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_shadow_key);
     g_slots_key = g_shadow_key = JS_UNDEFINED;
     g_id_attach = g_id_inner_get = g_id_inner_set = g_id_set_html_unsafe = g_id_set_html = -1;
+    g_sr_class = 0;   /* the handle this release kept — core/agent_state.h's dom_rect defect, exactly */
     g_ready = 0;
 }

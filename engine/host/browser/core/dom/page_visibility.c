@@ -140,9 +140,21 @@ bool page_visibility_hidden(JSContext *ctx)
 void page_visibility_init(JSContext *ctx)
 {
     /* DECLARED ONCE PER AGENT, like every other realm value. The initial state is §6.6's "set the initial
-       visibility state", which for this user agent is "visible". */
-    if (g_vis_slot < 0)
-        g_vis_slot = realm_value_declare(ctx, "the document's §6.6 visibility state");
+       visibility state", which for this user agent is "visible".
+       NOT `if (g_vis_slot < 0)`. There is one declaration site and document_init reaches it unconditionally, so
+       that test could never be true — what it COULD do is hand a second agent the slot id a dead runtime issued,
+       which is the shape core/agent_state.h found five inits in and 8987603c deleted. */
+    DCHECK(g_vis_slot < 0, "page_visibility_init ran twice — §6.6's realm slot is declared once per AGENT");
+    g_vis_slot = realm_value_declare(ctx, "the document's §6.6 visibility state");
+}
+
+/* RELEASED BY ITS DECLARER — §6.6 is declared from document_init, so document_agent_free gives it back. The
+   RECORDS are the realms', released with their contexts; the slot ID is the agent's, and a release that kept it
+   would answer a second agent's first read out of an array a dead runtime sized. */
+void page_visibility_free(void)
+{
+    DCHECK(g_vis_slot >= 0, "§6.6's visibility state was released in an agent that never declared it");
+    g_vis_slot = -1;
 }
 
 void page_visibility_install(JSContext *ctx, JSValueConst proto)

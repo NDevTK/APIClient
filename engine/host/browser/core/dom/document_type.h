@@ -9,5 +9,7 @@ void document_type_init(JSContext *ctx);
 void document_type_install_proto(JSContext *ctx);
 /* The interface OBJECT on a realm's global, so `doctype instanceof DocumentType` holds. */
 void document_type_install(JSContext *ctx, JSValueConst global);
+/* Reached from document_agent_free — §4.6 is declared by document_init, so it is released by its declarer. */
+void document_type_free(void);
 
 #endif

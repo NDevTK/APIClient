@@ -283,3 +283,20 @@ void document_metadata_install(JSContext *ctx, JSValueConst proto)
         idl_install_accessor(ctx, proto, DM_NAME[i], js_doc_metadata, i,
                              i == DM_COOKIE ? g_id_cookie_set : -1);
 }
+
+/* RELEASED BY ITS DECLARER — §3.1.4's four members are declared from document_init, so document_agent_free
+ * gives them back. The setter's pool entry is the whole of what a C static holds here: the accessors are each
+ * REALM's, installed onto the prototype that goes with its context, and the per-realm cookie store goes with it.
+ *
+ * THE TWO ATTACKER SOURCES ARE NOT GIVEN BACK, AND THAT IS A GAP RATHER THAN A DECISION. `document.cookie` and
+ * `document.referrer` are declared into solver/concolic.c's source registry, whose storage is that component's
+ * malloc'd array — a CLAIM in core/platform.h's fourth sense, owed back by its claimant. There is no
+ * concolic_undeclare_source to give one back with, and the registry is neither freed nor reset by anything, so
+ * a second agent in one process trips concolic_declare_source's own "declared its browser delivery twice"
+ * assert. Three components are in that state (this one, core/frame/location.c and core/file/file_system.c) and
+ * the fix is one mechanism for all three, so it is not half-built here. */
+void document_metadata_free(void)
+{
+    DCHECK(g_id_cookie_set >= 0, "§3.1.4's members were released in an agent that never declared them");
+    g_id_cookie_set = -1;
+}

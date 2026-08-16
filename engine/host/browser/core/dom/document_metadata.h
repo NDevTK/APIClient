@@ -10,5 +10,7 @@
 void document_metadata_init(JSContext *ctx);
 /* §3.7.6's REGULAR ATTRIBUTES, on Document.prototype — installed by whoever owns the interface object. */
 void document_metadata_install(JSContext *ctx, JSValueConst proto);
+/* Reached from document_agent_free — §3.1.4 is declared by document_init, so it is released by its declarer. */
+void document_metadata_free(void);
 
 #endif

@@ -95,3 +95,15 @@ void document_type_install(JSContext *ctx, JSValueConst global)
     node_install_interface(ctx, global, "DocumentType", proto);
     JS_FreeValue(ctx, proto);
 }
+
+/* RELEASED BY ITS DECLARER — §4.6 is declared from document_init, so document_agent_free is what gives it back.
+   IT TAKES NO RUNTIME because it holds no value and no atom: the prototype is each REALM's, released with its
+   context, and what a C static holds for the agent is the class and the latch. Both go, because a class id kept
+   past its runtime is exactly what core/agent_state.h found in dom_rect — a handle given back and then kept,
+   whose only reader is the next agent's init deciding it need not run. */
+void document_type_free(void)
+{
+    DCHECK(g_ready, "§4.6's DocumentType was released in an agent that never declared it");
+    g_ready = 0;
+    g_doctype_class = 0;
+}

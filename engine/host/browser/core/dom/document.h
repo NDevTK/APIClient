@@ -223,8 +223,19 @@ const PolicyContainer *document_policy(JSContext *ctx);
  * ZERO IS A REAL ANSWER, never "not known yet": an unsandboxed Document has an EMPTY active sandboxing flag
  * set, which is what every top-level document without a CSP `sandbox` directive gets. */
 SandboxFlags document_active_sandbox_flags(JSContext *ctx);
-/* Release what the component HOLDS across the document's lifecycle — the window it fires `load` at. */
+/* THE PER-REALM HALF OF THIS COMPONENT'S RELEASE — one realm's Document records: the wrapper, the Window it
+   fires `load` at, the WindowProxy, §4.5's implementation, and every Lexbor tree that realm created at
+   baseline. Reached once per realm, from quickjs's realm-teardown hook (core/frame/navigable.c) for a child
+   navigable and by hand for the root one, and it reads NOTHING this file holds for the agent — see
+   document_agent_free, which is why the two halves may run in either order. */
 void document_free(JSContext *ctx);
+
+/* THE AGENT HALF — core/platform.h's third column. `document` is the ONE component with both halves, and the
+   paragraph in that header about a JSContext in a signature is about the OTHER one. This releases what a C
+   static holds for the whole agent: §4.5's class, its fifteen member declarations, the two realm-value slot
+   ids, the §13.2.7 lifecycle claim this component makes on the ONE frontier, and the ten sub-components
+   document_init declares — three of which element_free's cascade was releasing on its behalf. */
+void document_agent_free(JSRuntime *rt);
 
 /* §4.2.6/§4.9's FOUR selector members as ONE declaration — querySelector, querySelectorAll, matches, closest.
    They differ in where the cursor goes and what a match yields, which is the magic: 0 = querySelector,
