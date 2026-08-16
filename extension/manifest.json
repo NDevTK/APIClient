@@ -44,11 +44,11 @@
     "128": "icons/icon128.png"
   },
   "sandbox": {
-    "pages": ["poc-sandbox.html"]
+    "pages": ["poc-sandbox.html", "renderer.html"]
   },
   "content_security_policy": {
     "extension_pages": "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' https: http: data:; frame-src 'self'; frame-ancestors 'none'; form-action 'none'",
-    "sandbox": "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; connect-src *"
+    "sandbox": "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals; script-src 'unsafe-inline' 'unsafe-eval' blob:; style-src 'unsafe-inline'; connect-src *"
   },
   "cross_origin_embedder_policy": {
     "value": "require-corp"

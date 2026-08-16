@@ -1,0 +1,227 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- renderer.html — THE RENDERER DOCUMENT: one WASM engine instance, in a frame the BROWSER isolates.
+
+     WHY A FRAME AT ALL. Two `WebAssembly.Instance`s in one realm is a NAMESPACE, not a sandbox: the host JS
+     holds both `Module` handles and `M.HEAPU8` reads and writes either linear memory. A frame carrying the
+     `sandbox` attribute WITHOUT `allow-same-origin` gets a UNIQUE OPAQUE ORIGIN, which is cross-origin to the
+     extension origin, and Site Isolation is then free to put it in its own renderer process with the OS
+     sandbox around it. SECURITY.md's "the QuickJS/WASM engine is UNTRUSTED, confined to the WASM sandbox + a
+     fixed set of host edges" becomes a fact the browser enforces instead of an import list somebody remembered
+     not to write.
+
+     THIS PAGE LOADS NOTHING BY URL, AND THAT IS FORCED BY THE MANIFEST'S OWN COEP. `cross_origin_embedder_policy:
+     require-corp` is served on EVERY extension resource response (extensions/browser/extension_protocols.cc,
+     GetSecurityPolicyForURL — the value is read off the extension, not off the resource path), so this document
+     enforces require-corp on its own subresources. That same file emits `Access-Control-Allow-Origin: *` and
+     `Cross-Origin-Resource-Policy: cross-origin` ONLY when `send_cors_header` is set, and it is set only for a
+     resource `WebAccessibleResourcesInfo::IsResourceWebAccessible` accepts. Our resources are not web-accessible
+     and must not become so. So from THIS document's opaque origin:
+       • a classic `<script src="renderer.js">` is a no-cors CROSS-ORIGIN load of a response with no CORP header
+         -> under require-corp the policy defaults to `same-origin` -> BLOCKED;
+       • a module script (`<script type=module>` or `import()`) is fetched in CORS mode by HTML's "fetch a single
+         module script" -> `Origin: null` against a response with no ACAO -> BLOCKED;
+       • `fetch("lib/qjs/qjs.wasm")` is the same CORS load -> BLOCKED.
+     A `srcdoc` frame does not escape this: it is a local scheme, so it INHERITS the embedder's policy
+     container — COEP require-corp included — and it inherits the embedder's CSP, which has no 'unsafe-inline',
+     so it could not run this bootstrap either. Neither does dropping the manifest's COEP: the CORS half kills
+     modules and `fetch` regardless, and CLAUDE.md §scheduler costs require-corp as most of what a SharedArrayBuffer
+     transport already has paid for.
+     THEREFORE the trusted zone HANDS this document everything it runs — check.js, the engine's JS glue and the
+     wasm bytes arrive on the boot record — and this file's only job is to be a place inline script may run.
+
+     AND AN `extension_pages` DOCUMENT COULD NOT BE FRAMED AT ALL: that policy ends in `frame-ancestors 'none'`,
+     which is enforced against ANY embedder, this extension's own offscreen included. The `sandbox` policy
+     carries no frame-ancestors, which is why poc-sandbox.html — the same shape, listed the same way, handed its
+     payload by postMessage the same way — is embeddable by the popup today.
+
+     WHICH IS WHY IT IS IN `manifest.sandbox.pages`. That listing is what swaps the `extension_pages` policy
+     (`script-src 'self' 'wasm-unsafe-eval'` — a grant this document cannot use, see above) for the `sandbox`
+     one, whose `'unsafe-inline'` is what lets a bootstrap exist with no URL to load it from, whose
+     `'unsafe-eval'` is what compiles the wasm, and whose `blob:` is what lets `import()` reach the engine glue
+     module built out of the Blob the offscreen delivered. The listing ALSO gives the document a CSP `sandbox`
+     directive, so the opaque origin is stated twice — by the policy and by the embedder's attribute — and the
+     effective sandboxing flags are the union of both restrictions, so the `sandbox="allow-scripts"` the
+     offscreen writes is what removes `allow-popups`/`allow-modals` from what the manifest policy grants.
+
+     THE META POLICY BELOW IS THIS DOCUMENT'S OWN, AND IT CAN ONLY NARROW. Policies combine and every one must
+     allow, so `default-src 'none'` deletes the `connect-src *` the manifest's sandbox policy grants: SECURITY.md
+     puts every analyzer-driven request through safeFetch in the trusted zone, and here there is no reachable
+     network to bypass it with — a property of the document rather than a rule the code follows. `script-src` is
+     restated because `default-src 'none'` would otherwise be what `script-src` falls back to in THIS policy and
+     the bootstrap would not run. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob:">
+<title>renderer</title>
+<script>
+"use strict";
+/* THE RENDERER'S HALF OF THE TRANSPORT. It is inline because nothing else can be — see the CSP note above —
+   and it is deliberately the smallest program that can hold a renderer: it adopts the port, instantiates the
+   engine out of what the trusted zone delivered, and relays the qjs_* ABI. It holds NO analysis logic and no
+   policy; SECURITY.md keeps both on the other side of this boundary. */
+(function () {
+  var M = null;        /* the instantiated renderer module — one per frame, one per agent cluster */
+  var out = [];        /* the engine's stdout/stderr since the last reply; drained into every reply */
+
+  /* THE ENGINE'S OUTPUT BELONGS TO THE TRUSTED ZONE, so it rides every reply rather than being kept here.
+     bridge.js parses @RESULT/@E/@WHY out of exactly these lines and a crash's ROOT line is the last @WHY
+     printed before abort() — if they stayed in the frame a crashed renderer would take its own cause with it. */
+  function drain() { var o = out; out = []; return o; }
+
+  function cstr(s) {
+    var n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n);
+    CHECK(p !== 0, "OOM placing an ABI string argument in the renderer's linear memory");
+    M.stringToUTF8(s, p, n);
+    return p;
+  }
+  /* BYTES ARE PLACED, NEVER ENCODED — the same rule bridge.js states at its own `cbytes`: `stringToUTF8` is an
+     encode and a document that arrived as a byte sequence must not be run through one on the way in. The extra
+     byte is the NUL a `cstr`-shaped entry (qjs_init) strlen()s to. */
+  function cbytes(b) {
+    var p = M._malloc(b.length + 1);
+    CHECK(p !== 0, "OOM placing an ABI byte argument in the renderer's linear memory");
+    M.HEAPU8.set(b, p);
+    M.HEAPU8[p + b.length] = 0;
+    return p;
+  }
+  /* A BODY IS A (ptr, len) PAIR AND `null` IS A POSITIVE STATEMENT — "this answer carries no body at all", a
+     network error or a load that did not load. bridge.js's engineBodyBytes says why the extra byte exists:
+     `_malloc(0)` may answer 0, and 0 is what the C entry reads as "no body", which a 204 is not. */
+  function body(b) {
+    if (b === null || b === undefined) return [0, 0];
+    DCHECK(b instanceof Uint8Array,
+           "a body argument reached the renderer as something other than a byte sequence — Fetch §2.2.5 makes " +
+           "a response body one, and anything else here is a zone that ran a decode the engine owns");
+    var p = M._malloc(b.length + 1);
+    CHECK(p !== 0, "OOM placing a fetched body in the renderer's linear memory — the flow parked on this " +
+                   "reply would resume reading a successful response with nothing in it");
+    M.HEAPU8.set(b, p);
+    return [p, b.length];
+  }
+
+  /* ONE ABI CALL. `args` declares each argument's SHAPE and the shape decides the plumbing, so a new qjs_*
+     entry needs nothing added here — which is the point: a per-entry branch on this side would be the same
+     per-spelling plumbing on both sides of one boundary, and every omission would be a silent gap.
+       string  — emscripten's own transient copy (what M.ccall("…","string") already does)
+       number  — passed through
+       cstr    — a NUL-terminated pointer RETAINED for the renderer's lifetime (qjs_init's arguments), which is
+                 this frame's lifetime: the module is destroyed wholesale with the document, so a free list
+                 here would be a list nothing could ever read.
+       cbytes  — the same retention for an argument that arrived as bytes
+       body    — expands to TWO arguments, the pointer and the length, freed after the call returns */
+  function docall(m) {
+    DCHECK(M !== null,
+           "a renderer was asked for an ABI call before its module was instantiated — the boot record is the " +
+           "first thing that crosses this port and nothing may be asked of an engine that does not exist yet");
+    DCHECK(Array.isArray(m.args) && Array.isArray(m.bodies),
+           "an ABI call arrived without its argument list or its byte list — a call carries both, so a caller " +
+           "cannot hand over a record and forget the bytes beside it");
+    var types = [], vals = [], transient = [], i, a, pr;
+    for (i = 0; i < m.args.length; i++) {
+      a = m.args[i];
+      if (a.t === "string")      { types.push("string"); vals.push(a.v); continue; }
+      if (a.t === "number")      { types.push("number"); vals.push(a.v); continue; }
+      if (a.t === "cstr")        { types.push("number"); vals.push(cstr(a.v)); continue; }
+      if (a.t === "cbytes")      { types.push("number"); vals.push(cbytes(m.bodies[a.i])); continue; }
+      if (a.t === "body")        { pr = body(m.bodies[a.i]); if (pr[0]) transient.push(pr[0]);
+                                   types.push("number"); vals.push(pr[0]);
+                                   types.push("number"); vals.push(pr[1]); continue; }
+      DFAIL("an ABI call named an argument shape this renderer does not place: `" + a.t + "`");
+      /* RELEASE PATH UNDER THE ASSERT, and it REFUSES rather than continuing: falling through this loop would
+         push no operand for this argument and hand the C entry a call one operand short — every later argument
+         read one slot early, which is a wrong call rather than a missing one. */
+      throw new TypeError("unplaceable ABI argument shape: " + a.t);
+    }
+    try { return M.ccall(m.fn, m.ret, types, vals); }
+    finally { for (i = 0; i < transient.length; i++) M._free(transient[i]); }
+  }
+
+  /* A DELIVERED PROGRAM IS RUN AS WHAT IT IS — a module, reached through a blob: URL minted in THIS document,
+     so the URL's origin is this frame's own opaque one and nothing about it is cross-origin. The URL is
+     released once the import has resolved: the module graph is already loaded and holds no reference to it. */
+  async function importBlob(b) {
+    var u = URL.createObjectURL(b);
+    try { return await import(u); } finally { URL.revokeObjectURL(u); }
+  }
+
+  async function boot(m, port) {
+    /* check.js FIRST AND BY ITS OWN BYTES, so this frame asserts with the SAME mechanism as the offscreen and
+       the C engine rather than a second one coined here. It is a classic IIFE over `self`, which is also a
+       valid module body, so importing it installs DCHECK/CHECK/DFAIL exactly as a <script src> would. */
+    await importBlob(m.check);
+    DCHECK(typeof DCHECK === "function" && typeof CHECK === "function",
+           "the boot record's check.js did not install the assertion mechanism — every line below asserts " +
+           "with it, and a renderer that cannot assert is one whose invariant failures are invisible");
+    DCHECK(m.glue instanceof Blob && m.wasm instanceof Uint8Array,
+           "the boot record did not carry the renderer's program — the engine's JS glue crosses as a Blob " +
+           "carrying its type and the wasm crosses as BYTES, because this document may load neither by URL");
+    var mod = await importBlob(m.glue);
+    DCHECK(typeof mod.default === "function",
+           "the engine glue module exported no factory — build.mjs links the production ABI with " +
+           "-sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createQJS, whose default export is that factory");
+    /* `instantiateWasm` IS THE HOOK THIS BUILD ACTUALLY HAS. `Module.wasmBinary` is declared in the glue and
+       never assigned from the incoming Module, so setting it would silently fall through to findWasmBinary()
+       and a fetch this document cannot make; `instantiateWasm` is read off Module and short-circuits BEFORE
+       any URL is computed, so no address is ever derived from this frame's blob: base. */
+    M = await mod.default({
+      print: function (s) { out.push(String(s)); },
+      printErr: function (s) { out.push(String(s)); },
+      noInitialRun: true,
+      instantiateWasm: function (imports, ok) {
+        WebAssembly.instantiate(m.wasm, imports).then(function (r) { ok(r.instance, r.module); });
+        return {};   /* emscripten's async form: the exports arrive through `ok` */
+      },
+    });
+    port.onmessage = function (e) { serve(e.data, port); };
+    return null;
+  }
+
+  function serve(m, port) {
+    var rec;
+    try {
+      DCHECK(m && m.v === 1 && typeof m.id === "number" && typeof m.op === "string",
+             "a record on the renderer port is not this transport's — it carries a version, a call id and an op");
+      if (m.op !== "call") {
+        DFAIL("the offscreen asked this renderer for an op it does not serve: `" + m.op + "`");
+        /* RELEASE PATH UNDER THE ASSERT: a refusal that REACHES the caller. Saying nothing would park the
+           offscreen on an answer that is never coming, which is the one outcome with no symptom anywhere. */
+        rec = { v: 1, id: m.id, ok: false, err: "unserved renderer op: " + m.op, out: drain() };
+      } else {
+        rec = { v: 1, id: m.id, ok: true, ret: docall(m), out: drain() };
+      }
+    } catch (e) {
+      /* EVERY FAILURE IN HERE IS THE RENDERER'S — a WASM abort (the engine's own CHECK/DCHECK reaching abort()),
+         or one of the asserts above. Both cross as a REJECTION so the offscreen's ccall seam keeps the shape it
+         already has: M.ccall throws on abort, and bridge.js's engineCrash is written against exactly that. The
+         drained lines travel WITH it, because the @WHY the C side printed immediately before abort() is the
+         only thing that says what actually broke. */
+      rec = { v: 1, id: m && m.id, ok: false, err: String((e && e.stack) || e), out: drain() };
+    }
+    port.postMessage(rec);
+  }
+
+  /* THE ONLY TWO ASSERTIONS THIS FRAME MAKES WITHOUT THE MECHANISM, because check.js arrives IN the record
+     being checked. They are bare throws for the same reason check.js's own `fail` is a throw, and they are
+     tagged @E rather than @WHY because they are CHECK-class and not DCHECK-class: who may boot this renderer
+     is a trust boundary, so it must hold in release too. Nothing but the embedder can reach this window — the
+     frame is sandboxed with no opener, no children and no popups — so another source is a should-never-happen
+     and not a case to skip past. */
+  function onboot(e) {
+    if (e.source !== parent)
+      throw new Error("@E a renderer received its boot record from a window that is not its embedder");
+    removeEventListener("message", onboot);
+    var port = e.ports[0];
+    if (!port) throw new Error("@E a renderer's boot record carried no port — every call after boot rides it");
+    boot(e.data, port).then(
+      function () { port.postMessage({ v: 1, id: e.data.id, ok: true, ret: null, out: drain() }); },
+      function (err) { port.postMessage({ v: 1, id: e.data.id, ok: false,
+                                          err: String((err && err.stack) || err), out: drain() }); });
+  }
+  addEventListener("message", onboot);
+  /* "*" IS THE ONLY TARGET ORIGIN THIS FRAME CAN NAME. Its own origin is opaque and postMessage's targetOrigin
+     parses as a URL unless it is "*" or "/", so there is no origin string to state. It is not a broadcast: the
+     message goes to `parent` and to nothing else, and the offscreen matches it by `event.source` — the
+     browser-set WindowProxy of the frame IT created — never by anything this record claims about itself. */
+  parent.postMessage({ v: 1, hello: 1 }, "*");
+})();
+</script>

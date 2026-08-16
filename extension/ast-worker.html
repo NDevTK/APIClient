@@ -1,5 +1,11 @@
 <!DOCTYPE html>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' https: http: data:">
+<!-- `frame-src 'self'` IS WHAT LETS THIS DOCUMENT HOLD A RENDERER, and its absence was a block with no
+     symptom on this side: the manifest's extension_pages policy grants `frame-src 'self'`, but policies
+     COMBINE and every one must allow, and this document's own policy names no frame-src at all — so it fell
+     back to `default-src 'none'` and every renderer frame renderer-host.js creates would have been refused by
+     the strictest of the two. It is 'self' and nothing wider: the only address this zone ever frames is
+     renderer.html, on this origin. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; frame-src 'self'; connect-src 'self' https: http: data:">
 <!-- The offscreen document hosts the API-learning BRAIN (offscreen-brain.js, the
      former service worker) where it has a stable lifetime + IndexedDB. Its lib/*
      dependencies load first, then the brain — which now ALSO contains the v2 host
@@ -33,6 +39,10 @@
 <script src="lib/serialize.js"></script>
 <!-- the analysis brain (LOGIC — being deleted into the engine over time). -->
 <script src="offscreen-brain.js"></script>
+<!-- the trusted side of a RENDERER FRAME: provisions renderer.html in a sandboxed (opaque-origin) iframe,
+     hands it the engine program, and relays the qjs_* ABI to it. This is where the WASM load moves to, so it
+     is loaded before the bridge that will call it. -->
+<script src="renderer-host.js"></script>
 <!-- the v2 host bridge: the ONLY irreducible trusted-zone JS (SECURITY.md) — dynamic-import()s the
      engine WASM lib/qjs/qjs.mjs, drives qjs_step, safe-fetches, persists IDB, installs self.astDispatch. -->
 <script src="bridge.js"></script>

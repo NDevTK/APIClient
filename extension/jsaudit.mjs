@@ -61,6 +61,18 @@ const LEDGER = [
   // ── BRIDGE — irreducible platform edge ───────────────────────────────────────────────────────────────
   { f: "bridge.js", zone: "BRIDGE:1,2,5",
     why: "loads the engine WASM, drives qjs_step, relays every byte through safeFetch, persists the frontier to IDB, routes cross-instance notices. The Level-1 WFQ lives here because one WASM instance is one document and no instance can rank the others." },
+  { f: "renderer-host.js", zone: "BRIDGE:5",
+    why: "LOADING THE WASM IS REASON 5, and this is where that reason stops being a figure of speech. While " +
+         "`createQJS()` runs in the offscreen's OWN realm the untrusted engine is confined by convention — the " +
+         "host holds the Module handle and HEAPU8 is an exported view of the whole linear memory, so two " +
+         "instances in one realm are a namespace and not a sandbox. This provisions each instance in an " +
+         "`<iframe sandbox=\"allow-scripts\">` with no `allow-same-origin`, whose UNIQUE OPAQUE ORIGIN is " +
+         "cross-origin to the extension origin and is what lets Site Isolation give it its own renderer " +
+         "process. Everything it holds is the load and the relay: it hands the frame check.js, the engine glue " +
+         "and the wasm BYTES (an opaque-origin frame can load none of them itself — the manifest's " +
+         "require-corp plus Chromium's CORP/ACAO-for-web-accessible-only rule sees to that), then carries the " +
+         "qjs_* ABI across a MessagePort in `M.ccall`'s own shape. No analysis logic, no policy, no key: the " +
+         "pool that owns the agent-cluster question passes the name in." },
   { f: "lib/safe-fetch.js", zone: "BRIDGE:1",
     why: "THE network chokepoint. SOP/CORS/PNA/CORB/GET-only cannot live inside the untrusted WASM — " +
          "SECURITY.md §Network. THIS ROW WAS FALSE UNTIL THE BODY BECAME BYTES: the file ended in " +
