@@ -116,7 +116,12 @@ void node_heap_detach(lxb_dom_document_t *doc)
            standing at the allocation, and 'OOM' alone tells them nothing about realms". */
 #if APICLIENT_DEV
         {
-            char why[1024];
+            /* THE BUFFER IS THE MESSAGE'S SIZE AND NOT A ROUND NUMBER. At 1024 the format expanded to at
+               least 1305 and `snprintf` truncated it mid-word — the ORDER arm, the last third and the one a
+               large count needs, never reached the reader, and the build's own `-Wno-format-truncation` is why
+               no gate said so. A diagnosis that is cut off is §Testing's report about nothing with the
+               explanation attached. */
+            char why[2560];
             snprintf(why, sizeof why,
                      "the agent's DOM heap still holds %zu node allocation(s) and %zu text allocation(s) after "
                      "the last document that could name them was destroyed. READ THE RATIO FIRST, because the "
@@ -133,7 +138,14 @@ void node_heap_detach(lxb_dom_document_t *doc)
                      "a delta released after this line rather than before it, leaving a whole flow's creations "
                      "live (and every one of them would then be freed out of an arena that is gone). A node "
                      "created while capture was off and then detached is the remaining shape and looks like "
-                     "the handful.",
+                     "the handful. AND A HUGE COUNT IS NOT A LEAK AT ALL — `ref_count` is UNSIGNED and "
+                     "`lexbor_mraw_free` decrements it while validating nothing, so a count near SIZE_MAX is "
+                     "that many frees TOO MANY: read it as a negative and the magnitude is the number of "
+                     "double frees. It is the more serious half, because the same call also inserted a pointer "
+                     "this arena never handed out into this arena's size-keyed free cache, so the two arenas "
+                     "now ALIAS and the next allocation of that size gets memory the other one still owns. "
+                     "core/dom/document_type.h is the worked example: lexbor allocates a doctype's two ids "
+                     "from `mraw` and frees them into `text`, which is exactly nodes at +2 and text at -2.",
                      (size_t)g_nodes->ref_count, (size_t)g_text->ref_count);
             DCHECK(g_nodes->ref_count == 0 && g_text->ref_count == 0, why);
         }
@@ -165,6 +177,18 @@ static bool mraw_owns(const lexbor_mraw_t *mraw, const void *p)
 static bool str_owned(const lexbor_mraw_t *text, const lexbor_str_t *s)
 {
     return s->data == NULL || mraw_owns(text, s->data);
+}
+
+NodeArena node_heap_arena_of(const void *p)
+{
+    bool in_nodes = mraw_owns(g_nodes, p), in_text = mraw_owns(g_text, p);
+
+    /* THE TWO ARENAS ARE DISJOINT REGIONS, so a pointer in both is the aliasing this file's teardown assertion
+       exists to catch, seen one allocation earlier and from the other side. */
+    DCHECK(!(in_nodes && in_text),
+           "a pointer is inside a chunk of BOTH of the agent's DOM arenas — they hand out disjoint memory, so "
+           "one of them has taken a free of a pointer the other allocated and their caches now alias");
+    return in_nodes ? NODE_ARENA_NODES : in_text ? NODE_ARENA_TEXT : NODE_ARENA_NONE;
 }
 
 bool dom_storage_owned_by(const lxb_dom_document_t *doc, const lxb_dom_node_t *n)
@@ -215,8 +239,13 @@ bool dom_storage_owned_by(const lxb_dom_document_t *doc, const lxb_dom_node_t *n
     case LXB_DOM_NODE_TYPE_DOCUMENT_TYPE: {
         const lxb_dom_document_type_t *dt = (const lxb_dom_document_type_t *)n;
         /* §4.6's publicId and systemId are STRINGS here, not name ids — the doctype's `name` is the `attrs` id
-           name_intern.h moves, and these two are the bytes this file moves nowhere because the arena is one. */
-        return str_owned(doc->text, &dt->public_id) && str_owned(doc->text, &dt->system_id);
+           name_intern.h moves, and these two are the bytes this file moves nowhere because the arena is one.
+           THEY ARE IN `mraw`, NOT `text`, and this line said `text` because lexbor's own DESTROY says `text` —
+           while `lxb_html_token_doctype_parse` ALLOCATES them from `mraw`. Asking the wrong arena made this
+           predicate answer false for every doctype ever parsed, which is the shape of a check that cannot fail
+           usefully: it would have named the defect the first time it was asked. core/dom/document_type.h holds
+           the full statement, and core/dom/document_type.c is the destroy that now agrees with this line. */
+        return str_owned(doc->mraw, &dt->public_id) && str_owned(doc->mraw, &dt->system_id);
     }
     case LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT:
     case LXB_DOM_NODE_TYPE_SHADOW_ROOT:

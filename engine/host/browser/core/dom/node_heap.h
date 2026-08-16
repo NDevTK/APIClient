@@ -83,9 +83,22 @@ void node_heap_detach(lxb_dom_document_t *doc);
  *   - Text, Comment, CDATASection, ProcessingInstruction:
  *                 `char_data.data.data`          (`lxb_dom_character_data_interface_destroy` → `doc->text`)
  *   - ProcessingInstruction, additionally: `target.data`                            → `doc->text`
- *   - DocumentType: `public_id.data`, `system_id.data`                              → `doc->text`
+ *   - DocumentType: `public_id.data`, `system_id.data`                              → `doc->mraw`
+ *                 (NOT `doc->text`, though lexbor's own destroy frees them there — `lxb_html_token_doctype_parse`
+ *                 allocates both from `mraw`. core/dom/document_type.h states why that mismatch is fatal here and
+ *                 harmless upstream, and core/dom/document_type.c is the destroy that resolves it.)
  *   - DocumentFragment, ShadowRoot: the struct and nothing else.
  * A kind with no arm CRASHES rather than answering true, because a silent skip IS the dangling pointer. */
+/* WHICH of the agent's two arenas a pointer came out of, asked EXACTLY rather than assumed.
+ * A caller has to ask when the ANSWER GENUINELY DIFFERS BY HOW THE THING WAS MADE, and §4.6's doctype ids are
+ * the case that forced this to exist: `lxb_html_token_doctype_parse` allocates them from `mraw`, while
+ * `lxb_dom_document_type_interface_clone` and `lxb_dom_document_type_create` both allocate them from `text`.
+ * One doctype, three constructors, two arenas — so there is no arena a destroy can NAME, only one it can ask
+ * for. This is not a defensive `if`: nothing is being skipped, and the answer NONE is a `DFAIL` at the caller.
+ * It is the same chunk-list walk `dom_storage_owned_by` is built on and costs the same. */
+typedef enum { NODE_ARENA_NONE = 0, NODE_ARENA_NODES, NODE_ARENA_TEXT } NodeArena;
+NodeArena node_heap_arena_of(const void *p);
+
 bool dom_storage_owned_by(const lxb_dom_document_t *doc, const lxb_dom_node_t *n);
 
 #endif

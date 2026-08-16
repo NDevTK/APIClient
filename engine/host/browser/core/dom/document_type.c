@@ -23,6 +23,7 @@
 #include "quickjs.h"
 #include "core/dom/document_type.h"
 #include "core/dom/node.h"
+#include "core/dom/node_heap.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 
@@ -106,4 +107,54 @@ void document_type_free(void)
     DCHECK(g_ready, "§4.6's DocumentType was released in an agent that never declared it");
     g_ready = 0;
     g_doctype_class = 0;
+}
+
+/* §4.6's DESTROY — see document_type.h for WHICH arena and why it is not lexbor's.
+   THE HEADERS ARE COPIED BEFORE THE STRUCT GOES, because `public_id` and `system_id` ARE fields of the struct
+   the node free is about to hand back; reading them afterwards is a read of freed memory, and it is the order
+   `lxb_dom_document_type_interface_destroy` uses for exactly that reason. The arena is asked before it too, for
+   the same reason — the answer is derived from `owner_document`, another field of the same struct. */
+static void doctype_free_id(lxb_dom_document_t *doc, lexbor_str_t *id, const char *which)
+{
+    /* NULL OWNS NOTHING, AND THAT IS A STATE THE PARSER REALLY PRODUCES — this asserted the opposite first and
+       `<!DOCTYPE html SYSTEM "about:legacy-compat">` fired it immediately. `lxb_html_token_doctype_parse`'s
+       SYSTEM branch initialises `system_id`, appends, and RETURNS, so a system-only doctype never reaches the
+       `set_pub_sys_empty` label and its `public_id` is left as the zeroed field the struct was calloc'd with.
+       So this is not a hole to fill: absence of `data` is the POSITIVE statement that the header owns no bytes,
+       which is the same statement `lexbor_str_destroy`'s own `if (str->data != NULL)` and node_heap.h's
+       `str_owned` make from their two sides. */
+    if (id->data == NULL)
+        return;
+    switch (node_heap_arena_of(id->data)) {
+    case NODE_ARENA_NODES: (void) lexbor_str_destroy(id, doc->mraw, false); return;
+    case NODE_ARENA_TEXT:  (void) lexbor_str_destroy(id, doc->text, false); return;
+    case NODE_ARENA_NONE:
+        break;
+    }
+    (void) which;
+    DFAIL("a doctype's id was allocated out of neither of the agent's DOM arenas, so there is nowhere to give "
+          "it back — every constructor DOM §4.6 has takes one of the two (the parser `mraw`, clone and "
+          "createDocumentType `text`), so a fourth one was added without saying where its bytes live");
+}
+
+lxb_dom_interface_t *document_type_destroy(lxb_dom_document_type_t *dt)
+{
+    lxb_dom_node_t *node = lxb_dom_interface_node(dt);
+    lxb_dom_document_t *doc;
+    lexbor_str_t public_id, system_id;
+
+    DCHECK(dt != NULL, "no doctype was destroyed");
+    DCHECK(node->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE,
+           "a node that is not a doctype reached §4.6's destroy — it would free two string headers out of "
+           "whatever the other interface keeps at those offsets");
+    DCHECK(node->owner_document != NULL && node->owner_document->mraw != NULL,
+           "a doctype is being destroyed with its node document already detached from the agent's DOM heap — "
+           "its two ids came out of that heap and there is now nowhere to give them back");
+    doc = node->owner_document;
+    public_id = dt->public_id;
+    system_id = dt->system_id;
+    (void) lxb_dom_node_interface_destroy(node);
+    doctype_free_id(doc, &public_id, "publicId");
+    doctype_free_id(doc, &system_id, "systemId");
+    return NULL;
 }

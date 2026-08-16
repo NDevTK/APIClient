@@ -9,6 +9,7 @@
 
 #include "check.h"
 #include "core/dom/attr_list.h"     /* dom_attr_destroy — the ONE point an Attr's death converges on */
+#include "core/dom/document_type.h"  /* document_type_destroy — §4.6's ids are not in the arena lexbor frees them into */
 #include "core/dom/node.h"          /* node_template_content — the ONE spelling of where a template's markup is;
                                        node_wrap_forget / node_agent_runtime — the dying node hands its wrapper back */
 #include "core/dom/node_heap.h"
@@ -35,8 +36,11 @@ static lxb_dom_interface_t *dom_node_interface_free(lxb_dom_interface_t *intrfc)
 
     if (node == NULL)
         return NULL;
+    /* §4.6's destroy is core/dom/document_type.c's and not lexbor's: lexbor allocates a doctype's two ids out
+       of the NODE arena and frees them into the TEXT one, which with the agent-wide arenas of node_heap.h makes
+       the two caches alias. document_type.h states the whole of it. */
     if (node->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)
-        return lxb_dom_document_type_interface_destroy(intrfc);
+        return document_type_destroy(lxb_dom_interface_document_type(intrfc));
     if (node->type == LXB_DOM_NODE_TYPE_ELEMENT &&
         node->local_name < LXB_TAG__LAST_ENTRY && node->ns >= LXB_NS__LAST_ENTRY)
         return lxb_dom_element_interface_destroy(intrfc);
