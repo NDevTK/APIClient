@@ -83,6 +83,29 @@ void      cow_capture_varref(JSContext *ctx, void *vref);
    baseline lookup — an append is always a fresh existed=0 slot). The accumulator hot path. */
 void      cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom);
 
+/* Install as JSTimeTravelHooks.buf_write: capture a shared ARRAY BUFFER's BYTES before this flow writes any of
+   them. `abuf` is the ArrayBuffer/SharedArrayBuffer OBJECT.
+ *
+ * THE UNIT IS THE BUFFER'S BYTES, NOT A VIEW'S ELEMENT, and that is decided by the code rather than by taste.
+ * A typed array's elements are raw bytes in an ArrayBuffer, so `ta[i] = v` reached no property hook and no
+ * element hook and was captured by nothing at all; the same is true of fill, copyWithin, set's memmove, sort's
+ * writeback, reverse, DataView's setters and Atomics. Three things rule the element out as the entry:
+ *   - a DATAVIEW write has no element. `dv.setFloat64(3, x)` writes bytes 3..10, a DataView exposes no indexed
+ *     properties, and those bytes cross the element boundary of every view over the buffer, so an (object,
+ *     index) entry cannot name the write at all;
+ *   - a JSValue cannot CARRY the bytes back. Under JS_NAN_BOXING — every 32-bit build, and the wasm one is
+ *     32-bit — __JS_NewFloat64 normalises a NaN, so a Float64Array element with a payload comes back canonical
+ *     and the resume is not byte-identical, which §Time-travel's razor makes a cap;
+ *   - the builtins write with memmove/memset, where an entry per element costs sizeof(CowEntry) per BYTE.
+ * Aliasing then needs no handling: a Float64Array and a Uint8Array over one buffer ARE one entry, because they
+ * are one storage. The entry names the BUFFER OBJECT and never its data pointer, which is why it cannot be the
+ * existing COW_STATE_HOST byte arm: that one holds a raw `target` into a record its owner never moves, while an
+ * ArrayBuffer's storage is freed by a detach and reallocated by a resize.
+ * ONE entry per buffer per flow, holding the bytes as this flow FIRST found them — so a loop overwriting one
+ * element a million times costs one entry and the delta stays O(shared state touched), which an undo log of
+ * ranges would not. A DETACHED or empty buffer is skipped: it holds no bytes, so there is nothing to isolate. */
+void      cow_capture_buffer(JSContext *ctx, JSValueConst abuf);
+
 /* Install as JSTimeTravelHooks.map_add: O(1) capture of a KNOWN-NEW Set/Map record (Set.add / Map.set of a fresh
    key on a shared collection). unapply deletes the flow's added record (JS_MapDeleteRecord), apply re-adds it
    (JS_MapAddRecord) — the Set/Map accumulator analogue of cow_capture_arr_append. */
@@ -177,7 +200,7 @@ void      cow_apply(JSContext *ctx, CowDelta *d);
    concolic set is: two entries each spelled it out as a struct literal, which is a list that can drift, and one
    of them already had. `.gen_fork` is the scheduler's, which is why this lives with the capture hooks that make
    up the rest of it rather than at either entry. */
-/* `gen_fork` is the caller's: the eight other hooks are this file's capture points, and the ninth belongs to
+/* `gen_fork` is the caller's: the nine other hooks are this file's capture points, and the tenth belongs to
    whoever assembles the sibling flow. See the definition. */
 void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork);
 

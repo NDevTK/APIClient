@@ -64,8 +64,18 @@ enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
 #define COW_MAP_DELETE    2
 /*   COW_STATE_HOST_REC — a component record that OWNS JSValues (target is the record, `rec` its layout). The
  *                        byte arm above cannot serve it: a memcpy of a JSValue makes a reference it does not
- *                        count, so the next restore frees a value the blob still names. See cow.h. */
-enum { COW_STATE_ASYNC = 0, COW_STATE_MODULE = 1, COW_STATE_HOST = 2, COW_STATE_HOST_REC = 3 };
+ *                        count, so the next restore frees a value the blob still names. See cow.h.
+ *   COW_STATE_BUFFER   — an ARRAY BUFFER's BYTES (obj is the buffer object, a_len its byte length; target
+ *                        unused). A typed array's elements are not JSValues and not slots — they are raw bytes
+ *                        in an ArrayBuffer — so `ta[i] = v`, fill, copyWithin, set, sort, reverse, DataView's
+ *                        setters and Atomics all wrote where no capture could see them. It is not the HOST byte
+ *                        arm above even though both copy bytes: that one holds a raw `target` pointer into a
+ *                        record whose owner never moves it, while an ArrayBuffer's storage is FREED by a detach
+ *                        and REALLOCATED by a resize, so this entry names the buffer OBJECT and asks it for the
+ *                        bytes at each save and restore (JS_GetBufferBytes / JS_SetBufferBytes). Why the unit is
+ *                        the bytes and not the element is in cow.h. */
+enum { COW_STATE_ASYNC = 0, COW_STATE_MODULE = 1, COW_STATE_HOST = 2, COW_STATE_HOST_REC = 3,
+       COW_STATE_BUFFER = 4 };
 typedef struct { JSValue obj; JSAtom atom; int existed; JSValue base; JSValue cur; int cur_state; void *vref;
                  int is_gendata; void *g0; void *g1; int is_map; int map_op; JSValue map_old;
                  int is_state; int state_kind; void *target; size_t a_len; void *a_base; void *a_cur;
@@ -255,6 +265,26 @@ static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
         }
         return blob;
     }
+    case COW_STATE_BUFFER: {
+        /* THE BYTES ARE ASKED OF THE BUFFER, never read through a pointer the entry kept: a detach frees that
+           storage and a resize reallocates it, which is the whole reason this is not the HOST arm above. */
+        uint32_t len;
+        const uint8_t *bytes = JS_GetBufferBytes(e->obj, &len);
+        void *blob;
+        CHECK(bytes != NULL,
+              "a COW delta is saving the bytes of a DETACHED buffer: a flow transferred it and the storage the "
+              "entry names is freed, so build the buffer-LIFETIME entry (detach and resize are mutations of the "
+              "buffer object, which an entry over its contents cannot express)");
+        CHECK(len == (uint32_t)e->a_len,
+              "a COW delta is saving a different number of bytes than it captured: a flow RESIZED the buffer, "
+              "which is a mutation of the buffer object rather than of its contents — build the "
+              "buffer-lifetime entry beside the byte entry");
+        blob = reclaim_malloc(e->a_len);
+        CHECK(blob, "cow: OOM saving a buffer's bytes — a lost baseline write leaks one flow's typed-array "
+                    "state into every sibling");
+        memcpy(blob, bytes, e->a_len);
+        return blob;
+    }
     default:
         DCHECK(e->state_kind == COW_STATE_ASYNC, "a COW state entry names a target kind with no save");
         return JS_AsyncStateSave(ctx, e->obj);
@@ -288,6 +318,11 @@ static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
         }
         break;
     }
+    case COW_STATE_BUFFER:
+        DCHECK(blob != NULL, "a buffer's bytes were re-applied before any unapply had recorded them — the "
+                             "context switch that parked this flow did not run");
+        JS_SetBufferBytes(e->obj, blob, (uint32_t)e->a_len);
+        break;
     default:
         DCHECK(e->state_kind == COW_STATE_ASYNC, "a COW state entry names a target kind with no restore");
         JS_AsyncStateRestore(ctx, e->obj, blob);
@@ -300,7 +335,8 @@ static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
 static void cow_state_free(JSRuntime *rt, const CowEntry *e, void *blob) {
     switch (e->state_kind) {
     case COW_STATE_MODULE: JS_ModuleEvalStateFree(rt, blob); break;
-    case COW_STATE_HOST:   free(blob); break;
+    case COW_STATE_HOST:
+    case COW_STATE_BUFFER: free(blob); break;   /* both are POD bytes: nothing in them holds a reference */
     case COW_STATE_HOST_REC:
         if (blob) {
             int i;
@@ -561,6 +597,41 @@ void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t 
     e->is_gendata = 0; e->g0 = e->g1 = NULL;
     e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
     e->is_state = 1; e->state_kind = COW_STATE_HOST; e->target = p; e->a_len = n; e->a_cur = NULL; e->rec = NULL;
+    e->a_base = cow_state_save(ctx, e);   /* the bytes as this flow found them */
+    g_capturing = 0;
+}
+
+/* A SHARED ARRAY BUFFER'S BYTES — see cow.h for why the unit is the bytes and not a view's element.
+   The identity of the entry is the buffer OBJECT and not a `target` pointer, because the storage a pointer
+   would name is freed by a detach and reallocated by a resize; that is also why the save and the restore ask
+   the buffer for its bytes rather than keeping the address they first saw. */
+void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
+    if (g_capturing || !g_current) return;
+    CowDelta *d = g_current;
+    uint32_t len;
+    DCHECK(JS_IsObject(abuf), "a buffer's bytes were captured with no buffer object — the capture named a VIEW "
+                              "where it must name the storage the view is a window onto");
+    if (JS_ObjFlowGen(abuf) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
+    /* A DETACHED buffer answers NULL and an empty one answers zero bytes. Neither is a failure and neither is a
+       hole a default is filling: a buffer with no bytes has nothing a flow could have written, so there is
+       nothing to isolate. A flow that detaches a buffer it HAS captured is a different question, and it aborts
+       at the save/restore naming the buffer-lifetime entry. */
+    if (!JS_GetBufferBytes(abuf, &len) || len == 0) return;
+    for (int i = 0; i < d->n; i++)                   /* one entry per buffer: the FIRST bytes are the baseline */
+        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_BUFFER &&
+            JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(abuf)) return;
+    g_capturing = 1;
+    if (cow_room_for_one(d, "cow: OOM growing delta (buffer bytes)"))
+        cow_hash_rebuild(d);
+    CowEntry *e = &d->e[d->n++];
+    e->obj = JS_DupValue(ctx, abuf);
+    e->atom = JS_ATOM_NULL; e->existed = 0;
+    e->base = JS_UNDEFINED; e->cur = JS_UNDEFINED; e->cur_state = COW_CUR_UNRECORDED;
+    e->vref = NULL;
+    e->is_gendata = 0; e->g0 = e->g1 = NULL;
+    e->is_map = 0; e->map_op = 0; e->map_old = JS_UNDEFINED;
+    e->is_state = 1; e->state_kind = COW_STATE_BUFFER; e->target = NULL; e->a_len = len; e->a_cur = NULL;
+    e->rec = NULL;
     e->a_base = cow_state_save(ctx, e);   /* the bytes as this flow found them */
     g_capturing = 0;
 }
@@ -1033,7 +1104,7 @@ static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
 
 /* THE time-travel hook set — see cow.h. Installed AFTER the context's own globals exist, so the baseline is
    pre-flow and nothing set up before it lands in a delta.
-   `gen_fork` IS THE CALLER'S, and it is the only one of the nine that is: the other eight are this file's own
+   `gen_fork` IS THE CALLER'S, and it is the only one of the ten that is: the other nine are this file's own
    capture points, while a generator-state fork is stashed by whoever assembles the SIBLING FLOW — the
    scheduler. Naming that function here made this primitive depend on the dispatch loop, and through it on the
    whole DOM, so nothing could take the COW delta without taking the browser too. It is a parameter now, which
@@ -1042,7 +1113,7 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork)
 {
     static JSTimeTravelHooks HOOKS = {
         .prop_write = cow_capture_hook, .cell_write = cow_capture_varref,
-        .arr_append = cow_capture_arr_append,
+        .arr_append = cow_capture_arr_append, .buf_write = cow_capture_buffer,
         .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate,
         .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval,
         .async_fork = cow_capture_async_fork };
