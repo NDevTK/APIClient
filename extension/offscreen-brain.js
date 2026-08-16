@@ -956,7 +956,7 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
          + "apiclientsink('<id>') and is the only thing that ties a real Chrome hit back to this session");
   if (!pageUrl) return { pocJs: null, why: "no page url recorded for this finding — a live delivery navigates the page the sink was observed on" };
   var call = "apiclientsink('" + marker + "')";           // the verifier's proof hook (marker = crypto.randomUUID)
-  // The engine's X9 is a bare fire-marker: `onerror=X9`, `javascript:X9`, `';X9();//`. Map every X9 (call or
+  // The engine's X9 is a bare fire-marker: `onerror=X9`, `javascript:X9`, `';X9()//`. Map every X9 (call or
   // ref form) to the apiclientsink CALL so the real sink, on firing, relays the proof. Its structure (breakout
   // + gate prefix + surviving transforms) is untouched.
   var payload = String(poc).split("X9()").join(call).split("X9").join(call);

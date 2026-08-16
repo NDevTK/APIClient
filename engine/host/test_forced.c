@@ -712,13 +712,13 @@ static const char *HTML =
     /* THE SOURCE'S BROWSER TRANSFORM decides whether a breakout is real, and the SAME candidate through the
        SAME source answers differently per sink context. A fragment percent-encodes `<` but NOT the apostrophe,
        so:
-         - a JS-context sink fed from location.hash IS a real XSS (`';X9();//` arrives intact), and
+         - a JS-context sink fed from location.hash IS a real XSS (`';X9()//` arrives intact), and
          - an HTML-context sink fed from the same source is NOT (the `<` arrives as %3C and parses as text).
        Before the delivery transform existed the solver handed the payload over raw and would report BOTH as
        working, which is a false PoC — the thing this half of the engine must never produce.
        BOTH HALVES ARE ASSERTED, through ONE source into TWO sink contexts, which is the only arrangement that
        can tell "the transform is applied" apart from "the solver is failing to solve": the apostrophe survives
-       the fragment set so the JS sink FIRES (through `'#';X9();//'` — the leading `#` included), while `<` does
+       the fragment set so the JS sink FIRES (through `'#';X9()//'` — the leading `#` included), while `<` does
        not survive so the HTML sink CANNOT, and it is reported as a PARKED SEARCH rather than omitted. The
        negative half costs the run TWO extra candidate re-fires that are known not to fire — the markup sink's
        context PROBE and the one escape solve_html.c derives from it — where the deleted CANDS_HTML spray cost
@@ -1072,7 +1072,15 @@ static const char *HTML =
     "fetch('/api/kid?mark=' + lastChildMark());"   /* DOM NODE READ-BACK: each flow's appended child is its OWN last child -> admin reads kidADMIN, public reads kidPUBLIC (neither's inserted node leaks) */
     "fetch('/api/flag?v=' + rx.flag);"   /* ACCESSOR READ-BACK: rx.flag reads rx._f (per-flow). WITHOUT the accessor-skip fix, cow_unapply would JS_SetProperty(rx.flag, undefined) -> re-invoke the setter -> corrupt _f -> v=undefined */
     "if (state.region === 'us-east-1') { fetch('/api/region/' + state.region); }"   /* EQ gate: true arm PINS region -> real @H value /api/region/us-east-1 */
-    "eval(\"'\" + state.code + \"'\");"   /* @S JS: source lands INSIDE a single-quoted string -> breakout ';X9();// */
+    "eval(\"'\" + state.code + \"'\");"   /* @S JS: source lands INSIDE a §12.9.4 SingleStringCharacters state -> solve_js.c derives that state's own exit, `';X9()//` */
+    /* @S JS, A SECOND §12 STATE, and the one that says the derivation is a derivation. The hole lands in a
+       §12.4 SingleLineComment, which NONE of the five deleted CANDS_JS payloads could fit: every one of them
+       continued the comment it was already inside, so this sink was unsolvable BY CONSTRUCTION and reported
+       `parked, tried 5` without ever naming what it had failed to escape. solve_js.c scans the argument the
+       probe run produced, names the state, and emits that state's own exit — §12.4 puts the LineTerminator
+       OUTSIDE the comment and §12.10 rule 1 inserts the semicolon across it, so the whole escape is one
+       newline and the call. */
+    "eval('//' + state.note);"
     "setInnerHTML('<div>' + state.html + '</div>');"   /* @S HTML: source in HTML text -> breakout an auto-firing element */
     "setLocation(state.next);"   /* @S URL: attacker controls the whole URL -> breakout javascript:X9() */
     "Promise.resolve(cfg.admin ? 'thenADMIN' : 'thenPUBLIC').then(function(v){ fetch('/api/then?v=' + v); });"   /* ASYNC-AS-FLOW: a microtask reaction fires as part of THIS flow, under its COW -> admin flow reads thenADMIN, public thenPUBLIC (per-flow reaction isolation) */
@@ -2527,16 +2535,26 @@ int main(int argc, char **argv) {
     /* @S: the eval sink reached by concolic state.code, breakout constructed + fire-verified. Read from the
        ONE document above — there is no second line to keep in step with it. */
     const char *ss = js;
-    /* @S JS: single-quote-context breakout fire-verified. @S HTML: innerHTML sink fire-verified via Lexbor re-parse. */
-    int s_eval = strstr(ss, "\"sink\":\"eval\"") && strstr(ss, "{state}.code") && strstr(ss, "';X9();//");
+    /* @S JS: the eval sink's argument is scanned per ECMAScript §12 and the hole is in §12.9.4's
+       SingleStringCharacters, so the DERIVED escape is that production's own exit and nothing longer — the
+       quote, a `;` because §12.10 inserts none on the same line, and `//` to discard the page's orphaned
+       closing quote. The deleted CANDS_JS wrote a second `;` that no §12 rule asks for, and the assertion
+       carried it; a payload one byte longer than the state requires is exactly what a derivation must stop
+       producing, so the expected text is the derivation's. @S HTML: fire-verified via Lexbor re-parse. */
+    int s_eval = strstr(ss, "\"sink\":\"eval\"") && strstr(ss, "{state}.code") && strstr(ss, "';X9()//");
+    /* THE SECOND §12 STATE, and it is the half that distinguishes a derivation from a renamed table: the same
+       sink class, a different lexical state, and an escape no fixed list contained. The expected text is
+       JSON-escaped because the escape IS a LineTerminator — §12.4 puts it outside the comment — so what the
+       report carries is a backslash and an `n`, not a byte a payload table could have spelled. */
+    int s_evalc = strstr(ss, "{state}.note") && strstr(ss, "\\nX9()");
     int s_html = strstr(ss, "\"sink\":\"innerHTML\"") && strstr(ss, "{state}.html") && strstr(ss, "<svg onload=X9()>");
     int s_url = strstr(ss, "\"sink\":\"location\"") && strstr(ss, "{state}.next") && strstr(ss, "javascript:X9()");
     /* THE SOURCE'S BROWSER TRANSFORM, asserted end to end: a breakout through the REAL Location, whose value
        the browser percent-encodes per the fragment set and prefixes with `#`. The apostrophe is not in that set,
-       so `';X9();//` arrives intact and fires — and it fires through `'#';X9();//'`, the leading `#` included.
+       so `';X9()//` arrives intact and fires — and it fires through `'#';X9()//'`, the leading `#` included.
        Before the transform existed the payload was handed over raw, so this fired for the wrong reason and an
        HTML-context breakout through the same source would have fired too, which a browser would not. */
-    int s_loc = strstr(ss, "\"source\":\"location.hash\"") && strstr(ss, "';X9();//");
+    int s_loc = strstr(ss, "\"source\":\"location.hash\"") && strstr(ss, "';X9()//");
     /* THE NEGATIVE HALF, and it is an assertion about the REPORT, not about a missing line. The same source
        into an HTML sink must produce NO PoC — the fragment set encodes `<`, so every HTML candidate arrives as
        `%3C` and parses as text — and must still be REPORTED, as a parked search carrying the encode set that
@@ -2605,7 +2623,8 @@ int main(int argc, char **argv) {
            full document and the main gate goes the same way. See the statement's own comment for the two
            measured causes and which mechanism each one needs. */
         { "optiter", optiter_tt, DOC_MIN },
-        { "s-eval", s_eval, 1 },           { "s-html", s_html, 1 },
+        { "s-eval", s_eval, 1 },           { "s-evalc", s_evalc, 1 },
+        { "s-html", s_html, 1 },
         { "s-url", s_url, 1 },             { "s-loc", s_loc, 0 },
         { "s-park", s_park, 0 },
     };

@@ -2,6 +2,7 @@
    it at the source, re-run the REAL code, and verify it FIRES. */
 #include "solver/solve.h"
 #include "solver/solve_html.h"
+#include "solver/solve_js.h"
 #include "core/json_buf.h"
 #include "core/frame/policy_container.h"
 #include "core/html/trusted_types.h"
@@ -87,26 +88,19 @@ static void fire_js(const char *src, size_t len) {
 }
 
 /* THE BREAKOUTS A SINK CLASS STARTS ITS SEARCH FROM, where they are WRITTEN DOWN rather than derived.
-   §@S allows exactly one reason to write one down, and CANDS_URL is it: the sink IS a single context, so there
-   is nothing to derive — navigating a URL executes the `javascript:` scheme and nothing else does. Its row
-   says which context makes it the only answer.
-   CANDS_JS IS NOT THAT, and this comment does not pretend otherwise. An eval sink's argument lands in a JS
-   LEXICAL state — bare expression, string, template, comment — exactly as a markup sink's lands in a tokenizer
-   state, so this list is the same guess-spray CANDS_HTML was and it goes the same way: solve_js.c's
-   construct_js_breakout, its own diff, next.
-   CANDS_HTML IS GONE. Five guessed markup payloads tried at every markup sink, and the defect was not that it
-   was inelegant: a sink whose lexical context none of the five fitted was unsolvable BY CONSTRUCTION and the
-   search could not say so — it reported `parked, tried 5` while never stating what it had failed to escape.
-   solve_html.c reads that context off the REAL parse of the sink's OWN output and CRASHES on a state it cannot
-   name, which is the difference between a search that has not solved and a capability that is not built. */
-static const char *CANDS_JS[] = {
-    "X9()",           /* statement / expression position — the input runs directly */
-    "';X9();//",      /* single-quoted string context */
-    "\";X9();//",     /* double-quoted string context */
-    "`;X9();//",      /* template-literal context */
-    "${X9()}",        /* template interpolation */
-    NULL
-};
+   §@S allows exactly one reason to write one down, and CANDS_URL is the only list left in this file because it
+   is the only sink that meets it: the sink IS a single context, so there is nothing to derive — navigating a
+   URL executes the `javascript:` scheme and nothing else does. Its row says which context makes it the only
+   answer.
+   CANDS_HTML AND CANDS_JS ARE BOTH GONE, and they went for one reason. Five guessed markup payloads at every
+   markup sink and five guessed JS payloads at every eval sink: a sink whose lexical state none of the five
+   fitted was unsolvable BY CONSTRUCTION and the search could not say so — it reported `parked, tried 5` while
+   never once stating what it had failed to escape. Two of the JS five could not fit ANY state ECMAScript §12
+   defines: a backtick closes a template whose own terminator is still ahead in the source, and `${X9()}` was
+   sprayed at strings and comments that have no substitution while the state that does have one got no
+   candidate of its own. solve_html.c reads its context off the REAL parse of the sink's OWN output and
+   solve_js.c scans the eval sink's OWN argument per §12; each CRASHES on a state it cannot name, which is the
+   difference between a search that has not solved and a capability that is not built. */
 static const char *CANDS_URL[] = {
     "javascript:X9()",     /* URL context: the vector IS the javascript: scheme (one fixed context) */
     "javascript:X9()//",
@@ -118,7 +112,7 @@ static const char *CANDS_URL[] = {
    single-context sink still needs its one stated vector, delete the vector list and a derived sink still needs
    its parser, so neither is the other's leftover. A class declares exactly ONE of the two and solve_init
    asserts it, which is what stops a class being added with neither and reported as parked forever. */
-enum { SINK_DERIVE_NONE = 0, SINK_DERIVE_HTML };
+enum { SINK_DERIVE_NONE = 0, SINK_DERIVE_HTML, SINK_DERIVE_JS };
 /* THE SINK CLASSES — one row per lexical context the solver breaks out of, and the row holds everything that
    is a fact about THE SINK rather than about a run. They are one row because they are one thing: the sink's
    FIRE ORACLE. Before this they were four scattered statements of it, and one of the four did not exist:
@@ -151,7 +145,7 @@ struct SinkClass {
     const char       *fires_on;  /* what makes the fired breakout RUN, from the oracle above */
 };
 static const SinkClass SINKS[] = {
-    [SINK_EVAL] = { "eval",      CANDS_JS,  SINK_DERIVE_NONE, POLICY_EVAL,           TRUSTED_TYPE_SCRIPT, "sink-evaluates" },
+    [SINK_EVAL] = { "eval",      NULL,      SINK_DERIVE_JS,   POLICY_EVAL,           TRUSTED_TYPE_SCRIPT, "sink-evaluates" },
     [SINK_HTML] = { "innerHTML", NULL,      SINK_DERIVE_HTML, POLICY_INLINE_HANDLER, TRUSTED_TYPE_HTML,   "parse-insert"   },
     [SINK_URL]  = { "location",  CANDS_URL, SINK_DERIVE_NONE, POLICY_JAVASCRIPT_URL, -1,                  "navigation"     },
 };
@@ -165,6 +159,7 @@ static const SinkClass SINKS[] = {
 static const char *derive_probe(int derive) {
     switch (derive) {
     case SINK_DERIVE_HTML: return SOLVE_HTML_LOCATOR;
+    case SINK_DERIVE_JS:   return SOLVE_JS_LOCATOR;
     default: break;
     }
     DFAIL("a sink class declared a context derivation this file has no probe for - the probe is the run the "
@@ -217,6 +212,14 @@ void solve_init(JSContext *ctx) {
                "a sink class declared both a fixed vector set and a context derivation, or neither — a "
                "breakout comes from exactly one of the two, and a class with neither is seeded no candidates");
     }
+    /* THE TWO DERIVED CLASSES' LOCATORS ARE THE PARTITION BETWEEN THEIR PROBES, so neither may contain the
+       other. A page that writes one attacker source into BOTH an eval sink and a markup sink runs each class's
+       probe straight past the other class's sink, and a locator one substring-test could confuse would make
+       that sink derive a context for a search that never asked for it — which probe_search would then report as
+       a crash in the machinery rather than as what it is. */
+    DCHECK(!strstr(SOLVE_JS_LOCATOR, SOLVE_HTML_LOCATOR) && !strstr(SOLVE_HTML_LOCATOR, SOLVE_JS_LOCATOR),
+           "the @S markup and JS context locators are not distinct — one contains the other, so the substring "
+           "test that routes a probe's output to its own derivation answers for both");
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "X9", JS_NewCFunction(ctx, js_x9, "X9", 0));
     JS_FreeValue(ctx, g);
@@ -301,11 +304,60 @@ static void record_sink(int cls, const char *source, const char *poc) {
     f->cls = cls; f->source = strdup(source ? source : "?"); f->poc = strdup(poc);
 }
 
+/* THE CONTEXT PROBE CAME BACK — the observation §@S(2) asks for, and the reason a derived sink's breakouts are
+   not a list. This flow injected the inert locator at the source instead of a breakout, so the string handed to
+   the sink is what the page's OWN code built around the attacker's bytes: its concatenations, its filter, its
+   re-encoding, all of them run. The class's own parser reads the state each surviving occurrence sits in and
+   constructs that state's minimal escape; every escape joins THIS sink's search and the next drain seeds it. */
+static void queue_derived(void *user, const char *breakout) { push_breakout((Cand *)user, breakout); }
+
+/* THE SEARCH A RUNNING PROBE BELONGS TO. These three assertions are about the CANDIDATE MACHINERY and not
+   about any parser, so they are stated ONCE for every derived-context class rather than re-written per class —
+   which is how a second class would otherwise end up with one of the three subtly different. */
+static Cand *probe_search(int sink) {
+    Flow *f = flow_running();
+    int created = 0;
+    Cand *e;
+
+    DCHECK(f && f->cand_src && f->cand_sink,
+           "an @S context locator reached a sink outside a candidate flow — nothing but a probe flow injects "
+           "one, so a string carrying it was built by something that is not this search");
+    DCHECK(sink_class_of_name(f->cand_sink) == sink,
+           "an @S context locator reached one sink class while the running candidate belongs to another — one "
+           "flow carries one substitution, so the breakouts derived here would be filed against a search that "
+           "never asked for them. The classes' locators are distinct strings precisely so a page writing one "
+           "source into two sink kinds cannot reach this");
+    e = sink_search(f->cand_src, sink, &created);
+    DCHECK(!created,
+           "the sink a context probe is running for was not on the pending list — the probe exists only "
+           "because detection put it there, so an absent entry means this search was dropped and the breakouts "
+           "about to be derived have no seeded flow to belong to");
+    return e;
+}
+
+/* §12 for the eval sink, §13.2.5 for the markup one — the SAME observation read by the parser that owns the
+   sink's language. */
+static void derive_js_context(const char *code)   { solve_js_breakouts(code, queue_derived, probe_search(SINK_EVAL)); }
+static void derive_html_context(const char *html) { solve_html_breakouts(html, queue_derived, probe_search(SINK_HTML)); }
+
 void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {                          /* candidate run: the arg is the injected+wrapped CONCRETE code */
         if (concolic_is(arg)) return;           /* injection didn't reach this read -> not our candidate */
         const char *code = JS_ToCString(ctx, arg);
-        if (code) { fire_js(code, strlen(code)); JS_FreeCString(ctx, code); }
+        if (code) {
+            /* THE SAME PARTITION THE MARKUP SINK MAKES, and for the same two reasons. Each candidate kind is
+               told apart by the bytes IT injects, which the other cannot contain: the CONTEXT PROBE carries the
+               inert locator and no X9 (that is what makes it inert), a derived BREAKOUT carries X9 and no
+               locator (it is built from the §12 state, not from the probe's token). It is a partition, not an
+               ordering heuristic.
+               AND IT IS WHAT STOPS EVERY OTHER `eval` IN THE PAGE BEING RE-EXECUTED ONCE PER CANDIDATE. This
+               used to queue whatever string reached the sink, tested only by "the value is not concolic" —
+               which is also true of every literal the page evals — so each candidate flow re-ran the page's own
+               code at a cost of the page's evals times the number of breakouts tried. */
+            if (strstr(code, SOLVE_JS_LOCATOR))  derive_js_context(code);
+            else if (strstr(code, "X9"))         fire_js(code, strlen(code));
+            JS_FreeCString(ctx, code);
+        }
         return;                                 /* g_fired reflects the PoC once this flow drains its queue */
     }
     if (!concolic_is(arg)) return;              /* detection: not an attacker source -> not a sink */
@@ -374,33 +426,6 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
     const char *shape = concolic_shape_c(arg);
     const char *src = concolic_src_c(arg);
     add_pending(src ? src : (shape ? shape : "?"), SINK_URL);
-}
-
-/* THE CONTEXT PROBE CAME BACK — the observation §@S(2) asks for, and the reason the HTML breakout is not a
-   list. This flow injected the inert locator at the source instead of a breakout, so the string handed to the
-   sink is what the page's OWN code built around the attacker's bytes: its concatenations, its filter, its
-   re-encoding, all of them run. solve_html.c reads the tokenizer state each surviving occurrence sits in and
-   constructs that state's minimal escape; every escape joins THIS sink's search and the next drain seeds it. */
-static void queue_derived(void *user, const char *breakout) { push_breakout((Cand *)user, breakout); }
-
-static void derive_html_context(const char *html) {
-    Flow *f = flow_running();
-    int created = 0;
-    Cand *e;
-
-    DCHECK(f && f->cand_src && f->cand_sink,
-           "the @S HTML context locator reached a sink outside a candidate flow — nothing but a probe flow "
-           "injects it, so a string carrying it was built by something that is not this search");
-    DCHECK(sink_class_of_name(f->cand_sink) == SINK_HTML,
-           "the @S HTML context locator reached the markup sink while the running candidate belongs to another "
-           "sink class — one flow carries one substitution, so the breakouts derived here would be filed "
-           "against a search that never asked for them");
-    e = sink_search(f->cand_src, SINK_HTML, &created);
-    DCHECK(!created,
-           "the markup sink a context probe is running for was not on the pending list — the probe exists only "
-           "because detection put it there, so an absent entry means this search was dropped and the "
-           "breakouts about to be derived have no seeded flow to belong to");
-    solve_html_breakouts(html, queue_derived, e);
 }
 
 /* innerHTML = arg: an HTML-context sink. Detection records the source; the candidate run re-parses the injected

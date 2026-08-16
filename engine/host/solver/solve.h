@@ -2,12 +2,14 @@
  * a breakout DERIVED from the sink context and VERIFY it by FIRING (an X9 marker must actually call), not a
  * fixed-payload guess. The emitted finding IS a replay-verified PoC; absence is never a "safe" verdict, only
  * search-not-yet-solved.
- * WHERE EACH CLASS'S BREAKOUT COMES FROM IS A COLUMN OF THE SINK TABLE, and there are exactly two answers. The
- * markup sink DERIVES it: solve_html.c reads the tokenizer state off the REAL parse of the sink's own output
- * (§13.2.5), which a probe candidate run produces. The URL sink STATES it, because the sink IS one context —
- * navigating executes the `javascript:` scheme and nothing else does. The eval sink still carries a written
- * list, which is the same guess-spray the markup one carried until solve_html.c replaced it, and it goes the
- * same way: solve_js.c's construct_js_breakout over the hole's string/template/comment state. */
+ * WHERE EACH CLASS'S BREAKOUT COMES FROM IS A COLUMN OF THE SINK TABLE, and there are exactly two answers.
+ * TWO of the three classes DERIVE it, each from the parser that owns the sink's own language and each from a
+ * string a REAL run of the page produced: solve_html.c reads the §13.2.5 tokenizer state off the Lexbor parse
+ * of the markup sink's output, and solve_js.c scans the eval sink's argument per ECMAScript §12 for the
+ * lexical state the attacker's bytes are in. Both are fed by the same mechanism — a probe candidate run that
+ * injects an inert locator at the source instead of a breakout.
+ * The URL sink STATES it, and it is the only class left that may: the sink IS one context, so there is nothing
+ * to derive — navigating executes the `javascript:` scheme and nothing else does. */
 #ifndef ENGINE_HOST_SOLVER_SOLVE_H
 #define ENGINE_HOST_SOLVER_SOLVE_H
 

@@ -179,7 +179,7 @@ static void park_rec_url(double val, const char *url)
 
 /* ATTACKER TEXT CROSSES AS HEX, and it is the one thing in this document whose charset the grammar cannot
    state. Every other field is composed of digits by this file and park_rec asserts exactly that; park_rec_url
-   widens it once by naming what an address cannot contain. A BREAKOUT can contain anything: `';X9();//` holds
+   widens it once by naming what an address cannot contain. A BREAKOUT can contain anything: `';X9()//` holds
    the ';' the host joins records with, an HTML breakout holds the '"' the JSON value is quoted with, and a
    payload that survives a filter may be any byte at all. So the choice is a charset PREDICATE that three
    separate consumers would have to be kept in step with — this grammar, the JSON writer, and the host's split

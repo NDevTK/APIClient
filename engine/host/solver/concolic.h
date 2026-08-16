@@ -64,7 +64,7 @@ void        concolic_set_candidate(const char *src, const char *payload);
    and hands it to the source RAW, so a candidate containing `<` looked like it broke out of an HTML sink fed
    from `location.hash` — when a real browser percent-encodes `<` in a fragment, so the page would have read
    `%3C` and nothing would have happened. CLAUDE.md states the consequence directly: a raw-hash HTML breakout is
-   a FALSE PoC unless the app decodes it, while a JS-context one (`';X9();//`) is REAL, because the fragment set
+   a FALSE PoC unless the app decodes it, while a JS-context one (`';X9()//`) is REAL, because the fragment set
    encodes backtick and NOT the apostrophe. Those two outcomes are the same candidate through the same source;
    only the delivery tells them apart.
    `encode` lists the bytes this component percent-encodes (C0 controls and DEL are always encoded, so they are
