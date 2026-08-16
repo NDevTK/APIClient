@@ -1,18 +1,16 @@
-// What is LEFT of this file is TWO components with two different consumers, and neither of them is the
-// discovery FETCH any more:
+// What is LEFT of this file is ONE component, and the header above once listed three:
 //   * schema resolution for the Send panel   (findDiscoveryMethod / findMethodById / resolveDiscoverySchema)
-//   * response-asset classification          (classifyResponseAsset — lib/response-decode.js)
 //
-// The React Server Components parser was the third and is gone — see the note at the foot of this file. What
-// keeps the other two here is their CONSUMERS, which is the ordering jsaudit.mjs's own ledger header states:
-// "a producer whose consumers still live in JS is not first, because moving it makes every call it serves
-// cross the JS↔WASM boundary the architecture rule exists to delete." There is no host→engine compute edge in
-// this architecture and there must not be one — the engine is the driver, the bridge relays. So the classifier
-// leaves with lib/response-decode.js (jsaudit step 2 → reply_decode.c), whose `_isAsset` / `_isBoringFetch`
-// gate its every learning call; and the schema half leaves with lib/send.js (step 7 → moat.c), which is what
-// the Send panel actually asks. Its ALGORITHM is already in C on the engine's own side of that line: the
-// WHATWG MIME Sniffing standard is engine/host/browser_process/network/mime_sniff.c, and the schema of an engine-fetched discovery
-// document is read by engine/host/solver/discovery.c.
+// The React Server Components parser was the second and is gone — see the note at the foot of this file. The
+// response-asset classifier was the third and is gone too, to the BROWSER PROCESS
+// (engine/host/browser_process/network/resource_kind.c); the note where it stood says what moved and what was
+// deleted rather than ported. What keeps the last one here is its CONSUMER, which is the ordering jsaudit.mjs's
+// own ledger header states: "a producer whose consumers still live in JS is not first, because moving it makes
+// every call it serves cross the JS↔WASM boundary the architecture rule exists to delete." There is no
+// host→engine compute edge in this architecture and there must not be one — the engine is the driver, the
+// bridge relays — so the schema half leaves with lib/send.js (step 7 → moat.c), which is what the Send panel
+// actually asks. The classifier could go earlier precisely because its destination was NOT the engine: the
+// browser process is a program the trusted zone CALLS, so moving it added no inverted edge.
 //
 // THE CANDIDATE SET AND ITS FETCH LOOP ARE GONE TO engine/host/solver/discovery.c. `buildDiscoveryUrls` stood
 // here and `fetchDiscoveryForService` (lib/discovery-probe.js, deleted with it) walked its candidates in a
@@ -372,202 +370,31 @@ function mapJsonSchemaType(prop) {
 }
 
 
-// ─── Content-based asset classification ──────────────────────────────────────
+// ─── Content-based asset classification — GONE TO engine/host/browser_process/network/resource_kind.c ────────
 //
-// Decide whether a captured response body is binary media (image, video,
-// font, archive, 3d model, wasm) purely from magic bytes — no URL extension,
-// no content-type. An API endpoint that returns a PNG is still an API
-// (its URL/query/auth are meaningful); this classifier only decides whether
-// to attempt structured-schema extraction from the response body. Binary
-// media has no JSON/protobuf schema to learn, so we skip response parsing
-// and annotate the method entry with the detected media type.
+// `sniffBinaryMagic`, `_sniffTextAssetSignature` and `classifyResponseAsset` answered "is this captured reply a
+// static asset to skip, or API data to learn from" for lib/response-decode.js, which gated every learning call
+// on the answer. All three are deleted. The ruling they were living against is one sentence — type checking is
+// safeFetch's job and safeFetch is the only source of sniffing — and this file was the second source: a
+// hand-rolled magic-byte table beside WHATWG MIME Sniffing §6, a two-row `<!doctype html` / `<html` test beside
+// §7.1's nineteen, and sniffs for SVG, plain CSS, WebVTT, HLS and DASH that are in no standard and that no
+// browser performs. §RUN, DON'T MATCH names that last group exactly ("no regex/name/identifier matching,
+// scoring, heuristics"), and a server that serves an SVG STATES `image/svg+xml`, which §4.6's image group
+// already answers.
 //
-// Nothing is hidden from the user — every captured response is logged whatever
-// this answers; the classifier only decides how much schema to synthesize
-// around it. (This paragraph used to say the log carried each response's
-// `_assetKind` / `_assetLabel`. It never did: response-decode.js wrote both
-// fields and nothing on either side of the popup boundary read them, so the
-// sentence described a surface that did not exist. Both writes are deleted.)
+// WHAT THE PREVIOUS NOTE HERE SAID, AND WHY IT STOPPED BEING TRUE. It said the table survived because "its only
+// caller is JS and there is no host→engine COMPUTE edge for a JS caller to reach a moved callee through". That
+// was a fact about the ENGINE — the renderer is the driver, the bridge relays, and inverting that is the
+// orchestration layer this architecture deletes — and it was correct while §7 lived only there. It is not a
+// fact about the BROWSER PROCESS: that program is a dedicated Worker the trusted zone CALLS (0f4643f7), the
+// edge into it is a postMessage the offscreen already owns, and classifying a response is the question a
+// network service exists to answer. So the callee moved and the caller awaits it —
+// `self.browserProcessClassify` in extension/browser-process-host.js.
 //
-// THIS COMPONENT IS SUPERSEDED AND IS WAITING FOR ITS CALLER. What it does is
-// the WHATWG MIME Sniffing standard, and that standard is implemented in C at
-// engine/host/browser_process/network/mime_sniff.c — §6's pattern tables and
-// §7's sniffing algorithm. It is in the BROWSER PROCESS and not in the renderer
-// because §7 is the network service's algorithm and CORB gates on its result;
-// that is now a structural fact rather than a rule someone follows — the file is
-// in a source list the renderer's link is never offered, so a renderer-side call
-// to it does not resolve. The browser process serves ONE entry today (the CORB
-// verdict lib/safe-fetch.js asks for at its script gate), which is not the
-// question this table answers, so the hand-rolled table below survives because
-// lib/response-decode.js is still JS and calls it; it goes out with that file at
-// jsaudit step 2. Do not extend it.
-//
-// Sniff magic bytes on a Uint8Array. Returns a MIME-like label or null.
-function sniffBinaryMagic(bytes) {
-  if (!bytes || bytes.length < 2) return null;
-  var b = bytes;
-  if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
-  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
-  if (b.length >= 6 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return "image/gif";
-  if (b.length >= 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return "image/webp";
-  if (b.length >= 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return "application/pdf";
-  if (b.length >= 4 && b[0] === 0x77 && b[1] === 0x4f && b[2] === 0x46 && b[3] === 0x46) return "font/woff";
-  if (b.length >= 4 && b[0] === 0x77 && b[1] === 0x4f && b[2] === 0x46 && b[3] === 0x32) return "font/woff2";
-  if (b.length >= 4 && b[0] === 0x00 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) return "font/ttf";
-  if (b.length >= 4 && b[0] === 0x4f && b[1] === 0x54 && b[2] === 0x54 && b[3] === 0x4f) return "font/otf";
-  if (b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b) return "application/gzip";
-  if (b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04) return "application/zip";
-  if (b.length >= 4 && b[0] === 0x25 && b[1] === 0x21 && b[2] === 0x50 && b[3] === 0x53) return "application/postscript";
-  if (b.length >= 4 && b[0] === 0x00 && b[1] === 0x61 && b[2] === 0x73 && b[3] === 0x6d) return "application/wasm";
-  // MP4 / QuickTime: bytes 4..7 are "ftyp"
-  if (b.length >= 8 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return "video/mp4";
-  if (b.length >= 4 && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return "video/webm";
-  // glTF (.glb) — little-endian "glTF" magic
-  if (b.length >= 4 && b[0] === 0x67 && b[1] === 0x6c && b[2] === 0x54 && b[3] === 0x46) return "model/gltf-binary";
-  // RIFF container (wav/avi) — webp already matched above
-  if (b.length >= 4 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46) return "application/octet-stream";
-  // ID3/MP3
-  if (b.length >= 3 && b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) return "audio/mpeg";
-  // OGG
-  if (b.length >= 4 && b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53) return "audio/ogg";
-  return null;
-}
-
-// Classify the response body. Returns { kind, label }:
-//   "asset"   → binary media; skip RESPONSE-body schema extraction (request
-//                still learned as normal). label is the sniffed MIME.
-//   "empty"   → no body captured; learn as a fire-and-forget API (204-style).
-//   "api"     → structured or text body; learn normally.
-// Text-format asset signatures (SVG, plain CSS from CDN, etc.). SVG in
-// particular is text but structurally a static image — icon CDNs like
-// fonts.gstatic.com serve thousands of per-icon GET responses that
-// shouldn't populate the discovery doc. Sniff on leading bytes only.
-function _sniffTextAssetSignature(text) {
-  if (!text) return null;
-  var head = text.trimStart();
-  var t = head.slice(0, 512);
-  var lower = t.toLowerCase();
-  // HLS playlist — literal "#EXTM3U" on the first line.
-  if (head.startsWith("#EXTM3U")) return "application/vnd.apple.mpegurl";
-  // WebVTT subtitles — "WEBVTT" header line.
-  if (head.startsWith("WEBVTT")) return "text/vtt";
-  // SVG (two entry shapes)
-  if (lower.startsWith("<?xml") && /<svg\b/.test(lower)) return "image/svg+xml";
-  if (lower.startsWith("<svg")) return "image/svg+xml";
-  // HTML — doctype declaration or root <html> tag. Page fragments and
-  // full documents fetched via fetch() are assets, not APIs.
-  if (lower.startsWith("<!doctype html")) return "text/html";
-  if (lower.startsWith("<html")) return "text/html";
-  // DASH manifest — XML with <MPD as root element.
-  if (lower.startsWith("<?xml") && /<mpd\b/.test(lower)) return "application/dash+xml";
-  // SMIL / SRT — some streamers use these.
-  if (lower.startsWith("<?xml") && /<smil\b/.test(lower)) return "application/smil+xml";
-  // Plain CSS (CDN icon fonts often ship CSS with @font-face rules).
-  // Require a @-rule at the head to avoid matching HTML with inline <style>.
-  if (/^@(font-face|import|charset|media|keyframes|supports)\b/.test(t)) return "text/css";
-  return null;
-}
-
-function classifyResponseAsset(responseBody, responseBase64, opts) {
-  // Opaque cross-origin responses (fetch mode:"no-cors") can't be read,
-  // so body is always empty. These are overwhelmingly fire-and-forget
-  // tracking pixels / preconnect beacons — not API endpoints.
-  if (opts && opts.responseType === "opaque") {
-    return { kind: "asset", label: "opaque-cross-origin" };
-  }
-  // Server-declared content type (stripped to the bare MIME). Used only
-  // as a weaker cross-check — magic bytes are authoritative; the header
-  // is a server claim that can lie or be misconfigured.
-  var declaredCt = null;
-  if (opts && typeof opts.responseContentType === "string") {
-    declaredCt = opts.responseContentType.toLowerCase().split(";")[0].trim() || null;
-  }
-
-  if (responseBody == null || responseBody === "") {
-    return { kind: "empty", label: null };
-  }
-  if (responseBase64) {
-    var bytes;
-    try { bytes = base64ToUint8(responseBody); }
-    catch (_) { return { kind: "api", label: null }; }
-    if (bytes.length === 0) return { kind: "empty", label: null };
-    var magic = sniffBinaryMagic(bytes);
-    if (magic) {
-      var note1 = declaredCt && declaredCt !== magic ? " (declared " + declaredCt + ")" : "";
-      return { kind: "asset", label: magic + note1 };
-    }
-    // If the base64 decodes to printable text, run the text-asset sniff
-    // too — misconfigured CDNs occasionally serve SVG as application/
-    // octet-stream, triggering binary capture.
-    try {
-      var decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-      if (decoded) {
-        var textMagic = _sniffTextAssetSignature(decoded);
-        if (textMagic) {
-          var note2 = declaredCt && declaredCt !== textMagic ? " (declared " + declaredCt + ")" : "";
-          return { kind: "asset", label: textMagic + note2 };
-        }
-      }
-    } catch (e) {
-      // TextDecoder with fatal:false shouldn't throw on arbitrary bytes —
-      // a throw here means the bytes input wasn't a valid Uint8Array shape.
-      // Falls through to "binary-structured" classification.
-      if (typeof console !== "undefined") console.debug("[discovery:classify] TextDecoder threw on binary bytes:", e && e.message || e);
-    }
-    // Base64 bytes with no magic match: could be protobuf, gRPC-Web, or any
-    // structured binary format. These have schemas; don't skip learning.
-    return { kind: "api", label: "binary-structured" };
-  }
-  // Text body. Sniff text-format assets first (SVG, CSS, HTML).
-  var textAsset = _sniffTextAssetSignature(responseBody);
-  if (textAsset) {
-    var note3 = declaredCt && declaredCt !== textAsset ? " (declared " + declaredCt + ")" : "";
-    return { kind: "asset", label: textAsset + note3 };
-  }
-  // Also run the binary sniff on raw bytes — servers sometimes ship
-  // binary under a text content-type, which intercept captures as text.
-  var probe = responseBody.length > 64 ? responseBody.slice(0, 64) : responseBody;
-  var textBytes = new Uint8Array(probe.length);
-  for (var i = 0; i < probe.length; i++) textBytes[i] = probe.charCodeAt(i) & 0xff;
-  var magicText = sniffBinaryMagic(textBytes);
-  if (magicText) {
-    var note4 = declaredCt && declaredCt !== magicText ? " (declared " + declaredCt + ")" : "";
-    return { kind: "asset", label: magicText + note4 };
-  }
-  // Asset content-types whose bodies have no unique structural prefix
-  // (or where the @-rule sniff above misses common shapes). Trust the
-  // server-declared MIME when the body is NOT a JSON root shape (`{`/`[`)
-  // — JSON-shape under a JS MIME is JSONP/API data; under a CSS MIME it
-  // wouldn't be valid CSS anyway, but the same gate keeps the path
-  // symmetric. The set is restricted to MIMEs where servers have no
-  // legitimate reason to ship API payloads (browsers execute JS, parse
-  // CSS, render fonts — these aren't structured data formats).
-  var ctAssetMimes = {
-    "application/javascript": 1, "text/javascript": 1,
-    "application/ecmascript": 1, "text/ecmascript": 1,
-    "application/x-javascript": 1,
-    "text/css": 1,
-  };
-  if (ctAssetMimes[declaredCt]) {
-    var trimmed = responseBody.trimStart();
-    var firstCh = trimmed.charCodeAt(0);
-    // 0x7B = '{', 0x5B = '[' — JSON root shapes. Anything else starts
-    // with a CSS selector / JS statement / comment and is asset content,
-    // not API payload.
-    if (firstCh !== 0x7B && firstCh !== 0x5B) {
-      return { kind: "asset", label: declaredCt };
-    }
-  }
-  return { kind: "api", label: null };
-}
-
-// Explicit self-binding for SW global scope — some extension loader configs
-// don't hoist late function declarations into `self` reliably; attach so
-// background.js can call them via importScripts.
-if (typeof self !== "undefined") {
-  self.sniffBinaryMagic = sniffBinaryMagic;
-  self.classifyResponseAsset = classifyResponseAsset;
-}
+// The judgement itself was not just a copy of a standard, and that half went with it rather than being left
+// behind: asset-vs-API is a product decision §7 does not make, so it is its own component beside mime_sniff.c
+// (network/resource_kind.c) stated over §7's COMPUTED type and §4.6's groups — which is also how it became
+// correct about a mislabelled body, the case a declared-type test can never see.
 
 // ─── React Server Components — GONE TO engine/host/solver/reply_decode.c ────────────────────────────────
 //

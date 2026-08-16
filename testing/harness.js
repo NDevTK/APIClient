@@ -1021,23 +1021,19 @@ async function cmdNetDiff(args) {
         catch (e) { return String(u).slice(0, 80); }
       };
       // A live GET to a STATIC ASSET is not an API endpoint the analyzer missed —
-      // it's correctly not learned. The analyzer ALREADY classifies each captured
-      // request (magic-byte + mime → _assetKind/_boring, CLAUDE.md #9), so trust
-      // that first; the captured content-type is often "" for cross-origin/opaque
-      // asset responses (the real type lives in mimeType). Fall back to mime/
-      // content-type for entries that predate the classification. text/html is
-      // NOT an asset — an include-fragment / SSR partial returns text/html and IS
-      // a real endpoint. Unknown → keep (conservative; never hide a real gap).
-      const isAsset = (r) => {
-        if (r._assetKind === "asset") return true;
-        const ct = String(r.contentType || r.mimeType || "").toLowerCase().split(";")[0].trim();
-        if (!ct) return false;
-        return /^(image|font|video|audio|model)\//.test(ct)
-          || ct === "text/css"
-          || /^(application|text)\/(javascript|ecmascript)$/.test(ct)
-          || ct === "application/wasm"
-          || /^application\/(x-font|font-|vnd\.ms-fontobject)/.test(ct);
-      };
+      // it's correctly not learned, and this diagnostic ASKS THE ANALYZER rather than
+      // deciding for itself. Every captured HTTP response is classified in
+      // lib/response-decode.js by the browser process (WHATWG MIME Sniffing §6/§7 plus
+      // §4.6's groups, engine/host/browser_process/network/resource_kind.c) and stamped
+      // on the log entry as the RULE that decided, so non-null is the answer.
+      // WHAT STOOD HERE WAS A SECOND CLASSIFIER, and it was reached on every entry:
+      // it tested `r._assetKind`, a field whose writer had already been deleted, and
+      // then fell through to its own content-type table — a declared-type guess, made
+      // where the real answer needs the bytes, disagreeing with the one classifier
+      // about exactly the mislabelled responses that classifier exists for. The
+      // fallback is gone with the dead read; an entry with no classification is now
+      // KEPT, which is the conservative direction this comment already asked for.
+      const isAsset = (r) => !!r._assetReason;
       const learned = new Set(), learnedMap = new Map();
       if (typeof globalStore !== "undefined") {
         for (const e of globalStore.endpoints.values()) {

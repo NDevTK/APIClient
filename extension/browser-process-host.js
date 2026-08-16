@@ -117,28 +117,75 @@
     return p;
   }
 
-  /* THE ONE SHIPPED ENTRY, called by lib/safe-fetch.js at its `opts.as === "script"` gate.
-     `contentType` is `string | null`, and null is §5.1's "the supplied MIME type is undefined" — a positive
-     statement that no such header arrived, never an empty string standing in for one. `sameOrigin` is this
-     zone's own comparison of the browser-stated principal with the response's origin. `body` is Fetch §2.2.5's
-     byte sequence as the chokepoint read it. */
-  self.browserProcessCorb = async function browserProcessCorb(contentType, noSniff, sameOrigin, body) {
+  /* THE HEADER FACTS BOTH SHIPPED ENTRIES TAKE, asserted where they are handed over. Each is `string | null`
+     and null is a POSITIVE statement that the response carried no such header — §5.1's "the supplied MIME type
+     is undefined" for the first, Fetch's "values is null" for the second — never an empty string standing in
+     for one, which is a value a server can really send and which means something else.
+     THE SECOND ONE IS THE HEADER AND NOT THE FLAG, deliberately. `noSniff` used to arrive here already decided,
+     which meant Fetch's determine-nosniff lived in lib/safe-fetch.js as an `indexOf("nosniff")` over a
+     lowercased value — a substring test where the standard splits the header and matches its FIRST value, so
+     `foo, nosniff` set the flag and should not have. With a second entry needing the same fact that would have
+     become two copies of one wrong algorithm, so the derivation is now C beside the algorithms it feeds
+     (browser_process/network/nosniff.c) and what this zone hands over is what this zone did: it read a header. */
+  function checkHeaderFacts(what, contentType, xContentTypeOptions, body) {
     DCHECK(contentType === null || typeof contentType === "string",
-           "the CORB gate was handed a Content-Type that is neither a string nor null — an absent header is " +
-           "§5.1's undefined supplied type and says so with null, which is a different input from \"\"");
-    DCHECK(typeof noSniff === "boolean" && typeof sameOrigin === "boolean",
-           "the CORB gate was handed a flag that is not a boolean — both are facts the caller KNOWS (a header " +
-           "it read, a principal comparison it made), so neither may arrive as undefined");
+           "the " + what + " gate was handed a Content-Type that is neither a string nor null — an absent " +
+           "header is §5.1's undefined supplied type and says so with null, which is a different input from " +
+           "\"\"");
+    DCHECK(xContentTypeOptions === null || typeof xContentTypeOptions === "string",
+           "the " + what + " gate was handed an X-Content-Type-Options that is neither a string nor null — " +
+           "this boundary carries the VALUE so the standard's own split-and-match runs in one place, and an " +
+           "absent header says so with null exactly as an absent Content-Type does");
     DCHECK(body instanceof Uint8Array,
-           "the CORB gate was handed a body that is not a byte sequence — the decision reads the body, and a " +
-           "string here is the chokepoint having run a decode it does not own");
+           "the " + what + " gate was handed a body that is not a byte sequence — the decision reads the " +
+           "body, and a string here is a caller having run a decode it does not own");
+  }
+
+  /* THE CORB GATE, called by lib/safe-fetch.js at its `opts.as === "script"` gate. `sameOrigin` is this zone's
+     own comparison of the browser-stated principal with the response's origin. `body` is Fetch §2.2.5's byte
+     sequence as the chokepoint read it. */
+  self.browserProcessCorb = async function browserProcessCorb(contentType, xContentTypeOptions, sameOrigin,
+                                                              body) {
+    checkHeaderFacts("CORB", contentType, xContentTypeOptions, body);
+    DCHECK(typeof sameOrigin === "boolean",
+           "the CORB gate was handed a principal comparison that is not a boolean — it is a comparison the " +
+           "caller MADE, so it may not arrive as undefined");
     var bp = await browserProcessOnce();
-    var v = await bpCall(bp, { op: "corb", contentType: contentType, noSniff: noSniff, sameOrigin: sameOrigin,
+    var v = await bpCall(bp, { op: "corb", contentType: contentType,
+                               xContentTypeOptions: xContentTypeOptions, sameOrigin: sameOrigin,
                                header: body.slice(0, RESOURCE_HEADER_MAX) });
     DCHECK(v && typeof v.allow === "boolean" && typeof v.computed === "string" && typeof v.reason === "string",
            "the browser process answered a CORB verdict missing one of its three fields — the decision, §7's " +
            "computed essence and the rule that decided are written together by corb.c, so a missing one is a " +
            "producer that stopped writing it and not a value with a default");
+    return v;
+  };
+
+  /* THE CLASSIFICATION GATE, called by lib/response-decode.js for every captured HTTP response. It answers
+     what a body is FOR — an asset with no schema in it, or API data to learn from — which is a question about
+     the resource's ACTUAL type and therefore a question about its bytes. That is why it is here and not in the
+     offscreen's own JS: the user's ruling is that type checking is safeFetch's job and the only source of
+     sniffing, and `classifyResponseAsset` in lib/discovery.js was a second source of it — a hand-rolled
+     magic-byte table beside a standard, plus SVG/CSS/WebVTT/HLS/DASH sniffs no standard has. All three of its
+     functions are deleted; the algorithm is browser_process/network/resource_kind.c.
+     `opaque` is Fetch §2.2.6: the response is an opaque filtered response, so its body is null and its header
+     list is empty by construction. Only the zone holding the Response can state that, which is why it crosses
+     as a fact rather than being inferred from an empty body on the far side. */
+  self.browserProcessClassify = async function browserProcessClassify(contentType, xContentTypeOptions, opaque,
+                                                                      body) {
+    checkHeaderFacts("classify", contentType, xContentTypeOptions, body);
+    DCHECK(typeof opaque === "boolean",
+           "the classify gate was handed a filtered-response fact that is not a boolean — Fetch §2.2.6 is " +
+           "either true of this response or it is not, and an undefined here would be read as `false` and " +
+           "would learn an unreadable body as an endpoint with no fields");
+    var bp = await browserProcessOnce();
+    var v = await bpCall(bp, { op: "classify", contentType: contentType,
+                               xContentTypeOptions: xContentTypeOptions, opaque: opaque,
+                               header: body.slice(0, RESOURCE_HEADER_MAX) });
+    DCHECK(v && typeof v.asset === "boolean" && typeof v.reason === "string",
+           "the browser process answered a classification missing one of its two fields — the verdict and the " +
+           "rule that decided are written together by resource_kind.c, so a missing one is a producer that " +
+           "stopped writing it and not a value with a default");
     return v;
   };
 
@@ -165,6 +212,7 @@
     var JS = enc.encode("(function(){window.__chunk=1;})();\n");
     var JSON_BODY = enc.encode('{"user":{"id":42},"token":"abc"}');
     var PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+    var WOFF2 = new Uint8Array([0x77, 0x4f, 0x46, 0x32, 0, 1, 0, 0, 0, 0, 0, 0]);
     var CASES = [
       { name: "javascript served as text/plain", ct: "text/plain", nosniff: false, same: false, body: JS,
         want: { allow: true, computed: "text/plain", reason: "allowed" } },
@@ -192,23 +240,82 @@
       { name: "javascript served honestly, SAME-origin", ct: "text/javascript", nosniff: false, same: true,
         body: JS, want: { allow: true, computed: "text/javascript", reason: "same-origin" } },
     ];
-    var rec = { provisioned: false, agree: false, handleKeys: [], cases: [] };
+    /* THE CLASSIFICATION ROWS, on the same rule and for the same reason: every one is a case where the answer
+       is NOT the declared type, because a body whose server told the truth is decided by its header alone and
+       would prove only that the worker replied. What each row is FOR:
+         - A JS BUNDLE SERVED AS `application/octet-stream` must not become a boring asset. §7 answers
+           `application/octet-stream` (it never upgrades a resource INTO a scriptable type — §7.2's note is
+           that the refusal is the point), so nothing here can call it a script, and the rule that matters is
+           that it falls to `structured` and is LEARNED. The load path is separate and unaffected: CORB allows
+           the same body, so a lazy chunk served this way is still fetched and still executed, which is the
+           headline surface CLAUDE.md §Attacker-sources names.
+         - A PNG SERVED AS `application/json` is the row that fails if §6.1's table stopped being consulted:
+           §7 hands back the declared type unchanged, so only the confirmation sniff can see it.
+         - A JSON API RESPONSE SERVED AS `text/plain` is the row that fails if a confirmation sniff became
+           over-eager. `text/plain` is one of §5.1's four Apache-bug values, so §7 re-derives from the bytes and
+           still reaches `text/plain`; nothing in §6 or §7.1 matches JSON; it must be learned.
+         - A GENUINE STATIC ASSET (a WOFF2 under `font/woff2`) is decided by §4.6's font group, which is the
+           arm that catches every honestly-served asset and the one the deleted JS's hand-rolled font magic was
+           standing in for.
+         - The remaining rows are the JavaScript group's two sides (a script, and API data shipped under a
+           JavaScript MIME type, told apart by json_sniff.c), an HTML error page returned where JSON was
+           declared, and Fetch §2.2.6's opaque response, whose body no amount of sniffing can reach. */
+    var CLASSIFY_CASES = [
+      { name: "a javascript bundle served as application/octet-stream", ct: "application/octet-stream",
+        xcto: null, opaque: false, body: JS, want: { asset: false, reason: "structured" } },
+      { name: "a png served as application/json", ct: "application/json", xcto: null, opaque: false,
+        body: PNG, want: { asset: true, reason: "sniffed-image/png" } },
+      { name: "a json api response served as text/plain", ct: "text/plain", xcto: null, opaque: false,
+        body: JSON_BODY, want: { asset: false, reason: "structured" } },
+      { name: "a woff2 served as font/woff2", ct: "font/woff2", xcto: null, opaque: false, body: WOFF2,
+        want: { asset: true, reason: "font" } },
+      { name: "a javascript chunk served honestly", ct: "text/javascript", xcto: null, opaque: false,
+        body: JS, want: { asset: true, reason: "script" } },
+      { name: "json served as text/javascript", ct: "text/javascript", xcto: null, opaque: false,
+        body: JSON_BODY, want: { asset: false, reason: "javascript-mime-json-body" } },
+      { name: "an html error page served as application/json", ct: "application/json", xcto: null,
+        opaque: false, body: HTML, want: { asset: true, reason: "sniffed-text/html" } },
+      { name: "html served as text/html", ct: "text/html", xcto: null, opaque: false, body: HTML,
+        want: { asset: true, reason: "markup" } },
+      /* THE OPAQUE ARM. The bytes and the declared type say API data; the fact that only this zone holds says
+         the body was never readable. It is the one row whose answer cannot come from the bytes at all, so a
+         flag that failed to cross would show up here and nowhere else. */
+      { name: "an opaque no-cors response", ct: null, xcto: null, opaque: true, body: new Uint8Array(0),
+        want: { asset: true, reason: "opaque-filtered-response" } },
+      /* NOSNIFF, WHOSE FIRST VALUE IS NOT `nosniff`. Fetch splits the header and matches its FIRST value, so
+         this response does NOT set the flag — and the substring test this boundary used to carry in JS said it
+         did. The difference is visible because §7 step 2 runs §7.1 WITH its scriptable table when the flag is
+         clear and WITHOUT it when set: clear, this computes `text/html` and the rule is `markup`; set, §7 would
+         reach `text/plain` and the document would be caught one rule later as `sniffed-text/html`. Same
+         verdict, different rule — which is exactly what a reason field is for. */
+      { name: "html under an unknown type and X-Content-Type-Options: foo, nosniff", ct: "application/unknown",
+        xcto: "foo, nosniff", opaque: false, body: HTML, want: { asset: true, reason: "markup" } },
+    ];
+
+    var rec = { provisioned: false, agree: false, handleKeys: [], cases: [], classify: [] };
     var bp = await browserProcessOnce();
     rec.provisioned = true;
     rec.handleKeys = Object.keys(bp).sort();
     var all = true;
     for (var i = 0; i < CASES.length; i++) {
       var c = CASES[i];
-      var v = await self.browserProcessCorb(c.ct, c.nosniff, c.same, c.body);
+      var v = await self.browserProcessCorb(c.ct, c.nosniff ? "nosniff" : null, c.same, c.body);
       var ok = v.allow === c.want.allow && v.computed === c.want.computed && v.reason === c.want.reason;
       if (!ok) all = false;
       rec.cases.push({ name: c.name, agree: ok, allow: v.allow, computed: v.computed, reason: v.reason,
                        want: c.want });
+    }
+    for (var j = 0; j < CLASSIFY_CASES.length; j++) {
+      var k = CLASSIFY_CASES[j];
+      var w = await self.browserProcessClassify(k.ct, k.xcto, k.opaque, k.body);
+      var kok = w.asset === k.want.asset && w.reason === k.want.reason;
+      if (!kok) all = false;
+      rec.classify.push({ name: k.name, agree: kok, asset: w.asset, reason: w.reason, want: k.want });
     }
     rec.agree = all;
     rec.lines = bp.lines;
     return rec;
   };
 
-  console.debug("[browser-process] ready (self.browserProcessCorb + self.browserProcessProbe installed)");
+  console.debug("[browser-process] ready (self.browserProcessCorb + self.browserProcessClassify + self.browserProcessProbe installed)");
 })();

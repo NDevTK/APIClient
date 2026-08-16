@@ -380,11 +380,11 @@ function abiCheck(program, entrySrc, marker, prefix, list) {
   }
 }
 abiCheck("renderer", join(HOST, "main.c"), "QJS_EXPORT", "qjs_", QJS_ABI);
-/* THE BROWSER PROCESS'S ABI, and it is ONE entry because a network service answers questions about bytes and
-   holds no state between them. It is enforced by the same call for the same reason: `bp_corb_check` reaching
-   `Module` because EXPORT_KEEPALIVE happens to be on is not an ABI, it is an accident that survives until a
-   setting changes. */
-const BP_ABI = ["bp_corb_check"];
+/* THE BROWSER PROCESS'S ABI. Every entry is a question about BYTES answered with no state kept between calls,
+   which is what a network service is and why there is no scheduler behind them. It is enforced by the same call
+   for the same reason: an entry reaching `Module` because EXPORT_KEEPALIVE happens to be on is not an ABI, it
+   is an accident that survives until a setting changes. */
+const BP_ABI = ["bp_corb_check", "bp_classify"];
 abiCheck("browser process", join(BPROC_DIR, "main.c"), "BP_EXPORT", "bp_", BP_ABI);
 
 /* COMPILE FLAGS AND LINK FLAGS ARE SEPARATED, and that separation is what lets both entries be verified.

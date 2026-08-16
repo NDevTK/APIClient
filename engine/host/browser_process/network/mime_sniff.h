@@ -12,13 +12,16 @@
  * those rows are DELETED rather than ported, and the same sentence covers the JS's `ctAssetMimes` table, which
  * trusted a declared JavaScript/CSS type only when the body did not start with `{` or `[`.
  *
- * WHAT THIS FILE'S ARRIVAL ACTUALLY DELETED IS SOMEWHERE ELSE, and saying otherwise would be the stale-DFAIL
- * failure mode in the first paragraph of a new file. `discovery.js`'s classifier is still on disk and still
- * called: `_isAsset`/`_isBoringFetch` gate every learning call in `lib/response-decode.js`, and it answers a
- * DIFFERENT question — is this reply a static asset to skip — for which this program serves no entry. It leaves
- * with its caller at jsaudit step 2 and its row says so. What this arrival deleted is `safe-fetch.js`'s
- * `_jsMime`, `_corbProtectedMime`, `_sniffsProtected` and `_corbAllowsScript`, which asked THIS question about
- * the same bytes on the wrong side of the boundary — see network/corb.h.
+ * WHAT THIS FILE'S ARRIVAL DELETED WAS `safe-fetch.js`'s `_jsMime`, `_corbProtectedMime`, `_sniffsProtected`
+ * and `_corbAllowsScript`, which asked THIS question about the same bytes on the wrong side of the boundary —
+ * see network/corb.h. The paragraph here used to add that `discovery.js`'s classifier was "still on disk and
+ * still called", because it answered a DIFFERENT question — is this reply a static asset to skip — "for which
+ * this program serves no entry", and that it would leave with its caller at jsaudit step 2. THAT IS NO LONGER
+ * TRUE AND THE SENTENCE IS DELETED RATHER THAN SOFTENED, which is the same rule the DFAIL below was removed
+ * under. This program serves that entry now (network/resource_kind.c), the three JS functions are gone, and
+ * the reason the wait was unnecessary is worth recording: the objection was that there is no host→engine
+ * COMPUTE edge for a JS caller to reach a moved callee through, and that is a fact about the RENDERER. The
+ * browser process is a program the TRUSTED ZONE CALLS, so its caller awaits it and no edge is inverted.
  *
  * WHY THIS DIRECTORY EXISTS, AND WHAT MAKES IT REAL THIS TIME. §7 is a NETWORK-side algorithm: in a real
  * browser it runs in the network service, CORB gates on its result, and the renderer is TOLD a computed MIME
@@ -42,15 +45,17 @@
  * untrusted page execution, and this is the thing that confinement protects; an opaque origin would also cost
  * it `connect-src` and credentialed fetch, which is the opposite of what a network service needs. The trusted
  * side is `extension/browser-process-host.js`, and `engine/build.mjs` links THIS program out of its OWN source
- * list into its OWN objects: main.c, network/corb.c, network/mime_sniff.c and the renderer's
- * core/mime/mime_type.c. Nothing else in the engine is offered to that link, so a renderer-side call to §7 is
- * an undefined symbol rather than a comment somebody has to remember.
+ * list into its OWN objects — every .c under browser_process/, plus the renderer's core/mime/mime_type.c.
+ * Nothing else in the engine is offered to that link, so a renderer-side call to §7 is an undefined symbol
+ * rather than a comment somebody has to remember.
  *
- * WHAT LEAVES. `corb.c` is the one caller: SECURITY.md's CORB rule is decided here, beside safe-fetch.js's
- * SOP/CORS, and what crosses back to the trusted zone is the VERDICT plus the computed essence that produced
- * it. A computed type stamped onto a reply record for the renderer to read is the same shape and is not built
- * yet — solver/reply_decode.c says so at the reader's end, and adding the field before the plumbing exists
- * would be the reader-with-no-writer contract CLAUDE.md calls greppable.
+ * WHAT LEAVES. Two callers, two questions, one algorithm. `corb.c` decides SECURITY.md's CORB rule beside
+ * safe-fetch.js's SOP/CORS, and what crosses back is the VERDICT plus the computed essence that produced it.
+ * `resource_kind.c` decides whether a captured reply is a static asset or API data, and what crosses back is
+ * the rule that decided. Neither ships §7's record itself: a computed type stamped onto a reply record for the
+ * RENDERER to read is a third shape and is not built yet — solver/reply_decode.c says so at the reader's end,
+ * and adding the field before the plumbing exists would be the reader-with-no-writer contract CLAUDE.md calls
+ * greppable.
  *
  * §4's RECORD IS THE RENDERER'S and stays there: `mime_type_extract` PARSES what a server STATED, and that
  * record is page-observable through `Blob.type`, `File.type`, `DataTransferItem.type` and `accept` matching.
@@ -74,9 +79,11 @@
  * a value that is not a MIME type — `mime_type_extract` decides that here rather than at every call site).
  * NULL is therefore a positive statement and never a hole a caller filled in.
  *
- * `no_sniff` is §5's no-sniff flag. Its one source in a browser is `X-Content-Type-Options: nosniff`, so the
- * caller reads that header and states the answer; this component never reaches back into a header list for a
- * second fact about the same response.
+ * `no_sniff` is §5's no-sniff flag, and this component takes the ANSWER rather than the header: it never
+ * reaches back for a second fact about the same response. Its one source in a browser is
+ * `X-Content-Type-Options`, and Fetch's determine-nosniff over that value is `network/nosniff.c` — a component
+ * of its own, so that both of this program's entries state the flag from one implementation of one algorithm
+ * instead of two spellings of it.
  *
  * §5.1's CHECK-FOR-APACHE-BUG FLAG IS NOT AN ARGUMENT, because it is a property of the very string being
  * passed: it is set when the supplied type is EXACTLY one of four byte sequences, and asking the caller to
@@ -97,5 +104,18 @@ void mime_sniff_compute(MimeType *out, const char *content_type_value, bool no_s
 const char *mime_sniff_image_pattern(const unsigned char *header, size_t header_n);
 const char *mime_sniff_audio_video_pattern(const unsigned char *header, size_t header_n);
 const char *mime_sniff_archive_pattern(const unsigned char *header, size_t header_n);
+
+/* §7.1's OWN FIRST TABLE — the scriptable one, whose rows are `<!doctype html`, `<script`, `<html`, `<iframe`,
+   `<!--`, `<?xml`, `%PDF-` and the rest. It is exposed for the same reason the three above are, and it has the
+   same two callers §7.1 does not: a component asking whether a body IS MARKUP regardless of what its server
+   called it. Both of them (corb.c's confirmation sniff, resource_kind.c's mislabelled-document rule) reached
+   this table through `mime_sniff_compute(out, NULL, false, …)` — a whole §7 run whose only purpose was to fall
+   through to step 2 and then to this one table — and then threw away every other answer it can give. Naming the
+   table is what that call was spelling.
+   THE ANSWER IS THE ROW'S TYPE, which is `text/html` for every markup row, `text/xml` for `<?xml` and
+   `application/pdf` for `%PDF-`; a caller that only counts markup as evidence tests for the first two, which is
+   a test it can write because the answers are the standard's and not this file's. NULL is the algorithm's
+   "return undefined". */
+const char *mime_sniff_scriptable_pattern(const unsigned char *header, size_t header_n);
 
 #endif

@@ -29,14 +29,22 @@
  * boundary does not have. The `hello` stays, because it answers a different one: a worker script that LOADED is
  * not a module that INSTANTIATED, and the trusted side must not send a call into a program that does not exist.
  *
- * A NAMED OPERATION, NOT `{op:"call", fn, ret, args, bodies}`. The renderer's record is a generic `M.ccall`
+ * NAMED OPERATIONS, NOT `{op:"call", fn, ret, args, bodies}`. The renderer's record is a generic `M.ccall`
  * relay because bridge.js drives nineteen ABI entries of varying shapes and the transport must carry all of
- * them without knowing any; here there is ONE operation, and its arguments are TYPED FACTS — a nullable
- * `Content-Type` value, two browser-stated booleans, a byte sequence. A generic `args:[{t:"cstr",v:…}]` list
- * would flatten exactly the distinctions this boundary has to assert (null is §5.1's undefined supplied type
- * and not `""`; `sameOrigin` is a browser statement and not a string) and would put every DCHECK below out of
- * reach of the thing it is about. The shape follows the number of operations, not the other way round: a
- * second one arrives as a second `op` with its own named fields and its own asserts.
+ * them without knowing any; here the operations are few and their arguments are TYPED FACTS — a nullable
+ * `Content-Type` value, a nullable `X-Content-Type-Options` value, a browser-stated boolean, a byte sequence.
+ * A generic `args:[{t:"cstr",v:…}]` list would flatten exactly the distinctions this boundary has to assert
+ * (null is §5.1's undefined supplied type and not `""`; `sameOrigin` is a browser statement and not a string)
+ * and would put every DCHECK below out of reach of the thing it is about. That paragraph said "here there is
+ * ONE operation" and ended "a second one arrives as a second `op` with its own named fields and its own
+ * asserts", which is exactly what `classify` is: the same three facts about a response, asked a different
+ * question — what a body IS FOR rather than whether a code loader may have it.
+ *
+ * BOTH TAKE THE HEADER VALUE AND NEITHER TAKES THE FLAG. `noSniff` used to cross as a boolean, which put
+ * Fetch's determine-nosniff in `lib/safe-fetch.js` as `_cto.toLowerCase().indexOf("nosniff") >= 0` — a
+ * substring test where the standard splits the header and matches its FIRST value. A second op needing the
+ * same fact would have been a second copy of that, so the derivation moved to where the other algorithms are
+ * (browser_process/network/nosniff.c) and what crosses is the header this zone READ.
  */
 import "./check.js";
 import createBrowserProcess from "./lib/bproc/bproc.mjs";
@@ -72,31 +80,62 @@ function withHeader(bytes, fn) {
   try { return fn(p, bytes.length); } finally { M._free(p); }
 }
 
-/* THE ONE OPERATION. `contentType` is `string | null` and null is §5.1's "the supplied MIME type is undefined"
-   — a POSITIVE statement that the response carried no such header, never an empty string standing in for one.
-   `sameOrigin` is the trusted zone's comparison of the browser-stated page origin with the response's, which
-   SECURITY.md keeps on that side and this program therefore never re-derives. */
-function opCorb(m) {
+/* THE HEADER FACTS EVERY OPERATION TAKES, asserted ONCE because they are one record's fields and not one
+   operation's arguments. Each is `string | null`, and null is a POSITIVE statement that the response carried
+   no such header — §5.1's "the supplied MIME type is undefined" for the first, Fetch's "values is null" for
+   the second — never an empty string standing in for one, which is a value a server can actually send. */
+function checkHeaderFacts(m, what) {
   DCHECK(m.contentType === null || typeof m.contentType === "string",
-         "a CORB call arrived with a Content-Type that is neither a string nor null — §5.1 distinguishes an " +
-         "ABSENT supplied type from a present one, so an absent header says so with null and never with \"\"");
-  DCHECK(typeof m.noSniff === "boolean" && typeof m.sameOrigin === "boolean",
-         "a CORB call arrived without both of its browser-stated flags — `noSniff` is the response's " +
-         "X-Content-Type-Options and `sameOrigin` is the principal comparison, and neither has a default this " +
-         "program may invent");
+         "a " + what + " call arrived with a Content-Type that is neither a string nor null — §5.1 " +
+         "distinguishes an ABSENT supplied type from a present one, so an absent header says so with null " +
+         "and never with \"\"");
+  DCHECK(m.xContentTypeOptions === null || typeof m.xContentTypeOptions === "string",
+         "a " + what + " call arrived with an X-Content-Type-Options that is neither a string nor null — " +
+         "this boundary carries the header VALUE so that Fetch's determine-nosniff runs beside the other " +
+         "algorithms, and an absent header is null exactly as an absent Content-Type is");
   DCHECK(m.header instanceof Uint8Array,
-         "a CORB call arrived without its resource header as BYTES — the whole reason this decision is made " +
-         "here is that it reads the body, and anything but a byte sequence is a zone that ran a decode");
+         "a " + what + " call arrived without its resource header as BYTES — the whole reason this decision " +
+         "is made here is that it reads the body, and anything but a byte sequence is a zone that ran a decode");
+}
+
+/* ONE `JSON.parse` OF ONE DOCUMENT per answer, which is the discipline CLAUDE.md §Architecture blesses for
+   `@RESULT`: the record is built where the decision is taken, so no consumer re-derives a field from another. */
+
+/* CORB. `sameOrigin` is the trusted zone's comparison of the browser-stated page origin with the response's,
+   which SECURITY.md keeps on that side and this program therefore never re-derives. */
+function opCorb(m) {
+  checkHeaderFacts(m, "CORB");
+  DCHECK(typeof m.sameOrigin === "boolean",
+         "a CORB call arrived without its browser-stated principal comparison — `sameOrigin` is a fact the " +
+         "trusted zone MADE, and it has no default this program may invent");
   const json = withHeader(m.header, (p, n) =>
-    M.ccall("bp_corb_check", "string", ["string", "number", "number", "number", "number"],
-            [m.contentType, m.noSniff ? 1 : 0, m.sameOrigin ? 1 : 0, p, n]));
-  /* ONE `JSON.parse` OF ONE DOCUMENT, which is the discipline CLAUDE.md §Architecture blesses for `@RESULT`:
-     the record is built where the decision is taken, so no consumer re-derives a field from another. */
+    M.ccall("bp_corb_check", "string", ["string", "string", "number", "number", "number"],
+            [m.contentType, m.xContentTypeOptions, m.sameOrigin ? 1 : 0, p, n]));
   const r = JSON.parse(json);
   DCHECK(r && typeof r.allow === "boolean" && typeof r.computed === "string" && typeof r.reason === "string",
          "the browser process's CORB entry answered a record missing one of its three fields — the verdict, " +
          "§7's computed essence and the rule that decided are written together by corb.c and a missing one is " +
          "a producer that stopped writing it rather than a value with a default");
+  return r;
+}
+
+/* WHAT THE RESOURCE IS FOR — asset or API data. `opaque` is Fetch §2.2.6: the response is an opaque filtered
+   response, whose body is null and whose header list is empty, which is a fact about the Response OBJECT and
+   therefore one only the zone holding it can state. */
+function opClassify(m) {
+  checkHeaderFacts(m, "classify");
+  DCHECK(typeof m.opaque === "boolean",
+         "a classify call arrived without Fetch §2.2.6's filtered-response fact — `opaque` says the body " +
+         "could not be read at all, which no amount of looking at the bytes this program was given can tell " +
+         "it apart from a body that was read and found empty");
+  const json = withHeader(m.header, (p, n) =>
+    M.ccall("bp_classify", "string", ["string", "string", "number", "number", "number"],
+            [m.contentType, m.xContentTypeOptions, m.opaque ? 1 : 0, p, n]));
+  const r = JSON.parse(json);
+  DCHECK(r && typeof r.asset === "boolean" && typeof r.reason === "string",
+         "the browser process's classify entry answered a record missing one of its two fields — the verdict " +
+         "and the rule that decided are written together by resource_kind.c, so a missing one is a producer " +
+         "that stopped writing it rather than a value with a default");
   return r;
 }
 
@@ -106,13 +145,19 @@ function serve(m) {
     DCHECK(m && m.v === 1 && typeof m.id === "number" && typeof m.op === "string",
            "a record on the browser-process port is not this transport's — it carries a version, a call id " +
            "and an op");
-    if (m.op !== "corb") {
+    /* ROUTING, and the distinction CLAUDE.md §C-stack draws is worth naming because the shape looks alike:
+       this picks WHICH ONE implementation runs and CRASHES on a name it cannot answer for, and there is no
+       second implementation anywhere for it to fall back to. Deleting `opClassify` would not leave this switch
+       still needed — it would leave it with one arm — which is the test that says routing rather than gate. */
+    if (m.op === "corb") {
+      rec = { v: 1, id: m.id, ok: true, ret: opCorb(m), out: drain() };
+    } else if (m.op === "classify") {
+      rec = { v: 1, id: m.id, ok: true, ret: opClassify(m), out: drain() };
+    } else {
       DFAIL("the offscreen asked the browser process for an op it does not serve: `" + m.op + "`");
       /* RELEASE PATH UNDER THE ASSERT, and it REACHES the caller. Saying nothing would park the offscreen on
          an answer that is never coming, which is the one outcome with no symptom anywhere. */
       rec = { v: 1, id: m.id, ok: false, err: "unserved browser-process op: " + m.op, out: drain() };
-    } else {
-      rec = { v: 1, id: m.id, ok: true, ret: opCorb(m), out: drain() };
     }
   } catch (e) {
     /* EVERY FAILURE IN HERE IS THIS PROGRAM'S — a WASM abort (its own CHECK/DCHECK reaching abort()), or one of

@@ -4,6 +4,33 @@
 // (one problem per file); loaded before it, resolves callers (learnFromResponse, extractKeysFromText,
 // protobuf/discovery libs) at call-time. The Protocol Reverse-Engineering feature, just relocated.
 
+/* MIME Sniffing §5.2's RESOURCE HEADER, out of a captured body — the first bytes, AS BYTES.
+ *
+ * WHY A PREFIX IS TAKEN HERE AS WELL AS AT THE BOUNDARY. browser-process-host.js slices to exactly 1445, which
+ * is the standard's number and the truncation that matters; this slices FIRST so that the thing being sliced is
+ * not a multi-megabyte bundle. Same split as that file's own comment describes between itself and the worker:
+ * the sender keeps the clone small, the receiver states the exact bound. The generosity is deliberate and each
+ * arm is a different unit — a base64 quantum decodes to three bytes, a UTF-8 character encodes to at least one
+ * — so both prefixes are guaranteed to cover 1445 bytes whenever the body has that many.
+ *
+ * AND THE TEXT ARM ENCODES RATHER THAN MASKING. What it replaces did `charCodeAt(i) & 0xff` over the first 64
+ * characters, which is not an encoding of anything: it silently truncated every non-Latin-1 code unit to a
+ * different byte, so a body whose first characters were not ASCII was sniffed as bytes it never contained. The
+ * capture arrived as a UTF-8 DECODE of the response, so a UTF-8 encode is the round trip back to what the
+ * server sent. */
+const _RK_TEXT_CHARS = 1445;      /* ≥ 1445 bytes: every character encodes to at least one */
+const _RK_BASE64_CHARS = 1948;    /* a multiple of 4, decoding to 1461 bytes; no padding inside a whole group */
+
+function _responseHeaderBytes(msg) {
+  if (msg.body == null || msg.body === "") return new Uint8Array(0);
+  DCHECK(typeof msg.body === "string",
+         "a captured response body is not a string — intercept.js emits either the text of the response or " +
+         "its base64, and both are strings, so anything else is a producer whose bytes this function would " +
+         "read as characters");
+  if (msg.base64Encoded) return base64ToUint8(msg.body.slice(0, _RK_BASE64_CHARS));
+  return new TextEncoder().encode(msg.body.slice(0, _RK_TEXT_CHARS));
+}
+
 async function handleResponseBody(tabId, msg, frameId, documentId) {
   if (!msg.url) return;
   await _globalStoreReady;
@@ -241,7 +268,7 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   if (url.hash.includes("_uasr_send")) return;
   if (url.hash.includes("_internal_probe")) return;
 
-  // Static-asset filtering is now CONTENT-based (see classifyResponseAsset
+  // Static-asset filtering is CONTENT-based (the browser-process classification
   // below). URL extensions do not decide API-vs-asset here — an API endpoint
   // at /users/42/avatar.png that returns JSON metadata is still an API, and
   // a dynamic endpoint like /models/duck.glb returning a binary 3D model is
@@ -253,6 +280,54 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
 
   // Skip internal probe requests
   if (url.searchParams.has("_probe")) return;
+
+  /* WHAT THIS RESPONSE IS, ASKED OF THE BROWSER PROCESS — and asked HERE, above everything this function
+     mutates, because it is the only `await` in the body and its position is the ordering contract.
+     THE CONTRACT IT KEEPS. From `_docForLearning` below to the last `notifyPopup`, this function runs
+     SYNCHRONOUSLY: it captures a DocData by reference, mutates it, calls learnFromRequest (which looks the
+     SAME document up again by id), pushes the log entry and merges — and none of that is safe across a
+     suspension. `_evictReviewedDoc` deletes a document from `state.docs` when its analysis finalizes, so a
+     suspension in the middle would leave this invocation holding the evicted DocData while learnFromRequest's
+     own lookup returned the transient globalStore-only view: one response written into two different records,
+     with nothing to say so. The log's ORDER is the same property from the other side — `_pushGlobalLog` runs
+     after the classification, and two captures suspending in the middle would push in whichever order the
+     worker replied.
+     So the await goes where the function still holds NOTHING. Everything it needs is a pure function of `msg`,
+     which is what made hoisting possible rather than a rewrite; what remains after this line is exactly as
+     atomic as it was before the browser process existed.
+     WHY THE OFFSCREEN NO LONGER ANSWERS THIS ITSELF. `classifyResponseAsset` in lib/discovery.js was a
+     hand-rolled magic-byte table beside WHATWG MIME Sniffing §6/§7 plus sniffs for SVG, CSS, WebVTT, HLS and
+     DASH that no standard has — a second source of type checking, which is precisely what the ruling this
+     move implements forbids. All three of its functions are deleted; the algorithm is
+     engine/host/browser_process/network/resource_kind.c. */
+  CHECK(typeof self.browserProcessClassify === "function",
+        "a captured response reached the classifier with no browser process to answer it — " +
+        "extension/browser-process-host.js installs self.browserProcessClassify in this document and " +
+        "ast-worker.html loads it before this file, so its absence is a load order or a policy that refused " +
+        "the Worker, and every reply would otherwise be learned as an API with no one having read its bytes");
+  DCHECK(msg.responseHeaders && typeof msg.responseHeaders === "object",
+         "an HTTP capture reached the classifier with no response header map — intercept.js builds one from " +
+         "the Response's own headers on both the fetch and the XHR path and content.js relays it whole, so a " +
+         "missing map is a producer that stopped sending it and would be read as a response that declared " +
+         "nothing");
+  const _rkCt = msg.responseHeaders["content-type"];
+  const _rkCto = msg.responseHeaders["x-content-type-options"];
+  DCHECK((_rkCt === undefined || typeof _rkCt === "string") &&
+         (_rkCto === undefined || typeof _rkCto === "string"),
+         "a relayed response header value is not a string — both intercept.js paths build the map out of the " +
+         "browser's own header iteration, whose values are strings, so anything else is a map some other " +
+         "producer assembled and every rule downstream would be deciding about the wrong thing");
+  const _assetClass = await self.browserProcessClassify(
+    _rkCt === undefined ? null : _rkCt,
+    _rkCto === undefined ? null : _rkCto,
+    /* Fetch §2.2.6: an OPAQUE (or opaque-redirect) filtered response has a null body and an empty header list,
+       so there is nothing in it to learn and nothing for a sniff to read. Only this side can state it — the
+       far side would see an empty body and could not tell it from a body that was read and found empty.
+       XHR CANNOT PRODUCE ONE, which is why an absent field is a positive `false` here and not a hole: XHR's
+       own spec fails a cross-origin response that CORS did not allow rather than handing back an opaque one,
+       so its emit carries no response type because the concept does not apply to it. */
+    msg.responseType === "opaque" || msg.responseType === "opaqueredirect",
+    _responseHeaderBytes(msg));
 
   const tab = _docForLearning(documentId);
   let service = extractInterfaceName(url);
@@ -348,8 +423,8 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     if (textBody) extractKeysFromText(documentId, textBody, msg.url, "response_body");
   }
 
-  // Classify the captured response purely by magic bytes (no URL extension,
-  // no content-type). Three buckets result:
+  // The classification computed at the top of this function decides how much schema
+  // to synthesize around the capture. Three buckets result:
   //   structured API → full learning (schema, methods, discovery probe)
   //   image API     → learn URL + request body + auth; skip response schema;
   //                    create method entry (user can inspect/replay)
@@ -365,10 +440,6 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   // Nothing is ever hidden from the log — every request, including boring
   // CDN fetches, is captured and surfaced to the user. The bucket only
   // decides how much schema to synthesize around it.
-  const _assetClass = classifyResponseAsset(msg.body, msg.base64Encoded, {
-    responseType: msg.responseType || null,
-    responseContentType: (msg.responseHeaders && (msg.responseHeaders["content-type"] || msg.responseHeaders["Content-Type"])) || null,
-  });
   /* `entry._assetKind`, `entry._assetLabel` and `entry._boring` USED TO BE WRITTEN HERE AND WERE READ BY
      NOTHING — not by this file, not by learn.js, not by serialize.js, and not by the popup, which receives
      every log entry whole and rendered neither of them. Three fields written on every captured response for
@@ -377,7 +448,16 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
      that is READ somewhere and WRITTEN nowhere is a broken contract" — and this is the same contract broken
      from the other end: a producer nobody consumes reads as a capability the surface has. The two locals below
      are the live half; they gate every learning call in this function. */
-  const _isAsset = _assetClass.kind === "asset";
+  const _isAsset = _assetClass.asset;
+  /* AND THE LOG ENTRY CARRIES THE RULE, because it HAS a reader and the comment above got that half wrong.
+     `_assetKind`/`_assetLabel`/`_boring` were deleted here as written-for-nobody, and two of them were —
+     but `testing/harness.js`'s `netdiff --unused` diagnostic tested `r._assetKind === "asset"` to tell a
+     static asset apart from an endpoint the analyzer missed, so the delete left a reader with no writer and
+     the diagnostic silently fell through to a hand-rolled content-type table of its own. ONE field replaces
+     all three and carries both halves: non-null IS the verdict, and the string is the rule that produced it.
+     There is no `_boring` beside it — that one really was read by nothing, and it is derived below from
+     facts the entry already carries. */
+  entry._assetReason = _isAsset ? _assetClass.reason : null;
   const _isBoringFetch = _isAsset &&
     msg.method === "GET" &&
     !url.search &&
@@ -485,7 +565,12 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
       const _methods = tab.discoveryDocs.get(service)?.doc?.resources?.learned?.methods;
       if (_methods && _methods[_methodName]) {
         _methods[_methodName]._responseKind = "asset";
-        _methods[_methodName]._responseLabel = _assetClass.label;
+        /* THE RULE THAT DECIDED is the label, and it is the whole of what the browser process answers besides
+           the verdict. It used to be a MIME-ish string the JS classifier assembled — a sniffed type with an
+           occasional " (declared …)" note glued on — and the popup's reader still cuts it at a semicolon that
+           a rule name never has. A rule name is what a human wants there anyway: `font` and `script` say what
+           the body is, and `sniffed-image/png` says the server was wrong about it. */
+        _methods[_methodName]._responseLabel = _assetClass.reason;
       }
     }
   }

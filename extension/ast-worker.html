@@ -23,9 +23,10 @@
 <script src="lib/chains.js"></script>
 <!-- THE BROWSER PROCESS's trusted side: provisions extension/browser-process.js as a dedicated module Worker
      (its own realm, its own WASM instance, its own thread — no HEAPU8 shared with this document) and relays
-     the CORB/§7 decision to it. Loaded BEFORE safe-fetch.js, which is its one shipped caller. `worker-src
-     'self'` in this document's own policy above is what lets the Worker exist at all: policies COMBINE, so
-     the manifest's grant is not enough on its own. -->
+     the decisions §7 backs to it — CORB for a script load, and what a captured reply IS FOR. Loaded BEFORE
+     both of its shipped callers, safe-fetch.js and lib/response-decode.js. `worker-src 'self'` in this
+     document's own policy above is what lets the Worker exist at all: policies COMBINE, so the manifest's
+     grant is not enough on its own. -->
 <script src="browser-process-host.js"></script>
 <!-- THE single external-fetch function (GET only, no cookies, http(s) only). -->
 

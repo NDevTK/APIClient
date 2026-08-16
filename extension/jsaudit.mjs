@@ -99,10 +99,14 @@ const LEDGER = [
          "browser-stated boolean crosses; no URL and no principal ever do." },
   { f: "browser-process.js", zone: "BRIDGE:5",
     why: "THE BROWSER PROCESS's own bootstrap, and the whole of the JS inside that boundary: instantiate the " +
-         "module, place a resource header in ITS linear memory, call one entry, post the record back. It is " +
-         "the same role renderer.html's bootstrap plays for a renderer and it is measured the same way — a " +
-         "line here that decided anything about a response would be the logic this move exists to delete, " +
-         "since the point of a network service is that the algorithm is the standard's and not a zone's." },
+         "module, place a resource header in ITS linear memory, call the named entry, post the record back. " +
+         "It is the same role renderer.html's bootstrap plays for a renderer and it is measured the same way " +
+         "— a line here that decided anything about a response would be the logic this move exists to delete, " +
+         "since the point of a network service is that the algorithm is the standard's and not a zone's. THE " +
+         "MEASUREMENT MOVED ONCE, in the right direction: `noSniff` used to arrive as a boolean, which meant " +
+         "Fetch's determine-nosniff was being computed in lib/safe-fetch.js as a substring test. Both entries " +
+         "now take the HEADER VALUE and network/nosniff.c decides what it means, so this file relays two " +
+         "header values, two browser-stated facts and a byte sequence, and interprets none of them." },
   { f: "lib/safe-fetch.js", zone: "BRIDGE:1",
     why: "THE network chokepoint. SOP/CORS/PNA/CORB/GET-only cannot live inside the untrusted WASM — " +
          "SECURITY.md §Network. THIS ROW WAS FALSE UNTIL THE BODY BECAME BYTES: the file ended in " +
@@ -145,25 +149,26 @@ const LEDGER = [
   { f: "lib/popup-console.js", zone: "BRIDGE:4", why: "WS/postMessage console." },
 
   // ── LOGIC / MIXED — the queue ────────────────────────────────────────────────────────────────────────
-  { f: "lib/discovery.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c + moat.c",
-    why: "TWO COMPONENTS LEFT and they belong to two different steps, which is why this row is no longer " +
-         "step 1: the RSC parser was the third and is GONE (React Flight is read in the engine at " +
-         "engine_provide; `looksLikeRSC` was a body-shape guess §RUN, DON'T MATCH forbids and did not move). " +
-         "What is left is classifyResponseAsset — whose `_isAsset`/`_isBoringFetch` gate every learning call " +
-         "in lib/response-decode.js, so it moves WITH that file, here at step 2 — and the Send panel's schema " +
-         "resolution (findDiscoveryMethod/findMethodById/resolveDiscoverySchema), whose consumers are " +
-         "lib/send.js and the popup, so it leaves at step 7. Neither could go earlier: this ledger's own rule " +
-         "is that a producer whose consumers still live in JS is not first, and there is no host→engine " +
-         "COMPUTE edge for a JS caller to reach a moved callee through — the engine is the driver and adding " +
-         "one would be the orchestration layer inverted. The ALGORITHMS are already in C: the magic-byte " +
-         "classifier's standard is browser_process/network/mime_sniff.c (WHATWG MIME Sniffing §6/§7, which " +
-         "also deletes the JS's invented SVG/CSS/VTT/HLS/DASH sniffs), and a discovery document's schema " +
-         "graph is read by engine/host/solver/discovery.c. THE STANDARD BEING IN C IS NOT THIS FILE'S COPY " +
-         "BEING GONE, and the distinction is the reason this row still exists: §7 now runs in the BROWSER " +
-         "PROCESS, whose one shipped entry answers a CORB verdict for a script load, and `classifyResponseAsset` " +
-         "asks a different question (is this reply a static asset to skip) on behalf of a JS caller in " +
-         "lib/response-decode.js. Deleting it would remove a live caller's only implementation to make this " +
-         "row shorter." },
+  { f: "lib/discovery.js", zone: "LOGIC", step: 7, dest: "engine/host/solver/moat.c",
+    why: "ONE COMPONENT LEFT, and it belongs to step 7, which is why this row is no longer step 2: the Send " +
+         "panel's schema resolution (findDiscoveryMethod/findMethodById/resolveDiscoverySchema), whose " +
+         "consumers are lib/send.js and the popup. It is LOGIC and not a bridge because it is an ALGORITHM " +
+         "over a discovery document's schema graph — walk `$ref`, flatten a method's parameter list, resolve " +
+         "a request body's type — over state the moat owns, and the engine already reads that same graph in " +
+         "solver/discovery.c. It cannot go earlier for this ledger's own rule: a producer whose consumers " +
+         "still live in JS is not first, and there is no host→engine COMPUTE edge for a JS caller to reach a " +
+         "moved callee through, because the engine is the DRIVER and adding one would be the orchestration " +
+         "layer inverted. THE OTHER TWO COMPONENTS ARE GONE, and the second one is the reason that sentence " +
+         "needs its qualifier. The RSC parser went to the engine at engine_provide (`looksLikeRSC` was a " +
+         "body-shape guess §RUN, DON'T MATCH forbids and did not move). classifyResponseAsset — a hand-rolled " +
+         "magic-byte table beside WHATWG MIME Sniffing §6, a two-row markup test beside §7.1's nineteen, and " +
+         "SVG/CSS/WebVTT/HLS/DASH sniffs no standard has — went to the BROWSER PROCESS " +
+         "(browser_process/network/resource_kind.c), and the version of this row that kept it said it could " +
+         "not, for the compute-edge reason above. That reason is about the ENGINE and does not reach this " +
+         "destination: the browser process is a program the TRUSTED ZONE CALLS over a postMessage the " +
+         "offscreen already owns, so lib/response-decode.js awaits it and no edge is inverted. The ruling it " +
+         "was standing against is one sentence — type checking is safeFetch's job and safeFetch is the only " +
+         "source of sniffing — and a second implementation in this file was what that forbids." },
   { f: "lib/protobuf.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
     why: "a wire CODEC. §A JS-engine encoding builtin is modeled FAITHFULLY — the engine runs the real codec; a second one in JS is the redundant layer." },
   { f: "lib/protocol-parsers.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",

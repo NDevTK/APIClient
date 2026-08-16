@@ -41,8 +41,13 @@ const char *mime_type_parameter(const MimeType *m, const char *name);
    (browser_process/network/mime_sniff.c — a different PROGRAM, which is why this record is a pure value type
    over strings with no dependency outside the C library); solver/reply_decode.c
    tests image, audio-or-video, font, ZIP-based and archive over the SUPPLIED type to decide whether a reply
-   body has any structure to learn from. The JSON and JavaScript groups are still ABSENT
-   — nothing branches on them yet. */
+   body has any structure to learn from. The JSON group is still ABSENT — nothing branches on it yet.
+   THE JAVASCRIPT GROUP ARRIVED WITH ITS SECOND CALLER, which is this comment's own rule for when a group is
+   written: browser_process/network/corb.c had a private copy (a `const char *` essence against a hand-written
+   list), and resource_kind.c needs the same question answered to tell a SCRIPT from the API data some servers
+   ship under a JavaScript type. Two copies of one group is the pair that can disagree about one response, and
+   corb.c's had in fact already drifted from §4.6 in both directions — it carried `application/node`, which is
+   not in the group, and lacked `text/livescript`, which is. */
 bool mime_type_is_html(const MimeType *m);
 bool mime_type_is_xml(const MimeType *m);
 bool mime_type_is_image(const MimeType *m);
@@ -50,6 +55,7 @@ bool mime_type_is_audio_or_video(const MimeType *m);
 bool mime_type_is_font(const MimeType *m);
 bool mime_type_is_zip_based(const MimeType *m);
 bool mime_type_is_archive(const MimeType *m);
+bool mime_type_is_javascript(const MimeType *m);
 
 /* Fetch §2.2.3 "extract a MIME type", over the `Content-Type` value as "get a header" has already joined the
    list's duplicates (0x2C 0x20 between them) — which is exactly the string Fetch §2.2's "get, decode, and

@@ -38,12 +38,13 @@ const DUMP_TAB = `
       _source: r._source || null,
       methodId: r.methodId || null,
       format: r.format || (r.body && r.body.format) || null,
-      // Content-based asset classification, set by classifyResponseAsset
-      // in lib/discovery.js. Binary media still appear in the log but skip
-      // response-body schema extraction.
-      _assetKind: r._assetKind || null,
-      _assetLabel: r._assetLabel || null,
-      _boring: !!r._boring,
+      // Content-based asset classification — the RULE that decided, stamped by
+      // response-decode.js from the browser process's answer
+      // (engine/host/browser_process/network/resource_kind.c). Non-null means the
+      // body is a static asset: it still appears in the log, but no response-body
+      // schema is extracted from it. _assetKind / _assetLabel / _boring stood here
+      // and named classifyResponseAsset in lib/discovery.js, which is deleted.
+      _assetReason: r._assetReason || null,
       // WS / postMessage / MessageChannel frames live here:
       messages: r.messages || null,
       channelId: r.channelId || null,

@@ -5,36 +5,27 @@
 
 #include "check.h"
 #include "network/corb.h"
+#include "network/json_sniff.h"
 #include "network/mime_sniff.h"
 
-/* ── the two type sets, as ESSENCES ─────────────────────────────────────────────────────────────────────────
+/* ── the protected type set, as ESSENCES ────────────────────────────────────────────────────────────────────
  *
- * Both are compared against a §4.2 essence, which §4.4's parser has already ASCII-lowercased, so there is no
- * case folding here and no `;`-splitting either: the record was parsed, not cut at the first semicolon. That is
- * the difference from the JS these replace, which did `String(mime||"").split(";")[0].trim().toLowerCase()` on
- * a raw header value and therefore disagreed with the parser about `text/html;charset="a;b"`. */
+ * It is compared against a §4.2 essence, which §4.4's parser has already ASCII-lowercased, so there is no case
+ * folding here and no `;`-splitting either: the record was parsed, not cut at the first semicolon. That is the
+ * difference from the JS this replaces, which did `String(mime||"").split(";")[0].trim().toLowerCase()` on a
+ * raw header value and therefore disagreed with the parser about `text/html;charset="a;b"`.
+ *
+ * THE JAVASCRIPT SET LEFT THIS FILE. It stood here as Chromium's `IsJavaScriptMimeType`, and the moment a
+ * second component needed the same answer (resource_kind.c, telling a script from API data) a private copy
+ * became the pair that can disagree about one response. It is §4.6's JavaScript MIME type group and it is now
+ * `mime_type_is_javascript`, beside the other groups, asked of the RECORD rather than of a string — which also
+ * closed the two ways this copy had drifted from the group it was quoting: it carried `application/node`, which
+ * is in no version of the list, and it lacked `text/livescript`, which is in every one. */
 
 static bool suffix_is(const char *e, const char *suf)
 {
     size_t n = strlen(e), m = strlen(suf);
     return n >= m && !strcmp(e + n - m, suf);
-}
-
-/* Chromium's `IsJavaScriptMimeType`, which is HTML's "JavaScript MIME type" list. */
-static bool essence_is_javascript(const char *e)
-{
-    static const char *const JS[] = {
-        "application/ecmascript", "application/javascript", "application/x-ecmascript",
-        "application/x-javascript", "text/ecmascript", "text/javascript", "text/jscript",
-        "text/x-ecmascript", "text/x-javascript", "application/node",
-    };
-    size_t i;
-    for (i = 0; i < sizeof JS / sizeof *JS; i++)
-        if (!strcmp(e, JS[i])) return true;
-    /* HTML's legacy `text/javascript1.0` … `text/javascript1.5`, written as the range it is rather than as the
-       regex the JS carried — a range test cannot accidentally match `text/javascript1.5x`. */
-    if (!strncmp(e, "text/javascript1.", 17) && e[17] >= '0' && e[17] <= '5' && e[18] == 0) return true;
-    return false;
 }
 
 /* The CORB-PROTECTED types: what a cross-origin load must never deliver to a code loader. Chromium's analyzer
@@ -54,77 +45,34 @@ static bool essence_is_protected(const char *e)
  * so sniffing can never upgrade a resource INTO a scriptable type, and the symmetric refusal is that it never
  * downgrades one out. So the declared type decides the first two rules and the bytes decide the last. */
 
-/* MARKUP, through MIME Sniffing §7.1's own scriptable table. Passing a NULL supplied type is §5.1's "the
-   supplied MIME type is undefined", which sends §7 to step 2 and §7.1 to the table whose rows are `<!doctype
-   html`, `<script`, `<html`, `<iframe`, `<!--`, `<?xml` and the rest — the same signature list Chromium's
-   `SniffForHTML` carries a hand-written copy of. `no_sniff` is false here on purpose: the caller has already
-   applied the nosniff rule as its own step, and this call is asking what the BYTES are, which is a question
-   the response's own headers do not get a vote on. */
+/* MARKUP, through MIME Sniffing §7.1's own scriptable table — the rows `<!doctype html`, `<script`, `<html`,
+   `<iframe`, `<!--`, `<?xml` and the rest, which is the same signature list Chromium's `SniffForHTML` carries a
+   hand-written copy of.
+   IT ASKS FOR THE TABLE BY NAME NOW. What stood here ran a whole `mime_sniff_compute(&m, NULL, false, …)` — a
+   §7 pass whose NULL supplied type existed only to reach step 2, whose `no_sniff` was false only to reach the
+   scriptable branch, and whose every other answer was then thrown away. That is six steps of an algorithm
+   nobody was asking, spelling one table; mime_sniff.h exposes the table, and resource_kind.c reaching for the
+   same one is what made the difference matter.
+   ONLY MARKUP COUNTS AS A CONFIRMATION, unchanged. The table also answers `application/pdf`, and §7.1 around it
+   answers image/*, the archive types and (as its last two steps) text/plain or application/octet-stream — none
+   of which is evidence that a body declared as script is a DOCUMENT, and treating a fallback answer as a
+   confirmation would block every plain-text chunk in existence. */
 static const char *sniff_markup(const unsigned char *header, size_t header_n)
 {
-    MimeType m;
-    char *essence;
-    const char *hit = NULL;
+    const char *m = mime_sniff_scriptable_pattern(header, header_n);
 
-    mime_sniff_compute(&m, NULL, false, header, header_n);
-    essence = mime_type_essence(&m);
-    CHECK(essence, "corb: OOM reading the sniffed essence");
-    /* Only markup counts as a confirmation. §7.1 also answers image/*, application/pdf, the archive types and
-       (as its last two steps) text/plain or application/octet-stream — none of which is evidence that a body
-       declared as script is a document, and treating a fallback answer as a confirmation would block every
-       plain-text chunk in existence. */
-    if (!strcmp(essence, "text/html")) hit = "text/html";
-    else if (!strcmp(essence, "text/xml")) hit = "text/xml";
-    free(essence);
-    mime_type_free(&m);
-    return hit;
+    if (!m) return NULL;
+    if (!strcmp(m, "text/html") || !strcmp(m, "text/xml")) return m;
+    return NULL;
 }
 
-/* §7 has no JSON row — JSON is not in the standard's tables at all — so this one is Chromium's
-   `CrossOriginReadBlocking::SniffForJSON` and nothing else: an opening brace, then a double-quoted string, then
-   a colon, with ASCII whitespace and JS comments skipped outside the string literal.
-   IT DELIBERATELY DOES NOT SNIFF AN ARRAY, and that is Chromium's position rather than an omission: a
-   top-level `[1,2,3]` IS a valid JavaScript expression, so it is not evidence that the server mislabelled
-   anything, while a top-level `{"a":` is a syntax error as a JS statement and therefore is. The JS this
-   replaces ran `JSON.parse` over the whole body and blocked on either, which also meant a multi-megabyte
-   bundle was decoded and parsed to answer a question its first byte settles. */
-static bool sniff_json(const unsigned char *d, size_t n)
-{
-    enum { START, LEFT_BRACE, IN_STRING, ESCAPE, RIGHT_QUOTE } state = START;
-    size_t i = 0;
-
-    while (i < n) {
-        unsigned char c = d[i];
-        if (state != IN_STRING && state != ESCAPE) {
-            if (c == 0x09 || c == 0x0A || c == 0x0B || c == 0x0C || c == 0x0D || c == 0x20) { i++; continue; }
-            /* Chromium's `AdvancePastComments`, in both of JavaScript's comment forms. An unterminated comment
-               consumes the rest of the header, which ends the loop as "ran out of data" below. */
-            if (c == '/' && i + 1 < n && d[i + 1] == '/') {
-                i += 2;
-                while (i < n && d[i] != 0x0A) i++;
-                continue;
-            }
-            if (c == '/' && i + 1 < n && d[i + 1] == '*') {
-                i += 2;
-                while (i + 1 < n && !(d[i] == '*' && d[i + 1] == '/')) i++;
-                i = (i + 1 < n) ? i + 2 : n;
-                continue;
-            }
-        }
-        switch (state) {
-        case START:       if (c != '{') return false; state = LEFT_BRACE; break;
-        case LEFT_BRACE:  if (c != '"') return false; state = IN_STRING; break;
-        case IN_STRING:   if (c == '"') state = RIGHT_QUOTE; else if (c == '\\') state = ESCAPE; break;
-        case ESCAPE:      state = IN_STRING; break;
-        case RIGHT_QUOTE: return c == ':';
-        }
-        i++;
-    }
-    /* Chromium's third answer is `kMaybe` — the sniff ran out of data before deciding — and for a response
-       whose bytes are all here that is a NO. This caller always holds the whole resource header, so there is
-       no more data coming and nothing to wait for. */
-    return false;
-}
+/* JSON is not in MIME Sniffing's tables at all, so §7 cannot be asked and the sniff is Chromium's
+   `CrossOriginReadBlocking::SniffForJSON`. IT WAS STATIC HERE AND IS NOW `network/json_sniff.c`, for the reason
+   this file's own JavaScript list moved: resource_kind.c needs the identical answer about the identical bytes —
+   a body under a JavaScript MIME type that opens a JSON object is API data, not a script — and two static
+   copies of one algorithm is the pair that can disagree about one response. The JS this replaced ran
+   `JSON.parse` over the WHOLE body and blocked on either shape, which also meant a multi-megabyte bundle was
+   decoded and parsed to answer a question its first byte settles. */
 
 /* ── the decision ──────────────────────────────────────────────────────────────────────────────────────── */
 
@@ -163,7 +111,7 @@ void corb_check(CorbVerdict *out, const char *content_type_value, bool no_sniff,
         /* The page's OWN data, which it may read by definition — CORB protects across origins and nowhere
            else. The one thing skipped is the page's own non-JS data being handed to a CODE loader, which is a
            load that could not have executed anyway. */
-        verdict(out, !(essence_is_protected(essence) && !essence_is_javascript(essence)),
+        verdict(out, !(essence_is_protected(essence) && !mime_type_is_javascript(&computed)),
                 essence, "same-origin");
         goto done;
     }
@@ -173,7 +121,7 @@ void corb_check(CorbVerdict *out, const char *content_type_value, bool no_sniff,
     }
     /* `nosniff` is the server saying the declared type is the final word, so a browser refuses to execute a
        cross-origin non-JS type under it and this refuses to ingest one. */
-    if (no_sniff && !essence_is_javascript(essence)) {
+    if (no_sniff && !mime_type_is_javascript(&computed)) {
         verdict(out, false, essence, "nosniff-not-js");
         goto done;
     }
@@ -181,7 +129,7 @@ void corb_check(CorbVerdict *out, const char *content_type_value, bool no_sniff,
         verdict(out, false, essence, !strcmp(markup, "text/html") ? "sniffed-html" : "sniffed-xml");
         goto done;
     }
-    if (sniff_json(header, header_n)) {
+    if (json_sniff(header, header_n)) {
         verdict(out, false, essence, "sniffed-json");
         goto done;
     }

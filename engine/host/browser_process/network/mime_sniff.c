@@ -305,6 +305,12 @@ static const SniffRow SCRIPTABLE_ROWS[] = {
     { P_PDF,     M_5FF,      5, -1, false, "application/pdf" },
 };
 
+const char *mime_sniff_scriptable_pattern(const unsigned char *header, size_t header_n)
+{
+    return table_match(header, header_n, SCRIPTABLE_ROWS,
+                       (int)(sizeof SCRIPTABLE_ROWS / sizeof *SCRIPTABLE_ROWS));
+}
+
 static const unsigned char P_PS[]      = { 0x25,0x21,0x50,0x53,0x2D,0x41,0x64,0x6F,0x62,0x65,0x2D };
 static const unsigned char M_PS[]      = { 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF };
 static const unsigned char P_UTF16BE[] = { 0xFE,0xFF,0x00,0x00 };
@@ -348,8 +354,7 @@ static void identify_unknown(MimeType *out, bool sniff_scriptable,
     const char *m;
 
     if (sniff_scriptable) {
-        m = table_match(header, header_n, SCRIPTABLE_ROWS,
-                        (int)(sizeof SCRIPTABLE_ROWS / sizeof *SCRIPTABLE_ROWS));
+        m = mime_sniff_scriptable_pattern(header, header_n);
         if (m) { computed(out, m); return; }
     }
     m = table_match(header, header_n, UNKNOWN_ROWS, (int)(sizeof UNKNOWN_ROWS / sizeof *UNKNOWN_ROWS));

@@ -30,6 +30,17 @@
       status: d.status,
       contentType: d.contentType,
       responseHeaders: d.responseHeaders,
+      // Fetch §2.2.6's FILTERED RESPONSE KIND, which intercept.js has read off the
+      // Response (`clone.type`) since it was written and which this relay dropped on
+      // the floor — so `msg.responseType` was undefined in the offscreen for the whole
+      // life of the field and the classifier's opaque rule was a reader with no writer.
+      // It is the one fact about an opaque no-cors response that its bytes cannot
+      // carry: the body is null and the header list empty, so an unreadable response
+      // and an empty one are byte-identical downstream and only this side can tell them
+      // apart. The XHR path emits none because XHR cannot produce one — its own spec
+      // fails a cross-origin response CORS did not allow rather than handing back an
+      // opaque one — so absence here is "not applicable", not "not sent".
+      responseType: d.responseType || null,
       body: d.body,
       base64Encoded: d.base64Encoded,
       wsId: d.wsId || null,

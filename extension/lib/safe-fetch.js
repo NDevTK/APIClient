@@ -280,11 +280,19 @@ async function safeFetch(url, opts) {
     // `Content-Type` is §5.1's "the supplied MIME type is undefined" — which sends
     // §7 to its step 2 and lets the BYTES name the type — and that is a different
     // input from the empty string the `|| ""` here used to manufacture.
+    // AND THE SECOND HEADER CROSSES AS A HEADER, not as a flag this file derived. What
+    // stood here was `_cto.toLowerCase().indexOf("nosniff") >= 0`, and Fetch's
+    // "determine nosniff" is not a substring test: it gets, decodes and SPLITS the
+    // header and matches its FIRST value, so `foo, nosniff` set the flag here and does
+    // not set it under the standard. That is an algorithm, so it belongs where the
+    // other algorithms are (browser_process/network/nosniff.c) — this file reads the
+    // header, which is what a chokepoint does, and the network service decides what it
+    // means, which is what a network service is for.
     var _ct = headers["content-type"];
     var _cto = headers["x-content-type-options"];
     var _v = await self.browserProcessCorb(
       typeof _ct === "string" ? _ct : null,
-      typeof _cto === "string" && _cto.toLowerCase().indexOf("nosniff") >= 0,
+      typeof _cto === "string" ? _cto : null,
       _corbSameOrigin(parsed.href, opts.pageOrigin), body);
     // `reason` names the rule that decided and `computed` is §7's answer for what the
     // resource actually is; both ride the status message, which is where this file
