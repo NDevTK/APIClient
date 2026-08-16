@@ -56,6 +56,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
+#include "core/dom/element.h"   /* element_prefix — §4.4's three namespace lookups read the name §4.5 stored */
 /* §4.5 adopt's step 3 arm. The DOM defines a node's custom element registry and the standard states the
    re-derivation right here, in §4.5; HTML owns what a registry IS. shadow_root.c reaches across the same
    boundary for the same reason. */
@@ -2105,7 +2106,11 @@ static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         size_t nl = 0, pl = 0;
         const lxb_char_t *ns = lxb_ns_by_id(n->owner_document->ns, n->ns, &nl);
-        const lxb_char_t *px = lxb_dom_element_prefix(el, &pl);
+        /* element_prefix and NOT lxb_dom_element_prefix: that one leaves `*len` at whatever the caller
+           initialised it to on its success path, so every branch below read "this element has no prefix" —
+           and `lookupNamespaceURI(null)`'s match IS that condition, so a prefixed element answered as the
+           default namespace's holder. See core/dom/element.c. */
+        const lxb_char_t *px = (const lxb_char_t *)element_prefix(el, &pl);
 
         if (magic == 1) {   /* lookupNamespaceURI(prefix): the namespace of the element carrying that prefix */
             bool match = arg ? (pl == strlen(arg) && pl && memcmp(px, arg, pl) == 0)

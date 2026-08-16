@@ -187,6 +187,36 @@ void element_ns_and_local(lxb_dom_element_t *el, const char **ns, const char **l
     if (s && len < locap) { memcpy(lobuf, s, len); lobuf[len] = 0; *local = lobuf; }
 }
 
+/* DOM §4.9 `prefix` — the THIRD of the three names §4.5's storage step wrote, and the one the reader above does
+ * not carry because it is nullable and the other two are not.
+ *
+ * IT IS THIS ENGINE'S READ AND NOT lxb_dom_element_prefix, MEASURED. That function never writes `*len` on its
+ * SUCCESS path — it writes it only at its two `goto empty` arms — so every caller that initialises the length
+ * to zero (which is the only thing a caller can do with an out-parameter it does not own) reads a prefix of
+ * length zero and concludes there is none. `element.prefix` answered null for `createElementNS(SVG_NS,
+ * "svg:rect")`, and §4.4's `lookupNamespaceURI(null)` — whose match IS "this element has no prefix" — answered
+ * the namespace of every prefixed element as though it were the default one. It also asks the wrong hash
+ * (`owner_document->tags`), which happens not to matter only because lxb_ns_prefix_data_by_id ignores its hash
+ * argument entirely and resolves a non-static id as its own address; the right hash is asked here so that stays
+ * true by statement rather than by luck.
+ *
+ * BORROWED, like every interned name: the bytes live in the document's prefix hash for as long as the document
+ * does, so there is nothing to copy and nothing to free. `*len` is written on EVERY path. */
+const char *element_prefix(lxb_dom_element_t *el, size_t *len)
+{
+    const lxb_ns_prefix_data_t *d;
+
+    DCHECK(el != NULL && len != NULL, "an element's namespace prefix was read off no element");
+    *len = 0;
+    if (el->node.prefix == LXB_NS__UNDEF) return NULL;   /* §1.4's null prefix, which is not the empty string */
+    d = lxb_ns_prefix_data_by_id(lxb_dom_interface_node(el)->owner_document->prefix, el->node.prefix);
+    CHECK(d != NULL, "an element carries a namespace prefix id its document cannot resolve — element_intern_"
+                     "prefix is the only writer of that field and it interns the bytes before it stores the id, "
+                     "so an unresolvable one is a node built by something that is not this engine");
+    *len = d->entry.length;
+    return (const char *)lexbor_hash_entry_str(&d->entry);
+}
+
 /* ---- DOM §4.5 "create an element internal", THE STORAGE STEP ---------------------------------------------
  *
  * "Set element's namespace to namespace, namespace prefix to prefix, local name to localName" — three strings
@@ -1543,7 +1573,7 @@ static JSValue js_el_name_part(JSContext *ctx, JSValueConst this_val, int magic)
     if (!el) return JS_NULL;
     switch (magic) {
     case 0: v = lxb_dom_element_local_name(el, &n); break;
-    case 1: v = lxb_dom_element_prefix(el, &n);     break;
+    case 1: v = (const lxb_char_t *)element_prefix(el, &n); break;
     default:
         DCHECK(magic == 2, "an element name part was declared with a magic this file does not name");
         v = lxb_ns_by_id(lxb_dom_interface_node(el)->owner_document->ns,
