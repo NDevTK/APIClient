@@ -17,8 +17,10 @@
  * way a URL parser is wrong, so this file never conflates them — a validation error is not recorded at all,
  * because nothing in the platform surfaces it.
  *
- * WHAT IS NOT HERE YET: IDNA. §4.2's domain-to-ASCII is Unicode UTS-46 plus Punycode, and a non-ASCII domain
- * reaches a DFAIL naming it rather than a lowercase-and-hope. */
+ * §4.2's DOMAIN-TO-ASCII IS ITS OWN COMPONENT, core/url/idna.c, which this file calls. It is Unicode's UTS-46
+ * table plus RFC 3492's Punycode — one assertable contract with nothing of the state machine in it — and this
+ * header used to say instead that it did not exist and that a non-ASCII domain reached a DFAIL naming it. That
+ * sentence outlived the DFAIL: idna.c's own header records that this file's crash is why it was written. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -491,9 +493,10 @@ static bool parse_opaque_host(const char *s, size_t n, UrlHost *out)
     return true;
 }
 
-/* §4.2's "domain to ASCII" for the ASCII case, which is a lowercase and the validity tests. A non-ASCII
-   domain is UTS-46 plus Punycode and reaches the DFAIL: answering with the bytes lowercased would put a
-   domain in the record that no resolver would agree with, which is worse than not answering. */
+/* §4.2's "domain to ASCII" for the ASCII case, which is a lowercase and the validity tests. A non-ASCII domain
+   is UTS-46 plus Punycode and goes to idna.c: answering with the bytes lowercased would put a domain in the
+   record that no resolver would agree with, and this comment used to say that case reached a DFAIL — which it
+   has not since idna.c was built, and the call to it is in the body this sentence sits on. */
 static bool parse_host(const char *s, size_t n, bool is_opaque, UrlHost *out)
 {
     char *decoded;

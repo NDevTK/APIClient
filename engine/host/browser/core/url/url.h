@@ -99,7 +99,16 @@ int  url_default_port(const char *scheme);
 
 /* §5.1's URLENCODED SERIALIZER's encode set, exported because URLSearchParams is the other user of it. */
 char *url_percent_encode(const char *s, size_t len, int set);
-/* §1.3 "percent-decode". `*out_n` is the decoded LENGTH, which is not strlen when the input decodes a %00. */
+/* §1.3 "percent-decode". IT ANSWERS A BYTE SEQUENCE, NOT A STRING — "let output be an empty byte sequence …
+   append byte to output" — and `%XX` reaches all 256, so the result is arbitrary bytes whatever the input was.
+   `*out_n` is that sequence's LENGTH, which is not strlen when the input decodes a %00.
+   WHETHER A DECODE FOLLOWS IS THE CALLING STANDARD'S STEP, and both answers are live in this tree: URL §3.5's
+   host parser and §5.1's urlencoded parser want a STRING and run Encoding §6's UTF-8 decode without BOM on
+   this (the standard's own note here: "using anything but UTF-8 decode without BOM when input contains bytes
+   that are not ASCII bytes might be insecure"), HTML §7.4.2.3.2's javascript: URL wants one and runs §6's
+   UTF-8 decode, while CSP §6.7.2.12's path comparison and a data URL's body are byte sequences to their own
+   standards and are DONE here. Skipping an owed decode does not fail loudly: it hands the next component bytes
+   it will read as text — an overlong `%C1%A1` spelled the host `a.com` until §3.5 ran its decode. */
 char *url_percent_decode(const char *s, size_t len, size_t *out_n);
 
 /* The RECORD behind a `URL` wrapper, or NULL when `v` is not one — how URLSearchParams writes §6.1's update
