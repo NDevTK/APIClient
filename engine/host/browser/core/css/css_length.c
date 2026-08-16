@@ -425,29 +425,104 @@ CssPx css_length_snap_line_width(JSContext *realm, CssPx len)
     return css_px_combine(len, css_px_env(CSS_ENV_DEVICE_PIXEL_RATIO, realm, out), out);
 }
 
-/* css-values §serializing a `<number>`: the SHORTEST form that round-trips. Printed at rising precision until
-   strtod gives the value back, which is that rule stated directly rather than a fixed `%g` that would report
-   `4.0000000000000004px` for one length and truncate the next. `suffix` is the unit CSSOM §6.7.2 writes after
-   it, which is the only thing that differs between a `<length>` and a `<percentage>`. */
+/* THE SHORTEST DECIMAL THAT NAMES THIS DOUBLE, as its digits and its decimal exponent: the value is
+   `D[0].D[1..ndig-1] x 10^e10`, signed separately. Printed at RISING PRECISION until strtod gives the value
+   back, which is CSSOM §6.7.2's "in the shortest form possible" stated directly rather than a fixed `%g` that
+   would report `4.0000000000000004px` for one length and truncate the next.
+   THE `%e` FORM IS READ RATHER THAN PRINTED: it is the one printf conversion whose output separates the
+   significand from the exponent, so the layout below is a positional rendering of the digits and never has to
+   ask printf for one. */
+static void css_num_shortest(double v, char *digits, int *ndig, int *e10)
+{
+    char sci[40];
+    const char *p;
+    int prec, n = 0;
+
+    for (prec = 1; prec <= 17; prec++) {
+        snprintf(sci, sizeof sci, "%.*e", prec - 1, v);
+        if (strtod(sci, NULL) == v) break;
+    }
+    DCHECK(prec <= 17, "a double did not round-trip through 17 significant digits, which is more than IEEE 754 "
+                       "binary64 needs — the printer and the parser disagree");
+    for (p = sci + (*sci == '-' ? 1 : 0); *p != 'e'; p++)
+        if (*p != '.') digits[n++] = *p;
+    digits[n] = '\0';
+    DCHECK(n == prec, "the significand printf wrote does not carry the number of digits it was asked for — the "
+                      "layout below indexes them against that count");
+    DCHECK(n == 1 || digits[n - 1] != '0',
+           "the shortest round-tripping significand ends in a ZERO, so dropping that digit would name the same "
+           "double in one character less and the search above stopped a digit late — CSSOM §6.7.2 asks for the "
+           "shortest form and this one is not it");
+    *ndig = n;
+    *e10 = (int)strtol(p + 1, NULL, 10);
+}
+
+/* CSSOM §6.7.2's SERIALIZE A `<number>`, entire: "A base-ten number using digits 0-9 in the SHORTEST FORM
+   POSSIBLE, using '.' to separate decimals (if any), ROUNDING THE VALUE IF NECESSARY TO NOT PRODUCE MORE THAN
+   6 DECIMALS, preceded by '-' if it is negative", with its own note that "scientific notation is not used".
+ * BOTH CLAUSES ARE THE RULE AND NEITHER IS OPTIONAL, and this used to implement the first alone. CSS's
+ * `<number-token>` grammar admits an exponent on INPUT — CSS Syntax §4.3.3 consumes one — so `width: 1e-7px`
+ * is a declaration a page can write, and there is no notation to write the answer back in: `%g` produces one
+ * for every value whose exponent is below -4 or at or above its precision, which is where the assert that
+ * REJECTED an exponent was firing. Rejecting it was the wrong half of the rule; the digits are laid out
+ * POSITIONALLY instead, and the six-decimal clause is what bounds that layout from below.
+ * PRINTING `%.6f` FOR EVERY VALUE WOULD ANSWER THE SECOND CLAUSE AND BREAK THE FIRST: the double nearest 1e23
+ * is 99999999999999991611392, and `%.6f` writes exactly that while the shortest form that names it is a 1 with
+ * twenty-three zeros after it. So the shortest form is found first, and only a form needing more than six
+ * decimals is re-rounded — which puts the value below 1e11, since more than six decimals means the exponent is
+ * below `ndig - 7`, so the fixed-point print that rounds it is bounded and the shortest form of the ROUNDED
+ * value is what gets laid out.
+ * `suffix` is the unit CSSOM §6.7.2 writes after the number, the only thing that differs between a `<length>`
+ * and a `<percentage>`. The buffer holds the widest positional form a finite double can take: a sign, the 309
+ * integer digits of DBL_MAX, a point, six decimals and the unit. */
+#define CSS_NUM_MAX 336
+
 static char *css_len_serialize(double v, const char *suffix)
 {
-    char num[64], out[72];
-    int prec;
+    char digits[24], rounded[32], out[CSS_NUM_MAX];
+    int ndig, e10, decimals, i, n = 0;
 
     DCHECK(v == v && v * 0.0 == 0.0,
            "a value that is not a FINITE number reached CSSOM §6.7.2's serializer. Every length and every "
            "percentage this engine reports is off a real declaration or arithmetic over such values, so a NaN "
            "or an infinity is a derivation that lost an operand rather than a value to print");
-    for (prec = 1; prec <= 17; prec++) {
-        snprintf(num, sizeof num, "%.*g", prec, v);
-        if (strtod(num, NULL) == v) break;
+    css_num_shortest(v, digits, &ndig, &e10);
+    if (ndig - 1 - e10 > 6) {
+        snprintf(rounded, sizeof rounded, "%.6f", v);
+        v = strtod(rounded, NULL);
+        css_num_shortest(v, digits, &ndig, &e10);
+        DCHECK(ndig - 1 - e10 <= 6,
+               "a value rounded to six decimal places came back from the shortest-form search needing more "
+               "than six — the fixed-point print and the round-trip search disagree about what the rounded "
+               "value is");
     }
-    DCHECK(prec <= 17, "a double did not round-trip through 17 significant digits, which is more than IEEE 754 "
-                       "binary64 needs — the printer and the parser disagree");
-    DCHECK(strchr(num, 'e') == NULL && strchr(num, 'E') == NULL,
-           "CSSOM serialized a number in EXPONENT form, which CSS's number grammar has no notation for — a "
-           "used length of this magnitude is a derivation that produced a coordinate no layout could hold");
-    snprintf(out, sizeof out, "%s%s", num, suffix);
+    decimals = ndig - 1 - e10;
+    DCHECK(e10 <= 308 && decimals <= 6,
+           "the two facts that bound §6.7.2's positional layout to the buffer sized from DBL_MAX's decimal "
+           "width — a FINITE double's decimal exponent, and the six-decimal clause applied above — do not both "
+           "hold, so the layout below would write past it");
+    /* "preceded by `-` if it is NEGATIVE" is a statement about the NUMBER, and negative zero is zero: CSS has
+       no signed zero to distinguish, and a value the six-decimal clause rounded down to nothing keeps the sign
+       bit of the length it came from. `v < 0.0` is the question the sentence asks; the printed sign is not. */
+    if (v < 0.0) out[n++] = '-';
+    if (e10 < 0) {
+        /* Wholly fractional: §6.7.2's leading zero, then the exponent's own zeros, then every digit. */
+        out[n++] = '0';
+        out[n++] = '.';
+        for (i = 0; i < -e10 - 1; i++) out[n++] = '0';
+        for (i = 0; i < ndig; i++) out[n++] = digits[i];
+    }
+    else {
+        /* The integer part is the first e10 + 1 digit positions, padded with the zeros a positional rendering
+           of a large exponent needs and the shortest significand does not carry. */
+        for (i = 0; i <= e10; i++) out[n++] = i < ndig ? digits[i] : '0';
+        if (decimals > 0) {
+            out[n++] = '.';
+            for (i = e10 + 1; i < ndig; i++) out[n++] = digits[i];
+        }
+    }
+    for (i = 0; suffix[i] != '\0'; i++) out[n++] = suffix[i];
+    out[n] = '\0';
     return css_len_strdup(out);
 }
 
