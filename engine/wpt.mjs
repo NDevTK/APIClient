@@ -153,6 +153,31 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       one paragraph up. */
                    "html/webappapis/animation-frames",
                    "html/webappapis/structured-clone",
+                   /* HTML §8.1.4.2's TWO SCRIPT-FETCHING ALGORITHMS AND §4.12.3's TEMPLATE, whose
+                      components now exist and whose standard directory has never been checked out. This is
+                      the excluded-test failure this file names twice above, and both rows are load-bearing
+                      right now rather than prospectively.
+                      `the-script-element` is 814 files, 304 of them under `module/`. core/loader/
+                      script_fetch.c is fetch-a-classic-script and fetch-a-single-module-script — two
+                      DIFFERENT decodes, Encoding §6.1's `decode` with a fallback for the classic entry and
+                      §6's UTF-8 decode for the module one — and the corpus's own `charset-*` and
+                      `external-script-utf8.js` files are what distinguish them. Neither was materialized on
+                      disk, so the difference between the two algorithms had no test in this tree at all and
+                      the component was verified only by fixtures its own author wrote.
+                      `the-template-element` is 57 files, and it is the directory for the assert that is
+                      FIRING as this row is written: node_heap.c's teardown check names §4.12.3's template
+                      contents as the allocations nothing walks, because the contents fragment is not a child
+                      of the inert owner document and lexbor's template destructor frees the fragment without
+                      what is in it. A standard whose absence is already crashing the build is the clearest
+                      possible case that an uncollected directory is an untested one.
+                      NAMED PER COMPONENT, not `html/semantics` whole, for the reason `css` is: the parent
+                      holds forms, embedded content and tabular data, whose components do not exist. Files at
+                      `scripting-1/`'s own level are META.yml only, so the two-level shape FileAPI needed is
+                      not needed here — checked rather than assumed, because that lesson cost ten files once.
+                      Expect bad first numbers: async/defer ordering, `document.write`'d scripts and dynamic
+                      import are all in there. A bad first number is the measurement. */
+                   "html/semantics/scripting-1/the-script-element",
+                   "html/semantics/scripting-1/the-template-element",
                    /* XHR §3 and §5 — core/xhr. Its two SUPPORT directories were listed and the standard's own
                       was not, so the 305 test files of the standard this engine had no component for were the
                       largest single uncollected population in the checkout. `xhr` is the standard; the two
