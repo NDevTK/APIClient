@@ -432,7 +432,8 @@ static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val
         goto fail_path;
     }
 
-    store = idb_object_store_create(ctx, db, name, path != NULL ? JS_NewStringLen(ctx, path, path_len) : JS_NULL,
+    store = idb_object_store_create(ctx, tx, db, name,
+                                    path != NULL ? JS_NewStringLen(ctx, path, path_len) : JS_NULL,
                                     auto_increment);
     /* §5.7 step 3 set this transaction's scope to the connection's object store set, and this is the write
        that keeps that true — §4.10's note: "subsequent calls to [objectStoreNames] during an upgrade
@@ -485,7 +486,7 @@ static JSValue js_conn_delete_object_store(JSContext *ctx, JSValueConst this_val
        connection's object store set IS the database's record — see the file header. The index-set step has
        nothing to clear: §2.6's index does not exist, so no handle can hold one. */
     idb_transaction_scope_remove(ctx, tx, store);
-    idb_object_store_destroy(ctx, db, store);
+    idb_object_store_destroy(ctx, tx, db, store);
     JS_FreeValue(ctx, store);
     JS_FreeValue(ctx, db);
     JS_FreeValue(ctx, tx);

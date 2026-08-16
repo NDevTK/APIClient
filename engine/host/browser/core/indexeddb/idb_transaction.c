@@ -62,6 +62,7 @@
 #define TX_HEAD        "head"         /* the index of the first request still in that list — see the header */
 #define TX_REQUEST     "request"      /* §2.7.3's open request, for an upgrade transaction; JS_NULL otherwise */
 #define TX_HANDLES     "handles"      /* §2.2.1's one-handle-per-store set, keyed by name */
+#define TX_CHANGES     "changes"      /* §5.5 step 2's changes made to the database — see the header */
 
 static JSValue g_key;          /* the private Symbol the slot record hangs off */
 static int     g_ready;
@@ -341,11 +342,20 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
            "let the page place another request against it");
     tx_set_int(ctx, tx, TX_STATE, state);
     if (state == IDB_TX_FINISHED) {
+        /* §5.5 step 2'S RECORD IS DROPPED HERE, at the ONE door both endings go through — §5.4 committed the
+           changes and §5.5 has just written them back, and §5.5 step 1 abandons the abort of a transaction that
+           is already finished, so nothing can ever read this list again. It is emptied rather than left because
+           every entry holds a §2.2 RECORD the store no longer names — for a `get` that is the whole value the
+           page stored — and a finished transaction the page still has a reference to would hold all of them. */
+        JSValue changes = idb_transaction_changes(ctx, tx);
+        uint32_t i, n;
+
+        JS_SetPropertyStr(ctx, changes, "length", JS_NewInt32(ctx, 0));
+        JS_FreeValue(ctx, changes);
         /* "A transaction is said to be live from when it is created until its state is set to finished." The
            removal is HERE rather than at the two callers so a transaction cannot be finished by one path and
            stay live because the other path was the one that remembered. */
-        uint32_t i, n = tx_array_len(ctx, g_live);
-
+        n = tx_array_len(ctx, g_live);
         for (i = 0; i < n; i++) {
             JSValue m = JS_GetPropertyUint32(ctx, g_live, i);
             bool same = JS_VALUE_GET_PTR(m) == JS_VALUE_GET_PTR(tx);
@@ -435,6 +445,41 @@ bool idb_transaction_requests_empty(JSContext *ctx, JSValueConst tx)
     JS_FreeValue(ctx, list);
     JS_FreeValue(ctx, slots);
     return empty;
+}
+
+/* ---- §5.5 step 2's CHANGES MADE TO THE DATABASE ---------------------------------------------------------- */
+
+JSValue idb_transaction_changes(JSContext *ctx, JSValueConst tx)
+{
+    JSValue list = tx_field(ctx, tx, TX_CHANGES);
+
+    DCHECK(JS_IsArray(list), "a transaction carried no list of database changes — every transaction is built by "
+                             "idb_transaction_new, which gives it one");
+    return list;
+}
+
+void idb_transaction_record_change(JSContext *ctx, JSValueConst tx, JSValue change)
+{
+    JSValue list;
+
+    DCHECK(idb_transaction_is(tx), "a database change was recorded against something that is not a "
+                                   "transaction — §2.7: \"whenever data is read or written to the database it "
+                                   "is done by using a transaction\", so a change with no transaction is a "
+                                   "change §5.5 step 2 could never undo");
+    DCHECK(idb_transaction_mode(ctx, tx) != IDB_TX_READONLY,
+           "a READ-ONLY transaction changed the database. §2.7: \"the transaction is only allowed to read "
+           "data. No modifications can be done by this type of transaction\" — §4.5's members report that as "
+           "a ReadOnlyError before the operation is even minted");
+    DCHECK(idb_transaction_state(ctx, tx) != IDB_TX_FINISHED,
+           "a FINISHED transaction changed the database. §5.5 step 2 has already reverted this transaction's "
+           "changes, or §5.4 has committed them, so this one belongs to neither and nothing would ever undo "
+           "it — §5.6 step 5 is aborted for every request of an aborted transaction exactly so that no "
+           "operation can run past this point");
+    list = idb_transaction_changes(ctx, tx);
+    /* A DEFINE and not an assignment, for core/idl_slots.h's sibling rule — the same reason the request list
+       above is written with one. */
+    JS_DefinePropertyValueUint32(ctx, list, tx_array_len(ctx, list), change, JS_PROP_C_W_E);
+    JS_FreeValue(ctx, list);
 }
 
 /* ---- §2.7.3's TWO SHARED UPGRADE ARMS ----------------------------------------------------------------------
@@ -702,20 +747,32 @@ void idb_transaction_abort(JSContext *ctx, JSValueConst tx, JSValue error)
         JS_FreeValue(ctx, error);
         return;
     }
-    /* §5.5 step 2: "All the changes made to the database by the transaction are reverted." A READ-ONLY
-       transaction has made none, so there is nothing to revert and that is a fact about the mode rather than a
-       step skipped. Any other mode needs the undo, and it does not exist. */
-    if (tx_int(ctx, tx, TX_MODE) != IDB_TX_READONLY) {
-        DFAIL("Indexed Database §5.5 step 2's REVERT is not built. A transaction that can write needs the "
-              "changes it made to be undone when it aborts — for a \"readwrite\" transaction that is every "
-              "record §6.1 stored and every record §6.4 deleted through it, and for an upgrade transaction it "
-              "is additionally the object stores and indexes created or removed and the version change "
-              "itself. The mechanism is the per-flow COW delta this engine already has (solver/cow.h): a "
-              "transaction's writes are a SPAN of one flow's delta, so the undo is unapplying that span "
-              "rather than a second journal — build it where the transaction records where its span began, "
-              "and delete this crash");
+    /* §5.5 step 2: "All the changes made to the database by the transaction are reverted." Asked of the
+       component that owns §2.1's and §2.2's state, which recorded the inverse of each change as it was made —
+       see core/indexeddb/idb_database.c, which also states why this is not a span of the flow's COW delta. A
+       READ-ONLY transaction has recorded nothing and reverts nothing, which is §2.7's statement about that
+       mode rather than a branch here. */
+    idb_database_revert_transaction(ctx, tx);
+
+    /* §5.5 step 3: "If transaction is an upgrade transaction, run the steps to abort an upgrade transaction
+       with transaction." */
+    if (idb_transaction_mode(ctx, tx) == IDB_TX_VERSIONCHANGE) {
+        DFAIL("Indexed Database §5.8's ABORT AN UPGRADE TRANSACTION is not built. Step 2 above has just put the "
+              "DATABASE back — its version, its set of object stores, and every record — and §5.8 is the other "
+              "half of that sentence: what the page can still SEE of it. Its four steps are (1) the "
+              "connection's version goes back to the database's, which after step 2's revert is the one number "
+              "for both of §5.8's arms — a database this open created is back at the 0 it was created with, so "
+              "\"or 0 if database was newly created\" needs no second field remembering which it was; (2) the "
+              "connection's object store set goes back to the database's, which in this engine is the SAME "
+              "record (idb_connection.c says why) and so is already true — assert that identity rather than "
+              "writing it twice; (3) for each object store handle associated with the transaction, INCLUDING "
+              "the handles of stores created or deleted during it, a handle whose store was not newly created "
+              "takes its store's name back, which is what makes `store.name` answer the old name after an "
+              "aborted rename — the handle set is idb_transaction_handle_find's, and \"newly created during "
+              "this transaction\" is what idb_transaction_changes still holds at this point, since the list is "
+              "not cleared until the state goes FINISHED below; (4) the index-handle step, which §2.6's index "
+              "does not exist to have. Build it as its own component beside this one and delete this crash");
     }
-    /* §5.5 step 3 is the upgrade-transaction arm; §2.7.3's upgrade transaction arrives with §5.7. */
     /* §5.5 steps 4 and 5. */
     idb_transaction_set_state(ctx, tx, IDB_TX_FINISHED);
     slots = tx_slots(ctx, tx);
@@ -874,7 +931,7 @@ static void tx_check_can_start(JSContext *ctx, JSValueConst scope, int mode)
 
 JSValue idb_transaction_new(JSContext *ctx, JSValueConst connection, JSValue scope, int mode, int durability)
 {
-    JSValue tx, st, proto, requests, handles;
+    JSValue tx, st, proto, requests, handles, changes;
     JSAtom k;
 
     DCHECK(g_ready, "an IDBTransaction was created before idb_transaction_init declared the interface");
@@ -918,6 +975,10 @@ JSValue idb_transaction_new(JSContext *ctx, JSValueConst connection, JSValue sco
     handles = idl_slots_new(ctx);
     CHECK(!JS_IsException(handles), "IndexedDB: a transaction's object store handle set could not be allocated");
     JS_SetPropertyStr(ctx, st, TX_HANDLES, handles);
+    /* §5.5 step 2's changes, empty because a transaction has made none when it is created. */
+    changes = JS_NewArray(ctx);
+    CHECK(!JS_IsException(changes), "IndexedDB: a transaction's list of database changes could not be allocated");
+    JS_SetPropertyStr(ctx, st, TX_CHANGES, changes);
     k = JS_ValueToAtom(ctx, g_key);
     CHECK(k != JS_ATOM_NULL, "the IDBTransaction slot key could not be interned");
     JS_SetProperty(ctx, tx, k, st);

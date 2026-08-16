@@ -60,6 +60,19 @@ void idb_transaction_add_request(JSContext *ctx, JSValueConst tx, JSValueConst r
 void idb_transaction_remove_request(JSContext *ctx, JSValueConst tx, JSValueConst request);
 bool idb_transaction_requests_empty(JSContext *ctx, JSValueConst tx);
 
+/* §5.5 step 2's "ALL THE CHANGES MADE TO THE DATABASE BY THE TRANSACTION" — the list of them, in the order they
+   were made. It is the TRANSACTION's state because that is whose changes they are, and it is a JS Array on the
+   transaction's slot record for the reason every other list in this component is one (§State-isolation): a
+   malloc'd C list captured as a head pointer reverts the POINTER on a context switch and leaves its nodes
+   reachable from nothing, and this list has to fork with the flow, park to the cold tier and come back. Forking
+   with the flow is not incidental here — it is what makes an abort correct in one arm of a fork while its
+   sibling commits, because each arm appends to its own copy and reverts only what it wrote.
+   The record of one change is core/indexeddb/idb_database.c's, because the inverse of a write is a write and
+   only the component that owns the state can make it. This side only files them and hands them back in order.
+   `change` is CONSUMED; the list is OWNED and is read backwards by §5.5 step 2. */
+void    idb_transaction_record_change(JSContext *ctx, JSValueConst tx, JSValue change);
+JSValue idb_transaction_changes(JSContext *ctx, JSValueConst tx);
+
 /* §2.7's MODE and CONNECTION, read. The mode is what §4.5's members test for a "ReadOnlyError" and what §4.4's
    `createObjectStore` tests to know it is inside an upgrade transaction; the connection is what §4.10's `db`
    answers with and what §4.5's rename reaches the database through. The connection is OWNED. */

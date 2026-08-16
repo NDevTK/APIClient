@@ -604,7 +604,7 @@ static int js_idb_upgrade_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
            carried on the entry because step 9.5 fires it at the page AFTER this task has ended. */
         old_version = idb_database_version(ctx, db);
         entry_set(ctx, entry, E_OLD_VERSION, JS_NewFloat64(ctx, old_version));
-        idb_database_set_version(ctx, db, version);
+        idb_database_set_version(ctx, tx, db, version);
         /* Step 8's last line: "Set request's processed flag to true." */
         idb_request_set_processed(ctx, req, true);
         JS_FreeValue(ctx, tx);

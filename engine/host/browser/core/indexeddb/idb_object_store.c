@@ -180,9 +180,14 @@ static int os_check(JSContext *ctx, JSValueConst h, bool writes, JSValue *pstore
  * Neither of these runs the page's code. §6.1's clone is over a value §4.5 has ALREADY cloned (see the member),
  * and §6.2's is over a value this component built, so both operate on engine-owned plain data — which is why
  * they are C bodies over their captured data rather than step machines. */
-#define OP_STORE_STORE  0
-#define OP_STORE_VALUE  1
-#define OP_STORE_KEY    2
+/* THE TRANSACTION IS ONE OF THE OPERANDS, for the same reason the store and the key are: this operation is a
+   work item, and §5.5 step 2 has to know whose change the record it writes is. Read back off the handle at task
+   time it would be whichever transaction that handle names BY THEN — the same one today, and exactly the shape
+   §scheduler names as the defect that arrives with every conversion from a call to a job. */
+#define OP_STORE_TX     0
+#define OP_STORE_STORE  1
+#define OP_STORE_VALUE  2
+#define OP_STORE_KEY    3
 
 static JSValue js_idb_store_operation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                       int magic, JSValueConst *func_data)
@@ -192,8 +197,8 @@ static JSValue js_idb_store_operation(JSContext *ctx, JSValueConst this_val, int
     (void)this_val; (void)argc; (void)argv;
     /* §6.1's own contract: 0 with the key it filed the record under, or -1 with the DOMException it names
        live — which §5.6 step 5.2 takes as "result is an error". */
-    if (idb_store_record(ctx, func_data[OP_STORE_STORE], func_data[OP_STORE_VALUE], func_data[OP_STORE_KEY],
-                         magic == OS_ADD, &key) < 0)
+    if (idb_store_record(ctx, func_data[OP_STORE_TX], func_data[OP_STORE_STORE], func_data[OP_STORE_VALUE],
+                         func_data[OP_STORE_KEY], magic == OS_ADD, &key) < 0)
         return JS_EXCEPTION;
     return key;   /* "If successful, request's result will be the record's key." */
 }
@@ -214,7 +219,7 @@ static JSValue js_idb_retrieve_operation(JSContext *ctx, JSValueConst this_val, 
 
 static JSValue js_os_put(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    JSValueConst data[3];
+    JSValueConst data[4];
     JSValue store = JS_UNDEFINED, tx = JS_UNDEFINED, key = JS_UNDEFINED, key_path, clone, op, req;
     bool key_given = argc > 1 && !JS_IsUndefined(argv[1]);
     bool in_line, generator;
@@ -258,10 +263,11 @@ static JSValue js_os_put(JSContext *ctx, JSValueConst this_val, int argc, JSValu
        first step in this engine, which is where the crash naming them lives — see idb_database.c. A store
        reaching this line with in-line keys or a key generator carries no key, which is exactly what that
        algorithm's own first step branches on. */
+    data[OP_STORE_TX] = tx;
     data[OP_STORE_STORE] = store;
     data[OP_STORE_VALUE] = clone;
     data[OP_STORE_KEY] = key;
-    op = JS_NewCFunctionData(ctx, js_idb_store_operation, 0, magic, 3, data);
+    op = JS_NewCFunctionData(ctx, js_idb_store_operation, 0, magic, 4, data);
     JS_FreeValue(ctx, clone);
     CHECK(!JS_IsException(op), "IndexedDB: §6.1's operation could not be minted");
     /* "Return the result (an IDBRequest) of running asynchronously execute a request with THIS and operation."
@@ -425,7 +431,7 @@ static JSValue js_os_set_name(JSContext *ctx, JSValueConst this_val, JSValueCons
         goto fail;
     }
     JS_FreeValue(ctx, existing);
-    idb_object_store_rename(ctx, db, store, name);
+    idb_object_store_rename(ctx, tx, db, store, name);
     JS_FreeValue(ctx, db);
     {
         JSValue slots = os_slots(ctx, this_val);

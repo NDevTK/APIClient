@@ -36,8 +36,9 @@ JSValue idb_database_name(JSContext *ctx, JSValueConst db);
 /* §2.1's VERSION, WRITTEN. §5.7 step 8 is the only caller and the standard says so — "the only way to change
    the version is using an upgrade transaction" — which is why this arrived with §5.7 and not before it. The
    sentence continues "this change is considered part of the transaction, and so if the transaction is aborted,
-   this change is reverted", and that revert is §5.5 step 2's, which is not built. */
-void idb_database_set_version(JSContext *ctx, JSValueConst db, double version);
+   this change is reverted", which is why the transaction is an operand: the version the database held is
+   recorded on it, and §5.5 step 2 writes that back. */
+void idb_database_set_version(JSContext *ctx, JSValueConst tx, JSValueConst db, double version);
 
 /* §2.1's "a database has at most one associated UPGRADE TRANSACTION, which is either null or an upgrade
    transaction, and is initially null". It is what §4.4's `createObjectStore` and `deleteObjectStore` read to
@@ -59,12 +60,21 @@ JSValue idb_database_connections(JSContext *ctx, JSValueConst db);
    copy, for the reason idb_connection.c states. OWNED. */
 JSValue idb_database_store_set(JSContext *ctx, JSValueConst db);
 
+/* EVERY CHANGE TO §2.1's AND §2.2's STATE NAMES THE TRANSACTION MAKING IT — the five declarations below and no
+   others, because those five are every write this component performs on a database. §2.7's first sentence is
+   why ("whenever data is read or written to the database it is done by using a transaction"), and §5.5 step 2
+   is what needs it: the transaction records the INVERSE of each change as it is made, so an abort has something
+   to write back. A mutation that took no transaction would be a change nothing could undo, and the abort would
+   be silently partial rather than crashing — which is the whole reason this is a parameter and not a lookup.
+   Each asserts what §2.7 says its transaction may do (a read-only transaction may change nothing; only an
+   upgrade transaction may add, remove or rename a store, or change the version). */
+
 /* §2.2's SET OF OBJECT STORES. A store has a name unique within its database, OPTIONALLY a key path (with one
    it "uses in-line keys", without one "out-of-line keys") and OPTIONALLY a key generator — both are on the
    record because §2.2 puts them there, and both are what §6.1's first step branches on. `key_path` is JS_NULL
    for out-of-line keys, or the key path value (a string, or a list of strings). CONSUMED. */
-JSValue idb_object_store_create(JSContext *ctx, JSValueConst db, const char *name, JSValue key_path,
-                                bool key_generator);
+JSValue idb_object_store_create(JSContext *ctx, JSValueConst tx, JSValueConst db, const char *name,
+                                JSValue key_path, bool key_generator);
 JSValue idb_object_store_find(JSContext *ctx, JSValueConst db, const char *name);   /* or JS_NULL. OWNED. */
 
 /* §6.1's STORE A RECORD INTO AN OBJECT STORE, with store, value, an optional key, and a no-overwrite flag.
@@ -78,7 +88,7 @@ JSValue idb_object_store_find(JSContext *ctx, JSValueConst db, const char *name)
  *
  * Returns 0 with *pkey the key the record was filed under (OWNED, a key record — §6.1's "Return key"), or -1
  * with the DOMException the algorithm names live ("ConstraintError"). */
-int idb_store_record(JSContext *ctx, JSValueConst store, JSValueConst value, JSValueConst key,
+int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst value, JSValueConst key,
                      bool no_overwrite, JSValue *pkey);
 
 /* §6.2's TWO RETRIEVALS, over `range` — a key range (core/indexeddb/idb_key_range.h). Each answers the FIRST
@@ -102,12 +112,24 @@ bool    idb_object_store_uses_key_generator(JSContext *ctx, JSValueConst store);
    script cannot access an object store by using the objectStore() method after the transaction is aborted, it
    can still have references to IDBObjectStore instances", and those instances must report the state rather
    than answer out of a record nothing points at. */
-void idb_object_store_destroy(JSContext *ctx, JSValueConst db, JSValueConst store);
+void idb_object_store_destroy(JSContext *ctx, JSValueConst tx, JSValueConst db, JSValueConst store);
 bool idb_object_store_is_deleted(JSContext *ctx, JSValueConst store);
 
 /* §4.5's `name` SETTER, whose whole content is a RE-KEY: "set store's name to name" moves the store within
    §2.2's set, which is keyed by the name that identifies it there. The ConstraintError for a name the database
    already holds is the member's, reported before this runs. */
-void idb_object_store_rename(JSContext *ctx, JSValueConst db, JSValueConst store, const char *name);
+void idb_object_store_rename(JSContext *ctx, JSValueConst tx, JSValueConst db, JSValueConst store,
+                             const char *name);
+
+/* §5.5 step 2: "ALL THE CHANGES MADE TO THE DATABASE BY THE TRANSACTION ARE REVERTED. For upgrade transactions
+   this includes changes to the set of object stores and indexes, as well as the change to the version. Any
+   object stores and indexes which were created during the transaction are now considered deleted for the
+   purposes of other algorithms."
+   It is asked of this component and not of the transaction because the state being put back is this one's, and
+   because the inverse of a write is a write — so it is made where the write is made, through the same two
+   functions §2.2's set of object stores is changed by anywhere else. A read-only transaction has recorded
+   nothing and this does nothing, which is a fact about what §2.7 lets that mode do rather than a mode test.
+   See the file for why this is NOT a span of the flow's COW delta. */
+void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx);
 
 #endif

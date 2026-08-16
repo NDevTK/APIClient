@@ -7,6 +7,7 @@
 #include "solver/decide.h"
 #include "solver/flow.h"
 #include "solver/world.h"
+#include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
 #include "core/timing/event_loop.h"
 #include "core/timing/timer.h"
@@ -64,9 +65,11 @@
 #include "core/encoding/text_stream.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/fetch.h"
+#include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key.h"
 #include "core/indexeddb/idb_key_range.h"
+#include "core/indexeddb/idb_transaction.h"
 #include "solver/endpoint.h"
 #include "solver/req2proto.h"
 #include "solver/result.h"
@@ -2059,20 +2062,152 @@ static int32_t idb_selftest_int(JSContext *ctx, JSValueConst v)
     return n;
 }
 
-static void idb_selftest_put(JSContext *ctx, JSValueConst store, JSValueConst value, JSValueConst key)
+static void idb_selftest_put(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst value,
+                             JSValueConst key)
 {
     JSValue out = JS_UNDEFINED;
 
-    CHECK(idb_store_record(ctx, store, value, key, false, &out) == 0,
+    CHECK(idb_store_record(ctx, tx, store, value, key, false, &out) == 0,
           "§6.1 refused a record for a store with out-of-line keys and no key generator");
     CHECK(!JS_IsUndefined(out), "§6.1's last step is \"Return key\", and it returned none");
     JS_FreeValue(ctx, out);
 }
 
+/* A TRANSACTION IN THE MODE §2.7 REQUIRES FOR THE CHANGE ABOUT TO BE MADE, over the connection §5.1 would have
+   opened. §2.7's first sentence is why the fixture needs one at all — "whenever data is read or written to the
+   database it is done by using a transaction" — and every algorithm below takes it as an operand because that
+   is who §5.5 step 2 reverts the change for. `stores` is the scope: empty for an upgrade transaction, which is
+   what §5.7 step 3 gives one for a database that has no object stores yet. OWNED. */
+static JSValue idb_selftest_tx(JSContext *ctx, JSValueConst conn, JSValueConst store, int mode)
+{
+    JSValue scope = JS_NewArray(ctx);
+
+    CHECK(!JS_IsException(scope), "the fixture's transaction scope could not be allocated");
+    if (!JS_IsUndefined(store))
+        JS_DefinePropertyValueUint32(ctx, scope, 0, JS_DupValue(ctx, store), JS_PROP_C_W_E);
+    return idb_transaction_new(ctx, conn, scope, mode, IDB_DUR_DEFAULT);
+}
+
+/* §5.4's END OF A TRANSACTION, without the task that fires `complete`. The fixture is at the pre-boot baseline
+   and no flow is running, so there is nothing a database task could be queued onto — and what the assertions
+   need from the ending is the one thing §2.7 states about it: "a transaction is said to be LIVE from when it is
+   created until its state is set to finished", so the next transaction this fixture creates is not blocked by
+   §2.7.2 on an overlapping scope. */
+static void idb_selftest_finish(JSContext *ctx, JSValue tx)   /* CONSUMES tx */
+{
+    idb_transaction_set_state(ctx, tx, IDB_TX_FINISHED);
+    JS_FreeValue(ctx, tx);
+}
+
+/* INDEXED DATABASE §5.5 STEP 2 — "all the changes made to the database by the transaction are reverted. For
+ * upgrade transactions this includes changes to the set of object stores and indexes, as well as the change to
+ * the version. Any object stores and indexes which were created during the transaction are now considered
+ * deleted for the purposes of other algorithms."
+ *
+ * WHAT IT EXERCISES. Five changes are every change this engine can make to a database, and each is asserted
+ * from both sides — the change is visible, and after the revert the state the transaction found is back: a
+ * record put OVER another (the displaced record returns), a record put where there was NONE (it goes away and
+ * §2.2's ordering survives its removal), a store CREATED (it leaves the set and is marked deleted, which is
+ * what a handle the page still holds must report), a store RENAMED (it is filed under its former name again), a
+ * store DESTROYED (it is back in the set and no longer deleted), and the VERSION.
+ *
+ * AND THE ORDER, which is the part a one-change test cannot reach. The changes below are made as version →
+ * create → rename → destroy, so the revert has to run them BACKWARDS: the destroy is undone first, putting the
+ * store back under the name the rename gave it, which is the only state in which undoing the rename can find
+ * it. A revert that replayed forwards would look right for any single change and would leave this store filed
+ * under a name it never had.
+ *
+ * IT REVERTS RATHER THAN ABORTING because §5.5's other six steps are a queued database task and an event
+ * dispatch, and this fixture runs at the pre-boot baseline where no flow is running to queue one onto. What it
+ * exercises is what it claims: the changes, and the writes that put them back. */
+static void idb_revert_selftest(JSContext *ctx, JSValueConst conn, JSValueConst db, JSValueConst store)
+{
+    JSValue tx, key, range, got, value, other, found;
+
+    /* §6.1's TWO SHAPES, through a read/write transaction over the store the round trip left behind. */
+    tx = idb_selftest_tx(ctx, conn, store, IDB_TX_READWRITE);
+    key = idb_selftest_key(ctx, JS_NewInt32(ctx, 2));
+    value = JS_NewInt32(ctx, 42);
+    idb_selftest_put(ctx, tx, store, value, key);   /* over the record the round trip left under key 2 */
+    JS_FreeValue(ctx, value);
+    JS_FreeValue(ctx, key);
+    key = idb_selftest_key(ctx, JS_NewInt32(ctx, 8));
+    value = JS_NewInt32(ctx, 80);
+    idb_selftest_put(ctx, tx, store, value, key);   /* under a key the store holds no record for */
+    JS_FreeValue(ctx, value);
+    JS_FreeValue(ctx, key);
+    range = idb_selftest_range(ctx, JS_NewInt32(ctx, 8));
+    got = idb_retrieve_value(ctx, store, range);
+    CHECK(idb_selftest_int(ctx, got) == 80, "§6.1 did not file the record this fixture is about to revert");
+    JS_FreeValue(ctx, got);
+
+    idb_database_revert_transaction(ctx, tx);
+
+    got = idb_retrieve_value(ctx, store, range);
+    CHECK(JS_IsUndefined(got), "§5.5 step 2 left a record the transaction ADDED — \"all the changes made to "
+                               "the database by the transaction are reverted\"");
+    JS_FreeValue(ctx, got);
+    JS_FreeValue(ctx, range);
+    range = idb_selftest_range(ctx, JS_NewInt32(ctx, 2));
+    got = idb_retrieve_value(ctx, store, range);
+    CHECK(idb_selftest_int(ctx, got) == 99,
+          "§5.5 step 2 did not put back the record the transaction OVERWROTE — the record §6.1 displaced is "
+          "the state that key was in when the transaction found it, and it is what the store must hold again");
+    JS_FreeValue(ctx, got);
+    JS_FreeValue(ctx, range);
+    range = idb_selftest_range(ctx, JS_UNDEFINED);
+    got = idb_retrieve_key(ctx, store, range);
+    CHECK(idb_selftest_int(ctx, got) == 1,
+          "§5.5 step 2's removal left the list of records out of order — §2.2 keeps it \"sorted according to "
+          "key in ascending order\", so the tail has to come down over the record that was taken out");
+    JS_FreeValue(ctx, got);
+    JS_FreeValue(ctx, range);
+    idb_selftest_finish(ctx, tx);
+
+    /* THE UPGRADE TRANSACTION'S THREE, made in an order whose revert only composes backwards. */
+    tx = idb_selftest_tx(ctx, conn, JS_UNDEFINED, IDB_TX_VERSIONCHANGE);
+    idb_database_set_version(ctx, tx, db, 7);
+    other = idb_object_store_create(ctx, tx, db, "t", JS_NULL, false);
+    idb_object_store_rename(ctx, tx, db, store, "s2");
+    idb_object_store_destroy(ctx, tx, db, store);
+    CHECK(idb_database_version(ctx, db) == 7, "§5.7 step 8's write did not reach the database");
+    found = idb_object_store_find(ctx, db, "t");
+    CHECK(JS_VALUE_GET_PTR(found) == JS_VALUE_GET_PTR(other),
+          "§4.4's createObjectStore did not file the store in its database's set");
+    JS_FreeValue(ctx, found);
+
+    idb_database_revert_transaction(ctx, tx);
+
+    CHECK(idb_database_version(ctx, db) == 0,
+          "§5.7 step 8: \"this change is considered part of the transaction, and so if the transaction is "
+          "aborted, this change is reverted\" — the version this database was CREATED with is what it goes "
+          "back to, which is also the answer §5.8 step 3 needs for a database an open newly created");
+    found = idb_object_store_find(ctx, db, "t");
+    CHECK(JS_IsNull(found), "§5.5 step 2 left an object store the transaction CREATED in its database's set");
+    JS_FreeValue(ctx, found);
+    CHECK(idb_object_store_is_deleted(ctx, other),
+          "\"any object stores and indexes which were created during the transaction are now considered "
+          "DELETED for the purposes of other algorithms\" — §4.5's members answer out of the handle the page "
+          "still holds, so the store record itself has to say so");
+    found = idb_object_store_find(ctx, db, "s2");
+    CHECK(JS_IsNull(found), "§5.5 step 2 left the store filed under the name the transaction RENAMED it to");
+    JS_FreeValue(ctx, found);
+    found = idb_object_store_find(ctx, db, "s");
+    CHECK(JS_VALUE_GET_PTR(found) == JS_VALUE_GET_PTR(store),
+          "§5.5 step 2 did not put the store back in its database's set under the name it had — the destroy "
+          "and the rename are undone in that order, and only that order can find it");
+    JS_FreeValue(ctx, found);
+    CHECK(!idb_object_store_is_deleted(ctx, store),
+          "§5.5 step 2 left a store the transaction DESTROYED marked as deleted — every member of §4.5 asks "
+          "that question first, so the store would answer an InvalidStateError for a deletion that was undone");
+    JS_FreeValue(ctx, other);
+    idb_selftest_finish(ctx, tx);
+}
+
 static void idb_store_selftest(JSContext *ctx)
 {
     static const int32_t ARRIVAL[] = { 3, 1, 2 };
-    JSValue db, found, store, key, range, got, tainted, value, out;
+    JSValue db, found, store, key, range, got, tainted, value, out, conn, tx;
     int i;
 
     /* §2.1: "When a database is first created, its version is 0", and a storage key has ONE database per name
@@ -2087,8 +2222,15 @@ static void idb_store_selftest(JSContext *ctx)
     CHECK(JS_IsNull(found), "§2.1: a name this storage key holds no database for must answer with none");
     JS_FreeValue(ctx, found);
 
+    /* §2.1.1's CONNECTION and §2.7's TRANSACTION, which §5.1 and §5.7 build for a page and which this fixture
+       builds for itself: §2.7's first sentence makes a transaction the only way data is written, and every
+       algorithm below takes it because a change that names no transaction is a change §5.5 step 2 could never
+       undo. An UPGRADE transaction, because creating an object store is what §2.7 gives only that mode. */
+    conn = idb_connection_open(ctx, db);
+    tx = idb_selftest_tx(ctx, conn, JS_UNDEFINED, IDB_TX_VERSIONCHANGE);
+
     /* §2.2: out-of-line keys, no key generator — the store §6.1's first step does not branch for. */
-    store = idb_object_store_create(ctx, db, "s", JS_NULL, false);
+    store = idb_object_store_create(ctx, tx, db, "s", JS_NULL, false);
     found = idb_object_store_find(ctx, db, "s");
     CHECK(JS_VALUE_GET_PTR(found) == JS_VALUE_GET_PTR(store),
           "§2.2: an object store's name is unique within its database and names that store");
@@ -2097,7 +2239,7 @@ static void idb_store_selftest(JSContext *ctx)
     for (i = 0; i < 3; i++) {
         key = idb_selftest_key(ctx, JS_NewInt32(ctx, ARRIVAL[i]));
         value = JS_NewInt32(ctx, ARRIVAL[i] * 10);
-        idb_selftest_put(ctx, store, value, key);
+        idb_selftest_put(ctx, tx, store, value, key);
         JS_FreeValue(ctx, value);
         JS_FreeValue(ctx, key);
     }
@@ -2123,7 +2265,7 @@ static void idb_store_selftest(JSContext *ctx)
     JS_FreeValue(ctx, got);
     key = idb_selftest_key(ctx, JS_NewInt32(ctx, 2));
     value = JS_NewInt32(ctx, 99);
-    idb_selftest_put(ctx, store, value, key);
+    idb_selftest_put(ctx, tx, store, value, key);
     JS_FreeValue(ctx, value);
     got = idb_retrieve_value(ctx, store, range);
     CHECK(idb_selftest_int(ctx, got) == 99, "§6.1's overwrite must replace the record filed under that key");
@@ -2133,7 +2275,7 @@ static void idb_store_selftest(JSContext *ctx)
        BEFORE the value is copied, and it leaves the record it refused to overwrite exactly as it was. */
     value = JS_NewInt32(ctx, 7);
     out = JS_UNDEFINED;
-    CHECK(idb_store_record(ctx, store, value, key, true, &out) < 0,
+    CHECK(idb_store_record(ctx, tx, store, value, key, true, &out) < 0,
           "§6.1's no-overwrite flag must refuse a key the store already holds a record for");
     {
         /* THE INTERNAL SLOT, not the accessor. `DOMException.prototype.name` is an IDL getter, so reading it
@@ -2166,7 +2308,7 @@ static void idb_store_selftest(JSContext *ctx)
        with a plausible datum and delete the fork the read should produce. */
     tainted = concolic_new(ctx, "{hash}", "{hash}", JS_NewString(ctx, "session-token"));
     key = idb_selftest_key(ctx, JS_NewInt32(ctx, 5));
-    idb_selftest_put(ctx, store, tainted, key);
+    idb_selftest_put(ctx, tx, store, tainted, key);
     JS_FreeValue(ctx, key);
     range = idb_selftest_range(ctx, JS_NewInt32(ctx, 5));
     got = idb_retrieve_value(ctx, store, range);
@@ -2185,7 +2327,7 @@ static void idb_store_selftest(JSContext *ctx)
     tainted = concolic_new(ctx, "{hash}", "{hash}", JS_NewString(ctx, "u-42"));
     key = idb_selftest_key(ctx, JS_DupValue(ctx, tainted));
     value = JS_NewString(ctx, "by-tainted-key");
-    idb_selftest_put(ctx, store, value, key);
+    idb_selftest_put(ctx, tx, store, value, key);
     JS_FreeValue(ctx, value);
     JS_FreeValue(ctx, key);
     range = idb_selftest_range(ctx, JS_DupValue(ctx, tainted));
@@ -2200,6 +2342,12 @@ static void idb_store_selftest(JSContext *ctx)
     JS_FreeValue(ctx, range);
     JS_FreeValue(ctx, tainted);
 
+    /* The upgrade transaction ends the way §5.4's commit task ends it, so the records above are the state the
+       next transaction finds — which is what §5.5 step 2 has to put back. */
+    idb_selftest_finish(ctx, tx);
+    idb_revert_selftest(ctx, conn, db, store);
+
+    JS_FreeValue(ctx, conn);
     JS_FreeValue(ctx, store);
     JS_FreeValue(ctx, db);
 }
