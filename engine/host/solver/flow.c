@@ -86,6 +86,71 @@ void flow_age_running(int64_t us) {
     g_running->cpu += us;
 }
 
+/* A FORKED SIBLING IS A CONTINUATION, NOT A NEWCOMER — so it inherits BOTH terms of its parent's account, and
+ * this is the one place that says so.
+ *
+ * A fork is "append an arm to a decision vector" (flow.h): the sibling holds the parent's frame snapshot, the
+ * parent's COW delta, the parent's DOM base, the parent's queued jobs and the parent's outstanding replies —
+ * every field of the parent's HISTORY is copied at the fork except the two the WFQ ranks by, which were left at
+ * the constructor's zeros. Both zeros are false statements about that flow, and each is false in the direction
+ * that promotes it:
+ *
+ *   `val` — the sibling has, by construction, executed every emission the parent made before the branch; they
+ *   are in its own delta and its own recipe replays them. Zeroing it says the flow that found six endpoints and
+ *   then branched produced nothing, and ranks its two continuations below arms nobody has looked at. The cold
+ *   tier already decided this question the other way at the OTHER place a flow is rebuilt from another's state:
+ *   park_flow carries `val` across the park and states plainly that a replay re-emits and the resulting
+ *   double-count is deliberate, because ORDER is the only thing a weight decides. A fork is the same rebuild
+ *   and was answering it differently.
+ *
+ *   `cpu` — the sibling has burned the parent's CPU, through the parent, on the prefix it is resuming. Zeroing
+ *   it hands a flow that has been running since boot a service notch of 0, which is the FULL optimism bonus
+ *   (1.0) that flow_weight reserves for a flow the scheduler has never given the thread to. That is the hole
+ *   the aging term cannot close from the other side: a flow that burns the thread without emitting sinks, but a
+ *   flow that BRANCHES while burning it hands its debt to a child born debt-free, so a forking loop — the
+ *   `Array.from(state.items)` walk FLOW_AGE_RATE was written against — ages forever and never sinks.
+ *
+ * WHAT THE TWO ZEROS DID TOGETHER, measured on the smoke fixture: every fork minted a flow at weight 1.0, the
+ * maximum a val-0 flow can hold and strictly above every flow that had consumed a quantum (bonus <= 0.5, since
+ * one notch of aging is 0.012 against half a point of optimism). So a newborn strictly outranked the whole
+ * backlog, the value yield fired at the fork, and the thread went to the newest flow while every flow that had
+ * already had one turn waited behind flows that did not exist yet. Forking replenishes the front of the queue
+ * faster than a quantum drains it, so no flow ever got a SECOND turn: 9451 flows, 14126 switches (1.5 turns
+ * each — one turn per flow plus one handoff per fork), `finished` 0, and a document whose deepest program index
+ * was still 1. That is not breadth-first exploration; it is a queue that can only ever be entered.
+ *
+ * INHERITING PUTS THE FORK AT THE BACK RATHER THAN THE FRONT. The sibling ties with its parent, so it does not
+ * dislodge it (flow_pick seeds the incumbent and takes a STRICT comparison), and it ranks BELOW every flow that
+ * has consumed less service — which is exactly the backlog. This is start-time fair queueing's rule and not a
+ * new policy: a continuation of an active flow enters at that flow's virtual time, never at the system's, or
+ * any flow can reset its own virtual clock by splitting. A genuinely from-baseline flow (the first flow, a
+ * candidate session, a cold resume) still enters at zero and still outranks everything, which is what
+ * §scheduler's "a never-run flow is never starved" is about. */
+void flow_fork_inherit(Flow *sib, const Flow *parent) {
+    DCHECK(sib != NULL && parent != NULL && sib != parent,
+           "a fork's accounting was inherited from nobody, or from itself — this is the one line that decides "
+           "where a newborn arm enters the queue, so it cannot be asked about one flow");
+    /* NOTHING MAY HAVE BEEN CREDITED OR CHARGED FIRST, because the inheritance ASSIGNS both terms. A caller
+       that ran the sibling — or credited it — before handing it its account would have run it at a rank nobody
+       chose, and the assignment would then silently erase whatever that run produced. */
+    DCHECK(sib->val == 0.0 && sib->cpu == 0,
+           "a forked sibling was credited or charged before it inherited its parent's account — it was ranked, "
+           "and possibly run, at a weight that belongs to no flow, and this assignment throws that away");
+    sib->val = parent->val;
+    sib->cpu = parent->cpu;
+    /* §scheduler'S ONE WFQ, ASSERTED AT THE FORK: A FORK IS RANK-NEUTRAL. The sibling is the same flow's path
+       with one more arm on it, so at the instant it is born it is worth exactly what the parent is worth —
+       branching is neither a promotion nor a demotion. It is not a tautology dressed as a check: it fires the
+       moment anything else enters flow_weight that a fork does not carry, which is precisely the shape every
+       banned fix for this defect takes (a depth bonus, a script-index term, a separate visit counter, a
+       "prefer flows that have run" tiebreak). Any of those would make the two sides differ here, at the fork,
+       instead of six minutes later in a progress line that says `finished 0`. */
+    DCHECK(flow_weight(sib) == flow_weight(parent),
+           "a fork changed the ranking — the sibling is the parent's path with one arm appended, so the two "
+           "must be worth the same at the instant of the branch; a weight term the fork does not carry lets a "
+           "flow change its own rank by branching, which is the one thing the WFQ may never let it do");
+}
+
 /* RELEASE ONE FLOW — see flow.h. This is where every field a Flow owns is given back, and the only place. */
 void flow_release(JSContext *ctx, Flow *f) {
     /* THE SCHEDULER IS NOT SWITCHED INTO IT. Everything below is released as PARKED state — the heap delta's

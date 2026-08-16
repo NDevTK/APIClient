@@ -1065,6 +1065,10 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
    already holds a segment for the parent can materialize the sibling's by forking it — the same O(1)
    shared-base-segment fork this line performs locally, performed there. */
     Flow *sib = flow_add(ctx, parent->fn, parent->world);
+    /* AND ITS ACCOUNT IS A CHILD OF THE PARENT'S TOO — the WFQ's two terms, taken over at the branch like every
+       other field of the parent's history copied below. It is FIRST because it is what decides where this flow
+       enters the queue, and everything after this line is the construction of a flow that is already ranked. */
+    flow_fork_inherit(sib, parent);
     sib->started = 1;                 /* HOT: resume from the cloned frame + blobs, never a fresh re-run */
     sib->frame = clone;               /* the frame snapshot taken AT the branch */
     sib->script_i = parent->script_i; /* same position in the script sequence */

@@ -310,6 +310,16 @@ void  flow_credit_emit(double v);   /* a NEW @H/@S from the running flow: raise 
    of the interval). Never a step count: see the `cpu` field. */
 void  flow_age_running(int64_t us);
 
+/* THE FORKED SIBLING TAKES OVER ITS PARENT'S ACCOUNT — both terms of the rank, at the instant of the branch.
+   A fork copies every other field of the parent's history (frame, delta, DOM base, jobs, replies, chunks) and
+   used to leave these two at the constructor's zeros, which told the WFQ that a flow running since boot had
+   emitted nothing and consumed no thread — the second of those being the FULL never-run optimism bonus. The
+   sibling then outranked every flow that had ever had a turn, so the frontier could only be entered and never
+   drained. Called by the fork and by nothing else; a from-baseline flow (the first flow, a candidate session,
+   a cold resume) keeps the zeros, which is what makes ITS bonus mean what it says. Asserts that a fork is
+   RANK-NEUTRAL — see the reasoning at the definition. */
+void  flow_fork_inherit(Flow *sib, const Flow *parent);
+
 /* RELEASE A FLOW THE SCHEDULER IS NOT SWITCHED INTO — the ONE teardown for a member of the frontier, and the
  * primitive the PARTIAL self-park needs (§scheduler: "an engine self-parks its residue to the IDB cold tier
  * under pressure"; §Time-travel-resume: "under RAM pressure the cold low-value tail serializes to IDB").
