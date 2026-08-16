@@ -13,6 +13,7 @@
 #include "core/css/css_property_applies.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
+#include "core/frame/viewport.h"
 #include "core/layout/used_value.h"
 
 static char *css_cv_strdup(const char *s)
@@ -428,8 +429,26 @@ static bool resolved_display_generates_a_box(lxb_dom_element_t *el)
     return box;
 }
 
-char *css_resolved_value(lxb_dom_element_t *el, const char *name)
+/* CSSOM §6.7.2's serialization of a used length, and the ONE place a used value crosses into a page. The
+   string is the EXAMPLE; `viewport_icb_derived` decides whether it crosses as itself or as the example of a
+   concolic whose domain is the viewport's, from the fact the length carries (css_length.h). */
+static JSValue css_resolved_used(JSContext *ctx, CssPx used)
 {
+    char *text = css_length_serialize_px(used.px);
+    JSValue v = JS_NewString(ctx, text);
+
+    free(text);
+    return viewport_icb_derived(used, v);
+}
+
+JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name)
+{
+    char *computed;
+    JSValue out;
+
+    DCHECK(ctx != NULL, "a resolved value was asked for with no realm to answer it in — the string is created "
+                        "there, and a used value derived from the viewport mints its domain in the element's "
+                        "document's realm, which is a different one and is read from the element itself");
     DCHECK(el != NULL && name != NULL, "a resolved value was asked for with no element or no property name");
     switch (css_resolved_kind(name)) {
     case CSS_RESOLVED_COMPUTED:
@@ -441,10 +460,10 @@ char *css_resolved_value(lxb_dom_element_t *el, const char *name)
            `Applies to:` line (core/css/css_property_applies.h) and it is what answers `width` on a
            non-replaced inline element — `auto`, in every user agent, and not a used value that does not exist.
            The second is `display: none`. Past them, the used value is CSS 2.1 §10's, and
-           core/layout/used_value.h computes the arms of §10 that need no containing block and crashes naming
-           the section for the arms that do. */
+           core/layout/used_value.h computes it — §10.1's containing block and §10.3.3's equation included —
+           crashing by section for the arms that need an intrinsic size. */
         if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) break;
-        return css_length_serialize_px(used_value_px(el, name));
+        return css_resolved_used(ctx, used_value_px(el, name));
     case CSS_RESOLVED_USED_IF_POSITIONED:
         /* "If the property applies to a positioned element and the resolved value of the display property is
            not none or contents, and the property is not over-constrained, then the resolved value is the used
@@ -455,15 +474,18 @@ char *css_resolved_value(lxb_dom_element_t *el, const char *name)
            answered. */
         if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) break;
         DFAIL("CSSOM §9 makes an inset property's resolved value the USED value for a POSITIONED element that "
-              "generates a box, and this element is one. CSS 2.1 §9.4.3 gives a RELATIVELY positioned box's "
-              "used `left`/`right` from the containing block's WIDTH (a percentage) and from each other (the "
-              "`left = -right` rule when one is `auto`), and §10.3.7 solves an ABSOLUTELY positioned box's "
-              "from the same constraint equation as its width — so both need the containing block, and both "
-              "are waiting on the one subproblem core/layout/used_value.h names: §10.3.3's equation over "
-              "§10.1's containing-block chain, whose base case is the ICB and whose width is a CONCOLIC. BUILD "
-              "that, then §9's THIRD conjunct, which is stated in terms of the same equation — an "
-              "OVER-CONSTRAINED pair (`left` and `right` both non-auto on a non-auto width) resolves to the "
-              "computed value");
+              "generates a box, and this element is one. THE CONTAINING BLOCK IS NO LONGER THE BLOCKER — "
+              "core/layout/used_value.c answers §10.1's width now, which is what a percentage inset resolves "
+              "against — and what is left is three things this component has not been asked for. (1) The four "
+              "insets are not among the ten PHYSICAL BOX-MODEL LENGTHS `used_value_px` carries; adding them is "
+              "adding a group, not a case. (2) CSS 2.1 §9.4.3 makes a RELATIVELY positioned box's `left` and "
+              "`right` a PAIR rather than two values — both `auto` makes both 0, one `auto` makes it the "
+              "negation of the other — so the entry has to be asked about the pair. (3) The over-constrained "
+              "case of that pair, and §9's own THIRD conjunct which is stated over it, both turn on the "
+              "containing block's `direction`, which is INHERITED by a cascade with no inheritance step. An "
+              "ABSOLUTELY positioned box is a fourth thing again: §10.3.7 solves its insets from the same "
+              "constraint equation as its width, against the PADDING EDGE of its nearest positioned ancestor, "
+              "which used_value.c's §10.1 fourth case crashes for and names in full");
         break;
     case CSS_RESOLVED_USED:
         DFAIL("CSSOM §9 makes this property's resolved value the USED value unconditionally — it is one of the "
@@ -480,7 +502,7 @@ char *css_resolved_value(lxb_dom_element_t *el, const char *name)
         /* "The resolved value is normal if the computed value is normal, or the used value otherwise." */
         char *v = cssom_cascaded_value(el, name);
 
-        if (css_cv_is(v, "normal")) return v;
+        if (css_cv_is(v, "normal")) { out = JS_NewString(ctx, v); free(v); return out; }
         free(v);
         DFAIL("CSSOM §9 makes `line-height`'s resolved value the USED value whenever the computed value is not "
               "`normal` — the absolute length a LAYOUT laid the line boxes out with, which for a number or a "
@@ -494,7 +516,7 @@ char *css_resolved_value(lxb_dom_element_t *el, const char *name)
            matrix() function … For other computed values, the resolved value is the computed value." */
         char *v = cssom_cascaded_value(el, name);
 
-        if (css_cv_is(v, "none")) return v;
+        if (css_cv_is(v, "none")) { out = JS_NewString(ctx, v); free(v); return out; }
         free(v);
         DFAIL("css-transforms §3.2 makes `transform` a resolved value special case: a <transform-list> resolves "
               "to ONE matrix() function, post-multiplying every function in the list into a 4x4 matrix and "
@@ -505,5 +527,11 @@ char *css_resolved_value(lxb_dom_element_t *el, const char *name)
         break;
     }
     }
-    return css_resolved_computed(el, name);
+    /* §9's "any other property", and the value every escape above breaks to: the COMPUTED value. A property no
+       cascade layer answers at all — a custom property nobody set — is the empty string, which is §6.6.1's own
+       answer for one that is not set rather than a default standing in for a value. */
+    computed = css_resolved_computed(el, name);
+    out = computed ? JS_NewString(ctx, computed) : JS_NewStringLen(ctx, "", 0);
+    free(computed);
+    return out;
 }

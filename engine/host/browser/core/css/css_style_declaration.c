@@ -969,20 +969,18 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
         }
         r = JS_NewString(ctx, (v && important) ? "important" : "");
         free(v);
+    } else if (computed) {
+        /* CSSOM §9's RESOLVED value, which for most properties is the computed value and for the box-model
+           ones is the used value (css_computed_value.h). It answers a JSValue rather than text because a used
+           value derived from CSS 2.1 §10.1's initial containing block carries the VIEWPORT's domain, and a
+           `char *` here would carry the number and drop the fork. */
+        r = css_resolved_value(ctx, cssd_owner_element(ctx, block), name);
     } else {
-        char *v;
+        size_t len = 0;
+        char *text = cssd_declarations_text(ctx, block, &len);
+        char *v = cssd_value_in_block(text, len, name, NULL);
 
-        if (computed) {
-            /* CSSOM §9's RESOLVED value, which for most properties is the computed value and for the box-model
-               ones is the used value (css_computed_value.h). */
-            v = css_resolved_value(cssd_owner_element(ctx, block), name);
-        } else {
-            size_t len = 0;
-            char *text = cssd_declarations_text(ctx, block, &len);
-
-            v = cssd_value_in_block(text, len, name, NULL);
-            free(text);
-        }
+        free(text);
         r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
         free(v);
     }
@@ -1057,21 +1055,20 @@ static JSValue js_cssd_camel_get(JSContext *ctx, JSValueConst this_val, int magi
 {
     const lxb_css_entry_data_t *e = lxb_css_property_by_id((uintptr_t)magic);
     JSValue block = cssd_block(ctx, this_val), r;
-    char *v;
 
     DCHECK(e != NULL, "a CSS attribute was declared with a property id the registry does not have");
     if (JS_IsException(block)) return block;
     if (cssd_flag(ctx, block, "computed")) {
-        v = css_resolved_value(cssd_owner_element(ctx, block), (const char *)e->name);
+        r = css_resolved_value(ctx, cssd_owner_element(ctx, block), (const char *)e->name);
     } else {
         size_t len = 0;
         char *text = cssd_declarations_text(ctx, block, &len);
+        char *v = cssd_value_in_block(text, len, (const char *)e->name, NULL);
 
-        v = cssd_value_in_block(text, len, (const char *)e->name, NULL);
         free(text);
+        r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
+        free(v);
     }
-    r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
-    free(v);
     JS_FreeValue(ctx, block);
     return r;
 }

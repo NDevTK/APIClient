@@ -145,16 +145,22 @@ static JSValue ev_long(JSContext *ctx, double v)
    round-half-away-from-zero are the same function on non-negative numbers, and a padding edge is a content box
    floored at zero plus two paddings CSS 2.1 §8.4 forbids to be negative. The assert below is what keeps that
    true rather than a remark that it happens to be: the day something hands this a negative length the two
-   tie-breaks separate, and the crash stands at the line where the choice would have to be made. */
-static JSValue ev_length_long(JSContext *ctx, double px)
+   tie-breaks separate, and the crash stands at the line where the choice would have to be made.
+   AND THE ROUNDING IS OVER THE EXAMPLE, WHICH IS WHY THE DOMAIN OUTLIVES IT. A padding edge whose box is sized
+   by CSS 2.1 §10.3.3's constraint equation is derived from the INITIAL CONTAINING BLOCK, so it carries the
+   viewport's domain (css_length.h) — `document.body.clientWidth < 768` is the same responsive gate as
+   `innerWidth < 768` and a bare integer there deletes the mobile arm. §6's `long` is the EXAMPLE the concolic
+   carries, minted through viewport.h's one seam, which hands back the plain integer for a box whose size the
+   author's own declarations determined. */
+static JSValue ev_length_long(JSContext *ctx, CssPx px)
 {
-    DCHECK(isfinite(px) && px >= 0.0,
+    DCHECK(isfinite(px.px) && px.px >= 0.0,
            "§6's clientWidth/clientHeight step 3 was handed a padding edge that is not a NON-NEGATIVE FINITE "
            "length. A padding edge is a content box floored at zero (css-sizing §5) plus two paddings CSS 2.1 "
            "§8.4 forbids to be negative, so a negative or non-finite one is a used value that lost an operand — "
            "and it would also make this conversion's tie-break observable, which the derivation above says it "
            "is not");
-    return ev_long(ctx, floor(px + 0.5));
+    return viewport_icb_derived(px, ev_long(ctx, floor(px.px + 0.5)));
 }
 
 /* A `long` member that reports the VIEWPORT: the modelled geometry as the EXAMPLE of a concolic, minted
@@ -348,9 +354,10 @@ static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
           "the right-most and bottom-most of its padding edge and the margin edges of all of its descendants' "
           "boxes. Every one of those is a POSITION, which is the half of a box this engine still does not have "
           "— core/layout/used_value.h computes a padding edge's EXTENT (`clientWidth` above reports one) and an "
-          "extent locates nothing. BUILD the positions: CSS 2.1 §10.1's containing-block chain, whose base case "
-          "is the initial containing block viewport.c already models, and §9.4's flow layout that places each "
-          "in-flow box within it. Then make an element's scroll position per-flow state in the COW delta");
+          "extent locates nothing. BUILD the positions: §10.1's containing block is answered now, so what is "
+          "left is CSS 2.1 §9.4's NORMAL FLOW placing each in-flow box inside the rectangle §10.1 gives it, "
+          "which needs every preceding sibling's used HEIGHT and §8.3.1's margin collapsing between them. Then "
+          "make an element's scroll position per-flow state in the COW delta");
     return JS_UNDEFINED;
 }
 
@@ -392,10 +399,11 @@ static JSValue ev_scroll_extent(JSContext *ctx, const EvTarget *t, bool vertical
           "margin edge of all of the element's descendants' boxes, excluding boxes that have an ancestor of the "
           "element as their containing block'. THAT IS NOT THE PADDING EDGE'S EXTENT, which "
           "core/layout/used_value.h now computes and `clientWidth` above reports: it is a right-most POSITION "
-          "over the element's box and every descendant's, so it needs each of those boxes PLACED and it needs "
-          "to know which containing block each of them has. BUILD CSS 2.1 §10.1's containing-block chain and "
-          "the flow layout that positions a box inside one; there is no answer to derive from the viewport for "
-          "an element that is not the root, and an extent cannot stand in for one");
+          "over the element's box and every descendant's, so it needs each of those boxes PLACED. It also needs "
+          "to know WHICH CONTAINING BLOCK each of them has, and that half is answered — core/layout/used_value.c "
+          "decides it per element for the exclusion this step states. BUILD the other half: CSS 2.1 §9.4's flow "
+          "layout, which positions a box inside the rectangle §10.1 gives it. There is no answer to derive from "
+          "the viewport for an element that is not the root, and an extent cannot stand in for one");
     return ev_long(ctx, 0.0);
 }
 
@@ -427,8 +435,10 @@ static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical
        satisfied by construction rather than by undoing anything — a used value IS in CSS pixels, and §2.2's two
        zooms are what would scale it into device pixels for painting. What is left is the padding edge itself,
        which core/layout/used_value.h computes: `width: auto` reaches CSS 2.1 §10.3.3's constraint equation
-       there and crashes naming the containing-block chain it is waiting on, which is that component's own
-       subproblem and no longer this one's. */
+       there and is solved against §10.1's containing block, so an ordinary `div` answers a real number here —
+       one that carries the ICB's domain, which is why the conversion below hands the pair to viewport.h rather
+       than returning an integer. The arms that still crash are that component's own subproblem and not this
+       one's: a shrink-to-fit width and a content-based height need the box's text measured. */
     return ev_length_long(ctx, used_value_padding_edge_px(lxb_dom_interface_element(t->node), vertical));
 }
 

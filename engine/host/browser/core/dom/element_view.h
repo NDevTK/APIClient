@@ -16,22 +16,24 @@
  *   A BOX HAS AN EXTENT AND IT HAS NO POSITION, and that split is what decides which §6 member below answers
  *   and which one crashes. It is not this component's distinction; it is the spec's own. An EXTENT is a
  *   distance between two parallel edges of ONE box, and core/layout/used_value.h computes those: CSS 2.1 §10's
- *   used value of every box-model length §10 defines without a containing block, and over them css-sizing §5's
- *   border box and CSS 2.1 §8's PADDING EDGE. A POSITION is a coordinate in some other box's space, so it needs
- *   §10.1's containing-block chain and the flow layout that places a box inside one, and NOTHING has a position
- *   here except the INITIAL CONTAINING BLOCK that viewport.c models.
+ *   used value of every box-model length, over §10.1's containing block, and over them css-sizing §5's border
+ *   box and CSS 2.1 §8's PADDING EDGE. A POSITION is a coordinate in some other box's space, so it needs §9.4's
+ *   flow layout to PLACE a box inside the containing block §10.1 gives it — the chain answers the rectangle's
+ *   width and says nothing about where anything sits in it — and NOTHING has a position here except the
+ *   INITIAL CONTAINING BLOCK that viewport.c models.
  *   SO §6 SPLITS EXACTLY THERE, and each member's own text says which side it is on. `clientTop`/`clientLeft`
  *   are neither — §6 defines them as a COMPUTED VALUE, core/css/css_computed_value.h's `border-*-width`, and
  *   not as a geometry at all. `clientWidth`/`clientHeight` ask for "the unscaled width of the PADDING EDGE",
  *   which is an extent, and are answered. `scrollWidth`/`scrollHeight`, the `scrollTop`/`scrollLeft` setter and
  *   `getClientRects()` all reach for the element's SCROLLING AREA or its border AREA — §2 defines the first by
  *   its four edges and the second is a rectangle, so both are positions over this box AND every descendant's —
- *   and all three still crash, naming the chain rather than the extent. An extent cannot stand in for a
- *   position, which is the one way this component could go wrong now that it has one.
- *   WHAT THE EXTENTS ARE STILL BLOCKED ON, because it is one thing and not several: a `width: auto` box is CSS
- *   2.1 §10.3.3's constraint equation, whose remaining unknown is that same §10.1 chain and the CONCOLIC width
- *   of the ICB at its base. used_value.h states it in full, and it is the same subproblem the positions need,
- *   which is why there is one queue here and not two.
+ *   and all three still crash, naming §9.4's FLOW LAYOUT rather than the extent. An extent cannot stand in for
+ *   a position, which is the one way this component could go wrong now that it has one.
+ *   THE EXTENTS ARE NO LONGER BLOCKED ON THE SAME THING THE POSITIONS ARE, and that is what separated the two
+ *   queues: a `width: auto` box is CSS 2.1 §10.3.3's constraint equation, which used_value.c now solves against
+ *   §10.1's containing block down to the ICB at its base, so `clientWidth` answers for an ordinary box. What a
+ *   POSITION still needs is §9.4 placing each box inside that rectangle — a different section, and the one
+ *   every member below that crashes is waiting on.
  *
  * THOSE ARE TWO DIFFERENT ANSWERS AND THE SPEC ASKS THEM SEPARATELY, which is the whole reason this component
  * can answer anything at all. §6's algorithms use box EXISTENCE as a gate and then, in several branches, route
@@ -90,11 +92,13 @@
  * put an engine's own missing component under the vocabulary reserved for what the environment does not tell
  * us, invent an example for `rect.top` that nothing computed, and silence the crash that is the only thing
  * asking for the layout to be built.
- * ONE EDGE OF THAT RULE IS ALREADY VISIBLE AND IS USED_VALUE.H'S TO CROSS, NOT THIS FILE'S: the root element's
- * `width: auto` resolves against the ICB, whose width viewport.h mints as a concolic, so the first used value
- * derived from it carries that domain and `clientWidth` will report a concolic for those boxes — by propagation
- * from the operand, never by a second policy decided here. That lands with §10.3.3 and the containing-block
- * chain, in the component that owns them.
+ * THAT EDGE IS CROSSED NOW, AND IT IS USED_VALUE.H'S CROSSING AND NOT THIS FILE'S. A `width: auto` box resolves
+ * through CSS 2.1 §10.3.3's constraint equation against §10.1's containing block, whose chain bottoms out in
+ * the ICB — so an ordinary `div`'s padding edge carries the viewport's domain and `clientWidth` reports a
+ * concolic for it, while the `width: 100px; padding: 10px` box above still reports a concrete 120. Neither is a
+ * decision made here: the used value carries the fact it derives from (css_length.h), `ev_length_long` rounds
+ * the EXAMPLE and hands the pair to viewport.h's one seam, and a box whose size the author pinned arrives with
+ * no fact to mint. Propagation from the operand, never a second policy.
  *
  * WHAT IS HONESTLY ABSENT: `checkVisibility`, `scrollIntoView`, `scroll`, `scrollTo`, `scrollBy` and
  * `currentCSSZoom`. `checkVisibility` needs a flat-tree walk over computed `content-visibility`, `visibility`

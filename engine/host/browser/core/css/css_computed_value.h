@@ -16,9 +16,9 @@
  *   properties and the USED value for a named set — the box-model lengths (`width`, `height`, the margins and
  *   paddings), the insets of a positioned box, the colors, `line-height`, and the special cases other specs
  *   declare (`transform` resolves to a matrix). A used value is what a LAYOUT produced, and CSS 2.1 §10 is
- *   that layout: core/layout/used_value.h owns it and computes the arms of §10 that need no containing block
- *   (a margin or padding whose computed value is an absolute length; a `width` or `height` that is one),
- *   crashing by SECTION for the arms that do. What is NOT a layout question is §9's OTHER conjunct — whether
+ *   that layout: core/layout/used_value.h owns it and computes every arm of §10 that needs no INTRINSIC SIZE —
+ *   §10.1's containing block and §10.3.3's constraint equation included — crashing by SECTION for the arms
+ *   that need the box's own content measured with a real font. What is NOT a layout question is §9's OTHER conjunct — whether
  *   the property APPLIES to the element at all — and core/css/css_property_applies.h answers it from the
  *   property's own `Applies to:` line, which is why `getComputedStyle(span).width` reports the computed `auto`
  *   that every user agent reports rather than reaching for a box.
@@ -39,6 +39,8 @@
 #include <stdbool.h>
 
 #include <lexbor/dom/dom.h>
+
+#include "quickjs.h"
 
 /* THE COMPUTED VALUE of `name` on `el`, as text. OWNED: the caller frees. `name` must be one of the properties
    this component models — `css_computed_models` is that list, and asking for another one crashes. */
@@ -76,8 +78,17 @@ typedef enum {
 
 CssResolvedKind css_resolved_kind(const char *name);
 
-/* CSSOM §9's RESOLVED VALUE of `name` on `el` — what getComputedStyle() answers. OWNED. Any property name,
-   including a custom one. */
-char *css_resolved_value(lxb_dom_element_t *el, const char *name);
+/* CSSOM §9's RESOLVED VALUE of `name` on `el` — what getComputedStyle() answers. Any property name, including
+   a custom one; a name no cascade layer answers is the EMPTY STRING, which is §6.6.1's own answer for a
+   property that is not set and not a hole where a value would be.
+   IT IS A `JSValue` AND NOT A `char *`, AND THAT IS THE POINT OF THE ENTRY RATHER THAN A DETAIL OF IT. §9 makes
+   the resolved value of the box-model lengths the USED value, CSS 2.1 §10.1 makes the base case of every used
+   width the INITIAL CONTAINING BLOCK, and core/frame/viewport.h makes the ICB's dimensions a PICKED
+   environment fact — so the string this returns for `width` may be the example of a CONCOLIC whose domain is
+   the viewport's, and `parseInt(getComputedStyle(el).width) < 768` forks the same two worlds `innerWidth < 768`
+   does. A `char *` could carry the number and not the domain, and the arm behind that gate would be deleted
+   with nothing to say so. `ctx` is the CALLER's realm — the string is created in it — while the realm the ICB
+   is answered per is the ELEMENT's document's, which core/layout/used_value.c reads for itself. */
+JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name);
 
 #endif

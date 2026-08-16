@@ -16,9 +16,11 @@
  * below does, and a box type whose section is unbuilt CRASHES naming that section rather than borrowing the
  * neighbouring one's answer.
  *
- * WHAT THIS COMPONENT COMPUTES TODAY, AND WHY THAT SET AND NOT A LARGER ONE. Two of §10's arms need NO layout
- * at all, and they are not the small cases — and the last entry below is not one of §10's arms but a BOX EDGE
- * stated over them, which is here for the reason its own paragraph gives:
+ * WHAT THIS COMPONENT COMPUTES TODAY, AND WHY THAT SET AND NOT A LARGER ONE. The set is every arm of §10 that
+ * needs no INTRINSIC SIZE — no measurement of the box's own content — plus the box edge stated over them and
+ * the containing block they are all stated against. The one thing missing from all of it is therefore one
+ * thing: a shrink-to-fit width and a content-based height each need the box's text measured with a real font,
+ * and nothing here does:
  *   - A MARGIN OR PADDING whose computed value is an absolute length. Nothing in CSS 2.1 alters it. §10.3.3's
  *     constraint equation solves for `auto` values and, when the box is OVER-CONSTRAINED, for one horizontal
  *     margin; it never touches a vertical margin, and §10.6.3 gives the vertical pair exactly one rule (`auto`
@@ -51,36 +53,44 @@
  *     are computed once, in one function, and both directions of §5's conversion are stated over that one
  *     result — the double-count is not a mistake to avoid, it is a sentence there is no longer anywhere to
  *     write.
+ *   - A MARGIN, PADDING OR `width` whose computed value is a PERCENTAGE, which §8.3, §8.4 and §10.2 all resolve
+ *     against the same measure: the WIDTH of the containing block, and for §8.3 and §8.4 that is true of the
+ *     VERTICAL sides too ("even for 'padding-top' and 'padding-bottom'"). That is the rule most implementations
+ *     get wrong, and it is why neither arm below takes an axis. A percentage `height` is the exception and is
+ *     not here: §10.5 makes it a COMPUTED-value question (it computes to `auto` when the containing block's
+ *     height is not specified explicitly), so it belongs one stage earlier and crashes naming that stage.
+ *   - AND §10.3.3's CONSTRAINT EQUATION, which is what `width: auto` on an ordinary block-level box resolves
+ *     through and is therefore the arm most of the web reaches first. Its seven terms,
+ *         margin-left + border-left-width + padding-left + width + padding-right + border-right-width +
+ *         margin-right = width of containing block
+ *     are every one of them read back through the arms above, so the section is a solve for whichever of them
+ *     is `auto` (rule 5 for `width`, rules 2/4/6 for the margins) and nothing more — plus §10.4's clamp by
+ *     `min-width`, whose initial 0 is always in effect and is therefore part of the answer rather than a
+ *     second pass. What §10.3.3 still crashes for is its OVER-CONSTRAINED case, and it is not a layout gap:
+ *     WHICH of the two margins is ignored is a fact about the containing block's computed `direction`, and
+ *     `direction` is inherited by a cascade that has no inheritance step.
+ *   - AND §10.1's CONTAINING BLOCK, which every one of those percentages and every one of those `auto` values
+ *     is stated against. It is a recursion — "the content edge of the nearest BLOCK CONTAINER ancestor box" —
+ *     and it terminates because §10.1's first case makes the ROOT ELEMENT's containing block the INITIAL
+ *     CONTAINING BLOCK, which "has the dimensions of the viewport" core/frame/viewport.h models. Its other two
+ *     cases crash, and for reasons that are not this one's: a `fixed` box's containing block is the viewport
+ *     (the same rectangle, but §10.3.7's equation is what turns it into a used width) and an `absolute` box's
+ *     is the PADDING EDGE of the nearest positioned ancestor — a RECTANGLE, where this component computes
+ *     extents, so it is waiting on box positions and §9.4's flow layout rather than on anything here.
  *
- * AND WHY THE ROOT ELEMENT'S `width: auto` IS STILL NOT AMONG THEM, WHICH IS THE ONE THING TO READ BEFORE
- * ADDING IT. §10.3.3's constraint equation has SEVEN terms,
- *     margin-left + border-left-width + padding-left + width + padding-right + border-right-width +
- *     margin-right = width of containing block
- * and EVERY ONE OF THEM IS READABLE. This paragraph used to say that two were not, because lexbor's property
- * registry carries no `border-*-width` longhand — it has the `border` and `border-<side>` SHORTHANDS and the
- * four `border-*-color` longhands and nothing else of the border, so `border: 1px solid red` set a width no
- * cascade read could see. That is built: core/css/css_shorthand.c expands `border`, `border-<side>`,
- * `border-width` and `border-style`, and core/css/css_computed_value.c derives the two longhands' computed
- * value (CSS 2.1 §8.5.1's rule that a `none`/`hidden` style makes it 0 included, and that file states why the
- * rule lives at the computed value rather than at the used one).
- * WHAT IS LEFT IS THE CONTAINING BLOCK, and it is two problems. §10.1's CHAIN makes every block-level box's
- * containing block the content edge of its nearest block container ancestor, so the equation is recursive; the
- * base case is real, because §10.1 makes the ROOT ELEMENT's the INITIAL CONTAINING BLOCK core/frame/viewport.c
- * models. And the ICB's width is not a number — see the paragraph below.
- *
- * THE GEOMETRY IS CONCRETE, AND A GEOMETRY DERIVED FROM THE VIEWPORT IS NOT. c35f1fed decided the first half
- * and it is right: viewport.h's test is whether the model PICKED one point out of a range the environment
- * leaves free or DERIVED the only value the model permits, and a box's size is neither — it is what a LAYOUT
- * determines from this tree and this cascade, so it is a computed number and a concolic there would invent an
- * example nothing computed. Every value this component returns today is that: an absolute length the author
- * wrote, or a zero §10.6.3 states. But the half that decision did not have to face is that the ICB's width is
- * a PICKED environment fact (viewport.h says so, and `viewport_env_value` is the seam that mints it), so a
- * used width DERIVED from it inherits its domain — `parseInt(getComputedStyle(el).width) < 768` is the same
- * responsive gate as `innerWidth < 768`, and answering it with a bare 1280 deletes the mobile arm exactly as
- * viewport.h warns. That is PROPAGATION and not a second policy: geometry stays concrete, and a value computed
- * FROM a concolic operand stays concolic because every operand's domain rides its result. It is also why the
- * viewport-unit arm of css_length.c crashes rather than resolving `50vw` — see its message: the resolved-value
- * path is a `char *`, and it stops being one on the day the first viewport-derived used value lands.
+ * A GEOMETRY IS CONCRETE AND A GEOMETRY DERIVED FROM THE VIEWPORT IS NOT, WHICH IS WHY A USED VALUE IS A
+ * `CssPx` AND NOT A `double`. c35f1fed decided the first half and it is right: viewport.h's test is whether the
+ * model PICKED one point out of a range the environment leaves free or DERIVED the only value the model
+ * permits, and a box's size is neither — it is what a LAYOUT determines from this tree and this cascade, so a
+ * concolic there would invent an example nothing computed. But the ICB's width IS a picked environment fact,
+ * so every used value the equation above derives from it inherits that domain:
+ * `parseInt(getComputedStyle(el).width) < 768` is the same responsive gate as `innerWidth < 768`, and
+ * answering it with a bare 1264 deletes a responsive bundle's whole mobile world exactly as viewport.h warns.
+ * That is PROPAGATION and not a second policy — every operand's domain rides its result — and css_length.h
+ * states the shape it rides in: the EXAMPLE is the number, which is what C compares and what the arithmetic
+ * here runs on, and the FACT is what the JS boundary mints the domain from. `viewport_icb_derived` is that
+ * boundary and it is the only switch over the fact in the engine, so a used length either crosses to a page
+ * through it or does not cross at all.
  *
  * NOTHING HERE IS STORED, SO NOTHING HERE TIME-TRAVELS — and that is a decision with a reason, not an omission.
  * A layout is per-flow state: two flows with different DOMs have different boxes, and a box tree cached across
@@ -98,25 +108,30 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "core/css/css_length.h"
+
 /* THE USED VALUE of `name` on `el`, in CSS pixels. `name` is one of the physical box-model lengths CSSOM §9
    routes here — the four margins, the four paddings, `width` and `height` — and the caller has ALREADY
    established §9's two conjuncts (the property applies to the element, and the element generates a box), which
    is why nothing here re-asks them. A case CSS 2.1 §10 defines and this component does not compute crashes
-   naming its own section; there is no fallback answer. */
-double used_value_px(lxb_dom_element_t *el, const char *name);
+   naming its own section; there is no fallback answer.
+   IT IS A `CssPx` AND NOT A `double` because §10.1's base case is the viewport — see the header above and
+   css_length.h. A caller that reports one to a page mints its domain through `viewport_icb_derived`; a caller
+   that does arithmetic on one uses css_length.h's, which propagates the fact and crashes where two facts
+   would have to be carried by one source key. */
+CssPx used_value_px(lxb_dom_element_t *el, const char *name);
 
 /* THE USED EXTENT OF THE PADDING EDGE on one axis, in CSS pixels — the horizontal one for `vertical` false and
    the vertical one for true. CSSOM VIEW §6's `clientWidth` and `clientHeight` step 3 is its caller, and the
    header above derives it: the content box on that axis plus the two paddings, with css-sizing §5 deciding
    which box `used_value_px` handed back.
    IT IS AN EXTENT AND NOT AN EDGE POSITION, which is the whole reason these two §6 members can be answered
-   while `getClientRects()` cannot: a position is a coordinate in the viewport's space and needs §10.1's
-   containing-block chain, and a distance between two parallel edges of ONE box needs none of it.
+   while `getClientRects()` cannot: a POSITION is a coordinate in the ICB's own space and needs §9.4's flow
+   layout to place each box inside the containing block §10.1 gives it, and a distance between two parallel
+   edges of ONE box needs none of that — only the chain's WIDTH, which §10.1 answers.
    The caller has already established §6's step 1 — the element has an associated box and that box is not
    inline — which is what makes the size properties apply to it at all. Every arm CSS 2.1 §10 defines and this
-   component does not compute crashes through `used_value_px` naming its own section, so an ordinary block-level
-   box with `width: auto` reaches §10.3.3's constraint equation and the containing-block chain it is waiting
-   on. */
-double used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical);
+   component does not compute crashes through `used_value_px` naming its own section. */
+CssPx used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical);
 
 #endif

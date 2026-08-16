@@ -92,6 +92,43 @@ double viewport_device_pixel_ratio(JSContext *ctx)
     return VIEWPORT_DPPX;
 }
 
+/* CSS 2.1 §10.1: the initial containing block "has the dimensions of the viewport". */
+CssPx viewport_icb_width(JSContext *ctx)
+{
+    return css_px_env(CSS_ENV_ICB_WIDTH, ctx, viewport_width(ctx));
+}
+
+CssPx viewport_icb_height(JSContext *ctx)
+{
+    return css_px_env(CSS_ENV_ICB_HEIGHT, ctx, viewport_height(ctx));
+}
+
+/* See viewport.h: the one switch over CssEnvFact, so a used length mints its domain in one place. */
+JSValue viewport_icb_derived(CssPx len, JSValue computed)
+{
+    static const char *const MEMBER[] = {
+        NULL, "initialContainingBlock.width", "initialContainingBlock.height",
+    };
+
+    if (len.env == CSS_ENV_NONE) {
+        DCHECK(len.realm == NULL,
+               "a length that derives from NO environment fact carried a realm anyway — the two are written "
+               "together by css_px_env and by nothing else, so one without the other is a length assembled "
+               "field-by-field past that entry");
+        return computed;
+    }
+    DCHECK((unsigned)len.env < sizeof(MEMBER) / sizeof(MEMBER[0]),
+           "a length carries a CssEnvFact this seam has no member name for. Every fact is a viewport fact — "
+           "css_length.h says so, and the test for one is viewport.h's — so a new fact is a new row HERE, and "
+           "a fact without one would cross to the page as a bare number with its domain dropped");
+    DCHECK(viewport_exists(len.realm),
+           "a length derived from the INITIAL CONTAINING BLOCK reached the page out of a realm whose document "
+           "is not being presented. §10.1's ICB has the dimensions of the viewport, and viewport.h makes a "
+           "document that is not fully active have none — so this length was derived from a rectangle that "
+           "does not exist rather than from one whose size is a UA choice");
+    return viewport_env_value(len.realm, MEMBER[len.env], computed);
+}
+
 /* See viewport.h: the one seam, and the one speller of the key. */
 JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
 {

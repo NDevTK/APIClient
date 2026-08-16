@@ -74,6 +74,7 @@
 
 #include <stdbool.h>
 #include "quickjs.h"
+#include "core/css/css_length.h"
 
 /* Declared once per AGENT: the §4 members' names and the per-realm slot their §13.1 latch lives in. It also
    REGISTERS the per-realm install, so no host has a line to remember. */
@@ -104,6 +105,26 @@ double viewport_height(JSContext *ctx);
    `resolution` feature reports as `dppx`. A modelled 1.0 is a UA with a non-HiDPI display, chosen for the same
    reason the size is. */
 double viewport_device_pixel_ratio(JSContext *ctx);
+
+/* CSS 2.1 §10.1's INITIAL CONTAINING BLOCK — "the containing block in which the root element lives is a
+   rectangle called the initial containing block. For continuous media, IT HAS THE DIMENSIONS OF THE VIEWPORT
+   and is anchored at the canvas origin". So this is not a second geometry beside the two above, it IS them,
+   stated in §10's own vocabulary because that is the vocabulary a layout asks in: core/layout/used_value.h's
+   containing-block chain is a recursion, and it bottoms out here and nowhere else.
+   IT IS ITS OWN ENVIRONMENT SOURCE ALL THE SAME, by element_view.h's test rather than in spite of it.
+   `innerWidth` INCLUDES a rendered scroll bar and the ICB does not, so
+   `innerWidth - parseInt(getComputedStyle(document.documentElement).width)` is a bundle measuring the scroll
+   bar — a question with two answers, which is what makes them different facts even in a UA that renders no
+   scroll bar and reports the same number for both. */
+CssPx viewport_icb_width(JSContext *ctx);
+CssPx viewport_icb_height(JSContext *ctx);
+
+/* THE ONE SEAM A VALUE DERIVED FROM THE ICB CROSSES to become what the page reads, and the ONE switch over
+   `CssEnvFact` — so a length that crosses to JS anywhere in this engine mints its domain here or not at all.
+   `computed` is the SERIALIZED example the member's own IDL type demanded (CSSOM §6.7.2's `1264px` for a
+   resolved value, §6's `long` for a client extent) and is CONSUMED. A length whose `env` is CSS_ENV_NONE is
+   handed back unchanged — that is the positive statement css_length.h describes, not a missing domain. */
+JSValue viewport_icb_derived(CssPx len, JSValue computed);
 
 /* CSSOM VIEW §4's `scrollX`/`scrollY` — "the x-coordinate, relative to the initial containing block origin, of
    the left of the viewport". DERIVED, not stored, and the derivation is in viewport.c: no box in this model has

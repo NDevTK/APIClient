@@ -10,18 +10,23 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/css/css_property_applies.h"
+#include "core/dom/document.h"
+#include "core/frame/viewport.h"
 #include "core/layout/used_value.h"
 
 /* CSS 2.1 §10.3's OWN LIST OF BOX TYPES, which is the list of algorithms `width` has. The names are the
-   spec's; the ones this file collapses are collapsed for a stated reason and never for convenience:
-   §10.3.5 (floating) and §10.3.7 (absolutely positioned) are ONE member here because the two arms this
-   component computes — a non-auto size, and a non-auto margin — are the same in both, and every arm where they
-   differ crashes naming both sections rather than either one. */
+   spec's, and there is one member per section because the sections DISAGREE at exactly the arms this component
+   computes. §10.3.5 and §10.3.7 used to be one member here on the ground that a non-auto size and a non-auto
+   margin read the same in both; that is true and it was still the wrong shape, because a computed `auto`
+   MARGIN does not — §10.3.5 and §10.3.9 both say outright that its used value is 0, while §10.3.7 solves it
+   from a constraint equation between `left` and `right`. One member for the two turned a rule this component
+   can state into a crash it had no way to tell apart from one it cannot. */
 typedef enum {
     UV_BOX_INLINE = 0,     /* §10.3.1 / §10.6.1 — an inline box; `width` and `height` do not apply to it */
     UV_BOX_BLOCK_FLOW,     /* §10.3.3 / §10.6.3 — block-level, in normal flow: the constraint equation's box */
-    UV_BOX_OUT_OF_FLOW,    /* §10.3.5 / §10.3.7 — floating, or absolutely positioned */
-    UV_BOX_INLINE_BLOCK,   /* §10.3.9 — shrink-to-fit when auto, the computed value otherwise */
+    UV_BOX_FLOAT,          /* §10.3.5 — floating: shrink-to-fit when auto, `auto` margins are 0 */
+    UV_BOX_ABS,            /* §10.3.7 — absolutely positioned: the equation between `left`, `width`, `right` */
+    UV_BOX_INLINE_BLOCK,   /* §10.3.9 — shrink-to-fit when auto, `auto` margins are 0 */
     UV_BOX_TABLE,          /* CSS 2.1 §17.5 — the table's own width and height algorithms, not §10's */
     UV_BOX_ITEM            /* a flex or grid item: css-flexbox §9.7 / css-grid sizes it, and §10 does not */
 } UvBox;
@@ -86,7 +91,7 @@ static UvBox uv_box_kind(lxb_dom_element_t *el)
        relatively positioned box is laid out in normal flow and then OFFSET, so §10.3.3 is still its section. */
     if (uv_computed_is(el, "position", "absolute") || uv_computed_is(el, "position", "fixed")) {
         free(display);
-        return UV_BOX_OUT_OF_FLOW;
+        return UV_BOX_ABS;
     }
     parent_display = css_box_parent_display(lxb_dom_interface_node(el));
     if (uv_display_is_flex_or_grid(parent_display)) {
@@ -95,7 +100,7 @@ static UvBox uv_box_kind(lxb_dom_element_t *el)
         return UV_BOX_ITEM;
     }
     free(parent_display);
-    if (!uv_computed_is(el, "float", "none")) { free(display); return UV_BOX_OUT_OF_FLOW; }
+    if (!uv_computed_is(el, "float", "none")) { free(display); return UV_BOX_FLOAT; }
     if (strcmp(display, "inline") == 0)            kind = UV_BOX_INLINE;
     else if (strcmp(display, "inline-block") == 0) kind = UV_BOX_INLINE_BLOCK;
     else                                           kind = UV_BOX_BLOCK_FLOW;
@@ -139,8 +144,8 @@ static void uv_require_unclamped(lxb_dom_element_t *el, bool vertical)
    terms to come to disagree, which is the only way the padding edge and the size it is derived from can stop
    describing the same box. */
 typedef struct {
-    double padding;   /* padding-left + padding-right, or padding-top + padding-bottom */
-    double border;    /* border-left-width + border-right-width, or the top/bottom pair */
+    CssPx padding;   /* padding-left + padding-right, or padding-top + padding-bottom */
+    CssPx border;    /* border-left-width + border-right-width, or the top/bottom pair */
 } UvSurround;
 
 static UvSurround uv_surround(lxb_dom_element_t *el, bool vertical)
@@ -152,7 +157,7 @@ static UvSurround uv_surround(lxb_dom_element_t *el, bool vertical)
         { "border-left-width", "border-right-width" }, { "border-top-width", "border-bottom-width" },
     };
     int axis = vertical ? 1 : 0, i;
-    UvSurround s = { 0.0, 0.0 };
+    UvSurround s = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
 
     for (i = 0; i < 2; i++) {
         char *bw = uv_computed(el, BORDERS[axis][i]);
@@ -164,10 +169,10 @@ static UvSurround uv_surround(lxb_dom_element_t *el, bool vertical)
                "one — 0 for a `none`/`hidden` style, 1/3/5px for the three keywords, the absolutized length "
                "otherwise — so a percentage or a keyword here is a rule that did not run");
         free(bw);
-        s.border  += len.px;
-        s.padding += used_value_px(el, PADDINGS[axis][i]);
+        s.border  = css_px_add(s.border, css_px(len.px));
+        s.padding = css_px_add(s.padding, used_value_px(el, PADDINGS[axis][i]));
     }
-    DCHECK(s.padding >= 0.0 && s.border >= 0.0,
+    DCHECK(s.padding.px >= 0.0 && s.border.px >= 0.0,
            "css-sizing §5's conversion between the content box and the border box was handed a NEGATIVE "
            "surround. CSS 2.1 §8.4 states outright that 'negative values for padding properties are not "
            "allowed' and css-backgrounds-3 §3.3's <line-width> is a non-negative <length>, so lexbor drops "
@@ -182,9 +187,9 @@ static UvSurround uv_surround(lxb_dom_element_t *el, bool vertical)
    below zero — a real disagreement and a rounding artifact then look identical, and the assert that is supposed
    to catch the first would be tripped by the second. Subtracting the very number that was added cancels
    exactly, which is what makes that assert mean what it says. */
-static double uv_surround_total(UvSurround s)
+static CssPx uv_surround_total(UvSurround s)
 {
-    return s.padding + s.border;
+    return css_px_add(s.padding, s.border);
 }
 
 /* css-sizing §5's `box-sizing`, asked as the ONE question both directions of its conversion turn on. The
@@ -220,25 +225,203 @@ static bool uv_is_border_box(lxb_dom_element_t *el)
  * border-box size the border box GROWS to hold them — "the border-box size ends up at 120px, even though
  * width: 100px is specified for the border box". The used border-box size is therefore the LARGER of the two,
  * and computing it needs exactly the four terms §10.3.3 was waiting on, two of which are the border widths. */
-static double uv_border_box_size(lxb_dom_element_t *el, double declared, bool vertical)
+static CssPx uv_border_box_size(lxb_dom_element_t *el, CssPx declared, bool vertical)
 {
     UvSurround s = uv_surround(el, vertical);
-    double surround = uv_surround_total(s);
 
     DCHECK(uv_is_border_box(el),
            "css-sizing §5's border-box arm was reached for a box whose `box-sizing` is `content-box` — the "
            "declared length is then the CONTENT box's and this function would report it as the border box's");
-    return declared > surround ? declared : surround;
+    return css_px_max(declared, uv_surround_total(s));
+}
+
+/* THE CONTENT BOX'S EXTENT on one axis, which is css-sizing §5's conversion run in the one direction two
+   callers need it in: CSSOM VIEW §6's padding edge, and §10.1's containing block (the content EDGE of the
+   nearest block container ancestor). Under `content-box` the used size already IS the content box; under
+   `border-box` it is the border box, and §5 converts by "subtracting the border and padding widths of the
+   respective sides".
+   `s` IS THE CALLER'S OWN SURROUND, passed in rather than recomputed, so the sum subtracted here is byte-
+   identical to the one the caller adds back — see the note on uv_surround_total for why that is the difference
+   between an assert that means what it says and one a rounding artifact can trip. */
+static CssPx uv_content_size(lxb_dom_element_t *el, bool vertical, UvSurround s)
+{
+    CssPx used = used_value_px(el, vertical ? "height" : "width");
+
+    if (!uv_is_border_box(el)) return used;
+    return css_px_sub(used, uv_surround_total(s));
+}
+
+/* ---- CSS 2.1 §10.1's CONTAINING BLOCK ---------------------------------------------------------------------
+   Every percentage in §8.3, §8.4 and §10.2 and every `auto` §10.3.3 solves for is stated against this one
+   rectangle's WIDTH, so it is the recursion the whole of §10.3 stands on and its base case is the reason the
+   recursion terminates. */
+
+static CssPx uv_containing_block_width(lxb_dom_element_t *el);
+
+/* "The containing block in which the ROOT ELEMENT lives is a rectangle called the initial containing block" —
+   the element whose parent is the Document itself. */
+static bool uv_is_root(const lxb_dom_node_t *n)
+{
+    return n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT;
+}
+
+/* §10.1's FIRST CASE, and the base case of the recursion above: "For continuous media, it has the dimensions
+   of the VIEWPORT and is anchored at the canvas origin." core/frame/viewport.h owns both halves — the number
+   and the fact that the number is a PICKED environment choice rather than a derived one — so what this
+   function does is find the realm the viewport is answered per and ask it. The realm is the ELEMENT'S own
+   document's, never the running one: a layout is a fact about the document the element is in, and an iframe's
+   ICB is 300 CSS pixels wide while its parent's is 1280. */
+static CssPx uv_icb_width(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el);
+    JSContext *dctx;
+
+    DCHECK(n->owner_document != NULL,
+           "the initial containing block was asked for an element whose node has no owner document — every "
+           "node this engine mints belongs to the document that created it");
+    dctx = document_active_realm_of(lxb_dom_interface_node(n->owner_document));
+    if (dctx == NULL || !viewport_exists(dctx))
+        DFAIL("CSS 2.1 §10.1's INITIAL CONTAINING BLOCK 'has the dimensions of the VIEWPORT', and this "
+              "element's document is not being presented by any navigable — a DOMParser document, an XHR "
+              "`responseXML`, a `<template>`'s contents owner, or the document of a navigable that has been "
+              "destroyed. There is no viewport, so there is no ICB, so §10's used values have no rectangle to "
+              "resolve against and no LAYOUT ran to produce one. CSSOM §9 does not state this escape: its two "
+              "conjuncts are the property's `Applies to:` line and the element's OWN computed `display`, and "
+              "both are true here, yet every user agent answers the COMPUTED value (`auto`) because the "
+              "element generates no box. BUILD §9's missing conjunct over the predicate that already decides "
+              "it — core/dom/element_view.h's `element_view_has_box`, which is defined over exactly this "
+              "question — so the resolved value takes §9's computed-value escape before §10 is ever asked");
+    return viewport_icb_width(dctx);
+}
+
+/* CSS 2.1 §9.2.1's BLOCK CONTAINER BOX: one that "either contains only block-level boxes or establishes an
+   inline formatting context and thus contains only inline-level boxes". §10.1's second case asks for the
+   nearest block container ANCESTOR BOX, so the question is asked of a computed `display` and of nothing else.
+   The list is these six rather than "everything block-level" because the two are different sets in both
+   directions: an `inline-block` is a block container and is not block-level, and a TABLE box is block-level
+   and is not a block container (CSS 2.1 §17.4 makes the table CELL and the CAPTION the block containers inside
+   one). `flow-root` is css-display §2.1's spelling of the same box. */
+static bool uv_display_is_block_container(const char *d)
+{
+    static const char *const BLOCK_CONTAINER[] = {
+        "block", "flow-root", "list-item", "inline-block", "table-cell", "table-caption",
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(BLOCK_CONTAINER) / sizeof(BLOCK_CONTAINER[0]); i++)
+        if (strcmp(BLOCK_CONTAINER[i], d) == 0) return true;
+    return false;
+}
+
+/* §10.1's four cases, in the spec's own order. Each one this component cannot answer crashes naming ITS case
+   and not the neighbouring one, because the three that are missing are missing for three different reasons. */
+static CssPx uv_containing_block_width(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el), *a;
+
+    if (uv_is_root(n)) return uv_icb_width(el);
+    if (uv_computed_is(el, "position", "fixed"))
+        DFAIL("CSS 2.1 §10.1's THIRD case: a `position: fixed` box's containing block 'is established by the "
+              "VIEWPORT in the case of continuous media'. The rectangle is the one uv_icb_width above already "
+              "answers, so the WIDTH is not what is missing — what is missing is everything else about a fixed "
+              "box: §10.3.7's constraint equation between `left`, `width` and `right` is what turns that "
+              "rectangle into a used width, and its `auto` cases need the STATIC POSITION, which is where the "
+              "box would have been in normal flow and therefore a real flow layout. BUILD §10.3.7 over §9.4's "
+              "flow layout; this case and the fourth one below are then the same code with a different "
+              "rectangle");
+    if (uv_computed_is(el, "position", "absolute"))
+        DFAIL("CSS 2.1 §10.1's FOURTH case: an absolutely positioned box's containing block is established by "
+              "'the nearest ancestor with a position of absolute, relative or fixed', and is formed by that "
+              "ancestor's PADDING EDGE — not its content edge, which is the second case's rectangle and the "
+              "only one this component computes. Two pieces are missing and they are different: the padding "
+              "edge as a RECTANGLE (core/layout/used_value.h computes a padding edge's EXTENT on one axis, and "
+              "an extent locates nothing), and §10.1's own exception for an INLINE ancestor, whose containing "
+              "block is 'the bounding box around the padding boxes of the first and the last inline boxes' and "
+              "is undefined in CSS 2.1 when that ancestor is split across lines. BUILD the box POSITIONS: "
+              "§9.4's normal flow places each in-flow box within its containing block, and that is what turns "
+              "every extent this component computes into a rectangle");
+    /* §10.1's SECOND case: "For other elements, if the element's position is 'relative' or 'static', the
+       containing block is formed by the CONTENT EDGE of the nearest BLOCK CONTAINER ANCESTOR BOX." The walk
+       asks for a BOX, so an ancestor whose computed `display` is `contents` is stepped over rather than
+       answered — it generates none, and §10.1 is asking which box the rectangle is the content edge of. */
+    for (a = n->parent; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
+        lxb_dom_element_t *anc = lxb_dom_interface_element(a);
+        char *d = uv_computed(anc, "display");
+        bool contents = strcmp(d, "contents") == 0;
+        bool container = uv_display_is_block_container(d);
+
+        if (container) {
+            UvSurround s = uv_surround(anc, false);
+
+            free(d);
+            return uv_content_size(anc, false, s);
+        }
+        if (!contents)
+            DFAIL("CSS 2.1 §10.1's second case asks for the nearest BLOCK CONTAINER ancestor box, and the "
+                  "nearest ancestor that generates a box is not one — its computed `display` makes it a table "
+                  "box, a table row or row group, a flex or grid container, an inline box, or a box whose "
+                  "`display: none` means it generates nothing at all and neither does this element. Each of "
+                  "those establishes a containing block by a DIFFERENT spec: CSS 2.1 §17.5's table layout owns "
+                  "the first three, css-flexbox §4.1 and css-grid §9 make a flex or grid container establish "
+                  "one for its items (which is why a box whose parent is one is a flex ITEM here and is sized "
+                  "by that container's algorithm rather than by §10), and an INLINE ancestor is §10.1's own "
+                  "exception — the bounding box around the padding boxes of its first and last inline boxes. "
+                  "A `display: none` ancestor is not a missing algorithm at all: this element generates no box "
+                  "either, and the answer is CSSOM §9's computed-value escape over element_view.h's has-a-box "
+                  "predicate, which uv_icb_width above names in full");
+        free(d);
+        /* CSS Display §2.8: "a display of contents computes to block on the root element", so the walk can
+           never step OVER the root — it is a block container however it was declared. */
+        DCHECK(!uv_is_root(a),
+               "the containing-block walk stepped over the ROOT ELEMENT as a `display: contents` box. CSS "
+               "Display §2.8 makes `contents` compute to `block` on the root, so a root that reached this line "
+               "is a computed-value rule that did not run");
+    }
+    DFAIL("the containing-block walk ran out of ancestors without finding a block container box. Every walk "
+          "starts below the ROOT ELEMENT — §10.1's first case answers the root itself — and the root is a "
+          "block container whatever it declares (CSS Display §2.8 blockifies it), so an element in a tree with "
+          "a root cannot reach here. What can is an element whose ancestors do NOT reach a root element: a "
+          "node in a DocumentFragment or a detached subtree, which has no box in any user agent and whose "
+          "resolved value is CSSOM §9's computed value for the reason uv_icb_width above states in full");
+    return css_px(0.0);
 }
 
 /* ---- the used value ------------------------------------------------------------------------------------- */
+
+/* CSS 2.1 §10.3.3's rules 2, 4 and 6 — the used value of a horizontal `auto` margin on a block-level box in
+   normal flow whose `width` is NOT `auto`, which is one computation and not three:
+     rule 4, "if there is exactly one value specified as 'auto', its used value follows from the equality" —
+       the margin takes all the slack;
+     rule 6, "if both 'margin-left' and 'margin-right' are 'auto', their used values are equal" — they split
+       it, which is what `margin: 0 auto` means;
+     rule 2, "if 'width' is not 'auto' and border + padding + width (plus any of 'margin-left' or
+       'margin-right' that are not 'auto') is larger than the width of the containing block, then any 'auto'
+       values for 'margin-left' or 'margin-right' are, for the following rules, treated as zero" — which is
+       exactly the slack being negative.
+   THE SIGN TEST RUNS ON THE EXAMPLE, and that is css_length.h's stated layering rather than a shortcut past
+   it: the containing block's width may be the viewport's, so `slack < 0` is a question the environment could
+   answer either way, and it is decided here on the modelled viewport exactly as Media Queries §4 decides
+   `(max-width: 768px)` on the same number. The fact rides the result either way, so the page's own branch on
+   the margin still forks both worlds. */
+static CssPx uv_block_auto_margin(lxb_dom_element_t *el, const char *opposite)
+{
+    UvSurround s = uv_surround(el, false);
+    CssPx cb = uv_containing_block_width(el);
+    CssPx inner = css_px_add(uv_content_size(el, false, s), uv_surround_total(s));
+    bool both = uv_computed_is(el, opposite, "auto");
+    CssPx other = both ? css_px(0.0) : used_value_px(el, opposite);
+    CssPx slack = css_px_sub(css_px_sub(cb, inner), other);
+
+    if (slack.px < 0.0) return css_px(0.0);              /* rule 2 */
+    return both ? css_px_scale(slack, 0.5) : slack;      /* rule 6, then rule 4 */
+}
 
 /* `opposite` is the OTHER horizontal margin's property name — `margin-right` when this is `margin-left` and
    the reverse — or NULL when this is a vertical margin, which is also how this function knows which pair it
    is in. §10.3.3's over-constraint is a statement about the three horizontal values TOGETHER, so the one that
    is not this margin and is not `width` has to be read. */
-static double uv_margin(lxb_dom_element_t *el, const char *computed, const char *opposite, CssLength len,
-                        UvBox box)
+static CssPx uv_margin(lxb_dom_element_t *el, const char *computed, const char *opposite, CssLength len,
+                       UvBox box)
 {
     bool vertical = opposite == NULL;
 
@@ -247,10 +430,9 @@ static double uv_margin(lxb_dom_element_t *el, const char *computed, const char 
            used value differs from its computed value: a block-level non-replaced box in normal flow whose
            `width` and both horizontal margins are all non-auto cannot satisfy the equation, and the spec
            resolves it by IGNORING one of the two — `margin-right` when the containing block's `direction` is
-           `ltr`, `margin-left` when it is `rtl` — and recomputing it so the equality holds. Both spellings
-           crash: which one is ignored is a fact about the CONTAINING BLOCK's computed `direction`, and the
-           recomputed value needs the containing block's WIDTH, so the two halves are blocked on different
-           things and naming only one would send the next reader to the wrong file.
+           `ltr`, `margin-left` when it is `rtl` — and recomputing it so the equality holds. It crashes on the
+           half that is still missing: WHICH margin is ignored is a fact about the containing block's computed
+           `direction`, and `direction` is inherited. The recomputed VALUE is no longer missing at all.
            ALL THREE HAVE TO BE NON-AUTO for the box to be over-constrained, which is why the OTHER margin is
            read: "if there is exactly one value specified as 'auto', its used value follows from the equality",
            so `margin-left: 10px; margin-right: auto; width: 100px` is not over-constrained at all and
@@ -261,29 +443,28 @@ static double uv_margin(lxb_dom_element_t *el, const char *computed, const char 
                   "margins are all non-auto, so its used values are OVER-CONSTRAINED and one horizontal "
                   "margin's used value is NOT its computed value — the spec ignores the specified "
                   "`margin-right` (`margin-left` when the containing block's `direction` is `rtl`) and "
-                  "recomputes it to make the constraint equation true. TWO things are missing and they are "
-                  "different: `direction` is an INHERITED property and this engine's cascade has no "
-                  "inheritance step, so the containing block's computed `direction` cannot be read; and the "
-                  "recomputed value is the containing block's WIDTH minus the other six terms, which is "
-                  "§10.3.3's equation over the CONTAINING BLOCK CHAIN §10.1 defines (used_value.h states that "
-                  "subproblem — every term of the equation is readable now, and the chain and its base case "
-                  "in the ICB are what is left)");
-        return len.px;
+                  "recomputes it to make the constraint equation true. ONE thing is missing and it is which "
+                  "margin: `direction` is an INHERITED property and this engine's cascade has no inheritance "
+                  "step, so the containing block's computed `direction` cannot be read. The VALUE is no longer "
+                  "missing — the recomputed margin is the containing block's width minus the other six terms, "
+                  "and §10.1's chain answers that width now — so this crash is waiting on the cascade's "
+                  "defaulting and inheritance step (css_computed_value.c's CSS-wide-keyword DFAIL names the "
+                  "same one) and on nothing in this component");
+        return css_px(len.px);
     }
+    /* CSS 2.1 §8.3: a percentage margin "is calculated with respect to the WIDTH of the generated box's
+       containing block. NOTE THAT THIS IS TRUE FOR 'margin-top' AND 'margin-bottom' AS WELL." So the axis is
+       not asked: a vertical margin resolves against the same horizontal measure, which is the counter-intuitive
+       half of the rule and the reason this arm takes no `vertical`. */
     if (len.kind == CSS_LENGTH_PERCENTAGE)
-        DFAIL("CSS 2.1 §8.3: a PERCENTAGE margin — including `margin-top` and `margin-bottom`, which the spec "
-              "is explicit about — 'is calculated with respect to the WIDTH of the generated box's containing "
-              "block'. §10.1 makes that containing block the content edge of the nearest block container "
-              "ancestor, and its width is §10.3.3's constraint equation. BUILD §10.3.3 and the containing-block "
-              "chain §10.1 defines — all seven of the equation's terms are readable now, and used_value.h "
-              "states what the chain's base case in the ICB costs");
+        return css_px_scale(uv_containing_block_width(el), len.pct / 100.0);
     DCHECK(strcmp(computed, "auto") == 0,
            "a margin's computed value is neither a length, nor a percentage, nor `auto` — CSS 2.1 §8.3's "
            "<margin-width> grammar admits exactly those three, and lexbor validates the declaration against "
            "it, so a fourth form here is a serializer that produced something the grammar does not");
     if (vertical) {
         /* §10.6.3: "If 'margin-top', or 'margin-bottom' are 'auto', their used value is 0." */
-        if (box == UV_BOX_BLOCK_FLOW) return 0.0;
+        if (box == UV_BOX_BLOCK_FLOW) return css_px(0.0);
         DFAIL("a VERTICAL margin computes to `auto` on a box CSS 2.1 §10.6.3 does not cover. §10.6.3 is the "
               "block-level-in-normal-flow section and it is the only one that gives `margin-top: auto` a used "
               "value of 0 outright; §10.6.4 solves the vertical `auto` margins of an ABSOLUTELY POSITIONED box "
@@ -291,39 +472,101 @@ static double uv_margin(lxb_dom_element_t *el, const char *computed, const char 
               "given), §10.6.1 says nothing at all about an INLINE box's vertical margins, and css-flexbox §9.6 "
               "gives a flex item's `auto` cross-axis margins the free space. BUILD the section this box's type "
               "names — uv_box_kind above says which it is");
-        return 0.0;
+        return css_px(0.0);
     }
-    /* §10.3.1: an inline box — "A computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used
-       value of '0'." §10.3.3: a block-level box in normal flow whose `width` is also `auto` — "If 'width' is
-       set to 'auto', any other 'auto' values become '0'". */
-    if (box == UV_BOX_INLINE) return 0.0;
-    if (box == UV_BOX_BLOCK_FLOW && uv_computed_is(el, "width", "auto")) return 0.0;
-    DFAIL("a HORIZONTAL margin computes to `auto` on a box whose used value follows from a CONSTRAINT "
-          "EQUATION rather than from a rule. §10.3.3 with a non-auto `width` is the centring case — one `auto` "
-          "margin takes up all the slack, and two `auto` margins split it, which is what `margin: 0 auto` "
-          "means — and §10.3.7 does the same for an absolutely positioned box between `left` and `right`. "
-          "Every one of them needs the containing block's WIDTH, so they are all waiting on the same "
-          "subproblem: §10.3.3's equation over §10.1's containing-block chain (used_value.h states it in full)");
-    return 0.0;
+    /* THREE SECTIONS SAY THE SAME SENTENCE and one solves an equation instead, which is why the box type is
+       what this arm branches on. §10.3.1 (inline), §10.3.5 (floating) and §10.3.9 (inline-block) each state
+       outright that "a computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of
+       '0'"; §10.3.3 says it too, but only in its rule 5, "if 'width' is set to 'auto', any other 'auto' values
+       become '0'" — with a non-auto `width` its `auto` margins take the slack instead. */
+    if (box == UV_BOX_INLINE || box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK) return css_px(0.0);
+    if (box == UV_BOX_BLOCK_FLOW)
+        return uv_computed_is(el, "width", "auto") ? css_px(0.0) : uv_block_auto_margin(el, opposite);
+    if (box == UV_BOX_TABLE)
+        DFAIL("a horizontal `auto` margin on a TABLE box. CSS 2.1 §17.5.2 derives the table's own width first "
+              "— an intrinsic size over its columns — and only then is there a slack for §10.3.3's margin "
+              "rules to divide, which is what makes `table { margin: 0 auto }` centre it. BUILD §17.2's "
+              "anonymous table-object generation and §17.5.2's algorithms; the margin rule is then the same "
+              "code the block-level arm above already runs");
+    if (box == UV_BOX_ITEM)
+        DFAIL("a horizontal `auto` margin on a FLEX or GRID ITEM, which css-flexbox §9.5 answers before "
+              "alignment does: 'if the remaining free space is positive and at least one main-axis auto margin "
+              "is on the line, distribute it equally among those margins'. It is the container's FREE SPACE "
+              "and not §10.3.3's slack — the two differ because the container has already flexed every item. "
+              "BUILD the flex layout algorithm over the container's own used content size");
+    DFAIL("a HORIZONTAL margin computes to `auto` on an ABSOLUTELY POSITIONED box, whose used value CSS 2.1 "
+          "§10.3.7 solves from its own constraint equation — 'left + margin-left + border + padding + width + "
+          "border + padding + margin-right + right = width of containing block' — under the section's own "
+          "ordered rules: an `auto` `left` or `right` replaces an `auto` margin with 0 first, both `auto` "
+          "margins then get EQUAL values 'unless this would make them negative', and an over-constrained set "
+          "ignores one offset depending on the containing block's `direction`. Three things are missing and "
+          "none of them is the containing block's WIDTH, which §10.1's chain answers now: the used `left` and "
+          "`right` (CSSOM §9's inset arm crashes on the same equation), the STATIC POSITION its `auto` cases "
+          "fall back to, which is where the box would have been in normal flow, and `direction`, which is "
+          "inherited. BUILD §9.4's flow layout, then §10.3.7 over it");
+    return css_px(0.0);
 }
 
-static double uv_padding(CssLength len)
+/* CSS 2.1 §8.4: a percentage padding "is calculated with respect to the WIDTH of the generated box's
+   containing block, EVEN FOR 'padding-top' and 'padding-bottom'" — so, as for a margin, the axis is not asked.
+   §8.4's other sentence is the one this component cannot yet be asked to break: "if the containing block's
+   width depends on this element, then the resulting layout is undefined in CSS 2.1". No containing block this
+   component computes depends on its contents — every one of them is §10.1's second case over a block container
+   whose own width came from a declaration or from §10.3.3's equation, and the shrink-to-fit widths that WOULD
+   depend on the element crash in uv_size below. */
+static CssPx uv_padding(lxb_dom_element_t *el, CssLength len)
 {
-    if (len.kind == CSS_LENGTH_ABSOLUTE) return len.px;
+    if (len.kind == CSS_LENGTH_ABSOLUTE) return css_px(len.px);
     DCHECK(len.kind == CSS_LENGTH_PERCENTAGE,
            "a padding's computed value is neither a length nor a percentage. CSS 2.1 §8.4's <padding-width> "
            "grammar has no `auto` and no keyword at all — a padding is a length or a percentage and nothing "
            "else — so this is a value lexbor's own validation should have dropped");
-    DFAIL("CSS 2.1 §8.4: a PERCENTAGE padding 'is calculated with respect to the WIDTH of the generated box's "
-          "containing block, EVEN FOR padding-top and padding-bottom'. That width is §10.3.3's constraint "
-          "equation over the nearest block container ancestor, which this engine cannot evaluate yet — see "
-          "used_value.h for the containing-block chain it is blocked on");
-    return 0.0;
+    return css_px_scale(uv_containing_block_width(el), len.pct / 100.0);
 }
 
-static double uv_size(lxb_dom_element_t *el, const char *computed, CssLength len, UvBox box, bool vertical)
+/* CSS 2.1 §10.3.3's RULE 5 — "if 'width' is set to 'auto', any other 'auto' values become '0' and 'width'
+   follows from the resulting equality", which is the constraint equation
+       margin-left + border-left-width + padding-left + width + padding-right + border-right-width +
+       margin-right = width of containing block
+   solved for the one unknown. Every other term is read back through this component's own arms, so the `auto`
+   margins rule 5 zeroes are zeroed by uv_margin and not a second time here.
+   §10.4's CLAMP IS PART OF THE ANSWER AND NOT A SEPARATE PASS, for the one limit that is always in effect:
+   `min-width`'s initial value is 0 (css-sizing's `auto` is the same 0 for every box this arm reaches), and
+   §10.4 step 3 re-runs the rules with it substituted whenever "the resulting width is smaller than
+   'min-width'". A negative content box is exactly that case, so the floor is §10.4 running rather than a guard
+   against it — uv_require_unclamped is what asserts that no OTHER limit was declared.
+   AND THE ANSWER IS THE BORDER BOX under `box-sizing: border-box`, because css-sizing §5 says the used value
+   "as exposed for instance through getComputedStyle()" refers to that box. The equation solves for the CONTENT
+   width either way — its seven terms are CSS 2.1's, which knows only the content box — so §5's conversion is
+   applied to the result rather than to the equation. */
+static CssPx uv_block_auto_width(lxb_dom_element_t *el)
 {
-    if (len.kind == CSS_LENGTH_ABSOLUTE) {
+    UvSurround s;
+    CssPx cb;
+    CssPx margins, content;
+
+    uv_require_unclamped(el, false);
+    s = uv_surround(el, false);
+    cb = uv_containing_block_width(el);
+    margins = css_px_add(used_value_px(el, "margin-left"), used_value_px(el, "margin-right"));
+    content = css_px_max(css_px_sub(css_px_sub(cb, uv_surround_total(s)), margins), css_px(0.0));
+    if (!uv_is_border_box(el)) return content;
+    return css_px_add(content, uv_surround_total(s));
+}
+
+static CssPx uv_size(lxb_dom_element_t *el, const char *computed, CssLength len, UvBox box, bool vertical)
+{
+    /* CSS 2.1 §10.2: a percentage `width` "is calculated with respect to the width of the generated box's
+       containing block", which §10.1 answers — and past that resolution it is a declared length like any
+       other, which is why the two arms join here rather than each carrying its own copy of §5's `box-sizing`
+       conversion and §10.4's clamp. §10.2's other sentence, "if the containing block's width depends on this
+       element's width, then the resulting layout is undefined in CSS 2.1", is unreachable for the reason
+       uv_padding states. A percentage HEIGHT is not here: §10.5 makes it a computed-value question. */
+    if (len.kind == CSS_LENGTH_ABSOLUTE || (len.kind == CSS_LENGTH_PERCENTAGE && !vertical)) {
+        CssPx declared = len.kind == CSS_LENGTH_ABSOLUTE
+                             ? css_px(len.px)
+                             : css_px_scale(uv_containing_block_width(el), len.pct / 100.0);
+
         /* §10.3.3, §10.3.5, §10.3.7 and §10.3.9 all agree on this one case and each says it in its own words:
            the equation solves for `width` only when `width` is `auto`, so a declared length IS the used value.
            §10.6.2 and §10.6.3 say the same for `height`. What does NOT agree is a table box and a flex or grid
@@ -344,21 +587,18 @@ static double uv_size(lxb_dom_element_t *el, const char *computed, CssLength len
                   "first — the same §10.3.3 subproblem, one level up");
         uv_require_unclamped(el, vertical);
         /* css-sizing §5 decides which BOX EDGE the declared length is on, and the used value it exposes. */
-        if (uv_is_border_box(el)) return uv_border_box_size(el, len.px, vertical);
-        return len.px;
+        if (uv_is_border_box(el)) return uv_border_box_size(el, declared, vertical);
+        return declared;
     }
     if (len.kind == CSS_LENGTH_PERCENTAGE) {
-        if (vertical)
-            DFAIL("CSS 2.1 §10.5: a PERCENTAGE `height` resolves against the containing block's HEIGHT, and "
-                  "when that height 'is not specified explicitly (i.e., it depends on content height)' the "
-                  "percentage COMPUTES TO `auto` instead — so this is a COMPUTED-value rule that reads the "
-                  "parent's own computed `height`, and it has to be decided before any used value is asked "
-                  "for. BUILD it in css_computed_value.c beside `height`'s other computed-value rule, then "
-                  "§10.6.3's content-based height for the `auto` result it produces");
-        DFAIL("CSS 2.1 §10.2: a PERCENTAGE `width` 'is calculated with respect to the width of the generated "
-              "box's containing block'. §10.1 makes that the content edge of the nearest block container "
-              "ancestor, whose own used width is §10.3.3's constraint equation (used_value.h states it in "
-              "full)");
+        DCHECK(vertical, "a horizontal PERCENTAGE size reached the vertical arm — §10.2's resolution above "
+                         "takes every one of them and this branch is what is left");
+        DFAIL("CSS 2.1 §10.5: a PERCENTAGE `height` resolves against the containing block's HEIGHT, and "
+              "when that height 'is not specified explicitly (i.e., it depends on content height)' the "
+              "percentage COMPUTES TO `auto` instead — so this is a COMPUTED-value rule that reads the "
+              "parent's own computed `height`, and it has to be decided before any used value is asked "
+              "for. BUILD it in css_computed_value.c beside `height`'s other computed-value rule, then "
+              "§10.6.3's content-based height for the `auto` result it produces");
     }
     DCHECK(strcmp(computed, "auto") == 0,
            "a `width` or `height` computed to a keyword that is not `auto` — CSS 2.1 §10.2 and §10.5 admit "
@@ -387,7 +627,7 @@ static double uv_size(lxb_dom_element_t *el, const char *computed, CssLength len
        §10.3.3's equation and is blocked on a different thing — so it gets its own message rather than the
        block-level one below. It was always reachable through CSSOM §9's resolved value; CSSOM VIEW §6's
        `clientWidth` on a floated or inline-block box is the ordinary way a page arrives here. */
-    if (box == UV_BOX_OUT_OF_FLOW || box == UV_BOX_INLINE_BLOCK)
+    if (box == UV_BOX_FLOAT || box == UV_BOX_ABS || box == UV_BOX_INLINE_BLOCK)
         DFAIL("CSS 2.1 §10.3.5 (floating) and §10.3.9 (inline-block) send an `auto` width to the SHRINK-TO-FIT "
               "formula — 'min(max(preferred minimum width, available width), preferred width)' — and §10.3.7 "
               "sends an absolutely positioned box's there too in its rules 1 and 3, which are the ones where "
@@ -401,32 +641,35 @@ static double uv_size(lxb_dom_element_t *el, const char *computed, CssLength len
               "real font and finds its break opportunities, over every in-flow descendant's own contribution. "
               "The third term, the available width, is §10.1's containing block, so this arm needs BOTH and the "
               "other needs one of them");
-    DFAIL("CSS 2.1 §10.3.3: a `width` of `auto` on a block-level box 'follows from the resulting equality' — "
-          "the used width is the CONTAINING BLOCK's width minus the six other terms of the constraint "
-          "equation. ALL SEVEN TERMS ARE READABLE NOW: the margins and paddings are this component's own §8.3 "
-          "and §8.4 arms, and `border-left-width`/`border-right-width` are css_computed_value.c's, which used "
-          "to be the blocker and is not one. What is missing is the CONTAINING BLOCK itself, and it is two "
-          "things rather than one. (1) §10.1's CHAIN: every block-level box's containing block is the content "
-          "edge of its nearest block container ancestor, so the equation is recursive and the recursion has to "
-          "walk to a base case — which exists, because §10.1 makes the ROOT ELEMENT's containing block the "
-          "INITIAL CONTAINING BLOCK that core/frame/viewport.c models. (2) THE ICB'S WIDTH IS A CONCOLIC, not "
-          "a number: viewport.h makes the viewport size a PICKED environment fact minted through "
-          "`viewport_env_value`, so a used width derived from it carries that domain — "
-          "`parseInt(getComputedStyle(el).width) < 768` is the same responsive gate as `innerWidth < 768` and "
-          "answering it with a bare 1280 deletes the mobile arm. So the resolved-value path stops being a "
-          "`char *` on the same day this lands, which is the same plumbing css_length.c's viewport-unit and "
-          "snap-a-border-width crashes both ask for. BUILD the chain and that path together");
-    return 0.0;
+    /* The two box types §10 does not own at all reach the `auto` arm as well as the declared one, and their
+       `auto` case is a DIFFERENT algorithm from their declared case, so each says which. */
+    if (box == UV_BOX_TABLE)
+        DFAIL("a TABLE box with `width: auto` is sized by CSS 2.1 §17.5.2's AUTOMATIC table layout algorithm: "
+              "the table's width comes from its COLUMNS, each of which is derived from its cells' minimum and "
+              "maximum content widths — an intrinsic size over the box structure §17.2's anonymous table-object "
+              "generation builds, and not §10.3.3's equation, which does not apply to a table at all. BUILD "
+              "§17.2 and then §17.5.2's two algorithms");
+    if (box == UV_BOX_ITEM)
+        DFAIL("a FLEX or GRID ITEM with `width: auto`. css-flexbox §9.7 makes the FLEX BASE SIZE the item's "
+              "max-content contribution and then flexes it against the container's free space; css-grid §11 "
+              "sizes the item to its TRACK, which is itself sized from the items in it. Both are intrinsic "
+              "sizes and neither is §10.3.3's equation. BUILD the flex layout over the container's own used "
+              "content size, which §10.1 and §10.3.3 answer now");
+    DCHECK(box == UV_BOX_BLOCK_FLOW,
+           "an `auto` width reached §10.3.3's constraint equation on a box that is not block-level in normal "
+           "flow — every other box type in uv_box_kind's list has left through its own section above, so the "
+           "two lists have come apart");
+    return uv_block_auto_width(el);
 }
 
-double used_value_px(lxb_dom_element_t *el, const char *name)
+CssPx used_value_px(lxb_dom_element_t *el, const char *name)
 {
     static const char *const MARGINS[] = { "margin-top", "margin-right", "margin-bottom", "margin-left" };
     static const char *const PADDINGS[] = { "padding-top", "padding-right", "padding-bottom", "padding-left" };
     char *computed;
     CssLength len;
     UvBox box;
-    double out;
+    CssPx out;
     bool vertical = false;
     unsigned i;
     int group = -1;   /* 0 = margin, 1 = padding, 2 = size */
@@ -449,7 +692,7 @@ double used_value_px(lxb_dom_element_t *el, const char *name)
               "`margin-block-start`, `padding-inline-end`), which need css-writing-modes §6's mapping to a "
               "physical property before §10 can be asked anything, and `transform-origin`, whose used value is "
               "a position in the TRANSFORM REFERENCE BOX (css-transforms §5) and not a length at all");
-        return 0.0;
+        return css_px(0.0);
     }
     computed = uv_computed(el, name);
     len = css_length_parse(computed);
@@ -459,7 +702,7 @@ double used_value_px(lxb_dom_element_t *el, const char *name)
            "first conjunct is false and the resolved value is the computed value — this call should never have "
            "been made. css_property_applies.c decides it, and the two have come apart");
     if (group == 0)      out = uv_margin(el, computed, vertical ? NULL : MARGINS[(side + 2) % 4], len, box);
-    else if (group == 1) out = uv_padding(len);
+    else if (group == 1) out = uv_padding(el, len);
     else                 out = uv_size(el, computed, len, box, vertical);
     free(computed);
     return out;
@@ -467,8 +710,8 @@ double used_value_px(lxb_dom_element_t *el, const char *name)
 
 /* CSS 2.1 §8's BOX MODEL — "the padding edge surrounds the box padding", and the padding box is the content box
    plus the padding on each side — over css-sizing §5, which is the only thing that varies: WHICH BOX the used
-   size is the size of. That is why the paddings are added ONCE below, to a content box the one `box-sizing`
-   question above derives, rather than in two arms that would each have to remember the other's convention.
+   size is the size of. That is why the paddings are added ONCE below, to the content box `uv_content_size`
+   derives, rather than in two arms that would each have to remember the other's convention.
    THE ASSERT IS THE WHOLE MECHANISM AND IT IS TWO-SIDED. §5 floors the content box at zero — "as the content
    width and height cannot be negative, this computation is floored at zero" — and `uv_border_box_size`
    IMPLEMENTS that floor, by returning the LARGER of the declared length and the four-term surround rather than
@@ -480,18 +723,15 @@ double used_value_px(lxb_dom_element_t *el, const char *name)
    not come through §5's floor, or a surround computed from different terms than the one that produced it.
    Under `content-box` the same assert says something simpler and just as necessary — CSS 2.1 §10.2's `width`
    is a non-negative <length>, so a negative used size is a derivation that lost an operand. */
-double used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical)
+CssPx used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical)
 {
     UvSurround s;
-    bool border_box;
-    double used, content;
+    CssPx content;
 
     DCHECK(el != NULL, "a padding edge's extent was asked for with no element");
     s = uv_surround(el, vertical);
-    border_box = uv_is_border_box(el);
-    used = used_value_px(el, vertical ? "height" : "width");
-    content = border_box ? used - uv_surround_total(s) : used;
-    DCHECK(content >= 0.0,
+    content = uv_content_size(el, vertical, s);
+    DCHECK(content.px >= 0.0,
            "the CONTENT box derived from a used size is NEGATIVE. Under `box-sizing: border-box` css-sizing §5 "
            "floors it at zero and this component's border-box arm implements that floor by taking the larger of "
            "the declared length and the four-term surround, so subtracting that same sum back out cannot reach "
@@ -499,5 +739,5 @@ double used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical)
            "different terms and no longer describe the same box. Under `content-box` the used size IS the "
            "content box, and CSS 2.1 §10.2's `width` is a non-negative <length>, so a negative one is a "
            "derivation that lost an operand");
-    return content + s.padding;
+    return css_px_add(content, s.padding);
 }

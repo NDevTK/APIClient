@@ -17,6 +17,64 @@ static char *css_len_strdup(const char *s)
     return out;
 }
 
+/* ---- the CSS pixel, and the environment fact it may derive from (see css_length.h) ------------------------ */
+
+CssPx css_px(double px)
+{
+    CssPx out = { px, CSS_ENV_NONE, NULL };
+
+    return out;
+}
+
+CssPx css_px_env(CssEnvFact fact, JSContext *realm, double px)
+{
+    CssPx out = { px, fact, realm };
+
+    DCHECK(fact != CSS_ENV_NONE && realm != NULL,
+           "a length was said to derive from an ENVIRONMENT FACT with no fact or no realm to name it — the two "
+           "travel together because the mint at the JS boundary needs both (which viewport, and which of its "
+           "dimensions), and a length carrying one without the other could not be turned into a domain");
+    return out;
+}
+
+/* The one place two lengths' facts meet, so the one place the pair can be asserted. */
+static CssPx css_px_combine(CssPx a, CssPx b, double px)
+{
+    CssPx out = { px, a.env, a.realm };
+
+    if (a.env == CSS_ENV_NONE) { out.env = b.env; out.realm = b.realm; return out; }
+    if (b.env == CSS_ENV_NONE) return out;
+    DCHECK(a.env == b.env && a.realm == b.realm,
+           "two lengths derived from DIFFERENT environment facts were combined into one. A concolic carries ONE "
+           "source identity, so the result's domain would be a relation over a PAIR of facts — a `width: 50vh` "
+           "inside a percentage-margined box is a function of both viewport axes at once — and keeping either "
+           "one alone would report a narrowing the page never made. BUILD the multi-fact domain in "
+           "solver/concolic.h, or resolve the second fact before it reaches this arithmetic");
+    return out;
+}
+
+CssPx css_px_add(CssPx a, CssPx b)   { return css_px_combine(a, b, a.px + b.px); }
+CssPx css_px_sub(CssPx a, CssPx b)   { return css_px_combine(a, b, a.px - b.px); }
+
+CssPx css_px_scale(CssPx a, double k)
+{
+    CssPx out = a;
+
+    out.px = a.px * k;
+    return out;
+}
+
+/* THE LARGER EXAMPLE, CARRYING BOTH OPERANDS' FACT — which is why this is `css_px_combine` and not `a.px > b.px
+   ? a : b`. Returning the winner whole would drop the loser's fact, and the loser is the arm the OTHER viewport
+   takes: css-sizing §5's floor picks the declared length at 1280 and the four-term surround at 320, so a result
+   that kept only the winner would report a length as environment-independent in exactly the world where it is
+   not. Over-reporting the dependence forks a world the page might not have needed; under-reporting it deletes
+   one it did, and CLAUDE.md's §Headless errs toward the first. */
+CssPx css_px_max(CssPx a, CssPx b)
+{
+    return css_px_combine(a, b, a.px > b.px ? a.px : b.px);
+}
+
 /* CSS Values §5.2's ABSOLUTE UNITS, each as the spec's own definition of it in CSS pixels: "1in = 96px" is the
    anchor and the other five are exact fractions of the inch (1cm = 96/2.54, 1mm = 96/25.4, 1Q = 96/101.6,
    1pt = 96/72, 1pc = 16). Nothing here is a device measurement, which is why §Headless does not reach it. */
@@ -150,15 +208,18 @@ CssLength css_length_parse(const char *value)
                    sizeof(CSS_VIEWPORT_RELATIVE) / sizeof(CSS_VIEWPORT_RELATIVE[0]), unit)) {
         DFAIL("a VIEWPORT-PERCENTAGE length (`vw`, `vh`, `vmin`, `vmax`) reached CSS Values §5.1.2's "
               "absolutization. The viewport this resolves against EXISTS in this engine — core/frame/viewport.h "
-              "models it, and Media Queries §4 already evaluates `(min-width: 40em)` against it — so what is "
-              "missing here is not the value but the PLUMBING: a viewport is answered PER REALM (an iframe's is "
-              "300 CSS pixels wide and the top-level traversable's is 1280), and this entry is reached through "
-              "`css_resolved_value(element, property)`, which carries no JSContext. BUILD the realm through "
-              "css_resolved_value into this component — the element's own document already knows it "
-              "(document_active_realm_of) — and note that a value derived from the viewport inherits the "
-              "viewport's CONCOLIC domain (viewport.h: the size is a PICKED environment fact and "
-              "`viewport_env_value` is the one seam that mints it), so the resolved value stops being a plain "
-              "`char *` at the same moment");
+              "models it, Media Queries §4 already evaluates `(min-width: 40em)` against it, and a USED value "
+              "derived from it now carries its domain the whole way to the page (CssPx above, minted at the JS "
+              "boundary by viewport.h's initial-containing-block seam). What is missing is ONE LAYER UP: a "
+              "viewport-percentage absolutizes at COMPUTED-VALUE time — `width`'s own `Computed value:` line is "
+              "'the percentage as specified or the absolute length' — and css_computed_value.c's entry answers "
+              "TEXT (`char *css_computed_value(element, property)`), which carries neither the realm the "
+              "viewport is answered per (an iframe's is 300 CSS pixels wide and the top-level traversable's is "
+              "1280) nor anywhere to put the fact. A `50vw` computed here would serialize to `640px` and every "
+              "reader downstream would see a number the environment PICKED with nothing left to say so. BUILD "
+              "the computed-value path over CssPx: the element's own document already knows the realm "
+              "(document_active_realm_of), and the readers that want text are CSSOM's serializers, which is "
+              "where the used value already turns back into one");
         return out;
     }
     DFAIL("a length-valued property's value is a DIMENSION in a unit CSS Values §5 does not define as a length "
@@ -220,11 +281,12 @@ double css_length_snap_line_width(double px)
           "not a whole number of CSS pixels, so the answer depends on how many device pixels one CSS pixel is. "
           "core/frame/viewport.h MODELS that (`viewport_device_pixel_ratio`, a modelled 1.0) and it is a "
           "forkable environment SOURCE there, not a constant: `devicePixelRatio > 1` is the retina gate, and a "
-          "computed border width derived from it carries that domain. Neither half is reachable from here — "
-          "this entry arrives through `css_resolved_value(element, property)`, which carries no realm, and a "
-          "concolic computed value would not fit the `char *` it returns. BUILD the same plumbing the "
-          "viewport-percentage arm above asks for: the realm through css_resolved_value into this component, "
-          "and with it the resolved-value path that can carry a concolic");
+          "computed border width derived from it carries that domain. Neither half is reachable from here, and "
+          "for the SAME reason the viewport-percentage arm above gives: this entry arrives through "
+          "css_computed_value.c's border-width rule, whose whole path is `char *`, so there is no realm to ask "
+          "and nowhere to put the fact. BUILD the computed-value path over CssPx — and with it a `CssEnvFact` "
+          "for the device pixel ratio, which is a SECOND fact beside the initial containing block's two "
+          "dimensions and is exactly the case css_length.h says one source key cannot spell alone");
     return px;
 }
 
