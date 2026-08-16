@@ -14,6 +14,7 @@
 #include "core/dom/document.h"
 #include "core/html/html_iframe.h"   /* §7.2.5's document-tree child navigables — §7.1's walk descends them */
 #include "core/html/html_parse.h"    /* the ONE place a Document is parsed — that header owns the token bytes */
+#include "core/loader/document_scripts.h"  /* §4.12.1's script inventory: what a parsed Document's programs ARE */
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
 #include "core/url/url.h"
 #include "core/encoding/encoding.h"   /* §6's UTF-8 decode, which §7.4.2.3.2 step 3 runs on a percent-decoding */
@@ -196,6 +197,98 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
     return dom;
 }
 
+/* A DOCUMENT'S OWN SCRIPTS ARE PROGRAMS OF THE ONE FRONTIER, AND SEEDING THEM IS THE DOCUMENT'S OWN BEHAVIOUR
+ * RATHER THAN A HOST EDGE. §7.11's create-and-initialize-a-Document ends by handing the response's bytes to the
+ * parser, and what the parser does with a `<script>` is §4.12.1 — so a Document this agent built out of a
+ * response and never ran the scripts of is not a document that has been analysed at all. It is here because
+ * this is the ONE place a same-origin Document of this agent comes into existence.
+ *
+ * IT WAS IN THE HOST, AND ONLY IN ONE OF THE THREE. `wpt_runner.c`'s child-realm builder seeded them and
+ * `main.c`'s and `test_forced.c`'s did not — the identical drift core/realm.h was written to abolish for the
+ * per-realm intrinsic list, arriving a second time through the one seam that is still hand-copied per host.
+ * The cost of it was not a WPT-only detail: in the SHIPPED extension a same-origin `<iframe src>` got a realm,
+ * a parsed Document and a WindowProxy, and its own bundle never ran — measured on real Chrome over a
+ * same-origin fixture, where the child document contributed ZERO endpoints and the run's document list named
+ * only the parent, while the CROSS-origin spelling of the same page (a second instance, whose `qjs_init` seeds
+ * its own scripts) reported the child's. A host builds a platform surface; WHICH programs a Document runs is
+ * the Document's, and the two hosts that never wrote the line are the reason it may not live there.
+ *
+ * THE ORDER IS THE DOCUMENT'S ORDER, and this seeds only the half of it that is already expressible. An INLINE
+ * classic script is a program of the flow that created this navigable, queued in place. An EXTERNAL one is a
+ * fetch the flow is OWED — its reply becomes a program of the same flow when the register drains — so it lands
+ * AFTER everything queued in this pass, and an inline script that FOLLOWS an external one would then run before
+ * the code it is written after. That is asserted rather than reordered, because the fix is a real mechanism and
+ * not a sort: the SESSION's document already has one (engine_pending_docscript fills a slot at the script's own
+ * INDEX and every flow waits at that index), and a child navigable's document needs the same sequence.
+ *
+ * `doc` NAMES THE DOCUMENT AND THEREFORE THE REALM the program is compiled in (solver/engine.h): a child's
+ * script compiled in its creator's realm defines the child's globals on the parent and reads the parent's back
+ * as the child's. */
+static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, uint32_t doc)
+{
+    DocScripts ds;
+    bool external_seeded = false;
+    int i;
+
+    DCHECK(cctx != NULL && dom != NULL, "a Document's scripts were seeded with no realm or no tree");
+    DCHECK(document_doc(cctx) == doc,
+           "a child Document's scripts were seeded naming a document its own realm does not answer with — the "
+           "name decides which realm the program is compiled in, so the two disagreeing compiles the child's "
+           "code in another document's Window");
+    ds = document_exec_scripts(dom);
+    for (i = 0; i < ds.n; i++) {
+        /* §8.1.3.3's TWO ALGORITHMS, and only one of them has a route. The same gap html_script.c names for an
+           INJECTED `<script type=module>`: the flow's dynamic sequence carries no ScriptType, so a module body
+           on it would be compiled by §8.1.3.3's CLASSIC entry and the child's own `import` would come back a
+           SyntaxError from a parser that is perfectly correct. */
+        DCHECK(ds.types[i] != SCRIPT_TYPE_MODULE,
+               "a child navigable's Document carries a `<script type=module>` and this seam can only queue a "
+               "CLASSIC program — give the flow's dynamic script sequence a ScriptType per entry "
+               "(engine_queue_script and solver/flow.h's dyn arrays), the way the document's own sequence "
+               "carries one, so flow_step routes it to §8.1.3.3's module entry");
+        if (ds.bodies[i]) {
+            DCHECK(!external_seeded,
+                   "a child navigable's Document has an INLINE script after an EXTERNAL one, and this seam "
+                   "cannot keep §4.12.1's document order across the two: an external script's program joins "
+                   "this flow when its fetch REPLIES, which is after everything queued in this pass, so the "
+                   "inline script would run before the bundle it is written after. Build the child document's "
+                   "script sequence the way the session's document already has one — a slot per script INDEX "
+                   "that the flow waits at (engine_pending_docscript), driven from §7.4 step 14's load job, "
+                   "which is a flow and can park");
+            engine_queue_script(doc, ds.bodies[i]);
+            continue;
+        }
+        DCHECK(ds.srcs[i] != NULL,
+               "a document's script inventory holds an entry that is neither an inline body nor an external "
+               "address — document_exec_scripts states one of the two for every executable entry");
+        {
+            /* §4.4's API BASE URL IS THE CHILD DOCUMENT'S, not the creator's: `<script src=app.js>` in a frame
+               at `/app/child.html` is `/app/app.js`, and resolving it against whichever document performed the
+               navigation is how a child's own bundle comes to be fetched from the parent's directory. */
+            UrlRecord base, rec;
+            const char *base_url = document_base_url(cctx);
+            bool have_base;
+            char *abs_url = NULL;
+
+            url_record_init(&base);
+            have_base = base_url && url_parse(&base, base_url, strlen(base_url), NULL);
+            url_record_init(&rec);
+            if (url_parse(&rec, ds.srcs[i], strlen(ds.srcs[i]), have_base ? &base : NULL))
+                abs_url = url_serialize(&rec, false);
+            url_record_free(&rec);
+            url_record_free(&base);
+            /* §4.12.1's OWN BRANCH for a `src` that does not parse — "return" — so the element runs no script.
+               It is the standard's answer and not a skip: what is still owed is the error event it fires at
+               the element, which needs a task on the child document rather than anything here. */
+            if (!abs_url) continue;
+            engine_pending_script_url(cctx, abs_url);
+            external_seeded = true;
+            free(abs_url);
+        }
+    }
+    doc_scripts_free(&ds);
+}
+
 /* BUILD A CHILD NAVIGABLE'S REALM AROUND A RESPONSE — see navigable.h. Two callers, and they are the two
    documents a navigable has: the load job, which has the bytes §7.4 step 14 fetched, and `proxy_realm`, which
    is materializing the initial about:blank and has none. THE POLICY TRAVELS WITH THE TREE, because §7.2.6's
@@ -255,6 +348,12 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
         g_realms_cap = cap;
     }
     g_realms[g_realms_n++] = cctx;
+    /* AND THE DOCUMENT RUNS ITS OWN SCRIPTS — see navigable_seed_scripts. AFTER the realm is recorded, because
+       a program names its document and the document's realm has to be the one this agent is holding by then;
+       BEFORE the reference handoff below, so nothing here reads a realm whose only reference has just gone.
+       The initial about:blank reaches this with an empty tree and seeds nothing, which is §7.4's own fact
+       rather than a case to test for: that Document came from no response and has no scripts by construction. */
+    navigable_seed_scripts(cctx, dom, doc);
     /* THE BUILDER'S REFERENCE IS HANDED TO THE NAVIGABLE — see the list's own note for why the agent must not
        keep one. What holds the realm afterwards is its own graph: the WindowProxy holds the child's Window, the
        Window's methods are C function objects, and every one of those holds a counted reference to the realm
