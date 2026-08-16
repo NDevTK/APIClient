@@ -431,22 +431,30 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
 
 /* Record a CLOSURE CELL's pre-write value (JSCowVarRefHook) into the running flow's delta, so a snapshot-forked
    sibling that shares the cell is isolated on write. Captured once per cell (first write is the baseline). */
-/* Record a KNOWN-NEW fast-array APPEND slot (JSTimeTravelHooks.arr_append): the index == the array's current
-   length, so it cannot already be in the delta (dedup unneeded) and its baseline is ABSENT (existed=0, no
-   JS_GetOwnSlotDesc). O(1) — this is the accumulator hot path (a shared array built one element at a time);
-   routing it through cow_capture_hook's O(n) dedup scan makes an N-element build O(N^2). The flow-private skip is
-   still applied (a post-fork private array — e.g. a per-flow accumulator built after the fork — is not captured). */
+/* Record a fast-array APPEND slot (JSTimeTravelHooks.arr_append). What is KNOWN about it is its BASELINE: the
+   index is at the array's dense count, so no slot is there and existed=0 without a JS_GetOwnSlotDesc. That read
+   is what this saves, and it is why this is the accumulator hot path (a shared array built one element at a
+   time); routing it through cow_capture_hook's baseline read on every push is what the separate hook avoids.
+   IT STILL DEDUPS, and the sentence that said it "cannot already be in the delta" was false in both directions:
+   `Object.defineProperty(sharedArr, "3", …)` captures the absent slot through prop_write and THEN appends
+   through here, so one slot got two entries; and `a[3]='x'; a.length=3; a[3]='y'` appends the same index twice.
+   Neither corrupted — two entries for one absent slot invert to the same shrink — but a `while(1){a.push(x);
+   a.pop();}` loop appends the same index without bound, and an entry per iteration over ONE slot is the
+   O(shared-state-touched) invariant broken. The dedup is the hash index's O(1) find, the same one every other
+   capture uses. The flow-private skip is still applied (a post-fork private array — e.g. a per-flow accumulator
+   built after the fork — is not captured). */
 void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     if (g_capturing || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;
+    if (cow_hash_find(d, JS_VALUE_GET_PTR(obj), atom, NULL) >= 0) return;   /* capture each slot ONCE (O(1)) */
     g_capturing = 1;
     cow_room_for_one(d, "cow: OOM growing delta (arr_append)");
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
     e->atom = JS_DupAtom(ctx, atom);   /* a tagged-int index atom: dup is a no-op, kept for uniform free */
-    e->existed = 0;                    /* an append creates the slot; unapply truncates it away */
+    e->existed = 0;                    /* an append creates the slot; unapply shrinks the dense part past it */
     cow_hash_add_last(d);   /* in the index so a later OVERWRITE of this index dedups to the append entry */
     g_capturing = 0;
 }
@@ -813,13 +821,18 @@ static void cow_restore_base(JSContext *ctx, CowEntry *e) {
             JSPropertyDescriptor d = cow_desc_dup(ctx, &e->base);
             JS_SetOwnSlotDesc(ctx, e->obj, e->atom, &d);
         }
-    else if (JS_IsArrayIndexSlot(e->obj, e->atom, &ai))
-        /* flow-CREATED array append: TRUNCATE the array to this index (frees the tail), removing it. Entries
-           are processed in reverse (highest index first), so a contiguous run of appends shrinks one-by-one
-           back to the baseline length. cur was saved in pass 1 so apply re-appends it. A JS_DeleteProperty
-           would convert the fast array to slow and leave the LENGTH standing, which nothing else would take
-           back down — the array's length is derived from these entries rather than captured as the slot it is. */
-        JS_ArraySetLength(ctx, e->obj, ai);
+    else if (JS_IsArrayDenseSlot(e->obj, e->atom, &ai))
+        /* flow-CREATED DENSE ELEMENT: shrink the dense part past it, which is what removing one is. A
+           JS_DeleteOwnSlot would convert the fast array to a slow one for every sibling. Entries are processed
+           in reverse (highest index first), so a contiguous run of appends shrinks one-by-one; cur was saved in
+           pass 1 so apply re-appends it.
+           THE LENGTH IS NOT TOUCHED, and the sentence that used to stand here — "the array's length is derived
+           from these entries rather than captured as the slot it is" — was true only while `length == count`.
+           This reached the shrink through a LENGTH WRITE, so a flow's `buf[0]='a'` on a baseline
+           `new Array(10)` unapplied to `buf.length === 0` for every sibling. The length is a captured slot now
+           (cow_capture_append takes it beside the element), which also makes these two entries order-INDEPENDENT
+           rather than order-critical: neither one's restore can move what the other one restores. */
+        JS_ArrayTruncateDense(ctx, e->obj, ai);
     else
         /* THE FLOW'S OWN CREATION, REMOVED — as a SLOT REMOVAL, for the reason the write above is a slot write.
            This was JS_DeleteProperty, the [[Delete]] OPERATION, which 10.1.10.1 makes refuse a non-configurable
