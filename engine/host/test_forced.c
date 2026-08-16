@@ -2048,7 +2048,13 @@ static void idb_store_selftest(JSContext *ctx)
     CHECK(idb_store_record(ctx, store, value, key, true, &out) < 0,
           "§6.1's no-overwrite flag must refuse a key the store already holds a record for");
     {
-        JSValue exc = JS_GetException(ctx), name = JS_GetPropertyStr(ctx, exc, "name");
+        /* THE INTERNAL SLOT, not the accessor. `DOMException.prototype.name` is an IDL getter, so reading it
+           with JS_GetPropertyStr runs page-shaped code from a C activation with no flow base — which the engine
+           asserts against, and the abort names that read rather than anything about this test. This is the case
+           JS_GetDOMExceptionName exists for, and its own comment says so: a stored value, never an operation,
+           because a reporter runs from outside any flow. A non-DOMException yields undefined and the CHECK below
+           fails loudly with the name it did get, which is the answer this test wants anyway. */
+        JSValue exc = JS_GetException(ctx), name = JS_GetDOMExceptionName(ctx, exc);
         const char *s = JS_ToCString(ctx, name);
 
         CHECK(s && !strcmp(s, "ConstraintError"),
