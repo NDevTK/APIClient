@@ -11,8 +11,7 @@
 // leaves with lib/response-decode.js (jsaudit step 2 → reply_decode.c), whose `_isAsset` / `_isBoringFetch`
 // gate its every learning call; and the schema half leaves with lib/send.js (step 7 → moat.c), which is what
 // the Send panel actually asks. Its ALGORITHM is already in C on the engine's own side of that line: the
-// WHATWG MIME Sniffing standard is browser_process/network/mime_sniff.c (the BROWSER PROCESS, because §7 is
-// the network service's), and the schema of an engine-fetched discovery
+// WHATWG MIME Sniffing standard is core/mime/mime_sniff.c, and the schema of an engine-fetched discovery
 // document is read by engine/host/solver/discovery.c.
 //
 // THE CANDIDATE SET AND ITS FETCH LOOP ARE GONE TO engine/host/solver/discovery.c. `buildDiscoveryUrls` stood
@@ -392,12 +391,12 @@ function mapJsonSchemaType(prop) {
 //
 // THIS COMPONENT IS SUPERSEDED AND IS WAITING FOR ITS CALLER. What it does is
 // the WHATWG MIME Sniffing standard, and that standard is implemented in C at
-// engine/host/browser_process/network/mime_sniff.c — §6's pattern tables and
-// §7's sniffing algorithm, asked by the BROWSER PROCESS's `mime.sniff` and by
-// nothing in the renderer, because §7 is the network service's and CORB gates
-// on its result. The hand-rolled table below survives only because
-// lib/response-decode.js is still JS and calls it; it goes out with that file
-// at jsaudit step 2. Do not extend it.
+// engine/host/browser/core/mime/mime_sniff.c — §6's pattern tables and §7's
+// sniffing algorithm, which no renderer-side caller may reach (§7 is the
+// network service's and CORB gates on its result — see that file's header).
+// The hand-rolled table below survives only because lib/response-decode.js is
+// still JS and calls it; it goes out with that file at jsaudit step 2. Do not
+// extend it.
 //
 // Sniff magic bytes on a Uint8Array. Returns a MIME-like label or null.
 function sniffBinaryMagic(bytes) {
@@ -573,8 +572,7 @@ if (typeof self !== "undefined") {
 // merge the json rows into a response schema. The ENDPOINT half is the @H surface and is now learned in the
 // engine, at `engine_provide` — the one point every fetched reply crosses exactly once — keyed on the type the
 // server STATED (Fetch §4's extract a MIME type), because §7's COMPUTED type is the network service's answer
-// and is asked of the browser process (browser_process/network/mime_sniff.c), not of the renderer that learns
-// from the body. `looksLikeRSC` did not move at all: it
+// and no renderer-side caller may reach it (core/mime/mime_sniff.c). `looksLikeRSC` did not move at all: it
 // guessed the protocol from a body whose first two lines matched `^[0-9a-f]+:`, which is also the shape of a
 // JSON object keyed by digits, and CLAUDE.md §RUN, DON'T MATCH names that ("no regex/name/identifier
 // matching, scoring, heuristics"). The schema half went with learn.js's branch, into the moat the engine is

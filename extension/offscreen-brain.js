@@ -175,12 +175,14 @@ function _originForDoc(documentId) {
 }
 
 /* THE BROWSER-STATED FACTS OF ONE DOCUMENT, MINTED IN ONE PLACE OUT OF THE ONE OBJECT THAT CARRIES THEM.
-   This is the JS half of engine/host/browser_process/host_facts.h — the same record, field for field, in the
-   only zone that can obtain it. Every field here is an answer `chrome.runtime` gave and that NO WASM instance
-   can ask for: SECURITY.md keys authorization on `sender.tab.url` and fixes the credentialed-read principal at
-   `MessageSender.origin` precisely because the browser process stamps them and a renderer cannot forge one.
-   When safeFetch's SOP/CORS moves into the trusted browser-process WASM instance, this record is what crosses
-   to it; the policy is an ALGORITHM and may move, these are FACTS and may not.
+   Every field here is an answer `chrome.runtime` gave and that NO WASM instance can ask for: SECURITY.md keys
+   authorization on `sender.tab.url` and fixes the credentialed-read principal at `MessageSender.origin`
+   precisely because the browser stamps them and a renderer cannot forge one. When safeFetch's SOP/CORS moves
+   into a trusted instance, this record is what crosses to it; the policy is an ALGORITHM and may move, these
+   are FACTS and may not. (A C counterpart to this record was written for an `engine/host/browser_process/`
+   linked as its own wasm artifact, and that is deleted: a separate link is a separate FILE, not a separate
+   process — the objects are shared, both Modules instantiate in this realm, and the host holds an exported
+   HEAPU8 over each. The record below is the whole of the mechanism today and is not waiting on a C twin.)
 
    IT TAKES A `MessageSender` AND NOTHING ELSE, which is the whole mechanism. A caller cannot state one of
    these values without holding the object the browser filled in, so the failure this exists to prevent —
@@ -191,8 +193,7 @@ function _originForDoc(documentId) {
    fabricates a tuple origin the browser refused to give that document — and grants it same-origin access to
    the embedder's authenticated bytes.
 
-   `stated` IS THE BRAND, and it is read by `_statedFacts` below at every consumer. It mirrors
-   host_facts.h's HOST_PRINCIPAL_STATED for the same reason that word exists there: JS has no types to make
+   `stated` IS THE BRAND, and it is read by `_statedFacts` below at every consumer. JS has no types to make
    `{origin: originOf(url)}` unrepresentable, so the consumer asserts that what it was handed came from HERE.
    It catches the accident, which is the failure mode inside a trusted zone; it is not an anti-forgery device,
    and this comment does not claim to be one. */

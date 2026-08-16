@@ -1,6 +1,6 @@
 /* MIME sniffing — see mime_sniff.h. WHATWG MIME Sniffing §6 (pattern matching) and §7 (the sniffing
    algorithm), over §4's record. No state: every entry is a pure function of the bytes and the header value. */
-#include "browser_process/network/mime_sniff.h"
+#include "core/mime/mime_sniff.h"
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -391,6 +391,28 @@ void mime_sniff_compute(MimeType *out, const char *content_type_value, bool no_s
     char *essence;
     bool undefined_type, unknown_essence;
 
+    /* §7 IS THE NETWORK SERVICE'S, AND THIS PROCESS IS THE RENDERER — see mime_sniff.h. Reached from here, a
+       computed type is one the untrusted side voted on, and a body classified in this process is one that may
+       never have been CORB-gated on that classification at all: the endpoints mined out of it would be surface
+       the page could not have obtained. `solver/reply_decode.c` was the one caller and now asks Fetch §4's
+       extract a MIME type instead (the server's own statement, which the renderer legitimately parses). What to
+       build is the BROWSER-PROCESS instance that runs this beside safe-fetch.js's SOP/CORS, and the computed
+       type it produces then crosses on the reply record like the sender's origin on a message — stamped by the
+       trusted zone, never minted by the sandbox.
+       AND A SECOND LINK IS NOT THAT INSTANCE. That was built here once and is deleted, so this paragraph names
+       it rather than leaving the next reader to rediscover it: a second wasm-ld invocation over the SAME shared
+       object set produces a second ARTIFACT, never a second process. The objects are the same objects, the size
+       difference between the two outputs is dead-stripping and nothing else, and both Modules are instantiated
+       in the offscreen's own realm with the host holding an exported HEAPU8 over each — one address space, one
+       trust position, two file names. The boundary that is real is the one `extension/renderer.html` and
+       `extension/renderer-host.js` opened: a frame with a unique OPAQUE origin, cross-origin to the extension
+       origin, which is what lets Site Isolation put it in its own OS-sandboxed process. A trusted counterpart is
+       provisioned across a boundary of that kind or it is not provisioned at all. */
+    DFAIL("MIME Sniffing §7 ran in the RENDERER — sniffing is the network service's algorithm and CORB gates on "
+          "its result, so a type computed here is the untrusted side deciding what it is allowed to read. Build "
+          "the browser-process instance across a REAL module boundary — a sandboxed opaque-origin frame, the "
+          "shape extension/renderer-host.js provisions, never a second link out of this same object set — and "
+          "stamp the computed type onto the reply record from there");
     DCHECK(out != NULL, "§7 was asked to compute a MIME type into nothing");
     DCHECK(header != NULL || header_n == 0,
            "a resource header of non-zero length was passed as a null pointer — §5.2's buffer is a byte "

@@ -53,8 +53,7 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
    is the driver and the bridge relays. What DID move is the part that needed no JS caller at all, because the
    engine already holds the input: React Flight is now read at `engine_provide`, the one point every fetched
    reply crosses exactly once, and the magic-byte classifier's ALGORITHM became the standard it was a
-   hand-rolled copy of (browser_process/network/mime_sniff.c, WHATWG MIME Sniffing §6/§7, in the BROWSER
-   PROCESS because §7 is the network service's). The remainder is re-stepped to the
+   hand-rolled copy of (core/mime/mime_sniff.c, WHATWG MIME Sniffing §6/§7). The remainder is re-stepped to the
    files that call it. A row's step is a claim about THIS tree, so a step that disagrees with its own reason is
    the stale-DFAIL failure mode wearing a number. */
 const LEDGER = [
@@ -119,8 +118,7 @@ const LEDGER = [
          "is that a producer whose consumers still live in JS is not first, and there is no host→engine " +
          "COMPUTE edge for a JS caller to reach a moved callee through — the engine is the driver and adding " +
          "one would be the orchestration layer inverted. The ALGORITHMS are already in C: the magic-byte " +
-         "classifier's standard is browser_process/network/mime_sniff.c (WHATWG MIME Sniffing §6/§7, in the " +
-         "BROWSER PROCESS because §7 is the network service's, and which also deletes the " +
+         "classifier's standard is core/mime/mime_sniff.c (WHATWG MIME Sniffing §6/§7, which also deletes the " +
          "JS's invented SVG/CSS/VTT/HLS/DASH sniffs), and a discovery document's schema graph is read by " +
          "engine/host/solver/discovery.c." },
   { f: "lib/protobuf.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
