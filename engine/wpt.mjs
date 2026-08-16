@@ -977,14 +977,20 @@ console.log("  ---- summary");
   console.log(`  ---- corpus: ${files.length} file(s) collected, ${readable} readable` +
               (g_unreadable.size ? `; ${g_unreadable.size} unreadable path(s) seen in total` : ""));
   if (g_unreadable.size) {
+    /* THREE ANSWERS, ALL WRITTEN OUT — no `||` standing in for the third. "The corpus did not move" is a
+       POSITIVE finding and the most expensive one to misread: it says the checkout is genuinely short of what
+       this gate collected, which is a provisioning bug, whereas the other two say the measurement was taken
+       while somebody else moved the ground. */
     const now = corpusIdentity();
-    const moved = now.head !== CORPUS_AT_START.head ? `its HEAD changed (${CORPUS_AT_START.head} → ${now.head})`
-                : now.cone !== CORPUS_AT_START.cone ? "its sparse cone was rewritten — ANOTHER RUN OF THIS GATE " +
-                    "applied a different WPT_PATHS to this shared corpus while this run was in flight, so these " +
-                    "files are an artifact of HOW this ran, not of what ran"
-                : null;
-    console.log(`       the corpus ${moved || "did not move during this run — these files were never readable, " +
-                                     "so the checkout itself is short of what this gate collected"}`);
+    const moved = now.head !== CORPUS_AT_START.head
+                    ? `its HEAD changed (${CORPUS_AT_START.head} → ${now.head})`
+                : now.cone !== CORPUS_AT_START.cone
+                    ? "its sparse cone was rewritten — ANOTHER RUN OF THIS GATE applied a different WPT_PATHS " +
+                      "to this shared corpus while this run was in flight, so these files are an artifact of " +
+                      "HOW this ran, not of what ran"
+                    : "did not move during this run — these files were never readable, so the checkout itself " +
+                      "is short of what this gate collected";
+    console.log(`       the corpus ${moved}`);
     for (const [k, why] of [...g_unreadable.entries()].sort()) console.log(`       ${why.padEnd(8)} ${k}`);
   }
 }
