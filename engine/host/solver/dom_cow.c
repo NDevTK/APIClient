@@ -837,10 +837,12 @@ void dom_cow_move_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_
    No C recursion: depth here is the page's data. */
 /* AN ELEMENT'S ATTRIBUTES ARE NOT ITS DESCENDANTS — DOM §4.5's adopt says so by re-documenting them in a step
  * of its own, and this walk is over CHILDREN, so it visited none of them. Every one is a WRAPPED node all the
- * same, and lexbor's `lxb_dom_element_interface_destroy` destroys the whole attribute list with the element,
- * so an element freed here left every Attr wrapper the page still holds naming freed memory. `attr.value` then
- * read a garbage `value` pointer — a SEGV in `dom/nodes/Node-cloneNode.html`, which clones elements, reads
- * their attributes, and discards the delta that owns the copies.
+ * same, and the destroy dispatcher releases the whole attribute list with the element
+ * (core/dom/node_interface.c's `elem_release_attrs`, which is the ONLY thing that frees one for an HTML
+ * element — lexbor's own `lxb_dom_element_interface_destroy` walks the list but is reached for the
+ * plain-element shapes alone), so an element freed here left every Attr wrapper the page still holds naming
+ * freed memory. `attr.value` then read a garbage `value` pointer — a SEGV in `dom/nodes/Node-cloneNode.html`,
+ * which clones elements, reads their attributes, and discards the delta that owns the copies.
  * The taint shadow goes with the wrapper for the reason attr_shadow.h gives: its key is a POINTER into a pool,
  * and an entry outliving its node is inherited by the next attribute allocated at that address. */
 static void dom_forget_node_attrs(JSContext *ctx, lxb_dom_node_t *n)

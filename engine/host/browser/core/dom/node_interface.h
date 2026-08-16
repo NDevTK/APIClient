@@ -23,10 +23,21 @@
  *     a non-static ns id IS THE HASH ENTRY'S OWN ADDRESS. So `createElementNS("http://fake-namespace", "div")`
  *     loads a function pointer from roughly `&res_destructor[LXB_TAG_DIV][0] + address/8` and CALLS it.
  *
+ * (3) A DESTRUCTOR THE KEY SELECTS CORRECTLY THAT FREES ONLY PART OF WHAT THE NODE OWNS. This one is not about
+ *     the key at all, which is why it is stated separately: for an HTML element the table answers with exactly
+ *     the right function, and every one of those functions is the single line
+ *     `lxb_dom_node_interface_destroy(node)` — the element's own struct and nothing it points at. So neither
+ *     HTML §4.12.3's template contents nor DOM §4.9's attribute list is freed, and neither is a CHILD, so no
+ *     tree walk reaches either. `lxb_dom_element_interface_destroy` does walk the attribute list, but it is
+ *     reached only for the plain-`lxb_dom_element_t` shapes of (2). Both are released by the dispatcher itself,
+ *     before it delegates — see core/dom/node_interface.c, which carries the measurement for each.
+ *
  * SO THE ENGINE OWNS THE DESTROY DISPATCH, on the field lexbor designed for it (`doc->destroy_interface`). It
  * answers by the thing that actually identifies the interface — the node's TYPE — and delegates every shape
- * for which lexbor's key IS an identity, because for those its create and its destroy already agree and a
- * second copy of a switch that is right is a second thing to keep in step.
+ * for which lexbor's key IS an identity, because for those its create and its destroy already agree ABOUT THE
+ * STRUCT and a second copy of a switch that is right is a second thing to keep in step. What they do not agree
+ * about is everything else the node owns, which is (3) and is handled before the delegation rather than inside
+ * it.
  *
  * EVERY DOCUMENT HAS IT FROM BIRTH, WHICH IS WHY `dom_document_create` EXISTS. The first version of this
  * component installed the dispatcher on demand — at the line that mints an out-of-domain namespace id, and

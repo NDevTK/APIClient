@@ -3,6 +3,7 @@
 
 #include <lexbor/html/html.h>
 #include <lexbor/html/interface.h>
+#include <lexbor/dom/interfaces/attr.h>   /* lxb_dom_attr_interface_destroy — see elem_release_attrs */
 #include <lexbor/dom/interfaces/document_type.h>
 #include <lexbor/dom/interfaces/element.h>
 
@@ -119,6 +120,58 @@ static void tpl_queue_push(lxb_dom_node_t *n)
     g_tpl_queue[g_tpl_n++] = n;
 }
 
+/* DOM §4.9'S ATTRIBUTES ARE THE SECOND STRUCTURE REACHED FROM A NODE THAT NO WALK OF CHILDREN SEES, AND FOR AN
+ * HTML ELEMENT NOTHING IN LEXBOR'S TABLE FREES THEM. "An element has an attribute list, which is a list of
+ * zero or more attributes" (https://dom.spec.whatwg.org/#concept-element-attribute), and an attribute is a NODE
+ * whose parent is always null — solver/dom_cow.c says the same thing from §4.5's side, "an element's attributes
+ * are not its descendants" — so `first_child` has never reached one, exactly as it has never reached a
+ * template's contents.
+ *
+ * WHICH DESTRUCTOR RUNS IS WHAT DECIDES IT, and only one of them does the walk.
+ * `lxb_dom_element_interface_destroy` iterates `first_attr` and destroys every Attr; it is reached for an
+ * element lexbor built as a plain `lxb_dom_element_t` — the foreign-namespace arm of dom_node_interface_free
+ * above, and lexbor's own unknown-tag-outside-HTML case. EVERY other element goes to
+ * `lxb_html_interface_res_destructor[local_name][ns]` or `lxb_html_unknown_element_interface_destroy`, and
+ * every one of those is the same single line, `lxb_dom_node_interface_destroy(node)`, which frees the element's
+ * own struct and follows nothing. So on a page of HTML every attribute of every element was memory nothing
+ * named: per attribute with a value, the Attr struct and the `lexbor_str_t` header out of the NODE arena and
+ * its bytes out of the TEXT arena — three allocations in a 2:1 ratio, which is what node_heap.c's teardown
+ * assert was counting when it reported 14 nodes against 7 text for a document holding seven attributes.
+ * Upstream never sees it for the reason node_interface.h already gives about the other two defects in this
+ * dispatch: upstream frees the whole arena and destroys no node on its own.
+ *
+ * SO THE LIST IS RELEASED HERE, at the one point every node death converges on, and the element is left holding
+ * none — the arm that does reach `lxb_dom_element_interface_destroy` then walks an empty list, which is what
+ * keeps this ONE statement rather than two that would have to agree about which elements each covers.
+ * NO QUEUE, unlike the template contents: an Attr has no children, and `lxb_dom_attr_interface_destroy` is
+ * lexbor's leaf free rather than a dispatch through `doc->destroy_interface`, so this cannot re-enter and costs
+ * one C frame however long the list is.
+ * THE WRAPPERS ARE HANDED BACK FIRST, and by something that already exists: solver/dom_cow.c's
+ * `dom_forget_node_attrs` drops every Attr wrapper and its taint shadow out of the identity map before each of
+ * the four paths that destroy a subtree reaches this function. That function's own comment names THIS free as
+ * the reason it has to run — a wrapper naming freed memory is what a pool allocator turns into the next
+ * attribute inheriting a dead wrapper. */
+static void elem_release_attrs(lxb_dom_node_t *node)
+{
+    lxb_dom_element_t *el;
+    lxb_dom_attr_t *a, *next;
+
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT)
+        return;
+    el = lxb_dom_interface_element(node);
+    for (a = el->first_attr; a != NULL; a = next) {
+        next = a->next;
+        DCHECK(a->owner == el,
+               "an attribute in this element's list names a different element as its owner — §4.9's list and "
+               "the attribute's `element` are two spellings of ONE edge (attr_list.c writes both in each of "
+               "attach/detach/replace), so a disagreement here means the free below takes an attribute out of "
+               "a list that is still holding it");
+        lxb_dom_attr_interface_destroy(a);
+    }
+    el->first_attr = el->last_attr = NULL;
+    el->attr_id = el->attr_class = NULL;
+}
+
 static lxb_dom_interface_t *dom_node_interface_destroy(lxb_dom_interface_t *intrfc)
 {
     lxb_dom_node_t *node = intrfc, *content, *child;
@@ -133,6 +186,7 @@ static lxb_dom_interface_t *dom_node_interface_destroy(lxb_dom_interface_t *intr
             tpl_queue_push(child);
         }
     }
+    elem_release_attrs(node);
     r = dom_node_interface_free(intrfc);
     if (!g_tpl_draining) {
         g_tpl_draining = 1;

@@ -83,11 +83,13 @@ void node_heap_detach(lxb_dom_document_t *doc)
         /* THE HEAP IS EMPTY WHEN THE LAST DOCUMENT IS GONE, and lexbor's `ref_count` states it exactly: it is
            incremented by every alloc and decremented by every free, so a non-zero count here is memory no
            document, no tree and no wrapper names any more.
-           HTML §4.12.3's TEMPLATE CONTENTS USED TO BE NAMED HERE and are not any more: a `<template>`'s
-           contents are freed with the element by core/dom/node_interface.c's destroy dispatcher, which is the
-           one point every node death converges on, so the document tree walk, the per-flow delta's kind-4
-           release and every other destroy carry them. What is left are the trees a walk of CHILDREN still
-           cannot reach and no C pointer names:
+           TWO STRUCTURES USED TO BE NAMED HERE and are not any more, and they were one defect wearing two
+           shapes: HTML §4.12.3's TEMPLATE CONTENTS and DOM §4.9's ATTRIBUTE LIST are each reached from an
+           element and from nowhere in any tree, and lexbor's per-tag HTML destructors free the element's own
+           struct and follow neither. Both are freed with the element by core/dom/node_interface.c's destroy
+           dispatcher, which is the one point every node death converges on, so the document tree walk, the
+           per-flow delta's kind-4 release and every other destroy carry them. What is left are the trees a walk
+           of CHILDREN still cannot reach and no C pointer names:
              - A SHADOW ROOT. DOM §4.8's shadow root is a second tree exactly as a template's contents are, and
                the element→shadow-root edge is on the host's WRAPPER (core/dom/shadow_root.c writes it as a slot
                on the element's JS object, which is what `shadow_root_of_element` peeks), so no C walk can see
@@ -103,26 +105,35 @@ void node_heap_detach(lxb_dom_document_t *doc)
            neither number, so the reader standing at the teardown could not tell which of the three they were
            looking at — and the three want opposite fixes. §Testing's rule that a message naming several causes
            and distinguishing none of them is a report about nothing applies to a DCHECK exactly as it applied
-           to the kill that said "segfault/abort/timeout": the count is what separates them. A HANDFUL of nodes
-           with text near zero is a second tree nothing walked — a shadow root, whose whole content is a few
-           elements. A count in the HUNDREDS, with text in proportion, is an ordering fault: a delta released
-           after this line, so an entire flow's creations are still live. And nodes without text, or text
-           without nodes, is neither — it is one arena's free path missing while the other's runs.
+           to the kill that said "segfault/abort/timeout": the count is what separates them.
+           AND IT IS THE RATIO THAT SEPARATES THEM, WHICH THE FIRST VERSION OF THIS MESSAGE DID NOT SAY. It led
+           with the shadow root for every small count, and the first count it ever printed — 14 nodes against 7
+           text — was not one: it was seven attributes, because an attribute with a value is THREE allocations
+           (the Attr and its `lexbor_str_t` header here, its bytes there) and no HTML element destructor freed
+           any of them. A reader sent to `shadow_root.c` by a message that leads with the arm it cannot be is
+           the stale-DFAIL failure with a number attached, so the arithmetic goes first and the trees after it.
            §Testing states the general form of this at the allocation that OOMs: "the reader of a `@WHY` is
            standing at the allocation, and 'OOM' alone tells them nothing about realms". */
 #if APICLIENT_DEV
         {
-            char why[640];
+            char why[1024];
             snprintf(why, sizeof why,
                      "the agent's DOM heap still holds %zu node allocation(s) and %zu text allocation(s) after "
-                     "the last document that could name them was destroyed. A HANDFUL is a second tree no C "
-                     "walk reaches — a DOM §4.8 shadow root, whose edge from its host is a slot on the host's "
-                     "WRAPPER, so only a per-flow delta's kind-4 entry ever frees one. HUNDREDS is the ORDER "
-                     "instead: a delta released after this line rather than before it, leaving a whole flow's "
-                     "creations live (and every one of them would then be freed out of an arena that is gone). "
-                     "Nodes without text or text without nodes is neither, and means one arena's free path is "
-                     "missing while the other's runs. A node created while capture was off and then detached "
-                     "is the remaining shape and looks like the first.",
+                     "the last document that could name them was destroyed. READ THE RATIO FIRST, because the "
+                     "two arenas count different things and the list of what each kind owns is node_heap.h's: "
+                     "an ATTRIBUTE with a value is three allocations, two here and one there, so nodes at "
+                     "TWICE text is an attribute list nothing freed; a TEXT, COMMENT or CDATASection is one of "
+                     "each, so nodes at ROUGHLY text is character data; text at ZERO with nodes non-zero is "
+                     "element or fragment structs alone. THEN THE MAGNITUDE. A HANDFUL is a second structure "
+                     "reached from an element and from nowhere in any tree, which no walk of children can see "
+                     "— DOM §4.8's shadow root is the one left, its edge from the host being a slot on the "
+                     "host's WRAPPER, so only a per-flow delta's kind-4 entry ever frees one (§4.9's "
+                     "attributes and §4.12.3's template contents are the same shape and are freed by "
+                     "core/dom/node_interface.c's dispatcher). HUNDREDS, in proportion, is the ORDER instead: "
+                     "a delta released after this line rather than before it, leaving a whole flow's creations "
+                     "live (and every one of them would then be freed out of an arena that is gone). A node "
+                     "created while capture was off and then detached is the remaining shape and looks like "
+                     "the handful.",
                      (size_t)g_nodes->ref_count, (size_t)g_text->ref_count);
             DCHECK(g_nodes->ref_count == 0 && g_text->ref_count == 0, why);
         }
@@ -168,15 +179,17 @@ bool dom_storage_owned_by(const lxb_dom_document_t *doc, const lxb_dom_node_t *n
     case LXB_DOM_NODE_TYPE_ELEMENT: {
         const lxb_dom_element_t *el = (const lxb_dom_element_t *)n;
         /* `is_value` is a `lexbor_str_t *` out of `doc->mraw` with its bytes out of `doc->text`, and it is the
-           one thing on this list that NOTHING frees: `lxb_dom_element_interface_destroy` walks the attribute
-           list and never touches it. Nothing in this engine sets one either — core/dom/node.c's §4.4 clone
-           asserts the same absence at the one site that would have dropped it — so the honest statement is
-           that it is absent, not that it is owned. The day `is` becomes real this fires here as well as
-           there, and both sites are then the list of what has to learn about it. */
+           one thing on this list that NOTHING frees: core/dom/node_interface.c's `elem_release_attrs` walks
+           the attribute list on the way to the element's own destroy and never touches it, and neither does
+           any of the per-tag destructors that run after it. Nothing in this engine sets one either —
+           core/dom/node.c's §4.4 clone asserts the same absence at the one site that would have dropped it —
+           so the honest statement is that it is absent, not that it is owned. The day `is` becomes real this
+           fires here as well as there, and both sites are then the list of what has to learn about it. */
         DCHECK(el->is_value == NULL,
                "an element carries an `is` value: it is a lexbor_str_t in the node arena with its bytes in the "
                "text arena, no destructor frees either, and DOM §4.5's adopt has no rule for it — give this "
-               "arm its two pointers and give lexbor's element destroy its free");
+               "arm its two pointers and give core/dom/node_interface.c's elem_release_attrs its free, beside "
+               "the attribute list it already releases");
         return el->is_value == NULL;
     }
     case LXB_DOM_NODE_TYPE_ATTRIBUTE: {
