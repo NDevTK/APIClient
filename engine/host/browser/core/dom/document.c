@@ -1025,6 +1025,12 @@ static JSValue js_doc_create_element_ns(JSContext *ctx, JSValueConst this_val, i
        three slices validate-and-extract hands back ARE what it passed. */
     el = element_create_ns(lxb_dom_interface_document(d->dom),
                            qn.ns, qn.ns_len, qn.local, qn.local_len, qn.prefix, qn.prefix_len);
+    /* THIS FLOW MADE IT — the same statement every other creating member on this interface makes, and the one
+       this one did not. It is not inside element_create_ns, and cannot be: what a creation entry declares is
+       OWNERSHIP, and ownership is the CALLER's fact. §4.4's clone builds a whole subtree with the same creator
+       and notes only its ROOT, because dom_release_created destroys deep and a second entry naming a node
+       already freed under its parent is a double free. So the creator cannot answer it and each caller must. */
+    dom_cow_note_created(lxb_dom_interface_node(el));
     if (ns) JS_FreeCString(ctx, ns);
     JS_FreeCString(ctx, qname);
     r = element_wrap(ctx, el);
