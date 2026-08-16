@@ -796,10 +796,26 @@ async function engineRoot(rend, code, html, msg, persist, docName, topLevelUrl) 
    what "ONE WFQ policy at both levels" means — and restating it here would additionally be a branch on a state
    the producer cannot be in, since qjs_top_weight DCHECKs `g_begun` (main.c) and qjs_begin is what sets it. */
 async function engineRecordFacts(eng) {
+  /* -INFINITY IS AN ANSWER, NOT A BROKEN ONE. `engine_top_weight` is `flow_best() ? flow_weight(b) : -1.0/0.0`
+     (solver/engine.c), so negative infinity is the engine's POSITIVE statement that its frontier holds no
+     runnable flow — and it is the RIGHT statement, because that is precisely the value that ranks below every
+     real weight in the comparisons below. Demanding a finite number here rejected the producer's own vocabulary:
+     every drained engine aborted its round, was destroyed and re-provisioned, and aborted again — 43279 crashes
+     against 0 completed runs on a single fixture page, with the pool still reporting a live framed renderer, so
+     nothing about the shape of the pool said anything was wrong.
+     NaN AND +INFINITY ARE STILL BROKEN and are still asserted, which is what makes this a narrowing of the
+     contract rather than its removal: NaN is the case §qjs_set_yield_floor's own comment calls out — every
+     comparison against it is false, so the top flow never yields and the Level-1 interleave silently stops —
+     and +Infinity is a weight no flow_weight can produce. The check that matters is the one that can fire.
+     THE RANKING NEEDS NO ARM FOR IT. `-Infinity < x` is true for every real weight, so a drained engine sorts
+     last by arithmetic rather than by a branch, and the step that follows retires it through the DONE path it
+     was always going to take. */
   const w = +(await eng.r.call("qjs_top_weight", "number", [], []));
-  DCHECK(Number.isFinite(w), "the engine answered a top-flow weight that is not a finite number — every " +
-                             "Level-1 ranking comparison against it is false, so the pool would pick by " +
-                             "array order and call it value-of-information");
+  DCHECK(Number.isFinite(w) || w === -Infinity,
+         "the engine answered a top-flow weight of " + w + " — a weight is either a finite number or the " +
+         "-Infinity that says its frontier holds no runnable flow, and NaN or +Infinity is neither: every " +
+         "Level-1 ranking comparison against a NaN is false, so the pool would pick by array order and call " +
+         "it value-of-information");
   eng.topWeight = w;
   /* THE WORKING SET AS THE FRAME LAST STATED IT, WHICH IS AS OF THE CALL ABOVE. There is no HEAPU8 in this
      realm to read — that is the whole point of the boundary — so renderer.html reports `HEAPU8.length` on every
