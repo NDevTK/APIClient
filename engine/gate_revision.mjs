@@ -63,6 +63,56 @@ function dirtyIn(cwd, cone) {
   return out.split("\n").map((l) => l.trimEnd()).filter(Boolean);
 }
 
+/* A REVISION THAT CANNOT COMPILE ITSELF IS NOT A MEASURABLE REVISION, and that is a question about the
+ * REVISION, which is why it lives here beside the other two.
+ *
+ * IT HAPPENED TODAY AND IT COST EVERY AGENT THEIR BUILD. A commit published `solver/dom_cow.c` with
+ * `#include "core/dom/node_heap.h"` while `node_heap.{c,h}` were still untracked — they existed only in the
+ * shared working tree. `main` did not compile for anyone, and nothing said so until somebody ran a build four
+ * minutes long. The cause is §Disposition's staging rule: the committing agent verified `git diff HEAD` and a
+ * different agent's hunks landed in the shared worktree before its `git hash-object` two commands later, so an
+ * include for a file it did not stage rode into its commit. That rule tells an agent how not to cause it; this
+ * tells every gate how to SEE it, in 73 ms, without a compiler.
+ *
+ * §Testing already states the neighbouring half — "A TRANSLATION UNIT NO GATE COMPILES IS OUTSIDE THE GATE,
+ * AND THE SHIPPED ENTRY POINT IS THE ONE THAT ROTS" — and the remedy there was that `build.mjs` compiles the
+ * entry it did not link. This is that rule's dual and it is strictly cheaper: a HEADER no commit contains is
+ * outside every gate too, and unlike an unbuilt entry it takes the whole program down with it rather than one
+ * translation unit. Answered over the COMMITTED tree, never the working one — the working tree passes while
+ * HEAD is broken, and HEAD is what another agent checks out.
+ *
+ * Resolution mirrors the build's own `-I` list (`engine/host`, `engine/host/browser`, `engine/qjs`) plus the
+ * including file's own directory, because that is what the compiler will do. A path resolving into the
+ * submodule is asked of the submodule: the superproject's tree does not list a gitlink's contents. */
+function danglingIncludes(rev) {
+  const out = ask(ROOT, "grep", "-n", "-e", '^[[:space:]]*#[[:space:]]*include[[:space:]]*"',
+                  rev, "--", "engine/host/*.c", "engine/host/*.h");
+  if (out.startsWith("<git ")) return [out];
+  const listed = ask(ROOT, "ls-tree", "-r", "--name-only", rev, "--", "engine/host");
+  if (listed.startsWith("<git ")) return [listed];
+  const tracked = new Set(listed.split("\n").filter(Boolean));
+  const qjsListed = ask(QJS, "ls-tree", "-r", "--name-only", "HEAD");
+  const inQjs = new Set(qjsListed.startsWith("<git ") ? [] : qjsListed.split("\n").filter(Boolean));
+  /* NO `-h`, DELIBERATELY, AND THIS WAS WRONG ONCE. Searching a REVISION rather than the worktree, git grep
+     prefixes `<rev>:<path>:<lineno>:`, and `-h` suppresses the path — which is the one field that names the
+     OWNER of a bad include. With `-h` this parser matched nothing and the check passed for every tree there
+     will ever be: the "diagnostic that always says yes" failure this file names two functions up, reproduced
+     inside the fix for it. A report that some file somewhere includes a missing header is a search, not a
+     finding, so the path is the deliverable and its absence is what makes the whole check inert. */
+  const bad = [];
+  for (const line of out.split("\n")) {
+    const m = /^([^:]+):([^:]+):(\d+):\s*#\s*include\s+"([^"]+)"/.exec(line);
+    if (!m) continue;
+    const [, , owner, no, inc] = m;
+    const cands = [join(dirname(owner), inc), join("engine/host", inc),
+                   join("engine/host/browser", inc), join("engine/qjs", inc)];
+    const ok = cands.some((c) => tracked.has(c) ||
+                                 (c.startsWith("engine/qjs/") && inQjs.has(c.slice("engine/qjs/".length))));
+    if (!ok) bad.push(`${owner}:${no} includes "${inc}", which no file at this revision provides`);
+  }
+  return bad;
+}
+
 /* THE ARTIFACT CARRIES ITS OWN IDENTITY, BECAUSE AN MTIME IS NOT ONE — and the mtime answer was wrong in
  * exactly the mode §Testing MANDATES. `git worktree add --detach` writes every tracked file at the checkout
  * instant, so in a frozen snapshot every source is newer than any artifact built before it, whatever revision
@@ -190,6 +240,10 @@ export function gateRevision(cone, artifact = null) {
        ever carried, so a reader cannot mistake which kind of answer arrived. */
     stamp,
     stale: artifact && !stamp ? stalerThan(artifact, cone) : null,
+    /* ASKED OF HEAD, not of the working tree, and asked whenever the host is in the cone — a gate that links
+       only quickjs sources cannot be broken by a host include, and reporting one at it would be the same
+       category error as reporting a popup edit at a JS-engine number. */
+    dangling: cone.includes("engine/host") ? danglingIncludes("HEAD") : [],
     cone,
   };
 }
@@ -225,6 +279,15 @@ export function revisionLines(rev) {
   /* THE PROGRAM, WHEN IT IS NOT THE ONE THIS RUN LINKED. Reported after the revision and never instead of it:
      both facts are needed, because a clean tree in front of a six-commit-old artifact is the most misleading
      pair there is — every line above says "quotable" about a program that is not the one that ran. */
+  /* BEFORE THE ARTIFACT, because this one says the revision named above cannot be COMPILED at all, which
+     makes every statement under it about a program that cannot exist. */
+  if (rev.dangling.length) {
+    out.push(`[rev] THIS REVISION DOES NOT COMPILE — ${rev.dangling.length} include(s) below name a file no ` +
+             `commit provides, so the tree as published cannot be built by anyone who checks it out. The usual ` +
+             `cause is a commit that staged a source and not the header it added (CLAUDE.md §Disposition: the ` +
+             `index is shared, so stage and commit as ONE uninterrupted operation).`);
+    for (const l of rev.dangling) out.push(`[rev]   ${l}`);
+  }
   if (rev.stamp) {
     const s = rev.stamp;
     if (s.dirty && s.dirty.length) {
