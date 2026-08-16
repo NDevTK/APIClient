@@ -656,47 +656,72 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
     e->is_map = 0;
 }
 
-static void cow_unapply_entries(JSContext *ctx, CowEntry *ents, int n) {
-    for (int i = n - 1; i >= 0; i--) {   /* reverse: symmetric with apply */
-        CowEntry *e = &ents[i];
-        if (e->is_gendata) { cow_gd_install(e, e->g0); continue; }   /* restore the shared original */
-        if (e->is_state) {   /* blob state: save what THIS flow produced, then rewind to the baseline */
-            cow_state_free(JS_GetRuntime(ctx), e, e->a_cur);
-            e->a_cur = cow_state_save(ctx, e);
-            cow_state_restore(ctx, e, e->a_base);
-            continue;
-        }
-        if (e->is_map) {   /* invert the flow's record mutation: ADD->delete, OVERWRITE/DELETE->restore old value */
-            if (e->map_op == COW_MAP_ADD) JS_MapDeleteRecord(ctx, e->obj, e->base);
-            else JS_MapAddRecord(ctx, e->obj, e->base, e->map_old);
-            continue;
-        }
-        if (e->vref) {                        /* closure cell: save its current value, restore the baseline */
-            if (e->cur_state != COW_CUR_UNRECORDED) JS_FreeValue(ctx, e->cur);
-            e->cur = JS_VarRefGetValue(e->vref); e->cur_state = COW_CUR_PRESENT;
-            JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->base));
-            continue;
-        }
-        JSValue cur;                          /* save the flow's CURRENT STATE so apply can restore it */
-        int has = JS_GetOwnSlot(ctx, &cur, e->obj, e->atom);
-        DCHECK(has >= 0, "reading back a captured slot threw — a delta holds something that is not an object, "
-                         "and a context switch has no flow base to run an exception on");
-        DCHECK(has > 0 || JS_IsUndefined(cur),
-               "an ABSENT slot was recorded carrying a value — apply would write it back and re-create the "
-               "property this flow deleted");
-        if (e->cur_state != COW_CUR_UNRECORDED) JS_FreeValue(ctx, e->cur);
-        e->cur = cur;
-        e->cur_state = has > 0 ? COW_CUR_PRESENT : COW_CUR_ABSENT;
-        uint32_t ai;
-        if (e->existed) JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->base));   /* -> baseline */
-        else if (JS_IsArrayIndexSlot(e->obj, e->atom, &ai))
-            /* flow-CREATED array append: TRUNCATE the array to this index (frees the tail), removing it. Entries
-               are processed in reverse (highest index first), so a contiguous run of appends shrinks one-by-one
-               back to the baseline length. cur was saved above so apply re-appends it. A JS_DeleteProperty would
-               convert the fast array to slow and leave the element in place. */
-            JS_ArraySetLength(ctx, e->obj, ai);
-        else JS_DeleteProperty(ctx, e->obj, e->atom, 0);
+/* PASS 1 of an unapply — READ this entry's flow-side state off the live heap. Writes nothing to the heap. */
+static void cow_save_cur(JSContext *ctx, CowEntry *e) {
+    if (e->is_gendata) return;   /* a fixed toggle between two activations: nothing is read back */
+    if (e->is_state) {           /* blob state: what THIS flow produced, for apply to re-install */
+        cow_state_free(JS_GetRuntime(ctx), e, e->a_cur);
+        e->a_cur = cow_state_save(ctx, e);
+        return;
     }
+    if (e->is_map) return;       /* an UNDO-LOG entry: it inverts, it does not read the collection back */
+    if (e->vref) {               /* closure cell */
+        if (e->cur_state != COW_CUR_UNRECORDED) JS_FreeValue(ctx, e->cur);
+        e->cur = JS_VarRefGetValue(e->vref); e->cur_state = COW_CUR_PRESENT;
+        return;
+    }
+    JSValue cur;
+    int has = JS_GetOwnSlot(ctx, &cur, e->obj, e->atom);
+    DCHECK(has >= 0, "reading back a captured slot threw — a delta holds something that is not an object, "
+                     "and a context switch has no flow base to run an exception on");
+    DCHECK(has > 0 || JS_IsUndefined(cur),
+           "an ABSENT slot was recorded carrying a value — apply would write it back and re-create the "
+           "property this flow deleted");
+    if (e->cur_state != COW_CUR_UNRECORDED) JS_FreeValue(ctx, e->cur);
+    e->cur = cur;
+    e->cur_state = has > 0 ? COW_CUR_PRESENT : COW_CUR_ABSENT;
+}
+
+/* PASS 2 of an unapply — put the BASELINE back. Writes the heap; reads nothing of the flow's. */
+static void cow_restore_base(JSContext *ctx, CowEntry *e) {
+    if (e->is_gendata) { cow_gd_install(e, e->g0); return; }   /* restore the shared original */
+    if (e->is_state) { cow_state_restore(ctx, e, e->a_base); return; }
+    if (e->is_map) {   /* invert the flow's record mutation: ADD->delete, OVERWRITE/DELETE->restore old value */
+        if (e->map_op == COW_MAP_ADD) JS_MapDeleteRecord(ctx, e->obj, e->base);
+        else JS_MapAddRecord(ctx, e->obj, e->base, e->map_old);
+        return;
+    }
+    if (e->vref) { JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->base)); return; }
+    uint32_t ai;
+    if (e->existed) JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->base));   /* -> baseline */
+    else if (JS_IsArrayIndexSlot(e->obj, e->atom, &ai))
+        /* flow-CREATED array append: TRUNCATE the array to this index (frees the tail), removing it. Entries
+           are processed in reverse (highest index first), so a contiguous run of appends shrinks one-by-one
+           back to the baseline length. cur was saved in pass 1 so apply re-appends it. A JS_DeleteProperty
+           would convert the fast array to slow and leave the LENGTH standing, which nothing else would take
+           back down — the array's length is derived from these entries rather than captured as the slot it is. */
+        JS_ArraySetLength(ctx, e->obj, ai);
+    else JS_DeleteProperty(ctx, e->obj, e->atom, 0);
+}
+
+/* A SAVE IS A READ OF THE SAME HEAP A RESTORE WRITES, so ALL of one segment's entries are read BEFORE ANY of
+   them is put back. Interleaving them — one loop that saved entry i and immediately restored it — made an
+   entry's record of "what this flow has" depend on what a LATER-CAPTURED entry's restore had already changed,
+   and the two entries that do that to each other are an array's length and its elements: `arr.length = 5`
+   followed by `arr[3] = v` restores the element first, which truncates the array back to 3 (see
+   cow_restore_base), and only then reads the length — recording the 3 that truncation had just produced
+   instead of the 5 the flow set, so the flow resumed holding a length it never had. The two
+   passes cost one extra walk of an array the swap already walks twice, and they are what make the record of a
+   flow's state a statement about the flow rather than about the order its writes happened to be captured in.
+   Pass 2 runs in REVERSE (symmetric with apply's forward replay); pass 1's order cannot matter, because it
+   writes nothing the next entry could read.
+   ACROSS segments the interleave is CORRECT and stays: cow_install_chain unapplies the topmost segment whole
+   before the one below it, because the lower segment's flow-side state is precisely what the upper one's
+   restore puts back. The invariant is within ONE frozen unit, whose entries are one flow's writes at one
+   instant and are deduped, so no slot appears twice. */
+static void cow_unapply_entries(JSContext *ctx, CowEntry *ents, int n) {
+    for (int i = 0; i < n; i++) cow_save_cur(ctx, &ents[i]);
+    for (int i = n - 1; i >= 0; i--) cow_restore_base(ctx, &ents[i]);
 }
 
 /* UNAPPLY (flow -> parked): ONLY THE HEAD. The base chain stays applied and g_cow_installed says so — the
