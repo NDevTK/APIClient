@@ -59,6 +59,7 @@
 #include "core/dom/element.h"   /* element_prefix — §4.4's three namespace lookups read the name §4.5 stored */
 #include "core/dom/attr_list.h"    /* dom_attr_clone / dom_attr_attach — §4.4 step 2's attribute half */
 #include "core/dom/name_intern.h"  /* §4.4's names in the COPY's document — see clone_element_into */
+#include "core/dom/node_interface.h" /* …and which C struct those names mean, on create AND on destroy */
 /* §4.5 adopt's step 3 arm. The DOM defines a node's custom element registry and the standard states the
    re-derivation right here, in §4.5; HTML owns what a registry IS. shadow_root.c reaches across the same
    boundary for the same reason. */
@@ -538,6 +539,12 @@ static void node_set_node_document(lxb_dom_node_t *n, lxb_dom_document_t *doc)
            "DOM §4.5 adopt step 3.1 tried to set a DOCUMENT's node document — a document IS its own node "
            "document, and `adoptNode` throws NotSupportedError rather than reaching one");
     if (n->owner_document == doc) return;
+    /* THE ID ARRIVES WITHOUT BEING MINTED HERE. Adopt re-points the node document and does NOT re-intern the
+       node's names, so a node created in A with a namespace outside lexbor's static table is from now on
+       destroyed through B's dispatcher — and lexbor's would index its eight-column destructor table with that
+       namespace id, which is a heap address. This is the second and last of the two ways a document acquires
+       such a node; dom_intern_namespace is the first. See node_interface.h. */
+    dom_document_own_node_interfaces(doc);
     /* THROUGH THE CHOKEPOINT, because a node document is shared baseline state exactly like a parent link: the
        delta now has an entry kind for it, so a flow that adopts a subtree moves those nodes in ITS timeline
        and a sibling arm that never adopted still reads the document it knew. */
@@ -1857,7 +1864,7 @@ static lxb_dom_node_t *clone_element_into(lxb_dom_document_t *doc, lxb_dom_eleme
     DCHECK(src->is_value == NULL,
            "an element carries an `is` value and §4.4's clone must pass it to create-an-element — build the "
            "copy of it here, in the destination document's arena, beside the three names");
-    el = lxb_dom_interface_element(lxb_dom_document_create_interface(doc, tag, ns));
+    el = lxb_dom_interface_element(dom_element_interface_create(doc, tag, ns));
     CHECK(el != NULL, "clone a single node: the element copy's interface could not be created");
     el->node.local_name = tag;
     el->node.ns = ns;

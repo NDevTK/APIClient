@@ -28,6 +28,7 @@
 #include "solver/solve.h"
 #include "core/dom/element.h"
 #include "core/dom/name_intern.h"   /* §4.5's storage step stores the three names AS GIVEN — see that header */
+#include "core/dom/node_interface.h" /* …and the (local name, namespace) pair decides the element's C STRUCT */
 #include "core/dom/element_view.h"
 #include "core/dom/node_iterator.h"
 #include "core/dom/tree_walker.h"
@@ -260,7 +261,7 @@ lxb_dom_element_t *element_create_ns(lxb_dom_document_t *doc, const char *ns, si
            "NamespaceError for that pair, so validate-and-extract cannot have produced it");
     tag_id = dom_intern_element_local_name(doc, local, local_len);
     ns_id = dom_intern_namespace(doc, ns, ns_len);
-    el = lxb_dom_interface_element(lxb_dom_document_create_interface(doc, tag_id, ns_id));
+    el = lxb_dom_interface_element(dom_element_interface_create(doc, tag_id, ns_id));
     CHECK(el != NULL, "an element interface could not be created");
     if (prefix != NULL && prefix_len != 0) {
         /* BEFORE local_name is set, which is lexbor's own order and is load-bearing: the qualified name is
