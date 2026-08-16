@@ -195,6 +195,31 @@ if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   process.exit(1);
 }
 
+/* THE ORACLE IS SHARED, AND THE ENFORCEMENT BELOW MUTATES IT. `sparse-checkout set` is a WRITE to a checkout every
+   concurrent run of this gate also writes — and WPT_PATHS is read from whichever tree the run was launched
+   from, so two runs at two revisions apply two different cones to ONE corpus and each removes what the other
+   put there. It is not hypothetical and it is not rare: this repository currently has worktrees at revisions
+   whose WPT_PATHS differ by ten entries (`permissions`, `fs`, `storage`, `xhr`, `webidl`, `shadow-dom`,
+   `html/user-activation`, `wai-aria/scripts`, `html/webappapis/animation-frames`), and 660 corpus files carry
+   the timestamp of the most recent re-materialization. Between this gate's classification pass and its run loop
+   sits the whole runner link — minutes — so a file collected as a test can be gone by the time it is run.
+   That is §Testing's frozen-snapshot rule one level out: the gate must not report a number about a corpus that
+   no longer exists, and it CANNOT freeze this one, because the enforcement above exists precisely to make the
+   checkout agree with WPT_PATHS. What it can do is know when the corpus moved under it. So the corpus's
+   IDENTITY is captured here — its HEAD and the exact cone that was applied — and re-read wherever a file turns
+   out to be unreadable, so the report distinguishes "another run re-sparsified this corpus mid-run" from "this
+   file is unreadable and the checkout never moved", which are different diagnoses and must not read alike. */
+/* ASKED OF GIT, NOT READ OFF A PATH THIS FILE GUESSES. `.git` is a directory in a clone and a FILE in a
+   worktree, so `.git/info/sparse-checkout` is a path that exists for one provisioning and not the other — and a
+   read that quietly failed would make the cone compare equal to itself forever, which is a diagnostic that
+   always answers "nothing moved". A failure is kept AS the identity, so a run that could not ask and a run that
+   asked and got a different answer are both changes rather than both silence. */
+function corpusIdentity() {
+  const ask = (...a) => { const r = spawnSync("git", a, { cwd: WPT, encoding: "utf8" });
+                          return r.status === 0 ? r.stdout : `<git ${a.join(" ")} failed: ${r.stderr}>`; };
+  return { head: ask("rev-parse", "HEAD").trim(), cone: ask("sparse-checkout", "list") };
+}
+
 /* THE CHECKOUT IS ENFORCED, NOT ASSUMED. WPT_PATHS is this gate's statement of what it measures, and until now
    nothing made the working tree agree with it: the presence of testharness.js was the whole test, so a corpus
    missing an entire directory answered "provisioned" and every file in that directory silently stopped being
@@ -204,11 +229,29 @@ if (!existsSync(join(WPT, "resources", "testharness.js"))) {
    of the working tree by an unrelated restore; the next run reported the same total as before and nothing said
    the area had gone. `sparse-checkout set` is idempotent and takes about a second when the list already
    matches, so it runs every time rather than being guarded by a check that can itself be wrong. */
+/* AND WHAT IT CHANGED IS SAID OUT LOUD, because this is the write that makes the corpus shared-mutable and
+   nothing named it. `set` is idempotent when the list already matches — and when it does NOT match, it is a
+   worktree update that ADDS and REMOVES files, applied to a checkout other runs of this gate are reading. Two
+   trees at two revisions of this file therefore fight over one corpus: measured, this repository has worktrees
+   whose WPT_PATHS differ by ten entries, and 660 corpus files carry the timestamp of the most recent
+   re-materialization. Printing the delta at the moment it is applied is what turns "a file vanished mid-run"
+   from a mystery into a line the reader already has: a run whose first output is `-xhr -webidl` is a run about
+   to invalidate somebody else's numbers, and a run that prints nothing here changed nothing. */
 {
+  const before = corpusIdentity();
   const set = spawnSync("git", ["sparse-checkout", "set", ...WPT_PATHS], { cwd: WPT, encoding: "utf8" });
   if (set.status !== 0) {
     console.error("[wpt] could not apply the sparse checkout this gate measures:\n" + (set.stderr || set.stdout));
     process.exit(1);
+  }
+  const after = corpusIdentity();
+  if (before.cone !== after.cone) {
+    const cut = (s) => new Set(s.split("\n").map((l) => l.trim()).filter(Boolean));
+    const b = cut(before.cone), a = cut(after.cone);
+    console.log("[wpt] THIS RUN RE-SPARSIFIED THE SHARED CORPUS — any other run reading it now has a corpus " +
+                "that no longer matches what it collected:" +
+                [...[...a].filter((p) => !b.has(p)).map((p) => " +" + p),
+                 ...[...b].filter((p) => !a.has(p)).map((p) => " -" + p)].join(""));
   }
   const missing = WPT_PATHS.filter((p) => !existsSync(join(WPT, p)));
   if (missing.length) {
@@ -217,6 +260,10 @@ if (!existsSync(join(WPT, "resources", "testharness.js"))) {
     process.exit(1);
   }
 }
+
+/* THE IDENTITY THIS RUN'S NUMBERS BELONG TO, taken AFTER the cone above is applied — that is the corpus the
+   collection below is about, and every later "did it move?" question is asked against it. */
+const CORPUS_AT_START = corpusIdentity();
 
 /* WHICH FILES TO RUN — AND THE ANSWER IS THE CORPUS'S OWN, PORTED, not a set of endings this file grew one
    defect at a time. Four times now the rule here has been a habit rather than the definition, and each time the
@@ -270,11 +317,39 @@ function isDocument(p) { return DOC_EXT.test(p); }
    thirteen `dom/nodes/*-svg.svg` tests declare `xmlns:h` and write `<h:script src="/resources/testharness.js"/>`.
    A pattern anchored on the literal tag name dropped all thirteen — a narrowing that reads as tidier and
    silently excludes real tests, which is the exact defect this collector exists to prevent. */
+/* EVERY READ OF THE CORPUS GOES THROUGH HERE, AND AN UNREADABLE FILE IS A RESULT OF ITS OWN KIND — neither a
+   test that failed, nor a DCHECK naming a missing capability, nor a kill. There were TWO reads of each collected
+   file and they handled the same failure in opposite, equally wrong, ways. At COLLECT time `isTestDocument`
+   wrapped its read in `catch { return false; }`, so a document the process could not open was classified "not a
+   test" and vanished from the total — the silent exclusion this file's own header calls a failure. At RUN time
+   `scriptMetadata` read the same file with no containment at all, so the same condition threw out of the driver
+   and an ENTIRE AREA produced NO NUMBER: measured, as `node engine/wpt.mjs html/browsers` dying on
+   `ENOENT … back-forward-cache/focus.html`, a file that both collected and classified seconds earlier.
+   The gap between those two reads is the whole runner build — minutes of clang — and the corpus is SHARED and
+   MUTATED IN PLACE by every run (the `sparse-checkout set` above), so the window is real and the file that
+   disappears is real. Neither answer was allowed: dropping it is an excluded test, and dying is that area's
+   number thrown away over one file. So the read RECORDS, and what it records is reported, counted and named.
+   It records by PATH, so the same file discovered twice is one fact, and it keeps the errno — ENOENT (the
+   checkout moved) and EACCES (it did not) are different diagnoses and must not read alike. */
+const g_unreadable = new Map();
+function readCorpus(p) {
+  try { return readFileSync(p, "utf8"); }
+  catch (e) {
+    /* THE ERRNO IS THE DIAGNOSIS, and where there is none that is itself the fact rather than a hole to fill:
+       `readFileSync` throws a SystemError carrying `code`, so anything else came from somewhere this file does
+       not expect and must arrive in the report saying so, not wearing a plausible errno. */
+    const why = typeof e.code === "string" ? e.code : `non-errno: ${e.message}`;
+    g_unreadable.set(relative(WPT, p).split(sep).join("/"), why);
+    return null;
+  }
+}
+/* `null` — NOT `false` — WHEN THE FILE CANNOT BE READ, because "this is not a testharness test" is a claim about
+   its CONTENT and there is no content to make it from. The caller propagates the third answer rather than
+   collapsing it into the negative one. */
 function isTestDocument(p) {
-  try {
-    return /<(?:[A-Za-z][\w.-]*:)?script[^>]*\ssrc\s*=\s*(["']?)\/resources\/testharness\.js\1[\s/>]/i
-      .test(readFileSync(p, "utf8"));
-  } catch { return false; }
+  const src = readCorpus(p);
+  return src === null ? null
+       : /<(?:[A-Za-z][\w.-]*:)?script[^>]*\ssrc\s*=\s*(["']?)\/resources\/testharness\.js\1[\s/>]/i.test(src);
 }
 /* WHAT KIND OF TEST A FILE IS, or null when it is not one. The order is sourcefile.py's `manifest_items`
    cascade, and the order is load-bearing: every NAME-based type is asked BEFORE the content, so a file that
@@ -299,7 +374,13 @@ function testKind(rel) {
        DedicatedWorkerGlobalScope, which this engine does not have — so it fails loud on `importScripts`, which
        NAMES the missing capability. Leaving it out named nothing and counted nothing. */
     return ["any", "window", "worker"].some((g) => f.meta.includes(g)) ? "script" : null;
-  return isDocument(rel) && isTestDocument(join(WPT, rel)) ? "document" : null;
+  if (!isDocument(rel)) return null;
+  /* THE THIRD ANSWER IS CARRIED, NOT COLLAPSED. A `.js` is classified by its NAME and needs no read, so an
+     unreadable one reaches the runner and dies there; a document is classified by its CONTENT, so an unreadable
+     one used to be quietly demoted here. One kind for both: the file is COLLECTED (it can never silently leave
+     the total) and it is reported as unreadable rather than run. */
+  const t = isTestDocument(join(WPT, rel));
+  return t === null ? "unreadable" : t ? "document" : null;
 }
 function collect(dir, out) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -341,9 +422,13 @@ if (!files.length) { console.error(`[wpt] no test files under ${root}`); process
    lines, and past it the file is code. Two consumers read it (the scripts a test must be given, and the
    variants it declares) and a second parser for the second consumer is how the two come to disagree about
    where the block ends. */
+/* IT ANSWERS `null` WHEN THE FILE CANNOT BE READ. This is the line the whole area died on — an unguarded
+   `readFileSync` of a collected file, three frames below a `for` loop with no catch around it. */
 function scriptMetadata(file) {
+  const src = readCorpus(file);
+  if (src === null) return null;
   const out = [];
-  for (const line of readFileSync(file, "utf8").split("\n")) {
+  for (const line of src.split("\n")) {
     if (!line.startsWith("// META:")) {
       if (line.startsWith("//") || line.trim() === "") continue;
       break;
@@ -364,11 +449,18 @@ function scriptMetadata(file) {
    over by silently running the file bare. */
 function testVariants(file, kind) {
   const rel = relative(WPT, file).split(sep).join("/");
+  /* AN UNREADABLE FILE IS EXACTLY ONE RUN, and that run's whole result is that it could not be read. Its
+     variant declarations live in the bytes nobody can see, so claiming any number other than one would be
+     inventing a count — the same fabrication as defaulting a producer's absent field. */
+  if (kind === "unreadable") return [""];
+  const src = kind === "document" ? readCorpus(file) : null;
+  const md = kind === "document" ? null : scriptMetadata(file);
+  if (src === null && md === null) return [""];   /* readCorpus/scriptMetadata already recorded WHY */
   const rv = kind === "document"
-    ? [...readFileSync(file, "utf8").matchAll(/<meta\s[^>]*name=(["']?)variant\1[^>]*>/gi)]
+    ? [...src.matchAll(/<meta\s[^>]*name=(["']?)variant\1[^>]*>/gi)]
         .map((m) => m[0].match(/\scontent=(["']?)([^"'>]*)\1/i))
         .filter(Boolean).map((m) => m[2])
-    : scriptMetadata(file).filter(([k]) => k === "variant").map(([, v]) => v);
+    : md.filter(([k]) => k === "variant").map(([, v]) => v);
   for (const v of rv) {
     if (v === "") continue;
     if (v[0] !== "?" && v[0] !== "#")
@@ -419,6 +511,10 @@ const runs = files.flatMap((f) => {
       const rel = relative(WPT, p).split(sep).join("/");
       const mine = testKind(rel);
       const theirs = oracle.get(rel);
+      /* A FILE NEITHER SIDE COULD READ IS NOT A CLASSIFIER DISAGREEMENT, and reporting it as one would exit
+         here with a message about sourcefile.py — a confident wrong diagnosis of a corpus fact. It is carried
+         to the unreadable report, which is the one place that fact belongs. */
+      if (mine === "unreadable") continue;
       if (Boolean(mine) !== Boolean(theirs)) {
         disagree.push(`  ${rel}: this gate says ${mine ? "TEST" : "not a test"}, sourcefile.py says ` +
                       `${theirs ? "TEST" : "not a test"}`);
@@ -494,7 +590,8 @@ function byArea(rel) {
   const p = WPT_PATHS.filter((d) => rel === d || rel.startsWith(d + "/"))
                      .reduce((a, b) => (b.length > a.length ? b : a), rel.split("/")[0]);
   let a = areas.get(p);
-  if (!a) areas.set(p, (a = { name: p, expected: 0, done: 0, runs: 0, pass: 0, fail: 0, aborted: 0, lines: [] }));
+  if (!a) areas.set(p, (a = { name: p, expected: 0, done: 0, runs: 0, pass: 0, fail: 0, aborted: 0,
+                              unread: 0, lines: [] }));
   return a;
 }
 
@@ -511,9 +608,16 @@ function byArea(rel) {
    area is done". Every area's file count is known before the first file runs, so the answer is exact. */
 for (const r of runs) byArea(relative(WPT, r.file)).expected++;
 const AREA_W = Math.max(...[...areas.keys()].map((n) => n.length));
+/* FOUR COLUMNS, NOT THREE, AND THE FOURTH IS NOT A KIND OF ABORT. §Testing insists a wrong answer, a missing
+   capability, a kill and an artifact of HOW the run happened stay distinguishable — this is that rule applied
+   to the corpus itself. `unread` is "the gate collected this file and then could not read it": nothing about
+   the engine was measured, so folding it into `aborted` would report a checkout fact as a missing capability
+   and send the next reader to build something. It is per AREA because an area losing files to a shared-corpus
+   mutation and an area whose component is absent look identical in a total. */
 function areaRow(a) {
   console.log(`  ${a.name.padEnd(AREA_W)}  runs ${String(a.runs).padStart(5)}  pass ${String(a.pass).padStart(7)}` +
-              `  fail ${String(a.fail).padStart(7)}  aborted ${String(a.aborted).padStart(3)}`);
+              `  fail ${String(a.fail).padStart(7)}  aborted ${String(a.aborted).padStart(3)}` +
+              `  unread ${String(a.unread).padStart(3)}`);
 }
 /* An area's failure lines are held only until that area finishes, for the same reason: buffered to the end of
    the RUN they are lost with it; buffered to the end of the AREA they arrive with the row they belong to. */
@@ -575,7 +679,9 @@ const SERVER_REWRITES = {
    A `/`-rooted path is WPT-root-relative and anything else is relative to the test's own directory, which is
    the server's own resolution rule. */
 function metaScripts(file) {
-  return scriptMetadata(file).filter(([k]) => k === "script").map(([, v]) => {
+  const md = scriptMetadata(file);
+  if (md === null) return null;   /* the file itself is gone; the run loop reports that, it does not die of it */
+  return md.filter(([k]) => k === "script").map(([, v]) => {
     /* THE REWRITE APPLIES HERE AND NOWHERE ELSE. A META script is a PROGRAM INPUT — the driver hands the runner
        its file to execute before the test — so this path is resolved on disk and needs wptserve's rewrite table
        to find /resources/WebIDLParser.js, which is the webidl2 library under its historical name. Everything the
@@ -607,7 +713,7 @@ async function substituted(dep) {
   return out;
 }
 
-let pass = 0, fail = 0, aborted = 0;
+let pass = 0, fail = 0, aborted = 0, unread = 0;
 
 console.log("\n==================== web-platform-tests ====================");
 for (const { file: f, kind, variant } of runs) {
@@ -620,7 +726,27 @@ for (const { file: f, kind, variant } of runs) {
   const failures = area.lines;   /* held until this AREA finishes, not until the run does */
   area.runs++;
   try {
-    const deps = (await Promise.all(metaScripts(f).map(substituted)));
+    /* THE FILE ITSELF, BEFORE ANYTHING IT NAMES. This is where the driver used to die: `metaScripts` read the
+       collected file with no containment, so one file the corpus no longer had took the whole area's number
+       with it. Both halves of that are wrong and both are fixed here — it is REPORTED (never dropped, which
+       would be the excluded test) and it is reported AS ITS OWN KIND (never an abort, never a fail), and it
+       costs exactly one run rather than an area. */
+    const meta = kind === "unreadable" ? null : metaScripts(f);
+    if (meta === null) {
+      /* THE REASON IS ASSERTED, NOT DEFAULTED. `readCorpus` is the only producer of a null here and it always
+         records the errno first, so an absent entry means THIS DRIVER is wrong about its own contract — a
+         should-never-happen that must crash at its origin, not become the string "unknown" sitting in a report
+         as a plausible datum. */
+      const key = path.split(sep).join("/");
+      if (!g_unreadable.has(key))
+        throw new Error(`[wpt] ${key} read as unreadable with no recorded reason — readCorpus records every ` +
+                        "failure it returns null for, so this driver's own accounting is broken");
+      unread++; area.unread++;
+      failures.push(`  UNREAD ${rel}\n         the corpus file could not be read: ${g_unreadable.get(key)} — ` +
+                    "nothing about the engine was measured by this run");
+      continue;
+    }
+    const deps = (await Promise.all(meta.map(substituted)));
     const missing = deps.filter((d) => !existsSync(d));
     if (missing.length) {
       /* A META script the sparse checkout does not have is a GATE defect, not a test result: the file would run
@@ -810,6 +936,7 @@ console.log("  ---- summary");
     /* GROUPED BY DIRECTORY, at most two segments deep — the granularity a WPT_PATHS entry is written at. The
        filename is not part of the key; taking the first two SEGMENTS made one row per file for everything
        sitting at a standard's own level, which is a list of 300 rows saying "xhr". */
+    if (g_unreadable.has(rel)) continue;   /* it is reported below, by name, as unreadable — not as a stray test */
     const k = rel.split("/").slice(0, -1).slice(0, 2).join("/") || ".";
     stray.set(k, (stray.get(k) || 0) + 1);
   }
@@ -833,7 +960,35 @@ console.log("  ---- summary");
     console.log(`  ---- ${vfiles.size} collected file(s) declare variants, run as ` +
                 `${runs.filter((r) => r.variant).length} distinct runs at their own addresses`);
 }
+/* COLLECTED VERSUS READ, EVERY RUN, WHETHER OR NOT ANYTHING WENT WRONG. A total that LOOKS complete and is not
+   is the defect this gate exists to catch, and until now the only number printed was the collected one — so a
+   corpus that lost files under the run reported a smaller total with nothing to say why, which is
+   indistinguishable from a regression. Two numbers make the difference visible without anyone having to
+   suspect it.
+   AND WHEN THEY DIFFER, THE CORPUS IS ASKED WHETHER IT MOVED. `sparse-checkout set` at the top of this file is
+   a write to a checkout every concurrent run also writes, from whichever tree it was launched from, so "the
+   file vanished mid-run" and "the file was never readable" are both real and are different work: the first is
+   a statement about how this gate is being RUN and is fixed by not running two cones against one corpus; the
+   second is a statement about the checkout and is fixed by provisioning it. Reporting them alike is the
+   collapsed-verdict failure §Testing names. */
+{
+  const collected = new Set(files.map((f) => relative(WPT, f).split(sep).join("/")));
+  const readable = files.length - [...g_unreadable.keys()].filter((k) => collected.has(k)).length;
+  console.log(`  ---- corpus: ${files.length} file(s) collected, ${readable} readable` +
+              (g_unreadable.size ? `; ${g_unreadable.size} unreadable path(s) seen in total` : ""));
+  if (g_unreadable.size) {
+    const now = corpusIdentity();
+    const moved = now.head !== CORPUS_AT_START.head ? `its HEAD changed (${CORPUS_AT_START.head} → ${now.head})`
+                : now.cone !== CORPUS_AT_START.cone ? "its sparse cone was rewritten — ANOTHER RUN OF THIS GATE " +
+                    "applied a different WPT_PATHS to this shared corpus while this run was in flight, so these " +
+                    "files are an artifact of HOW this ran, not of what ran"
+                : null;
+    console.log(`       the corpus ${moved || "did not move during this run — these files were never readable, " +
+                                     "so the checkout itself is short of what this gate collected"}`);
+    for (const [k, why] of [...g_unreadable.entries()].sort()) console.log(`       ${why.padEnd(8)} ${k}`);
+  }
+}
 console.log(`  files ${files.length}   runs ${runs.length}   subtests ${pass + fail}   pass ${pass}` +
-            `   fail ${fail}   aborted-runs ${aborted}`);
+            `   fail ${fail}   aborted-runs ${aborted}   unreadable-runs ${unread}`);
 console.log("===========================================================");
-process.exit(fail || aborted ? 1 : 0);
+process.exit(fail || aborted || unread ? 1 : 0);
