@@ -19,6 +19,20 @@ void iter_cursor_init(IterCursor *c)
     c->cb[0] = c->cb[1] = JS_UNDEFINED;
 }
 
+/* See idl_iter.h. The one difference from the init above is WHERE the cursor starts: the @@iterator read has
+   already happened, in the union algorithm that chose this arm, so re-running it here would be the page's
+   getter called twice for one conversion. */
+void iter_cursor_init_from_method(JSContext *ctx, IterCursor *c, JSValue method)
+{
+    DCHECK(JS_IsFunction(ctx, method),
+           "an iterable cursor was planted with an @@iterator that is not callable — ECMAScript's GetMethod "
+           "answers undefined for null and undefined and throws a TypeError for anything else, so the caller "
+           "has already decided this and there is nothing here to fall back to");
+    iter_cursor_init(c);
+    c->iterfn = method;
+    c->phase = IT_CALL_ITERFN;
+}
+
 void iter_cursor_visit(JSContext *ctx, IterCursor *c, JSStepVisit *v)
 {
     int k;

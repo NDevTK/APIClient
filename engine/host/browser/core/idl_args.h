@@ -105,6 +105,32 @@ typedef enum {
        argument-position sequence does, rather than being walked from a body after every later member was
        already read. */
     IDL_SEQUENCE_DOMSTRING,
+    /* `(DOMString or sequence<DOMString>)` — §3.2.25's union, and the FIRST declared type whose ARM IS CHOSEN
+       BY THE PAGE'S OWN CODE. Every other union in this list is decided by a brand test or by `JS_IsObject`,
+       neither of which reads anything; this one's step 12.2 is `? GetMethod(V, %Symbol.iterator%)` — one
+       accessor or one Proxy `get` trap away from being a page loop — so the position PARKS on that read exactly
+       as it parks on a `toString`, and which arm it resolved to is a resume point of its own.
+       THE ORDER IS THE ALGORITHM'S AND IT IS OBSERVABLE. Steps 4 through 11 name no arm this union has (no
+       dictionary, no interface type, no `object`, no buffer source, no callback function), so the whole
+       decision is step 12.2 against step 16: an Object whose @@iterator is callable takes the SEQUENCE, and
+       EVERYTHING else takes the string arm and is ToString'd — an Object with no @@iterator included, and null,
+       and a number. `db.transaction({})` is therefore the store name "[object Object]" and a "NotFoundError",
+       which is what a browser answers; reading the union as "an object is the sequence" gets that one wrong in
+       the direction of a TypeError the spec does not have. And it is GetMethod and NOT Get: undefined and null
+       mean there is no method, and a @@iterator that is neither of those and not callable is a TypeError.
+       The element type is a DOMString, so §3.2.11's scalar value conversion does NOT run over it — that is the
+       whole of what separates this sequence's elements from `BlobPart`'s. Indexed Database §4.4's
+       `transaction(storeNames, …)` is what declares it. */
+    IDL_DOMSTRING_OR_SEQUENCE,
+    /* `(DOMString or sequence<DOMString>)?` — the same union with §3.2.25 STEP 2 ahead of it: the union
+       INCLUDES a nullable type, so null AND undefined are the IDL null and nothing is read off either. The
+       difference from the row above is the difference between `keyPath: null` meaning "this store has no key
+       path" and meaning the four characters "null", which §2.5 then refuses as an invalid key path.
+       Indexed Database §4.4's `IDBObjectStoreParameters.keyPath` declares it, and declares it as a DICTIONARY
+       MEMBER — the arm-deciding read is the page's code there exactly as it is at an argument position, so the
+       conversion parks on the member it is on rather than being walked from a body after every later member of
+       the same dictionary was already read. */
+    IDL_DOMSTRING_OR_SEQUENCE_NULLABLE,
     /* `sequence<T>` where T is an INTERFACE type — §3.2.21's iterator-protocol conversion with §3.2.15's brand
        test as the element conversion. HTML §8.5's `GetHTMLOptions.shadowRoots` is `sequence<ShadowRoot>` and is
        the first, and it is the same reason IDL_SEQUENCE_DOMSTRING is a declared type rather than a body's walk:
@@ -458,6 +484,21 @@ typedef struct {
    declared and past what any member may declare, and the value that meant "none" changed whenever the ceiling
    did. The declaration asserts the bound, so the state cannot be reached. */
 void idl_optional_from(int first_optional);
+
+/* §3.6 STEP 14.2'S DEFAULT VALUE AT A POSITIONAL ARGUMENT — the THIRD state at a position, beside "the page
+   passed one" and "the argument is absent", and exactly the distinction IdlDictDefault already draws for a
+   dictionary member. §3.6.2's absent rule above is for an optional argument with NO default value; where the
+   IDL writes `= …`, step 14.2 replaces the undefined with THAT value and the body never sees a hole.
+   IT WAS NOT EXPRESSIBLE AND THE BODIES PAID FOR IT. Indexed Database §4.4's
+   `transaction(storeNames, optional IDBTransactionMode mode = "readonly", …)` is the member that needs it: with
+   only "absent" to say, the body would read `undefined` and substitute "readonly" itself — the IDL's own
+   declaration re-derived in a body, which is the consumer-side default §Offensive-programming names, and the
+   next member declared that way would re-derive it again with nothing to keep the two equal.
+   The default is already an IDL value — it is written in the IDL and not computed from the page — so it is
+   PLACED and never coerced, and no enumeration check runs over it. Set after the declaration, naming the member
+   the LAST one made, exactly as idl_optional_from does; the position must be one that declaration listed and
+   must already be optional, both of which are asserted. `dflt_str` must outlive the declaration. */
+void idl_arg_default(int index, IdlDictDefault dflt, const char *dflt_str);
 
 /* DECLARE THE CLASS AN IDL_INTERFACE / IDL_STRING_UNLESS_IFACE POSITION BRANDS AGAINST. Set after the
    declaration, naming the member the LAST one made, exactly as idl_optional_from does and for the same reason:

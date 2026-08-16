@@ -29,6 +29,18 @@ void iter_cursor_release(JSContext *ctx, IterCursor *c);
 int  iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst src,
                      JSValue in, JSValue **out_cb, int *out_argc);
 
+/* ECMAScript's GetIteratorFromMethod — the entry Web IDL §3.2.25 step 12.2 reaches this protocol through, and
+   a SECOND entry rather than a flag on the first, because the two differ in who performed the @@iterator read.
+   A union whose member types include a sequence chooses its arm with ? GetMethod(V, %Symbol.iterator%) and
+   then hands §3.2.20's "create a sequence from an iterable" THAT method. Reading @@iterator again here would be
+   a second [[Get]] the page can SEE — a Proxy `get` trap counts them, and an accessor may answer a different
+   function the second time, so the sequence would be built by an iterator the union never inspected. The cursor
+   therefore starts at the CALL of the method it is planted with.
+   `method` is CONSUMED, and it must be callable: that is GetMethod's own answer (undefined and null mean there
+   is no method, anything else non-callable is a TypeError), so the caller has already decided it and this
+   asserts the decision rather than repeating it. */
+void iter_cursor_init_from_method(JSContext *ctx, IterCursor *c, JSValue method);
+
 /* WEB IDL §3.2.21's `record<K, V>` CONVERSION, as the same shape of cursor. It is [[OwnPropertyKeys]] followed
    by a [[GetOwnProperty]] and a [[Get]] per key — on a Proxy those are the page's `ownKeys`, `getOwnPropertyDescriptor`
    and `get` traps, so every one of them is a request. Shared for the same reason the iterable cursor is:

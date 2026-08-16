@@ -22,13 +22,13 @@
  * to be closed before an upgrade runs. A copy taken here would be a second answer to one question, and
  * `createObjectStore` would then have to write both.
  *
- * WHAT IS ABSENT AND WHY. `objectStoreNames` needs a DOMStringList, which this engine does not have.
- * `transaction()` needs Web IDL §3.2.25's `(DOMString or sequence<DOMString>)` union, whose resolution is
- * "Type(V) is Object and ? Get(V, @@iterator) is not undefined" — a PROPERTY READ of the page's value, so it
- * belongs in the argument-conversion machine as a request and not in a body that would run it from C. Both are
- * honestly ABSENT and the IDL gap auditor lists them; until `transaction()` lands, a page reaches §4.5's
- * members through the handle §4.4's `createObjectStore` returns and through §4.10's `objectStore()` on the
- * upgrade transaction, which is where every migration already works. */
+ * WHAT IS ABSENT AND WHY. `objectStoreNames` needs a DOMStringList, which this engine does not have — it is
+ * honestly ABSENT and the IDL gap auditor lists it. `transaction()` used to stand beside it, and for a
+ * different reason: its `storeNames` is Web IDL §3.2.25's `(DOMString or sequence<DOMString>)`, whose arm is
+ * chosen by ? GetMethod(V, %Symbol.iterator%) — a property read of the PAGE'S value, which a body cannot
+ * perform because a C activation hosting the page's getter is the drive-to-completion this engine aborts on.
+ * That union is a declared type now (core/idl_args.h's IDL_DOMSTRING_OR_SEQUENCE), so the member is here and
+ * the body is handed either a string or the engine's own array of them. */
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -56,7 +56,7 @@ static JSValue   g_key;
 static JSClassID g_conn_class;
 static int       g_ready;
 static JSRuntime *g_conn_rt;
-static int g_id_close = -1, g_id_create_store = -1, g_id_delete_store = -1;
+static int g_id_close = -1, g_id_create_store = -1, g_id_delete_store = -1, g_id_transaction = -1;
 /* §5.1 step 10.6's rendezvous — see the header. */
 static void (*g_closed_hook)(JSContext *ctx, JSValueConst connection);
 
@@ -253,6 +253,35 @@ void idb_connection_transaction_finished(JSContext *ctx, JSValueConst connection
     conn_become_closed(ctx, connection);
 }
 
+/* ---- §4.4's ENUMERATIONS ----------------------------------------------------------------------------------
+ *
+ * The value lists ARE the types (Web IDL §3.2.19), so they are declared beside the member and the conversion
+ * refuses anything else before a body runs. The ORDER is not free: the index into each list is the enumerator
+ * idb_transaction.h declares, which is what lets one lookup serve both the declaration and the body. */
+static const char *const TX_MODES[] = { "readonly", "readwrite", "versionchange", NULL };
+static const char *const TX_DURABILITY[] = { "default", "strict", "relaxed", NULL };
+
+/* WHICH VALUE OF THE ENUMERATION THIS IS. It runs none of the page's code — §3.2.19's membership check is part
+   of the TYPE and has already run, so what arrives is one of the strings this file wrote. */
+static int conn_enum_index(JSContext *ctx, JSValueConst v, const char *const *values)
+{
+    const char *str = JS_ToCString(ctx, v);
+    int i = 0;
+
+    CHECK(str != NULL, "IndexedDB: an enumeration value could not be read back as a string");
+    while (values[i] != NULL && strcmp(str, values[i]) != 0)
+        i++;
+    /* ALWAYS FATAL, because what this decides is whether the database may be WRITTEN. §3.2.19's check runs in
+       the conversion against the list declared beside the member, so a value arriving here that this list does
+       not name means the declaration and this list have drifted apart — and the index would then be read past
+       the end of the list and handed to §2.7 as a mode. */
+    CHECK(values[i] != NULL,
+          "IndexedDB: a transaction enumeration held a value its own IDL does not list — the declaration and "
+          "this list name different value sets");
+    JS_FreeCString(ctx, str);
+    return i;
+}
+
 /* ---- §4.4's members ---------------------------------------------------------------------------------------- */
 
 /* "The name getter steps are to return this's associated database's name." The DATABASE's, which the note is
@@ -348,19 +377,25 @@ static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val
                                       "`= null`, so the conversion places it whether or not the page wrote "
                                       "one — an undefined here is the declaration having lost its default");
     if (!JS_IsNull(key_path)) {
-        /* §2.5's LIST ARM — `(DOMString or sequence<DOMString>)?` — is Web IDL §3.2.25's union, whose
-           resolution is a property read of the page's value (`Get(V, @@iterator)`) and therefore belongs in
-           the argument-conversion machine as a request rather than in this body. The member is declared
-           `any` until it is there, so what arrives is whatever the page wrote and a non-string is this. */
+        /* §2.5's LIST ARM. The union IS built — the member is declared with §3.2.25's
+           IDL_DOMSTRING_OR_SEQUENCE_NULLABLE, so what arrives is the IDL null, a string, or the ENGINE'S own
+           array of strings, and "if it is a sequence" is this one JS_IsString and nothing else. What remains
+           unbuilt is what a list key path MEANS, and the crash below names those three things rather than the
+           conversion that used to be one of them. */
         if (!JS_IsString(key_path)) {
+            DCHECK(JS_IsArray(key_path),
+                   "§2.5's key path is neither the IDL null, a string, nor a sequence — its declared type is "
+                   "§3.2.25's `(DOMString or sequence<DOMString>)?`, which answers with exactly those three");
             JS_FreeValue(ctx, key_path);
-            DFAIL("Indexed Database §2.5's LIST key path is not built. `createObjectStore(name, {keyPath: "
-                  "['a','b']})` declares a COMPOUND key path, whose value is §7.1's list of extracted keys "
-                  "assembled into an array key — and reaching it needs Web IDL §3.2.25's `(DOMString or "
-                  "sequence<DOMString>)` union, whose resolution reads @@iterator off the page's value and so "
-                  "must be a REQUEST in core/idl_args.c rather than a read from C. Build the union type "
-                  "there, declare this member's `keyPath` with it, and then §2.5's list arm and §7.1's "
-                  "list arm here");
+            DFAIL("Indexed Database §2.5's LIST key path is not built, and it is now the only half of it that "
+                  "is not: `createObjectStore(name, {keyPath: ['a','b']})` reaches this arm with the engine's "
+                  "own array of strings, because the union is a declared type. Three things are missing and "
+                  "none of them is a conversion — §2.5's VALIDITY for a list (non-empty, and every entry a "
+                  "valid string key path), §4.5's convert a key path to a value (a list answers a FROZEN "
+                  "array, which is idl_freeze_array and not the array the conversion made), and §7.1's list "
+                  "arm of extract a key from a value using a key path, which assembles the list of extracted "
+                  "keys into an array key. Build those three, and storing the list is then "
+                  "idb_object_store_create's `key_path` taking the array it already documents");
             /* A RELEASE BUILD FALLS THROUGH, and it must not return JS_EXCEPTION with nothing thrown — the
                capability is simply not supportable outside dev, which is what this says. */
             JS_ThrowTypeError(ctx, "a sequence key path is not supported");
@@ -457,6 +492,173 @@ static JSValue js_conn_delete_object_store(JSContext *ctx, JSValueConst this_val
     return JS_UNDEFINED;
 }
 
+/* ---- §4.4's TRANSACTION ------------------------------------------------------------------------------------
+ *
+ * "The transaction(storeNames, mode, options) method steps are: 1. If a live upgrade transaction is associated
+ * with the connection, throw an InvalidStateError. 2. If this's close pending flag is true, then throw an
+ * InvalidStateError. 3. Let scope be the set of unique strings in storeNames if it is a sequence, or a set
+ * containing one string equal to storeNames otherwise. 4. If any string in scope is not the name of an object
+ * store in the connected database, throw a NotFoundError. 5. If scope is empty, throw an InvalidAccessError.
+ * 6. If mode is not readonly or readwrite, throw a TypeError. 7. Let transaction be a newly created transaction
+ * with this connection, mode, options' durability member, and the set of object stores named in scope. 8. Set
+ * transaction's cleanup event loop to the current event loop. 9. Return an IDBTransaction object."
+ *
+ * STEP 3 IS WHY THIS MEMBER WAS ABSENT. `storeNames` is Web IDL §3.2.25's `(DOMString or sequence<DOMString>)`,
+ * whose arm is chosen by ? GetMethod(V, %Symbol.iterator%) — a property read of the page's value, and therefore
+ * the page's code. Reading it from this body would be a C activation hosting a page getter, so the union is a
+ * DECLARED TYPE in core/idl_args.c and this body is handed either a string or the engine's own array of them;
+ * "if it is a sequence" is then the one JS_IsString below and nothing else.
+ *
+ * STEP 6 REFUSES A VALUE THE TYPE ADMITS, which is why it is a step and not part of the declaration.
+ * IDBTransactionMode lists "versionchange", so §3.2.19 accepts it and this algorithm then throws a TypeError
+ * for it — an upgrade transaction is created by §5.7 and never by a page. */
+
+/* §4.4 step 3's "the set of UNIQUE strings", resolved to the §2.2 object store RECORDS step 7 names, with step
+   4's "NotFoundError" thrown for the first name the connected database does not have. The uniqueness is by
+   RECORD IDENTITY because idb_object_store_find answers the database's own record for a name rather than a copy
+   of it, so `db.transaction(['s','s'])` names one store and its scope has one entry. */
+static int conn_scope_add(JSContext *ctx, JSValueConst db, JSValueConst scope, uint32_t *n,
+                          JSValueConst name_v)
+{
+    const char *name;
+    JSValue store;
+    uint32_t k;
+
+    DCHECK(JS_IsString(name_v),
+           "§4.4 step 3 was handed a scope entry that is not a string — the `(DOMString or "
+           "sequence<DOMString>)` conversion produces strings and this engine builds the list they arrive "
+           "in, so nothing else can be in it");
+    name = JS_ToCString(ctx, name_v);
+    if (name == NULL) return -1;
+    store = idb_object_store_find(ctx, db, name);
+    JS_FreeCString(ctx, name);
+    if (JS_IsNull(store)) {
+        JS_FreeValue(ctx, store);
+        JS_ThrowDOMException(ctx, "NotFoundError",
+                             "a name in the transaction's scope is not the name of an object store in the "
+                             "connected database");
+        return -1;
+    }
+    for (k = 0; k < *n; k++) {
+        JSValue have = JS_GetPropertyUint32(ctx, scope, k);
+        bool dup = JS_VALUE_GET_PTR(have) == JS_VALUE_GET_PTR(store);
+
+        JS_FreeValue(ctx, have);
+        if (dup) {
+            JS_FreeValue(ctx, store);
+            return 0;
+        }
+    }
+    JS_DefinePropertyValueUint32(ctx, scope, (*n)++, store, JS_PROP_C_W_E);
+    return 0;
+}
+
+static JSValue js_conn_transaction(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                   int magic)
+{
+    JSValueConst names = argv[0], options = argv[2];
+    JSValue db = JS_UNDEFINED, upgrade, scope = JS_UNDEFINED, durability, tx;
+    uint32_t n = 0;
+    int mode, durab;
+
+    (void)argc; (void)magic;
+    if (!conn_brand(ctx, this_val)) return JS_EXCEPTION;
+    DCHECK(JS_IsString(argv[1]),
+           "§4.4's transaction was handed a mode that is not a string — `optional IDBTransactionMode mode = "
+           "\"readonly\"` is an enumeration WITH a default, so §3.6 step 14.2 places one whether or not the "
+           "page passed one");
+    DCHECK(JS_IsObject(options),
+           "§4.4's transaction was handed no options dictionary — the IDL writes `optional "
+           "IDBTransactionOptions options = {}`, so the conversion builds one carrying every declared default");
+
+    db = idb_connection_database(ctx, this_val);
+    /* Step 1. The database's upgrade transaction is cleared when it finishes, so a non-null one is a LIVE one;
+       "associated with THE CONNECTION" is the comparison below, because §5.1 lets a second connection exist
+       while an upgrade runs and that connection's step 1 does not throw (its step 2 does). */
+    upgrade = idb_database_upgrade_transaction(ctx, db);
+    if (!JS_IsNull(upgrade)) {
+        JSValue owner = idb_transaction_connection(ctx, upgrade);
+        bool mine = JS_VALUE_GET_PTR(owner) == JS_VALUE_GET_PTR(this_val);
+
+        JS_FreeValue(ctx, owner);
+        JS_FreeValue(ctx, upgrade);
+        if (mine) {
+            JS_FreeValue(ctx, db);
+            return JS_ThrowDOMException(ctx, "InvalidStateError",
+                                        "an upgrade transaction is live on this connection, so no other "
+                                        "transaction can be created with it");
+        }
+    } else {
+        JS_FreeValue(ctx, upgrade);
+    }
+    /* Step 2 — §2.1.1's note: "once a connection's close pending flag has been set to true, no new transactions
+       can be created using the connection". */
+    if (idb_connection_close_pending(ctx, this_val)) {
+        JS_FreeValue(ctx, db);
+        return JS_ThrowDOMException(ctx, "InvalidStateError",
+                                    "the connection is closing, so no new transaction can be created with it");
+    }
+
+    /* Steps 3 and 4, together, because step 4 asks its question of every string step 3 collected and the
+       records are what step 7 wants anyway. */
+    scope = JS_NewArray(ctx);
+    CHECK(!JS_IsException(scope), "IndexedDB: the transaction's scope could not be allocated");
+    if (JS_IsString(names)) {
+        if (conn_scope_add(ctx, db, scope, &n, names) < 0) goto fail;
+    } else {
+        JSValue lv;
+        uint32_t len = 0, i;
+
+        DCHECK(JS_IsArray(names),
+               "§4.4 step 3 was handed a storeNames that is neither a string nor a sequence — §3.2.25's union "
+               "answers with one or the other and this engine builds the sequence itself");
+        lv = JS_GetPropertyStr(ctx, names, "length");
+        CHECK(JS_ToUint32(ctx, &len, lv) == 0,
+              "IndexedDB: the length of the transaction's scope sequence could not be read");
+        JS_FreeValue(ctx, lv);
+        for (i = 0; i < len; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, names, i);
+            int r = conn_scope_add(ctx, db, scope, &n, e);
+
+            JS_FreeValue(ctx, e);
+            if (r < 0) goto fail;
+        }
+    }
+    /* Step 5. It is AFTER step 4 and the order is observable: `db.transaction([])` is an "InvalidAccessError"
+       while `db.transaction(['nope'])` is a "NotFoundError". */
+    if (n == 0) {
+        JS_ThrowDOMException(ctx, "InvalidAccessError",
+                             "a transaction cannot be created with an empty scope");
+        goto fail;
+    }
+    /* Step 6 — see the header comment: the TYPE admits "versionchange" and this algorithm refuses it. */
+    mode = conn_enum_index(ctx, argv[1], TX_MODES);
+    if (mode != IDB_TX_READONLY && mode != IDB_TX_READWRITE) {
+        JS_ThrowTypeError(ctx, "a transaction cannot be created with the mode \"versionchange\" — an upgrade "
+                               "transaction is created by the steps to upgrade a database");
+        goto fail;
+    }
+
+    /* Steps 7, 8 and 9. §4.9's creation takes the scope (CONSUMED), and the cleanup event loop is set HERE and
+       not inside the creation because §5.7's upgrade transaction must not have one — see idb_transaction.h. */
+    durability = idl_dict_get(ctx, options, "durability");
+    DCHECK(JS_IsString(durability),
+           "IDBTransactionOptions' `durability` is declared with the IDL's own `= \"default\"`, so the "
+           "conversion places it whether or not the page wrote one — an absent one here is the declaration "
+           "having lost its default");
+    durab = conn_enum_index(ctx, durability, TX_DURABILITY);
+    JS_FreeValue(ctx, durability);
+    tx = idb_transaction_new(ctx, this_val, scope, mode, durab);
+    idb_transaction_set_cleanup_loop(ctx, tx);
+    JS_FreeValue(ctx, db);
+    return tx;
+
+fail:
+    JS_FreeValue(ctx, scope);
+    JS_FreeValue(ctx, db);
+    return JS_EXCEPTION;
+}
+
 /* ---- install ------------------------------------------------------------------------------------------------ */
 
 static void idb_connection_install_realm(JSContext *ctx)
@@ -474,6 +676,7 @@ static void idb_connection_install_realm(JSContext *ctx)
     event_target_install_handlers(ctx, proto, EH_IDB_DATABASE);
     idl_install_accessor(ctx, proto, "name", js_conn_get_name, 0, -1);
     idl_install_accessor(ctx, proto, "version", js_conn_get_version, 0, -1);
+    idl_install_method(ctx, proto, "transaction", 1, g_id_transaction);
     idl_install_method(ctx, proto, "close", 0, g_id_close);
     idl_install_method(ctx, proto, "createObjectStore", 1, g_id_create_store);
     idl_install_method(ctx, proto, "deleteObjectStore", 1, g_id_delete_store);
@@ -493,14 +696,28 @@ void idb_connection_init(JSContext *ctx)
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType CREATE_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
     static const IdlArgType DELETE_ARGS[1] = { IDL_DOMSTRING };
+    /* `[NewObject] IDBTransaction transaction((DOMString or sequence<DOMString>) storeNames,
+        optional IDBTransactionMode mode = "readonly", optional IDBTransactionOptions options = {});` — the
+       union is what kept this member out, and it is a declared type because its arm is decided by a read of
+       the page's value. `mode` carries §3.2.19's value list AND §3.6 step 14.2's default, both stated below. */
+    static const IdlArgType TX_ARGS[3] = { IDL_DOMSTRING_OR_SEQUENCE, IDL_ENUM, IDL_DICT };
+    /* `dictionary IDBTransactionOptions { IDBTransactionDurability durability = "default"; };` — one member,
+       whose value list IS its type and whose default its IDL writes, so the body reads a value that is there
+       rather than inventing the "default". */
+    static const IdlDictMember TX_OPTIONS[] = {
+        { "durability", IDL_ENUM, false, TX_DURABILITY, 0, NULL, IDL_DEFAULT_STRING, "default" },
+    };
     /* `dictionary IDBObjectStoreParameters { (DOMString or sequence<DOMString>)? keyPath = null; boolean
        autoIncrement = false; }` — one level, so §3.2.17 reads them in the order they are written here, which
-       a page pins by throwing from a member's getter. `keyPath` is declared `any` because its union's second
-       arm is §3.2.25's sequence resolution, which is not built (see the member); the DEFAULT is declared, so
+       a page pins by throwing from a member's getter. `keyPath` STATES ITS OWN UNION, and the row it replaces
+       was wrong about more than compound key paths: declared IDL_ANY, the page's value crossed unconverted, so
+       `createObjectStore("s", {keyPath: {}})` reached the body as an object and hit the not-a-string arm —
+       where §3.2.25 has no sequence to find, takes step 16, and makes it the string "[object Object]", which
+       §2.5 then refuses with a "SyntaxError" exactly as a browser does. The DEFAULT is declared beside it, so
        the body reads a value that is there rather than inventing the null. */
     static const IdlDictMember CREATE_INIT[] = {
         { "autoIncrement", IDL_BOOLEAN },
-        { "keyPath", IDL_ANY, false, NULL, 0, NULL, IDL_DEFAULT_NULL },
+        { "keyPath", IDL_DOMSTRING_OR_SEQUENCE_NULLABLE, false, NULL, 0, NULL, IDL_DEFAULT_NULL },
     };
 
     DCHECK(!g_ready, "idb_connection_init ran twice — one instance is one document is one agent");
@@ -511,6 +728,12 @@ void idb_connection_init(JSContext *ctx)
     CHECK(JS_NewClass(rt, g_conn_class, &d) == 0,
           "IDBDatabase: the per-realm prototype slot could not be declared");
     g_id_close = idl_method_id(ctx, NULL, 0, js_conn_close, 0);
+    g_id_transaction = idl_method_id_dict(ctx, TX_ARGS, 3, TX_OPTIONS,
+                                          (int)(sizeof TX_OPTIONS / sizeof TX_OPTIONS[0]),
+                                          js_conn_transaction, 0);
+    idl_optional_from(1);                                 /* `mode` and `options` are both optional */
+    idl_enum_values(TX_MODES);                            /* §3.2.19's value list for the `mode` position */
+    idl_arg_default(1, IDL_DEFAULT_STRING, "readonly");   /* §3.6 step 14.2's `= "readonly"` */
     g_id_create_store = idl_method_id_dict(ctx, CREATE_ARGS, 2, CREATE_INIT,
                                            (int)(sizeof CREATE_INIT / sizeof CREATE_INIT[0]),
                                            js_conn_create_object_store, 0);

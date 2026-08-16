@@ -179,6 +179,15 @@ static int idl_enum_check(JSContext *ctx, JSValueConst v, const char *const *val
    needs, and there is nothing left to run out of. */
 #define IDL_POOL_CHUNK 128
 
+/* §3.6 step 14.2's DEFAULT VALUE AT ONE POSITION, stated in the same two fields IdlDictMember already uses for
+   a dictionary member's: the KIND, and the string the IDL wrote for the one kind that carries one. It is a
+   struct rather than two parallel arrays so that a member's positions cannot be described half in one and half
+   in the other. */
+typedef struct {
+    IdlDictDefault kind;
+    const char    *str;
+} IdlArgDefault;
+
 typedef struct {
     IdlSetter  setter;      /* set instead of `body` for an attribute setter */
     bool       null_to_empty;
@@ -199,6 +208,11 @@ typedef struct {
        does not declare it converts every position it lists. It was IDL_MAX_DECLARED + 1, a sentinel that could
        only exist while there was a ceiling to derive it from, and that named a position no member had. */
     int        first_optional;
+    /* §3.6 STEP 14.2's DEFAULT VALUES, one entry per position the IDL lists — see idl_arg_default. NULL for a
+       member declaring none, which is nearly all of them; allocated by the first declaration that names one,
+       and freed with the pool exactly as `types` is. A position whose entry is IDL_DEFAULT_NONE has no default,
+       which is what §3.6.2's absent rule is for. */
+    IdlArgDefault *arg_dflts;
     int        magic;
     /* An IDL_DICT argument's members, and their names INTERNED at registration. The atom must be live at both
        the request and the answer — step_getprop_run is handed it twice, with a suspension in between — so it
@@ -502,16 +516,24 @@ static int idl_members_depth(const IdlDictMember *ms, int n)
     return max;
 }
 
-/* §3.2.17 step 4.1.5's DEFAULT VALUE, as an IDL value. It is already converted — a default is written in the
-   IDL, not computed from the page — so it is placed and never coerced. */
+/* A DEFAULT VALUE, AS AN IDL VALUE. It is already converted — a default is written in the IDL, not computed
+   from the page — so it is placed and never coerced.
+   ONE FUNCTION, WHEREVER IT WAS DECLARED: §3.2.17 step 4.1.5 (a dictionary member) and §3.6 step 14.2 (an
+   optional positional argument) place the SAME kinds of value, so a second copy for the argument side would be
+   a second list of which forms the platform writes. */
+static JSValue idl_default_of(JSContext *ctx, IdlDictDefault kind, const char *str)
+{
+    if (kind == IDL_DEFAULT_NULL) return JS_NULL;
+    if (kind == IDL_DEFAULT_ZERO) return JS_NewInt32(ctx, 0);
+    DCHECK(kind == IDL_DEFAULT_STRING && str != NULL,
+           "a declaration named a default this machine has no value for — the forms are the ones the "
+           "platform's IDL writes, and a new one is an arm here rather than a string that means something else");
+    return JS_NewString(ctx, str);
+}
+
 static JSValue idl_default_value(JSContext *ctx, const IdlDictMember *dm)
 {
-    if (dm->dflt == IDL_DEFAULT_NULL) return JS_NULL;
-    if (dm->dflt == IDL_DEFAULT_ZERO) return JS_NewInt32(ctx, 0);
-    DCHECK(dm->dflt == IDL_DEFAULT_STRING && dm->dflt_str != NULL,
-           "a dictionary member declared a default this machine has no value for — the forms are the ones the "
-           "platform's IDL writes, and a new one is an arm here rather than a string that means something else");
-    return JS_NewString(ctx, dm->dflt_str);
+    return idl_default_of(ctx, dm->dflt, dm->dflt_str);
 }
 
 /* ---- §3.2.21 OVER A UNION ELEMENT TYPE: THE NESTED CONVERSION, AS A STACK OF CURSORS -----------------------
@@ -568,6 +590,13 @@ typedef struct {
        its own rather than a null list, because a zeroed state's JSValue is the INTEGER 0 and not JS_UNDEFINED —
        JS_TAG_INT is 0 — so "have I built the list yet" read off the value is always "yes". */
     uint8_t    seq_phase;
+    /* §3.2.25's ARM FOR A `(DOMString or sequence<DOMString>)` POSITION, which is a RESUME POINT because the
+       decision is `? GetMethod(V, %Symbol.iterator%)` — the page's code. Without it a park inside the page's
+       @@iterator getter would come back, re-enter the conversion loop, and ask for the property a second time;
+       with it the resume finds the arm already chosen and continues into the string coercion or the cursor.
+       It is shared between an argument position and a dictionary member's for exactly the reason `seq` is:
+       arguments are converted strictly left to right, so the two are never in flight at once. */
+    uint8_t    uni_phase;
     /* THE NESTED CONVERSION'S STACK POINTER — how many IdlConvFrame frames (which live immediately after this
        state, one per declared sequence level) are live. Zero means no nested conversion is in flight, which is
        what tells a resumed member's sequence branch to continue rather than start over. */
@@ -900,6 +929,75 @@ static int idl_conv_run(JSContext *ctx, JSIdlArgsState *s, const IdlMember *m, J
             f->phase = IDL_CONV_PULL;
         }
     }
+}
+
+/* ---- §3.2.25 OVER `(DOMString or sequence<DOMString>)`: THE ARM, AS A REQUEST -----------------------------
+ *
+ * The union's member types are a string and a sequence and NOTHING else, so steps 4 through 11 of the
+ * conversion name no arm it has and the whole decision is step 12.2 against step 16. Step 12.2 is
+ * `? GetMethod(V, %Symbol.iterator%)`, which is a [[Get]] of the PAGE'S value — so this is a rest point, and
+ * which arm it answered has to survive the rest.
+ *
+ * WHY THE METHOD IS HANDED TO THE CURSOR RATHER THAN RE-READ. §3.2.20's "create a sequence from an iterable"
+ * takes the iterable AND the method the union already obtained; a cursor that read @@iterator itself would
+ * perform the property access twice for one conversion, which a Proxy `get` trap counts and an accessor can
+ * answer differently the second time. iter_cursor_init_from_method is that second entry, and it is why the
+ * method is never held on this state across a park: it is consumed on the entry that completes the read. */
+enum { IDL_UNI_ASK = 0, IDL_UNI_STRING, IDL_UNI_SEQUENCE };
+
+/* Resolve the union at `v` to the type its arm is: IDL_DOMSTRING (step 16) or IDL_SEQUENCE_DOMSTRING (step
+   12.2, with this machine's cursor already planted on the method the page gave). §3.2.25 step 2's null arm is
+   the CALLER's — it runs none of the page's code and the two callers place the IDL null in two different
+   slots.
+   `*pin` is the request answer on the way in and is CLEARED when it was consumed, because a resume that lands
+   here on its way back INTO the sequence still has to hand that answer to the cursor. Returns >0 (the caller
+   returns it), 0 with *pout set, or -1 with a throw live. */
+static int idl_union_seq_arm(JSContext *ctx, JSIdlArgsState *s, JSValueConst v, JSValue *pin,
+                             IdlArgType *pout, JSValue **out_cb, int *out_argc)
+{
+    /* Step 12 asks its whole question of an OBJECT; every other value reaches step 16 without a read. */
+    if (s->uni_phase == IDL_UNI_ASK && !JS_IsObject(v))
+        s->uni_phase = IDL_UNI_STRING;
+    if (s->uni_phase == IDL_UNI_ASK) {
+        JSValue method = JS_UNDEFINED;
+        int r = step_getprop_run(ctx, &s->hdr, v, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR), *pin, &method,
+                                 out_cb, out_argc);
+
+        *pin = JS_UNDEFINED;
+        if (r > 0) return r;      /* parked INSIDE the page's @@iterator getter or its Proxy trap */
+        if (r < 0) return -1;
+        /* ECMAScript's GetMethod, which is the operation §3.2.25 step 12.2 names and not a plain [[Get]]:
+           undefined and null are "there is no method" and fall through to the string arm, and anything else
+           that is not callable is a TypeError rather than a quiet second arm. */
+        if (JS_IsUndefined(method) || JS_IsNull(method)) {
+            JS_FreeValue(ctx, method);
+            s->uni_phase = IDL_UNI_STRING;
+        } else if (!JS_IsFunction(ctx, method)) {
+            JS_FreeValue(ctx, method);
+            JS_ThrowTypeError(ctx, "the value's @@iterator is not callable");
+            return -1;
+        } else {
+            /* THE STATE IS COMPLETE BEFORE THE METHOD IS HANDED OVER: the list is placed on the machine
+               first, so a failure here tears down through the same `visit` that would have named it, and the
+               method is released by the one branch that still owns it. */
+            DCHECK(s->seq_phase == 0,
+                   "the union's sequence arm was chosen while a sequence was already in flight on this "
+                   "machine — one argument is converted at a time, so the cursor has exactly one user");
+            s->seq_list = JS_NewArray(ctx);
+            if (JS_IsException(s->seq_list)) {
+                s->seq_list = JS_UNDEFINED;
+                JS_FreeValue(ctx, method);
+                return -1;
+            }
+            iter_cursor_init_from_method(ctx, &s->seq, method);   /* CONSUMES `method` */
+            s->seq_phase = 1;
+            s->uni_phase = IDL_UNI_SEQUENCE;
+        }
+    }
+    DCHECK(s->uni_phase == IDL_UNI_STRING || s->uni_phase == IDL_UNI_SEQUENCE,
+           "a `(DOMString or sequence<DOMString>)` position resumed at an arm this union never parks in");
+    *pout = (s->uni_phase == IDL_UNI_SEQUENCE) ? IDL_SEQUENCE_DOMSTRING : IDL_DOMSTRING;
+    return 0;
 }
 
 /* WHAT THIS MACHINE OWNS: the coerced arguments so far. A concolic branch inside one page `toString` forks the
@@ -1299,7 +1397,13 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             s->i < idl_declared_positions(m) && s->i >= m->first_optional && JS_IsUndefined(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
-            *slot = JS_UNDEFINED;
+            /* §3.6 STEP 14.2: an optional argument whose IDL writes `= …` is not absent — it holds THAT value,
+               which is already an IDL value and is therefore placed rather than coerced. A position with no
+               declared default is absent, which is the undefined the body reads as "not given". */
+            *slot = (m->arg_dflts != NULL && m->arg_dflts[s->i].kind != IDL_DEFAULT_NONE)
+                  ? idl_default_of(ctx, m->arg_dflts[s->i].kind, m->arg_dflts[s->i].str)
+                  : JS_UNDEFINED;
+            if (JS_IsException(*slot)) { *slot = JS_UNDEFINED; return JS_STEP_ABRUPT; }
             goto placed;
         }
 
@@ -1353,6 +1457,24 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             DCHECK(m->dict_n > 0, "a member declared an overload splitting at a dictionary argument with no "
                                   "dictionary members — the dictionary is half of what that type states");
             t = (JS_IsObject(a) || JS_IsNull(a) || JS_IsUndefined(a)) ? IDL_DICT : IDL_USVSTRING;
+        }
+
+        /* §3.2.25 over `(DOMString or sequence<DOMString>)`, whose arm is decided by a READ of the page's value
+           and is therefore the only union here that can park. Step 2 first — the nullable spelling makes null
+           and undefined the IDL null before anything is looked at — and then the arm, which for everything but
+           an Object with a callable @@iterator is step 16's string. Resolved AFTER the concolic pass-through
+           above for the same reason the two unions before it are: unknown external input IS an object, and
+           asking it for @@iterator would read a property off an attacker's value. */
+        if (t == IDL_DOMSTRING_OR_SEQUENCE || t == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE) {
+            if (t == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE && (JS_IsNull(a) || JS_IsUndefined(a))) {
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                *slot = JS_NULL;
+                goto placed;
+            }
+            r = idl_union_seq_arm(ctx, s, a, &cb_result, &t, out_cb, out_argc);
+            if (r > 0) return r;   /* parked ON THE ARM's read; the resume finds the arm already chosen */
+            if (r < 0) return JS_STEP_ABRUPT;
         }
 
         if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST) {
@@ -1444,6 +1566,22 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                    concolic member keeps forking control flow instead of collapsing at a coercion. */
                 if (mt != IDL_ANY && concolic_is(s->dict_v))
                     mt = IDL_ANY;
+                /* §3.2.25 over `(DOMString or sequence<DOMString>)` ON A DICTIONARY MEMBER — the same union the
+                   argument path resolves, resolved here so the arm's @@iterator read parks on the MEMBER it is
+                   on. It rewrites `mt` and the arms below convert what it chose; step 2's null is placed
+                   directly, because the IDL null runs none of the page's code and is not a string arm. */
+                if (mt == IDL_DOMSTRING_OR_SEQUENCE || mt == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE) {
+                    if (mt == IDL_DOMSTRING_OR_SEQUENCE_NULLABLE &&
+                        (JS_IsNull(s->dict_v) || JS_IsUndefined(s->dict_v))) {
+                        JS_FreeValue(ctx, s->dict_v);
+                        s->dict_v = JS_NULL;
+                        mt = IDL_ANY;
+                    } else {
+                        r = idl_union_seq_arm(ctx, s, s->dict_v, &cb_result, &mt, out_cb, out_argc);
+                        if (r > 0) return r;   /* parked ON THIS MEMBER's arm; the resume finds it chosen */
+                        if (r < 0) return JS_STEP_ABRUPT;
+                    }
+                }
                 if (mt == IDL_SEQUENCE_STRING_OR_DICT) {
                     /* §3.2.21 whose element type is §3.2.25's `(DOMString or D)` — the conversion that NESTS,
                        driven from here as a stack of cursors so a resume comes back to the element it was on
@@ -1627,6 +1765,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 JS_SetPropertyStr(ctx, *idl_arg_slot(m, s, s->i), dm->name, s->dict_v);
                 s->dict_v = JS_UNDEFINED;
                 s->dict_phase = 0;
+                /* THE UNION'S ARM IS PER MEMBER, and this is the one place a member finishes — the next
+                   member's own §3.2.25 must ask its own value rather than inherit the answer this one got. */
+                s->uni_phase = IDL_UNI_ASK;
                 s->dict_i++;
             }
             JS_FreeValue(ctx, cb_result);
@@ -1643,7 +1784,12 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            IDL converts arguments LEFT TO RIGHT, so a sequence that throws mid-iteration must run before the
            dictionary after it is read at all. Driven from the body it ran after every other argument, and
            `new Blob(throwingIterable, {get type(){…}})` called the type getter the spec never reaches. */
-        if (t == IDL_SEQUENCE_BLOBPART || t == IDL_SEQUENCE_INTERFACE || t == IDL_SEQUENCE_OBJECT) {
+        /* IDL_SEQUENCE_DOMSTRING IS ONE OF THEM AT AN ARGUMENT POSITION, and it reaches this loop by two
+           roads: declared outright, and as the arm §3.2.25 resolved a `(DOMString or sequence<DOMString>)` to
+           — in which case the cursor was already planted on the method the union read and `seq_phase` is
+           already 1, so the setup below is skipped and nothing reads @@iterator twice. */
+        if (t == IDL_SEQUENCE_BLOBPART || t == IDL_SEQUENCE_INTERFACE || t == IDL_SEQUENCE_OBJECT ||
+            t == IDL_SEQUENCE_DOMSTRING) {
             if (!JS_IsObject(a)) {
                 JS_FreeValue(ctx, cb_result);
                 JS_ThrowTypeError(ctx, "the sequence argument is not an object");
@@ -1690,9 +1836,13 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     }
                     /* `BlobPart` is `(BufferSource or Blob or USVString)`, and its rule is a BRAND test: a
                        BufferSource and a Blob cross as themselves, everything else takes the USVString arm,
-                       whose ToString is the page's code. Stated once, here, like BodyInit's. */
-                    if (blob_is(s->seq.value) || JS_IsArrayBuffer(s->seq.value) ||
-                        JS_GetTypedArrayType(s->seq.value) >= 0 || JS_IsDataView(s->seq.value)) {
+                       whose ToString is the page's code. Stated once, here, like BodyInit's.
+                       IT IS THE BLOBPART TYPE'S AND NOT THE LOOP'S: a `sequence<DOMString>` holding a Blob has
+                       one element type and it is a string, so that element ToStrings to "[object Blob]" rather
+                       than crossing as an interface the declaration never named. */
+                    if (t == IDL_SEQUENCE_BLOBPART &&
+                        (blob_is(s->seq.value) || JS_IsArrayBuffer(s->seq.value) ||
+                         JS_GetTypedArrayType(s->seq.value) >= 0 || JS_IsDataView(s->seq.value))) {
                         JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, JS_DupValue(ctx, s->seq.value));
                         continue;
                     }
@@ -1705,8 +1855,13 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     cb_result = JS_UNDEFINED;
                     if (r > 0) return r;
                     if (r < 0) return JS_STEP_ABRUPT;
-                    str = JS_ToScalarValueString(ctx, str);   /* §3.2.11: lone surrogates become U+FFFD */
-                    if (JS_IsException(str)) return JS_STEP_ABRUPT;
+                    /* THE SCALAR VALUE CONVERSION BELONGS TO THE ELEMENT TYPE. `BlobPart`'s string arm is a
+                       USVString, so §3.2.11 replaces its lone surrogates; a `sequence<DOMString>`'s element is
+                       a DOMString and keeps them, which is the whole difference between the two. */
+                    if (t != IDL_SEQUENCE_DOMSTRING) {
+                        str = JS_ToScalarValueString(ctx, str);   /* §3.2.11: lone surrogates become U+FFFD */
+                        if (JS_IsException(str)) return JS_STEP_ABRUPT;
+                    }
                     JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, str);
                     s->seq_phase = 1;
                 }
@@ -1880,6 +2035,9 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             JS_SetPropertyUint32(ctx, s->conv, (uint32_t)s->i, s->vstage);
             s->vstage = JS_UNDEFINED;
         }
+        /* THE UNION'S ARM IS PER POSITION — the same reason the store above is per position. Two
+           `(DOMString or sequence<DOMString>)` arguments in one member each ask their own value. */
+        s->uni_phase = IDL_UNI_ASK;
         s->i++;
     }
 
@@ -2100,6 +2258,9 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
     /* NO OPTIONAL ARGUMENTS, stated in the member's OWN terms: one past its last position. There is nothing
        here to overflow and nothing to keep in step with a ceiling — see idl_optional_from. */
     idl_member(idx)->first_optional = nargs;
+    /* NO DECLARED DEFAULTS, which is what §3.6.2's absent rule is the answer for. The array is allocated by the
+       first idl_arg_default this member makes, so a member with none costs nothing. */
+    idl_member(idx)->arg_dflts = NULL;
     /* HOW MANY THE CALLER MUST PASS. §3.6.2 throws a TypeError before ANY conversion when a call has fewer
        arguments than the member has required ones — `new File()` throws rather than building a File with no
        bits. It is the same number `first_optional` already states, capped at what the IDL declares, so a member
@@ -2272,6 +2433,35 @@ void idl_optional_from(int first_optional)
     DCHECK(first_optional >= 0 && first_optional <= idl_member(g_n - 1)->nargs,
            "a member's first OPTIONAL argument is not one of the positions it declares");
     idl_member(g_n - 1)->first_optional = first_optional;
+}
+
+/* See idl_args.h. Same "names the last declaration" rule as idl_optional_from, and it must be stated AFTER
+   that one: §3.6 step 14.2 reads a default only for an OPTIONAL argument, so a default on a position the member
+   still calls required is a declaration disagreeing with itself. */
+void idl_arg_default(int index, IdlDictDefault dflt, const char *dflt_str)
+{
+    IdlMember *m;
+
+    DCHECK(g_n > 0, "an argument default was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    m = idl_member(g_n - 1);
+    DCHECK(index >= 0 && index < m->nargs,
+           "an argument default named a position the member's IDL does not list — the index is into that "
+           "member's own type list, which is what its declaration passed");
+    DCHECK(index >= m->first_optional,
+           "a REQUIRED argument was given a default value — §3.6 step 14.2 reads one only for an optional "
+           "argument, so idl_optional_from is stated before the defaults the optional positions carry");
+    DCHECK(dflt != IDL_DEFAULT_NONE,
+           "an argument default declared IDL_DEFAULT_NONE, which is the ABSENCE of a default — that is what a "
+           "position with no declaration already is, and saying it here means the IDL was misread");
+    if (m->arg_dflts == NULL) {
+        m->arg_dflts = calloc((size_t)m->nargs, sizeof *m->arg_dflts);
+        CHECK(m->arg_dflts != NULL,
+              "idl: OOM recording a member's declared argument defaults — a member that cannot be declared is "
+              "an API the page cannot call");
+    }
+    m->arg_dflts[index].kind = dflt;
+    m->arg_dflts[index].str  = dflt_str;
 }
 
 /* See idl_args.h. Same "names the last declaration" rule as idl_optional_from. */
@@ -2703,6 +2893,10 @@ void idl_args_free(JSContext *ctx)
            this pool allocates per member, and it is freed here beside the other two. */
         free(idl_member(i)->types);
         idl_member(i)->types = NULL;
+        /* §3.6 step 14.2's declared defaults — the strings themselves are the declaring component's statics;
+           the array naming them is this pool's, allocated by the first default a member declared. */
+        free(idl_member(i)->arg_dflts);
+        idl_member(i)->arg_dflts = NULL;
         /* The joined stage labels — the strings themselves are statics belonging to the member and to this
            file; the array that names them is this pool's. */
         free((void *)idl_member(i)->steps);
