@@ -14,9 +14,10 @@
  * copy in each component that could disagree. That storage is the other reason: `rule.style.color = 'red'` is
  * precisely a mutation two flows must be able to disagree about, and it lands in a C record behind a class
  * opaque where no property hook can see it.
- * §6.4.2's `cssText` — the whole rule, selector and body — is the member still absent, because it needs §6.6's
- * serialize-a-CSS-declaration-block INCLUDING its shorthand consolidation loop, and the IDL audit reports it,
- * which is the ledger.
+ * §6.4.2's `cssText` — the whole rule, selector and body — is §6.4's SERIALIZE A CSS RULE over both of them:
+ * the stored selector list, then §6.6's serialize-a-CSS-declaration-block over the stored body, which is where
+ * the shorthand consolidation loop runs. Its setter is the spec's own no-effect ("on setting the cssText
+ * attribute must do nothing"), not an unbuilt one.
  *
  * `CSSStyleRule : CSSGroupingRule` IN THE IDL, and this prototype chains to CSSRule.prototype instead, because
  * CSSGroupingRule is not built — it is nested rules, with its own `cssRules`/`insertRule`/`deleteRule`. The

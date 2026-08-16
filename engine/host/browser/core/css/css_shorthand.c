@@ -160,6 +160,28 @@ static int border_side_index(const char *longhand, const char *part)
     return -1;
 }
 
+/* css-backgrounds-3 §3.4's OTHER HALF, which its own prose states outright: "The border shorthand also resets
+   border-image to its initial value." That is not a footnote here — CSSOM §6.6 re-forms a shorthand only when
+   EVERY longhand it sets is present in the block, so a `border` that did not set these five would be a
+   shorthand no declaration block could ever put back together, and `border: 1px solid red` would read back out
+   of `cssText` as three separate four-side shorthands. "Resets" means the value is the same whatever the
+   border's own value is; the declaration still has to be VALID first, which §3.4's own grammar decides. */
+static const char *const BORDER_IMAGE_LONGHANDS[] = {
+    "border-image-source", "border-image-slice", "border-image-width",
+    "border-image-outset", "border-image-repeat",
+};
+/* css-backgrounds-3 §6.1 through §6.5's `Initial:` lines, in that same order. */
+static const char *const BORDER_IMAGE_INITIAL[] = { "none", "100%", "1", "0", "stretch" };
+
+static int border_image_index(const char *longhand)
+{
+    unsigned i;
+
+    for (i = 0; i < sizeof(BORDER_IMAGE_LONGHANDS) / sizeof(BORDER_IMAGE_LONGHANDS[0]); i++)
+        if (strcmp(BORDER_IMAGE_LONGHANDS[i], longhand) == 0) return (int)i;
+    return -1;
+}
+
 /* css-backgrounds-3 §3.4's THREE TERMS, in the order its `<line-width> || <line-style> || <color>` states
    them, with the INITIAL VALUE each longhand takes when the shorthand's value omits it — §3.3's `medium`,
    §3.2's `none` and §3.1's `currentcolor`. The initial is load-bearing rather than decorative: CSS Cascade
@@ -271,6 +293,23 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
        it is the assertion that the caller's longhand is one whose shorthands are all in this function. */
 
     /* ---- css-backgrounds-3 §3.2, §3.3 and §3.4's BORDER SHORTHANDS ---------------------------------------- */
+    /* §3.4's reset of `border-image`, ahead of the side/part split because these five longhands carry the side
+       nowhere in their names. A CSS-wide keyword is the whole value and is handed on the same way the triple's
+       is; otherwise the triple's grammar runs as the VALIDITY test, because an invalid `border` declaration is
+       dropped and sets nothing at all — including these. */
+    if (strcmp(shorthand, "border") == 0) {
+        int img = border_image_index(longhand);
+
+        if (img >= 0) {
+            char *valid;
+
+            if (css_wide_keyword(value)) return css_sh_strdup(value);
+            valid = border_triple_component(value, 0);
+            if (!valid) return NULL;
+            free(valid);
+            return css_sh_strdup(BORDER_IMAGE_INITIAL[img]);
+        }
+    }
     part = border_part_index(longhand, &side);
     if (part >= 0) {
         bool triple = strcmp(shorthand, "border") == 0;
@@ -386,9 +425,465 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
     }
 }
 
+/* ---- CSSOM §6.6's REVERSE DIRECTION -----------------------------------------------------------------------
+ *
+ * THE FORWARD DIRECTION ABOVE ANSWERS ONE QUESTION AT A TIME — "what does this declaration give that longhand"
+ * — and the cascade never needs another, because it resolves one property for one element. CSSOM §6.6's
+ * SERIALIZE A CSS DECLARATION BLOCK asks the mirror question and cannot be written without it: given the whole
+ * set of declarations, which shorthand covers a group of them, and what value would that shorthand carry.
+ * Its declaration loop is "if property maps to one or more shorthand properties, let shorthands be an array of
+ * those shorthand properties, IN PREFERRED ORDER", and its shorthand loop then needs the shorthand's OWN
+ * longhand list to ask whether all of them are present.
+ *
+ * SO THE TABLE IS THE COMPONENT, AND THE TWO DIRECTIONS ARE TWO READINGS OF IT. The reverse reading is derived
+ * by scanning the rows rather than typed a second time, which is the only way "margin-top's shorthands" and
+ * "margin's longhands" cannot come apart — and the forward reading is tied to it by the `expands` flag and by
+ * css_shorthand_init's round trip, so a longhand added to a row with no branch to expand it crashes at init.
+ *
+ * WHAT IS DELIBERATELY IN THE TABLE AND NOT IN THE FORWARD DIRECTION: `border-color`. Four `border-*-color`
+ * declarations lexbor TYPED and serialized can be put back together into one `border-color` with no grammar of
+ * this component's at all — the values are already canonical. Taking `border-color: red green` APART is the
+ * opposite: nothing has validated those components, and doing it means the `<color>` grammar
+ * core/css/css_color.h owns. The flag records exactly that asymmetry rather than leaving the row out, because
+ * leaving it out would make `border-top-color`'s shorthand set look complete when it is not.
+ *
+ * WHAT IS DELIBERATELY NOT IN THE TABLE AT ALL: every CSS shorthand this engine has no grammar for — `flex`,
+ * `flex-flow`, `text-decoration`, `background`, `font`. css_shorthand_is_shorthand answers FALSE for each, and
+ * the block serialization then emits their longhands separately, which is what it does today. */
+
+/* HOW A SHORTHAND'S VALUE IS PUT BACK TOGETHER — CSSOM §6.7.2's "serialize a CSS value ... with a list", which
+   is "serialize a CSS value from a hypothetical declaration of the property shorthand with its value
+   representing the combined values of the declarations in list", under §6.7.2's two syntactic rules: reorder
+   `||` terms into the property's canonical order, and OMIT any component that can be dropped or shortened
+   without changing the meaning. Each kind is one grammar's answer to those two rules, run backwards. */
+typedef enum {
+    CSS_SH_FOUR_SIDE,   /* CSS 2.1 §8.3's rotation reversed: top/right/bottom/left with the tail dropped */
+    CSS_SH_TWO_AXIS,    /* css-overflow §3.1's `{1,2}`: the second omitted when it equals the first */
+    CSS_SH_TRIPLE,      /* css-backgrounds-3 §3.4's `||`, each term omitted when it is that longhand's initial */
+    CSS_SH_BORDER       /* §3.4's `border`: one triple common to all four sides, over an untouched border-image */
+} CssShKind;
+
+typedef struct {
+    const char *name;
+    const char *const *longhands;
+    unsigned n;
+    CssShKind kind;
+    /* Does css_shorthand_component answer for EVERY one of `longhands`? See the note above for the one row
+       where it does not, and css_shorthand_complete_for for what the flag decides. */
+    bool expands;
+    /* ONE FIXTURE VALUE, in the canonical form the round trip must reproduce — expand it into every longhand,
+       consolidate the results back, and the string must come out unchanged. NULL where `expands` is false. */
+    const char *probe;
+} CssShorthandRow;
+
+static const char *const LH_MARGIN[]  = { "margin-top", "margin-right", "margin-bottom", "margin-left" };
+static const char *const LH_PADDING[] = { "padding-top", "padding-right", "padding-bottom", "padding-left" };
+static const char *const LH_OVERFLOW[] = { "overflow-x", "overflow-y" };
+static const char *const LH_BORDER_WIDTH[] = {
+    "border-top-width", "border-right-width", "border-bottom-width", "border-left-width"
+};
+static const char *const LH_BORDER_STYLE[] = {
+    "border-top-style", "border-right-style", "border-bottom-style", "border-left-style"
+};
+static const char *const LH_BORDER_COLOR[] = {
+    "border-top-color", "border-right-color", "border-bottom-color", "border-left-color"
+};
+static const char *const LH_BORDER_TOP[]    = { "border-top-width", "border-top-style", "border-top-color" };
+static const char *const LH_BORDER_RIGHT[]  = { "border-right-width", "border-right-style", "border-right-color" };
+static const char *const LH_BORDER_BOTTOM[] = { "border-bottom-width", "border-bottom-style", "border-bottom-color" };
+static const char *const LH_BORDER_LEFT[]   = { "border-left-width", "border-left-style", "border-left-color" };
+/* §3.4's `border` — the twelve side longhands and the five `border-image` ones it resets. Grouped by PART
+   rather than by side, because CSS_SH_BORDER reads them positionally: 0-3 widths, 4-7 styles, 8-11 colors,
+   12-16 image. §6.6.1's getPropertyValue walks the same list "in canonical order" and is order-insensitive
+   there — it requires every one of them and stops at the first that is missing. */
+static const char *const LH_BORDER[] = {
+    "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+    "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
+    "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
+    "border-image-source", "border-image-slice", "border-image-width",
+    "border-image-outset", "border-image-repeat",
+};
+
+/* IN ASCENDING NAME ORDER, asserted by css_shorthand_init — the preferred-order sort's first step is
+   lexicographic, and a table that is already sorted is what makes that step a scan instead of a comparison
+   nobody would notice going wrong. */
+static const CssShorthandRow SHORTHANDS[] = {
+    { "border",        LH_BORDER,        17, CSS_SH_BORDER,    true,  "1px solid red" },
+    { "border-bottom", LH_BORDER_BOTTOM,  3, CSS_SH_TRIPLE,    true,  "1px solid red" },
+    { "border-color",  LH_BORDER_COLOR,   4, CSS_SH_FOUR_SIDE, false, NULL },
+    { "border-left",   LH_BORDER_LEFT,    3, CSS_SH_TRIPLE,    true,  "1px solid red" },
+    { "border-right",  LH_BORDER_RIGHT,   3, CSS_SH_TRIPLE,    true,  "1px solid red" },
+    { "border-style",  LH_BORDER_STYLE,   4, CSS_SH_FOUR_SIDE, true,  "solid" },
+    { "border-top",    LH_BORDER_TOP,     3, CSS_SH_TRIPLE,    true,  "1px solid red" },
+    { "border-width",  LH_BORDER_WIDTH,   4, CSS_SH_FOUR_SIDE, true,  "1px" },
+    { "margin",        LH_MARGIN,         4, CSS_SH_FOUR_SIDE, true,  "1px 2px 3px 4px" },
+    { "overflow",      LH_OVERFLOW,       2, CSS_SH_TWO_AXIS,  true,  "hidden auto" },
+    { "padding",       LH_PADDING,        4, CSS_SH_FOUR_SIDE, true,  "1px 2px" },
+};
+
+static const CssShorthandRow *css_sh_row(const char *name)
+{
+    unsigned i;
+
+    for (i = 0; i < CSS_SH_N(SHORTHANDS); i++)
+        if (strcmp(SHORTHANDS[i].name, name) == 0) return &SHORTHANDS[i];
+    return NULL;
+}
+
+const char *const *css_shorthand_longhands(const char *shorthand, unsigned *pn)
+{
+    const CssShorthandRow *row;
+
+    DCHECK(shorthand != NULL && pn != NULL,
+           "the shorthand's longhand list was asked for with no name or nowhere to report the count");
+    row = css_sh_row(shorthand);
+    *pn = row ? row->n : 0;
+    return row ? row->longhands : NULL;
+}
+
+bool css_shorthand_is_shorthand(const char *name)
+{
+    DCHECK(name != NULL, "the shorthand question was asked about a NULL property name");
+    return css_sh_row(name) != NULL;
+}
+
+/* CSSOM §6.6's PREFERRED ORDER is a definition, not a UA preference, and it is FOUR steps applied in its own
+   order — each a stable rearrangement of the one before, so the last is the primary key and the first is the
+   tie-break. Written out step by step rather than collapsed into one comparator, because the collapsed form is
+   where the tie-break silently inverts. */
+static bool css_sh_prefixed(const char *s) { return s[0] == '-'; }
+
+static bool css_sh_prefixed_not_webkit(const char *s)
+{
+    static const char WK[] = "-webkit-";
+
+    return s[0] == '-' && strncmp(s, WK, sizeof WK - 1) != 0;
+}
+
+static void css_sh_move_last(const char **v, unsigned n, bool (*pred)(const char *))
+{
+    unsigned i, at = 0;
+    const char *keep[CSS_SHORTHAND_MAX_OF], *moved[CSS_SHORTHAND_MAX_OF];
+    unsigned nk = 0, nm = 0;
+
+    for (i = 0; i < n; i++) {
+        if (pred(v[i])) moved[nm++] = v[i];
+        else keep[nk++] = v[i];
+    }
+    for (i = 0; i < nk; i++) v[at++] = keep[i];
+    for (i = 0; i < nm; i++) v[at++] = moved[i];
+}
+
+unsigned css_shorthand_shorthands_of(const char *longhand, const char **out, unsigned max)
+{
+    unsigned n = 0, i, j;
+
+    DCHECK(longhand != NULL && out != NULL,
+           "the longhand's shorthand set was asked for with no name or nowhere to write it");
+    DCHECK(max >= CSS_SHORTHAND_MAX_OF,
+           "a caller offered less room than a longhand's shorthand set can need — CSS_SHORTHAND_MAX_OF is the "
+           "table's own maximum and css_shorthand_init asserts the table against it");
+    for (i = 0; i < CSS_SH_N(SHORTHANDS); i++) {
+        for (j = 0; j < SHORTHANDS[i].n; j++) {
+            if (strcmp(SHORTHANDS[i].longhands[j], longhand) != 0) continue;
+            CHECK(n < max, "cssom: a longhand maps to more shorthands than the caller made room for — the "
+                           "next write would be past the end of its array");
+            out[n++] = SHORTHANDS[i].name;
+            break;
+        }
+    }
+    CHECK(n <= CSS_SHORTHAND_MAX_OF,
+          "cssom: a longhand maps to more shorthands than CSS_SHORTHAND_MAX_OF — the preferred-order steps "
+          "below rearrange through arrays sized by that constant, so raise it with the row that broke it");
+    /* Step 1, lexicographic: the table is already in ascending name order and is scanned in that order, which
+       css_shorthand_init asserts — so the scan above IS this step, and a table that stopped being sorted
+       crashes there rather than silently reordering `border-top` ahead of `border-color` here. */
+    /* Steps 2 and 3: the prefixed spellings last, then the non-`-webkit-` prefixed ones after them. */
+    css_sh_move_last(out, n, css_sh_prefixed);
+    css_sh_move_last(out, n, css_sh_prefixed_not_webkit);
+    /* Step 4, the primary key: the greatest number of longhands first, stably. `border` (17) therefore
+       precedes `border-width` (4), which precedes `border-top` (3) — which is what makes a block holding all
+       twelve side longhands serialize as `border-width; border-style; border-color` rather than as four
+       `border-<side>` declarations, and what makes one holding all seventeen serialize as `border`. */
+    for (i = 1; i < n; i++) {
+        const char *cur = out[i];
+        unsigned cn = css_sh_row(cur)->n;
+
+        for (j = i; j > 0 && css_sh_row(out[j - 1])->n < cn; j--) out[j] = out[j - 1];
+        out[j] = cur;
+    }
+    return n;
+}
+
+/* CSS Logical §2: "any pair of flow-relative properties and physical properties (ignoring shorthand
+   properties) related by setting equivalent styles on the various sides or dimensions of a box, forms a
+   logical property group ... paired properties share a computed value ... determined by cascading the
+   declarations of both properties together as one". THAT is why §6.6's serialization refuses to re-form a
+   shorthand across one: `margin: 10px` written where `margin-top` and `margin-inline-start` were declared in
+   a particular order would move one of them past the other, and the pair's shared computed value is decided by
+   which came last.
+   ONLY THE GROUPS THIS COMPONENT'S SHORTHANDS REACH ARE RECORDED, which is the complete answer for the
+   question asked: a declaration whose group is not recorded reads as group 0, and group 0 equals no group, so
+   it never blocks a consolidation it has no business blocking. The flow-relative spellings are here even
+   though lexbor's registry does not carry them — `margin-inline-start` reaches a declaration block as a
+   `__CUSTOM` and is exactly the declaration that has to block one. */
+enum { CSS_LG_NONE = 0, CSS_LG_MARGIN, CSS_LG_PADDING, CSS_LG_BORDER_WIDTH, CSS_LG_BORDER_STYLE,
+       CSS_LG_BORDER_COLOR, CSS_LG_OVERFLOW };
+
+static const struct { const char *name; unsigned group; bool physical; } LOGICAL_GROUP[] = {
+    { "margin-top", CSS_LG_MARGIN, true }, { "margin-right", CSS_LG_MARGIN, true },
+    { "margin-bottom", CSS_LG_MARGIN, true }, { "margin-left", CSS_LG_MARGIN, true },
+    { "margin-block-start", CSS_LG_MARGIN, false }, { "margin-block-end", CSS_LG_MARGIN, false },
+    { "margin-inline-start", CSS_LG_MARGIN, false }, { "margin-inline-end", CSS_LG_MARGIN, false },
+
+    { "padding-top", CSS_LG_PADDING, true }, { "padding-right", CSS_LG_PADDING, true },
+    { "padding-bottom", CSS_LG_PADDING, true }, { "padding-left", CSS_LG_PADDING, true },
+    { "padding-block-start", CSS_LG_PADDING, false }, { "padding-block-end", CSS_LG_PADDING, false },
+    { "padding-inline-start", CSS_LG_PADDING, false }, { "padding-inline-end", CSS_LG_PADDING, false },
+
+    { "border-top-width", CSS_LG_BORDER_WIDTH, true }, { "border-right-width", CSS_LG_BORDER_WIDTH, true },
+    { "border-bottom-width", CSS_LG_BORDER_WIDTH, true }, { "border-left-width", CSS_LG_BORDER_WIDTH, true },
+    { "border-block-start-width", CSS_LG_BORDER_WIDTH, false },
+    { "border-block-end-width", CSS_LG_BORDER_WIDTH, false },
+    { "border-inline-start-width", CSS_LG_BORDER_WIDTH, false },
+    { "border-inline-end-width", CSS_LG_BORDER_WIDTH, false },
+
+    { "border-top-style", CSS_LG_BORDER_STYLE, true }, { "border-right-style", CSS_LG_BORDER_STYLE, true },
+    { "border-bottom-style", CSS_LG_BORDER_STYLE, true }, { "border-left-style", CSS_LG_BORDER_STYLE, true },
+    { "border-block-start-style", CSS_LG_BORDER_STYLE, false },
+    { "border-block-end-style", CSS_LG_BORDER_STYLE, false },
+    { "border-inline-start-style", CSS_LG_BORDER_STYLE, false },
+    { "border-inline-end-style", CSS_LG_BORDER_STYLE, false },
+
+    { "border-top-color", CSS_LG_BORDER_COLOR, true }, { "border-right-color", CSS_LG_BORDER_COLOR, true },
+    { "border-bottom-color", CSS_LG_BORDER_COLOR, true }, { "border-left-color", CSS_LG_BORDER_COLOR, true },
+    { "border-block-start-color", CSS_LG_BORDER_COLOR, false },
+    { "border-block-end-color", CSS_LG_BORDER_COLOR, false },
+    { "border-inline-start-color", CSS_LG_BORDER_COLOR, false },
+    { "border-inline-end-color", CSS_LG_BORDER_COLOR, false },
+
+    /* css-overflow §3.1's property definition table says it in one line — "Logical property group: overflow" —
+       for all four of `overflow-x`, `overflow-y`, `overflow-block` and `overflow-inline`. */
+    { "overflow-x", CSS_LG_OVERFLOW, true }, { "overflow-y", CSS_LG_OVERFLOW, true },
+    { "overflow-block", CSS_LG_OVERFLOW, false }, { "overflow-inline", CSS_LG_OVERFLOW, false },
+};
+
+unsigned css_shorthand_logical_group(const char *longhand, bool *pphysical)
+{
+    unsigned i;
+
+    DCHECK(longhand != NULL && pphysical != NULL,
+           "the logical-property-group question was asked with no name or nowhere to report the mapping logic");
+    *pphysical = true;
+    for (i = 0; i < CSS_SH_N(LOGICAL_GROUP); i++) {
+        if (strcmp(LOGICAL_GROUP[i].name, longhand) != 0) continue;
+        *pphysical = LOGICAL_GROUP[i].physical;
+        return LOGICAL_GROUP[i].group;
+    }
+    return CSS_LG_NONE;
+}
+
+/* ---- §6.7.2's serialize a CSS value, over a list of longhands --------------------------------------------- */
+
+static char *css_sh_join(const char *const *parts, unsigned n)
+{
+    size_t total = 1;
+    unsigned i;
+    char *out;
+    size_t at = 0;
+
+    for (i = 0; i < n; i++) total += strlen(parts[i]) + 1;
+    out = malloc(total);
+    CHECK(out != NULL, "cssom: OOM serializing a shorthand value — a dropped one reads as the empty string, "
+                       "which is how §6.6 is told the shorthand could not represent the declarations");
+    for (i = 0; i < n; i++) {
+        size_t l = strlen(parts[i]);
+
+        if (i) out[at++] = ' ';
+        memcpy(out + at, parts[i], l);
+        at += l;
+    }
+    out[at] = '\0';
+    return out;
+}
+
+/* CSS Cascade §7.3's keywords are a value for EVERY property, and a shorthand carrying one "sets all of its
+   sub-properties to that keyword" — so a list in which every longhand carries the SAME keyword is exactly what
+   such a declaration produced and serializes back as the keyword. Any other mixture is a list no single
+   declaration could have produced, and §6.7.2's answer for that is the empty string.
+   NOTE THAT THIS ENGINE NEVER STORES THE KEYWORD `initial` FOR AN OMITTED SUB-PROPERTY — border_triple_component
+   answers with the initial VALUE (`medium`, `none`, `currentcolor`) — so there is no shorthand here that has to
+   tolerate a mixture containing it. Returns 1 when it answered, 0 when no longhand carries a keyword at all,
+   and -1 for the mixture. */
+static int css_sh_wide_value(const char *const *v, unsigned n, char **out)
+{
+    unsigned i;
+    bool any = false;
+
+    for (i = 0; i < n; i++)
+        if (css_wide_keyword(v[i])) { any = true; break; }
+    if (!any) return 0;
+    for (i = 1; i < n; i++)
+        if (strcmp(v[i], v[0]) != 0) return -1;
+    if (!css_wide_keyword(v[0])) return -1;
+    *out = css_sh_strdup(v[0]);
+    return 1;
+}
+
+/* CSS 2.1 §8.3's rotation run backwards. The three tests are the exact inverse of SIDE_OF's rows: the fourth
+   component is written only when left differs from right, the third only when bottom differs from top or a
+   fourth is being written, the second only when right differs from top or a third is. */
+static char *css_sh_four_side_value(const char *const *v)
+{
+    const char *parts[4];
+    unsigned n = 1;
+    bool show_left = strcmp(v[1], v[3]) != 0;
+    bool show_bottom = strcmp(v[0], v[2]) != 0 || show_left;
+    bool show_right = strcmp(v[0], v[1]) != 0 || show_bottom;
+
+    parts[0] = v[0];
+    if (show_right) parts[n++] = v[1];
+    if (show_bottom) parts[n++] = v[2];
+    if (show_left) parts[n++] = v[3];
+    return css_sh_join(parts, n);
+}
+
+/* css-overflow §3.1's `{1,2}`: "if the second value is omitted, it is copied from the first". */
+static char *css_sh_two_axis_value(const char *const *v)
+{
+    if (strcmp(v[0], v[1]) == 0) return css_sh_strdup(v[0]);
+    return css_sh_join(v, 2);
+}
+
+/* css-backgrounds-3 §3.4's `<line-width> || <line-style> || <color>`, written in the canonical order of the
+   grammar with each term omitted when it holds that longhand's initial value — §6.7.2's "if component values
+   can be omitted ... without changing the meaning of the value, omit them", and BORDER_PART_INITIAL is the same
+   list the forward expansion fills an omitted term from. Every term initial leaves nothing to write, and the
+   empty string is §6.7.2's own answer for a shorthand that cannot represent the list. */
+static char *css_sh_triple_value(const char *width, const char *style, const char *color)
+{
+    const char *v[3], *parts[3];
+    unsigned n = 0, i;
+
+    v[0] = width; v[1] = style; v[2] = color;
+    for (i = 0; i < 3; i++)
+        if (strcmp(v[i], BORDER_PART_INITIAL[i]) != 0) parts[n++] = v[i];
+    if (n == 0) return NULL;
+    return css_sh_join(parts, n);
+}
+
+/* §3.4's `border`, which "cannot set different values on the four borders": a list whose four widths, four
+   styles or four colors disagree is one no `border` declaration could have produced. And the five
+   `border-image` longhands it resets must still hold what it reset them to — a `border-image` set afterwards
+   is precisely the case WPT's border-shorthand-serialization.html pins, where `rule.style.border` is the empty
+   string although all twelve side longhands are present. */
+static char *css_sh_border_value(const char *const *v)
+{
+    unsigned i;
+
+    for (i = 0; i < CSS_SH_N(BORDER_IMAGE_INITIAL); i++)
+        if (strcmp(v[12 + i], BORDER_IMAGE_INITIAL[i]) != 0) return NULL;
+    for (i = 1; i < 4; i++)
+        if (strcmp(v[i], v[0]) != 0 || strcmp(v[4 + i], v[4]) != 0 || strcmp(v[8 + i], v[8]) != 0) return NULL;
+    return css_sh_triple_value(v[0], v[4], v[8]);
+}
+
+char *css_shorthand_serialize_value(const char *shorthand, const char *const *values)
+{
+    const CssShorthandRow *row;
+    char *wide = NULL;
+    unsigned i;
+    int w;
+
+    DCHECK(shorthand != NULL && values != NULL,
+           "§6.7.2's serialize-a-CSS-value was asked for with no shorthand or no values");
+    row = css_sh_row(shorthand);
+    DCHECK(row != NULL,
+           "§6.7.2's serialize-a-CSS-value was asked for a name this component does not record as a shorthand. "
+           "The caller reached here through css_shorthand_shorthands_of, which only ever names rows of the "
+           "table above, so the two have come apart");
+    if (!row) return NULL;
+    for (i = 0; i < row->n; i++)
+        DCHECK(values[i] != NULL,
+               "§6.7.2's serialize-a-CSS-value was handed a list with a longhand missing. §6.6's loop asks "
+               "whether ALL of a shorthand's longhands are present BEFORE it builds the list, so a hole here "
+               "is that test having been skipped — and a hole read as a value is the shorthand claiming a "
+               "declaration the block never made");
+    w = css_sh_wide_value(values, row->n, &wide);
+    if (w != 0) return w > 0 ? wide : NULL;
+    switch (row->kind) {
+    case CSS_SH_FOUR_SIDE: return css_sh_four_side_value(values);
+    case CSS_SH_TWO_AXIS:  return css_sh_two_axis_value(values);
+    case CSS_SH_TRIPLE:    return css_sh_triple_value(values[0], values[1], values[2]);
+    default:
+        DCHECK(row->kind == CSS_SH_BORDER,
+               "a shorthand row carries a value-serialization kind this switch does not implement");
+        return css_sh_border_value(values);
+    }
+}
+
+void css_shorthand_init(void)
+{
+#if APICLIENT_DEV
+    unsigned i, j, k;
+
+    for (i = 0; i < CSS_SH_N(SHORTHANDS); i++) {
+        const CssShorthandRow *row = &SHORTHANDS[i];
+        const char *sh[CSS_SHORTHAND_MAX_OF];
+        char *values[CSS_SHORTHAND_MAX_LONGHANDS];
+        char *back;
+        unsigned back_n;
+
+        DCHECK(i == 0 || strcmp(SHORTHANDS[i - 1].name, row->name) < 0,
+               "css_shorthand.c's shorthand table is not in ascending name order, and CSSOM §6.6's preferred "
+               "order takes its lexicographic tie-break FROM that order — so a row inserted out of place "
+               "silently reorders two shorthands of equal length and changes which one a block serializes as");
+        DCHECK(row->n >= 2 && row->n <= CSS_SHORTHAND_MAX_LONGHANDS,
+               "a shorthand row names fewer than two longhands or more than CSS_SHORTHAND_MAX_LONGHANDS. The "
+               "upper bound is what every caller sizes its value array to; raise the constant with the row");
+        DCHECK(row->expands == (row->probe != NULL),
+               "a shorthand row claims an expansion with no fixture value to exercise it, or carries a fixture "
+               "for an expansion it does not have — the flag and the probe are one statement");
+        for (j = 0; j < row->n; j++) {
+            DCHECK(strcmp(row->longhands[j], row->name) != 0,
+                   "a shorthand names ITSELF among its longhands");
+            DCHECK(!css_shorthand_is_shorthand(row->longhands[j]),
+                   "a name is recorded BOTH as a shorthand and as a longhand of another one. §6.6's loop asks "
+                   "each declaration which shorthands map to it and would then ask the same name for its own "
+                   "longhands — CSS Logical's own definition of a property group excludes shorthands for the "
+                   "same reason");
+            for (k = 0; k < j; k++)
+                DCHECK(strcmp(row->longhands[k], row->longhands[j]) != 0,
+                       "a shorthand names one longhand twice, so its value list has two entries for one "
+                       "declaration and the positional serializations read the wrong slot");
+            back_n = css_shorthand_shorthands_of(row->longhands[j], sh, CSS_SHORTHAND_MAX_OF);
+            DCHECK(back_n >= 1,
+                   "a longhand named by a shorthand row does not find that row from the other direction");
+        }
+        if (!row->expands) continue;
+        for (j = 0; j < row->n; j++) {
+            values[j] = css_shorthand_component(row->name, row->probe, row->longhands[j]);
+            DCHECK(values[j] != NULL,
+                   "a shorthand this table says it EXPANDS gave one of its own longhands no value. The reverse "
+                   "reading gained a longhand that the forward one has no branch for, and nothing else would "
+                   "have said so: the cascade would read that longhand as undeclared, which is its INITIAL "
+                   "value and a different number, and §6.6 would stop re-forming the shorthand entirely");
+        }
+        back = css_shorthand_serialize_value(row->name, (const char *const *)values);
+        DCHECK(back != NULL && strcmp(back, row->probe) == 0,
+               "a shorthand's fixture value did not survive being expanded into its longhands and consolidated "
+               "back. §6.7.2's serialization is the exact inverse of the expansion above, so a round trip that "
+               "changes the string means one of the two is wrong — and the visible symptom is a `cssText` that "
+               "differs from what the page wrote for no reason a reader could see");
+        free(back);
+        for (j = 0; j < row->n; j++) free(values[j]);
+    }
+#endif
+}
+
 bool css_shorthand_complete_for(const char *longhand)
 {
-    /* THE LONGHANDS WHOSE COMPLETE SHORTHAND SET IS ABOVE, and what makes each complete:
+    /* THE LONGHANDS WHOSE SHORTHAND SET IS RECORDED IN FULL, and what makes each complete:
          overflow-x, overflow-y — `overflow` is the only shorthand in CSS that sets them (css-overflow §3.1;
            the logical `overflow-block`/`overflow-inline` are longhands of the same group, not shorthands);
          display, float, position, box-sizing — NO shorthand sets any of the four;
@@ -398,17 +893,17 @@ bool css_shorthand_complete_for(const char *longhand)
          width, height, min-width, max-width, min-height, max-height — NO shorthand sets any of them. CSS 2.1
            has none, and css-sizing adds none: `flex` sets `flex-basis`, not `width`, and `aspect-ratio` is a
            longhand of its own;
-         the four border-*-width and the four border-*-style — THREE shorthands set each of them and all three
-           are above: `border-width` (or `border-style`), `border-<side>` and `border`, which is
-           css-backgrounds-3 §3.3, §3.2 and §3.4. `border-image` sets no width or style longhand (its own
-           `border-image-width` is a different property), and the logical `border-block`/`border-inline` group
-           sets the logical longhands, which lexbor's registry does not carry and which are different
-           properties for the same reason `margin-block` is.
-       WHAT IS DELIBERATELY NOT HERE: the four `border-*-color`. `border` and `border-<side>` above DO answer
-       for them — the component is in hand, and returning NULL would be a wrong answer to a question this
-       function claims to answer — but `border-color` is a shorthand nothing expands, because validating its
-       raw components means the `<color>` grammar (core/css/css_color.h) and that is the next subproblem, not
-       this one. So the set is INCOMPLETE and this says so, which is exactly what stops a consumer trusting it.
+         the twelve border side longhands — THREE shorthands set each and all three are in the table above:
+           `border-width` (or `border-style`, or `border-color`), `border-<side>` and `border`, which is
+           css-backgrounds-3 §3.3, §3.2, §3.1 and §3.4. `border-image` sets no width, style or color longhand
+           (its own `border-image-width` is a different property), and the logical `border-block`/
+           `border-inline` group sets the logical longhands, which lexbor's registry does not carry and which
+           are different properties for the same reason `margin-block` is.
+       THIS LIST IS ONLY THE FIRST HALF OF THE QUESTION. The second — is every one of those shorthands one the
+       expansion above actually takes APART — is DERIVED from the table's own `expands` flags, so the two
+       cannot come apart the way a second hand-written list could. It is what answers FALSE for the four
+       `border-*-color`: their set is recorded in full, and `border-color` is a shorthand nothing expands
+       because validating its raw components means the `<color>` grammar core/css/css_color.h owns.
        A name absent from this list is not "probably fine": it is a question nobody has answered, and the
        answer decides whether a `margin: 0` two lines up was read or ignored. */
     static const char *const RECORDED[] = {
@@ -418,11 +913,21 @@ bool css_shorthand_complete_for(const char *longhand)
         "width", "height", "min-width", "max-width", "min-height", "max-height",
         "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
         "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
+        "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
     };
-    unsigned i;
+    const char *sh[CSS_SHORTHAND_MAX_OF];
+    unsigned i, n;
+    bool recorded = false;
 
     DCHECK(longhand != NULL, "the shorthand-completeness question was asked about a NULL property name");
     for (i = 0; i < sizeof(RECORDED) / sizeof(RECORDED[0]); i++)
-        if (strcmp(RECORDED[i], longhand) == 0) return true;
-    return false;
+        if (strcmp(RECORDED[i], longhand) == 0) { recorded = true; break; }
+    if (!recorded) return false;
+    DCHECK(!css_shorthand_is_shorthand(longhand),
+           "a SHORTHAND is listed among the longhands whose shorthand set is recorded — the two are asked "
+           "different questions and a name cannot be both");
+    n = css_shorthand_shorthands_of(longhand, sh, CSS_SHORTHAND_MAX_OF);
+    for (i = 0; i < n; i++)
+        if (!css_sh_row(sh[i])->expands) return false;
+    return true;
 }

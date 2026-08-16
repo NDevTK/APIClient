@@ -270,11 +270,10 @@ const INTERFACES = {
      and it is not this change's to decide. */
   StyleSheetList:       "core/css/style_sheet_list.c",
   /* CSSOM §6.4. CSSRule is an abstract base nothing instantiates, so its members live on their own prototype
-     and CSSStyleRule.prototype CHAINS to it — both rows name the one component. What each is EXPECTED to
-     report missing is real and named at the sites: CSSRule's `cssText` (§6.6's serialize-a-CSS-declaration-
-     block needs its shorthand consolidation loop, and a cssText without it is a string no browser produces),
-     and on CSSStyleRule the three CSSGroupingRule members it inherits in the IDL and cannot here. `style` is
-     BUILT — the block over the rule's own declarations — so it is off this list rather than still named. */
+     and CSSStyleRule.prototype CHAINS to it — both rows name the one component. What is EXPECTED to report
+     missing is on CSSStyleRule: the three CSSGroupingRule members it inherits in the IDL and cannot here.
+     `style` is BUILT — the block over the rule's own declarations — and so is `cssText`, §6.4's serialize-a-
+     CSS-rule over §6.6's declaration-block serialization; both are off this list rather than still named. */
   CSSRule:              "core/css/css_rule.c",
   CSSStyleRule:         "core/css/css_rule.c",
   CSSRuleList:          "core/css/css_rule_list.c",

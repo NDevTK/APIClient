@@ -37,6 +37,7 @@ typedef struct CssRuleData {
 static JSClassID g_rule_class;
 static int       g_cssrule_proto_slot = -1;   /* CSSRule.prototype, per realm */
 static int       g_id_set_selector = -1;
+static int       g_id_set_css_text = -1;
 
 static const uint16_t RULE_VALS[] = {
     (uint16_t)offsetof(CssRuleData, parent_style_sheet),
@@ -149,7 +150,74 @@ void css_rule_orphan(JSContext *ctx, JSValueConst rule)
 
 /* ---- §6.4.2's members ------------------------------------------------------------------------------------ */
 
-enum { CR_PARENT_RULE = 0, CR_PARENT_STYLE_SHEET, CR_TYPE, CR_SELECTOR_TEXT };
+enum { CR_PARENT_RULE = 0, CR_PARENT_STYLE_SHEET, CR_TYPE, CR_SELECTOR_TEXT, CR_CSS_TEXT };
+
+/* §6.4.2's `cssText` getter: "must return the result of serializing the CSS rule", and §6.4's SERIALIZE A CSS
+   RULE states the CSSStyleRule arm as five steps over three pieces — the selector list, the declaration block,
+   and the nested rules.
+ *   1. s = serialize a group of selectors, then " {".
+ *   2. decls = serialize a CSS declaration block on the rule's declarations, or NULL if there are none.
+ *   3. rules = serialize a CSS rule on each rule in cssRules, or NULL if there are none — always NULL here,
+ *      because §6.4.5's CSSGroupingRule is not built and this rule can hold no nested rule to lose.
+ *   4. decls and rules both null: append " }" and return.
+ *   5. rules null: append a SPACE, decls, then " }".
+ * IT WAS ABSENT UNTIL §6.6's SHORTHAND CONSOLIDATION LOOP EXISTED, and being absent was the right answer while
+ * that was true: a `.c { border: 1px solid black }` whose body serialized as `border-width: 1px;
+ * border-style: solid; border-color: black;` is not a partially-correct string, it is one no browser produces,
+ * and WPT's border-shorthand-serialization.html asserts the whole rule byte for byte. Step 2 is now
+ * cssom_serialize_declarations, which runs that loop. */
+/* One of the record's two texts, copied out. The accessor has already captured the record for this flow, so
+   these are read off it directly rather than through the exported helpers, which take a rule OBJECT. NULL only
+   when the string conversion itself threw, which is the caller's pending exception. */
+static char *rule_text_copy(JSContext *ctx, JSValueConst v, size_t *plen)
+{
+    size_t len = 0;
+    const char *c = JS_ToCStringLen(ctx, &len, v);
+    char *out;
+
+    *plen = 0;
+    if (!c) return NULL;
+    out = malloc(len + 1);
+    CHECK(out != NULL, "cssom: OOM copying a rule's text for its serialization");
+    memcpy(out, c, len);
+    out[len] = '\0';
+    JS_FreeCString(ctx, c);
+    *plen = len;
+    return out;
+}
+
+static JSValue js_rule_css_text(JSContext *ctx, CssRuleData *r)
+{
+    size_t sl = 0, bl = 0, dl, at;
+    char *sel = rule_text_copy(ctx, r->selector_text, &sl);
+    char *block, *decls, *s;
+    JSValue out;
+
+    if (!sel) return JS_EXCEPTION;
+    block = rule_text_copy(ctx, r->block_text, &bl);
+    if (!block) { free(sel); return JS_EXCEPTION; }
+    decls = cssom_serialize_declarations(block, bl);
+    free(block);
+    dl = decls ? strlen(decls) : 0;
+    s = malloc(sl + (decls ? dl + 1 : 0) + 5);
+    CHECK(s != NULL, "cssom: OOM serializing a CSS rule");
+    memcpy(s, sel, sl);
+    at = sl;
+    s[at++] = ' ';
+    s[at++] = '{';
+    if (decls) {
+        s[at++] = ' ';
+        memcpy(s + at, decls, dl);
+        at += dl;
+    }
+    s[at++] = ' ';
+    s[at++] = '}';
+    out = JS_NewStringLen(ctx, s, at);
+    free(s);
+    free(decls);
+    free(sel);
+    return out;
+}
 
 static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -163,6 +231,7 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     /* "The parentStyleSheet attribute must return the parent CSS style sheet." The spec's own note is the
        whole of when it is null: "the only circumstance where null is returned when a rule has been removed." */
     case CR_PARENT_STYLE_SHEET: return JS_DupValue(ctx, r->parent_style_sheet);
+    case CR_CSS_TEXT: return js_rule_css_text(ctx, r);
     case CR_TYPE:
         /* §6.4.2's deprecated `type`: "If the object is a CSSStyleRule, return 1." There is exactly one rule
            interface in this build, so this is that answer and not a stored field — and the enumeration is
@@ -175,6 +244,18 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
            which is what the parse handed over and what the setter below replaces. */
         return JS_DupValue(ctx, r->selector_text);
     }
+}
+
+/* §6.4.2 states the other half of `cssText` in one sentence — "on setting the cssText attribute must do
+   nothing" — so the attribute is READ-WRITE in the IDL and its setter is a real, specified no-effect rather
+   than an unbuilt one. Installing it without a setter would be a different behaviour a page can see:
+   `rule.cssText = 'x'` throws a TypeError in strict mode against a getter-only accessor, where the spec says
+   the assignment is simply ignored. It still CONVERTS its argument, because Web IDL's setter runs the
+   CSSOMString conversion before the attribute's own steps and a `{toString(){throw}}` must throw. */
+static JSValue js_rule_set_css_text(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    (void)ctx; (void)this_val; (void)val; (void)magic;
+    return JS_UNDEFINED;
 }
 
 /* The one rule a selector probe keeps: the SERIALIZED selector list lexbor accepted, which is the canonical
@@ -340,6 +421,7 @@ void css_rule_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_rule_class, &d);
     g_cssrule_proto_slot = realm_value_declare(ctx, "CSSOM §6.4.2 CSSRule.prototype");
     g_id_set_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_selector, 0);
+    g_id_set_css_text = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_css_text, 0);
     realm_declare_intrinsic(css_rule_install_proto);
 }
 
@@ -357,6 +439,7 @@ void css_rule_install_proto(JSContext *ctx)
     base = JS_NewObject(ctx);
     CHECK(!JS_IsException(base), "CSSRule.prototype could not be allocated");
     idl_interface_tag(ctx, base, "CSSRule");
+    idl_install_accessor(ctx, base, "cssText", js_rule_get, CR_CSS_TEXT, g_id_set_css_text);
     idl_install_accessor(ctx, base, "parentRule", js_rule_get, CR_PARENT_RULE, -1);
     idl_install_accessor(ctx, base, "parentStyleSheet", js_rule_get, CR_PARENT_STYLE_SHEET, -1);
     idl_install_accessor(ctx, base, "type", js_rule_get, CR_TYPE, -1);

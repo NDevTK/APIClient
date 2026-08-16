@@ -331,6 +331,72 @@ static char *cssd_value_in_block(const char *text, size_t len, const char *name,
     return out;   /* the LAST wins, which is what a declaration block means */
 }
 
+/* §6.6.1's GET PROPERTY VALUE over a block's text, including the step that is only reachable now that the
+   longhand->shorthand direction exists: "if property is a shorthand property ... for each longhand property
+   longhand that property maps to, in canonical order ... if declaration is null, then return the empty string
+   ... if important flags of all declarations in list are same, then return the serialization of list."
+   IT IS THE SAME WALK FOR BOTH BACKINGS AND FOR A SHORTHAND SPELLED EITHER WAY, because each longhand is read
+   through cssd_value_in_block, which already answers from a shorthand declaration as readily as from the
+   longhand itself. So `border` reads back out of a block holding `border: 1px solid red` (all seventeen
+   longhands answer, and consolidate to what was written) and reads back as the EMPTY STRING out of one holding
+   only `border-width`/`border-style`/`border-color` (the five `border-image` longhands answer nothing, and
+   §3.4's `border` is the shorthand that resets them) — which is exactly the split WPT's
+   border-shorthand-serialization.html pins. OWNED, NULL when the block gives the property no value. */
+static char *cssd_property_value(const char *text, size_t len, const char *name)
+{
+    const char *const *lh;
+    char *values[CSS_SHORTHAND_MAX_LONGHANDS];
+    unsigned n, i, have = 0;
+    bool important = false, mixed = false;
+    char *out;
+
+    lh = css_shorthand_longhands(name, &n);
+    if (!lh) return cssd_value_in_block(text, len, name, NULL);
+    CHECK(n <= CSS_SHORTHAND_MAX_LONGHANDS,
+          "cssom: a shorthand's longhand list outgrew the array §6.6.1's getPropertyValue sized from it");
+    for (i = 0; i < n; i++) {
+        bool imp = false;
+
+        values[i] = cssd_value_in_block(text, len, lh[i], &imp);
+        if (!values[i]) break;
+        if (have == 0) important = imp;
+        else if (imp != important) mixed = true;
+        have++;
+    }
+    out = (have == n && !mixed) ? css_shorthand_serialize_value(name, (const char *const *)values) : NULL;
+    for (i = 0; i < have; i++) free(values[i]);
+    return out;
+}
+
+/* §6.6.1's GET PROPERTY PRIORITY, whose shorthand step is the same shape with the values thrown away: "for
+   each longhand property longhand that property maps to, append the result of invoking getPropertyPriority()
+   with longhand as argument to list. If all items in list are the string 'important', then return the string
+   'important'." A longhand the block does not declare has no priority, so the answer is not "important". */
+static bool cssd_property_important(const char *text, size_t len, const char *name)
+{
+    const char *const *lh;
+    unsigned n, i;
+
+    lh = css_shorthand_longhands(name, &n);
+    if (!lh) {
+        bool imp = false;
+        char *v = cssd_value_in_block(text, len, name, &imp);
+        bool got = v != NULL && imp;
+
+        free(v);
+        return got;
+    }
+    for (i = 0; i < n; i++) {
+        bool imp = false;
+        char *v = cssd_value_in_block(text, len, lh[i], &imp);
+        bool got = v != NULL && imp;
+
+        free(v);
+        if (!got) return false;
+    }
+    return true;
+}
+
 /* LAYER 1 — the INLINE declaration for `name`, or NULL. The highest-weight layer short of !important, and the
    one that is per-flow because the attribute it reads is. The CASCADE reaches it with an element and no
    declaration object, which is why this takes one rather than a block. */
@@ -538,14 +604,7 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
  * §6.6's SERIALIZE A CSS DECLARATION, and the BLOCK serialization its entries are joined into with a single
  * SPACE. The spec's note is the exact shape — "no whitespace appears before the first property name and no
  * whitespace appears after the final semicolon delimiter" — and it is NOT lexbor's serialization, which joins
- * with "; " and emits no trailing semicolon at all. A CSSOM member must answer CSSOM's string.
- *
- * WHAT IS NOT HERE IS THE SHORTHAND CONSOLIDATION LOOP. §6.6's algorithm re-consolidates a full set of
- * longhands back into the shorthand that covers them (`margin-top`, `-right`, `-bottom`, `-left` all present
- * serialize as one `margin`), which needs the LONGHAND -> SHORTHAND direction and the shorthands' preferred
- * order; core/css/css_shorthand.h carries only the forward direction, so consolidating is a component's worth
- * of work. §6.4.2's `cssText` — a whole RULE, selector and body — is honestly absent until it exists, and the
- * IDL audit reports that, which is the ledger. */
+ * with "; " and emits no trailing semicolon at all. A CSSOM member must answer CSSOM's string. */
 static void cssd_append_declaration(CssBuf *out, bool *first, const char *name, const char *value,
                                     bool important)
 {
@@ -560,26 +619,191 @@ static void cssd_append_declaration(CssBuf *out, bool *first, const char *name, 
     css_buf_add(out, ";");
 }
 
-static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list)
+/* ---- §6.6's DECLARATIONS, and the SHORTHAND CONSOLIDATION LOOP that serializes them ------------------------
+ *
+ * §6.6 models a block's declarations as a LIST, and its serialization walks that list twice over: once per
+ * declaration, and once per shorthand that could cover a group of them. Lexbor's parsed list is an arena
+ * structure that dies with the parse, and the loop needs to look BACKWARDS and FORWARDS across the whole block
+ * (the shorthand's longhands may sit anywhere, and the logical-property-group step asks what sits BETWEEN
+ * them), so the declarations are lifted out of the arena into this array first. */
+typedef struct { char *name; char *value; bool important; } CssDecl;
+typedef struct { CssDecl *v; unsigned n, cap; } CssDecls;
+
+static void cssd_decls_free(CssDecls *d)
 {
-    CssBuf out = { 0 };
+    unsigned i;
+
+    for (i = 0; i < d->n; i++) { free(d->v[i].name); free(d->v[i].value); }
+    free(d->v);
+    d->v = NULL;
+    d->n = d->cap = 0;
+}
+
+/* Takes ownership of `name` and `value`. `value` may be NULL: CSS Syntax admits a declaration whose value is
+   empty, which is why §6.6's step 4 is conditional. */
+static void cssd_decls_push(CssDecls *d, char *name, char *value, bool important)
+{
+    if (d->n == d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 8;
+        d->v = realloc(d->v, d->cap * sizeof(*d->v));
+        CHECK(d->v != NULL, "cssom: OOM collecting a declaration block's declarations — a dropped one reads as "
+                            "a property the block never declared");
+    }
+    d->v[d->n].name = name;
+    d->v[d->n].value = value;
+    d->v[d->n].important = important;
+    d->n++;
+}
+
+static void cssd_decls_from_list(const lxb_css_rule_declaration_list_t *list, CssDecls *out)
+{
     const lxb_css_rule_t *r;
-    bool first = true;
 
     for (r = list ? list->first : NULL; r; r = r->next) {
         const lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(r);
-        char *name, *value;
+        char *name;
 
-        /* CSS Syntax's INVALID DECLARATION is not in the block, so it is not in the block's serialization
+        /* CSS Syntax's INVALID DECLARATION is not in the block, so it is not in the block's declarations
            either — the same drop the cascade and the rewrite make, for the same `__UNDEF` reason. */
         if (r->type != LXB_CSS_RULE_DECLARATION || d->type == LXB_CSS_PROPERTY__UNDEF) continue;
         name = cssd_decl_name(d);
-        value = cssd_decl_value(d);   /* the whitespace-trimmed one — see its own note */
-        if (name) cssd_append_declaration(&out, &first, name, value, d->important);
-        free(name);
-        free(value);
+        if (!name) continue;
+        cssd_decls_push(out, name, cssd_decl_value(d), d->important);   /* the trimmed value — see its note */
     }
-    return out.s;   /* NULL for a block with no valid declaration, which IS the empty serialization */
+}
+
+/* ONE PASS OF §6.6's SHORTHAND LOOP: can `shorthand` stand for a group of `d`'s not-yet-serialized
+   declarations, and if so write it and mark them. FALSE is the spec's "continue with the steps labeled
+   shorthand loop" — every one of its five refusals is below, in the order the algorithm states them. */
+static bool cssd_try_shorthand(const CssDecls *d, bool *done, const char *shorthand, CssBuf *out, bool *first)
+{
+    const char *const *lh;
+    const char *values[CSS_SHORTHAND_MAX_LONGHANDS];
+    unsigned at[CSS_SHORTHAND_MAX_LONGHANDS];
+    unsigned n, i, j, lo, hi;
+    bool important;
+    char *value;
+
+    lh = css_shorthand_longhands(shorthand, &n);
+    /* ALWAYS FATAL, because the two failures it covers both read or write past the arrays sized from it: a
+       name css_shorthand.c does not record as a shorthand answers with no longhands at all, and a longhand
+       list that outgrew CSS_SHORTHAND_MAX_LONGHANDS overruns `values` and `at`. The name came out of
+       css_shorthand_shorthands_of, so either one means the two readings of that table have come apart. */
+    CHECK(lh != NULL && n >= 2 && n <= CSS_SHORTHAND_MAX_LONGHANDS,
+          "cssom: §6.6's shorthand loop was handed a name with no usable longhand list");
+    /* "Let longhands be an array consisting of all CSS declarations ... that are not in already serialized and
+       have a property name that maps to one of the shorthand properties in shorthands", then "if not all
+       properties that map to shorthand are present in longhands, continue". A declaration named by
+       `shorthand`'s own list necessarily maps to it, so the two steps are one scan per longhand.
+       EXACTLY ONE declaration per longhand is required. A block that declares the same longhand twice is one
+       whose duplicates have not been collapsed into §6.6's at-most-one-per-property list, and a shorthand
+       built from either of them would silently drop the other's value — so both are left to be written out
+       individually, which is what the block already means. */
+    for (i = 0; i < n; i++) {
+        unsigned found = 0;
+
+        at[i] = d->n;
+        for (j = 0; j < d->n; j++) {
+            if (done[j] || strcmp(d->v[j].name, lh[i]) != 0) continue;
+            at[i] = j;
+            found++;
+        }
+        if (found != 1) return false;
+        /* A longhand whose value is empty is a real declaration and not a hole (CSS Syntax admits it, which is
+           why §6.6's step 4 is conditional) — and no shorthand's grammar has a component that can be empty, so
+           there is no value the shorthand could carry that would mean this. */
+        if (!d->v[at[i]].value) return false;
+        values[i] = d->v[at[i]].value;
+    }
+    lo = hi = at[0];
+    for (i = 1; i < n; i++) {
+        if (at[i] < lo) lo = at[i];
+        if (at[i] > hi) hi = at[i];
+    }
+    /* "If there are one or more CSS declarations in current longhands that have their important flag set and
+       one or more with it unset, continue" — one declaration cannot carry two priorities. */
+    important = d->v[at[0]].important;
+    for (i = 1; i < n; i++)
+        if (d->v[at[i]].important != important) return false;
+    /* "If there is any declaration in declaration block in between the first and the last longhand in current
+       longhands which belongs to the same logical property group, but has a different mapping logic as any of
+       the longhands in current longhands, and is not in current longhands, continue."
+       CSS Logical §2 is why: the two members of such a pair "share a computed value ... determined by
+       cascading the declarations of both properties together as one", so which of them came LAST decides the
+       answer. Writing the shorthand would move its longhands to one position and reorder them across the
+       flow-relative declaration sitting between — a different cascade for the same bytes. */
+    for (j = lo + 1; j < hi; j++) {
+        unsigned group;
+        bool physical = true, mine = true, chosen = false;
+
+        for (i = 0; i < n; i++)
+            if (at[i] == j) { chosen = true; break; }
+        if (chosen) continue;
+        group = css_shorthand_logical_group(d->v[j].name, &physical);
+        if (group == 0) continue;   /* a property in no group pairs with nothing, so it cannot reorder one */
+        for (i = 0; i < n; i++)
+            if (css_shorthand_logical_group(lh[i], &mine) == group && mine != physical) return false;
+    }
+    /* "Let value be the result of invoking serialize a CSS value with current longhands. If value is the empty
+       string, continue with the steps labeled shorthand loop." */
+    value = css_shorthand_serialize_value(shorthand, (const char *const *)values);
+    if (!value) return false;
+    cssd_append_declaration(out, first, shorthand, value, important);
+    free(value);
+    for (i = 0; i < n; i++) done[at[i]] = true;
+    return true;
+}
+
+/* §6.6's SERIALIZE A CSS DECLARATION BLOCK, entire. OWNED, NULL for a block with no declarations — which is
+   the spec's own note ("the serialization of an empty CSS declaration block is the empty string") and which
+   §6.4's serialize-a-CSS-rule reads as its "null if there are no such declarations". */
+static char *cssd_serialize_decls(const CssDecls *d)
+{
+    CssBuf out = { 0 };
+    bool first = true;
+    bool *done;
+    unsigned i;
+
+    if (d->n == 0) return NULL;
+    done = calloc(d->n, sizeof(*done));
+    CHECK(done != NULL, "cssom: OOM serializing a declaration block — a dropped already-serialized mark would "
+                        "write one declaration twice");
+    for (i = 0; i < d->n; i++) {
+        const char *sh[CSS_SHORTHAND_MAX_OF];
+        unsigned nsh, s;
+        bool emitted = false;
+
+        /* "If property is in already serialized, continue with the steps labeled declaration loop." */
+        if (done[i]) continue;
+        /* "If property maps to one or more shorthand properties, let shorthands be an array of those shorthand
+           properties, in preferred order." A property that maps to none — every shorthand, every custom
+           property, and every longhand no recorded shorthand sets — answers 0 and goes straight out. */
+        nsh = css_shorthand_shorthands_of(d->v[i].name, sh, CSS_SHORTHAND_MAX_OF);
+        for (s = 0; s < nsh && !emitted; s++)
+            emitted = cssd_try_shorthand(d, done, sh[s], &out, &first);
+        if (emitted) continue;
+        cssd_append_declaration(&out, &first, d->v[i].name, d->v[i].value, d->v[i].important);
+        done[i] = true;
+    }
+    /* EVERY DECLARATION IS IN THE STRING EXACTLY ONCE — either under its own name or inside the one shorthand
+       that absorbed it. The loop marks each index it visits, and a shorthand only ever absorbs indices it
+       found unmarked, so a survivor here would be a declaration silently dropped from a block's serialization
+       — the one failure of this algorithm that produces a plausible string rather than a crash. */
+    for (i = 0; i < d->n; i++)
+        DCHECK(done[i], "a declaration was left out of its own block's serialization");
+    free(done);
+    return out.s;
+}
+
+static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list)
+{
+    CssDecls d = { 0 };
+    char *out;
+
+    cssd_decls_from_list(list, &d);
+    out = cssd_serialize_decls(&d);
+    cssd_decls_free(&d);
+    return out;
 }
 
 /* The same, from the TEXT a backing keeps — which is what §6.6.1's `cssText` getter answers for both backings:
@@ -597,6 +821,12 @@ static char *cssd_serialize_text(const char *text, size_t len)
     out = cssd_serialize_block(list);
     if (mem) lxb_css_memory_destroy(mem, true);
     return out;
+}
+
+char *cssom_serialize_declarations(const char *text, size_t len)
+{
+    DCHECK(g_ready, "a declaration block was serialized before cssom_init built the parser it goes through");
+    return cssd_serialize_text(text, len);
 }
 
 unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *ud)
@@ -854,12 +1084,18 @@ static void cssd_declarations_write(JSContext *ctx, JSValueConst block, const ch
     dom_cow_set_attribute(el, "style", text, len, JS_UNDEFINED);
 }
 
-/* §6.6.1's SET A CSS DECLARATION and REMOVE A CSS DECLARATION, over the block's serialization: the declarations
-   of `text` with `name` set to `value` and the given important flag, or REMOVED when `value` is NULL. The
-   declaration keeps the POSITION it had — the spec's own recommended algorithm updates the target declaration
-   in place, and its constraint is that exactly one declaration for the property exists afterwards — and a name
-   the block does not declare is appended. What comes out is §6.6's serialize-a-CSS-declaration-block. OWNED,
-   NULL for a block left with no declarations, which IS the empty serialization. */
+/* §6.6.1's SET A CSS DECLARATION and REMOVE A CSS DECLARATION: the declarations of `text` with `name` set to
+   `value` and the given important flag, or REMOVED when `value` is NULL. The declaration keeps the POSITION it
+   had — the spec's own recommended algorithm updates the target declaration in place, and its constraint is
+   that exactly one declaration for the property exists afterwards — and a name the block does not declare is
+   appended.
+   WHAT COMES OUT IS THE BLOCK'S STORAGE, NOT §6.6's SERIALIZATION, AND THE DIFFERENCE IS DELIBERATE. §6.6
+   keeps the declarations as a LIST and this engine keeps them as the backing's TEXT, so that text has to
+   round-trip the list: every declaration the block holds, under its own name, in order. The serialization
+   above CONSOLIDATES — four `margin-*` declarations become one `margin` — and storing that would throw away
+   which longhands the block declares, so the very next `removeProperty('margin-top')` would find no
+   declaration by that name and silently do nothing. `cssText` runs §6.6's algorithm over what this stored;
+   this stores what §6.6 says the block holds. OWNED, NULL for a block left with no declarations. */
 static char *cssd_block_with(const char *text, size_t len, const char *name, const char *value, bool important)
 {
     lxb_css_memory_t *mem = NULL;
@@ -943,13 +1179,22 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
     name = JS_ToCString(ctx, argv[0]);   /* a real string by now: the declaration converted it */
     if (!name) { JS_FreeValue(ctx, block); return JS_EXCEPTION; }
     if (magic == 1) {
-        /* §6.6.1's removeProperty: the value is read BEFORE the removal, because that value is what it
-           returns. */
+        /* §6.6.1's removeProperty: "let value be the return value of invoking getPropertyValue()" — read
+           BEFORE the removal, because that value is what it returns. */
         size_t len = 0;
         char *text = cssd_declarations_text(ctx, block, &len);
-        char *old = cssd_value_in_block(text, len, name, NULL);
+        char *old = cssd_property_value(text, len, name);
+        const char *const *lh;
+        unsigned nlh, i;
 
         free(text);
+        /* §6.6.1's step 4: "if property is a shorthand property, for each longhand property longhand that
+           property maps to, invoke removeProperty() with longhand as argument". THE SHORTHAND'S OWN NAME IS
+           REMOVED TOO, which the spec has no step for because in §6.6 a block never holds one — this engine's
+           block is the backing's text and does, so clearing the property means clearing both spellings. */
+        lh = css_shorthand_longhands(name, &nlh);
+        for (i = 0; lh && i < nlh; i++)
+            cssd_write_declaration(ctx, block, lh[i], NULL, false);
         cssd_write_declaration(ctx, block, name, NULL, false);
         r = old ? JS_NewString(ctx, old) : JS_NewStringLen(ctx, "", 0);
         free(old);
@@ -958,17 +1203,15 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
            important flag at all, so the answer over its whole domain is the empty string — a positive
            statement about that block, not a hole where its text would be. */
         bool important = false;
-        char *v = NULL;
 
         if (!computed) {
             size_t len = 0;
             char *text = cssd_declarations_text(ctx, block, &len);
 
-            v = cssd_value_in_block(text, len, name, &important);
+            important = cssd_property_important(text, len, name);
             free(text);
         }
-        r = JS_NewString(ctx, (v && important) ? "important" : "");
-        free(v);
+        r = JS_NewString(ctx, important ? "important" : "");
     } else if (computed) {
         /* CSSOM §9's RESOLVED value, which for most properties is the computed value and for the box-model
            ones is the used value (css_computed_value.h). It answers a JSValue rather than text because a used
@@ -978,7 +1221,7 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
     } else {
         size_t len = 0;
         char *text = cssd_declarations_text(ctx, block, &len);
-        char *v = cssd_value_in_block(text, len, name, NULL);
+        char *v = cssd_property_value(text, len, name);
 
         free(text);
         r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
@@ -1063,7 +1306,7 @@ static JSValue js_cssd_camel_get(JSContext *ctx, JSValueConst this_val, int magi
     } else {
         size_t len = 0;
         char *text = cssd_declarations_text(ctx, block, &len);
-        char *v = cssd_value_in_block(text, len, (const char *)e->name, NULL);
+        char *v = cssd_property_value(text, len, (const char *)e->name);
 
         free(text);
         r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
@@ -1186,7 +1429,19 @@ static int cssd_names(const char *text, size_t len, char **out, int max)
                name it — the same drop the cascade and the rewrite make. */
             if (r->type != LXB_CSS_RULE_DECLARATION || d->type == LXB_CSS_PROPERTY__UNDEF) continue;
             lxb_css_property_serialize_name(d->u.user, d->type, css_buf_cb, &b);
-            if (b.s) out[n++] = b.s;
+            if (!b.s) continue;
+            DCHECK(!css_shorthand_is_shorthand(b.s),
+                   "a SHORTHAND was counted as one of a block's CSS declarations. §6.6's parse-a-CSS-declaration"
+                   "-block parses each declaration `according to the appropriate CSS specifications`, and CSS "
+                   "Cascade's shorthand section makes that expand a shorthand into its longhands — so "
+                   "`style=\"margin:1px\"` holds FOUR declarations, `length` is 4 and `item(0)` is "
+                   "`margin-top`, not one declaration named `margin`. BUILD THE EXPANSION in "
+                   "cssd_decls_from_list, where the declarations are already lifted out of lexbor's arena: "
+                   "css_shorthand.c's table gives each shorthand's longhands and css_shorthand_component gives "
+                   "each one's value. Its own prerequisite is the DUPLICATE COLLAPSE the expansion makes "
+                   "unavoidable — `margin:1px; margin-top:2px` becomes five declarations for four properties, "
+                   "and §6.6's list holds at most one per property");
+            out[n++] = b.s;
         }
     }
     if (mem) lxb_css_memory_destroy(mem, true);
@@ -1195,22 +1450,77 @@ static int cssd_names(const char *text, size_t len, char **out, int max)
 
 #define CSSD_MAX_NAMES 256
 
-/* The names of the block's declarations, collected. Both §6.6.1 members that need them go through here, and
-   both assert the same premise: a COMPUTED block's declarations are NOT the ones its owner element declares
-   inline, so counting those is a real number belonging to another block. Returns the count. */
+/* §7.2's DECLARATIONS OF A COMPUTED BLOCK, which are not stored anywhere and are not the owner element's
+   inline ones: "a list of CSS declarations ... with the following properties: ... declarations: the resolved
+   value of every LONGHAND property that is a supported CSS property, in LEXICOGRAPHICAL ORDER, plus every
+   custom property whose computed value is not the guaranteed-invalid value."
+ *
+ * THE SUPPORTED SET IS THE ONE THIS ENGINE CAN ANSWER FOR, and that is a real answer rather than a smaller
+ * one: `item(i)` names a property, `getPropertyValue` of that name must return its resolved value, and a name
+ * whose resolved value this build does not derive would crash the very read the enumeration invites. So the
+ * set is `css_computed_models`' — core/css/css_computed_value.h's own list, which is where the `Computed
+ * value:` lines live — minus anything css_shorthand.c records as a shorthand, since §7.2 says LONGHAND.
+ * THE NAMESPACE IS THE UNION OF TWO PLACES and both are asked, because neither alone is the engine's property
+ * list: lexbor's registry, and the longhands css_shorthand.c owns the grammar of (the four `border-*-width`
+ * and four `border-*-style`, which the registry does not carry at all).
+ * NO CUSTOM PROPERTY IS ENUMERATED, and that is a positive statement rather than a gap: a custom property's
+ * computed value comes from CSS Cascade §7's defaulting over a registration, and this engine registers none,
+ * so every one of them holds the guaranteed-invalid value that §7.2's own clause excludes. */
+static void cssd_computed_name(char **names, int *n, int max, const char *name)
+{
+    if (!css_computed_models(name) || css_shorthand_is_shorthand(name)) return;
+    CHECK(*n < max, "cssom: the computed block's longhand set outgrew the array a caller sized for it — the "
+                    "next write would be past the end of it");
+    names[*n] = strdup(name);
+    CHECK(names[*n] != NULL, "cssom: OOM enumerating a computed block's declarations — a dropped one makes "
+                             "`length` a smaller number with nothing to say a property went missing");
+    (*n)++;
+}
+
+static int cssd_computed_names(char **names, int max)
+{
+    uintptr_t id;
+    unsigned k, nlh, j;
+    int n = 0, i;
+
+    for (id = 1; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
+        const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
+
+        if (!e || !e->name || e->length == 0) continue;
+        cssd_computed_name(names, &n, max, (const char *)e->name);
+    }
+    for (k = 0; k < 2; k++) {
+        const char *const *border = css_shorthand_longhands(k == 0 ? "border-width" : "border-style", &nlh);
+
+        DCHECK(border != NULL,
+               "css_shorthand.c stopped recording `border-width`/`border-style`, which are the only place the "
+               "eight longhands lexbor's registry does not carry are named — the enumeration would silently "
+               "lose eight properties whose computed value this build does resolve");
+        for (j = 0; border && j < nlh; j++)
+            cssd_computed_name(names, &n, max, border[j]);
+    }
+    /* LEXICOGRAPHICAL ORDER, which §7.2 states outright and which is therefore the enumeration's contract
+       rather than a tidy-up: `item(i)` and `length` are the same list read two ways, and a page walking the
+       indices expects the order the spec named. */
+    for (i = 1; i < n; i++) {
+        char *cur = names[i];
+        int j2;
+
+        for (j2 = i; j2 > 0 && strcmp(names[j2 - 1], cur) > 0; j2--) names[j2] = names[j2 - 1];
+        names[j2] = cur;
+    }
+    return n;
+}
+
+/* The names of the block's declarations, collected — §7.2's list for a computed block, and the properties the
+   backing declares for the other two. Both §6.6.1 members that need them go through here. Returns the count. */
 static int cssd_declared_names(JSContext *ctx, JSValueConst block, char **names, int max)
 {
     size_t len = 0;
     char *text;
     int n;
 
-    DCHECK(!cssd_flag(ctx, block, "computed"),
-           "§6.6.1's `length` and `item` count the CSS declarations of a COMPUTED block, and §7.2 states what "
-           "those are: every LONGHAND property that is a supported CSS property, in lexicographical order, plus "
-           "every custom property whose computed value is not the guaranteed-invalid value. This engine has no "
-           "such list — lexbor's registry carries the shorthands beside the longhands and says which is which "
-           "nowhere — so build the longhand set and enumerate it here. Until then these two answered out of the "
-           "element's INLINE attribute, which is a real number belonging to a different declaration block");
+    if (cssd_flag(ctx, block, "computed")) return cssd_computed_names(names, max);
     text = cssd_declarations_text(ctx, block, &len);
     n = cssd_names(text, len, names, max);
     free(text);
@@ -1383,6 +1693,10 @@ void cssom_init(JSContext *ctx)
     uintptr_t id;
 
     DCHECK(!g_ready, "cssom_init ran twice — one instance is one document");
+    /* The shorthand table's own invariants, asserted before anything reads it — §6.6's serialization walks it
+       in both directions and the cascade walks it in one, so a row that disagrees with itself is a wrong
+       string and a wrong computed value at once. */
+    css_shorthand_init();
     g_parser = lxb_css_parser_create();
     CHECK(g_parser != NULL && lxb_css_parser_init(g_parser, NULL) == LXB_STATUS_OK,
           "the CSS parser could not be created");

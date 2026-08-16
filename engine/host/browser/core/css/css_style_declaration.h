@@ -24,6 +24,14 @@ void cssom_install(JSContext *ctx, JSValueConst global);
    — installed by the html layer, because the attribute is HTMLElement's and the object is this component's. */
 void cssom_install_style_attribute(JSContext *ctx, JSValueConst proto);
 
+/* CSSOM §6.6's SERIALIZE A CSS DECLARATION BLOCK over the text a backing keeps — the declarations that parsing
+   `text` produces, with §6.6's shorthand consolidation loop applied, joined by a single SPACE and each closed
+   by a semicolon. OWNED. NULL for a block that declares nothing, which is both the spec's "the serialization
+   of an empty CSS declaration block is the empty string" and §6.4's "null if there are no such declarations" —
+   the two answers a caller has to tell apart, which is why this reports it as NULL rather than as "".
+   EXPORTED FOR §6.4's SERIALIZE A CSS RULE, because a rule's `cssText` is its selector list and this. */
+char *cssom_serialize_declarations(const char *text, size_t len);
+
 /* §6.4.3's `style`: a CSSStyleProperties whose DECLARATIONS are `rule`'s — computed flag unset, readonly flag
    unset, parent CSS rule the rule, owner node null. Every read and every write goes back through the rule's own
    record, so two flows disagree about `rule.style.color` exactly as they disagree about an inline style.
