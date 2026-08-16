@@ -526,22 +526,33 @@ static lxb_dom_document_t *node_document_of(lxb_dom_node_t *n)
 }
 
 /* §4.5 adopt STEP 3.1 — "set inclusiveDescendant's node document to document", and step 3.3.1's same write
-   over an element's attribute list.
-   THE WRITE HAS NO PER-FLOW CAPTURE, which is the one thing about adoption this engine cannot yet do. A node's
-   document is shared baseline state exactly like its parent link: flow A adopting a node into another document
-   must be invisible to flow B, and dom_cow's delta has an entry kind for the tree, one for attributes and one
-   for character data — not one for this. So the assert fires precisely where the absence changes an answer:
-   while a flow's DOM writes are being captured. With capture off the write IS the baseline (the document
-   parse, a scratch parse) and there is nothing to revert. */
+   over an element's attribute list. THE ONE PLACE A NODE'S NODE DOCUMENT CHANGES, which is what lets the two
+   obligations below be stated once instead of at every caller of every mutation algorithm.
+   A NODE DOCUMENT IS NOT ONE POINTER. Every NAME the node holds is an id into the hashes of the document it
+   is leaving — `lxb_dom_node_t.local_name`, `.ns`, `.prefix`, an element's `qualified_name`, an attribute's
+   four, a doctype's `name` — and a non-static id IS the hash entry's address, so re-pointing `owner_document`
+   alone leaves the node naming memory `lxb_dom_document_destroy` frees with the other document. The names
+   travel with the document, through the one list in core/dom/name_intern.h, BEFORE the pointer moves so the
+   source is still the source when its bytes are read. */
 static void node_set_node_document(lxb_dom_node_t *n, lxb_dom_document_t *doc)
 {
     DCHECK(n->type != LXB_DOM_NODE_TYPE_DOCUMENT,
            "DOM §4.5 adopt step 3.1 tried to set a DOCUMENT's node document — a document IS its own node "
            "document, and `adoptNode` throws NotSupportedError rather than reaching one");
-    if (n->owner_document == doc) return;
+    if (n->owner_document == doc) {
+        /* THE SKIP IS ASSERTED, NOT ASSUMED. Step 3's walk visits every shadow-including inclusive descendant
+           and this is the one arm that does nothing, so a descendant that is already in `document` while
+           holding a name from somewhere else would be the single node the fix below silently misses. */
+        DCHECK(dom_names_owned_by(doc, n),
+               "a node already in this document holds a name id minted in another one — nothing on the adopt "
+               "path will move it now, and it names hash memory that document's destroy will free");
+        return;
+    }
+    dom_import_node_names(doc, n->owner_document, n);
     /* THROUGH THE CHOKEPOINT, because a node document is shared baseline state exactly like a parent link: the
-       delta now has an entry kind for it, so a flow that adopts a subtree moves those nodes in ITS timeline
-       and a sibling arm that never adopted still reads the document it knew. */
+       delta has an entry kind for it, so a flow that adopts a subtree moves those nodes in ITS timeline and a
+       sibling arm that never adopted still reads the document it knew — names included, because the delta's
+       swap re-imports them in the direction it moves the pointer. */
     dom_cow_set_node_document(n, doc);
 }
 
@@ -1860,10 +1871,20 @@ static lxb_dom_node_t *clone_element_into(lxb_dom_document_t *doc, lxb_dom_eleme
            "copy of it here, in the destination document's arena, beside the three names");
     el = lxb_dom_interface_element(dom_element_interface_create(doc, tag, ns));
     CHECK(el != NULL, "clone a single node: the element copy's interface could not be created");
-    el->node.local_name = tag;
-    el->node.ns = ns;
-    el->node.prefix = dom_import_prefix(doc, from, src->node.prefix);
-    el->qualified_name = dom_import_tag(doc, from, src->qualified_name);
+    /* THE NAMES ARE COPIED AND THEN IMPORTED AS A SET, through name_intern.h's one list of what names an
+       element has — the same list §4.5's adopt moves, so an element that grows a fifth name grows it once.
+       The two ids above stay separate only because dom_element_interface_create is CHOSEN by (tag id,
+       namespace id) and so cannot wait for them; the import that follows re-answers them identically, since
+       interning bytes a document already holds gives back the entry it already had. */
+    el->node.local_name = src->node.local_name;
+    el->node.ns = src->node.ns;
+    el->node.prefix = src->node.prefix;
+    el->qualified_name = src->qualified_name;
+    dom_import_node_names(doc, from, &el->node);
+    DCHECK(el->node.local_name == tag && el->node.ns == ns,
+           "§4.4's element copy was created from one (local name, namespace) pair and imported into another — "
+           "dom_element_interface_create picked the C struct from the first, so the copy's struct no longer "
+           "matches its names and node_interface.c will destroy it as something it is not");
     /* §4.13.3: a copy is created with synchronous custom elements FALSE, so it is not upgraded here — it
        becomes "custom" when §4.13's upgrade reaction runs, which the insertion steps enqueue. `undefined` is
        what §4.13.1 calls an element that has not been through that, and lexbor spells it UNCUSTOMIZED. */

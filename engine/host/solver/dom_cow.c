@@ -8,6 +8,7 @@
 #include "core/dom/node.h"   /* node_wrap_forget — a destroyed node hands back its wrapper */
 #include "core/dom/document.h"   /* document_record_release — a destroyed document hands back its record */
 #include "core/dom/attr_list.h"   /* §4.9's attribute-list algorithms — what the delta restores an attribute THROUGH */
+#include "core/dom/name_intern.h"   /* a node's names are per-DOCUMENT state, so kind 8 moves them with the pointer */
 #include "solver/attr_shadow.h"   /* the taint shadow rides the attribute delta (per-flow isolation of stashed taint) */
 #include <lexbor/dom/dom.h>
 
@@ -1101,6 +1102,13 @@ static void dom_unapply_entry(DomUndo *u) {
            reason the entry holds two: a parked flow resumes into the document IT adopted the node into. */
         u->doc_cur = u->node->owner_document;
         u->node->owner_document = u->doc_old;
+        /* AND THE NAMES, because a name id is per-document state that the pointer alone does not carry. A
+           flow's `d = createHTMLDocument(); d.body.appendChild(el)` interns `el`'s namespace, prefix, local
+           name and every attribute's four into `d`'s hashes; parking restores `el` to the baseline document
+           and kind 5 then DESTROYS `d`, hashes and all. Without this the baseline's own element would name
+           freed entries — the delta's revert would be what created the dangling id. Re-interning the bytes
+           dedupes to the entries the baseline already held, so the restore is byte-identical. */
+        dom_import_node_names(u->doc_old, u->doc_cur, u->node);
     } else if (u->kind == 1 && !u->detached) {
         u->parent = lxb_dom_interface_node(u->node)->parent;              /* remember re-insert position */
         u->next = lxb_dom_interface_node(u->node)->next;
@@ -1130,6 +1138,7 @@ static void dom_apply_entry(DomUndo *u) {
         lxb_dom_character_data_replace(cd, u->cur, u->cur_len, 0, cd->data.length);   /* the flow's text back */
     } else if (u->kind == 8) {
         u->node->owner_document = u->doc_cur;
+        dom_import_node_names(u->doc_cur, u->doc_old, u->node);   /* the mirror — see the unapply arm */
     } else if (u->kind == 2 && u->reinserted) {
         /* resuming the flow: it had removed this node, so take it back out. */
         lxb_dom_node_remove(u->node); u->reinserted = 0;

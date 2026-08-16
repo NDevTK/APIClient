@@ -315,10 +315,15 @@ lxb_dom_attr_t *dom_attr_clone(lxb_dom_document_t *doc, const lxb_dom_attr_t *sr
     from = src->node.owner_document;
     a = lxb_dom_attr_interface_create(doc);
     CHECK(a != NULL, "dom-attr-oom: an attribute clone could not be created");
-    a->node.local_name = dom_import_attribute_local_name(doc, from, src->node.local_name);
-    a->node.ns         = dom_import_namespace(doc, from, src->node.ns);
-    a->node.prefix     = dom_import_prefix(doc, from, src->node.prefix);
-    a->qualified_name  = dom_import_attribute_qualified_name(doc, from, src->qualified_name);
+    /* THE FOUR IDS ARE COPIED AND THEN IMPORTED AS A SET, through name_intern.h's one list of what names an
+       attribute has — rather than four import calls spelled out here. A second copy of that list is a second
+       thing to keep in step with the struct: §4.5's adopt needs exactly the same four, and the day an Attr
+       grows a fifth name the two spellings would disagree silently. */
+    a->node.local_name = src->node.local_name;
+    a->node.ns         = src->node.ns;
+    a->node.prefix     = src->node.prefix;
+    a->qualified_name  = src->qualified_name;
+    dom_import_node_names(doc, from, &a->node);
     /* §4.9.2's value default again — a value-less attribute is a state the model does not have, and lexbor
        leaves the field NULL on an attribute nothing has written. */
     dom_attr_set_value(a, src->value ? (const char *)src->value->data : "",

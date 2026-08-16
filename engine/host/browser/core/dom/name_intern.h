@@ -38,6 +38,7 @@
 #ifndef APICLIENT_DOM_NAME_INTERN_H
 #define APICLIENT_DOM_NAME_INTERN_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include <lexbor/dom/dom.h>
@@ -79,5 +80,41 @@ lxb_dom_attr_id_t dom_import_attribute_local_name(lxb_dom_document_t *to, lxb_do
                                                   lxb_dom_attr_id_t id);
 lxb_dom_attr_id_t dom_import_attribute_qualified_name(lxb_dom_document_t *to, lxb_dom_document_t *from,
                                                       lxb_dom_attr_id_t id);
+
+/* ─── EVERY NAME ONE NODE HOLDS — the list, in ONE place ───────────────────────────────────────────────────
+ *
+ * WHY THIS IS AN ENTRY AND NOT FIVE CALLS AT EACH SITE. The five imports above answer "this id, in that
+ * document"; nobody answered "this NODE, in that document", so each site that moves a node between documents
+ * spelled the list out for itself — and DOM §4.5's adopt, which is the operation the list exists for, spelled
+ * none of it. `node_set_node_document` re-pointed `owner_document` and stopped: after
+ * `otherDoc.adoptNode(el)` the element's namespace, prefix, local name and qualified name were still
+ * addresses into the SOURCE document's `ns`/`prefix`/`tags`/`attrs` hashes, and every attribute on it the
+ * same. A non-static id IS the hash entry's own address — that is what makes `lxb_tag_data_by_id` a cast —
+ * so `lxb_dom_document_destroy`'s four `lexbor_hash_destroy(…, true)` calls free exactly the memory those
+ * ids name, and the adopted node then answers `namespaceURI`, `localName` and `tagName` out of freed bytes.
+ * It is a use-after-free with no crash site of its own: the read succeeds until the allocator reuses the
+ * page.
+ *
+ * IT IS NOT EXOTIC. `lxb_dom_attr_qualified_name_append` inserts RAW with no static probe at all (lexbor's
+ * own attr.c), so EVERY attribute this engine creates carries a non-static `qualified_name` — an id in the
+ * document it was created in, whatever its name. A single `otherDoc.body.appendChild(el)` for an `el` with
+ * one attribute is enough.
+ *
+ * THE LIST DISPATCHES ON `node->type`, because the id SPACES differ by node kind and nothing in the struct
+ * says which: `lxb_dom_node_t.local_name` is a `tags` id on an element and an `attrs` id on an attribute,
+ * and a DocumentType's `name` is a third `attrs` id that lives outside the node struct entirely. A kind this
+ * file does not name crashes rather than skipping, because a silent skip IS the dangling id.
+ *
+ * `to == from` IS NOT SHORT-CIRCUITED HERE — each import already answers it, and the assertion below still
+ * has to run: a clone into the source's own document is exactly where a wrong id would be invisible. */
+void dom_import_node_names(lxb_dom_document_t *to, lxb_dom_document_t *from, lxb_dom_node_t *n);
+
+/* THE INVARIANT THE ABOVE ESTABLISHES, as a predicate rather than a comment: a node whose node document is
+ * `doc` holds no name id belonging to any other document. It is exactly checkable and O(1) per name — a
+ * non-static id is its entry's address and the hash dedupes by bytes, so searching `doc`'s hash for the id's
+ * OWN spelling must come back with the id itself; an id minted in another document either is absent or
+ * answers with that document's entry, and either way is not equal. Static ids are one shared array and are
+ * every document's answer. */
+bool dom_names_owned_by(const lxb_dom_document_t *doc, const lxb_dom_node_t *n);
 
 #endif
