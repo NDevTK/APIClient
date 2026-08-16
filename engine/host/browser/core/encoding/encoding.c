@@ -105,6 +105,9 @@ enum { JIS_ASCII = 0, JIS_ROMAN, JIS_KATAKANA, JIS_LEAD, JIS_TRAIL, JIS_ESC_STAR
 typedef struct EncDecoder {
     EncodingId enc;
     uint8_t fatal, ignore_bom, bom_seen;
+    /* §14.1.1's "replacement error returned", which is the whole state the replacement decoder has: it answers
+       ONE error for a non-empty sequence and `finished` for everything after it. */
+    uint8_t rep_error_returned;
     /* §4.4's UTF-8 machine: how many continuation bytes are still owed, how many have been seen, the code
        point so far, and the range the NEXT byte must fall in (which is what rejects an overlong sequence and a
        surrogate without a table of special cases). */
@@ -160,6 +163,7 @@ static void decoder_reset(EncDecoder *d)
     d->half = -1;
     d->lead_surrogate = -1;
     d->bom_seen = 0;
+    d->rep_error_returned = 0;
     d->gb_first = d->gb_second = d->gb_third = 0;
     d->nback = 0;
     d->mb_lead = d->jis0212 = 0;
@@ -620,6 +624,23 @@ static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
             err = euc_kr_step(d, b, o, d->fatal);
         } else if (d->enc == ENC_ISO_2022_JP) {
             err = iso2022jp_step(d, b, o, d->fatal);
+        } else if (d->enc == ENC_REPLACEMENT) {
+            /* §14.1.1: "If byte is end-of-queue, then return finished. If replacement error returned is false,
+               then set replacement error returned to true and return error. Return finished." The first byte is
+               ONE error — one U+FFFD under "replacement", the caller's error under "fatal" — and the read after
+               it answers `finished`, at which "process a queue" RETURNS. So the bytes past the first are never
+               read, and the whole sequence decodes to a single U+FFFD however long it is. That is the point of
+               the encoding: §14 says it "exists to prevent certain attacks that abuse a mismatch between
+               encodings supported on the server and the client", and a decoder that fell through to a real one
+               would be that mismatch. It is REACHABLE from a byte hook and not from §7.1: the constructors
+               refuse the label, but Fetch §3.5's legacy extract an encoding hands `replacement` straight to
+               §6.1's decode when a server labels a script `charset=iso-2022-kr`. */
+            if (!d->rep_error_returned) {
+                d->rep_error_returned = 1;
+                if (d->fatal) return -1;
+                enc_put(o, 0xFFFD);
+            }
+            return 0;
         } else {
             DFAIL("a page asked to decode an encoding this engine has no decoder for — every one the standard "
                   "names now has one, so reaching this means a NEW encoding was added to the registry and the "
@@ -631,6 +652,45 @@ static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
            function used to need one. */
         if (err && d->fatal) return -1;
         if (repeat) dec_push_back(d, b);
+    }
+    return 0;
+}
+
+/* THE END OF THE QUEUE, for every caller that has one — §7.1's `stream: false`, §7.5's flush, and each of §6's
+   byte hooks, which are whole-sequence by construction. It is ONE function because WHICH held state means "the
+   input stopped in the middle of a character" is per-decoder and the answer must not differ by caller: UTF-8's
+   owed continuation bytes, UTF-16's half unit and orphaned lead surrogate, gb18030's three held bytes, a
+   multi-byte lead, and §13.3.1's escape and two-byte modes (whose MODE is what is unfinished). The byte hooks
+   used to test `needed` alone, which is complete for UTF-8 and for nothing else — and §6.1's decode below runs
+   every decoder in the registry.
+   Returns -1 in "fatal" mode, where the incompleteness is the caller's error to answer with. */
+static int decoder_flush(EncDecoder *d, EncBuf *o)
+{
+    int incomplete = d->needed != 0 || d->half >= 0 || d->lead_surrogate >= 0 ||
+                     d->gb_first != 0 || d->gb_second != 0 || d->gb_third != 0 || d->mb_lead != 0 ||
+                     (d->enc == ENC_ISO_2022_JP &&
+                      (d->jis_state == JIS_ESC_START || d->jis_state == JIS_ESC ||
+                       d->jis_state == JIS_TRAIL));
+
+    if (!incomplete) return 0;
+    if (d->fatal) return -1;
+    /* §13.3.1's escape states PREPEND what they were holding before returning the error, and the standard says
+       so for the EOF byte too — so `ESC $` at the end of a stream is U+FFFD followed by the `$` it was holding,
+       not U+FFFD alone. The flush is a STEP of the decoder, which means what it pushes back is then decoded. */
+    if (d->enc == ENC_ISO_2022_JP) {
+        if (d->jis_state == JIS_ESC) dec_push_back(d, d->jis_lead);
+        d->jis_lead = 0;
+        d->jis_output_flag = 0;
+        d->jis_state = d->jis_out;
+    }
+    enc_put(o, 0xFFFD);
+    if (d->nback) {
+        /* This is the NON-fatal arm — the fatal one returned above — and "replacement" has no error to hand
+           back, so a failure here would mean the mode was not the one this branch is. */
+        int r2 = decoder_run(d, NULL, 0, o);
+        DCHECK(r2 == 0, "the flush's pushback answered a decoder error in \"replacement\" error mode, which "
+                        "pushes U+FFFD and continues rather than returning one");
+        (void)r2;
     }
     return 0;
 }
@@ -691,42 +751,13 @@ JSValue enc_decoder_decode(JSContext *ctx, EncDecoder *d, const uint8_t *p, size
     }
     if (!stream) {
         /* THE FLUSH. An incomplete sequence held across the last chunk is an error here — a stream that ends
-           mid-character is not a character, and holding it silently would drop bytes the page handed over. */
-        /* §11.1.1 step 1 counts gb18030's three held bytes for the same reason: a four-byte sequence cut short
-           by the end of the stream is not a character either. */
-        /* Every decoder's held state counts: a sequence cut short by the end of the stream is not a character
-           whichever machine was holding it. §13.3.1 adds one of its own — ISO-2022-JP is incomplete when it is
-           mid-escape OR when it ends in a two-byte mode, because the mode itself is unfinished. */
-        int incomplete = d->needed != 0 || d->half >= 0 || d->lead_surrogate >= 0 ||
-                         d->gb_first != 0 || d->gb_second != 0 || d->gb_third != 0 || d->mb_lead != 0 ||
-                         (d->enc == ENC_ISO_2022_JP &&
-                          (d->jis_state == JIS_ESC_START || d->jis_state == JIS_ESC ||
-                           d->jis_state == JIS_TRAIL));
-        if (incomplete) {
-            if (d->fatal) {
-                free(o.b);
-                decoder_reset(d);
-                return JS_ThrowTypeError(ctx, "the encoded data ended mid-sequence");
-            }
-            /* §13.3.1's escape states PREPEND what they were holding before returning the error, and the
-               standard says so for the EOF byte too — so `ESC $` at the end of a stream is U+FFFD followed by
-               the `$` it was holding, not U+FFFD alone. The flush is a STEP of the decoder, which means what
-               it pushes back is then decoded. */
-            if (d->enc == ENC_ISO_2022_JP) {
-                if (d->jis_state == JIS_ESC) dec_push_back(d, d->jis_lead);
-                d->jis_lead = 0;
-                d->jis_output_flag = 0;
-                d->jis_state = d->jis_out;
-            }
-            enc_put(&o, 0xFFFD);
-            if (d->nback) {
-                /* This arm is the NON-fatal one — the fatal flush returned above — and "replacement" has no
-                   error to hand back, so a failure here would mean the mode was not the one this branch is. */
-                int r2 = decoder_run(d, NULL, 0, &o);
-                DCHECK(r2 == 0, "the flush's pushback answered a decoder error in \"replacement\" error mode, "
-                                "which pushes U+FFFD and continues rather than returning one");
-                (void)r2;
-            }
+           mid-character is not a character, and holding it silently would drop bytes the page handed over. It is
+           decoder_flush's, shared with §6's byte hooks, because the set of states that count as incomplete is a
+           property of the DECODER and not of who stopped feeding it. */
+        if (decoder_flush(d, &o) < 0) {
+            free(o.b);
+            decoder_reset(d);
+            return JS_ThrowTypeError(ctx, "the encoded data ended mid-sequence");
         }
         decoder_reset(d);
     }
@@ -774,6 +805,8 @@ static JSValue js_decoder_decode(JSContext *ctx, JSValueConst this_val, int argc
  * codecs are this one's and are exported rather than written a second time. */
 
 int encoding_lookup(const char *label, size_t len) { return encoding_get(label, len); }
+
+int encoding_utf8(void) { return ENC_UTF_8; }
 
 bool encoding_is_replacement(int enc) { return enc == ENC_REPLACEMENT; }
 
@@ -831,6 +864,65 @@ char *encoding_utf8_decode(const char *p, size_t n, size_t *out_n)
     return encoding_utf8_decode_without_bom(p, n, out_n);
 }
 
+/* §6.1's BOM SNIFF — the table, in the order the standard writes it, and -1 for its null. The 0xFF 0xFE row is
+   BELOW 0xFE 0xFF and both are below the three-byte UTF-8 row, which is what "starting with the first one and
+   going down" decides for a sequence that starts 0xEF 0xBB 0xBF: it is the UTF-8 BOM, not two candidates. */
+int encoding_bom_sniff(const char *p, size_t n)
+{
+    const unsigned char *u = (const unsigned char *)p;
+
+    /* PEEKING THREE BYTES OF A QUEUE WITH FEWER IN IT ANSWERS WHAT IS THERE — a two-byte sequence can still be
+       a UTF-16 BOM and can never be the UTF-8 one, which is why each row carries its own length test. */
+    if (n >= 3 && u[0] == 0xEF && u[1] == 0xBB && u[2] == 0xBF) return ENC_UTF_8;
+    if (n >= 2 && u[0] == 0xFE && u[1] == 0xFF) return ENC_UTF_16BE;
+    if (n >= 2 && u[0] == 0xFF && u[1] == 0xFE) return ENC_UTF_16LE;
+    return -1;
+}
+
+/* §6.1's DECODE. The sniff decides the encoding and how many bytes the BOM is; the fallback is used only when
+   there is no BOM at all, which is the sentence "the byte order mark is more authoritative than anything else"
+   written as code. Everything after that is the ONE decoder every other hook drives, in "replacement" mode. */
+char *encoding_decode(const char *p, size_t n, int fallback_encoding, size_t *out_n)
+{
+    EncDecoder d;
+    EncBuf o = { 0 };
+    int bom = encoding_bom_sniff(p, n), r;
+
+    DCHECK(fallback_encoding >= 0 && fallback_encoding < ENC_COUNT,
+           "a decode was given a fallback that is not an encoding in this registry — §4.2's get an encoding is "
+           "what a caller turns a label into one with, and its FAILURE is the caller's own answer to substitute "
+           "rather than a value to pass through");
+    memset(&d, 0, sizeof d);
+    if (bom >= 0) {
+        /* "Read three bytes from ioQueue, if BOMEncoding is UTF-8; otherwise read two bytes." Those bytes are
+           CONSUMED — not decoded — which is the difference between this and the without-BOM hook. */
+        size_t eat = (bom == ENC_UTF_8) ? 3u : 2u;
+        d.enc = (EncodingId)bom;
+        p += eat;
+        n -= eat;
+    } else {
+        d.enc = (EncodingId)fallback_encoding;
+    }
+    d.fatal = 0;                       /* the hook's error mode is "replacement", which is what makes U+FFFD */
+    decoder_reset(&d);
+    r = decoder_run(&d, (const uint8_t *)p, n, &o);
+    DCHECK(r == 0, "a decode in \"replacement\" error mode answered an error — that mode pushes U+FFFD and "
+                   "continues, so there is nothing for it to answer with");
+    (void)r;
+    r = decoder_flush(&d, &o);
+    DCHECK(r == 0, "the end-of-queue flush of a \"replacement\" decode answered an error, which only the "
+                   "\"fatal\" mode can produce");
+    (void)r;
+    {
+        char *g = realloc(o.b, o.n + 1);
+        CHECK(g, "encoding: OOM terminating a decode");
+        o.b = g;
+        o.b[o.n] = 0;
+    }
+    if (out_n) *out_n = o.n;
+    return o.b;
+}
+
 /* "To UTF-8 decode without BOM an I/O queue of bytes ioQueue given an optional I/O queue of scalar values
    output …: Process a queue with an instance of UTF-8's decoder, ioQueue, output, and "replacement". Return
    output." */
@@ -850,8 +942,13 @@ char *encoding_utf8_decode_without_bom(const char *p, size_t n, size_t *out_n)
     (void)r;
     /* THE END OF THE QUEUE. "If byte is end-of-queue and UTF-8 bytes needed is not 0, then set UTF-8 bytes
        needed to 0 and return error" — a sequence the input stops in the middle of is one error, and
-       "replacement" makes it one U+FFFD. Without this a trailing `%C3` would vanish instead. */
-    if (d.needed != 0) enc_put(&o, 0xFFFD);
+       "replacement" makes it one U+FFFD. Without this a trailing `%C3` would vanish instead. It is the SHARED
+       flush: §7.1's non-streaming decode reaches the same states through the same function, so a hook cannot
+       come to disagree with the interface about what "ended mid-sequence" means. */
+    r = decoder_flush(&d, &o);
+    DCHECK(r == 0, "the end-of-queue flush of a \"replacement\" decode answered an error, which only the "
+                   "\"fatal\" mode can produce");
+    (void)r;
     /* NUL-TERMINATED BESIDE THE LENGTH, which is the contract every byte-string in this engine has: the length
        is the truth (a decoded U+0000 is a character), and the terminator is what lets a sequence without one
        be handed to a C string reader. */
@@ -879,10 +976,13 @@ bool encoding_is_scalar_value_string(const char *p, size_t n)
     d.fatal = 1;
     decoder_reset(&d);
     r = decoder_run(&d, (const uint8_t *)p, n, &o);
-    free(o.b);
     /* A sequence the bytes END inside is not a scalar value either — that is the same end-of-queue error the
-       decode hook above turns into U+FFFD. */
-    return r == 0 && d.needed == 0;
+       decode hook above turns into U+FFFD, asked through the SAME flush so that "ended mid-sequence" is one
+       statement rather than a second one that agrees only for UTF-8. In "fatal" mode the flush RETURNS that
+       error instead of pushing a replacement, which is exactly what a predicate wants. */
+    if (r == 0) r = decoder_flush(&d, &o);
+    free(o.b);
+    return r == 0;
 }
 
 /* §7.1's constructor. `label` resolving to `replacement` is a RangeError as much as an unknown label is — the

@@ -45,6 +45,7 @@
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
+#include "core/encoding/encoding.h"   /* §3.1.1's encoding is an id in §4.2's registry, asked of it by name */
 #include "core/dom/document.h"
 #include "core/dom/document_domain.h"
 #include "core/dom/document_metadata.h"
@@ -144,6 +145,13 @@ typedef struct Document {
     JSValue              impl;
     char                 url[2048]; /* the document's address, which §4.4 baseURI reads */
     char                 content_type[32];   /* §4.5 contentType — what this document was created as */
+    /* HTML §3.1.1's "Each Document has an encoding (an encoding), used for the document's character encoding"
+       — an id in the Encoding registry (core/encoding), and the fact HTML §4.12.1 falls back to when a
+       `<script>` has no `charset` attribute: "let encoding be el's node document's the encoding". It is a
+       FIELD and not a constant at each asker because it is per-document state that a navigation's response
+       decides; what will WRITE it is HTML §13.2.3.2's encoding sniffing algorithm over the response's bytes
+       and its `Content-Type` charset, which is where a document served as windows-1252 stops being UTF-8. */
+    int                  encoding;
     /* HTML §4.12.3's two facts about a Document, which are what its "appropriate template contents owner
        document" is made of: the ASSOCIATED INERT TEMPLATE DOCUMENT, and whether this document IS one ("a
        Document created by this algorithm"). The second is what ends the recursion — an inert document is its
@@ -1121,6 +1129,19 @@ const char *document_base_url(JSContext *ctx)
     return d->url;
 }
 
+/* HTML §3.1.1's "the encoding" of this realm's active document — see document.h. ONE component owns what a
+   document's encoding is, for the same reason it owns what its URL is: two answers to that question is how
+   they drift apart, and this one decides how a `<script src>`'s bytes become source text. */
+int document_encoding(JSContext *ctx)
+{
+    Document *d = doc_here(ctx);
+
+    DCHECK(d->encoding >= 0,
+           "a document's encoding was read before the record carried one — §3.1.1 gives every Document an "
+           "encoding and doc_rec_new writes it, so a negative id is a record some other path built");
+    return d->encoding;
+}
+
 /* HTML's SET THE URL — "set document's URL to url", which §7.4.4's URL and history update steps step 8
  * performs and which is the only way a Document's address changes without a new Document.
  *
@@ -1533,9 +1554,22 @@ static JSValue js_doc_strings(JSContext *ctx, JSValueConst this_val, int magic)
                                      ? "BackCompat" : "CSS1Compat");
     default:
         DCHECK(magic == 3, "a Document string accessor was declared with a magic this table does not name");
-        /* §4.5's encoding trio. This engine decodes every document as UTF-8, so that is the real answer and not
-           a placeholder; `charset` and `inputEncoding` are the spec's own historical aliases of `characterSet`
-           and are the SAME getter rather than three that could disagree. */
+        /* §4.5's encoding trio: "return this's encoding's NAME". `charset` and `inputEncoding` are the spec's
+           own historical aliases of `characterSet` and are the SAME getter rather than three that could
+           disagree. The encoding is the record's — §3.1.1 state, not a constant at this line — and this
+           document's is UTF-8 because every document this engine parses is decoded as UTF-8.
+           THE NAME IS ENCODING §4.2'S `Name` COLUMN, WHICH IS MIXED CASE ("UTF-8", "Shift_JIS",
+           "ISO-8859-8-I"), AND THE REGISTRY HAS ONLY THE LOWERCASED FORM §7.1's `encoding` attribute answers
+           ("utf-8") — one column where the standard has two, so `encoding_name_of` is the WRONG function to
+           reach for here and would report `utf-8` for a member every browser answers `UTF-8` for. The two
+           coincide for exactly this one encoding, which is what this asserts: the day a Document is created
+           with any other encoding, the name this getter owes is one the registry cannot yet produce, and the
+           thing to build is §4.2's Name column in engine/encgen.mjs beside the labels it already emits. */
+        DCHECK(d->encoding == encoding_utf8(),
+               "a Document was created with an encoding other than UTF-8 and §4.5's characterSet has no name "
+               "to answer with — Encoding §4.2's `Name` column is mixed case and this engine's registry keeps "
+               "only §7.1's ASCII-lowercased form, so build the Name column in engine/encgen.mjs and answer "
+               "this getter from it");
         return JS_NewString(ctx, "UTF-8");
     }
 }
@@ -2265,6 +2299,11 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
     d->impl = JS_UNDEFINED;
     snprintf(d->url, sizeof d->url, "%s", url ? url : "");
     snprintf(d->content_type, sizeof d->content_type, "%s", type);
+    /* §3.1.1's encoding. Every document this engine parses is decoded as UTF-8 — there is one source of bytes
+       and one decode of them — so this is the real answer rather than an initial value waiting to be
+       overwritten, and it is asked of the REGISTRY rather than written as a table index so that the set of
+       encodings has exactly one authority. */
+    d->encoding = encoding_utf8();
     dd->user = d;
     return d;
 }

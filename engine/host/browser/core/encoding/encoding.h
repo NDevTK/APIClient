@@ -52,8 +52,47 @@ int encoding_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp, s
  *
  * WHICH ONE A CALLER RUNS IS THE CALLING STANDARD'S CHOICE, NOT A PREFERENCE, and the two differ by exactly the
  * three bytes of §6's step 2. A caller therefore quotes the algorithm its own step names — HTML §7.4.2.3.2's
- * javascript: URL links `#utf-8-decode`, URL §3.5's host parser and §5.1's urlencoded parser link
- * `#utf-8-decode-without-bom` — and neither hook is a stand-in for the other. */
+ * javascript: URL and HTML §8.1.4.2's "fetch a single module script" link `#utf-8-decode`, URL §3.5's host
+ * parser and §5.1's urlencoded parser link `#utf-8-decode-without-bom` — and neither hook is a stand-in for the
+ * other. §6.1's `decode` below is a THIRD algorithm and not a variant of either: HTML §8.1.4.2's "fetch a
+ * classic script" is the caller that has a LABEL to honour, so its step links `#decode`.
+ *
+ * The rows, so a reader adding one can see which callers already exist:
+ *   #decode                     fallback-encoding + BOM-overrides-label   HTML §8.1.4.2 fetch a classic script
+ *   #utf-8-decode               BOM discarded, UTF-8 only                 HTML §7.4.2.3.2 javascript: URL,
+ *                                                                        HTML §8.1.4.2 fetch a single module
+ *                                                                          script
+ *   #utf-8-decode-without-bom   BOM kept, UTF-8 only                      URL §3.5 host parser,
+ *                                                                        URL §5.1 urlencoded parser */
+
+/* §4.2's UTF-8, by id. A component that names an encoding LITERALLY asks the registry for it rather than
+   writing down a table index, so there is exactly one authority on which encodings exist and what they are
+   numbered. */
+int encoding_utf8(void);
+
+/* §6.1's BOM SNIFF: "Let BOM be the result of peeking 3 bytes from ioQueue, converted to a byte sequence. For
+   each of the rows in the table below, starting with the first one and going down, if BOM starts with the bytes
+   given in the first column, then return the encoding given in the cell in the second column of that row.
+   Otherwise, return null." The three rows are 0xEF 0xBB 0xBF -> UTF-8, 0xFE 0xFF -> UTF-16BE, 0xFF 0xFE ->
+   UTF-16LE. -1 is the standard's null. It is EXPORTED because the standard's own note says it is: "this hook is
+   a workaround for the fact that decode has no way to communicate back to the caller that it has found a byte
+   order mark … the hook is to be invoked before decode" — a caller that must know WHICH encoding was used runs
+   it itself, and gets the same answer `decode` acts on because it is the same function. */
+int encoding_bom_sniff(const char *p, size_t n);
+
+/* §6.1's DECODE, the LEGACY hook: "To decode an I/O queue of bytes ioQueue given a fallback encoding encoding
+   …: Let BOMEncoding be the result of BOM sniffing ioQueue. If BOMEncoding is non-null: set encoding to
+   BOMEncoding; read three bytes from ioQueue, if BOMEncoding is UTF-8, otherwise read two bytes. (Do nothing
+   with those bytes.) Process a queue with an instance of encoding's decoder, ioQueue, output, and
+   "replacement". Return output."
+   THE BOM IS MORE AUTHORITATIVE THAN THE LABEL, which the standard states as a deliberate violation — "for
+   compatibility with deployed content, the byte order mark is more authoritative than anything else. In a
+   context where HTTP is used this is in violation of the semantics of the `Content-Type` header" — so a caller
+   that computed `fallback_encoding` from a charset parameter must still hand the WHOLE byte sequence over and
+   let this overrule it. `fallback_encoding` is an id from this registry; the standard's callers get theirs from
+   §4.2's get an encoding, which is what makes `replacement` a possible value here and a decodable one.
+   Same answer shape as the two hooks above: malloc'd, NUL-terminated, WELL-FORMED UTF-8, `*out_n` its length. */
+char *encoding_decode(const char *p, size_t n, int fallback_encoding, size_t *out_n);
 
 /* "To UTF-8 decode an I/O queue of bytes ioQueue …: Let buffer be the result of peeking three bytes from
    ioQueue, converted to a byte sequence. If buffer is 0xEF 0xBB 0xBF, then read three bytes from ioQueue. (Do

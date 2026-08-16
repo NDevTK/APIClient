@@ -65,4 +65,15 @@ bool fetch_parse_url(JSContext *ctx, UrlRecord *rec, const char *url, size_t len
 JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
                         const char *body, size_t body_len, const char *const *url_list, int url_list_n);
 
+/* …AND THE READ OF IT, in the component that owns the WRITE. The record's `headers` field is an Array of
+   [name, value] pairs — a LIST and not a map, because §5.1 never combines two entries and Fetch §2.2.2's "get"
+   is what joins them — and turning it back into a `HeaderList` is the one operation every consumer of a reply
+   needs before it can ask for a header. It had two readers written out by hand (the fetch() delivery, and the
+   script decode that needs the `Content-Type` charset); a record shape known in more than one place is a record
+   shape that drifts from its writer.
+   `out` must be an EMPTY list — a response has ONE header list, and filling one twice would make `get` join two
+   responses' values together. A reply that is the JSON `null` (a network error) carries no headers and leaves
+   `out` empty, which is what a caller reads as "the response had none". */
+void fetch_reply_header_list(JSContext *ctx, JSValueConst reply, HeaderList *out);
+
 #endif

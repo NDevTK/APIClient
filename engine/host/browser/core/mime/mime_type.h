@@ -50,4 +50,20 @@ bool mime_type_is_xml(const MimeType *m);
    candidate either fails to parse or has the wildcard essence the algorithm skips. */
 bool mime_type_extract(MimeType *out, const char *content_type_value);
 
+/* Fetch §3.5 "legacy extract an encoding", the algorithm that turns a `Content-Type`'s charset PARAMETER into
+   an encoding: "To legacy extract an encoding given failure or a MIME type mimeType and an encoding
+   fallbackEncoding: If mimeType is failure, then return fallbackEncoding. If mimeType["charset"] does not
+   exist, then return fallbackEncoding. Let tentativeEncoding be the result of getting an encoding from
+   mimeType["charset"]. If tentativeEncoding is failure, then return fallbackEncoding. Return
+   tentativeEncoding."
+   IT LIVES BESIDE `extract a MIME type` BECAUSE IT IS THE SAME HEADER'S OTHER HALF — Fetch states both in §3.5,
+   and its own caller (HTML §8.1.4.2's fetch a classic script) runs them back to back on one header list. `m` is
+   NULL for the spec's FAILURE, which is the one value a parsed record can never be, so the two arms of "failure
+   or a MIME type" are one parameter. Both the fallback and the answer are ids in the Encoding registry
+   (core/encoding), so a caller never holds a label it has not resolved.
+   THE ANSWER CAN BE `replacement`, and that is not an error to filter out: §4.2's get an encoding maps
+   `iso-2022-kr` and its siblings to it deliberately, and a decode that runs the replacement decoder is what
+   stops a server-chosen label from smuggling a different script past the client. */
+int mime_type_legacy_extract_encoding(const MimeType *m, int fallback_encoding);
+
 #endif

@@ -96,6 +96,12 @@ JSValueConst document_object(JSContext *ctx);
 /* §4.4 baseURI's answer: the document's address. ONE component owns what this document's URL is — two answers
    to that question is how they drift apart. */
 const char *document_base_url(JSContext *ctx);
+/* HTML §3.1.1's "the encoding" of this realm's active document, as an id in the Encoding registry
+   (core/encoding/encoding.h). It is what HTML §4.12.1 falls back to when a `<script>` carries no `charset`
+   attribute — "let encoding be el's node document's the encoding" — and therefore what HTML §8.1.4.2's fetch a
+   classic script decodes a fetched body with when the response names no charset of its own. ONE component owns
+   it, exactly as one owns the document's address. */
+int document_encoding(JSContext *ctx);
 /* HTML's SET THE URL — what HTML §7.4.4's URL and history update steps step 8 performs, and the only way a
    Document's address changes without a new Document being installed. PER FLOW: the address rides the running
    flow's COW delta, so the arm that called `history.pushState(s, "", "/b")` is the only one whose

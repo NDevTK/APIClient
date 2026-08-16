@@ -12,6 +12,7 @@
 #include "solver/cow.h"
 #include "solver/world.h"   /* the routed record's world vector: whose timeline a delivery belongs to */
 #include "core/dom/document.h"   /* which DOCUMENT a parked program belongs to: the realm it is compiled in */
+#include "core/loader/script_fetch.h"   /* HTML §8.1.4.2: where a fetched body becomes a script's source text */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent OPERATION: what performs it */
 #include "core/frame/remote_object.h"    /* …and the grammar its completion crosses back in */
@@ -1109,6 +1110,57 @@ static JSValue reply_body_of(JSContext *ctx, JSValueConst reply) {
     return JS_GetPropertyStr(ctx, reply, "body");
 }
 
+/* HTML §8.1.4.2'S processResponseConsumeBody STEP THAT MAKES SOURCE TEXT — the point at which a fetched BYTE
+   SEQUENCE becomes a script's text, and the one this engine ran neither half of. The bytes used to go from the
+   host's reply record to the compiler unchanged: one byte no UTF-8 sequence contains made a whole minified
+   bundle a SyntaxError no browser produces (and every endpoint in that chunk was lost with it), while a
+   three-byte surrogate compiled into a string where Encoding's decoder answers U+FFFD.
+   WHICH ALGORITHM RUNS IS §8.1.4.2's OWN SPLIT and not a parameter of one algorithm: a classic script decodes
+   with the response's `Content-Type` charset as a LABEL (Fetch §3.5's legacy extract an encoding, then Encoding
+   §6.1's decode, whose BOM sniff can overrule that label), and a module script is UTF-8 whatever the response
+   says. `doc_ctx` is the realm of the document the program belongs to, and it is read ONLY on the classic arm —
+   §4.12.1 says so about the element too: "if el's type is `module`, this encoding will be ignored."
+   Answers malloc'd source text the caller frees; `*out_n` is its length. */
+static char *reply_source_text(JSContext *ctx, JSValueConst reply, ScriptType stype, JSContext *doc_ctx,
+                               size_t *out_n)
+{
+    JSValue bv = reply_body_of(ctx, reply);
+    size_t body_len = 0;
+    /* WITH ITS LENGTH. `bodyBytes` is a byte sequence, and a strlen would end it at the first 0x00 the server
+       sent — the decode's job is to answer what those bytes ARE, so it must be given all of them. */
+    const char *body = JS_ToCStringLen(ctx, &body_len, bv);
+    char *src;
+
+    /* A CHECK AND NOT A DCHECK: `reply_body_of` answers a string or the record's own `body`, and the only way
+       this read fails is the allocator. A dropped script body is a flow that resumes running nothing. */
+    CHECK(body != NULL, "engine: OOM reading a fetched script's body out of the host's reply record");
+    if (stype == SCRIPT_TYPE_MODULE) {
+        src = script_fetch_module_source_text(body, body_len, out_n);
+    } else {
+        HeaderList hl = { 0 };
+        char *content_type;
+
+        fetch_reply_header_list(ctx, reply, &hl);
+        content_type = header_list_get(&hl, "content-type");   /* NULL is Fetch's "values is null" = failure */
+        src = script_fetch_classic_source_text(body, body_len, content_type, document_encoding(doc_ctx), out_n);
+        free(content_type);
+        header_list_free(&hl);
+    }
+    JS_FreeCString(ctx, body);
+    JS_FreeValue(ctx, bv);
+    return src;
+}
+
+/* AND WHAT THE PROGRAM QUEUE CAN CARRY, asserted where the source is stored rather than where it is compiled.
+   Every program in this engine is handed to JS_FlowNew / JS_FlowEvalModule as a NUL-TERMINATED body, so a
+   source that decoded a U+0000 runs truncated at it — silently, with the rest of the bundle simply absent. The
+   decode is the first place the two lengths can be compared, because before it there was no source text. */
+#define REPLY_SOURCE_WHOLE(src, n) \
+    DCHECK(strlen(src) == (n), \
+           "a fetched script's source text decoded to a U+0000 and the program queue holds a NUL-terminated " \
+           "body — build the queue over a LENGTH so a source with a NUL in it runs whole rather than " \
+           "truncated at it, exactly as navigable.c's javascript: URL states for the same queue")
+
 static int flow_drain_pending(JSContext *ctx, Flow *f) {
     int n = 0, i = 0;
     while (i < pending_count(f->pending)) {
@@ -1148,13 +1200,15 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             /* the DOCUMENT's text, shared by every flow: fill the slot once and all waiters proceed in order */
             int si = (int)pending_get_int(p, PEND_SCRIPT_I);
             if (!g_sess_bodies[si]) {
-                JSValue bv = reply_body_of(ctx, pv);
-                const char *body = JS_ToCString(ctx, bv);
-                DCHECK(body != NULL, "an external document script's body did not arrive as text");
-                g_sess_bodies[si] = body ? strdup(body) : strdup("");
+                size_t src_n = 0;
+                /* §8.1.4.2's DECODE, with §4.12.1's own answer for which of the two entries this row is: the
+                   document's script sequence is the only queue with an ELEMENT behind it, so it is the only one
+                   that can say MODULE. The realm is this document's — the session's ctx, which engine_sched_begin
+                   asserts is `doc_realm(g_sess_doc)` — and it is what the classic entry's fallback encoding is
+                   read from when the response names no charset. */
+                g_sess_bodies[si] = reply_source_text(ctx, pv, g_sess_types[si], ctx, &src_n);
                 CHECK(g_sess_bodies[si], "engine: OOM storing an external document script");
-                if (body) JS_FreeCString(ctx, body);
-                JS_FreeValue(ctx, bv);
+                REPLY_SOURCE_WHOLE(g_sess_bodies[si], src_n);
                 /* THE ONE UNBLOCKING THAT HAPPENS INSIDE A SLICE, AND THE ONE CLEAR THAT NAMES NO FLOW. This
                    text is the DOCUMENT's, not this flow's: every flow parked at the same script index was
                    waiting for exactly this slot, and their own register entries are not what changed. So every
@@ -1165,23 +1219,34 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             }
         } else if (kind == FLOW_PENDING_SCRIPT) {
             /* the reply is PROGRAM: it joins this flow's script sequence, and the one BFS runs it */
-            JSValue bv = reply_body_of(ctx, pv);
-            const char *body = JS_ToCString(ctx, bv);
-            DCHECK(body != NULL, "an injected script's body did not arrive as text");
-            if (body) { engine_queue_script((uint32_t)pending_get_int(p, PEND_DOC), body);
-                        JS_FreeCString(ctx, body); }
-            JS_FreeValue(ctx, bv);
+            /* AN INJECTED `<script src>` IS A CLASSIC SCRIPT, which is a statement about this entry and not a
+               default: the element was inserted by page code and its reply becomes one of this flow's programs,
+               and every program a FLOW adds is compiled classic (see the compile below). The document is the one
+               the element was inserted into — the park recorded it — so the encoding that decodes these bytes is
+               that document's and not the session's. */
+            uint32_t doc = (uint32_t)pending_get_int(p, PEND_DOC);
+            size_t src_n = 0;
+            char *src = reply_source_text(ctx, pv, SCRIPT_TYPE_CLASSIC, doc_realm(doc), &src_n);
+            REPLY_SOURCE_WHOLE(src, src_n);
+            engine_queue_script(doc, src);
+            free(src);
         } else if (kind == FLOW_PENDING_MODULE) {
             /* the reply is a MODULE's SOURCE: settle the load's promise with the text, and the import's own
-               reaction compiles, links and continues the flow that wrote `await import(...)`. */
-            JSValue bv = reply_body_of(ctx, pv);
+               reaction compiles, links and continues the flow that wrote `await import(...)`. The promise is
+               settled with the SOURCE TEXT and not with the reply's bytes — "let sourceText be the result of
+               UTF-8 decoding bodyBytes" is the step that stands between them, and the compiler on the other side
+               of this promise is the one that refuses an ill-formed byte. */
+            size_t src_n = 0;
+            char *src = reply_source_text(ctx, pv, SCRIPT_TYPE_MODULE, ctx, &src_n);
+            JSValue sv = JS_NewStringLen(ctx, src, src_n);
             JSValue resolve = pending_get(p, PEND_RESOLVE);
-            if (JS_CallAsFlow(ctx, resolve, bv) < 0) {
+            free(src);
+            if (JS_CallAsFlow(ctx, resolve, sv) < 0) {
                 JSValue exc = JS_GetException(ctx);
                 JS_FreeValue(ctx, exc);   /* a rejected load is the page's to observe, not this drain's */
             }
             JS_FreeValue(ctx, resolve);
-            JS_FreeValue(ctx, bv);
+            JS_FreeValue(ctx, sv);
         } else if (kind == FLOW_PENDING_DISCOVERY) {
             /* the reply is a DESCRIPTION of an API: it settles no promise and runs as no program, so it goes
                straight to the component that reads it (solver/discovery.h) and what it names lands in the same

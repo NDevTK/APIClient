@@ -191,7 +191,6 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             JSValue ul_v = JS_GetPropertyStr(ctx, body_v, "urlList");
             JSValue st_v = JS_GetPropertyStr(ctx, body_v, "status");
             JSValue stx_v = JS_GetPropertyStr(ctx, body_v, "statusText");
-            JSValue hs_v = JS_GetPropertyStr(ctx, body_v, "headers");
             JSValue bd_v = JS_GetPropertyStr(ctx, body_v, "body");
             const char *stx = JS_ToCString(ctx, stx_v);
             /* WITH ITS LENGTH: a reply is a byte sequence, and the interior NUL a strlen stops at is exactly
@@ -200,23 +199,12 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
             const char *body = JS_ToCStringLen(ctx, &body_len, bd_v);
             HeaderList hl = { 0 };
             int32_t status = 200;
-            uint32_t hi, hn = 0;
 
             JS_ToInt32(ctx, &status, st_v);
-            {
-                JSValue len_v = JS_GetPropertyStr(ctx, hs_v, "length");
-                JS_ToUint32(ctx, &hn, len_v);
-                JS_FreeValue(ctx, len_v);
-            }
-            for (hi = 0; hi < hn; hi++) {
-                JSValue pair = JS_GetPropertyUint32(ctx, hs_v, hi);
-                JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
-                const char *nn = JS_ToCString(ctx, nv), *vc = JS_ToCString(ctx, vv);
-                if (nn && vc) header_list_append(&hl, nn, vc);
-                if (nn) JS_FreeCString(ctx, nn);
-                if (vc) JS_FreeCString(ctx, vc);
-                JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, pair);
-            }
+            /* THE RECORD'S HEADER LIST, through the ONE reader of that field (above). The pair walk stood here
+               written out, and a second consumer of the same record — the script decode that needs the
+               `Content-Type` charset — would have been a second copy of it. */
+            fetch_reply_header_list(ctx, body_v, &hl);
             /* THE ENGINE↔HOST CONTRACT, ASSERTED AT THE EDGE IT CROSSES. A reply without a URL list is not a
                reply this component can answer `url` or `redirected` from, and taking `undefined` for it would
                make every response report no redirect — the exact silence the literal `false` used to be. */
@@ -224,13 +212,13 @@ static int js_fetch_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JS
                    "the host delivered a reply carrying no `urlList` — §2.2.6's URL list is what `url` and "
                    "`redirected` are, and the host is the only zone that performed the fetch that grew it");
             s->value = response_new(ctx, ul_v, (int)status, stx ? stx : "",
-                                    hn ? &hl : NULL, body ? body : "", body ? body_len : 0);
+                                    hl.n ? &hl : NULL, body ? body : "", body ? body_len : 0);
             header_list_free(&hl);
             if (stx) JS_FreeCString(ctx, stx);
             if (body) JS_FreeCString(ctx, body);
             JS_FreeValue(ctx, ul_v);
             JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, stx_v);
-            JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
+            JS_FreeValue(ctx, bd_v);
             if (JS_IsException(s->value)) return JS_STEP_ABRUPT;
         }
         STEP_GOTO(s->hdr.stage, FETCH_DELIVER_SETTLE, &s->cphase, NULL);
@@ -254,6 +242,45 @@ static const JSTrampStepDef js_fetch_deliver_def = {
     .steps = js_fetch_deliver_steps
 };
 static int g_deliver_stepid = -1;
+
+/* THE RECORD'S HEADER LIST, READ BACK — see fetch.h. It runs none of the page's code: the record is this
+   engine's own object, built by fetch_reply_new or parsed by qjs_provide out of the trusted zone's JSON, so
+   every read below is an ordinary own-property read on a plain Object. */
+void fetch_reply_header_list(JSContext *ctx, JSValueConst reply, HeaderList *out)
+{
+    JSValue hs_v, len_v;
+    uint32_t hi, hn = 0;
+
+    DCHECK(out != NULL && out->n == 0,
+           "a reply's header list was read into a list that already holds entries — a response has ONE header "
+           "list, and a second fill would make `get` join two responses' values into one header");
+    DCHECK(JS_IsObject(reply) || JS_IsNull(reply),
+           "a header list was asked of something that is not the host's reply record — the record is an object "
+           "and a network error is the JSON `null`, and there is no third thing this edge carries");
+    if (!JS_IsObject(reply)) return;   /* a network error has no headers, which is not the same as none named */
+    hs_v = JS_GetPropertyStr(ctx, reply, "headers");
+    /* THE FIELD IS ASSERTED, NEVER DEFAULTED. Every producer of this record fills it — fetch_reply_new writes
+       an Array whatever the host knew, and every host that crosses JSON writes `[[name, value], …]` — so a
+       record without one is a producer that stopped, not a response that had no headers (that is an EMPTY
+       array, which this walk reads as the zero headers it is). */
+    DCHECK(JS_IsArray(hs_v),
+           "the host's reply record carries no `headers` array — a response with no headers is the EMPTY one, "
+           "so an absent field is a producer that did not build this record, and every read below would be a "
+           "property read on `undefined`");
+    len_v = JS_GetPropertyStr(ctx, hs_v, "length");
+    JS_ToUint32(ctx, &hn, len_v);
+    JS_FreeValue(ctx, len_v);
+    for (hi = 0; hi < hn; hi++) {
+        JSValue pair = JS_GetPropertyUint32(ctx, hs_v, hi);
+        JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
+        const char *nn = JS_ToCString(ctx, nv), *vc = JS_ToCString(ctx, vv);
+        if (nn && vc) header_list_append(out, nn, vc);
+        if (nn) JS_FreeCString(ctx, nn);
+        if (vc) JS_FreeCString(ctx, vc);
+        JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, pair);
+    }
+    JS_FreeValue(ctx, hs_v);
+}
 
 /* THE REPLY, as one engine-built object every host delivers. It is engine-built, so the reads on the other
    side run none of the page's code — which is why this is an object and not a second provider callback.
