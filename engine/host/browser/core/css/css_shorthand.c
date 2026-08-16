@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/css/css_shorthand.h"
@@ -191,6 +192,10 @@ static int border_image_index(const char *longhand)
    declaration survive a later `border: solid` the cascade says overrode it. */
 static const char *const BORDER_PARTS[] = { "width", "style", "color" };
 static const char *const BORDER_PART_INITIAL[] = { "medium", "none", "currentcolor" };
+/* THE FOUR-SIDE SHORTHAND OF EACH PART, indexed the same way — §3.3's `border-width`, §3.2's `border-style` and
+   §3.1's `border-color`, each `<its component>{1,4}` over the same rotation. css_shorthand_init asserts that
+   each one's recorded longhand list IS the four `border-<side>-<part>`, so the three tables cannot drift. */
+static const char *const BORDER_PART_SHORTHAND[] = { "border-width", "border-style", "border-color" };
 
 /* Which of §3.4's three terms `longhand` is, and on which side. -1 when it is not a border longhand. */
 static int border_part_index(const char *longhand, int *pside)
@@ -241,41 +246,63 @@ static char *border_triple_component(const char *value, int part)
     return css_sh_strdup(BORDER_PART_INITIAL[part]);
 }
 
-/* CSS 2.1 §8.3's four-side rotation applied to a shorthand whose components are `<line-width>` or
-   `<line-style>` — css-backgrounds-3 §3.3 and §3.2 state the identical sentence for `border-width` and
-   `border-style`, which is why this is SIDE_OF again and not a second table. The difference from `margin` and
-   `padding` is VALIDATION: nothing has checked these components, so each is put through its grammar and a
-   component outside it drops the whole declaration. §3.3's range is part of that grammar — `<line-width> =
-   <length [0,∞]> | thin | medium | thick`, and "Negative values are invalid" — so a leading minus drops the
-   declaration here rather than reaching the computed value as a width no border can have. */
-static char *border_four_side_component(const char *value, int side, bool widths)
+/* WHICH GRAMMAR a `border-<part>`'s four components are written in — css-backgrounds-3 §3.3's `<line-width>`,
+   §3.2's `<line-style>` and §3.1's `<color>`. The three rotations are one algorithm over three component
+   grammars, which is why this is an argument and not three functions. */
+typedef enum { CSS_BORDER_PART_WIDTH = 0, CSS_BORDER_PART_STYLE = 1, CSS_BORDER_PART_COLOR = 2 } CssBorderPart;
+
+/* Is `w` a valid component of that grammar? A component outside it drops the whole declaration, which is CSS
+   Syntax's invalid declaration and the reason this is a validation and not a split.
+   §3.1's `<color>` is asked of core/css/css_color.h, which is THE agent's `<color>` — the same parse HTML's
+   colour well and the canvas go through. Asking it here rather than reimplementing it is what the note this
+   replaces asked for: `border-color` was the one row this component recorded and did NOT expand, so
+   `border-color: red` set no longhand at all, reached the cascade as nothing, and made every `border-*-color`
+   answer FALSE to css_shorthand_complete_for. */
+static bool border_part_component_valid(CssBorderPart part, const char *w, size_t n)
+{
+    char *probe;
+    bool ok;
+
+    if (part == CSS_BORDER_PART_STYLE)
+        return css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w, n) != NULL;
+    if (part == CSS_BORDER_PART_COLOR) {
+        CssColor c;
+
+        return css_color_parse(w, n, &c);
+    }
+    if (css_sh_keyword(LINE_WIDTH_KEYWORDS, CSS_SH_N(LINE_WIDTH_KEYWORDS), w, n)) return true;
+    if (n > 0 && w[0] == '-') return false;   /* §3.3: "Negative values are invalid" */
+    probe = css_sh_dupn(w, n);
+    ok = css_length_is_length(probe);
+    free(probe);
+    return ok;
+}
+
+/* CSS 2.1 §8.3's four-side rotation applied to a shorthand whose components are `<line-width>`, `<line-style>`
+   or `<color>` — css-backgrounds-3 §3.3, §3.2 and §3.1 state the identical sentence for `border-width`,
+   `border-style` and `border-color`, which is why this is SIDE_OF again and not a second table. The difference
+   from `margin` and `padding` is VALIDATION: nothing has checked these components, so each is put through its
+   grammar and a component outside it drops the whole declaration. */
+static char *border_four_side_component(const char *value, int side, CssBorderPart part)
 {
     const char *w[4], *kw;
     size_t wl[4];
     int n = css_words(value, w, wl, 4), i, comp;
 
     if (n < 1) return NULL;
-    for (i = 0; i < n; i++) {
-        if (widths) {
-            char *probe;
-            bool ok;
-
-            if (css_sh_keyword(LINE_WIDTH_KEYWORDS, CSS_SH_N(LINE_WIDTH_KEYWORDS), w[i], wl[i])) continue;
-            if (wl[i] > 0 && w[i][0] == '-') return NULL;
-            probe = css_sh_dupn(w[i], wl[i]);
-            ok = css_length_is_length(probe);
-            free(probe);
-            if (!ok) return NULL;
-        } else if (!css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w[i], wl[i])) {
-            return NULL;
-        }
-    }
+    for (i = 0; i < n; i++)
+        if (!border_part_component_valid(part, w[i], wl[i])) return NULL;
     comp = SIDE_OF[n][side];
     /* A KEYWORD component answers with its canonical lower-case spelling, which is what CSSOM serializes back —
        the same reason `overflow`'s expansion maps through its grammar. A `<length>` is copied verbatim, the
-       way `margin`'s is: core/css/css_length.h owns the unit's case-folding and every other question about it. */
-    kw = widths ? css_sh_keyword(LINE_WIDTH_KEYWORDS, CSS_SH_N(LINE_WIDTH_KEYWORDS), w[comp], wl[comp])
-                : css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w[comp], wl[comp]);
+       way `margin`'s is: core/css/css_length.h owns the unit's case-folding and every other question about it.
+       A `<color>` is copied verbatim too, and for the same reason one property along: this is the SPECIFIED
+       value, and which of `red` / `#f00` / `rgb(255 0 0)` was written is what §6.7.1 serializes back. */
+    kw = (part == CSS_BORDER_PART_WIDTH)
+             ? css_sh_keyword(LINE_WIDTH_KEYWORDS, CSS_SH_N(LINE_WIDTH_KEYWORDS), w[comp], wl[comp])
+             : (part == CSS_BORDER_PART_STYLE)
+                   ? css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w[comp], wl[comp])
+                   : NULL;
     return kw ? css_sh_strdup(kw) : css_sh_dupn(w[comp], wl[comp]);
 }
 
@@ -337,13 +364,12 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
             if (css_wide_keyword(value)) return css_sh_strdup(value);
             return border_triple_component(value, part);
         }
-        if (part == 0 && strcmp(shorthand, "border-width") == 0) {
+        /* `border-width`, `border-style` and `border-color` each rotate over the FOUR SIDES of their own part
+           and set no other part's longhand — which the part index says outright, so the three rows are one
+           branch rather than three. */
+        if (strcmp(shorthand, BORDER_PART_SHORTHAND[part]) == 0) {
             if (css_wide_keyword(value)) return css_sh_strdup(value);
-            return border_four_side_component(value, side, true);
-        }
-        if (part == 1 && strcmp(shorthand, "border-style") == 0) {
-            if (css_wide_keyword(value)) return css_sh_strdup(value);
-            return border_four_side_component(value, side, false);
+            return border_four_side_component(value, side, (CssBorderPart)part);
         }
         return NULL;   /* a border shorthand this component does not expand, or one that does not set this side */
     }
@@ -437,15 +463,18 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
  *
  * SO THE TABLE IS THE COMPONENT, AND THE TWO DIRECTIONS ARE TWO READINGS OF IT. The reverse reading is derived
  * by scanning the rows rather than typed a second time, which is the only way "margin-top's shorthands" and
- * "margin's longhands" cannot come apart — and the forward reading is tied to it by the `expands` flag and by
- * css_shorthand_init's round trip, so a longhand added to a row with no branch to expand it crashes at init.
+ * "margin's longhands" cannot come apart — and the forward reading is tied to it by css_shorthand_init's round
+ * trip, which runs EVERY row's fixture through the expansion and back, so a longhand added to a row with no
+ * branch to expand it crashes at init.
  *
- * WHAT IS DELIBERATELY IN THE TABLE AND NOT IN THE FORWARD DIRECTION: `border-color`. Four `border-*-color`
- * declarations lexbor TYPED and serialized can be put back together into one `border-color` with no grammar of
- * this component's at all — the values are already canonical. Taking `border-color: red green` APART is the
- * opposite: nothing has validated those components, and doing it means the `<color>` grammar
- * core/css/css_color.h owns. The flag records exactly that asymmetry rather than leaving the row out, because
- * leaving it out would make `border-top-color`'s shorthand set look complete when it is not.
+ * EVERY ROW IN THE TABLE IS EXPANDED, and `border-color` was the one that was not. Putting four `border-*-color`
+ * declarations lexbor TYPED back together needs no grammar of this component's — the values are already
+ * canonical — while taking `border-color: red green` APART needs the `<color>` production, so the row sat in the
+ * table with an `expands: false` flag beside it. What that flag actually bought was a `border-color: red` that
+ * set NO longhand: the cascade read every `border-*-color` as undeclared, and css_shorthand_complete_for
+ * answered FALSE for the four of them so every consumer that asserts completeness crashed on them. The `<color>`
+ * production is core/css/css_color.h's — the agent's ONE `<color>`, the same parse the colour well and the
+ * canvas go through — so it is ASKED, the row expands like every other, and the flag is deleted.
  *
  * WHAT IS DELIBERATELY NOT IN THE TABLE AT ALL: every CSS shorthand this engine has no grammar for — `flex`,
  * `flex-flow`, `text-decoration`, `background`, `font`. css_shorthand_is_shorthand answers FALSE for each, and
@@ -468,11 +497,10 @@ typedef struct {
     const char *const *longhands;
     unsigned n;
     CssShKind kind;
-    /* Does css_shorthand_component answer for EVERY one of `longhands`? See the note above for the one row
-       where it does not, and css_shorthand_complete_for for what the flag decides. */
-    bool expands;
     /* ONE FIXTURE VALUE, in the canonical form the round trip must reproduce — expand it into every longhand,
-       consolidate the results back, and the string must come out unchanged. NULL where `expands` is false. */
+       consolidate the results back, and the string must come out unchanged. Every row carries one, because
+       css_shorthand_component answers for every row's every longhand: a row that did not was a shorthand whose
+       declarations set NOTHING, and the flag that used to record that is deleted with the row that had it. */
     const char *probe;
 } CssShorthandRow;
 
@@ -508,17 +536,17 @@ static const char *const LH_BORDER[] = {
    lexicographic, and a table that is already sorted is what makes that step a scan instead of a comparison
    nobody would notice going wrong. */
 static const CssShorthandRow SHORTHANDS[] = {
-    { "border",        LH_BORDER,        17, CSS_SH_BORDER,    true,  "1px solid red" },
-    { "border-bottom", LH_BORDER_BOTTOM,  3, CSS_SH_TRIPLE,    true,  "1px solid red" },
-    { "border-color",  LH_BORDER_COLOR,   4, CSS_SH_FOUR_SIDE, false, NULL },
-    { "border-left",   LH_BORDER_LEFT,    3, CSS_SH_TRIPLE,    true,  "1px solid red" },
-    { "border-right",  LH_BORDER_RIGHT,   3, CSS_SH_TRIPLE,    true,  "1px solid red" },
-    { "border-style",  LH_BORDER_STYLE,   4, CSS_SH_FOUR_SIDE, true,  "solid" },
-    { "border-top",    LH_BORDER_TOP,     3, CSS_SH_TRIPLE,    true,  "1px solid red" },
-    { "border-width",  LH_BORDER_WIDTH,   4, CSS_SH_FOUR_SIDE, true,  "1px" },
-    { "margin",        LH_MARGIN,         4, CSS_SH_FOUR_SIDE, true,  "1px 2px 3px 4px" },
-    { "overflow",      LH_OVERFLOW,       2, CSS_SH_TWO_AXIS,  true,  "hidden auto" },
-    { "padding",       LH_PADDING,        4, CSS_SH_FOUR_SIDE, true,  "1px 2px" },
+    { "border",        LH_BORDER,        17, CSS_SH_BORDER,    "1px solid red" },
+    { "border-bottom", LH_BORDER_BOTTOM,  3, CSS_SH_TRIPLE,    "1px solid red" },
+    { "border-color",  LH_BORDER_COLOR,   4, CSS_SH_FOUR_SIDE, "red green" },
+    { "border-left",   LH_BORDER_LEFT,    3, CSS_SH_TRIPLE,    "1px solid red" },
+    { "border-right",  LH_BORDER_RIGHT,   3, CSS_SH_TRIPLE,    "1px solid red" },
+    { "border-style",  LH_BORDER_STYLE,   4, CSS_SH_FOUR_SIDE, "solid" },
+    { "border-top",    LH_BORDER_TOP,     3, CSS_SH_TRIPLE,    "1px solid red" },
+    { "border-width",  LH_BORDER_WIDTH,   4, CSS_SH_FOUR_SIDE, "1px" },
+    { "margin",        LH_MARGIN,         4, CSS_SH_FOUR_SIDE, "1px 2px 3px 4px" },
+    { "overflow",      LH_OVERFLOW,       2, CSS_SH_TWO_AXIS,  "hidden auto" },
+    { "padding",       LH_PADDING,        4, CSS_SH_FOUR_SIDE, "1px 2px" },
 };
 
 static const CssShorthandRow *css_sh_row(const char *name)
@@ -841,9 +869,10 @@ void css_shorthand_init(void)
         DCHECK(row->n >= 2 && row->n <= CSS_SHORTHAND_MAX_LONGHANDS,
                "a shorthand row names fewer than two longhands or more than CSS_SHORTHAND_MAX_LONGHANDS. The "
                "upper bound is what every caller sizes its value array to; raise the constant with the row");
-        DCHECK(row->expands == (row->probe != NULL),
-               "a shorthand row claims an expansion with no fixture value to exercise it, or carries a fixture "
-               "for an expansion it does not have — the flag and the probe are one statement");
+        DCHECK(row->probe != NULL,
+               "a shorthand row carries no fixture value, so nothing exercises its expansion. Every row in this "
+               "table is one css_shorthand_component takes apart — a row that is not is a shorthand whose "
+               "declarations set no longhand at all, which reads as the property's INITIAL value everywhere");
         for (j = 0; j < row->n; j++) {
             DCHECK(strcmp(row->longhands[j], row->name) != 0,
                    "a shorthand names ITSELF among its longhands");
@@ -860,7 +889,6 @@ void css_shorthand_init(void)
             DCHECK(back_n >= 1,
                    "a longhand named by a shorthand row does not find that row from the other direction");
         }
-        if (!row->expands) continue;
         for (j = 0; j < row->n; j++) {
             values[j] = css_shorthand_component(row->name, row->probe, row->longhands[j]);
             DCHECK(values[j] != NULL,
@@ -877,6 +905,31 @@ void css_shorthand_init(void)
                "differs from what the page wrote for no reason a reader could see");
         free(back);
         for (j = 0; j < row->n; j++) free(values[j]);
+    }
+    /* THE THREE PART TABLES ARE ONE INDEX, and css_shorthand_component reads all three by it: the part index
+       `border_part_index` answers with names the component grammar (BORDER_PARTS), the initial value the
+       triple falls back to (BORDER_PART_INITIAL) and the four-side shorthand of that part
+       (BORDER_PART_SHORTHAND). A row reordered in one and not the others would expand `border-color` through
+       the `<line-width>` grammar and drop every colour. */
+    for (i = 0; i < CSS_SH_N(BORDER_PARTS); i++) {
+        const CssShorthandRow *row = css_sh_row(BORDER_PART_SHORTHAND[i]);
+        unsigned s;
+
+        DCHECK(CSS_SH_N(BORDER_PART_INITIAL) == CSS_SH_N(BORDER_PARTS) &&
+                   CSS_SH_N(BORDER_PART_SHORTHAND) == CSS_SH_N(BORDER_PARTS),
+               "the three border-part tables have different lengths, so one of them is indexed past its end by "
+               "a part index the other two answer for");
+        DCHECK(row != NULL && row->n == 4,
+               "a border part's four-side shorthand is not a recorded four-longhand row");
+        for (s = 0; s < 4; s++) {
+            char name[40];
+
+            snprintf(name, sizeof name, "border-%s-%s", SIDES[s], BORDER_PARTS[i]);
+            DCHECK(strcmp(row->longhands[s], name) == 0,
+                   "a border part's four-side shorthand does not name that part's four side longhands in side "
+                   "order — the rotation writes each component into the slot SIDE_OF names, so a list in another "
+                   "order assigns `border-color: red green` to the wrong sides");
+        }
     }
 #endif
 }
@@ -899,11 +952,11 @@ bool css_shorthand_complete_for(const char *longhand)
            (its own `border-image-width` is a different property), and the logical `border-block`/
            `border-inline` group sets the logical longhands, which lexbor's registry does not carry and which
            are different properties for the same reason `margin-block` is.
-       THIS LIST IS ONLY THE FIRST HALF OF THE QUESTION. The second — is every one of those shorthands one the
-       expansion above actually takes APART — is DERIVED from the table's own `expands` flags, so the two
-       cannot come apart the way a second hand-written list could. It is what answers FALSE for the four
-       `border-*-color`: their set is recorded in full, and `border-color` is a shorthand nothing expands
-       because validating its raw components means the `<color>` grammar core/css/css_color.h owns.
+       THE OTHER HALF OF THE QUESTION — is every one of those shorthands one the expansion above actually takes
+       APART — is no longer asked HERE, because it is now a property of the TABLE rather than of a longhand:
+       css_shorthand_init runs every row's fixture through the expansion and back and crashes on a row that does
+       not answer for one of its own longhands. It used to be a per-call read of an `expands` flag whose only
+       FALSE was `border-color`, and the flag is gone with the gap.
        A name absent from this list is not "probably fine": it is a question nobody has answered, and the
        answer decides whether a `margin: 0` two lines up was read or ignored. */
     static const char *const RECORDED[] = {
@@ -915,19 +968,15 @@ bool css_shorthand_complete_for(const char *longhand)
         "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
         "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
     };
-    const char *sh[CSS_SHORTHAND_MAX_OF];
-    unsigned i, n;
-    bool recorded = false;
+    unsigned i;
 
     DCHECK(longhand != NULL, "the shorthand-completeness question was asked about a NULL property name");
-    for (i = 0; i < sizeof(RECORDED) / sizeof(RECORDED[0]); i++)
-        if (strcmp(RECORDED[i], longhand) == 0) { recorded = true; break; }
-    if (!recorded) return false;
-    DCHECK(!css_shorthand_is_shorthand(longhand),
-           "a SHORTHAND is listed among the longhands whose shorthand set is recorded — the two are asked "
-           "different questions and a name cannot be both");
-    n = css_shorthand_shorthands_of(longhand, sh, CSS_SHORTHAND_MAX_OF);
-    for (i = 0; i < n; i++)
-        if (!css_sh_row(sh[i])->expands) return false;
-    return true;
+    for (i = 0; i < sizeof(RECORDED) / sizeof(RECORDED[0]); i++) {
+        if (strcmp(RECORDED[i], longhand) != 0) continue;
+        DCHECK(!css_shorthand_is_shorthand(longhand),
+               "a SHORTHAND is listed among the longhands whose shorthand set is recorded — the two are asked "
+               "different questions and a name cannot be both");
+        return true;
+    }
+    return false;
 }
