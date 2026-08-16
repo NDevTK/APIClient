@@ -1410,7 +1410,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     JS_FreeValue(ctx, s->dict_v);
                     s->dict_v = seq;
                 }
-                else if (mt == IDL_SEQUENCE_DOMSTRING || mt == IDL_SEQUENCE_INTERFACE) {
+                else if (mt == IDL_SEQUENCE_DOMSTRING || mt == IDL_SEQUENCE_INTERFACE ||
+                         mt == IDL_SEQUENCE_OBJECT) {
                     /* §3.2.21 over a dictionary member. A value that is not an Object is a TypeError before
                        anything is read, exactly as it is in argument position — the check is on the TYPE and
                        not on iterability, so `{attributeFilter: "id"}` throws even though a string iterates.
@@ -1439,6 +1440,19 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                             if (r > 0) return r;   /* parked ON THIS ELEMENT; the resume comes back to it */
                             if (r < 0) return JS_STEP_ABRUPT;
                             if (s->seq.done) break;
+                            /* §3.2.16's `object` over a dictionary member — HTML §2.7.6's `transfer`. An
+                               Object crosses as itself and anything else is a TypeError, which runs none of
+                               the page's code, so it is decided here rather than being a rest point. */
+                            if (mt == IDL_SEQUENCE_OBJECT) {
+                                if (!JS_IsObject(s->seq.value)) {
+                                    JS_ThrowTypeError(ctx, "an element of dictionary member `%s` is not an "
+                                                      "object", dm->name);
+                                    return JS_STEP_ABRUPT;
+                                }
+                                JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++,
+                                                     JS_DupValue(ctx, s->seq.value));
+                                continue;
+                            }
                             /* §3.2.15's ELEMENT CONVERSION: a platform object implementing the interface
                                crosses as itself and anything else is a TypeError. It runs none of the page's
                                code, so it is decided here rather than being a rest point of its own. */
@@ -1569,7 +1583,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            IDL converts arguments LEFT TO RIGHT, so a sequence that throws mid-iteration must run before the
            dictionary after it is read at all. Driven from the body it ran after every other argument, and
            `new Blob(throwingIterable, {get type(){…}})` called the type getter the spec never reaches. */
-        if (t == IDL_SEQUENCE_BLOBPART || t == IDL_SEQUENCE_INTERFACE) {
+        if (t == IDL_SEQUENCE_BLOBPART || t == IDL_SEQUENCE_INTERFACE || t == IDL_SEQUENCE_OBJECT) {
             if (!JS_IsObject(a)) {
                 JS_FreeValue(ctx, cb_result);
                 JS_ThrowTypeError(ctx, "the sequence argument is not an object");
@@ -1588,6 +1602,17 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     if (r > 0) return r;   /* parked ON THIS ELEMENT; the resume comes back to it */
                     if (r < 0) return JS_STEP_ABRUPT;
                     if (s->seq.done) break;
+                    /* §3.2.16's `object`: an Object crosses as ITSELF and anything else is a TypeError. Like
+                       the brand test below it runs none of the page's code, so the cursor's next pull follows
+                       it in the same step. */
+                    if (t == IDL_SEQUENCE_OBJECT) {
+                        if (!JS_IsObject(s->seq.value)) {
+                            JS_ThrowTypeError(ctx, "an element of argument %d is not an object", s->i + 1);
+                            return JS_STEP_ABRUPT;
+                        }
+                        JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, JS_DupValue(ctx, s->seq.value));
+                        continue;
+                    }
                     /* §3.2.15's ELEMENT CONVERSION — the brand test, which runs none of the page's code, so
                        the cursor's next pull follows it in the same step. */
                     if (t == IDL_SEQUENCE_INTERFACE) {

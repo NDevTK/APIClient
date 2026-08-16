@@ -165,19 +165,24 @@ static JSValue js_win_set_opener(JSContext *ctx, JSValueConst this_val, JSValueC
    `open(url, "chan42")` gave "chan42" to the opener and an example-free unknown to the popup's own script,
    which is the popup unable to learn the name it was created with. §7.11 says "return the current name of
    this's navigable"; window_proxy_name_value is where that is computed, including whether it is known at all. */
-static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    (void)this_val; (void)argc; (void)argv;
+    (void)this_val; (void)magic;
     return window_proxy_name_value(ctx, document_window_proxy(ctx));
 }
 
 /* §7.11's `name` is SETTABLE, and it was not — the accessor had no setter at all, so `window.name = "x"` was a
    silent no-op and a page that names itself to be reached by `open(url, "x")` could not. It renames the
-   NAVIGABLE, which is the same write `w.name = "x"` performs from outside. */
-static JSValue js_win_set_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+   NAVIGABLE, which is the same write `w.name = "x"` performs from outside.
+   §7.11's `attribute DOMString name`, and the DOMString is the DECLARATION'S. Written as a bare
+   JS_NewCFunction setter, the ToString ran from C — `window.name = {toString(){ for(;;){} }}` is the page's
+   code in an activation with no flow base, so the loop drove to completion instead of parking, and the same
+   value as a Proxy reached its `get` trap there too. The body now receives a real string, which is also what
+   window_proxy_name_assign's own concolic DCHECK is written against. */
+static JSValue js_win_set_name(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    (void)this_val; (void)argc;
-    return window_proxy_name_assign(ctx, document_window_proxy(ctx), argv[0]);
+    (void)this_val; (void)magic;
+    return window_proxy_name_assign(ctx, document_window_proxy(ctx), val);
 }
 
 /* §7.2.5.1's EXOTIC OWN-PROPERTY BEHAVIOUR — `window[0]`, and why it is not a property anyone sets.
@@ -437,6 +442,7 @@ static JSClassID g_window_props_class;
    browser. So this registers, and window_install builds. */
 static int g_id_close, g_id_blur, g_id_stop;   /* declared once per agent — see window_init */
 static int g_id_opener_set;   /* §7.2.5's `opener` setter, declared with them for the same reason */
+static int g_id_name_set;     /* §7.11's `name` setter — its DOMString conversion is the page's code */
 
 void window_init(JSContext *ctx)
 {
@@ -453,6 +459,7 @@ void window_init(JSContext *ctx)
        is the same shape as a per-wrapper mint and is what the pool's seal asserts against. */
     bar_prop_init(ctx);   /* §7.2.5.3's BarProp class, one per agent */
     g_id_opener_set = idl_setter_id(ctx, IDL_ANY, false, js_win_set_opener, 0);
+    g_id_name_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_name, 0);
     g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
     g_id_blur  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 1);
     g_id_stop  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 2);
@@ -572,10 +579,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        the same §7.1.4 mode, and one fact answered from four places is four places for it to drift. */
     agent_cluster_install(ctx, g);
 
-    JS_DefinePropertyGetSet(ctx, g, JS_NewAtom(ctx, "name"),
-                            JS_NewCFunction(ctx, js_win_get_name, "get name", 0),
-                            JS_NewCFunction(ctx, js_win_set_name, "set name", 1),
-                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    idl_install_accessor(ctx, g, "name", js_win_get_name, 0, g_id_name_set);
     /* HTML §8.1.7.2: Window includes GlobalEventHandlers AND WindowEventHandlers, so `window.onload`,
        `onerror`, `onmessage` and the rest are THIS interface's members and belong to this install — the same
        reason §2.7's interface object is installed above. They were a separate line in each host's per-document

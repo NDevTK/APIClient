@@ -206,6 +206,7 @@ static void i_navigable(JSContext *c, JSValueConst g, const PlatformDocument *d)
 static void i_timer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; timer_install(c, g); }
 static void i_window_message(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_message_install(c, g, d->origin); }
 static void i_broadcast_channel(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; broadcast_channel_install(c, g); }
+static void d_structured_clone(JSContext *c, const PlatformAgent *a) { (void)a; structured_clone_init(c); }
 static void i_structured_clone(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; structured_clone_install(c, g); }
 static void i_unhandled_rejection(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; unhandled_rejection_install(c, g); }
 static void i_animation_frame(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; animation_frame_install(c, g); }
@@ -333,7 +334,7 @@ static const PlatformComponent PLATFORM[] = {
     /* AFTER window_proxy: §9.4.4's `postMessage` is installed on the WindowProxy PROTOTYPE. */
     { "window_message",      d_window_message,      i_window_message },
     { "broadcast_channel",   d_broadcast_channel,   i_broadcast_channel },
-    { "structured_clone",    NULL,                  i_structured_clone },
+    { "structured_clone",    d_structured_clone,    i_structured_clone },
     { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection, r_unhandled_rejection },
     /* §8.9's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
     { "animation_frame",     d_animation_frame,     i_animation_frame },

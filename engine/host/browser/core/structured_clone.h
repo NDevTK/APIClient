@@ -5,7 +5,12 @@
 
 #include "quickjs.h"
 
-/* §2.7.10's `structuredClone` global. There is no init: the operation holds no state of its own. */
+/* §2.7.10's `structuredClone` global. The DECLARATION is the agent's — `structuredClone(any value, optional
+   StructuredSerializeOptions options = {})` names a dictionary whose `transfer` member is a `sequence<object>`,
+   and every part of reading one is the page's code, so it is converted by the one IDL machine and not by this
+   file. This used to be a bare JS_NewCFunction with no declaration at all — the only component in PLATFORM
+   whose declare column was NULL — and its body read `options.transfer` with JS_GetPropertyStr from C. */
+void structured_clone_init(JSContext *ctx);
 void structured_clone_install(JSContext *ctx, JSValueConst global);
 
 /* StructuredDeserialize(StructuredSerialize(v)) — a deep, cycle-preserving copy in this realm. Every caller in
@@ -56,14 +61,17 @@ void structured_register_transferable(const StructuredTransferable *t);
  * DIFFERENTLY every time — so a list read per question is a list that can be four different lists. Everything
  * downstream of this call walks an Array the engine built, and reads nothing of the page's at all.
  *
- * WHAT IS STILL MISSING AND IS NAMED RATHER THAN APPROXIMATED: §3.2.21 converts a sequence through the ITERATOR
- * protocol (GetMethod(@@iterator), its call, one `next()` per element, a `done` and a `value` read), and every
- * one of those is a rest point a declared member parks on — which is why IDL_SEQUENCE_DOMSTRING and
- * IDL_SEQUENCE_INTERFACE are DECLARED TYPES in idl_args.h rather than walks a body performs. `sequence<object>`
- * has no such type yet, so this reads `length` and indices instead: right for the Array every real page passes,
- * and wrong for an iterable that is not one. The fix is an IDL_SEQUENCE_OBJECT beside those two, declared on
- * `postMessage`'s options member, after which this function's callers receive the converted list and this
- * function goes away.
+ * IT IS SUPERSEDED AND IT ABORTS. §3.2.21 converts a sequence through the ITERATOR protocol
+ * (GetMethod(@@iterator), its call, one `next()` per element, a `done` and a `value` read), and every one of
+ * those is a rest point a declared member parks on — which is why IDL_SEQUENCE_DOMSTRING and
+ * IDL_SEQUENCE_INTERFACE are DECLARED TYPES in idl_args.h rather than walks a body performs. IDL_SEQUENCE_OBJECT
+ * is now the third, `structuredClone` takes it, and this function's `length`-and-indices walk is the array-like
+ * algorithm — a different algorithm wearing this one's name, and one that runs the page's accessors and Proxy
+ * traps from an activation with no flow base. So a non-empty list DFAILs here rather than being walked: what is
+ * left to build is the second argument of window.postMessage — `(USVString or WindowPostMessageOptions)` with
+ * `sequence<object> transfer` third — and of MessagePort.postMessage —
+ * `(sequence<object> or StructuredSerializeOptions)`. Declare those two and this function goes with its last
+ * caller.
  *
  * Returns 0 with `*out` an owned Array (empty for an absent list), or -1 with a throw live. */
 int structured_transfer_list(JSContext *ctx, JSValueConst list, JSValue *out);

@@ -35,6 +35,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/idl_args.h"
 #include "core/structured_clone.h"
 #include "solver/concolic.h"
 
@@ -366,6 +367,19 @@ int structured_transfer_list(JSContext *ctx, JSValueConst list, JSValue *out)
     arr = JS_NewArray(ctx);
     if (JS_IsException(arr)) return -1;
     if (JS_IsUndefined(list) || JS_IsNull(list)) { *out = arr; return 0; }
+    /* THE PAGE ACTUALLY PASSED A LIST, so from here down this walks a value of the page's from C. Two things
+       are wrong with that and they are the same thing: `list.length` and every `list[i]` below can be an
+       accessor or a Proxy trap, which is the page's code in an activation with no flow base — a loop in it
+       drives to completion — and length-plus-indices is not §3.2.21 at all, it is the array-like algorithm, so
+       an iterable that is not an array converts to nothing here where the standard iterates it.
+       IDL_SEQUENCE_OBJECT is the declared type that performs it on the tramp, and `structuredClone` already
+       takes it. The two members still reaching this are window.postMessage — whose second argument is
+       `(USVString or WindowPostMessageOptions)` with `sequence<object> transfer` third — and
+       MessagePort.postMessage, whose second is `(sequence<object> or StructuredSerializeOptions)`. Declare
+       those two and this function goes with its last caller. */
+    DFAIL("§3.2.21's `sequence<object>` was converted from C — declare it as IDL_SEQUENCE_OBJECT on "
+          "window.postMessage and MessagePort.postMessage, whose second argument is still IDL_ANY, and delete "
+          "structured_transfer_list");
     if (!JS_IsObject(list)) {
         JS_FreeValue(ctx, arr);
         JS_ThrowTypeError(ctx, "the transfer list is not a sequence");
@@ -540,22 +554,28 @@ void structured_with_transfer_free(JSContext *ctx, StructuredWithTransfer *d)
 
 /* §2.7.10's `structuredClone(value, optional StructuredSerializeOptions options = {})` — three steps, and it is
    the ONE caller of this pair whose target realm is known at the call, so both halves run here. A transferable
-   in `transfer` is MOVED: the source is detached and the returned copy holds what it had. */
-static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+   in `transfer` is MOVED: the source is detached and the returned copy holds what it had.
+   THE ARGUMENTS ARRIVE CONVERTED. `options` is a dictionary and `options.transfer` a `sequence<object>`, so the
+   member read and the whole iterator walk are the page's code — read from C they had no flow base under them,
+   which is why the declaration performs them and this body sees a plain engine-built object holding an
+   engine-built array. §3.6.2 step 1's "value is required" is the declaration's too. */
+static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                   int magic)
 {
     StructuredWithTransfer swt;
-    JSValue raw = JS_UNDEFINED, transfer, out, values;
+    JSValue transfer, out, values;
 
-    (void)this_val;
-    if (argc < 1)
-        return JS_ThrowTypeError(ctx, "structuredClone requires a value");
-    if (argc > 1 && JS_IsObject(argv[1])) {
-        raw = JS_GetPropertyStr(ctx, argv[1], "transfer");
-        if (JS_IsException(raw))
-            return JS_EXCEPTION;
+    (void)this_val; (void)magic;
+    DCHECK(argc >= 1, "structuredClone ran with no value — §3.6.2 step 1 is the declaration's, and "
+                      "idl_optional_from names position 1 as the first optional one");
+    /* §2.7.6's `= []`: an options dictionary with no `transfer` member is a transfer list of nothing. That is
+       the IDL's own default and not a hole filled at the reader — an absent member of a dictionary IS the empty
+       sequence here, which is why the list is built rather than the walk skipped. */
+    transfer = argc > 1 ? idl_dict_get(ctx, argv[1], "transfer") : JS_UNDEFINED;
+    if (JS_IsUndefined(transfer)) {
+        transfer = JS_NewArray(ctx);
+        if (JS_IsException(transfer)) return JS_EXCEPTION;
     }
-    if (structured_transfer_list(ctx, raw, &transfer) < 0) { JS_FreeValue(ctx, raw); return JS_EXCEPTION; }
-    JS_FreeValue(ctx, raw);
     /* §2.7.10 step 1. */
     if (structured_serialize_transfer(ctx, argv[0], transfer, &swt) < 0) {
         JS_FreeValue(ctx, transfer);
@@ -573,8 +593,25 @@ static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int ar
     return out;
 }
 
+/* THE DECLARATION, ONCE PER AGENT. A member has one pool entry and every realm's global carries that same one,
+   which is why the id is a file static and the install below only names it. */
+static int g_id_clone = -1;
+
+void structured_clone_init(JSContext *ctx)
+{
+    static const IdlArgType CLONE_ARGS[2] = { IDL_ANY, IDL_DICT };
+    /* §2.7.6 `dictionary StructuredSerializeOptions { sequence<object> transfer = []; };` — one member, and it
+       is the whole reason this member is declared rather than read from its body. */
+    static const IdlDictMember CLONE_OPTS[] = { { "transfer", IDL_SEQUENCE_OBJECT } };
+
+    g_id_clone = idl_method_id_dict(ctx, CLONE_ARGS, 2, CLONE_OPTS,
+                                    (int)(sizeof CLONE_OPTS / sizeof CLONE_OPTS[0]),
+                                    js_structured_clone, 0);
+    idl_optional_from(1);   /* `structuredClone(value, optional StructuredSerializeOptions options = {})` */
+}
+
 void structured_clone_install(JSContext *ctx, JSValueConst global)
 {
-    JS_SetPropertyStr(ctx, (JSValue)global, "structuredClone",
-                      JS_NewCFunction(ctx, js_structured_clone, "structuredClone", 1));
+    DCHECK(g_id_clone >= 0, "structuredClone was installed before structured_clone_init declared it");
+    idl_install_method(ctx, global, "structuredClone", 1, g_id_clone);
 }

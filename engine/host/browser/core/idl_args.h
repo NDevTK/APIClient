@@ -116,6 +116,19 @@ typedef enum {
        rest point. The interface is named by idl_iface_brand / idl_iface_narrow, exactly as IDL_INTERFACE's is:
        one statement of what the type is, whether it appears alone or inside a sequence. */
     IDL_SEQUENCE_INTERFACE,
+    /* `sequence<object>` — §3.2.21's iterator-protocol conversion with §3.2.16's `object` as the element type.
+       HTML §2.7.6's `StructuredSerializeOptions.transfer` is the first, and it is what `structuredClone`,
+       `window.postMessage` and `MessagePort.postMessage` all take.
+       IT IS A DECLARED TYPE BECAUSE THE WALK IS THE PAGE'S CODE. structured_clone.c converted it from C with a
+       `length` read and one indexed read per entry, which is not §3.2.21 at all (that is the array-like
+       algorithm) and which runs a getter or a Proxy trap from an activation with no flow base — so
+       `structuredClone(v, {transfer: new Proxy([], …)})` reached the page's `get` trap with nothing under it to
+       park. The cursor is the same one every other sequence uses, so the conversion rests on the element it is
+       on at whatever depth it is at.
+       The element conversion runs NONE of the page's code — §3.2.16's `object` is "an Object crosses as itself,
+       anything else is a TypeError" — so, like the interface arm, it is decided between two pulls of the cursor
+       rather than being a rest point of its own. */
+    IDL_SEQUENCE_OBJECT,
     /* `sequence<(DOMString or D)>` where D is a DICTIONARY — §3.2.21's iterator protocol whose ELEMENT type is
        §3.2.25's union of a string and a dictionary. It is the first declared type whose conversion CONTAINS
        another one: an element that is an Object is a dictionary of type D, D's members are read one [[Get]] at
