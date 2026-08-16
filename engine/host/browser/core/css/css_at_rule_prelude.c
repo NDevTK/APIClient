@@ -1,5 +1,6 @@
-/* CSS Cascade §2's and CSS Namespaces §2's statement at-rule preludes. See css_at_rule_prelude.h for why this
- * is a component, why it tokenizes with lexbor's own tokenizer, and which spans stay raw source. */
+/* CSS Cascade §2's, CSS Namespaces §2's and CSS Paged Media §4.3's at-rule preludes. See
+ * css_at_rule_prelude.h for why this is a component, why it tokenizes with lexbor's own tokenizer, and which
+ * spans stay raw source. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 
 #include "check.h"
 #include "core/css/css_at_rule_prelude.h"
+#include "core/css/css_serialize.h"
 
 /* ONE PRELUDE BEING READ. `base`/`len` are the source the offsets below index — every token lexbor hands back
    names its own span inside it, which is how a raw span (`supports(...)`'s contents, the media tail) is taken
@@ -277,4 +279,118 @@ fail:
     free(uri);
     pre_close(&p);
     return false;
+}
+
+/* ---- CSS Paged Media §4.3's `<page-selector-list>` ---------------------------------------------------------
+ *
+ * See css_at_rule_prelude.h for why the parse and the serialization are one step, why the grammar's
+ * whitespace-sensitivity is what makes a tokenizer necessary here, and where each piece of the serialization
+ * comes from. */
+
+/* The serialization being built. It is its own buffer rather than one of the file's `char *` returns because a
+   page selector list is a JOIN — the pieces are appended one at a time and the count is not known up front. */
+typedef struct { char *s; size_t len, cap; } PBuf;
+
+static void pbuf_add_n(PBuf *b, const char *s, size_t n)
+{
+    if (b->len + n + 1 > b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 32;
+        char *grown;
+
+        while (cap < b->len + n + 1) cap *= 2;
+        grown = realloc(b->s, cap);
+        CHECK(grown != NULL, "cssom: OOM serializing a page selector list");
+        b->s = grown;
+        b->cap = cap;
+    }
+    memcpy(b->s + b->len, s, n);
+    b->len += n;
+    b->s[b->len] = '\0';
+}
+
+static void pbuf_add(PBuf *b, const char *s) { pbuf_add_n(b, s, strlen(s)); }
+
+/* §4.3's `<pseudo-page> = : [ left | right | first | blank ]` — the four, and nothing else is one. The table
+   is also the SERIALIZATION, which is why it is spelled in lowercase: a CSS keyword is ASCII case-insensitive,
+   so `:First` matches this entry and is written back out as this entry. */
+static const char *const PRE_PSEUDO_PAGES[] = { "left", "right", "first", "blank" };
+#define PRE_PSEUDO_PAGE_N ((unsigned)(sizeof(PRE_PSEUDO_PAGES) / sizeof(PRE_PSEUDO_PAGES[0])))
+
+/* ONE `<page-selector> = [ <ident-token>? <pseudo-page>* ]!`, appended to `out`. The `!` is what makes the
+   return value meaningful: the group must produce at least one value, so an EMPTY page selector is not one —
+   which is what refuses a trailing comma and a `@page ,` alike.
+   EVERY PEEK HERE IS THE RAW ONE. `pre_peek_ws` would eat exactly the whitespace §4.3 forbids between these
+   productions, so a whitespace token simply ends the selector and the caller then requires a comma or the end
+   of the prelude where it stands. */
+static bool pre_page_selector(Prelude *p, PBuf *out)
+{
+    lxb_css_syntax_token_t *t = pre_peek(p);
+    bool produced = false;
+
+    if (!t) return false;
+    if (t->type == LXB_CSS_SYNTAX_TOKEN_IDENT) {
+        const lxb_css_syntax_token_string_t *s = lxb_css_syntax_token_string(t);
+        char *name = pre_copy((const char *)s->data, s->length), *id;
+
+        /* §2.1's serialize an identifier, on the page NAME. Its case is the author's — a page name is an
+           author-chosen ident, not a keyword — so only the escaping is this step's. */
+        id = css_serialize_identifier(name, s->length);
+        pre_take(p);
+        pbuf_add(out, id);
+        free(id);
+        free(name);
+        produced = true;
+    }
+    for (;;) {
+        unsigned i;
+
+        t = pre_peek(p);
+        if (!t || t->type != LXB_CSS_SYNTAX_TOKEN_COLON) break;
+        pre_take(p);
+        t = pre_peek(p);
+        if (!t || t->type != LXB_CSS_SYNTAX_TOKEN_IDENT) return false;
+        for (i = 0; i < PRE_PSEUDO_PAGE_N; i++)
+            if (pre_name_is(t, PRE_PSEUDO_PAGES[i])) break;
+        if (i == PRE_PSEUDO_PAGE_N) return false;
+        pre_take(p);
+        pbuf_add(out, ":");
+        pbuf_add(out, PRE_PSEUDO_PAGES[i]);
+        produced = true;
+    }
+    return produced;
+}
+
+char *css_prelude_page_selectors(const char *prelude, size_t len)
+{
+    Prelude p = { NULL, NULL, 0 };
+    PBuf out = { NULL, 0, 0 };
+    lxb_css_syntax_token_t *t;
+
+    if (!pre_open(&p, prelude, len)) return NULL;
+    t = pre_peek_ws(&p);
+    if (!t) goto fail;
+    /* `<page-selector-list>?` — `@page { }` declares NO list, which is the empty one and a real answer. The
+       loop is entered only when there is something to read, and it is left only at the END of the prelude, so
+       a trailing comma reaches the selector parse with nothing in front of it and the group's `!` refuses it. */
+    if (t->type != LXB_CSS_SYNTAX_TOKEN__EOF) {
+        for (;;) {
+            if (!pre_page_selector(&p, &out)) goto fail;
+            t = pre_peek_ws(&p);
+            if (!t) goto fail;
+            if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) break;
+            /* The `#` multiplier, whose commas MAY carry whitespace — it is only INSIDE a selector that §4.3
+               forbids it. */
+            if (t->type != LXB_CSS_SYNTAX_TOKEN_COMMA) goto fail;
+            pre_take(&p);
+            if (!pre_peek_ws(&p)) goto fail;
+            pbuf_add(&out, ", ");
+        }
+    }
+    pre_close(&p);
+    return out.s ? out.s : pre_copy("", 0);
+
+fail:
+    free(out.s);
+    pre_close(&p);
+    return NULL;
 }

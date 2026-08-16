@@ -1,6 +1,7 @@
-/* CSSOM §6.4's CSS RULES — §6.4.2 CSSRule, §6.4.5 CSSGroupingRule, §6.4.3 CSSStyleRule, §6.4.4 CSSImportRule
- * and §6.4.9 CSSNamespaceRule, plus CSS Conditional §7.2's CSSConditionRule and §7.3's CSSMediaRule (the
- * `@media` half of the same object) and CSS Fonts §12.1's CSSFontFaceRule.
+/* CSSOM §6.4's CSS RULES — §6.4.2 CSSRule, §6.4.5 CSSGroupingRule, §6.4.3 CSSStyleRule, §6.4.4 CSSImportRule,
+ * §6.4.7 CSSPageRule, §6.4.8 CSSMarginRule and §6.4.9 CSSNamespaceRule, plus CSS Conditional §7.2's
+ * CSSConditionRule and §7.3's CSSMediaRule (the `@media` half of the same object) and CSS Fonts §12.1's
+ * CSSFontFaceRule.
  *
  * `CSSImportRule.styleSheet` IS ABSENT, AND IT IS THE ONE MEMBER OF THESE INTERFACES THAT IS. §6.4.4 defines it
  * as "the associated CSS style sheet, if any, or null otherwise" and its own note gives the case that produces
@@ -43,6 +44,15 @@
  * tries each class in turn, or copied them onto every concrete prototype, which is the hand-maintained list
  * core/realm.h exists to abolish. So the BRAND is the one class, the INTERFACE is the stored type, and each
  * interface prototype is the realm's own.
+ *
+ * A PAGE RULE IS TWO GRAMMARS THIS FILE DOES NOT OWN. CSS Paged Media §4.3's `<page-selector-list>` is parsed
+ * and canonicalised by core/css/css_at_rule_prelude.h — CSSOM §6.4.7 names "parse a list of CSS page
+ * selectors" and "serialize a list of CSS page selectors" and then declines to define either, so the grammar
+ * is the one place they can come from — and §4.3's restriction on which declarations a page context and a
+ * margin context hold is core/css/css_page.h's, applied by core/css/css_style_declaration.h before the block
+ * text is ever stored. Both are asked at the two moments a page rule's text is WRITTEN (the parse, and every
+ * §6.6.1 write through `style`), which is what makes `selectorText`, `cssText`, `length` and
+ * `getPropertyValue` agree without any of them asking for itself.
  *
  * WHAT A RULE HOLDS AND WHAT READS IT. The selector text is read by §6.4.3's `selectorText`, which is also
  * SETTABLE — one of the reasons the record time-travels. The declaration block text is a style rule's BODY, and

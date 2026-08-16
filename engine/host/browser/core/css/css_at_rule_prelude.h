@@ -1,10 +1,10 @@
-/* A STATEMENT AT-RULE'S PRELUDE, sliced into the parts its own grammar names — CSS Cascade §2's `@import` and
- * CSS Namespaces §2's `@namespace`.
+/* AN AT-RULE'S PRELUDE, sliced into the parts its own grammar names — CSS Cascade §2's `@import`, CSS
+ * Namespaces §2's `@namespace` and CSS Paged Media §4.3's `@page`.
  *
- * WHY THIS IS A COMPONENT AND NOT A LINE IN THE RULE BUILDER. Lexbor's stylesheet parse hands a statement
- * at-rule over as its at-keyword and the RAW SPAN of its prelude (core/css/css_style_declaration.h's
- * `CssomRule`), because lexbor keeps no parsed form for either of these two: `@import` is not in its at-rule
- * table at all, and its `@namespace` record is `{ uintptr_t reserved; }`. So the grammar that turns
+ * WHY THIS IS A COMPONENT AND NOT A LINE IN THE RULE BUILDER. Lexbor's stylesheet parse hands these at-rules
+ * over as their at-keyword and the RAW SPAN of the prelude (core/css/css_style_declaration.h's `CssomRule`),
+ * because lexbor keeps no parsed form for any of them: `@import` and `@page` are not in its at-rule table at
+ * all, and its `@namespace` record is `{ uintptr_t reserved; }`. So the grammar that turns
  * `url("a.css") supports(x) screen` into an href, a supports condition and a media query list has to exist
  * somewhere, and it is one problem with one set of invariants: it either MATCHES the at-rule's grammar or the
  * rule is INVALID and CSS Syntax drops it. Answering "false" is therefore a real answer with a spec behind it,
@@ -56,5 +56,36 @@ void css_import_prelude_free(CssImportPrelude *p);
    the empty string if there is no prefix", so the default namespace is not a null. Both OWNED; on false
    nothing is allocated. */
 bool css_prelude_namespace(const char *prelude, size_t len, char **pprefix, char **puri);
+
+/* CSS Paged Media §4.3's `<page-selector-list> = <page-selector>#`, where
+ * `<page-selector> = [ <ident-token>? <pseudo-page>* ]!` and `<pseudo-page> = : [ left | right | first |
+ * blank ]`, PARSED AND SERIALIZED IN ONE STEP.
+ *
+ * ONE STEP BECAUSE THE PARSED FORM HAS NO OTHER CONSUMER. CSSOM §6.4.7 names two algorithms it then declines
+ * to define — "Need to define the rules for parse a list of CSS page selectors and serialize a list of CSS
+ * page selectors" — and the only thing this engine ever does with the parse is serialize it, because a rule is
+ * made of TEXT (core/css/css_rule.h states why: a lexbor pointer has no cross-tier identity, so a rule that
+ * held one could neither park nor fork). A parsed form handed out here would be a second representation with
+ * one reader.
+ *
+ * THE GRAMMAR IS WHITESPACE-SENSITIVE, and that is the whole reason it is tokenized rather than split: §4.3
+ * says "no whitespace is allowed between the productions in <page-selector> or <pseudo-page> (similar to the
+ * rule for <compound-selector>)", so `named:first` is a page selector and `named :first` is not one at all —
+ * which is exactly the pair css/cssom/cssom-pagerule.html asserts from both sides. Lexbor's tokenizer emits a
+ * WHITESPACE token where there is whitespace, so the presence of one BETWEEN productions is what refuses the
+ * selector, while whitespace around the `#` multiplier's commas is still allowed.
+ *
+ * THE SERIALIZATION follows from the grammar and from §2.1: the page name is SERIALIZED AS AN IDENTIFIER (it
+ * is an author-chosen ident, so its case is the author's and its escapes are §2.1's), each pseudo-page is a
+ * COLON followed by its keyword ASCII-LOWERCASED (a CSS keyword is ASCII case-insensitive, which is why
+ * `named:First` reads back as `named:first`), repeats and order are preserved (§4.4 says "repeated occurrences
+ * of the same pseudo-classes are allowed and do increase specificity", so they are not a set), and the
+ * selectors are joined by §2.1's serialize-a-comma-separated-list — ", ".
+ *
+ * OWNED. NULL when the text is not a page selector list at all, which is a rule CSS Syntax drops. The EMPTY
+ * STRING is a real answer and not that one: `<page-selector-list>?` is optional in `@page`'s own grammar, so
+ * `@page { }` has an empty list, and §6.4.7's setter takes "" as a non-null parse and replaces the list with
+ * it. */
+char *css_prelude_page_selectors(const char *prelude, size_t len);
 
 #endif

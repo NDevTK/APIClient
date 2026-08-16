@@ -64,6 +64,7 @@
 #include "core/dom/element.h"
 #include "core/dom/selector_match.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_page.h"
 #include "core/css/css_presentational_hints.h"
 #include "core/css/css_rule.h"
 #include "core/css/css_shorthand.h"
@@ -89,6 +90,11 @@ static int       g_declaration_proto_slot = -1;
    §6.4.3's are (the rule's own text, through core/css/css_rule.h), so what differs is only which member names
    the interface answers to. */
 static int       g_font_face_proto_slot = -1;
+/* CSSOM §6.4.7's CSSPageDescriptors.prototype, the same way and for the same reason — a FOURTH prototype over
+   the one class and the one record. A `@page` rule's descriptors are kept where §6.4.3's declarations are (the
+   rule's own text, through core/css/css_rule.h), so what differs is only which member names the interface
+   answers to and, through core/css/css_page.h, which declarations the block admits at all. */
+static int       g_page_proto_slot = -1;
 /* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. The camel-cased
    attributes are GENERATED from Lexbor's property registry, so their setter ids are an array indexed the same
    way the registry is — one entry per property, declared once, installed into every realm. */
@@ -309,7 +315,16 @@ static char *cssd_decl_value(const lxb_css_rule_declaration_t *d)
  * wins and the later one never enters the block — which is what
  * `css/cssom/cssstyledeclaration-csstext-important.html` asserts and every engine does. */
 typedef struct { char *name; char *value; bool important; } CssDecl;
-typedef struct { CssDecl *v; unsigned n, cap; } CssDecls;
+/* WHICH CONTEXT a block's declarations are being collected in. CSS Paged Media §4.3 says "the @page rule can
+   only contain page properties and margin at-rules" and "the margin at-rules can only contain page-margin
+   properties", so a declaration's own name decides whether it is IN the block at all — and this is the one
+   place a block's declarations are built, which is why the question is asked here and nowhere else.
+   `ELEMENT` is every other block this engine has: an inline style, a computed style, a style rule's and an
+   `@font-face`'s, none of which restricts by name. It is ZERO so that the `{ 0 }` every collector starts from
+   states it. */
+typedef enum { CSSD_CONTEXT_ELEMENT = 0, CSSD_CONTEXT_PAGE, CSSD_CONTEXT_MARGIN } CssdContext;
+
+typedef struct { CssDecl *v; unsigned n, cap; CssdContext context; } CssDecls;
 
 static void cssd_decls_free(CssDecls *d)
 {
@@ -389,6 +404,16 @@ static void cssd_decls_collect_declaration(CssDecls *d, const char *name, const 
     char *values[CSS_SHORTHAND_MAX_LONGHANDS];
     unsigned n, i;
 
+    /* CSS Paged Media §4.3's restriction, asked of the DECLARATION AS WRITTEN and before the expansion below.
+       Before it, because a shorthand Appendix A names expands to longhands Appendix A does not — `text-
+       decoration` is a page property and `text-decoration-line` is a CSS 3 longhand no CSS 2.1 list can carry
+       — so filtering the expansion would delete the very declaration the spec admits. A custom property is
+       asked about by nobody: it is not a CSS 2.1 property, so the lists cannot name it, and CSS Variables §2
+       makes it valid wherever a declaration is. */
+    if (d->context != CSSD_CONTEXT_ELEMENT && !(name[0] == '-' && name[1] == '-') &&
+        !css_page_property_applies(d->context == CSSD_CONTEXT_MARGIN ? CSS_PAGE_CONTEXT_MARGIN
+                                                                    : CSS_PAGE_CONTEXT_PAGE, name))
+        return;
     lh = css_shorthand_longhands(name, &n);
     if (!lh) {
         /* THE DECLARATION IS THE LONGHAND, and its value has been through a grammar only if lexbor's registry
@@ -932,18 +957,48 @@ char *cssom_serialize_declarations(const char *text, size_t len)
     return cssd_serialize_text(text, len);
 }
 
+char *cssom_serialize_page_declarations(const char *text, size_t len, bool margin_context)
+{
+    CssDecls d = { 0 };
+    char *out;
+
+    DCHECK(g_ready, "a page context's declarations were serialized before cssom_init built the parser");
+    d.context = margin_context ? CSSD_CONTEXT_MARGIN : CSSD_CONTEXT_PAGE;
+    cssd_decls_from_text(text, len, &d);
+    out = cssd_serialize_decls(&d);
+    cssd_decls_free(&d);
+    return out;
+}
+
 /* AN AT-RULE's OWN NAME, which is the only thing that can say WHICH at-rule this is. Lexbor recognises exactly
    three by name (`@media`, `@font-face`, `@namespace`) and every other one it parses becomes a `_CUSTOM` rule
    carrying the identifier it was written with, so the name is read from whichever of those two places holds it.
    A rule whose own grammar FAILED has been converted to `_UNDEF` and is dropped by the walk below, which never
-   reaches here. Returns NULL for a type lexbor's own table has no entry for, which cannot happen. */
-static const char *cssd_at_rule_name(const lxb_css_rule_at_t *at)
+   reaches here. Returns NULL for a type lexbor's own table has no entry for, which cannot happen.
+   ASCII-LOWERCASED, AND THAT IS NOT COSMETIC. CSS Syntax makes an at-keyword ASCII case-insensitive and
+   lexbor's own table lookup agrees (`lexbor_shs_entry_get_lower_static`), so `@MEDIA` arrives here as the
+   table's lowercase "media" — but the `_CUSTOM` arm copies the identifier VERBATIM out of the token, so
+   `@PAGE` would arrive as "PAGE" and match no builder. That was invisible while every `_CUSTOM` at-rule was
+   one this engine has no interface for and crashes on anyway; it stopped being invisible when §6.4.7's
+   `@page`, which lexbor's table does not carry, became a rule. OWNED: the caller frees. */
+static char *cssd_at_rule_name(const lxb_css_rule_at_t *at)
 {
     const lxb_css_entry_at_rule_data_t *e;
+    const char *raw;
+    char *out;
+    size_t i;
 
-    if (at->type == LXB_CSS_AT_RULE__CUSTOM) return (const char *)at->u.custom->name.data;
-    e = lxb_css_at_rule_by_id(at->type);
-    return e ? (const char *)e->name : NULL;
+    if (at->type == LXB_CSS_AT_RULE__CUSTOM) raw = (const char *)at->u.custom->name.data;
+    else {
+        e = lxb_css_at_rule_by_id(at->type);
+        raw = e ? (const char *)e->name : NULL;
+    }
+    if (!raw) return NULL;
+    out = strdup(raw);
+    CHECK(out != NULL, "cssom: OOM copying an at-rule's name");
+    for (i = 0; out[i]; i++)
+        if (out[i] >= 'A' && out[i] <= 'Z') out[i] = (char)(out[i] - 'A' + 'a');
+    return out;
 }
 
 /* An at-rule's PRELUDE, sliced out of the source by the offsets lexbor recorded while consuming it. It is taken
@@ -984,7 +1039,7 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
         CssomRule out = { NULL, "", NULL, false };
         const lxb_css_rule_list_t *kids = NULL;
         CssBuf sel = { 0 };
-        char *block = NULL, *prelude = NULL;
+        char *block = NULL, *prelude = NULL, *at_name = NULL;
         void *handle;
 
         switch (r->type) {
@@ -1006,7 +1061,8 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
                an invalid rule is dropped — which is what a user agent does with `@namespace { }` and why an
                invalid at-rule is not in `cssRules`. */
             if (at->type == LXB_CSS_AT_RULE__UNDEF) continue;
-            out.at_name = cssd_at_rule_name(at);
+            at_name = cssd_at_rule_name(at);
+            out.at_name = at_name;
             DCHECK(out.at_name != NULL,
                    "lexbor reported an at-rule whose own name table has no entry for its type — the name is "
                    "the only thing that can say which §6.4 interface the rule wants");
@@ -1019,16 +1075,17 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
                  : (at->type == LXB_CSS_AT_RULE_FONT_FACE) ? at->u.font_face->block
                  : (at->type == LXB_CSS_AT_RULE__CUSTOM) ? at->u.custom->block : NULL;
             out.has_block = kids != NULL;
-            /* AND `@font-face`'S BODY IS DECLARATIONS, NOT RULES. CSS Fonts §12.1 makes its contents a
-               DESCRIPTOR block, so the body is reported the way a style rule's is — as the serialized
-               declarations — and it is NOT walked as a child rule list, which would have handed the builder a
-               CSSNestedDeclarations that an `@font-face` cannot contain. This is the one at-rule this build
-               parses whose block is declarations; §6.4.7's `@page` is the next, and it arrives here as a
-               `_CUSTOM` whose block the walk below still descends. */
-            if (at->type == LXB_CSS_AT_RULE_FONT_FACE) {
+            /* A BODY'S DECLARATIONS ARE REPORTED FOR EVERY AT-RULE THAT HAS A BODY, and its child rules are
+               walked for every at-rule too, because CSS Syntax's `<declaration-rule-list>` is a body that
+               holds BOTH and §6.4.7's `@page` is exactly one: page descriptors beside §4.3's margin at-rules.
+               This used to name `@font-face` and take the other fork for it, which was the same statement with
+               a name in it — an `@font-face`'s block simply contains no rules to walk, and a `@media`'s
+               contains no declarations to report, so asking both questions of both is what makes the ANSWER
+               the body's own rather than a table of at-rule names kept in the parser layer. The BUILDER
+               decides which of the two a given at-rule is allowed to have; CSS Syntax drops the other. */
+            if (kids) {
                 block = cssd_serialize_at_block(kids);
                 out.block = block ? block : "";
-                kids = NULL;
             }
             break;
         }
@@ -1051,6 +1108,7 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
         if (kids) cssd_emit_rules(text, len, kids, cb, ud, handle, NULL);
         free(prelude);
         free(block);
+        free(at_name);
         css_buf_free(&sel);
     }
 }
@@ -1692,30 +1750,51 @@ static JSValue js_cssd_camel_set(JSContext *ctx, JSValueConst this_val, JSValueC
     return JS_UNDEFINED;
 }
 
-/* ---- CSS Fonts §12.1's CSSFontFaceDescriptors -------------------------------------------------------------
+/* ---- THE DESCRIPTOR INTERFACES: CSS Fonts §12.1's CSSFontFaceDescriptors and CSSOM §6.4.7's
+ * CSSPageDescriptors -----------------------------------------------------------------------------------------
  *
- * THE LIST IS TYPED OUT BECAUSE THERE IS NO REGISTRY TO GENERATE IT FROM, and that is the opposite of the
+ * EACH LIST IS TYPED OUT BECAUSE THERE IS NO REGISTRY TO GENERATE IT FROM, and that is the opposite of the
  * camel-cased property attributes above, which are generated precisely because lexbor's property table IS the
  * "supported CSS property" set §6.6.1 states them over. A DESCRIPTOR is not a property: `src` and
- * `unicode-range` are accepted nowhere but inside an `@font-face` rule, lexbor's registry has no entry for
- * either, and the set is closed by the IDL rather than by what this engine implements. So the spec's own
- * fifteen names are the list, each carrying the two spellings the IDL declares (`fontFamily` and
- * `font-family`) — `src` alone has one, because it is already a single word. */
+ * `unicode-range` are accepted nowhere but inside an `@font-face` rule and `size` nowhere but inside an
+ * `@page`, lexbor's registry has no entry for any of them, and each set is closed by the IDL rather than by
+ * what this engine implements. So each spec's own names are its list, and each name carries the two spellings
+ * the IDL declares (`fontFamily` and `font-family`, `marginTop` and `margin-top`) — a name that is already one
+ * word (`src`, `size`, `marks`, `bleed`, `margin`) has one.
+ *
+ * TWO TABLES, ONE MAGIC SPACE. The attribute bodies below are shared: a descriptor is read through
+ * getPropertyValue and written through setProperty whichever interface declared it, so what an install has to
+ * carry is only WHICH NAME, and the magic indexes the two tables read end to end. A second pair of bodies over
+ * a second table would be the same twenty lines twice, and the two copies would be free to disagree about
+ * §6.6.1's own paths. */
 static const char *const FONT_FACE_DESCRIPTORS[] = {
     "src", "font-family", "font-style", "font-weight", "font-stretch", "font-width", "unicode-range",
     "font-feature-settings", "font-variation-settings", "font-named-instance", "font-display",
     "font-language-override", "ascent-override", "descent-override", "line-gap-override",
 };
 #define FONT_FACE_DESCRIPTOR_N ((int)(sizeof(FONT_FACE_DESCRIPTORS) / sizeof(FONT_FACE_DESCRIPTORS[0])))
-static int g_ff_set_id[FONT_FACE_DESCRIPTOR_N];
+
+/* CSSOM §6.4.7's `interface CSSPageDescriptors : CSSStyleDeclaration`, whose fourteen attributes are these
+   nine names in their two spellings. It derives from CSSStyleDeclaration and NOT from CSSStyleProperties, and
+   that is the interface saying what CSS Paged Media §4.3 says: a page context holds page properties, so
+   `pageRule.style.transform` is not a member and `pageRule.style.cssFloat` is undefined — which is what
+   css/cssom/page-descriptors.html reads directly. */
+static const char *const PAGE_DESCRIPTORS[] = {
+    "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+    "size", "page-orientation", "marks", "bleed",
+};
+#define PAGE_DESCRIPTOR_N ((int)(sizeof(PAGE_DESCRIPTORS) / sizeof(PAGE_DESCRIPTORS[0])))
+#define DESCRIPTOR_N (FONT_FACE_DESCRIPTOR_N + PAGE_DESCRIPTOR_N)
+static int g_desc_set_id[DESCRIPTOR_N];
 
 /* The descriptor `magic` names, asserted rather than clamped: the magic is written by the install loop below
    and by nothing else, so one out of range is this file disagreeing with itself. */
-static const char *ff_descriptor(int magic)
+static const char *cssd_descriptor(int magic)
 {
-    DCHECK(magic >= 0 && magic < FONT_FACE_DESCRIPTOR_N,
-           "a CSSFontFaceDescriptors attribute ran with a magic the descriptor table does not have");
-    return FONT_FACE_DESCRIPTORS[magic];
+    DCHECK(magic >= 0 && magic < DESCRIPTOR_N,
+           "a descriptor attribute ran with a magic neither descriptor table has");
+    if (magic < FONT_FACE_DESCRIPTOR_N) return FONT_FACE_DESCRIPTORS[magic];
+    return PAGE_DESCRIPTORS[magic - FONT_FACE_DESCRIPTOR_N];
 }
 
 /* Both halves forward exactly as §6.6.1's do — the getter is getPropertyValue and the setter is setProperty
@@ -1724,16 +1803,16 @@ static const char *ff_descriptor(int magic)
    style (§7.2's creator makes a CSSStyleProperties), which the flag asserts from the other side. */
 static JSValue js_cssd_descriptor_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    const char *name = ff_descriptor(magic);
+    const char *name = cssd_descriptor(magic);
     JSValue block = cssd_block(ctx, this_val), r;
     size_t len = 0;
     char *text, *v;
 
     if (JS_IsException(block)) return block;
     DCHECK(!cssd_flag(ctx, block, "computed"),
-           "a CSSFontFaceDescriptors attribute was read off a COMPUTED declaration block — §7.2's "
-           "getComputedStyle is the only creator that sets that flag and it mints a CSSStyleProperties, which "
-           "has no descriptor attribute for this member to have been reached through");
+           "a descriptor attribute was read off a COMPUTED declaration block — §7.2's getComputedStyle is the "
+           "only creator that sets that flag and it mints a CSSStyleProperties, which has no descriptor "
+           "attribute for this member to have been reached through");
     text = cssd_declarations_text(ctx, block, &len);
     v = cssd_property_value(text, len, name);
     free(text);
@@ -1745,7 +1824,7 @@ static JSValue js_cssd_descriptor_get(JSContext *ctx, JSValueConst this_val, int
 
 static JSValue js_cssd_descriptor_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    const char *name = ff_descriptor(magic);
+    const char *name = cssd_descriptor(magic);
     JSValue block = cssd_block(ctx, this_val);
     const char *v;
 
@@ -2032,6 +2111,20 @@ JSValue cssom_font_face_descriptors_for_rule(JSContext *ctx, JSValueConst rule)
     return out;
 }
 
+/* CSSOM §6.4.7's `style` — see the header. The block's PROPERTIES are §6.4.3's exactly (computed flag unset,
+   readonly flag unset, declarations "the declared descriptors in the rule, in specified order", parent CSS
+   rule the rule, owner node null); only the prototype differs. */
+JSValue cssom_page_descriptors_for_rule(JSContext *ctx, JSValueConst rule)
+{
+    JSValue proto = realm_value_get(ctx, g_page_proto_slot), out;
+
+    DCHECK(css_rule_is(rule),
+           "§6.4.7's `style` was asked to back a descriptor block with something that is not a CSS rule");
+    out = cssd_new(ctx, proto, JS_NULL, rule, false, false);
+    JS_FreeValue(ctx, proto);
+    return out;
+}
+
 /* §7.1's ElementCSSInlineStyle: "The style attribute must return a CSSStyleProperties object whose readonly
    flag is unset, whose parent CSS rule is null, and whose owner node is this." [SameObject] is why the block is
    remembered on the element rather than rebuilt: a page holds `el.style` and compares it, and a fresh object
@@ -2133,6 +2226,7 @@ void cssom_init(JSContext *ctx)
     }
     g_declaration_proto_slot = realm_value_declare(ctx, "CSSOM §6.6.1 CSSStyleDeclaration.prototype");
     g_font_face_proto_slot = realm_value_declare(ctx, "CSS Fonts §12.1 CSSFontFaceDescriptors.prototype");
+    g_page_proto_slot = realm_value_declare(ctx, "CSSOM §6.4.7 CSSPageDescriptors.prototype");
     g_ready = 1;
     {
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
@@ -2158,30 +2252,60 @@ void cssom_init(JSContext *ctx)
     for (id = 1; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++)
         g_camel_set_id[id] = idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_camel_set, (int)id);
     {
-        /* CSS Fonts §12.1 declares every descriptor attribute `[LegacyNullToEmptyString]`, so `null` reaches
-           the setter as "" and REMOVES the descriptor rather than declaring the string "null". */
+        /* CSS Fonts §12.1 and CSSOM §6.4.7 both declare every descriptor attribute
+           `[LegacyNullToEmptyString]`, so `null` reaches the setter as "" and REMOVES the descriptor rather
+           than declaring the string "null". */
         int i;
 
-        for (i = 0; i < FONT_FACE_DESCRIPTOR_N; i++)
-            g_ff_set_id[i] = idl_setter_id(ctx, IDL_DOMSTRING, true, js_cssd_descriptor_set, i);
+        for (i = 0; i < DESCRIPTOR_N; i++)
+            g_desc_set_id[i] = idl_setter_id(ctx, IDL_DOMSTRING, true, js_cssd_descriptor_set, i);
     }
     realm_declare_intrinsic(cssom_install_proto);
 }
 
-/* THREE INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, because three specs split them. §6.6.1's
+/* ONE DESCRIPTOR INTERFACE'S ATTRIBUTES, over the magic range `[first, first + n)` that is its table. BOTH
+   SPELLINGS ARE INSTALLED because the IDL declares both — `fontFamily` and `font-family` are two attributes of
+   the interface, not one attribute and a convenience, and so are `marginTop` and `margin-top` — and the dashed
+   one is exactly what css/cssom/cssstyledeclaration-cssfontrule.tentative.html reads (`"unicode-range" in
+   style`) and what css/cssom/page-descriptors.html asserts as an own property of the prototype. A name that is
+   already one word has two spellings that COINCIDE, so one attribute is defined for it. */
+static void cssd_install_descriptors(JSContext *ctx, JSValueConst proto, int first, int n)
+{
+    int d;
+
+    for (d = first; d < first + n; d++) {
+        const char *name = cssd_descriptor(d);
+        char camel[48];
+        size_t i, j = 0;
+        bool up = false;
+
+        idl_install_accessor(ctx, proto, name, js_cssd_descriptor_get, d, g_desc_set_id[d]);
+        for (i = 0; name[i]; i++) {
+            if (name[i] == '-') { up = true; continue; }
+            DCHECK(j + 1 < sizeof(camel), "a descriptor's camel-cased spelling outgrew its buffer");
+            camel[j++] = up ? (char)toupper((unsigned char)name[i]) : name[i];
+            up = false;
+        }
+        camel[j] = 0;
+        if (strcmp(camel, name) != 0)
+            idl_install_accessor(ctx, proto, camel, js_cssd_descriptor_get, d, g_desc_set_id[d]);
+    }
+}
+
+/* FOUR INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, because four specs split them. §6.6.1's
    `interface CSSStyleProperties : CSSStyleDeclaration` carries `cssFloat` and the per-property camel-cased
    attributes; CSS Fonts §12.1's `interface CSSFontFaceDescriptors : CSSStyleDeclaration` carries the fifteen
-   `@font-face` DESCRIPTORS, which are a different set with a different source (see the table above); and
-   CSSStyleDeclaration carries the block's own eight members, which both inherit. Installing all of them on one
-   object made `CSSStyleProperties` an absent global — an honest ReferenceError for an interface every one of
-   this engine's blocks IS — and made `Object.getOwnPropertyNames(CSSStyleDeclaration.prototype)` report three
-   hundred property attributes a browser does not have there. Nothing is an instance of the base, so it holds no
-   class of its own, exactly as §6.1.1's StyleSheet and §6.4.2's CSSRule do. */
+   `@font-face` DESCRIPTORS and CSSOM §6.4.7's `interface CSSPageDescriptors : CSSStyleDeclaration` the
+   fourteen `@page` ones, which are different sets with a different source (see the tables above); and
+   CSSStyleDeclaration carries the block's own eight members, which all three inherit. Installing all of them on
+   one object made `CSSStyleProperties` an absent global — an honest ReferenceError for an interface every one
+   of this engine's blocks IS — and made `Object.getOwnPropertyNames(CSSStyleDeclaration.prototype)` report
+   three hundred property attributes a browser does not have there. Nothing is an instance of the base, so it
+   holds no class of its own, exactly as §6.1.1's StyleSheet and §6.4.2's CSSRule do. */
 void cssom_install_proto(JSContext *ctx)
 {
-    JSValue base, proto, descriptors, prev;
+    JSValue base, proto, descriptors, page, prev;
     uintptr_t id;
-    int d;
 
     DCHECK(g_ready, "a realm asked for the declaration-block prototypes before the interfaces were declared");
     prev = JS_GetClassProto(ctx, g_cssd_class);
@@ -2225,35 +2349,22 @@ void cssom_install_proto(JSContext *ctx)
         idl_install_accessor(ctx, proto, camel, js_cssd_camel_get, (int)id, g_camel_set_id[id]);
     }
 
-    /* CSS Fonts §12.1's CSSFontFaceDescriptors.prototype. BOTH SPELLINGS ARE INSTALLED because the IDL
-       declares both — `fontFamily` and `font-family` are two attributes of the interface, not one attribute
-       and a convenience — and the dashed one is exactly what
-       css/cssom/cssstyledeclaration-cssfontrule.tentative.html reads (`"unicode-range" in style`). `src` is
-       one word, so its two spellings coincide and only one attribute is defined for it. */
+    /* CSS Fonts §12.1's CSSFontFaceDescriptors.prototype and CSSOM §6.4.7's CSSPageDescriptors.prototype, each
+       over the magic range that is its own table. */
     descriptors = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(descriptors), "CSSFontFaceDescriptors.prototype could not be allocated");
     idl_interface_tag(ctx, descriptors, "CSSFontFaceDescriptors");
-    for (d = 0; d < FONT_FACE_DESCRIPTOR_N; d++) {
-        const char *name = FONT_FACE_DESCRIPTORS[d];
-        char camel[48];
-        size_t i, j = 0;
-        bool up = false;
+    cssd_install_descriptors(ctx, descriptors, 0, FONT_FACE_DESCRIPTOR_N);
 
-        idl_install_accessor(ctx, descriptors, name, js_cssd_descriptor_get, d, g_ff_set_id[d]);
-        for (i = 0; name[i]; i++) {
-            if (name[i] == '-') { up = true; continue; }
-            DCHECK(j + 1 < sizeof(camel), "a font-face descriptor's camel-cased spelling outgrew its buffer");
-            camel[j++] = up ? (char)toupper((unsigned char)name[i]) : name[i];
-            up = false;
-        }
-        camel[j] = 0;
-        if (strcmp(camel, name) != 0)
-            idl_install_accessor(ctx, descriptors, camel, js_cssd_descriptor_get, d, g_ff_set_id[d]);
-    }
+    page = JS_NewObjectProto(ctx, base);
+    CHECK(!JS_IsException(page), "CSSPageDescriptors.prototype could not be allocated");
+    idl_interface_tag(ctx, page, "CSSPageDescriptors");
+    cssd_install_descriptors(ctx, page, FONT_FACE_DESCRIPTOR_N, PAGE_DESCRIPTOR_N);
 
     JS_SetClassProto(ctx, g_cssd_class, proto);
     realm_value_set(ctx, g_declaration_proto_slot, base);
     realm_value_set(ctx, g_font_face_proto_slot, descriptors);
+    realm_value_set(ctx, g_page_proto_slot, page);
 }
 
 int cssom_put_forwards_setter(void)
@@ -2287,6 +2398,14 @@ void cssom_install(JSContext *ctx, JSValueConst global)
                "CSSFontFaceDescriptors was installed in a realm that never ran its prototype install");
         node_install_interface(ctx, global, "CSSFontFaceDescriptors", descriptors);
         JS_FreeValue(ctx, descriptors);
+    }
+    {
+        JSValue page = realm_value_get(ctx, g_page_proto_slot);
+
+        DCHECK(JS_IsObject(page),
+               "CSSPageDescriptors was installed in a realm that never ran its prototype install");
+        node_install_interface(ctx, global, "CSSPageDescriptors", page);
+        JS_FreeValue(ctx, page);
     }
     JS_FreeValue(ctx, base);
     JS_FreeValue(ctx, proto);

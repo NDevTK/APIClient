@@ -1,5 +1,6 @@
-/* CSSOM §6.4's CSS rules and CSS Conditional §7.2/§7.3's conditional group rule. See css_rule.h for why a rule
- * is made of text, why a grouping rule's child list is a JS Array, and why one class carries every interface.
+/* CSSOM §6.4's CSS rules, CSS Conditional §7.2/§7.3's conditional group rule and CSS Paged Media's page and
+ * margin rules. See css_rule.h for why a rule is made of text, why a grouping rule's child list is a JS Array,
+ * and why one class carries every interface.
  *
  * THE RECORD TIME-TRAVELS BECAUSE ALMOST EVERYTHING ON IT IS SETTABLE. §6.4.3's `selectorText` is a setter,
  * §6.4.3's `style` writes the declaration block back through this record, §6.4.5's `insertRule`/`deleteRule`
@@ -19,6 +20,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/css/css_at_rule_prelude.h"
+#include "core/css/css_page.h"
 #include "core/css/css_rule.h"
 #include "core/css/css_rule_list.h"
 #include "core/css/css_serialize.h"
@@ -32,7 +34,7 @@
 /* §6.4's TYPE state item, which IS which interface this rule is — the values are §6.4.2's own constants, so
    there is one number rather than a stored type beside an interface tag that could disagree with it. */
 enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE_FONT_FACE = 5,
-       RULE_TYPE_NAMESPACE = 10 };
+       RULE_TYPE_PAGE = 6, RULE_TYPE_MARGIN = 9, RULE_TYPE_NAMESPACE = 10 };
 
 /* WHERE A RULE MAY SIT IN A STYLE SHEET, as the one number the ordering CSS specifies is stated over. CSS
    Cascade §2: "any @import rules must precede all other valid at-rules and style rules in a style sheet";
@@ -75,6 +77,11 @@ typedef struct CssRuleData {
        only ever "this is not a namespace rule". (OWNED) */
     JSValue namespace_uri;
     JSValue prefix;
+    /* §6.4.8's `name` — "the name of the margin at-rule. The @ character is not included in the name."
+       JS_NULL on every rule that is not one of CSS Paged Media §4.3's sixteen margin at-rules. It is stored
+       rather than derived because the RULE is what the at-keyword was: `type` says MARGIN and nothing else on
+       the record could say WHICH margin box, and `cssText` needs the same string the attribute returns. */
+    JSValue at_name;
     uint16_t type;
 } CssRuleData;
 
@@ -84,9 +91,10 @@ static JSClassID g_rule_class;
    CSSGroupingRule or CSSConditionRule) and the rest are concrete; all are held the same way because a rule is
    built with an EXPLICIT prototype chosen from its type, so the class's own proto slot decides nothing. */
 enum { PROTO_RULE = 0, PROTO_GROUPING, PROTO_STYLE, PROTO_CONDITION, PROTO_MEDIA, PROTO_IMPORT,
-       PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_N };
+       PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_PAGE, PROTO_MARGIN, PROTO_N };
 static int g_proto_slot[PROTO_N];
-static int g_id_set_selector = -1, g_id_set_css_text = -1, g_id_insert_rule = -1, g_id_delete_rule = -1;
+static int g_id_set_selector = -1, g_id_set_page_selector = -1, g_id_set_css_text = -1,
+           g_id_insert_rule = -1, g_id_delete_rule = -1;
 
 static const uint16_t RULE_VALS[] = {
     (uint16_t)offsetof(CssRuleData, parent_style_sheet),
@@ -102,6 +110,7 @@ static const uint16_t RULE_VALS[] = {
     (uint16_t)offsetof(CssRuleData, supports_text),
     (uint16_t)offsetof(CssRuleData, namespace_uri),
     (uint16_t)offsetof(CssRuleData, prefix),
+    (uint16_t)offsetof(CssRuleData, at_name),
 };
 static const CowRecord RULE_REC = { sizeof(CssRuleData), RULE_VALS,
                                     (int)(sizeof(RULE_VALS) / sizeof(RULE_VALS[0])) };
@@ -166,6 +175,7 @@ static void rule_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, r->supports_text);
     JS_FreeValueRT(rt, r->namespace_uri);
     JS_FreeValueRT(rt, r->prefix);
+    JS_FreeValueRT(rt, r->at_name);
     free(r);
 }
 
@@ -187,6 +197,7 @@ static void rule_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
     JS_MarkValue(rt, r->supports_text, mark_func);
     JS_MarkValue(rt, r->namespace_uri, mark_func);
     JS_MarkValue(rt, r->prefix, mark_func);
+    JS_MarkValue(rt, r->at_name, mark_func);
 }
 
 /* ---- §6.4's CSS RULE LIST, as INFRA's list operations over an Array ---------------------------------------- */
@@ -229,7 +240,10 @@ static void rules_remove_at(JSContext *ctx, JSValueConst list, uint32_t i)
    not an insertion into a list that rule does not have. */
 static bool rule_type_is_grouping(uint16_t type)
 {
-    return type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA;
+    /* §6.4.7 declares `interface CSSPageRule : CSSGroupingRule`, and that is not a formality: an `@page`
+       CONTAINS CSS Paged Media §4.3's margin at-rules, so `pageRule.cssRules[0]` is a CSSMarginRule. §6.4.8's
+       CSSMarginRule is NOT one — its body is a `<declaration-list>` and holds no rules at all. */
+    return type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_PAGE;
 }
 
 /* §6.4.5's CHILD CSS RULES — the very Array a grouping rule's `cssRules` shares. OWNED. */
@@ -240,8 +254,9 @@ static JSValue rule_child_rules(JSContext *ctx, JSValueConst rule)
     DCHECK(r != NULL, "a rule's child CSS rules were read off something that is not a CSS rule");
     DCHECK(rule_type_is_grouping(r->type),
            "a rule that is not a §6.4.5 grouping rule was asked for its child CSS rules. An `@import`, an "
-           "`@namespace` and an `@font-face` contain no rules at all, so the answer is not an empty list — it "
-           "is that the question does not apply, and every member that could ask it is brand-checked");
+           "`@namespace`, an `@font-face` and a §4.3 margin at-rule contain no rules at all, so the answer is "
+           "not an empty list — it is that the question does not apply, and every member that could ask it is "
+           "brand-checked");
     DCHECK(JS_IsArray(r->child_rules),
            "a CSS rule's child list is not an Array — the create allocates one for every grouping rule before "
            "it is handed to anybody, and nothing replaces it");
@@ -297,6 +312,7 @@ static JSValue rule_new(JSContext *ctx, int proto_slot, uint16_t type, JSValueCo
     r->supports_text = JS_NULL;
     r->namespace_uri = JS_NULL;
     r->prefix = JS_NULL;
+    r->at_name = JS_NULL;
     JS_SetOpaque(obj, r);
     return obj;
 }
@@ -418,6 +434,67 @@ static JSValue font_face_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     return obj;
 }
 
+/* A §6.4.7 CSSPageRule over the `@page` at-rule's prelude and its page descriptors. Both halves are grammars
+   this file does not own: CSS Paged Media §4.3's `<page-selector-list>` is parsed and canonicalised by
+   core/css/css_at_rule_prelude.h (a prelude whose grammar FAILS is not an `@page` rule at all — CSS Syntax
+   drops it, which is JS_UNDEFINED here and the same answer `@namespace a b c;` gets), and §4.3's restriction
+   on WHICH declarations a page context holds is applied by core/css/css_style_declaration.h before the text is
+   stored, so every reader of the block sees the declarations the rule really has. The child list an `@page`
+   gets from `rule_new` is where its margin at-rules go. */
+static JSValue page_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
+                             const char *prelude, const char *block_text)
+{
+    char *selectors, *decls;
+    JSValue obj;
+    CssRuleData *r;
+
+    DCHECK(prelude != NULL && block_text != NULL,
+           "a CSSPageRule was built without both of the texts it IS — `@page {}` has an EMPTY page selector "
+           "list and declares NOTHING, which are two empty strings and not two absences");
+    selectors = css_prelude_page_selectors(prelude, strlen(prelude));
+    if (!selectors) return JS_UNDEFINED;
+    obj = rule_new(ctx, PROTO_PAGE, RULE_TYPE_PAGE, parent_style_sheet, parent_rule);
+    if (JS_IsException(obj)) { free(selectors); return obj; }
+    r = JS_GetOpaque(obj, g_rule_class);
+    JS_FreeValue(ctx, r->selector_text);
+    r->selector_text = JS_NewString(ctx, selectors);
+    free(selectors);
+    decls = cssom_serialize_page_declarations(block_text, strlen(block_text), /*margin_context*/ false);
+    JS_FreeValue(ctx, r->block_text);
+    r->block_text = JS_NewString(ctx, decls ? decls : "");
+    free(decls);
+    return obj;
+}
+
+/* A §6.4.8 CSSMarginRule. `name` is the at-keyword with no `@`, which the parse has already ASCII-lowercased
+   (an at-keyword is case-insensitive, so `@TOP-LEFT` is `@top-left`), and the body is a `<declaration-list>`
+   of page-margin properties — the margin context's own list, which is not the page context's. */
+static JSValue margin_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
+                               const char *name, const char *block_text)
+{
+    char *decls;
+    JSValue obj;
+    CssRuleData *r;
+
+    DCHECK(name != NULL && css_page_margin_at_rule(name),
+           "a CSSMarginRule was built for an at-rule that is not one of CSS Paged Media §4.3's sixteen margin "
+           "at-rules — the builder decides that from the name before it gets here, because outside an `@page` "
+           "the very same name is an unknown at-rule that CSS Syntax drops");
+    DCHECK(block_text != NULL,
+           "a CSSMarginRule was built with no declaration text — `@top-left {}` declares NOTHING, which is the "
+           "empty string, and the absence of one is a parse that did not report the block at all");
+    obj = rule_new(ctx, PROTO_MARGIN, RULE_TYPE_MARGIN, parent_style_sheet, parent_rule);
+    if (JS_IsException(obj)) return obj;
+    r = JS_GetOpaque(obj, g_rule_class);
+    JS_FreeValue(ctx, r->at_name);
+    r->at_name = JS_NewString(ctx, name);
+    decls = cssom_serialize_page_declarations(block_text, strlen(block_text), /*margin_context*/ true);
+    JS_FreeValue(ctx, r->block_text);
+    r->block_text = JS_NewString(ctx, decls ? decls : "");
+    free(decls);
+    return obj;
+}
+
 static void rule_orphan(JSContext *ctx, JSValueConst rule)
 {
     /* THE BRAND IS ASSERTED, NOT THROWN: this is an algorithm §6.4 invokes on a rule it already holds, never a
@@ -479,8 +556,35 @@ static void build_free(RuleBuild *b)
    Every OTHER at-rule in the platform HAS an interface, so meeting one is a capability to build. */
 static bool at_rule_dropped(const char *name) { return strcmp(name, "charset") == 0; }
 
+/* The TYPE of the rule this one is written inside, or 0 at a sheet's top level. What a rule may BE depends on
+   it — CSS Syntax's rules are context-sensitive and CSS Paged Media §4.3 states two of them outright. */
+static uint16_t enclosing_rule_type(JSValueConst parent_rule)
+{
+    CssRuleData *r;
+
+    if (JS_IsNull(parent_rule)) return 0;
+    r = rule_of(parent_rule);
+    DCHECK(r != NULL, "a rule's enclosing rule is something that is not a CSS rule");
+    return r ? r->type : (uint16_t)0;
+}
+
 static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst parent_rule)
 {
+    uint16_t enclosing = enclosing_rule_type(parent_rule);
+
+    /* CSS Paged Media §4.3: "The @page rule can only contain page properties and margin at-rules." So inside
+       an `@page` the ONLY rules are §4.3's sixteen margin at-rules, and everything else written there — a
+       style rule, a nested `@page`, an `@media` — is invalid IN THIS CONTEXT and CSS Syntax drops it. That is
+       not a gap this build has an interface for: `@page :first { h1 { color: #444 } }` is in
+       css/cssom/cssom-ruleTypeAndOrder.html precisely because a page rule has no style rule in it anywhere. */
+    if (enclosing == RULE_TYPE_PAGE) {
+        if (!pr->at_name || !css_page_margin_at_rule(pr->at_name) || !pr->has_block) return JS_UNDEFINED;
+        return margin_rule_new(b->ctx, b->sheet, parent_rule, pr->at_name, pr->block ? pr->block : "");
+    }
+    /* AND THE MIRROR: a margin at-rule is only a rule INSIDE an `@page`. Anywhere else `@top-left { }` is an
+       at-rule no specification defines, which CSS Syntax drops — so it is dropped here rather than reaching
+       the crash below, which would name a capability that is already built. */
+    if (pr->at_name && css_page_margin_at_rule(pr->at_name)) return JS_UNDEFINED;
     if (!pr->at_name)
         return style_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude, pr->block ? pr->block : "");
     if (strcmp(pr->at_name, "media") == 0) {
@@ -514,6 +618,14 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
         return pr->has_block ? font_face_rule_new(b->ctx, b->sheet, parent_rule, pr->block ? pr->block : "")
                              : JS_UNDEFINED;
     }
+    /* CSS Paged Media §4.3 makes `@page` a BLOCK at-rule (`@page <page-selector-list>? { … }`), so `@page;` is
+       an at-rule whose grammar failed and CSS Syntax drops it — the same shape `@font-face;` has, and dropped
+       here for the same reason it is: lexbor parses an at-rule it does not know as `_CUSTOM`, which accepts
+       both, so this is malformed author CSS and not an engine invariant. */
+    if (strcmp(pr->at_name, "page") == 0)
+        return pr->has_block ? page_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude,
+                                             pr->block ? pr->block : "")
+                             : JS_UNDEFINED;
     if (at_rule_dropped(pr->at_name)) return JS_UNDEFINED;
     if (!b->unbuilt[0]) snprintf(b->unbuilt, sizeof b->unbuilt, "%s", pr->at_name);
     return JS_UNDEFINED;
@@ -535,6 +647,12 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
         parent_rule = b->built[i];
         /* The enclosing rule was dropped, so this one has no list to go in and no parent to name. */
         if (JS_IsUndefined(parent_rule)) return build_push(b, JS_UNDEFINED);
+        /* THE ENCLOSING RULE CONTAINS NO RULES AT ALL, so this one is not in it either. An `@font-face`'s and
+           a margin at-rule's body is CSS Syntax's `<declaration-list>`, which admits declarations and nothing
+           else, so a rule written inside one is invalid and dropped — and it must be dropped HERE, because
+           `rule_child_rules` asserts its receiver is a §6.4.5 grouping rule and neither of those is. */
+        if (!rule_type_is_grouping(enclosing_rule_type(parent_rule)))
+            return build_push(b, JS_UNDEFINED);
         list = rule_child_rules(b->ctx, parent_rule);
     }
     rule = rule_from_parse(b, pr, parent_rule);
@@ -558,15 +676,14 @@ static void rule_unbuilt_fail(const char *name)
 
     snprintf(msg, sizeof msg,
              "CSSOM §6.4 has no interface built for the at-rule `@%s`, so a stylesheet containing one cannot be "
-             "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.9's CSSNamespaceRule, CSS "
-             "Conditional §7.2's CSSConditionRule, §7.3's CSSMediaRule and CSS Fonts §12.1's CSSFontFaceRule "
-             "are built; what remains is §6.4.7's CSSPageRule with §6.4.8's CSSMarginRule (both of which need "
-             "§6.4.7's CSSPageDescriptors, a declaration block over the same rule-backed text CSS Fonts' "
-             "descriptors already use), CSS Animations' CSSKeyframesRule and CSSKeyframeRule, CSS Conditional "
-             "§7.4's CSSSupportsRule (whose condition needs CSS.supports to evaluate), CSS Cascade's "
-             "CSSLayerBlockRule and CSSLayerStatementRule, and CSS Contain's CSSContainerRule. Build the one "
-             "this names and mint it in rule_from_parse — do NOT skip the rule, because every index after it "
-             "would then name a different rule than the page's", name);
+             "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "
+             "CSSMarginRule, §6.4.9's CSSNamespaceRule, CSS Conditional §7.2's CSSConditionRule, §7.3's "
+             "CSSMediaRule and CSS Fonts §12.1's CSSFontFaceRule are built; what remains is CSS Animations' "
+             "CSSKeyframesRule and CSSKeyframeRule, CSS Conditional §7.4's CSSSupportsRule (whose condition "
+             "needs CSS.supports to evaluate), CSS Cascade's CSSLayerBlockRule and CSSLayerStatementRule, and "
+             "CSS Contain's CSSContainerRule. Build the one this names and mint it in rule_from_parse — do NOT "
+             "skip the rule, because every index after it would then name a different rule than the page's",
+             name);
     DFAIL(msg);
 }
 
@@ -627,6 +744,11 @@ static int rule_rank(uint16_t type)
        insertion must not break that order. Asking it in BOTH directions is what the tests pin from both
        sides: a style rule inserted at index 0 of a sheet holding an `@import` is refused by the same line that
        refuses an `@import` inserted after one.
+   CSS Paged Media §4.3's "the @page rule can only contain page properties and margin at-rules" is NOT asked
+   here, and that is not an omission: step 3's parse runs with the enclosing rule already in hand (see
+   `rule_from_parse`, which is reached from this algorithm and from the sheet parse alike), so a style rule
+   written into an `@page` is dropped by CSS Syntax before step 4 counts the rules and the answer is step 4's
+   SyntaxError. Asking again here would be an arm no input can reach.
    THE ONE RANK THIS BUILD CANNOT SEE is CSS Cascade §6.4.4.2's `@layer` STATEMENT rule, which shares
    `@import`'s position ("ignoring @charset, @supports-condition, and @layer statement rules"). It has no
    interface here, so no such rule can be in a list to be mis-ranked; when CSSLayerStatementRule lands it takes
@@ -854,25 +976,30 @@ static void serialized_free(char **v, unsigned n)
     free(v);
 }
 
-/* §6.4's CSSStyleRule arm, stated as five steps over three pieces — the selector list, the declaration block
-   and the nested rules. Step 2 is §6.6's serialize-a-CSS-declaration-block, which is where the shorthand
-   consolidation loop runs; step 3 is this rule's own `cssRules`, which CSS Nesting fills. */
-static bool style_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+/* §6.4's CSSStyleRule arm, stated as five steps over three pieces — the PRELUDE, the declaration block and the
+   nested rules. Step 2 is §6.6's serialize-a-CSS-declaration-block, which is where the shorthand consolidation
+   loop runs; step 3 is this rule's own `cssRules`, which CSS Nesting fills.
+   IT IS ALSO §6.4.7's ARM, and that is a derivation rather than a reading: §6.4's CSSPageRule entry is the
+   single sentence "need to define how CSSPageRule is serialized", and this is the only arm the spec states for
+   a rule whose body holds BOTH declarations and rules — which a page rule's is (page descriptors beside CSS
+   Paged Media §4.3's margin at-rules) and which nothing else in §6.4 is. Running it produces `@page { }` for
+   `@page {}` and `@page :left { }` for `@page :left {}`, which is what css/cssom/cssom-pagerule.html asserts
+   byte for byte and what every engine emits. So the two arms differ only in step 1's `s`, which is the caller's
+   to build: a selector list for §6.4.3 and `@page` plus its page selector list for §6.4.7. */
+static bool decls_and_rules_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule,
+                                      const char *prefix, size_t prefix_len, RBuf *out)
 {
-    size_t sl = 0, bl = 0;
-    char *sel = rule_text_copy(ctx, r->selector_text, &sl);
+    size_t bl = 0;
     char *block, *decls;
     char **kids;
     unsigned nk, i;
 
-    if (!sel) return false;
     block = rule_text_copy(ctx, r->block_text, &bl);
     decls = block ? cssom_serialize_declarations(block, bl) : NULL;
     free(block);
     kids = rule_children_serialized(ctx, rule, &nk);
-    rbuf_add_n(out, sel, sl);                 /* STEP 1 */
+    rbuf_add_n(out, prefix, prefix_len);      /* STEP 1 */
     rbuf_add(out, " {");
-    free(sel);
     if (!decls && nk == 0) {                  /* STEP 4 */
         rbuf_add(out, " }");
     } else if (nk == 0) {                     /* STEP 5 */
@@ -889,6 +1016,45 @@ static bool style_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst ru
     free(decls);
     serialized_free(kids, nk);
     return true;
+}
+
+/* §6.4.3's step 1 is "serialize a group of selectors on the rule's associated selectors", which is the text the
+   parse kept and `selectorText =` replaces. */
+static bool style_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+{
+    size_t sl = 0;
+    char *sel = rule_text_copy(ctx, r->selector_text, &sl);
+    bool ok;
+
+    DCHECK(sel != NULL,
+           "a §6.4.3 style rule has no serialized selector list. Both things that write one — the parse and "
+           "`selectorText =` — store only what lexbor accepted, so a null means the string conversion failed");
+    if (!sel) return false;
+    ok = decls_and_rules_serialize(ctx, r, rule, sel, sl, out);
+    free(sel);
+    return ok;
+}
+
+/* §6.4.7's step 1: `@page`, then — when the rule declares one — a SPACE and the PAGE SELECTOR LIST, which the
+   record keeps in the canonical form core/css/css_at_rule_prelude.h produced. The space is inside the
+   conditional, which is the whole of why `@page {}` reads back as `@page { }` and not as `@page  { }`. */
+static bool page_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+{
+    size_t sl = 0;
+    char *sel = rule_text_copy(ctx, r->selector_text, &sl);
+    RBuf prefix = { NULL, 0, 0 };
+    bool ok;
+
+    DCHECK(sel != NULL,
+           "a §6.4.7 page rule has no page selector list. `@page {}` declares the EMPTY one, which is the "
+           "empty string — both writers store a string and neither stores nothing");
+    if (!sel) return false;
+    rbuf_add(&prefix, "@page");
+    if (sl) { rbuf_add(&prefix, " "); rbuf_add_n(&prefix, sel, sl); }
+    free(sel);
+    ok = decls_and_rules_serialize(ctx, r, rule, prefix.s, prefix.len, out);
+    free(prefix.s);
+    return ok;
 }
 
 /* §6.4's CSSMediaRule arm: "@media", a SPACE, the media query list, a SPACE and "{", a newline, then each
@@ -999,30 +1165,55 @@ static bool namespace_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
     return true;
 }
 
-/* §6.4's CSSFontFaceRule arm. The spec's own steps name each descriptor in a fixed order and then admit "need
-   to define how the CSSFontFaceRule descriptors' values are serialized"; every step has the SAME shape — a
-   SPACE, `name:`, a SPACE, the value, `;` — which is exactly what §6.6's serialize-a-CSS-declaration-block
-   produces for the block once the leading space and the closing " }" are added. So the descriptors go through
-   the ONE declaration-block serializer rather than through a second hand-listed loop that could disagree with
-   it about `rule.style.cssText`, and the order is the rule's own (which is what Blink and WebKit report, and
-   what css/cssom/CSSFontFaceRule.html declines to pin because engines differ). */
-static bool font_face_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+/* §6.4's CSSFontFaceRule arm, and §6.4.8's, which is the same arm. The spec's own font-face steps name each
+   descriptor in a fixed order and then admit "need to define how the CSSFontFaceRule descriptors' values are
+   serialized"; every step has the SAME shape — a SPACE, `name:`, a SPACE, the value, `;` — which is exactly
+   what §6.6's serialize-a-CSS-declaration-block produces for the block once the leading space and the closing
+   " }" are added. So the descriptors go through the ONE declaration-block serializer rather than through a
+   second hand-listed loop that could disagree with it about `rule.style.cssText`, and the order is the rule's
+   own (which is what Blink and WebKit report, and what css/cssom/CSSFontFaceRule.html declines to pin because
+   engines differ).
+   §6.4 STATES NO ARM AT ALL FOR §6.4.8's CSSMarginRule, and this is it because a margin at-rule's body is CSS
+   Paged Media §4.3's `<declaration-list>` — declarations and nothing else, which is the shape this arm IS. The
+   at-keyword is the only difference, so it is a parameter: `@font-face` and `@top-left` are one algorithm over
+   two names, and a second copy could only disagree about the spacing. */
+static bool decl_body_rule_serialize(JSContext *ctx, CssRuleData *r, const char *at_name, RBuf *out)
 {
     size_t bl = 0;
     char *block = rule_text_copy(ctx, r->block_text, &bl);
     char *decls;
 
     DCHECK(block != NULL,
-           "a CSS Fonts §12.1 font-face rule has no descriptor text. `@font-face {}` declares nothing, which "
-           "is the EMPTY STRING, so a null here means the string conversion itself failed");
+           "a rule whose body is a declaration list has no declaration text. `@font-face {}` and `@top-left {}` "
+           "declare nothing, which is the EMPTY STRING, so a null here means the string conversion itself "
+           "failed");
     if (!block) return false;
     decls = cssom_serialize_declarations(block, bl);
     free(block);
-    rbuf_add(out, "@font-face {");
+    rbuf_add(out, "@");
+    rbuf_add(out, at_name);
+    rbuf_add(out, " {");
     if (decls) { rbuf_add(out, " "); rbuf_add(out, decls); }
     rbuf_add(out, " }");
     free(decls);
     return true;
+}
+
+/* §6.4.8's `name` as the at-keyword it serializes back to. It is the record's own string, so a margin rule
+   whose name is missing is this file disagreeing with its own creator rather than a shape a page can make. */
+static bool margin_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+{
+    size_t nl = 0;
+    char *name = rule_text_copy(ctx, r->at_name, &nl);
+    bool ok;
+
+    DCHECK(name != NULL,
+           "a §6.4.8 margin rule has no at-rule name. `margin_rule_new` is the one creator and it stores one "
+           "of CSS Paged Media §4.3's sixteen, so a null here means the string conversion itself failed");
+    if (!name) return false;
+    ok = decl_body_rule_serialize(ctx, r, name, out);
+    free(name);
+    return ok;
 }
 
 static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
@@ -1035,7 +1226,9 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
     case RULE_TYPE_MEDIA:     return media_rule_serialize(ctx, r, rule, out);
     case RULE_TYPE_IMPORT:    return import_rule_serialize(ctx, r, out);
     case RULE_TYPE_NAMESPACE: return namespace_rule_serialize(ctx, r, out);
-    case RULE_TYPE_FONT_FACE: return font_face_rule_serialize(ctx, r, out);
+    case RULE_TYPE_FONT_FACE: return decl_body_rule_serialize(ctx, r, "font-face", out);
+    case RULE_TYPE_PAGE:      return page_rule_serialize(ctx, r, rule, out);
+    case RULE_TYPE_MARGIN:    return margin_rule_serialize(ctx, r, out);
     default:
         DCHECK(r->type == RULE_TYPE_STYLE, "§6.4's serialize a CSS rule met a rule type it has no arm for");
         return style_rule_serialize(ctx, r, rule, out);
@@ -1046,7 +1239,7 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
 
 enum { CR_PARENT_RULE = 0, CR_PARENT_STYLE_SHEET, CR_TYPE, CR_CSS_TEXT, CR_SELECTOR_TEXT, CR_CONDITION_TEXT,
        CR_MEDIA, CR_MATCHES, CR_CSS_RULES, CR_HREF, CR_IMPORT_MEDIA, CR_LAYER_NAME, CR_SUPPORTS_TEXT,
-       CR_NAMESPACE_URI, CR_PREFIX };
+       CR_NAMESPACE_URI, CR_PREFIX, CR_PAGE_SELECTOR_TEXT, CR_MARGIN_NAME };
 
 static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -1156,6 +1349,18 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     case CR_PREFIX:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_NAMESPACE, "CSSNamespaceRule");
         return r ? JS_DupValue(ctx, r->prefix) : JS_EXCEPTION;
+    /* §6.4.7: "The selectorText attribute, on getting, must return the result of serializing the associated
+       selector list" — a PAGE selector list, whose grammar and serialization are CSS Paged Media §4.3's and
+       not Selectors', which is why this is a second attribute rather than §6.4.3's reached from two
+       prototypes. The record holds the serialization the parse (or the setter) already produced. */
+    case CR_PAGE_SELECTOR_TEXT:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_PAGE, "CSSPageRule");
+        return r ? JS_DupValue(ctx, r->selector_text) : JS_EXCEPTION;
+    /* §6.4.8: "The name attribute must return the name of the margin at-rule. The @ character is not included
+       in the name." */
+    case CR_MARGIN_NAME:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_MARGIN, "CSSMarginRule");
+        return r ? JS_DupValue(ctx, r->at_name) : JS_EXCEPTION;
     /* §6.4.5: "The cssRules attribute must return a CSSRuleList object for the child CSS rules." [SameObject],
        so the collection is remembered on the record — and it shares the very Array the children live in, which
        is what its liveness IS. */
@@ -1233,6 +1438,36 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
     return JS_UNDEFINED;
 }
 
+/* §6.4.7's setter, whose three steps are §6.4.3's three with ONE algorithm swapped: "run the PARSE A LIST OF
+   CSS PAGE SELECTORS algorithm on the given value. If the algorithm returns a non-null value replace the
+   associated selector list with the returned value. Otherwise, if the algorithm returns a null value, DO
+   NOTHING." So an invalid page selector is silently ignored — `rule.selectorText = ':notapagepseudo'` leaves
+   the rule exactly as it was, which css/cssom/cssom-pagerule.html asserts four times over — and the EMPTY
+   STRING is not that case: it parses to the empty list, which is a non-null value, so `selectorText = ''`
+   really does clear the list.
+   IT IS A SECOND SETTER AND NOT A BRANCH IN THE ONE ABOVE, because the two attributes are two members of two
+   interfaces over two grammars: a page selector list is CSS Paged Media §4.3's and is not a group of selectors
+   at all — `named:first` is one and no Selectors production admits it. */
+static JSValue js_rule_set_page_selector(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_PAGE, "CSSPageRule");
+    const char *v;
+    char *parsed;
+
+    (void)magic;
+    if (!r) return JS_EXCEPTION;
+    v = JS_ToCString(ctx, val);   /* a real string by now: the declaration converted it */
+    if (!v) return JS_EXCEPTION;
+    parsed = css_prelude_page_selectors(v, strlen(v));
+    JS_FreeCString(ctx, v);
+    if (parsed) {
+        JS_FreeValue(ctx, r->selector_text);
+        r->selector_text = JS_NewString(ctx, parsed);
+        free(parsed);
+    }
+    return JS_UNDEFINED;
+}
+
 /* ---- §6.4.5's insertRule and deleteRule ------------------------------------------------------------------- */
 
 /* §6.4.5: "The insertRule(rule, index) method must return the result of invoking insert a CSS rule rule into
@@ -1280,38 +1515,45 @@ static JSValue js_rule_delete_rule(JSContext *ctx, JSValueConst this_val, int ar
 
 /* ---- §6.4.3's `style`, and the DECLARATIONS behind it ----------------------------------------------------- */
 
-/* §6.4.3: "The style attribute must return a CSSStyleProperties object for the style rule, with the following
-   properties: computed flag unset, readonly flag unset, declarations THE DECLARED DECLARATIONS IN THE RULE,
-   parent CSS rule THIS, owner node null." [SameObject], so the block is remembered on the record — a page holds
-   `rule.style` and compares it, and a fresh object per read makes every such comparison false.
+/* THE FOUR `style` ATTRIBUTES, WHICH ARE ONE MEMBER OVER ONE FIELD. §6.4.3 states it: "the style attribute
+   must return a CSSStyleProperties object for the style rule, with the following properties: computed flag
+   unset, readonly flag unset, declarations THE DECLARED DECLARATIONS IN THE RULE, parent CSS rule THIS, owner
+   node null" — and CSS Fonts §12.1's, §6.4.7's and §6.4.8's say the same five things. [SameObject], so the
+   block is remembered on the record: a page holds `rule.style` and compares it, and a fresh object per read
+   makes every such comparison false. A rule has exactly ONE block object, which is why they share `r->style`.
+   WHAT DIFFERS IS THE INTERFACE, and the table says so once: §6.4.3's and §6.4.8's hand back a
+   CSSStyleProperties, CSS Fonts §12.1's a CSSFontFaceDescriptors, §6.4.7's a CSSPageDescriptors. §6.4.8's
+   choice is the corpus's own — css/cssom/idlharness.html lists `sheet.cssRules[2].cssRules[0].style` under
+   CSSStyleProperties, where it lists `sheet.cssRules[2].style` under CSSPageDescriptors. The IDL in
+   @webref/idl types it `CSSStyleDeclaration`, which a CSSStyleProperties IS; the editor's draft types it
+   `CSSMarginDescriptors`, an interface CSSOM references twice and never declares anywhere, so there is no
+   member list to build one from and the corpus contradicts it outright.
    IT IS MINTED THROUGH THE CAPTURING ACCESSOR, which is what makes the memo per-flow: the block belongs to the
    flow that first asked for it, and a sibling that asks gets its own over the same declarations. */
+enum { STYLE_OF_STYLE_RULE = 0, STYLE_OF_FONT_FACE, STYLE_OF_PAGE, STYLE_OF_MARGIN };
+
 static JSValue js_rule_style(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_STYLE, "CSSStyleRule");
+    static const struct {
+        uint16_t    type;
+        const char *iface;
+        JSValue   (*create)(JSContext *, JSValueConst);
+    } OF[] = {
+        { RULE_TYPE_STYLE,     "CSSStyleRule",    cssom_style_properties_for_rule },
+        { RULE_TYPE_FONT_FACE, "CSSFontFaceRule", cssom_font_face_descriptors_for_rule },
+        { RULE_TYPE_PAGE,      "CSSPageRule",     cssom_page_descriptors_for_rule },
+        { RULE_TYPE_MARGIN,    "CSSMarginRule",   cssom_style_properties_for_rule },
+    };
+    CssRuleData *r;
 
-    (void)magic;
+    DCHECK(magic >= 0 && magic < (int)(sizeof(OF) / sizeof(OF[0])),
+           "a `style` attribute ran with a magic no interface in this table declares — the magic is written by "
+           "the prototype install below and by nothing else");
+    r = rule_here_typed(ctx, this_val, OF[magic].type, OF[magic].iface);
     if (!r) return JS_EXCEPTION;
     if (!JS_IsObject(r->style)) {
         JS_FreeValue(ctx, r->style);
-        r->style = cssom_style_properties_for_rule(ctx, this_val);
-    }
-    return JS_DupValue(ctx, r->style);
-}
-
-/* CSS Fonts §12.1's `[SameObject, PutForwards=cssText] readonly attribute CSSFontFaceDescriptors style`. It is
-   the SAME memo, over the same field, as §6.4.3's above — a rule has ONE declaration block object — and it is
-   a separate member only because the two attributes are declared on two interfaces and hand back two different
-   ones. Which interface the block IS is decided by the creator this calls, not by anything on the record. */
-static JSValue js_rule_font_face_style(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_FONT_FACE, "CSSFontFaceRule");
-
-    (void)magic;
-    if (!r) return JS_EXCEPTION;
-    if (!JS_IsObject(r->style)) {
-        JS_FreeValue(ctx, r->style);
-        r->style = cssom_font_face_descriptors_for_rule(ctx, this_val);
+        r->style = OF[magic].create(ctx, this_val);
     }
     return JS_DupValue(ctx, r->style);
 }
@@ -1342,11 +1584,25 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
     DCHECK(r != NULL, "a rule's declaration block was written on something that is not a CSS rule");
     DCHECK(text != NULL, "a rule's declaration block was written with no text — an emptied block is the empty "
                          "string, which is what serializing no declarations produces");
-    DCHECK(r->type == RULE_TYPE_STYLE || r->type == RULE_TYPE_FONT_FACE,
+    DCHECK(r->type == RULE_TYPE_STYLE || r->type == RULE_TYPE_FONT_FACE ||
+           r->type == RULE_TYPE_PAGE || r->type == RULE_TYPE_MARGIN,
            "§6.6's declaration block wrote its text back onto a rule that HAS no declaration block. A rule's "
-           "`style` attribute is the only thing that reaches this, and only §6.4.3's CSSStyleRule and CSS "
-           "Fonts §12.1's CSSFontFaceRule declare one in this build — the day §6.4.7's CSSPageRule lands, its "
-           "CSSPageDescriptors comes with it");
+           "`style` attribute is the only thing that reaches this, and it is declared by §6.4.3's "
+           "CSSStyleRule, CSS Fonts §12.1's CSSFontFaceRule, §6.4.7's CSSPageRule and §6.4.8's CSSMarginRule "
+           "and by nothing else in this build");
+    /* CSS Paged Media §4.3's restriction, on the WRITE side. `setProperty`, `style.cssText =` and every
+       descriptor attribute reach the record through this one function, so filtering here is what makes
+       `pageRule.style.setProperty('transform', 'scale(1)')` take no effect and leaves `length` at what the
+       page context really declares — css/cssom/rule-restrictions.html reads both. It is the same call the two
+       creators make, so the text a write leaves behind is the text a parse would have. */
+    if (r->type == RULE_TYPE_PAGE || r->type == RULE_TYPE_MARGIN) {
+        char *kept = cssom_serialize_page_declarations(text, len, r->type == RULE_TYPE_MARGIN);
+
+        JS_FreeValue(ctx, r->block_text);
+        r->block_text = JS_NewString(ctx, kept ? kept : "");
+        free(kept);
+        return;
+    }
     JS_FreeValue(ctx, r->block_text);
     r->block_text = JS_NewStringLen(ctx, text, len);
 }
@@ -1403,6 +1659,11 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, RBuf *out, uint3
        `@font-face` declares a FONT FACE and not a style: nothing it contains can match an element, so it is
        not a rule the selector matcher has anything to do with. */
     if (r->type == RULE_TYPE_IMPORT || r->type == RULE_TYPE_FONT_FACE) return true;
+    /* AND NEITHER DOES AN `@page`, for a third reason of its own: its declarations style the PAGE BOX, which
+       CSS Paged Media §3 makes a box outside the document tree. Its page selector list selects pages and not
+       elements — `named:first` matches no element, and there is no element it could — so nothing in it can
+       reach the selector matcher. §4.3's margin at-rules are inside it and go with it. */
+    if (r->type == RULE_TYPE_PAGE) return true;
     DCHECK(r->type == RULE_TYPE_STYLE, "the author cascade met a rule type it has no arm for");
     /* CSS NESTING IS NOT FLATTENED, and must not be: a nested style rule's selector is RELATIVE to its parent's
        (`&`, and the implicit descendant a bare compound selector carries), so lifting it to the top level of
@@ -1498,7 +1759,10 @@ void css_rule_init(JSContext *ctx)
     g_proto_slot[PROTO_IMPORT] = realm_value_declare(ctx, "CSSOM §6.4.4 CSSImportRule.prototype");
     g_proto_slot[PROTO_NAMESPACE] = realm_value_declare(ctx, "CSSOM §6.4.9 CSSNamespaceRule.prototype");
     g_proto_slot[PROTO_FONT_FACE] = realm_value_declare(ctx, "CSS Fonts §12.1 CSSFontFaceRule.prototype");
+    g_proto_slot[PROTO_PAGE] = realm_value_declare(ctx, "CSSOM §6.4.7 CSSPageRule.prototype");
+    g_proto_slot[PROTO_MARGIN] = realm_value_declare(ctx, "CSSOM §6.4.8 CSSMarginRule.prototype");
     g_id_set_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_selector, 0);
+    g_id_set_page_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_page_selector, 0);
     g_id_set_css_text = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_css_text, 0);
     {
         /* §6.4.5: `unsigned long insertRule(CSSOMString rule, optional unsigned long index = 0)` and
@@ -1516,7 +1780,7 @@ void css_rule_init(JSContext *ctx)
 
 void css_rule_install_proto(JSContext *ctx)
 {
-    JSValue base, grouping, style, condition, media, import_rule, ns, font_face;
+    JSValue base, grouping, style, condition, media, import_rule, ns, font_face, page, margin;
 
     DCHECK(g_rule_class != 0, "a realm asked for the rule prototypes before the interfaces existed");
 
@@ -1546,7 +1810,8 @@ void css_rule_install_proto(JSContext *ctx)
     CHECK(!JS_IsException(style), "CSSStyleRule.prototype could not be allocated");
     idl_interface_tag(ctx, style, "CSSStyleRule");
     idl_install_accessor(ctx, style, "selectorText", js_rule_get, CR_SELECTOR_TEXT, g_id_set_selector);
-    idl_install_accessor(ctx, style, "style", js_rule_style, 0, cssom_put_forwards_setter());
+    idl_install_accessor(ctx, style, "style", js_rule_style, STYLE_OF_STYLE_RULE,
+                         cssom_put_forwards_setter());
 
     /* CSS Conditional §7.2's CSSConditionRule.prototype — "all the conditional at-rules, which consist of a
        condition and a statement block". `conditionText` is READONLY: the setter older drafts gave it is gone
@@ -1599,12 +1864,35 @@ void css_rule_install_proto(JSContext *ctx)
     font_face = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(font_face), "CSSFontFaceRule.prototype could not be allocated");
     idl_interface_tag(ctx, font_face, "CSSFontFaceRule");
-    idl_install_accessor(ctx, font_face, "style", js_rule_font_face_style, 0, cssom_put_forwards_setter());
+    idl_install_accessor(ctx, font_face, "style", js_rule_style, STYLE_OF_FONT_FACE,
+                         cssom_put_forwards_setter());
+
+    /* §6.4.7's CSSPageRule.prototype. It derives from CSSGroupingRule and not from CSSRule, because an
+       `@page` CONTAINS rules — CSS Paged Media §4.3's sixteen margin at-rules — so `cssRules`, `insertRule`
+       and `deleteRule` are reachable on one and are exactly the right members for it.
+       ITS `selectorText` IS NOT §6.4.3's. The two are two attributes of two interfaces over two grammars: CSS
+       Paged Media §4.3's `<page-selector-list>` is not a group of selectors and Selectors admits none of it,
+       so the getter reads a different magic and the setter runs a different parse. */
+    page = JS_NewObjectProto(ctx, grouping);
+    CHECK(!JS_IsException(page), "CSSPageRule.prototype could not be allocated");
+    idl_interface_tag(ctx, page, "CSSPageRule");
+    idl_install_accessor(ctx, page, "selectorText", js_rule_get, CR_PAGE_SELECTOR_TEXT, g_id_set_page_selector);
+    idl_install_accessor(ctx, page, "style", js_rule_style, STYLE_OF_PAGE, cssom_put_forwards_setter());
+
+    /* §6.4.8's CSSMarginRule.prototype — from CSSRule directly, because a margin at-rule's body is CSS Paged
+       Media §4.3's `<declaration-list>` and holds no rules at all. */
+    margin = JS_NewObjectProto(ctx, base);
+    CHECK(!JS_IsException(margin), "CSSMarginRule.prototype could not be allocated");
+    idl_interface_tag(ctx, margin, "CSSMarginRule");
+    idl_install_accessor(ctx, margin, "name", js_rule_get, CR_MARGIN_NAME, -1);
+    idl_install_accessor(ctx, margin, "style", js_rule_style, STYLE_OF_MARGIN, cssom_put_forwards_setter());
 
     /* Each into the realm's own slot, which asserts on its own that this install ran once in this realm. */
     realm_value_set(ctx, g_proto_slot[PROTO_IMPORT], import_rule);
     realm_value_set(ctx, g_proto_slot[PROTO_NAMESPACE], ns);
     realm_value_set(ctx, g_proto_slot[PROTO_FONT_FACE], font_face);
+    realm_value_set(ctx, g_proto_slot[PROTO_PAGE], page);
+    realm_value_set(ctx, g_proto_slot[PROTO_MARGIN], margin);
     realm_value_set(ctx, g_proto_slot[PROTO_RULE], base);
     realm_value_set(ctx, g_proto_slot[PROTO_GROUPING], grouping);
     realm_value_set(ctx, g_proto_slot[PROTO_STYLE], style);
@@ -1630,6 +1918,10 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
         { "CSSImportRule",     PROTO_IMPORT,     0 },
         { "CSSNamespaceRule",  PROTO_NAMESPACE,  0 },
         { "CSSFontFaceRule",   PROTO_FONT_FACE,  0 },
+        /* §6.4.7's derives from CSSGroupingRule (index 1) — an `@page` contains §4.3's margin at-rules —
+           while §6.4.8's derives from CSSRule, because a margin at-rule contains none. */
+        { "CSSPageRule",       PROTO_PAGE,       1 },
+        { "CSSMarginRule",     PROTO_MARGIN,     0 },
     };
     JSValue iface[sizeof(IFACES) / sizeof(IFACES[0])];
     unsigned i, n = sizeof(IFACES) / sizeof(IFACES[0]);

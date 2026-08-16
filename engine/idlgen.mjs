@@ -291,9 +291,17 @@ const INTERFACES = {
   CSSImportRule:        "core/css/css_rule.c",
   CSSNamespaceRule:     "core/css/css_rule.c",
   CSSFontFaceRule:      "core/css/css_rule.c",
-  /* CSS Fonts §12.1's descriptor block. Its file is the DECLARATION-BLOCK component and not the rule's: the
-     fifteen descriptor attributes are installed beside §6.6.1's per-property ones, over the same record. */
+  /* §6.4.7 and §6.4.8, same component and the same reason. CSSPageRule inherits CSSGroupingRule, so the row
+     is expected to report NOTHING missing — `cssRules`, `insertRule` and `deleteRule` are reachable on one and
+     really are installed. CSSMarginRule inherits CSSRule and declares only `name` and `style`. */
+  CSSPageRule:          "core/css/css_rule.c",
+  CSSMarginRule:        "core/css/css_rule.c",
+  /* CSS Fonts §12.1's and CSSOM §6.4.7's descriptor blocks. Their file is the DECLARATION-BLOCK component and
+     not the rule's: the descriptor attributes are installed beside §6.6.1's per-property ones, over the same
+     record. Both rows are expected to report nothing missing — each interface's members are exactly its own
+     table's two spellings plus the eight CSSStyleDeclaration declares. */
   CSSFontFaceDescriptors: "core/css/css_style_declaration.c",
+  CSSPageDescriptors:     "core/css/css_style_declaration.c",
   CSSRuleList:          "core/css/css_rule_list.c",
   /* HTML §4.2.6's `disabled` and CSSOM §6.3.2's LinkStyle `sheet` are installed onto HTMLStyleElement's
      prototype by their own component, for the same reason §4.10's rows name theirs. */
