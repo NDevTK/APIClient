@@ -71,6 +71,7 @@
 #include "solver/req2proto.h"
 #include "solver/result.h"
 #include "solver/solve.h"
+#include "solver/cold.h"      /* the cross-session tier: this host's residue, and what a resume rebuilt */
 #include "solver/dom_cow.h"   /* dom_attr_capture — the DOM write host-edge records into the per-flow DOM delta */
 #include "solver/attr_shadow.h"   /* the (element, slot) taint shadow — freed with the frontier at teardown */
 #include <lexbor/html/html.h>
@@ -1387,6 +1388,40 @@ static const char *HTML_MIN =
     "</script>"
     "</body></html>";
 
+/* THE CROSS-SESSION ROUND TRIP'S DOCUMENT — the third, and it exists because neither of the other two can be
+ * parked. cold_park refuses a frontier that holds a segment of a FOREIGN world, naming the cross-instance park
+ * that is not built; both documents above open child navigables (§7.4 `open()`, the cross-origin popup, the
+ * iframe loads), so a whole-frontier park of either aborts there. That crash is CORRECT and stays exactly where
+ * it is — what it means is that the residue this fixture can honestly write today is one from a document with
+ * no peer in it, and that is what this document is.
+ *
+ * WHAT IT HAS TO CARRY IS THE RECIPE GRAMMAR — one statement per record kind — because a residue made of one
+ * kind proves nothing about the arms that read the others, and until this document existed the only residue any
+ * process in this tree had ever produced was a single `f-,<val>`: a park taken before the first pick, one
+ * unstarted boot flow standing on nothing (engine/solvergate.mjs's `park` schedule). Every other arm of
+ * cold_resume — the segment rebuild, the hex decode, the sink-class re-bind, the probe address — had never run.
+ *   - A CONCOLIC BRANCH (`cfg.admin`), so flows stand on FROZEN DECISION SEGMENTS: the park then writes 's'
+ *     records and the 'f' records that name them by ordinal, and the resume walks a chain instead of a stub.
+ *   - A LOOP, so a flow is PREEMPTED mid-body and the residue holds a FRAMED flow — the one whose resume is a
+ *     replay of its arms rather than a restart, which is the claim §Time-travel-resume actually makes.
+ *   - AN @S SINK (`eval`), so solve.c seeds candidate sessions and the park writes 'c' records. They are the
+ *     only records that carry ATTACKER TEXT, so they are the only path through park_hex/park_unhex, and their
+ *     sink class is the only field that crosses the tier by NAME and has to be re-bound to a live pointer.
+ *   - AN ENDPOINT, which is what makes this origin enter the endpoint surface — and that is the event that
+ *     seeds the DISCOVERY probes whose whole identity is an address ('d').
+ * It is deliberately SMALL in every other respect: one fork and a six-iteration loop, so the document drains in
+ * a second session rather than becoming a frontier this fixture cannot finish measuring. */
+static const char *HTML_COLD =
+    "<!doctype html><html><body>"
+    "<script>var cfg = { admin: state.admin };</script>"
+    "<script>"
+    "var acc = 0; for (var i = 0; i < 6; i++) { acc += i; }"                       /* back-edges: a preempt mid-body, so a parked flow is FRAMED */
+    "if (cfg.admin) { fetch('/api/cold/admin?a=' + acc); }"                        /* the fork: two arms, two decision chains, and an endpoint per arm */
+    " else { fetch('/api/cold/public?a=' + acc); }"
+    "eval(\"'\" + state.code + \"'\");"                                            /* the @S sink: candidate sessions, hence 'c' records */
+    "</script>"
+    "</body></html>";
+
 /* HTML §7.2.6 AND CSP §6.1, in C — the browser half's tests are C tests, and this one has no page to run.
    What it pins is the pair of facts the rest of the platform will build on: what a policy PERMITS, and that a
    child's container is a CLONE whose answers do not move when the parent's would. */
@@ -2089,6 +2124,105 @@ static int arg_has(int argc, char **argv, const char *flag) {
     return 0;
 }
 
+/* …AND A FLAG THAT CARRIES A VALUE, for the one thing this host has to be told rather than asked: WHERE its
+   cold tier is. A flag with a missing operand is a path the fixture would then invent, so it says so instead. */
+static const char *arg_val(int argc, char **argv, const char *flag) {
+    int i;
+    for (i = 1; i < argc; i++)
+        if (argv[i] && !strcmp(argv[i], flag)) {
+            DCHECK(i + 1 < argc && argv[i + 1] != NULL,
+                   "a fixture flag that names a file was given without one — the cold tier's store is this "
+                   "host's IndexedDB and a run that invents its path writes a residue nothing will read back");
+            return argv[i + 1];
+        }
+    return NULL;
+}
+
+/* ─── THIS HOST'S COLD-TIER STORE ────────────────────────────────────────────────────────────────────────────
+ * THE PARK DOCUMENT HAS TO OUTLIVE THE PROCESS, WHICH IS THE WHOLE OF WHAT A SECOND SESSION IS. `_park` rides
+ * the result document to a trusted zone that puts it in IndexedDB and hands it back to qjs_begin on the next
+ * visit; this fixture had no such zone, so its residue lived in `g_park` and died with the runtime — and a
+ * document that dies with the writer cannot be read by anybody, which is the mechanical reason the read half
+ * had never executed here. A file IS that store: the same string, the same key (the caller's path), the same
+ * hand-back. What crosses is TEXT and it carries its type, which is the property SECURITY.md states about
+ * every other tier boundary and is true of this one for free — cold_park_recipes is already the language
+ * cold_resume parses.
+ * IT IS NOT A SECOND SCHEDULER, A REPLAY HARNESS OR A DRIVER. The resume is engine_sched_begin's own choice
+ * between a residue and a boot flow; all this supplies is the two sessions and the shelf between them. */
+static void tf_park_store(const char *path, const char *recipes) {
+    FILE *f = fopen(path, "wb");
+    size_t n = strlen(recipes);
+    size_t put;
+    int closed;
+
+    CHECK(f, "this host could not open its cold-tier store to write the parked residue — every flow the park "
+             "just wrote down is the only remaining copy of that timeline, and it is about to go with the "
+             "instance");
+    put = fwrite(recipes, 1, n, f);
+    closed = fclose(f);
+    CHECK(put == n && closed == 0,
+          "this host could not write the whole parked residue — a truncated park document is worse than none: "
+          "the records it kept name segments the records it lost were standing on");
+}
+
+/* …AND BACK. The residue is handed to engine_sched_begin exactly as read: no join, no split, no re-encode —
+   the one translation the extension performs (an array joined by ';') exists because IndexedDB stores JSON,
+   and a host with a file has no such boundary to translate across. */
+static char *tf_park_load(const char *path) {
+    FILE *f = fopen(path, "rb");
+    long n;
+    char *buf;
+    int seeked, rewound, closed;
+    size_t got;
+
+    CHECK(f, "this host could not open its cold-tier store to resume — a session asked to continue a residue "
+             "and the document naming it is not there, so it would silently re-explore from the baseline and "
+             "report that as a resume");
+    /* THE CALLS ARE MADE, THEN ASSERTED. A CHECK's condition is evaluated for its truth and nothing else — an
+       `fseek` inside one is work that a release build's compiled-out twin would have to keep, which is exactly
+       the asymmetry check.h's contract forbids. */
+    seeked = fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    rewound = fseek(f, 0, SEEK_SET);
+    CHECK(seeked == 0 && n >= 0 && rewound == 0,
+          "this host could not size the parked residue it is about to resume");
+    buf = malloc((size_t)n + 1);
+    CHECK(buf, "this host could not hold the parked residue it is about to resume");
+    got = fread(buf, 1, (size_t)n, f);
+    closed = fclose(f);
+    CHECK(got == (size_t)n && closed == 0,
+          "this host read less of the parked residue than the store holds — a park document truncated on the "
+          "way IN rebuilds flows standing on segments the tail of the document was going to write");
+    buf[n] = 0;
+    DCHECK(n > 0, "the cold-tier store holds an EMPTY residue — an empty park document is how a fully-explored "
+                  "document deletes its entry, so the session that wrote this one drained instead of parking "
+                  "and there is nothing here to resume");
+    return buf;
+}
+
+/* WHEN THIS HOST EVICTS (solver/engine.h's park hook). It is a POSITION IN THE RUN and not a budget: the park
+ * writes every member of the frontier, so what this decides is when the residue leaves memory and never how
+ * much of it there is.
+ *
+ * IT IS A CONDITION AND NOT A STEP COUNT, because a step count picks a moment whose CONTENTS nobody knows —
+ * and what a residue is worth is entirely its contents. The two facts named here are the two that decide which
+ * arms of the recipe grammar cross:
+ *   - THE SEARCH HAS OPENED (`solve_candidate_count()`), so @S candidate sessions are members of the frontier.
+ *     They are the only records that carry attacker text, hence the only path through park_hex/park_unhex and
+ *     the only sink class that has to be re-bound from a NAME to a live pointer on the way back.
+ *   - AND THE FRONTIER IS WAITING ON THIS HOST (`fixture_owed`), which is the moment AFTER those candidates
+ *     have run: each has re-entered the document, taken the branch — so it stands on a FROZEN DECISION SEGMENT
+ *     and the park writes 's' records and the ordinals that name them — and then parked on a reply.
+ *
+ * WHAT THIS MOMENT CANNOT ALSO CONTAIN, stated because it is structural rather than a shortcoming of the
+ * condition: a DISCOVERY PROBE ('d'). Candidates are seeded only when the frontier drains with the host owing
+ * NOTHING (engine.c's stall seam), and a probe parked on its address is precisely something the host owes — so
+ * every probe has been answered and finished by the time the first candidate exists. A park holding both is
+ * not a tuning question, it is a different park. */
+static int fixture_want_park(void) {
+    return solve_candidate_count() > 0 && fixture_owed();
+}
+
 int main(int argc, char **argv) {
     JSRuntime *rt;
     trusted_types_selftest();
@@ -2112,7 +2246,27 @@ int main(int argc, char **argv) {
     tf_agent_init(ctx, "https://x.test", "https://x.test/p");
     navigable_set_realm_builder(tf_child_realm);
     int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
-    const char *doc = min_doc ? HTML_MIN : HTML;
+    /* THE TWO SESSIONS OF THE CROSS-SESSION ROUND TRIP, one per invocation, because that is what a session
+       boundary IS: the first writes its residue to this host's store and the process ends, the second starts
+       from nothing but that document. Doing both inside one process would leave the endpoint surface, the sink
+       searches and the world namespace of the first standing behind the second, so "the resumed session found
+       it" and "the previous session had already found it" would be the same observation. */
+    const char *cold_park_path = arg_val(argc, argv, "--cold-park");
+    const char *cold_resume_path = arg_val(argc, argv, "--cold-resume");
+    int cold_doc = (cold_park_path || cold_resume_path) ? 1 : 0;
+    char *cold_residue = NULL;
+    /* ONE OF THE TWO PER INVOCATION. The product's steady state is a session that resumes a residue AND
+       re-parks what it did not finish, so this is a limit of the FIXTURE's verdict and not of the tier: the
+       probe table names one document per run, and a session doing both would have to carry two sets of rows
+       under one answer. Said as a refusal rather than left to produce a half-checked run. */
+    DCHECK(!(cold_park_path && cold_resume_path),
+           "this host was asked to park AND to resume in one invocation — its probe table answers for one "
+           "session, so the two halves of the round trip are two runs of this binary");
+    DCHECK(!(cold_doc && min_doc),
+           "the cold round trip was asked for over the minimal document — the park refuses a frontier holding "
+           "a foreign world's segment and that document opens child navigables, so this run would abort in "
+           "cold_park naming the cross-instance park rather than measuring the tier");
+    const char *doc = cold_doc ? HTML_COLD : (min_doc ? HTML_MIN : HTML);
     lxb_html_document_t *dom = lxb_html_document_create();
     lxb_html_document_parse(dom, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
@@ -2151,10 +2305,44 @@ int main(int argc, char **argv) {
     engine_set_provider(fixture_provide);
 
     DocScripts scripts = document_exec_scripts(dom);   /* each <script> its own program body — no concat */
-    engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.n);   /* @H + @S detection */
+    /* THE RESIDUE THIS SESSION IS CONTINUING, read off the shelf before the scheduler is seeded — because the
+       choice between it and a boot flow is made once, inside engine_sched_begin, and a residue that arrived
+       after that point would be a second seeding of the same document. */
+    if (cold_resume_path) cold_residue = tf_park_load(cold_resume_path);
+    /* …AND WHETHER THIS HOST EVICTS AT ALL. Installed only for the session that was asked to park, because a
+       host that never gives up its residue installs nothing — the seam is the question, not a default. */
+    if (cold_park_path) engine_set_park_hook(fixture_want_park);
+    engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.n, cold_residue);   /* @H + @S detection */
     /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */
     doc_scripts_free(&scripts);
     lxb_html_document_destroy(dom);
+    free(cold_residue); cold_residue = NULL;   /* engine_sched_begin rebuilt from it; the text was borrowed */
+
+    /* ─── THE COLD TIER'S TWO ENDS, EACH REPORTED PER RECORD KIND ────────────────────────────────────────────
+       A total cannot say which ARMS ran, and the arms are the whole question: a residue of nothing but 'f'
+       records reads back without touching the segment rebuild, park_unhex or the sink-class re-bind, and
+       reports the same count as one that touches all three. Both lines carry the same four fields for the same
+       reason, so the two ends of one round trip can be read against each other by eye. */
+    ColdParked cp;
+    ColdResumed cr;
+    memset(&cp, 0, sizeof cp);
+    memset(&cr, 0, sizeof cr);
+    if (cold_park_path) {
+        const char *recipes = cold_park_recipes();
+        cold_parked(&cp);
+        /* THE RESIDUE GOES TO THE SHELF BEFORE THE TEARDOWN RUNS. flow_registry_free frees the park document
+           with the frontier it belongs to, so a store written after it would be written from freed memory —
+           and the residue is the only remaining copy of every flow in it. */
+        tf_park_store(cold_park_path, recipes);
+        printf("@COLDPARK {\"records\":%ld,\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"probes\":%ld,"
+               "\"bytes\":%zu,\"store\":\"%s\"}\n",
+               cold_park_records(), cp.segs, cp.flows, cp.cands, cp.probes, strlen(recipes), cold_park_path);
+    }
+    if (cold_resume_path) {
+        cold_resumed(&cr);
+        printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"probes\":%ld}\n",
+               cr.segs, cr.flows, cr.cands, cr.probes);
+    }
 
     /* ONE result document — both surfaces and the scheduler's interleave count, serialized DIRECTLY from the
        C findings (no JS-object round-trip). The host does one JSON.parse of this line and relays it; it used
@@ -2576,9 +2764,32 @@ int main(int argc, char **argv) {
        is exactly the two-hand-maintained-lists shape the paragraph above describes: they could not be scoped to
        a document, so selecting the minimal one made the run FAIL on `location.hash` sinks that document does not
        contain. One table, one gate, one report. */
-    /* The three answers, so a row states which program its fact came from. The values are chosen so that the
-       rows already written keep their meaning: 0 was "full only" and 1 was "the minimal subset", which is BOTH. */
-    enum { DOC_FULL = 0, DOC_BOTH = 1, DOC_MIN = 2 };
+    /* THE CROSS-SESSION ROUND TRIP'S OWN STATEMENTS, one per record kind at each end, because "it resumed" is
+       the observation that cannot distinguish an exercised tier from an unexercised one. The park's four
+       numbers and the resume's four are the SAME four, so a kind written at one end and not rebuilt at the
+       other is visible as a pair rather than inferred from a total.
+       A ROW THAT READS 0 IS THE FORCING FUNCTION, NOT A FLAKE. `park-deep` at 0 means the eviction landed
+       before any flow had forked, so the residue is the `f-,<val>` a park before the first pick already writes
+       and the segment rebuild did not run. `park-cand` at 0 means no @S candidate session was live when the
+       park was taken, so no attacker text crossed and park_hex/park_unhex did not. Neither is a reason to
+       soften the row — each names exactly which arm went unexercised, which is the whole reason the census is
+       per kind, and fixture_want_park is where the moment is chosen. */
+    int cold_park_wrote = cold_park_path && cold_park_records() > 0;
+    int cold_park_deep  = cold_park_path && cp.segs > 0;
+    int cold_park_cand  = cold_park_path && cp.cands > 0;
+    int cold_resumed_any   = cold_resume_path && (cr.flows + cr.cands + cr.probes) > 0;
+    int cold_resumed_segs  = cold_resume_path && cr.segs > 0;
+    int cold_resumed_cand  = cold_resume_path && cr.cands > 0;
+    /* AND THE REPLAY ACTUALLY EXPLORED. A resumed flow re-runs the document under its recorded arms and forks
+       normally the moment the recipe runs out, so BOTH arms of the one branch must be in the session that
+       resumed — a session that rebuilt its flows and then went nowhere would satisfy every count above. */
+    int cold_arms = (strstr(js, "\"/api/cold/admin\"") && strstr(js, "\"/api/cold/public\"")) ? 1 : 0;
+    /* The four answers, so a row states which program its fact came from. The values are chosen so that the
+       rows already written keep their meaning: 0 was "full only" and 1 was "the minimal subset", which is BOTH.
+       The two cold sessions are two ANSWERS and not one, because they are two programs' worth of statements:
+       one is about what a park WROTE and the other about what a resume REBUILT, and a row that ran in the
+       wrong session would be asserting about a run that never happened. */
+    enum { DOC_FULL = 0, DOC_BOTH = 1, DOC_MIN = 2, DOC_PARK = 3, DOC_RESUME = 4 };
     /* WHICH DOCUMENTS CARRY THE STATEMENT: DOC_FULL only, BOTH, or DOC_MIN only. Two documents means two bits,
        and the field held one — which was sound only while the minimal document was a strict SUBSET of the full
        one. It is not: the opaque-iteration statement is in the minimal document ALONE, because running it in the
@@ -2627,17 +2838,43 @@ int main(int argc, char **argv) {
         { "s-html", s_html, 1 },
         { "s-url", s_url, 1 },             { "s-loc", s_loc, 0 },
         { "s-park", s_park, 0 },
+        /* SESSION ONE of the cross-session round trip: what the park WROTE, per record kind. */
+        { "park-wrote", cold_park_wrote, DOC_PARK }, { "park-deep", cold_park_deep, DOC_PARK },
+        { "park-cand", cold_park_cand, DOC_PARK },
+        /* SESSION TWO: what the resume REBUILT out of it, and that the rebuilt frontier then explored. */
+        { "resumed", cold_resumed_any, DOC_RESUME },       { "resumed-segs", cold_resumed_segs, DOC_RESUME },
+        { "resumed-cand", cold_resumed_cand, DOC_RESUME }, { "resumed-arms", cold_arms, DOC_RESUME },
     };
+    /* WHICH ROWS THIS INVOCATION CARRIES. DOC_BOTH means "the full document and the minimal one" — the two that
+       were the whole world when it was named — so a COLD session runs neither it nor them: every one of those
+       statements is about a program this invocation did not run, and a row asserting a fact about a run that
+       never happened is precisely what this field exists to prevent. */
+    const int doc_sel = cold_park_path ? DOC_PARK : cold_resume_path ? DOC_RESUME
+                      : min_doc ? DOC_MIN : DOC_FULL;
     int h_ok = 1;
     printf("@H ");
     for (unsigned pi = 0; pi < sizeof(probes) / sizeof(probes[0]); pi++) {
-        if (probes[pi].docs != DOC_BOTH && probes[pi].docs != (min_doc ? DOC_MIN : DOC_FULL))
+        if (probes[pi].docs != doc_sel &&
+            !(probes[pi].docs == DOC_BOTH && (doc_sel == DOC_FULL || doc_sel == DOC_MIN)))
             continue;
         h_ok = h_ok && probes[pi].ok;
         printf("%s=%d ", probes[pi].name, probes[pi].ok);
     }
     printf("=> %s\n", h_ok ? "OK" : "FAIL");
 
+    /* THE SENTENCE NAMES WHAT THIS INVOCATION MEASURED. A cold session runs none of the @H/@S rows, so
+       reporting their verdict over it would be a claim about a program it did not run — the same defect the
+       `docs` field exists to prevent, one line further down. */
+    if (cold_doc)
+        printf("%s\n", h_ok
+            ? (cold_park_path
+                ? "PASS: the frontier was written to this host's cold-tier store as recipes carrying every "
+                  "record kind — resume it with --cold-resume over the same path"
+                : "PASS: the parked residue was rebuilt into the ONE frontier and the resumed flows explored "
+                  "both arms of the branch they were suspended past")
+            : "FAIL: the cross-session round trip did not exercise the tier — read the 0 rows above and the "
+              "@COLDPARK/@COLDRESUME census beside them");
+    else
     printf("%s\n", h_ok
         ? "PASS: @H merge AND @S eval + innerHTML + location + a REAL Location source — fired where the source's"
           " transform permits, parked where it does not"

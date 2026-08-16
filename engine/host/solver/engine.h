@@ -77,8 +77,24 @@ void engine_set_document_done_hook(int (*fn)(JSContext *ctx));
 void engine_prepare_fork(void *dec_blob, void *pin_blob);
 
 /* Run the scripts to frontier exhaustion: seed the first flow, bracket each run with the decision state +
-   per-flow COW delta, and drain the frontier by WFQ order. */
-void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n);
+   per-flow COW delta, and drain the frontier by WFQ order.
+   `recipes` is the PARKED RESIDUE this host stored for the document, or NULL/"" for one with none — the same
+   parameter engine_sched_begin takes and for the same reason, because the choice between a residue and a boot
+   flow is the SCHEDULER's and not the store's. This driver used to pass NULL unconditionally, on the reasoning
+   that the cold tier "belongs to the host that has an IndexedDB"; that made the entire resume path unreachable
+   from every host in this tree that can be run without a browser, so the language cold_resume parses had no
+   producer any process could reach. */
+void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n,
+                const char *recipes);
+
+/* …AND WHETHER THIS HOST WANTS THE RESIDUE, asked at each step boundary of the one-call driver. It is the
+   Level-1 eviction seam: the HOST decides there is pressure (it is the only zone that can see the other
+   documents' engines and the summed working set) and the ENGINE decides when — the next boundary with no flow
+   switched in, which is the only moment every flow's state is in its own blob. A non-zero answer requests the
+   park (engine_request_park); a host that never evicts installs nothing, which is every existing caller.
+   IT IS A QUESTION, NOT A BUDGET. The park writes EVERY member of the frontier and the host stores it, so what
+   this decides is when the residue leaves memory and never how much of it survives. */
+void engine_set_park_hook(int (*want_park)(void));
 
 /* THE SESSION — the same dispatch loop, stepped by its HOST instead of drained. The extension's host has other
    work between quanta (its message port, other documents' engines, streaming findings), and CLAUDE.md's

@@ -141,11 +141,39 @@ void cold_park_flow(Flow *f);
    flows go and how far down the frontier to go — see the OOM CHECK in engine.c's flow-compile path. */
 void cold_park(void);
 
-/* THE PARK DOCUMENT, as a JSON array ready to drop into the result document — "[]" until a flow is written,
-   which is what tells the host this engine finished rather than paged out (an empty recipe list DELETES the
-   origin's cold entry, which is the right answer for a document that is fully explored). ONE document per
-   session however many parks appended to it: the closing bracket is rendered by this call rather than stored,
-   so a later append lands inside the same array. Borrowed; freed by cold_free. */
+/* THE PARK DOCUMENT AS THIS FILE HOLDS IT — the ';'-joined records, which is exactly the string cold_resume
+   parses. "" until a flow is written, and that emptiness is the POSITIVE answer engine_sched_begin reads as
+   "no residue, seed a boot flow" (a document that drained deletes its cold entry rather than storing one).
+   IT IS THE CANONICAL FORM AND THE JSON BELOW IS A TRANSPORT, which is a correction and not a preference: the
+   buffer used to hold JSON while the reader parsed ';'-joined text, so the only producer of the reader's own
+   language anywhere in the system was `extension/bridge.js` joining the array it had stored. No process held
+   both ends, and the entire read half — the 's'/'c'/'d' rebuilds, park_unhex, solve_resume_candidate — was
+   therefore unreachable from any host without an IndexedDB. A host that can store a string (the fixture stores
+   a file) stores this and hands it back to engine_sched_begin unchanged. Borrowed; freed by cold_free. */
+const char *cold_park_recipes(void);
+
+/* HOW MANY RECORDS ARE IN IT — the writer's own count, not a second parse of its output. A host that wants to
+   say what it stored asks; a host that counted the ';' itself would be a second speller of the grammar. */
+long cold_park_records(void);
+
+/* …AND WHICH KINDS THEY ARE, which is the only thing that can say how DEEP a park was. The two ends of the
+   tier are asked the same question in the same shape (ColdResumed below) because they are one round trip: a
+   residue of nothing but `f-,<val>` records — every flow standing on no decision segment, which is what a park
+   taken before the first pick writes — resumes without touching park_emit_chain's output, park_unhex or the
+   sink-class re-bind, and reports the identical record count as one taken after the document forked. A host
+   that cannot tell those apart cannot tell an exercised round trip from an unexercised one. */
+typedef struct {
+    long segs;     /* 's': frozen decision segments, written once each however many flows stand on them */
+    long flows;    /* 'f' */
+    long cands;    /* 'c' */
+    long probes;   /* 'd' */
+} ColdParked;
+void cold_parked(ColdParked *out);
+
+/* …AND THE SAME DOCUMENT AS THE JSON ARRAY the result document carries, rendered from the records on demand —
+   "[]" when there are none. IndexedDB is what the trusted zone has, so the array is what crosses to it; the
+   render is where "no record needs JSON escaping" is asserted, once, instead of being trusted separately by
+   each of the four record writers. Borrowed; freed by cold_free. */
 const char *cold_park_json(void);
 
 /* MERGE a parked residue INTO the frontier: the ';'-joined records the host stored, back into flows on the ONE
@@ -158,6 +186,18 @@ const char *cold_park_json(void);
    the merge. Whether a SESSION starts from a residue or from a fresh boot flow is engine_sched_begin's choice,
    not this call's — they are alternatives, and the frontier is seeded once. */
 void cold_resume(JSContext *ctx, const char *recipes);
+
+/* WHAT THE LAST cold_resume REBUILT, PER RECORD KIND — the observable that says which ARMS of the grammar ran.
+   `@RESUMED <n>` is printed for the extension because a line on stdout is the only channel that zone has, and
+   a single total cannot distinguish a residue of nothing but plain flows from one that also carried an @S
+   candidate (park_unhex, solve_resume_candidate) or a discovery probe. A host that can call C asks here. */
+typedef struct {
+    long segs;     /* frozen decision segments rebuilt from 's' records — the shared prefixes every flow stands on */
+    long flows;    /* 'f': exploration flows */
+    long cands;    /* 'c': @S candidate sessions, each carrying a hex source and payload */
+    long probes;   /* 'd': discovery probes, each an address to re-issue */
+} ColdResumed;
+void cold_resumed(ColdResumed *out);
 
 void cold_free(void);
 

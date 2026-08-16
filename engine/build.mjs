@@ -7,13 +7,15 @@
  *   node engine/build.mjs native [min]     -> the smoke fixture built and run NATIVELY (the memory series)
  *   node engine/build.mjs native leak      -> the same under LeakSanitizer
  *   node engine/build.mjs native address   -> the same under AddressSanitizer
+ *   node engine/build.mjs native cold      -> the CROSS-SESSION round trip: session one parks its frontier to a
+ *                                            file, session two (a second process) resumes from it
  *
  * Build success/failure is the milestone-0 signal (does clean quickjs-ng compile
  * + link + boot). Design-correctness verification stays on the live Chrome
  * harness once the browser target is wired.
  */
 import { spawnSync, spawn } from "node:child_process";
-import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync, readFileSync } from "node:fs";
+import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { cpus } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -221,6 +223,43 @@ if (NATIVE) {
   ], { stdio: "inherit" });
   if (cc.status !== 0) { console.error("[build] native build FAILED rc=" + cc.status); process.exit(cc.status || 1); }
   console.log("[build] OK -> " + bin);
+  /* THE CROSS-SESSION ROUND TRIP: TWO INVOCATIONS OVER ONE SHELF.
+   *
+   * §Time-travel-resume's whole claim is that the frontier persists as suspended snapshots ACROSS SESSIONS, and
+   * until this target existed nothing in this tree could run both halves of it: the residue the engine writes
+   * and the residue cold_resume reads were produced and consumed in different processes, and the only host that
+   * held both ends was a browser with an IndexedDB. So the read half — the segment rebuild, park_unhex,
+   * solve_resume_candidate, the probe address — had never executed in ANY process.
+   * A SESSION BOUNDARY IS A PROCESS BOUNDARY, which is why this is two spawns and not one binary doing both. A
+   * single process would leave the first session's endpoint surface, sink searches and world namespace standing
+   * behind the second, so "the resumed session found it" and "the previous session had already found it" would
+   * be the same observation and the round trip would prove nothing.
+   * IT IS NOT A DRIVER. The shelf is a file, the resume is engine_sched_begin's own choice between a residue
+   * and a boot flow, and everything between the two spawns is the store — which is exactly what the trusted
+   * zone is to the shipped engine. */
+  if (process.argv.includes("cold")) {
+    const store = join(OUT, "park.recipes");
+    /* THE SHELF IS EMPTY BEFORE SESSION ONE. A residue left by an earlier run of a DIFFERENT tree would resume
+       flows standing on segments this build never wrote — and it would look like a pass. */
+    rmSync(store, { force: true });
+    const one = spawnSync(bin, ["--cold-park", store], { stdio: "inherit" });
+    if (one.status !== 0) {
+      console.error("[build] session ONE (--cold-park) reported rc=" + (one.status ?? "signal") +
+                    " — read its `@H park-*` rows and the @COLDPARK census: a 0 there names which record kind " +
+                    "the park did not write, and the moment it was taken at is `fixture_want_park` in " +
+                    "engine/host/test_forced.c.");
+      process.exit(one.status || 1);
+    }
+    const two = spawnSync(bin, ["--cold-resume", store], { stdio: "inherit" });
+    if (two.status !== 0) {
+      console.error("[build] session TWO (--cold-resume) reported rc=" + (two.status ?? "signal") +
+                    " — `@RESUMED <n>` and the @COLDRESUME census say what it rebuilt out of the residue; a " +
+                    "kind session one wrote and this one did not rebuild is the arm to look at.");
+      process.exit(two.status || 1);
+    }
+    console.log("[build] cold round trip PASS (" + kind + ") — residue at " + store);
+    process.exit(0);
+  }
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
      the stream it prints and the report it ends with, and nothing else in the tree produces either. */
   const t = spawnSync(bin, MIN ? ["--min"] : [], { stdio: "inherit" });

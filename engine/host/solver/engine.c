@@ -3402,13 +3402,36 @@ static size_t engine_c_alloc_arena(void)
 static int (*g_provider)(JSContext *ctx);
 void engine_set_provider(int (*provide)(JSContext *ctx)) { g_provider = provide; }
 
-static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n, int forking) {
+/* …AND WHETHER THIS HOST WANTS THE FRONTIER'S RESIDUE — see engine.h. A seam, not a policy: the answer is the
+   host's and the moment the park is TAKEN at is the engine's. */
+static int (*g_park_hook)(void);
+void engine_set_park_hook(int (*want_park)(void)) { g_park_hook = want_park; }
+
+static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n, int forking,
+                          const char *recipes) {
     int next = ENGINE_PROGRESS_EVERY, last_cands = -1, r;
-    /* NO PARKED RESIDUE: this driver is a host with nothing else to do and no store to have kept one in — it
-       runs a document to exhaustion in one call. The cold tier's resume belongs to the host that has an
-       IndexedDB to have written the residue to, which is the extension's. */
-    engine_sched_begin(ctx, bodies, srcs, types, n, forking, NULL);
+    /* THE RESIDUE THIS HOST WAS HANDED, or NULL. This line used to say the cold tier's resume "belongs to the
+       host that has an IndexedDB", and that was a claim about STORAGE standing in for a claim about the
+       SCHEDULER: seeding from a residue is engine_sched_begin's own alternative to seeding a boot flow, and a
+       host with a file is as much a store as a host with an object store. Passing NULL from here made the
+       resume path unreachable from every host but the extension's, which is exactly the shape §SECURITY.md
+       names one level up — a mechanism that can be written, reviewed and self-tested with no process able to
+       run it. The store is the caller's business; the choice is the scheduler's, and it is made in one place. */
+    engine_sched_begin(ctx, bodies, srcs, types, n, forking, recipes);
     for (;;) {
+        /* DOES THIS HOST WANT THE RESIDUE? Level-1 eviction is the HOST's decision — it is the only zone that
+           can see the other documents' engines and the summed working set — so it is a SEAM here exactly as
+           the stall payment is, and for the same reason: the scheduler holds no idea of what memory pressure
+           is, and the host holds no idea of what a flow is. A host that never evicts installs nothing, which
+           is every existing caller.
+           IT TRUNCATES NOTHING, which is what keeps it out of §NO BOUNDS. The park WRITES every member of the
+           frontier and the caller stores it, so what this seam decides is WHEN the residue leaves memory and
+           never how much of it survives — which is precisely the difference between paging and a cap.
+           ASKED AT THE TOP OF THE LOOP, so a host that answers yes gets the park taken at the next step
+           boundary with no flow switched in, which is the only moment every flow's decision state is in its
+           own blob rather than in decide.c's globals. */
+        if (g_park_hook && g_park_hook())
+            engine_request_park();
         r = engine_sched_step();
         if (r == ENGINE_STEP_DONE)
             break;
@@ -3685,8 +3708,9 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
         engine_session_close();
 }
 
-/* EXPLORE: seed boot + drain the frontier, forking at every concolic branch. */
-void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n) {
-    run_scheduler(ctx, bodies, srcs, types, n, 1);
+/* EXPLORE: seed boot OR a parked residue, then drain the frontier, forking at every concolic branch. */
+void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n,
+                const char *recipes) {
+    run_scheduler(ctx, bodies, srcs, types, n, 1, recipes);
 }
 

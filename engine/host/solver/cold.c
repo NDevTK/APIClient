@@ -99,12 +99,30 @@ void cold_census(ColdCensus *out)
  * times the engine parks into it — and it parks more than once: a PARTIAL self-park writes the lowest-value
  * TAIL and releases it while the engine keeps running, and the tail it writes an hour later has to land in the
  * same document as the first, or whichever half the host does not store is a set of flows nothing will resume.
- * SO THE DOCUMENT IS APPENDED TO, RECORD BY RECORD, and the JSON array's closing bracket is RENDERED by
- * cold_park_json rather than accumulated — a bracket written into the buffer would be a terminator the next
- * append had to reach back and unwrite, which is the one edit that silently produces two arrays in one value. */
+ * SO THE DOCUMENT IS APPENDED TO, RECORD BY RECORD, and nothing that terminates it is ever written into it.
+ *
+ * AND THE FORM IT IS ACCUMULATED IN IS THE FORM ITS OWN READER PARSES — ';'-joined records — which is the
+ * correction this paragraph carries and the reason the read half had never run. The buffer used to hold JSON
+ * (`["s0,-,01","f0,3"`, with the closing bracket rendered), while cold_resume parses a ';'-joined string; the
+ * only producer of THAT language in the whole system was `extension/bridge.js`, which joins the stored array
+ * on its way back to qjs_begin. So the engine WROTE one language and READ another, no process ever held both
+ * ends, and every one of the resume arms below — the 's'/'c'/'d' rebuilds, park_unhex, solve_resume_candidate
+ * — was reachable only from a browser with an IndexedDB in it. A component whose input nothing in the program
+ * can produce is not a component that has not been exercised yet; it is one that CANNOT be, and the fix is not
+ * a second host, it is to make the writer speak the reader's language.
+ * THE JSON ARRAY IS A TRANSPORT, RENDERED AT THE BOUNDARY THAT NEEDS IT. `_park` rides the result document
+ * because the trusted zone stores it in IndexedDB and IndexedDB stores JSON, so cold_park_json builds the
+ * array out of the records on demand — which is also where the claim "nothing in this document needs JSON
+ * escaping" is finally asserted rather than distributed across four writers. A host with a FILE (the fixture)
+ * stores cold_park_recipes() directly and hands it straight back, which is the same document with one fewer
+ * translation in it. */
 static char *g_park;
 static size_t g_park_len, g_park_cap;
 static long  g_park_recs;
+/* …AND THE RENDERED TRANSPORT, rebuilt from the records on every ask rather than accumulated beside them. Two
+   accumulated copies would be two things to keep in step, and result.c asks twice (once to size its buffer,
+   once to fill it) — so this is idempotent by construction: the same records render the same bytes. */
+static char *g_park_json;
 
 static void park_reserve(size_t n)
 {
@@ -133,10 +151,15 @@ static void park_raw(const char *s, size_t n)
 
 static void park_str(const char *s) { park_raw(s, strlen(s)); }
 
-/* ONE RECORD, as one element of the JSON array. The charset is asserted rather than escaped: a record is built
-   from digits, the two arm characters and the punctuation below, so nothing in it can need JSON escaping and
-   nothing in it can be the ';' the host joins records with. An escape path here would be a second encoder for
-   text this file produces itself — and the failure it would hide (a record that splits into two on the way
+/* ONE RECORD BEGINS. The separator is written BEFORE the record rather than after it, so the document never
+   carries a trailing byte a later append has to reach back and unwrite — the property the rendered closing
+   bracket used to buy, now true of the accumulation itself. */
+static void park_open_rec(void) { if (g_park_recs++) park_str(";"); }
+
+/* ONE RECORD. The charset is asserted rather than escaped: a record is built from digits, the two arm
+   characters and the punctuation below, so nothing in it can need JSON escaping on the way to the transport
+   and nothing in it can be the ';' THIS FILE joins records with. An escape path here would be a second encoder
+   for text this file produces itself — and the failure it would hide (a record that splits into two on the way
    back) is exactly the one that must never be silent. */
 static void park_rec(const char *s)
 {
@@ -147,15 +170,14 @@ static void park_rec(const char *s)
                *p == 'e' || *p == 'E' || *p == 'f',
                "a park record holds a character the recipe grammar does not have — it would need JSON escaping "
                "on the way out, or (a ';') would split into two records on the way back in");
-    park_str(g_park_recs++ ? ",\"" : "\"");
+    park_open_rec();
     park_str(s);
-    park_str("\"");
 }
 
 /* THE ONE RECORD WHOSE LAST FIELD IS TEXT THIS FILE DID NOT COMPOSE OUT OF DIGITS — a discovery flow's whole
    identity is the address it probes (solver/discovery.h), so the address has to cross. It gets its OWN charset
    rather than widening park_rec's for every record, because the reason that assert is narrow is that a record
-   built from digits can never need JSON escaping and can never contain the ';' the host joins records with. A
+   built from digits can never need JSON escaping and can never contain the ';' this file joins records with. A
    URL can contain neither either — every candidate is minted by discovery.c out of an origin, a well-known path
    and a query — and this states exactly that, so the day one carries a quote, a backslash, a ';' or a byte
    outside printable ASCII the park says so instead of storing a document that splits in two on the way back. */
@@ -171,19 +193,18 @@ static void park_rec_url(double val, const char *url)
                "a parked discovery candidate holds a character the recipe grammar does not have — it would "
                "need JSON escaping on the way out, or (a ';') would split into two records on the way back in");
     }
-    park_str(g_park_recs++ ? ",\"" : "\"");
+    park_open_rec();
     park_str(head);
     park_str(url);
-    park_str("\"");
 }
 
 /* ATTACKER TEXT CROSSES AS HEX, and it is the one thing in this document whose charset the grammar cannot
    state. Every other field is composed of digits by this file and park_rec asserts exactly that; park_rec_url
    widens it once by naming what an address cannot contain. A BREAKOUT can contain anything: `';X9()//` holds
-   the ';' the host joins records with, an HTML breakout holds the '"' the JSON value is quoted with, and a
-   payload that survives a filter may be any byte at all. So the choice is a charset PREDICATE that three
-   separate consumers would have to be kept in step with — this grammar, the JSON writer, and the host's split
-   — or an ENCODING with no predicate in it. Hex has none: two characters per byte, both inside every one of
+   the ';' this file joins records with, an HTML breakout holds the '"' the transport quotes each record with,
+   and a payload that survives a filter may be any byte at all. So the choice is a charset PREDICATE that three
+   separate consumers would have to be kept in step with — this grammar, the JSON render, and cold_resume's
+   split — or an ENCODING with no predicate in it. Hex has none: two characters per byte, both inside every one of
    those alphabets, and park_unhex is the only thing that ever reads one back. It costs a doubling on two short
    fields, which is the price of never having to be right about a set of bytes again. */
 static void park_hex(const char *s)
@@ -276,14 +297,13 @@ static void park_rec_cand(const Flow *f, long id)
                "a ',' in it shifts every field after it and a ';' splits the record in two");
     if (id < 0) snprintf(head, sizeof head, "c-,%.17g,", f->val);
     else        snprintf(head, sizeof head, "c%ld,%.17g,", id, f->val);
-    park_str(g_park_recs++ ? ",\"" : "\"");
+    park_open_rec();
     park_str(head);
     park_str(f->cand_sink);
     park_str(",");
     park_hex(f->cand_src);
     park_str(",");
     park_hex(f->cand_payload);
-    park_str("\"");
 }
 
 /* THE SEGMENT ORDINALS — the cross-tier NAME of a frozen decision segment, valid only inside one park document
@@ -296,6 +316,16 @@ static void park_rec_cand(const Flow *f, long id)
    resuming onto a path nothing ever took, with no crash anywhere to say so. An identity that dies with the
    thing it identifies cannot be re-used, so the fifty lines of open addressing are gone rather than guarded. */
 static long g_park_segs;   /* the next ordinal — dense and ascending across the WHOLE document */
+
+/* WHAT THIS SESSION'S PARK DOCUMENT HOLDS, PER KIND — see cold.h for why a total cannot answer the question a
+   reader of a round trip is actually asking. Counted at the WRITE, so it cannot disagree with the records. */
+static ColdParked g_parked_census;
+
+void cold_parked(ColdParked *out)
+{
+    DCHECK(out != NULL, "the cold tier was asked to report a park into nothing");
+    *out = g_parked_census;
+}
 
 /* EMIT `seg` AND EVERY UNEMITTED SEGMENT BELOW IT, base first, and answer its ordinal. Iterative and not
    recursive for the reason every other walk of these chains is: the chain's depth is the fork depth, an
@@ -330,7 +360,7 @@ static long park_emit_chain(const void *seg)
                "a decision segment is being written before the one it stands on — the rebuild is a single "
                "forward pass, so a base that has no ordinal yet is a chain this walk descended wrongly");
         snprintf(head, sizeof head, "s%ld,", g_park_segs);
-        park_str(g_park_recs++ ? ",\"" : "\"");
+        park_open_rec();
         park_str(head);
         if (bid < 0) park_str("-");
         else { char b[32]; snprintf(b, sizeof b, "%ld", bid); park_str(b); }
@@ -343,8 +373,8 @@ static long park_emit_chain(const void *seg)
             c = (char)('0' + arms[k]);
             park_raw(&c, 1);
         }
-        park_str("\"");
         decide_seg_set_park_id(cur, g_park_segs++);
+        g_parked_census.segs++;
     }
     id = decide_seg_park_id(seg);
     DCHECK(id >= 0, "a decision chain was walked and the segment it started from still has no ordinal");
@@ -403,7 +433,6 @@ void cold_park_flow(Flow *f)
            "its record would name no segment and it would resume as a from-baseline flow, re-exploring the "
            "un-forked path and never reaching the branch it was suspended past");
 
-    if (!g_park) park_str("[");   /* the array opens with the first record ever appended; see park_reserve */
     seg = f->dec_blob ? decide_blob_seg(f->dec_blob) : NULL;
     id = seg ? park_emit_chain(seg) : -1;
     /* THE REWARD TRAVELS WITH THE FLOW because the ONE global frontier is ordered by it across sessions —
@@ -433,15 +462,18 @@ void cold_park_flow(Flow *f)
                "reach no branch, which means this flow ran something it has no business running and its record "
                "would resume it as a probe with a path nothing will replay");
         park_rec_url(f->val, f->disc_url);
+        g_parked_census.probes++;
     } else if (f->cand_src) {
         /* AN @S CANDIDATE PARKS AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand. It is asked about after
            the probe and before the plain flow because those three are the whole of what a flow's identity can
            be, and each pair is asserted disjoint where it is written rather than left to this order. */
         park_rec_cand(f, id);
+        g_parked_census.cands++;
     } else {
         if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", f->val);
         else        snprintf(rec, sizeof rec, "f%ld,%.17g", id, f->val);
         park_rec(rec);
+        g_parked_census.flows++;
     }
     f->paged = 1;   /* its recipe exists: flow_release may now let its parked continuation go (flow.h) */
 }
@@ -474,22 +506,51 @@ void cold_park(void)
     for (i = 0; (f = flow_at(i)) != NULL; i++) cold_park_flow(f);
 }
 
+const char *cold_park_recipes(void)
+{
+    /* THE DOCUMENT ITSELF, in the one language this file both writes and reads. A host that can store a string
+       stores this and hands it straight back to engine_sched_begin; nothing between the two translates, so
+       there is no second grammar for the round trip to disagree across. "" is the positive answer for a
+       frontier that drained, exactly as "[]" is on the transport side — engine_sched_begin reads an empty one
+       as "no residue" and seeds a boot flow instead. */
+    return g_park ? g_park : "";
+}
+
+long cold_park_records(void) { return g_park_recs; }
+
 const char *cold_park_json(void)
 {
+    const char *p;
+    char *o;
+    size_t need;
+
     if (!g_park) return "[]";
-    /* THE CLOSING BRACKET IS RENDERED, NEVER ACCUMULATED. This is read at the END of a session and the document
-       may still be appended to after it — a partial park's records land in the same value — so the terminator
-       cannot be part of the content: an append would write past it and the host would store an array with a
-       bracket in the middle of it. Written one past the content instead, where the next append overwrites it,
-       and park_reserve(1) is what guarantees the room for the byte and its NUL. Idempotent, because the result
-       document asks for this twice (once to size the buffer, once to fill it). */
-    park_reserve(1);
-    g_park[g_park_len] = ']';
-    g_park[g_park_len + 1] = 0;
-    DCHECK(g_park[0] == '[',
-           "the park document does not begin with its array — the opening bracket is written with the first "
-           "record and nothing else may precede it, so this value is not JSON the host can store");
-    return g_park;
+    /* THE TRANSPORT, RENDERED FROM THE RECORDS. Each ';' becomes `","` (+2 bytes), and the whole is wrapped in
+       `["` … `"]` (+4) with a NUL — a bound, not a guess, so the write below cannot run past its buffer.
+       Idempotent because it is a pure function of the records: result.c asks once to size its own buffer and
+       once to fill it, and the two must be the same bytes or it truncates the document. */
+    need = g_park_len + 2 * (size_t)g_park_recs + 8;
+    g_park_json = realloc(g_park_json, need);
+    CHECK(g_park_json, "the cold tier could not render the park document for the host to store — the residue "
+                       "exists and every flow in it would be dropped at the boundary that was to save it");
+    o = g_park_json;
+    *o++ = '['; *o++ = '"';
+    for (p = g_park; *p; p++) {
+        if (*p == ';') { *o++ = '"'; *o++ = ','; *o++ = '"'; continue; }
+        /* THE ESCAPE CLAIM, ASSERTED WHERE THE JSON IS MADE. Four writers each state what their own fields may
+           hold (park_rec's digits, park_rec_url's address bytes, park_rec_cand's sink letters, park_hex's two
+           hex characters), and the property they exist to guarantee is this one: no record needs escaping, so
+           no escape path is needed and a byte that would have needed one is a writer that got its charset
+           wrong. Said once, here, rather than trusted four times over. */
+        DCHECK(*p != '"' && *p != '\\' && (unsigned char)*p >= 0x20 && (unsigned char)*p < 0x7f,
+               "a park record holds a byte that would need JSON escaping — the recipe grammar exists so that "
+               "cannot happen, so one of the record writers accepted a field it should have refused and the "
+               "host is about to store a value that will not parse");
+        *o++ = *p;
+    }
+    *o++ = '"'; *o++ = ']'; *o = 0;
+    DCHECK((size_t)(o - g_park_json) < need, "the rendered park document overran the bound its own records set");
+    return g_park_json;
 }
 
 /* ONE FIELD SEPARATOR, asked for where it is required. A record that does not have it is a record this file
@@ -521,6 +582,20 @@ static Flow *park_flow_add(JSContext *ctx, double val, int before, long flows)
     return fl;
 }
 
+/* WHAT THE LAST REBUILD PRODUCED, PER RECORD KIND. `@RESUMED <n>` is printed for the extension, which reads it
+   off stdout because a line of text is the only channel that zone has into a wasm instance — and one total
+   cannot say WHICH arms of the grammar ran. That distinction is the whole of what a resume has to prove here:
+   a residue of nothing but 'f' records exercises neither park_unhex nor solve_resume_candidate nor the probe
+   rebuild, and a run reporting `@RESUMED 4` looks identical either way. An in-process host asks this instead of
+   parsing the engine's own stdout. */
+static ColdResumed g_resumed;
+
+void cold_resumed(ColdResumed *out)
+{
+    DCHECK(out != NULL, "the cold tier was asked to report a rebuild into nothing");
+    *out = g_resumed;
+}
+
 void cold_resume(JSContext *ctx, const char *recipes)
 {
     void **seg = NULL;
@@ -531,6 +606,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
     DCHECK(recipes != NULL && *recipes != '\0',
            "the cold tier was asked to resume an empty park document — a document with no residue DELETES its "
            "cold entry, so a caller reaching here has confused 'fully explored' with 'paged out'");
+    memset(&g_resumed, 0, sizeof g_resumed);
     /* THIS IS AN APPEND, NOT A SEED, and the two used to be one act. It asserted the frontier was EMPTY and
        assigned its park-local ordinals into it as though the document were the whole of what exists — which is
        true of the session-start rebuild and false by construction of the thing this tier is for: a PARTIAL
@@ -617,7 +693,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl->started = 1;
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
-            flows++;
+            flows++; g_resumed.flows++;
         } else if (kind == 'c') {
             /* AN @S CANDIDATE SESSION COMES BACK AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand for what
                crosses and, just as load-bearing, which two candidate fields deliberately do not. Everything the
@@ -672,7 +748,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl->started = 1;
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
-            flows++;
+            flows++; g_resumed.cands++;
         } else if (kind == 'd') {
             /* A DISCOVERY PROBE COMES BACK AS ITS ADDRESS. It is NOT `started`: it stands on no path, so there
                is nothing to replay — its first step parks on the URL exactly as the session that seeded it did,
@@ -693,7 +769,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
             CHECK(fl->disc_url, "the cold tier could not rebuild a parked discovery candidate");
             memcpy(fl->disc_url, q, ul);
             fl->disc_url[ul] = 0;
-            flows++;
+            flows++; g_resumed.probes++;
         } else {
             DFAIL("a park record names a kind this grammar does not have — the recipe holds SEGMENTS ('s'), "
                   "FLOWS ('f'), @S CANDIDATE SESSIONS ('c') and DISCOVERY PROBES ('d') and nothing else, so "
@@ -727,6 +803,13 @@ void cold_resume(JSContext *ctx, const char *recipes)
        Printed here rather than counted into the result document because the result is built when the session
        ENDS and this is a fact about how it BEGAN — a session that goes on to crash still has to have said that
        it resumed, or the residue looks like it was never read back. */
+    /* …AND THE SAME FACT DECOMPOSED, for a host that can ask rather than read. The sum is asserted against the
+       count the merge itself kept, so an arm added to the grammar without a counter is caught here instead of
+       silently reporting a kind that ran as one that did not. */
+    g_resumed.segs = seg_n;
+    DCHECK(g_resumed.flows + g_resumed.cands + g_resumed.probes == flows,
+           "the rebuild's per-kind census does not add up to the flows it landed — a record kind produced a "
+           "flow without counting itself, so a host asking which arms of the grammar ran is told one did not");
     printf("@RESUMED %ld\n", flows);
     fflush(stdout);
 }
@@ -734,8 +817,10 @@ void cold_resume(JSContext *ctx, const char *recipes)
 void cold_free(void)
 {
     free(g_park); g_park = NULL; g_park_len = g_park_cap = 0; g_park_recs = 0;
+    free(g_park_json); g_park_json = NULL;   /* the transport is a render of the records; it dies with them */
     /* THE ORDINAL COUNTER GOES BACK TO ZERO WITH THE DOCUMENT IT NUMBERED, and the names it handed out died
        with the segments (decide.c's `park_id`), which flow_registry_free has just asserted are all gone. */
     g_park_segs = 0;
+    memset(&g_parked_census, 0, sizeof g_parked_census);   /* the census is OF the document; it dies with it */
     free(g_walk); g_walk = NULL; g_walk_n = g_walk_cap = 0;
 }
