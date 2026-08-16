@@ -6,6 +6,7 @@
 #include "solver/decide.h"
 #include "solver/concolic.h"
 #include "solver/world.h"
+#include "solver/solve.h"     /* …and the @S sink table a parked candidate's class is re-bound through */
 #include "check.h"
 
 #include <stdio.h>
@@ -176,6 +177,115 @@ static void park_rec_url(double val, const char *url)
     park_str("\"");
 }
 
+/* ATTACKER TEXT CROSSES AS HEX, and it is the one thing in this document whose charset the grammar cannot
+   state. Every other field is composed of digits by this file and park_rec asserts exactly that; park_rec_url
+   widens it once by naming what an address cannot contain. A BREAKOUT can contain anything: `';X9();//` holds
+   the ';' the host joins records with, an HTML breakout holds the '"' the JSON value is quoted with, and a
+   payload that survives a filter may be any byte at all. So the choice is a charset PREDICATE that three
+   separate consumers would have to be kept in step with — this grammar, the JSON writer, and the host's split
+   — or an ENCODING with no predicate in it. Hex has none: two characters per byte, both inside every one of
+   those alphabets, and park_unhex is the only thing that ever reads one back. It costs a doubling on two short
+   fields, which is the price of never having to be right about a set of bytes again. */
+static void park_hex(const char *s)
+{
+    static const char H[] = "0123456789abcdef";
+    const unsigned char *p;
+
+    for (p = (const unsigned char *)s; *p; p++) {
+        char pair[2];
+        pair[0] = H[*p >> 4];
+        pair[1] = H[*p & 15];
+        park_raw(pair, 2);
+    }
+}
+
+static int park_hexval(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;   /* including upper case: this file writes lower, so anything else is not our document */
+}
+
+/* …AND BACK, as a malloc'd NUL-terminated string the caller owns. It is the decoder's job to refuse a field
+   the encoder cannot have produced, because the failure it would otherwise cause is silent: half a breakout is
+   a string that injects nothing and reports as a candidate that did not fire. */
+static char *park_unhex(const char *p, const char *end)
+{
+    size_t n = (size_t)(end - p), i;
+    char *out;
+
+    DCHECK(n > 0 && (n & 1) == 0,
+           "a parked @S candidate's text is empty or has an odd number of hex digits — it was truncated on the "
+           "way out or split on the way back, and half a breakout substitutes nothing while still reporting as "
+           "a candidate that was tried");
+    out = malloc(n / 2 + 1);
+    CHECK(out, "the cold tier could not rebuild a parked candidate's text");
+    for (i = 0; i < n; i += 2) {
+        int hi = park_hexval(p[i]), lo = park_hexval(p[i + 1]);
+        DCHECK(hi >= 0 && lo >= 0,
+               "a parked @S candidate's text is not lower-case hex — this file wrote it and nothing else may, "
+               "so the document did not come from this engine's park");
+        out[i / 2] = (char)((hi << 4) | lo);
+    }
+    out[n / 2] = 0;
+    return out;
+}
+
+/* AN @S CANDIDATE SESSION'S RECIPE. It is an 'f' record — a flow standing on a decision chain, carrying its
+   reward — PLUS the three things that make it a candidate rather than an exploration flow: the SOURCE its
+   payload replaces, the PAYLOAD, and the SINK CLASS its fire is recorded against. It needs both halves: a
+   candidate is an ordinary member of the one frontier, so it can branch and be preempted like anything else,
+   and a record holding only the substitution would resume it from the baseline having lost every arm it took.
+   THE PAYLOAD CROSSES AS BYTES, NEVER AS AN INDEX. Today solve.c seeds from fixed literal tables, so a
+   candidate's payload is one of a small closed vocabulary and an ordinal into that table would round-trip
+   perfectly and be shorter. It is still the wrong record: §@S says the breakout is DERIVED from the real parse
+   context, and the day that derivation lands the payload becomes a computed string and every index written by
+   an older session names a row that no longer exists — silently, because an index is always a valid index.
+   Text costs a hex doubling of a few dozen bytes and is correct in both worlds.
+   THE SINK CROSSES AS ITS NAME, because `cand_sink` is a pointer into solve.c's static table and a pointer has
+   no identity outside the session that minted it. solve_resume_candidate is what binds the name back to that
+   table's own pointer, which is what keeps solve.c's identity compare exact on a resumed flow.
+   AND TWO CANDIDATE FIELDS DELIBERATELY DO NOT CROSS, which is a decision and not an omission:
+     - `cand_verifying` is not state at all. solve_flow_begin sets it from `cand_src` on EVERY switch-in, so it
+       is a restatement of "this flow has a candidate" that the scheduler re-derives before the flow runs an
+       opcode. Carrying it would be carrying a duplicate of a field already here.
+     - `cand_fired` is dropped ON PURPOSE, and dropping it is what keeps a finding an OBSERVATION. A candidate
+       can fire mid-run and be preempted before it finishes, so a parked one may well be carrying the bit. If
+       it crossed, solve_flow_end would record a PoC on the strength of a fire THIS session never saw — and a
+       replay does not have to reproduce it, because §Time-travel says a resumed flow re-derives its values
+       from CURRENT sources and a fire that depended on a reply may simply not recur. §@S is explicit that only
+       firing proves it; a carried bit is a claim. Re-run, and re-observe, or report nothing. */
+static void park_rec_cand(const Flow *f, long id)
+{
+    char head[96];
+    const char *p;
+
+    DCHECK(f->cand_src && *f->cand_src && f->cand_payload && *f->cand_payload && f->cand_sink,
+           "an @S candidate was parked missing part of its substitution — the source, the payload and the sink "
+           "class are one identity, and a record holding two of the three resumes a flow that injects nothing "
+           "or cannot say what it fired");
+    DCHECK(f->disc_url == NULL,
+           "a flow is both an @S candidate and a discovery probe — those are two different identities seeded "
+           "by two different places, and whichever record kind is written would drop the other one");
+    /* THE SINK NAME IS THE ONE VARIABLE FIELD LEFT IN THE GRAMMAR'S OWN CHARSET, so it is asserted rather than
+       hexed: it comes from solve.c's closed table and stays readable at the one point a human ever looks at
+       this document. A ',' in it would move every field after it; a ';' would split the record in two. */
+    for (p = f->cand_sink; *p; p++)
+        DCHECK((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z'),
+               "a sink class name holds something other than letters — it is a field of the recipe grammar, so "
+               "a ',' in it shifts every field after it and a ';' splits the record in two");
+    if (id < 0) snprintf(head, sizeof head, "c-,%.17g,", f->val);
+    else        snprintf(head, sizeof head, "c%ld,%.17g,", id, f->val);
+    park_str(g_park_recs++ ? ",\"" : "\"");
+    park_str(head);
+    park_str(f->cand_sink);
+    park_str(",");
+    park_hex(f->cand_src);
+    park_str(",");
+    park_hex(f->cand_payload);
+    park_str("\"");
+}
+
 /* THE SEGMENT ORDINALS — the cross-tier NAME of a frozen decision segment, valid only inside one park document
    (which is the whole of what has to agree about it). The name lives ON THE SEGMENT (decide.h's
    decide_seg_park_id), and the only thing kept here is which ordinal comes next.
@@ -269,15 +379,8 @@ void cold_park_flow(Flow *f)
            "record resumes it as a SECOND flow standing on the same path, which re-forks every branch it has "
            "already taken and grows a duplicate of the frontier on every visit");
     /* WHAT A RECIPE CANNOT CARRY IS ASSERTED HERE, at the one point where it would otherwise be written
-       out wrong — never softened into a flow that resumes as something else. */
-    DCHECK(f->cand_src == NULL && f->cand_payload == NULL,
-           "an @S CANDIDATE SESSION was parked. Its identity is the SUBSTITUTION it carries (the source it "
-           "replaces, the breakout, and the sink that must fire), not merely its path — so a record holding "
-           "only the path resumes it as an ordinary exploration flow that re-runs the page with no payload "
-           "in it, and the search reports a candidate it never fired. Build the candidate recipe: the "
-           "source and the payload are text and cross as text, but `cand_sink` is a pointer into static "
-           "storage with no identity outside this session, so the sink crosses by NAME and is re-bound "
-           "through solve.c's table on resume");
+       out wrong — never softened into a flow that resumes as something else. An @S CANDIDATE SESSION used to
+       be on this list; it is a record kind now (park_rec_cand below), which is what the crash asked for. */
     DCHECK(f->deliver == NULL,
            "a flow holding a routed cross-document record was parked — the peer's message is not in its "
            "recipe and no replay can invent one, so it is dropped exactly as it would be at a finish. A "
@@ -330,6 +433,11 @@ void cold_park_flow(Flow *f)
                "reach no branch, which means this flow ran something it has no business running and its record "
                "would resume it as a probe with a path nothing will replay");
         park_rec_url(f->val, f->disc_url);
+    } else if (f->cand_src) {
+        /* AN @S CANDIDATE PARKS AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand. It is asked about after
+           the probe and before the plain flow because those three are the whole of what a flow's identity can
+           be, and each pair is asserted disjoint where it is written rather than left to this order. */
+        park_rec_cand(f, id);
     } else {
         if (id < 0) snprintf(rec, sizeof rec, "f-,%.17g", f->val);
         else        snprintf(rec, sizeof rec, "f%ld,%.17g", id, f->val);
@@ -391,6 +499,26 @@ static const char *park_comma(const char *p)
     DCHECK(*p == ',', "a park record is missing a field separator — the record was not written by this engine, "
                       "or it was split by a character the grammar forbids");
     return p + 1;
+}
+
+/* ONE REBUILT FLOW, LANDED AND CHECKED. Every record kind that names a flow goes through this, because the
+   thing that has to be true of all of them is the same thing and it is §scheduler's razor: a resume APPENDS.
+   It was three copies of these four lines when there were three kinds, which is exactly where a fourth kind
+   drops the assert and nothing says so. */
+static Flow *park_flow_add(JSContext *ctx, double val, int before, long flows)
+{
+    Flow *fl = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);
+    /* IT WENT ON THE END, WHICH IS THE HALF OF THE MERGE A LIVE FRONTIER CARES ABOUT. A rebuilt flow must be
+       an addition and never a substitution: the registry appends, so this one belongs at `before` plus however
+       many this document has rebuilt so far. If a member were ever displaced — a reorder, a swap-remove, a
+       registry that reused a slot — the flow that lived there would be gone from the frontier with nothing
+       else in the engine able to say so. Asked at the add rather than counted at the end, so the assert names
+       the record that did it. */
+    DCHECK(flow_at((int)(before + flows)) == fl,
+           "a rebuilt flow did not land at the end of the frontier — a resume APPENDS, so anything else means "
+           "a live member was displaced by a parked one and is now unreachable");
+    fl->val = val;
+    return fl;
 }
 
 void cold_resume(JSContext *ctx, const char *recipes)
@@ -485,20 +613,65 @@ void cold_resume(JSContext *ctx, const char *recipes)
                refused while any foreign segment lives here. Nothing across the tier is holding an edge into
                this frontier, so there is no edge to carry. When cross-instance park is built, the world NAME
                is what will travel — never this document's flow ancestry. */
-            fl = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);
-            /* IT WENT ON THE END, WHICH IS THE HALF OF THE MERGE A LIVE FRONTIER CARES ABOUT. A rebuilt flow
-               must be an addition and never a substitution: the registry appends, so this one belongs at
-               `before` plus however many this document has rebuilt so far. If a member were ever displaced —
-               a reorder, a swap-remove, a registry that reused a slot — the flow that lived there would be
-               gone from the frontier with nothing else in the engine able to say so. Asked at the add rather
-               than counted at the end, so the assert names the record that did it. */
-            DCHECK(flow_at((int)(before + flows)) == fl,
-                   "a rebuilt flow did not land at the end of the frontier — a resume APPENDS, so anything "
-                   "else means a live member was displaced by a parked one and is now unreachable");
+            fl = park_flow_add(ctx, val, before, flows);
             fl->started = 1;
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
-            fl->val = val;
+            flows++;
+        } else if (kind == 'c') {
+            /* AN @S CANDIDATE SESSION COMES BACK AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand for what
+               crosses and, just as load-bearing, which two candidate fields deliberately do not. Everything the
+               'f' arm does is done here too, because a candidate IS a flow with a path; the three extra fields
+               are what make the replay inject rather than explore. */
+            long sid;
+            double val;
+            Flow *fl;
+            const char *sb, *xb;
+            char sname[32];
+            size_t sl;
+
+            if (*q == '-') { sid = -1; q++; }
+            else { sid = strtol(q, &ep, 10); q = ep; }
+            q = park_comma(q);
+            val = strtod(q, &ep); q = ep;
+            q = park_comma(q);
+            for (sb = q; q < end && *q != ','; q++)
+                ;
+            sl = (size_t)(q - sb);
+            DCHECK(sl > 0 && sl < sizeof sname,
+                   "a parked @S candidate names no sink class, or one longer than any this engine has — the "
+                   "name is solve.c's own table text and is re-bound through it, so anything else is a record "
+                   "this writer did not produce");
+            memcpy(sname, sb, sl);
+            sname[sl] = 0;
+            q = park_comma(q);
+            for (xb = q; q < end && *q != ','; q++)
+                ;
+            DCHECK(sid < seg_n,
+                   "a parked @S candidate stands on a decision segment this document never wrote — it would "
+                   "resume from the baseline instead of from the path its search had reached");
+            fl = park_flow_add(ctx, val, before, flows);
+            fl->cand_src = park_unhex(xb, q);
+            q = park_comma(q);
+            fl->cand_payload = park_unhex(q, end);
+            /* THE SINK BINDS BACK TO THE TABLE'S OWN POINTER, and the same call re-registers the sink as
+               pending-and-tried — solve.h says why those are one call and not two. `cand_verifying` is not set
+               here: solve_flow_begin sets it from `cand_src` on the switch-in, before this flow runs an
+               opcode. `cand_fired` is not set here either, and that is the whole point — the replay has to
+               observe the fire again or nothing is recorded. */
+            fl->cand_sink = solve_resume_candidate(fl->cand_src, sname);
+            /* AND IT IS REBUILT EXACTLY AS AN 'f' IS, including a `-` segment. The temptation here is to say
+               that `-` means "never scheduled" and leave such a candidate un-started, the way
+               solve_seed_candidates leaves a fresh one — but the record CANNOT distinguish that from a flow
+               that ran, took no branch, and froze an empty chain, and both write `-`. Inventing the
+               distinction in this arm alone would make one record kind answer a question the grammar does not
+               ask, and would do it differently from the kind it is otherwise identical to. The two are the
+               same state anyway: decide_resume over an empty chain and decide_enter both start a replay at
+               cursor 0 with no arms and no pins (the empty pin blob is what makes the second half of that
+               true), so there is nothing between them to get wrong. */
+            fl->started = 1;
+            fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
+            fl->pin_blob = concolic_pins_blob_empty();
             flows++;
         } else if (kind == 'd') {
             /* A DISCOVERY PROBE COMES BACK AS ITS ADDRESS. It is NOT `started`: it stands on no path, so there
@@ -515,20 +688,16 @@ void cold_resume(JSContext *ctx, const char *recipes)
             DCHECK(ul > 0,
                    "a parked discovery probe names no candidate address — the address IS the flow, so this "
                    "record would resume a member of the frontier with nothing whatever to do");
-            fl = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);
-            DCHECK(flow_at((int)(before + flows)) == fl,
-                   "a rebuilt flow did not land at the end of the frontier — a resume APPENDS, so anything "
-                   "else means a live member was displaced by a parked one and is now unreachable");
+            fl = park_flow_add(ctx, val, before, flows);
             fl->disc_url = malloc(ul + 1);
             CHECK(fl->disc_url, "the cold tier could not rebuild a parked discovery candidate");
             memcpy(fl->disc_url, q, ul);
             fl->disc_url[ul] = 0;
-            fl->val = val;
             flows++;
         } else {
             DFAIL("a park record names a kind this grammar does not have — the recipe holds SEGMENTS ('s'), "
-                  "FLOWS ('f') and DISCOVERY PROBES ('d') and nothing else, so this document came from another "
-                  "writer or was truncated");
+                  "FLOWS ('f'), @S CANDIDATE SESSIONS ('c') and DISCOVERY PROBES ('d') and nothing else, so "
+                  "this document came from another writer or was truncated");
         }
         p = (*end == ';') ? end + 1 : end;
     }

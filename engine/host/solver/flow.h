@@ -81,6 +81,13 @@ typedef struct Flow {
        resumed with ordinary flows in between, so a global `fired` records another flow's marker and a global
        `verifying` leaves the substitution live for whoever runs next. They belong to the flow, and they swap
        with it. */
+    /* AND NEITHER CROSSES THE COLD TIER, which is a decision recorded where the fields are rather than only at
+       the writer. `cand_verifying` is not independent state at all — solve_flow_begin sets it from `cand_src`
+       on every switch-in, so a parked flow re-derives it before it runs an opcode. `cand_fired` is DROPPED on
+       purpose: a candidate can fire and then be preempted before it finishes, and carrying the bit would let
+       solve_flow_end record a PoC on the strength of a fire the resuming session never saw — while a replay is
+       not obliged to reproduce one, since §Time-travel has it re-deriving values from CURRENT sources. §@S:
+       only firing proves it, so the replay re-observes or nothing is recorded. See cold.c's park_rec_cand. */
     int cand_fired;        /* this flow's X9 marker executed */
     int cand_verifying;    /* this flow is a candidate run: the sink takes the concrete arg */
 

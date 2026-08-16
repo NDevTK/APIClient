@@ -31,6 +31,24 @@ int  solve_candidate_count(void);
 void solve_flow_begin(struct Flow *f);
 void solve_flow_end(struct Flow *f);
 
+/* A PARKED @S CANDIDATE IS COMING BACK — the cold tier's one call, and it does the whole of what a resumed
+   candidate needs this file to know. It answers the sink table's OWN pointer for `sink_name`, which is what
+   re-binds a class that crossed the tier by NAME (a `cand_sink` is a pointer into static storage with no
+   identity outside the session it was minted in), and it re-registers that sink as PENDING and already-TRIED
+   once.
+   BOTH HALVES OR NEITHER, WHICH IS WHY IT IS ONE CALL AND NOT THREE.
+     - The pending list is rebuilt by DETECTION, and a VERIFYING flow does not detect (solve_eval_sink and its
+       siblings take the candidate branch and never call add_pending). So a resumed candidate that finished
+       before any exploration flow had re-reached its sink would hand record_sink a finding for a sink it has
+       never heard of, and that assert would be right to fire.
+     - And the COUNT has to move with it: `tried` is the whole of what makes solve_seed_candidates idempotent,
+       so a resumed candidate that did not raise it would be seeded a SECOND time out of the table, and the
+       frontier would grow by one duplicate per visit — precisely what the park's write-once assert exists to
+       prevent, arriving through the other door.
+   Returns the table's pointer; a name this build's table does not have is a residue written by a build whose
+   sink classes this one no longer has, and it says so rather than resuming a search that cannot report. */
+const char *solve_resume_candidate(const char *src, const char *sink_name);
+
 /* EVERY DETECTED SINK as a JSON ARRAY (caller frees). Two entry shapes, because a sink is in one of two states
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]

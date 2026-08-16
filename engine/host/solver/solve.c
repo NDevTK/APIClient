@@ -315,6 +315,39 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
 /* Seed a candidate flow per (sink, breakout) for every sink NOT YET SEEDED, and answer how many were added.
    Idempotent by construction, so the scheduler can ask again every time the frontier drains — which is what a
    sink found by code that only loaded after the first drain needs. */
+/* A PARKED CANDIDATE COMING BACK — see solve.h for why the re-binding and the bookkeeping are ONE call. */
+const char *solve_resume_candidate(const char *src, const char *sink_name) {
+    int i, cls = -1;
+
+    DCHECK(src && *src && sink_name && *sink_name,
+           "a parked @S candidate was rebuilt without a source or without a sink class — its identity IS the "
+           "substitution it carries, so either one missing makes it an exploration flow wearing a payload");
+    for (i = 0; i < SINK_CLASS_N; i++)
+        if (!strcmp(SINKS[i].name, sink_name)) { cls = i; break; }
+    if (cls < 0) {
+        DFAIL("a parked @S candidate named a sink class this build's table does not have — the class crosses "
+              "the tier by NAME exactly so it survives a pointer that cannot, so a name nothing matches is a "
+              "residue from a build whose sink classes this one has dropped. Add the class back or drop the "
+              "record; resuming it as an ordinary flow would report a search that never ran");
+        return NULL;
+    }
+    /* PENDING FIRST, then the count on the entry it just guaranteed exists. add_pending dedups, so a session
+       that resumes five candidates for one sink registers it once and raises `tried` five times — which is
+       exactly the number of breakouts that sink's search has run, and exactly what the parked-search entry
+       reports. */
+    add_pending(src, cls);
+    for (i = 0; i < g_pending_n; i++)
+        if (g_pending[i].sink == cls && !strcmp(g_pending[i].src, src)) { g_pending[i].tried++; break; }
+    DCHECK(i < g_pending_n,
+           "the sink a resumed candidate names is not on the pending list after being added to it — the count "
+           "that keeps seeding idempotent has nowhere to land, so this sink is about to be searched twice");
+    /* IT COSTS WHAT A FRESH ONE COSTS, so it counts as one. This number is what says whether a run got slower
+       because there were more searches or because each search grew, and a resumed candidate re-runs the whole
+       page exactly as a newly-seeded one does. */
+    g_cands_seeded++;
+    return SINKS[cls].name;
+}
+
 int solve_seed_candidates(JSContext *ctx) {
     int added = 0;
     for (int i = 0; i < g_pending_n; i++) {

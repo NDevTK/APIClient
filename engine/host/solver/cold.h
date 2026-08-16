@@ -106,6 +106,20 @@ void cold_census(ColdCensus *out);
  *                                 path through the page but an ADDRESS it has still to read, so the address is
  *                                 what crosses and the resumed flow re-issues the GET. It is the last field and
  *                                 runs to the end of the record, which is what lets a query carry a ','.
+ *     c<seg-id|->,<val>,<sink>,<src-hex>,<payload-hex>
+ *                                 an @S CANDIDATE SESSION: an 'f' record PLUS the substitution that makes it a
+ *                                 candidate rather than an exploration flow. A candidate is an ordinary member
+ *                                 of the one frontier, so it branches and is preempted like anything else and
+ *                                 needs its path; and its IDENTITY is what it injects, so it needs that too.
+ *                                 `sink` is solve.c's sink-class NAME, re-bound to that table's own pointer by
+ *                                 solve_resume_candidate (a `cand_sink` is a pointer into static storage and
+ *                                 has no identity outside the session that minted it). The source and the
+ *                                 payload are ATTACKER TEXT and cross as lower-case HEX — never as an index
+ *                                 into solve.c's breakout tables, which §@S's derived-breakout work will
+ *                                 delete, and an index into a table that no longer exists is still a valid
+ *                                 index. `cand_verifying` and `cand_fired` deliberately do NOT cross; see
+ *                                 cold.c's park_rec_cand for why dropping the second is what keeps a recorded
+ *                                 PoC an observation rather than an inherited claim.
  *
  * Ordinals are dense and ascending in EMISSION order, and a base is always emitted before anything that names
  * it, so the rebuild is one forward pass with nothing to patch up. */
