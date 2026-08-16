@@ -229,9 +229,11 @@ void dom_cow_note_created(lxb_dom_node_t *node);
    that made it is what must own it. */
 bool dom_cow_note_created_document(lxb_html_document_t *dom);
 
-/* DESTROY A DOCUMENT THIS ENGINE OWNS, wrappers first. The identity map holds a strong reference per node, so a
-   document freed without this leaves the map naming freed memory — which a pool allocator turns into the next
-   node inheriting a dead wrapper — and leaves the runtime's own leak walk counting its whole tree. */
+/* DESTROY A DOCUMENT THIS ENGINE OWNS, and release the flow-level record that names it. What it adds over
+   core/dom/node_interface.c's `dom_document_destroy` is exactly the thing a destroy cannot know: that a flow's
+   delta owned this document, so its Document record goes back too. The identity map and the taint shadow are
+   NOT this function's business — each node hands its own entries back as it dies, from the one point every node
+   death converges on, so a document destroyed by any other caller is covered identically. */
 void dom_cow_destroy_document(lxb_html_document_t *dom);
 
 #endif

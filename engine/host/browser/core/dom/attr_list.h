@@ -58,10 +58,12 @@ void dom_attr_detach(lxb_dom_attr_t *a);
    preserved, which is what makes it different from a detach plus an append. The two must already agree on
    (namespace, local name), which "set an attribute" step 3 guarantees by finding the old one at that key. */
 void dom_attr_replace(lxb_dom_attr_t *old_a, lxb_dom_attr_t *new_a);
-/* Free a DETACHED attribute nothing can reach any more — the per-flow delta's release for one the flow created.
-   Takes the context because an Attr is a WRAPPED node: the identity map must be told before it is left naming
-   freed memory, which a pool allocator turns into the next attribute inheriting this one's wrapper. */
-void dom_attr_destroy(JSContext *ctx, lxb_dom_attr_t *a);
+/* Free a DETACHED attribute nothing can reach any more — the per-flow delta's release for one the flow created,
+   and the element teardown's release for one that was still in its list. It is the ONE point an Attr's death
+   converges on (lexbor frees an Attr through a leaf destructor, not through the document's per-interface
+   dispatcher), so it is where the two agent-wide maps keyed on the node's address are told: the wrapper identity
+   map and the taint shadow. See attr_list.c. */
+void dom_attr_destroy(lxb_dom_attr_t *a);
 
 /* §4.9 "append an attribute" and "change an attribute" over one identity: create it when the element has no
    attribute with that (namespace, local name), otherwise write the new value into the one it has. `prefix` is

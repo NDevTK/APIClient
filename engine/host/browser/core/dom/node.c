@@ -105,6 +105,14 @@ typedef struct { lxb_dom_node_t *n; JSValue obj; } NodeEntry;
 static NodeEntry *g_wraps;        /* g_wrap_cap slots, a power of two; a NULL `n` is empty */
 static int        g_wrap_n, g_wrap_cap;
 
+/* THE AGENT'S RUNTIME, and it is here because the map is. Every entry holds a strong reference (see
+   node_wrap_forget), and the site that has to release one is a node's DESTROY — which reaches this file with a
+   lexbor node and nothing else. A realm cannot be recovered from a node being torn down (its document's record
+   is released first), and it would be the wrong thing to recover: releasing a reference is a JSRuntime
+   operation. The map itself is per AGENT, keyed on an address out of the agent's one node heap
+   (core/dom/node_heap.h), so ONE runtime is the honest scope for it and node_init is where the agent says so. */
+static JSRuntime *g_agent_rt;
+
 static unsigned node_wrap_slot(const NodeEntry *tab, int cap, const lxb_dom_node_t *n)
 {
     /* 2^32 / phi. The multiply spreads the pointer's HIGH bits down, which is where a pool allocator's
@@ -116,17 +124,18 @@ static unsigned node_wrap_slot(const NodeEntry *tab, int cap, const lxb_dom_node
 }
 
 /* Grow and rehash. At half full, so a probe stays short.
-   THE MAP HOLDS ITS WRAPPERS WEAKLY, which is the whole reason it can stay small. It used to keep a
-   JS_DupValue of every wrapper and never remove anything — "the map only ever grows" was written here as if it
-   were a property rather than a defect. It meant every node ever wrapped was pinned for the runtime's life, so
-   a page re-run by two thousand exploration flows accumulated two thousand copies of its DOM, and one doubling
-   of a table that size is a single calloc-plus-rehash that measured FIVE SECONDS inside one createElement —
-   with no suspend point in it, because it is one C call.
-   It was also a correctness trap. A Lexbor node that is destroyed left its entry behind, and a pool allocator
-   reuses addresses: the next node at that address found the DEAD node's wrapper and got another node's
-   identity and another node's prototype.
-   So the entry is weak and the finalizer removes it — the ordinary DOM wrapper-map design. Identity holds for
-   exactly as long as someone holds the wrapper, which is the only span in which identity is observable. */
+   THE MAP HOLDS ITS WRAPPERS STRONGLY AND THE NODE'S DEATH IS WHAT REMOVES ONE — this paragraph used to say the
+   opposite ("the entry is weak and the finalizer removes it"), which was a statement about a design that had
+   already been measured and rejected forty lines further down at node_finalizer, where the measurement lives: a
+   weak entry is collected whenever no JS reference happens to be live, so the next `el.firstChild` allocates a
+   fresh object and re-resolves its prototype, and the smoke fixture went from ~200 s to over 1500 s. The two
+   defects that paragraph was written about are real and are fixed by the OTHER half of the pairing: the map
+   used to have no removal at all, so every node any of thousands of exploration flows ever wrapped stayed
+   pinned (one doubling of a table that size measured FIVE SECONDS inside a single createElement, with no
+   suspend point in it), and a destroyed node left its entry behind for a pool allocator to hand out again —
+   the next node at that address inheriting the dead node's wrapper and prototype. node_wrap_forget is the
+   removal, driven from the one point every node death converges on, and identity then holds for exactly as
+   long as the NODE exists, which is what the DOM says it holds for. */
 void node_wrap_stats(long *n, long *cap) { if (n) *n = g_wrap_n; if (cap) *cap = g_wrap_cap; }
 
 static void node_wrap_grow(void)
@@ -2955,8 +2964,13 @@ static void node_finalizer(JSRuntime *rt, JSValue val) { (void)rt; (void)val; }
    every node any of thousands of exploration flows ever created stayed in it forever — the table reached a size
    where ONE doubling was a five-second calloc-and-rehash inside a single createElement, with no suspend point
    in it. It was also a correctness trap, because a pool allocator reuses addresses and the next node at a dead
-   node's address inherited its wrapper and its prototype. */
-void node_wrap_forget(JSContext *ctx, lxb_dom_node_t *n)
+   node's address inherited its wrapper and its prototype.
+   IT IS CALLED FROM THE NODE'S DEATH AND NOT FROM WHOEVER CAUSED IT. Every node in this engine is freed through
+   core/dom/node_interface.c's destroy dispatcher (an Attr is the one exception, and attr_list.c's
+   dom_attr_destroy is the point that plays the dispatcher's role for it), so the call sits inside the free
+   rather than in a sweep each caller of a destroy has to remember to run first. It used to be the second of
+   those, and the list of callers that remembered was missing the biggest one — a whole document's tree. */
+void node_wrap_forget(lxb_dom_node_t *n)
 {
     unsigned slot;
 
@@ -2965,14 +2979,34 @@ void node_wrap_forget(JSContext *ctx, lxb_dom_node_t *n)
     slot = node_wrap_slot(g_wraps, g_wrap_cap, n);
     if (g_wraps[slot].n != n)
         return;                       /* never wrapped: the common case for a node no script ever touched */
+    /* AN ENTRY EXISTS, SO THE RUNTIME MUST — the two-sided half of node_agent_runtime's contract, asked after
+       the lookup rather than before it because "no runtime" is legitimate exactly while the map is empty. */
+    DCHECK(g_agent_rt != NULL,
+           "a wrapped node was destroyed with no agent runtime to release its wrapper to — the map is holding "
+           "a strong reference this cannot free, so either the wrap happened before node_init named the "
+           "runtime or a document is being torn down after JS_FreeRuntime with the map still live");
     /* NEUTER IT FIRST. The map's reference is not necessarily the last one — page code in the flow being
        discarded may still hold the wrapper, and its refcount keeps the JSObject alive after this. Leaving the
        freed node in its opaque makes the next property access a use-after-free that reads as an out-of-bounds
        somewhere else entirely; nulling it makes that access hit the DCHECK the accessors already carry, at the
        site that made it. */
     JS_SetOpaque(g_wraps[slot].obj, NULL);
-    JS_FreeValue(ctx, g_wraps[slot].obj);
+    JS_FreeValueRT(g_agent_rt, g_wraps[slot].obj);
     node_wrap_remove(n);
+}
+
+/* NULL IS AN ANSWER HERE AND IT IS A POSITIVE ONE: "this agent has no runtime", which is true before node_init
+   declares the DOM and true again after node_free hands the last of it back. It is not a hole a caller fills —
+   the two side maps this exists for are EMPTY in both of those spans (node_free walks its own table above;
+   solver/attr_shadow.c's attr_shadow_free runs in the same cascade), so there is nothing to release and a
+   runtime would have nothing to do. The assertion that this is so belongs at each map, where the count that
+   makes it true can be read: attr_shadow_forget crashes if it is handed no runtime while it still holds
+   entries, and node_wrap_forget's own check sits after the lookup for exactly the same reason.
+   main.c is why this is not hypothetical — its teardown destroys the page's document AFTER JS_FreeRuntime, so
+   the last document in the process is torn down with no runtime in existence. */
+JSRuntime *node_agent_runtime(void)
+{
+    return g_agent_rt;
 }
 
 /* THE AGENT'S DECLARATIONS: the classes, the IDL pool entries, and which class each node type wears. The
@@ -2991,8 +3025,17 @@ void node_init(JSContext *ctx)
     static const IdlDictMember ROOT_OPTS[] = { { "composed", IDL_BOOLEAN } };   /* GetRootNodeOptions */
     int i;
 
-    if (g_protos_ready)
+    if (g_protos_ready) {
+        /* ONE AGENT IS ONE RUNTIME, and this is where that is a statement rather than an assumption. The
+           identity map below is keyed on an address out of the agent's ONE node heap, so two runtimes sharing
+           it would have each other's nodes in one table and would release each other's wrappers. */
+        DCHECK(g_agent_rt == JS_GetRuntime(ctx),
+               "the DOM was declared a second time from a DIFFERENT runtime — the wrapper identity map is one "
+               "table keyed on a raw node address, so two runtimes would be holding references into each "
+               "other's heaps through it");
         return;    /* element.c asks for the base before declaring Element on top of it */
+    }
+    g_agent_rt = JS_GetRuntime(ctx);
     /* §2.9's dispatch walks the tree, and this is the file that has one. */
     event_target_set_tree(&NODE_EVENT_TREE);
     engine_set_wrap_stats(node_wrap_stats);
@@ -3250,6 +3293,15 @@ void node_free(JSRuntime *rt)
            "core/html/html_element.c claimed it and gives it back at html_element_free, which the DOM group's "
            "own cascade runs first");
     g_tree_hook_n = 0;
+    /* BEFORE the walk, because the walk is what would do the damage: every entry below holds a reference
+       belonging to the runtime that declared this layer, and freeing them through a different one is a heap
+       corruption the walk cannot report afterwards. `g_agent_rt == NULL` is the idempotent second call
+       element_free's own comment records. */
+    DCHECK(g_agent_rt == NULL || g_agent_rt == rt,
+           "the node layer is being released by a runtime that is not the one that declared it — the identity "
+           "map holds a reference per node belonging to that other runtime, and this release would free them "
+           "through this one");
+    g_agent_rt = NULL;
     for (i = 0; i < g_wrap_cap; i++)
         if (g_wraps[i].n)
             JS_FreeValueRT(rt, g_wraps[i].obj);

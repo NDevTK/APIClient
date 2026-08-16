@@ -242,10 +242,26 @@ void node_clone_visit_state(JSContext *ctx, NodeCloneState *s, JSStepVisit *v);
    knowledge. It registers the answer here; node_wrap asks it and stays the one place a wrapper is built. */
 void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el));
 
-/* THE NODE IS BEING DESTROYED — drop the wrapper the map holds for it. Called from the DOM's destroy
-   chokepoint, which is the only place a node's lifetime ends, so the map stays bounded by the nodes that
-   actually exist rather than by every node ever created. */
-void node_wrap_forget(JSContext *ctx, lxb_dom_node_t *n);
+/* THE NODE IS BEING DESTROYED — drop the wrapper the map holds for it. It is called from the ONE point every
+   node death converges on (core/dom/node_interface.c's destroy dispatcher, and core/dom/attr_list.c's
+   dom_attr_destroy for the one node kind that does not reach it), so the map stays bounded by the nodes that
+   actually exist rather than by every node ever created — and, because the arenas are the AGENT's rather than
+   any document's (core/dom/node_heap.h), so that an address lexbor hands back out cannot arrive carrying the
+   dead node's wrapper and the dead node's prototype.
+   IT TAKES NO CONTEXT, AND THAT IS THE POINT. What it does with one is release the reference the map holds,
+   which is a REFCOUNT and therefore a JSRuntime operation — asking a caller for a realm would invite it to
+   answer with whichever realm it happened to be standing in, and a destroy site standing in a document being
+   torn down has no meaningful one. The map is per AGENT by construction (it is keyed on a raw pointer into
+   the agent's one node heap), so the runtime is asked once, at the agent's own declaration point. */
+void node_wrap_forget(lxb_dom_node_t *n);
+/* THE AGENT'S JS RUNTIME, recorded at node_init — the ONE fact a node death needs and the one thing a node
+   cannot be asked for. It is not a realm and must never stand in for one: a per-realm question is answered per
+   realm (see the prototype resolution in node_wrap), and this exists precisely so that the agent-wide side maps
+   keyed on a node's address (this file's identity map, solver/attr_shadow.c's taint shadow) can release what
+   they hold without a realm being invented for them.
+   NULL before node_init and again after node_free, which is a POSITIVE statement — both maps are empty across
+   those spans — and each map asserts that rather than defaulting past it. See node.c. */
+JSRuntime *node_agent_runtime(void);
 
 /* The wrapper identity map's size: how many nodes it names and how many slots it has. Reported by the seam
    assertion because a table that has grown out of proportion to the live document is the shape of a leak. */

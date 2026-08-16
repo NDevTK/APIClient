@@ -30,12 +30,18 @@ int attr_shadow_find(const void *owner, int kind, const char *ns, const char *na
 void attr_shadow_set(JSContext *ctx, const void *owner, int kind, const char *ns, const char *name,
                      JSValueConst opaque);   /* JS_UNDEFINED clears */
 JSValue attr_shadow_opaque(int i);   /* the shadow opaque at index i (BORROWED — dup it to keep) */
-/* THE OWNER IS GONE, so every entry naming it goes with it. Called where an Attr is destroyed, for the reason
-   `node_wrap_forget` is called there: the key is a POINTER, lexbor hands nodes out of a pool, and an entry that
-   outlives its node is inherited by the next node at that address — a fresh attribute reading a destroyed one's
-   taint, which is a wrong @S answer with nothing to say so. It is also what keeps the map's linear scan bounded
-   by LIVE owners rather than by every owner the run ever had. */
-void attr_shadow_forget(JSContext *ctx, const void *owner);
+/* THE OWNER IS GONE, so every entry naming it goes with it. An owner is an ELEMENT or an ATTR NODE (see the key
+   above), so there are exactly two places this is called and each is the point that node kind's death converges
+   on: core/dom/node_interface.c's `elem_release_attrs`, reached from the destroy dispatcher every element in
+   this engine is freed through, and core/dom/attr_list.c's `dom_attr_destroy`, which is the one place an Attr's
+   struct is handed back. It is called there for the reason `node_wrap_forget` is called there: the key is a
+   POINTER, lexbor hands nodes out of a pool that is the AGENT's (core/dom/node_heap.h) rather than one document's,
+   and an entry that outlives its node is inherited by the next node at that address — a fresh attribute reading
+   a destroyed one's taint, which is a wrong @S answer with nothing to say so. It is also what keeps the map's
+   linear scan bounded by LIVE owners rather than by every owner the run ever had.
+   IT TAKES THE RUNTIME AND NOT A CONTEXT: what it does is release the references the map holds, which is a
+   refcount operation, and a destroy site has no realm to offer that would mean anything. */
+void attr_shadow_forget(JSRuntime *rt, const void *owner);
 void attr_shadow_free(JSContext *ctx);
 
 #endif

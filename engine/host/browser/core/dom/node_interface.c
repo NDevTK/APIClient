@@ -3,14 +3,17 @@
 
 #include <lexbor/html/html.h>
 #include <lexbor/html/interface.h>
-#include <lexbor/dom/interfaces/attr.h>   /* lxb_dom_attr_interface_destroy — see elem_release_attrs */
+#include <lexbor/dom/interfaces/attr.h>   /* lxb_dom_attr_t — the list elem_release_attrs walks */
 #include <lexbor/dom/interfaces/document_type.h>
 #include <lexbor/dom/interfaces/element.h>
 
 #include "check.h"
-#include "core/dom/node.h"          /* node_template_content — the ONE spelling of where a template's markup is */
+#include "core/dom/attr_list.h"     /* dom_attr_destroy — the ONE point an Attr's death converges on */
+#include "core/dom/node.h"          /* node_template_content — the ONE spelling of where a template's markup is;
+                                       node_wrap_forget / node_agent_runtime — the dying node hands its wrapper back */
 #include "core/dom/node_heap.h"
 #include "core/dom/node_interface.h"
+#include "solver/attr_shadow.h"     /* …and the taint slots keyed on the dying element go with it */
 
 /* THE TWO ARMS ARE THE TWO WAYS lexbor's KEY IS NOT AN IDENTITY — see node_interface.h for the measurement of
  * each. The doctype is answered by TYPE, which covers one whatever built it: this engine's createDocumentType,
@@ -146,11 +149,23 @@ static void tpl_queue_push(lxb_dom_node_t *n)
  * NO QUEUE, unlike the template contents: an Attr has no children, and `lxb_dom_attr_interface_destroy` is
  * lexbor's leaf free rather than a dispatch through `doc->destroy_interface`, so this cannot re-enter and costs
  * one C frame however long the list is.
- * THE WRAPPERS ARE HANDED BACK FIRST, and by something that already exists: solver/dom_cow.c's
- * `dom_forget_node_attrs` drops every Attr wrapper and its taint shadow out of the identity map before each of
- * the four paths that destroy a subtree reaches this function. That function's own comment names THIS free as
- * the reason it has to run — a wrapper naming freed memory is what a pool allocator turns into the next
- * attribute inheriting a dead wrapper. */
+ *
+ * THE FREE IS `dom_attr_destroy` AND NOT LEXBOR'S, because an Attr is the ONE node kind whose death does not
+ * reach this dispatcher, and attr_list.c is the point that plays this function's role for it: it hands the
+ * attribute's wrapper back to the identity map and its slots back to the taint shadow before the struct goes.
+ * Calling lexbor's leaf destructor here instead would be a SECOND place an Attr dies — and it was, which is
+ * exactly how those two maps came to be left naming an address lexbor then handed out again. §4.9's `element`
+ * is cleared for the whole list at once rather than per attribute through "remove an attribute": the list is
+ * ceasing to exist along with the element that owns it, so there is no list left to unlink from and no removal
+ * for the page to observe (the same reading that makes the template drain above `_wo_events`). It is unlinked
+ * from the element BEFORE any struct is freed, so nothing can reach a freed attribute through it in between.
+ *
+ * AND THE ELEMENT'S OWN TAINT SLOTS GO WITH IT. The shadow (solver/attr_shadow.h) is keyed on an ELEMENT or on
+ * an Attr, and an element's key covers both a content attribute's provenance and a DOM property's
+ * (`textContent`, an input's value/checked/selected-files), so the element's death is what releases them. The
+ * key is an ADDRESS out of the agent's node heap, so an entry left behind is inherited by whatever lexbor
+ * allocates there next — a fresh element reading a destroyed one's taint, which is a wrong @S answer with
+ * nothing to say so. */
 static void elem_release_attrs(lxb_dom_node_t *node)
 {
     lxb_dom_element_t *el;
@@ -159,17 +174,20 @@ static void elem_release_attrs(lxb_dom_node_t *node)
     if (node->type != LXB_DOM_NODE_TYPE_ELEMENT)
         return;
     el = lxb_dom_interface_element(node);
-    for (a = el->first_attr; a != NULL; a = next) {
+    a = el->first_attr;
+    el->first_attr = el->last_attr = NULL;
+    el->attr_id = el->attr_class = NULL;
+    for (; a != NULL; a = next) {
         next = a->next;
         DCHECK(a->owner == el,
                "an attribute in this element's list names a different element as its owner — §4.9's list and "
                "the attribute's `element` are two spellings of ONE edge (attr_list.c writes both in each of "
                "attach/detach/replace), so a disagreement here means the free below takes an attribute out of "
                "a list that is still holding it");
-        lxb_dom_attr_interface_destroy(a);
+        a->owner = NULL;
+        dom_attr_destroy(a);
     }
-    el->first_attr = el->last_attr = NULL;
-    el->attr_id = el->attr_class = NULL;
+    attr_shadow_forget(node_agent_runtime(), el);
 }
 
 static lxb_dom_interface_t *dom_node_interface_destroy(lxb_dom_interface_t *intrfc)
@@ -185,8 +203,29 @@ static lxb_dom_interface_t *dom_node_interface_destroy(lxb_dom_interface_t *intr
             lxb_dom_node_remove_wo_events(child);
             tpl_queue_push(child);
         }
+        /* THE FRAGMENT ITSELF DIES HERE AND NOWHERE ELSE, so its wrapper goes back here. Its CHILDREN are
+           queued above and each reaches this function on its own; the fragment does not. lexbor's template
+           destructor frees its struct through `lxb_dom_document_fragment_interface_destroy`, a leaf free that
+           never passes through `doc->destroy_interface` — and `t.content` is precisely the node a page holds a
+           wrapper for. */
+        node_wrap_forget(content);
     }
     elem_release_attrs(node);
+    /* THE NODE HANDS ITS WRAPPER BACK BEFORE ITS BYTES GO, and this is the whole of where that happens.
+     *
+     * A NODE'S DEATH IS ONE EVENT AND IT IS THIS ONE. The map used to be swept by a walk in solver/dom_cow.c
+     * that ran BEFORE four of the calls that destroy a subtree — and the sentence that stood here said so, as
+     * if "the four paths" were a closed set. It never was: `dom_document_destroy` below, and every caller of
+     * it in solve_html.c, solve.c, main.c and test_forced.c, destroyed a whole document's nodes with no sweep
+     * anywhere near them. That was survivable while the arenas were a document's own, because the addresses
+     * died with the document; since core/dom/node_heap.h made them the AGENT's, an address freed by one
+     * document's destroy is handed straight back out to the live page document's next allocation, and a
+     * surviving entry is then a wrapper whose opaque names another node's bytes.
+     * A LIST OF CALLERS THAT MUST REMEMBER IS HOW THE FIFTH CALLER CAME TO EXIST, so there is no list: the
+     * dispatcher is what lexbor reaches for every `lxb_dom_node_destroy` and every `_destroy_deep`, whoever
+     * calls them, and the forget is one line inside it. Nothing has to be added anywhere for a new caller to
+     * be covered, which is the only property that makes this statement true rather than currently true. */
+    node_wrap_forget(node);
     r = dom_node_interface_free(intrfc);
     if (!g_tpl_draining) {
         g_tpl_draining = 1;
@@ -263,6 +302,10 @@ void dom_document_destroy(lxb_html_document_t *dom)
        as the loop runs; it is iterative, so the depth of the page's markup costs no C stack. */
     while ((child = doc->node.first_child) != NULL)
         lxb_dom_node_destroy_deep(child);
+    /* THE DOCUMENT'S OWN NODE IS THE ONE NODE THIS FUNCTION FREES WITHOUT THE DISPATCHER, so it is the one
+       node whose wrapper this function has to hand back itself. `lxb_html_document_destroy` frees the struct
+       directly, and `document` is a node a page wraps on its very first statement. */
+    node_wrap_forget(&doc->node);
     node_heap_detach(doc);
     lxb_html_document_destroy(dom);
 }

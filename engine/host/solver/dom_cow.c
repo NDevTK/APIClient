@@ -5,7 +5,6 @@
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"        /* CHECK — an OOM here corrupts DOM isolation, fatal in every build */
 #include "solver/dom_cow.h"
-#include "core/dom/node.h"   /* node_wrap_forget — a destroyed node hands back its wrapper */
 #include "core/dom/document.h"   /* document_record_release — a destroyed document hands back its record */
 #include "core/dom/attr_list.h"   /* §4.9's attribute-list algorithms — what the delta restores an attribute THROUGH */
 #include "core/dom/name_intern.h"   /* a node's names are per-DOCUMENT state, so kind 8 moves them with the pointer */
@@ -824,100 +823,6 @@ void dom_cow_move_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_
     lxb_dom_node_insert_before(ref, child);
 }
 
-/* Destroy the tree. For the fragment parse its children must already be gone — destroying one that still holds
-   nodes would free tree the caller is about to insert — so the caller says which it means. */
-/* Every node in the subtree about to be freed, so each can hand back the wrapper the identity map holds for
-   it. The walk carries no C recursion for the reason every other tree walk here does not: the depth is the
-   page's data, so it descends by first_child and climbs by parent, never above the root it was given. */
-/* Every node in the subtree, and NOTHING outside it. The bound is `root`, not root's PARENT: this walk runs on
-   a DETACHED subtree, whose root can perfectly well have siblings — a fragment's children are siblings of each
-   other — and stopping at the parent let the climb step past root into them. It then handed back wrappers for
-   nodes that were never destroyed, leaving live nodes holding freed JSValues, which is an out-of-bounds access
-   the moment one of them is touched again. Climbing only while `n != root` cannot leave the subtree.
-   No C recursion: depth here is the page's data. */
-/* AN ELEMENT'S ATTRIBUTES ARE NOT ITS DESCENDANTS — DOM §4.5's adopt says so by re-documenting them in a step
- * of its own, and this walk is over CHILDREN, so it visited none of them. Every one is a WRAPPED node all the
- * same, and the destroy dispatcher releases the whole attribute list with the element
- * (core/dom/node_interface.c's `elem_release_attrs`, which is the ONLY thing that frees one for an HTML
- * element — lexbor's own `lxb_dom_element_interface_destroy` walks the list but is reached for the
- * plain-element shapes alone), so an element freed here left every Attr wrapper the page still holds naming
- * freed memory. `attr.value` then read a garbage `value` pointer — a SEGV in `dom/nodes/Node-cloneNode.html`,
- * which clones elements, reads their attributes, and discards the delta that owns the copies.
- * The taint shadow goes with the wrapper for the reason attr_shadow.h gives: its key is a POINTER into a pool,
- * and an entry outliving its node is inherited by the next attribute allocated at that address. */
-static void dom_forget_node_attrs(JSContext *ctx, lxb_dom_node_t *n)
-{
-    lxb_dom_attr_t *a;
-
-    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT)
-        return;
-    for (a = lxb_dom_interface_element(n)->first_attr; a; a = a->next) {
-        node_wrap_forget(ctx, lxb_dom_interface_node(a));
-        attr_shadow_forget(ctx, a);
-    }
-    /* AND THE ELEMENT'S OWN SLOTS, which are keyed on the element rather than on any attribute — a content
-       attribute's taint and a DOM property's both die with the element that owns them. */
-    attr_shadow_forget(ctx, lxb_dom_interface_element(n));
-}
-
-/* A <template>'S CONTENTS ARE IN THE SUBTREE FOR EVERY LIFETIME PURPOSE, and that is the half this walk did not
- * have. HTML §4.12.3's template contents are a DocumentFragment that is not a CHILD of the template element, so
- * the climb below never enters it — while every node in it is WRAPPED the moment the page reads `t.content` or
- * anything under it. That was a leak the runtime's own gc_obj_list walk counted and nothing else said; now that
- * core/dom/node_interface.c's destroy dispatcher frees those nodes with the element, a wrapper left behind is
- * the identity map naming FREED memory — which a pool allocator turns into the next node inheriting a dead
- * wrapper, the exact failure this function exists to prevent, one tree over.
- * THE SECOND TREES ARE A QUEUE, NOT A DESCENT, for the two reasons the destroy's queue is one: a fragment has
- * no parent to climb back out through, and `<template><template>` is depth the PAGE chooses. Discovery order
- * puts an outer fragment strictly before every fragment nested inside it, so appending while iterating
- * terminates — and it is `node_template_content`, the ONE spelling of where a template's markup is, because two
- * spellings is how one of them stops covering it. */
-typedef struct { lxb_dom_node_t **v; size_t n, cap; } DomTplRoots;
-
-static void dom_tpl_roots_push(DomTplRoots *q, lxb_dom_node_t *frag)
-{
-    if (q->n == q->cap) {
-        size_t want = q->cap ? q->cap * 2 : 8;
-        /* PLAIN realloc, NOT reclaim.h's: this is the free path, and selling a flow to fund it would re-enter
-           the delta release that is standing in the tree being torn down. */
-        lxb_dom_node_t **v = realloc(q->v, sizeof *v * want);
-
-        CHECK(v != NULL, "the wrapper walk could not record a <template>'s contents — a fragment it cannot "
-                         "reach is a subtree whose wrappers stay in the identity map naming nodes the destroy "
-                         "is about to free");
-        q->v = v;
-        q->cap = want;
-    }
-    q->v[q->n++] = frag;
-}
-
-static void dom_forget_one_tree(JSContext *ctx, lxb_dom_node_t *root, DomTplRoots *q)
-{
-    lxb_dom_node_t *n = root, *content;
-
-    for (;;) {
-        dom_forget_node_attrs(ctx, n);
-        node_wrap_forget(ctx, n);
-        content = node_template_content(n);
-        if (content) dom_tpl_roots_push(q, content);
-        if (n->first_child) { n = n->first_child; continue; }
-        while (n != root && !n->next) n = n->parent;
-        if (n == root) return;
-        n = n->next;
-    }
-}
-
-static void dom_forget_wrappers(JSContext *ctx, lxb_dom_node_t *root)
-{
-    DomTplRoots q = { NULL, 0, 0 };
-    size_t i;
-
-    dom_forget_one_tree(ctx, root, &q);
-    for (i = 0; i < q.n; i++)   /* `q` GROWS here: a <template> inside another template's contents */
-        dom_forget_one_tree(ctx, q.v[i], &q);
-    free(q.v);
-}
-
 /* THE NODE OWNERSHIP CONTRACT: a node a flow CREATED dies with that flow's delta.
  *
  * dom_buf_free said it outright — "its nodes stay detached, owned by the doc" — and that is the leak underneath
@@ -958,8 +863,10 @@ static void dom_release_created(DomUndo *u)
        A SIBLING cannot lose tree this way either, and for a structural reason rather than a check: a creation
        made before a fork lives in the frozen segment BOTH flows reference, so its refcount holds it alive until
        the last of them is gone. Only a creation genuinely private to the discarded delta is reached here. */
-    if (g_cow_ctx)
-        dom_forget_wrappers(g_cow_ctx, u->node);
+    /* THE WRAPPERS AND THE TAINT GO BACK INSIDE THE DESTROY, not in a sweep this caller performs first. A walk
+       here would be one of a list of callers that must remember, and this file HELD that list — four of them,
+       while a document's whole tree died through dom_document_destroy with none. core/dom/node_interface.c's
+       dispatcher is what every `lxb_dom_node_destroy_deep` reaches, per node, so there is nothing to remember. */
     lxb_dom_node_destroy_deep(u->node);
     u->node = NULL;   /* the entry has spent its claim; nothing may act on it twice */
 }
@@ -981,13 +888,10 @@ static void dom_release_created_attr(DomUndo *u)
     DCHECK(a->owner == NULL,
            "a flow's created attribute was still ON an element when its delta was discarded — the revert runs "
            "first and detaches it through its kind-0 entry, so an attached one means that entry is missing");
-    DCHECK(g_cow_ctx != NULL, "a created attribute was freed with no context named — an Attr is a WRAPPED "
-                              "node and the identity map has to be told (dom_cow_set_ctx names the runtime)");
-    /* AND THE TAINT SHADOW, for the same reason and in the same breath as the wrapper: a detached attribute
-       keys its shadow on ITSELF, lexbor hands attributes out of a pool, and an entry left naming this address
-       is inherited by the next attribute allocated at it. */
-    attr_shadow_forget(g_cow_ctx, a);
-    dom_attr_destroy(g_cow_ctx, a);
+    /* THE WRAPPER AND THE TAINT SHADOW GO BACK INSIDE dom_attr_destroy, which is the point an Attr's death
+       converges on — a detached attribute keys its shadow on ITSELF, and lexbor hands attributes out of the
+       agent's pool, so an entry left naming this address is inherited by the next attribute allocated at it. */
+    dom_attr_destroy(a);
     u->node = NULL;   /* the entry has spent its claim; nothing may act on it twice */
 }
 
@@ -1056,10 +960,9 @@ void dom_cow_destroy_document(lxb_html_document_t *dom)
     /* THE RECORD NAMES THE TREE, so it cannot outlive it — and it holds the document's wrapper and its
        DOMImplementation, which is one struct and two references per document any exploration arm ever built. */
     document_record_release(dom);
-    /* BEFORE the free, because after it the nodes are gone and the identity map would be left naming freed
-       memory — which is the state a pool allocator turns into another node inheriting this one's wrapper. */
-    if (g_cow_ctx)
-        dom_forget_wrappers(g_cow_ctx, lxb_dom_interface_node(dom));
+    /* The tree's wrappers and taint go back inside dom_document_destroy — per node through the destroy
+       dispatcher, and the document's own node in that function itself. This entry point is left holding only
+       the fact no destroy could know: that the flow's delta owned the document. */
     dom_document_destroy(dom);
 }
 
@@ -1089,19 +992,15 @@ void dom_cow_destroy_private(lxb_dom_node_t *root, bool with_children) {
     DCHECK(with_children || root->first_child == NULL,
            "a private tree was destroyed with children still in it — those nodes are about to be freed under "
            "whatever took a reference to them");
-    /* BEFORE the free, because after it the nodes are gone and the map would be left naming freed memory —
-       which is the state a pool allocator turns into another node inheriting this one's wrapper. */
-    if (g_cow_ctx)
-        dom_forget_wrappers(g_cow_ctx, root);
-    /* AND `with_children` HAS TO MEAN SOMETHING. It was `(void)`'d and the free was lxb_dom_node_destroy, which
+    /* `with_children` HAS TO MEAN SOMETHING. It was `(void)`'d and the free was lxb_dom_node_destroy, which
        frees exactly ONE node — so a caller that passed true had every child leaked with its parent link naming
-       freed memory, while dom_forget_wrappers above had already walked the WHOLE subtree and dropped those
-       children out of the identity map, so a JS wrapper for one of them survived pointing at a node the map no
-       longer knew. Nothing had caught it because the only caller passing true destroys a childless element.
+       freed memory, while a sweep that ran here had already walked the WHOLE subtree and dropped those children
+       out of the identity map, so a JS wrapper for one of them survived pointing at a node the map no longer
+       knew. Nothing had caught it because the only caller passing true destroys a childless element.
        The argument was a claim about a capability that did not exist, which is the same defect as a comment
-       where a DCHECK belongs — the DCHECK above reads as the guard for a `true` path that then did not happen.
-       lxb_dom_node_destroy_deep is what a tree destroy is, and it is what the delta's own creation release
-       already uses for a subtree a flow built. */
+       where a DCHECK belongs. lxb_dom_node_destroy_deep is what a tree destroy is, and it is what the delta's
+       own creation release already uses for a subtree a flow built — and it is also what now hands every one of
+       those nodes' wrappers back, one per node, from inside the destroy. */
     if (with_children) lxb_dom_node_destroy_deep(root);
     else               lxb_dom_node_destroy(root);
 }
@@ -1119,10 +1018,6 @@ void dom_cow_discard_private(lxb_dom_node_t *root, lxb_dom_node_t *node) {
     DCHECK(node->first_child == NULL,
            "dom_cow_discard_private on a node that still has children — they would be freed with it, and this "
            "operation exists because what was under it went somewhere else");
-    /* BEFORE the free, for the reason destroy_private states: a wrapper naming freed memory is inherited by
-       whatever the pool allocates at that address next. */
-    if (g_cow_ctx)
-        dom_forget_wrappers(g_cow_ctx, node);
     lxb_dom_node_destroy(node);
 }
 

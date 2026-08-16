@@ -24,7 +24,8 @@
 #include "quickjs.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/name_intern.h"   /* §4.9.2's storage step stores the three names AS GIVEN */
-#include "core/dom/node.h"   /* node_wrap_forget — a destroyed Attr hands back its wrapper */
+#include "core/dom/node.h"   /* node_wrap_forget / node_agent_runtime — a destroyed Attr hands back its wrapper */
+#include "solver/attr_shadow.h"   /* …and the taint keyed on it, for the same pool-reuse reason */
 
 const lxb_char_t *dom_attr_ns(const lxb_dom_attr_t *a, size_t *len)
 {
@@ -177,15 +178,21 @@ void dom_attr_replace(lxb_dom_attr_t *old_a, lxb_dom_attr_t *new_a)
     old_a->owner = NULL;                              /* step 5 */
 }
 
-void dom_attr_destroy(JSContext *ctx, lxb_dom_attr_t *a)
+/* THE ONE PLACE AN Attr's STRUCT IS HANDED BACK, which is why both of an attribute's side-map entries go back
+   here. An Attr is a node lexbor frees through a LEAF destructor rather than through the document's per-interface
+   dispatcher (core/dom/node_interface.c), so it is the one node kind whose death does not converge on that
+   function — and so this is the point that plays that role for it. Two agent-wide maps are keyed on a node's
+   ADDRESS and the arenas are the AGENT's (core/dom/node_heap.h), so an entry left behind is not merely stale:
+   the next attribute lexbor allocates at this address inherits it. The identity map hands back a wrapper whose
+   opaque names freed memory, and the taint shadow hands a fresh attribute a destroyed one's provenance — a wrong
+   @S answer with nothing to say so. */
+void dom_attr_destroy(lxb_dom_attr_t *a)
 {
     DCHECK(a != NULL, "an attribute destroy was asked for no attribute");
     DCHECK(a->owner == NULL, "an attribute still ON an element was destroyed — it is reachable from the "
                              "document, so the free would leave the element's list naming freed memory");
-    /* AN Attr IS A WRAPPED NODE, so a free that does not tell the identity map leaves it naming freed memory —
-       the same use-after-free `dom_forget_wrappers` exists to prevent for elements, and what a pool allocator
-       turns into the next attribute inheriting this one's wrapper. */
-    node_wrap_forget(ctx, lxb_dom_interface_node(a));
+    node_wrap_forget(lxb_dom_interface_node(a));
+    attr_shadow_forget(node_agent_runtime(), a);
     lxb_dom_attr_interface_destroy(a);
 }
 
