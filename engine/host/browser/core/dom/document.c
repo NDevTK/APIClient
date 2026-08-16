@@ -40,6 +40,7 @@
 #include "core/dom/selector_match.h"
 #include "core/css/css_style_declaration.h"
 #include "core/dom/document.h"
+#include "core/dom/document_domain.h"
 #include "core/dom/document_metadata.h"
 #include "solver/world.h"
 #include "core/frame/window_proxy.h"
@@ -1881,6 +1882,9 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     /* §3.1.4's resource metadata members and §3.1.5's `readyState` — their own component, because `cookie` and
        `referrer` are ATTACKER SOURCES with their own browser delivery and a cookie store behind them. */
     document_metadata_install(ctx, proto);
+    /* §7.1.1.2's `domain`, the fifth member of that partial interface — see document_domain.h for why the
+       origin-mutating one is not in the component that reads the resource's metadata. */
+    document_domain_install(ctx, proto);
 }
 
 /* HTML §7.2.6's container for THIS document, from BOTH halves of the policy list.
@@ -2036,6 +2040,10 @@ void document_init(JSContext *ctx)
        document_metadata_install runs from document_install_proto below — so the declaration is paired with it
        HERE for the reason page_visibility_init's is, rather than copied into each host's own init list. */
     document_metadata_init(ctx);
+    /* §7.1.1.2's `domain` is the fifth member of that same partial interface and a different PROBLEM — the one
+       operation in the platform that mutates an origin — so it is its own component, declared here beside the
+       other four for the reason document_metadata_init's line gives. */
+    document_domain_init(ctx);
     document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
     shadow_root_init(ctx);         /* §4.8, whose prototype chains to §4.7's — declared after it */
     slot_init(ctx);                /* §4.2.2's slots, which only exist inside a §4.8 tree */

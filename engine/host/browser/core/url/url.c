@@ -214,7 +214,31 @@ char *url_percent_decode(const char *s, size_t n, size_t *out_n)
 
 /* ---- the record ------------------------------------------------------------------------------------------ */
 
-static void url_host_free(UrlHost *h) { free(h->domain); h->domain = NULL; h->kind = URL_HOST_NULL; }
+void url_host_free(UrlHost *h) { free(h->domain); h->domain = NULL; h->kind = URL_HOST_NULL; }
+
+/* §4.2's HOST EQUALITY, BY VALUE OVER THE PARSED HOST — "identical" wherever a standard compares two hosts:
+   §7.1.1 step 2's same origin, §7.1.1's same origin-domain over two DOMAINS, §7.2.5's can-have-its-URL-rewritten
+   and §7.1.1.2's "hostSuffix does not equal originalHost". It lived THREE TIMES, once in each of those callers,
+   which is three chances for one edge to be read differently — and they had already drifted: two of them
+   answered a host of an undeclared kind with `true` where this one crashes. Two hosts of different KINDS are
+   different however they spell, an IPv4 is a number, an IPv6 is eight of them, and a domain is already
+   lowercased ASCII by domain-to-ASCII when the parser built it. */
+bool url_host_equal(const UrlHost *a, const UrlHost *b)
+{
+    DCHECK(a != NULL && b != NULL, "§4.2's host equality was asked with nothing on one side");
+    if (a->kind != b->kind) return false;
+    switch (a->kind) {
+    case URL_HOST_DOMAIN:
+    case URL_HOST_OPAQUE: return a->domain && b->domain && !strcmp(a->domain, b->domain);
+    case URL_HOST_IPV4:   return a->ipv4 == b->ipv4;
+    case URL_HOST_IPV6:   return memcmp(a->ipv6, b->ipv6, sizeof a->ipv6) == 0;
+    case URL_HOST_NULL:
+    case URL_HOST_EMPTY:  return true;   /* the null and empty hosts carry no payload to compare */
+    }
+    DFAIL("a URL host of a kind url.h does not declare was compared — the parser produces exactly the five, so "
+          "a sixth came from a record built by hand");
+    return false;
+}
 
 void url_record_init(UrlRecord *u)
 {
@@ -520,6 +544,27 @@ static bool parse_host(const char *s, size_t n, bool is_opaque, UrlHost *out)
     out->kind = URL_HOST_DOMAIN;
     out->domain = decoded;
     return true;
+}
+
+/* §4.2's HOST PARSER, AS ITS OWN ENTRY, because a host is parsed in places that have no URL to parse it into.
+   HTML §7.1.1.2's `document.domain` setter is one: its step 2 is "let hostSuffix be the result of PARSING
+   hostSuffixString" and there is no scheme, no base and no record anywhere in that algorithm — the answer is a
+   HOST and the caller compares it against another host. Routing that through a scratch URL would make the
+   answer depend on a scheme the algorithm never mentions (`isNotSpecial` decides between the domain parser and
+   the opaque-host parser, so a scratch `sc:` URL would percent-encode where the standard wants domain-to-ASCII).
+   `is_opaque` is §4.2's own parameter. `*out` is left zeroed on failure and is the CALLER's to url_host_free
+   whatever the answer was. */
+bool url_parse_host(UrlHost *out, const char *s, size_t len, bool is_opaque)
+{
+    DCHECK(out != NULL && s != NULL, "§4.2's host parser was called with nothing to parse or nowhere to put it");
+    if (parse_host(s, len, is_opaque, out)) return true;
+    /* ZEROED ON FAILURE, and asserted rather than re-zeroed here: §4.2's parser clears `out` before it starts
+       and every failure path of it returns before allocating, so a partially built host arriving here is that
+       contract broken — and quietly memsetting it would turn a LEAK into a clean-looking return. */
+    DCHECK(out->kind == URL_HOST_NULL && out->domain == NULL,
+           "§4.2's host parser left a partially built host behind on FAILURE — whatever it allocated is now "
+           "unreachable, and the caller is about to free a record that no longer names it");
+    return false;
 }
 
 /* §4.3's host serializer. The IPv6 form is the compressed one, which is why the record keeps the pieces. */

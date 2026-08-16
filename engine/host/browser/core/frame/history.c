@@ -164,22 +164,10 @@ static JSValue js_hist_set_scroll_restoration(JSContext *ctx, JSValueConst this_
  * (scheme, username, password, host, port) and every later test loosens by scheme. `https://example.com/home`
  * may be rewritten to `https://example.com/shop`, may not be rewritten to `http://example.com/home`, and may
  * not be rewritten to `https://user:pass@example.com/home` — those three rows are the standard's own table.
- * That is what makes pushState same-origin-only, and it is why the refusal is a SecurityError. */
-static bool url_host_equal(const UrlHost *a, const UrlHost *b)
-{
-    if (a->kind != b->kind) return false;
-    switch (a->kind) {
-    case URL_HOST_DOMAIN:
-    case URL_HOST_OPAQUE: return a->domain && b->domain && !strcmp(a->domain, b->domain);
-    case URL_HOST_IPV4:   return a->ipv4 == b->ipv4;
-    case URL_HOST_IPV6:   return memcmp(a->ipv6, b->ipv6, sizeof a->ipv6) == 0;
-    case URL_HOST_NULL:
-    case URL_HOST_EMPTY:  return true;
-    }
-    DFAIL("a URL host of a kind url.h does not declare reached §7.2.5's can-have-its-URL-rewritten");
-    return false;
-}
-
+ * That is what makes pushState same-origin-only, and it is why the refusal is a SecurityError.
+ *
+ * ITS HOST COMPARISON IS url.c's — this file held a copy, origin.c held a second, and a third question was
+ * about to ask the same thing; "identical hosts" is ONE rule of §4.2 and it now has one implementation. */
 static bool str_equal_or_both_absent(const char *a, const char *b)
 {
     if (!a || !b) return a == b || (!(a && *a) && !(b && *b));

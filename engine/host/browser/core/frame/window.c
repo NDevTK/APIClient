@@ -39,6 +39,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/frame/window.h"
+#include "core/frame/agent_cluster.h"
 #include "core/frame/secure_context.h"
 #include "core/frame/document_lifecycle.h"
 #include "core/frame/window_proxy.h"
@@ -565,6 +566,11 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        over `location.origin` for exactly the reason this one exists: they are facts about the ENVIRONMENT and
        not about whatever URL the Document happens to be showing. */
     idl_install_accessor(ctx, g, "isSecureContext", js_win_is_secure_context, 0, -1);
+    /* §7.1.2's `originAgentCluster` and §8.1.7.1's `crossOriginIsolated` — two answers about THIS AGENT'S
+       CLUSTER, installed by the component that computes it (core/frame/agent_cluster.c) rather than written out
+       here as two booleans, because §7.1.1.2's `document.domain` setter reads the same fact and one fact
+       answered from three places is three places for it to drift. */
+    agent_cluster_install(ctx, g);
 
     JS_DefinePropertyGetSet(ctx, g, JS_NewAtom(ctx, "name"),
                             JS_NewCFunction(ctx, js_win_get_name, "get name", 0),

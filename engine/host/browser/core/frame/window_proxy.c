@@ -217,11 +217,20 @@ static bool proxy_same_origin(const ProxyData *p)
 }
 
 /* §7.1.1's SAME ORIGIN-DOMAIN over the same pair — §7.3.1's `content document` filter, which is a DIFFERENT
-   algorithm from the one above and not a laxer spelling of it. */
-static bool proxy_same_origin_domain(const ProxyData *p)
+ * algorithm from the one above and not a laxer spelling of it.
+ *
+ * AND ITS ACCESSOR SIDE IS THE ASKING DOCUMENT'S ORIGIN, NOT THE AGENT'S. That is the one place the two checks
+ * must be written differently, and the reason is §7.1.1.2: every origin in this heap is same ORIGIN with the
+ * agent's by construction, so proxy_same_origin may compare against the agent's record and be exact — but a
+ * DOMAIN is per Document. §7.3.1's content document filters "container document" against the content document,
+ * and a child navigable's Document holds its own tuple record (§7.3.1 step 5 mints one per address), so a
+ * child that has relaxed its domain while its container has not is a pair the standard's own table answers
+ * ❌ for. Reading the agent's record here would have answered ✅ — right until the moment the member it exists
+ * to gate became implementable, which is what makes it worth one argument. */
+static bool proxy_same_origin_domain(JSContext *ctx, const ProxyData *p)
 {
     DCHECK(p->origin != NULL, "a WindowProxy carries no origin");
-    return origin_same_domain(p->origin, origin_agent());
+    return origin_same_origin_domain(p->origin, window_proxy_origin(document_window_proxy(ctx)));
 }
 
 bool window_proxy_is(JSValueConst v)
@@ -823,11 +832,11 @@ bool window_proxy_same_origin_of(JSValueConst proxy)
     return proxy_same_origin(p);
 }
 
-bool window_proxy_same_origin_domain_of(JSValueConst proxy)
+bool window_proxy_same_origin_domain_of(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);
     DCHECK(p != NULL, "the origin of something that is not a WindowProxy was compared");
-    return proxy_same_origin_domain(p);
+    return proxy_same_origin_domain(ctx, p);
 }
 
 bool window_proxy_same_origin_with_top(JSContext *ctx)

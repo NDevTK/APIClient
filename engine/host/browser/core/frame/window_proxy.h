@@ -227,9 +227,11 @@ bool window_proxy_same_origin_of(JSValueConst proxy);
 
 /* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME ORIGIN-DOMAIN WITH THIS ONE? §7.1.1's OTHER algorithm, and §7.3.1's
    `content document` filters `iframe.contentDocument` by THIS one rather than by the check above. They differ
-   exactly where `document.domain` has been set; keeping them apart is what makes that member implementable
-   without revisiting every caller. */
-bool window_proxy_same_origin_domain_of(JSValueConst proxy);
+   exactly where `document.domain` has been set, which is now a member (core/dom/document_domain.c).
+   IT TAKES A REALM WHERE THE SAME-ORIGIN CHECK DOES NOT, and that asymmetry is the spec's: same ORIGIN may be
+   answered against the agent's one record because every origin in this heap is same origin with it, while a
+   DOMAIN belongs to a DOCUMENT — so this compares against the ASKING realm's Document's origin. */
+bool window_proxy_same_origin_domain_of(JSContext *ctx, JSValueConst proxy);
 
 /* IS THIS ENVIRONMENT'S ORIGIN SAME ORIGIN WITH ITS TOP-LEVEL ORIGIN? — the question HTML §4.10.5.4's
    showPicker() step 2, Permissions §5.1 step 4's default 'self' allowlist and File System Access §2.2's and

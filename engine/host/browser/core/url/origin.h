@@ -42,10 +42,13 @@
  * has always been serializing without ever holding. HTML defines the ALGORITHMS over it, which is why their
  * spec sentences are quoted at each one in origin.c.
  *
- * LIFETIME: an origin is IMMUTABLE and lives for the AGENT. It is never freed while the agent runs — a parked
- * flow's COW delta holds POD pointers to the record (window_proxy.c captures its ProxyData by bytes), so a
- * freed origin would resume a flow onto freed memory, exactly as that component's strings already state. The
- * whole list goes at platform_agent_free. */
+ * LIFETIME: an origin lives for the AGENT and is immutable in every component but one. §7.1.1: origins "are
+ * generally immutable. Only the domain of a tuple origin can be changed, and only through the document.domain
+ * API" — so origin_set_domain below is the single writer, it captures into the running flow's COW delta before
+ * it writes, and every domain it has ever parsed stays alive with the records. Nothing here is freed while the
+ * agent runs: a parked flow's COW delta holds POD pointers into these records (window_proxy.c captures its
+ * ProxyData by bytes, and the domain slot is captured by bytes too), so a freed origin — or a freed domain —
+ * would resume a flow onto freed memory. The whole list goes at platform_agent_free. */
 #ifndef ENGINE_HOST_BROWSER_CORE_URL_ORIGIN_H
 #define ENGINE_HOST_BROWSER_CORE_URL_ORIGIN_H
 #include <stdbool.h>
@@ -64,8 +67,29 @@ bool origin_same(const Origin *a, const Origin *b);
 
 /* §7.1.1's SAME ORIGIN-DOMAIN, which is a DIFFERENT algorithm and not a laxer spelling of the one above: it is
    what §7.3.1's `content document` filters `iframe.contentDocument` by, while §7.2.5.1's cross-origin filter
-   uses same ORIGIN. They differ exactly where `document.domain` has been set, which is why both exist here. */
-bool origin_same_domain(const Origin *a, const Origin *b);
+   uses same ORIGIN. The standard prints a five-row table for the pair precisely because they disagree BOTH
+   WAYS — equal domains with different ports are same origin-domain and NOT same origin; one side having set a
+   domain makes a pair same origin and NOT same origin-domain — so a filter that agreed with same origin for
+   every input would pass a test that only checked the agreeing rows. */
+bool origin_same_origin_domain(const Origin *a, const Origin *b);
+
+/* §7.1.1's EFFECTIVE DOMAIN: "1. If origin is an opaque origin, then return null. 2. If origin's domain is
+   non-null, then return origin's domain. 3. Return origin's host." NULL is step 1 and it is what makes
+   §7.1.1.2's `document.domain` getter answer the empty string and its setter throw. BORROWED — it is the
+   record's own host or the agent's parsed domain, both of which live for the agent. */
+const UrlHost *origin_effective_domain(const Origin *o);
+
+/* §7.1.1.2's SETTER STEP 6, "set this's origin's domain to the result of parsing the given value" — and the ONE
+   place an origin is ever mutated. §7.1.1: origins "are generally immutable. Only the domain of a tuple origin
+   can be changed, and only through the document.domain API", which is why this takes a `const Origin *` like
+   every other reader: the constness is the standard's sentence, and this function is its one exception.
+   IT IS A PER-FLOW WRITE ON SHARED STATE, so it captures into the running flow's COW delta before it writes —
+   an arm that relaxed its domain must not leave a sibling arm's `contentDocument` null. `owner` is the JS
+   object whose algorithm is doing the writing (the Document), which is what anchors the delta entry.
+   THE DOMAIN IS COPIED into agent-lifetime storage and never freed while the agent runs, for the same reason
+   the records are: a parked flow's delta holds this slot as a POD pointer, so a freed domain would resume that
+   flow onto freed memory. The caller keeps ownership of what it passed. */
+void origin_set_domain(JSContext *ctx, JSValueConst owner, const Origin *o, const UrlHost *domain);
 
 /* §7.1.1's SERIALIZATION — "null" for an opaque origin, `scheme://host[:port]` otherwise. BORROWED and
    computed once: it is a pure function of an immutable record, and every caller of it is producing BYTES that

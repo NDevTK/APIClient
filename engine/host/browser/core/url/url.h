@@ -44,6 +44,17 @@ typedef struct {
 
 void url_record_init(UrlRecord *u);
 void url_record_free(UrlRecord *u);
+/* A HOST on its own — released, parsed and compared without a URL record around it, because a host is parsed
+   and compared in places that have none. HTML §7.1.1's origin holds two (its host and its domain), and
+   §7.1.1.2's `document.domain` setter parses one out of a bare string with no scheme and no base in sight. */
+void url_host_free(UrlHost *h);
+/* §4.2's HOST PARSER, which is what every standard means by "parsing" a bare host string; `is_opaque` is its
+   own `isNotSpecial` parameter and decides between the domain parser and the opaque-host parser. Returns false
+   for the spec's FAILURE. `*out` is zeroed either way and is the caller's to url_host_free. */
+bool url_parse_host(UrlHost *out, const char *s, size_t len, bool is_opaque);
+/* §4.2's HOST EQUALITY, by value over the parsed host — what §7.1.1 step 2, §7.1.1's same origin-domain,
+   §7.2.5's can-have-its-URL-rewritten and §7.1.1.2's step 4 each mean by two hosts being "identical". */
+bool url_host_equal(const UrlHost *a, const UrlHost *b);
 /* A deep copy — the parser needs one because `new URL(input, base)` must not write through to `base`. */
 bool url_record_copy(UrlRecord *dst, const UrlRecord *src);
 

@@ -176,6 +176,10 @@ const INTERFACES = {
                         /* §7.2.6.2's `[Replaceable] readonly attribute Navigation navigation`, installed
                            with the object it answers with rather than with the Window it hangs off. */
                         "core/frame/navigation.c",
+                        /* §7.1.2's `originAgentCluster` and §8.1.7.1's `crossOriginIsolated` — two answers
+                           about one agent cluster, installed by the component that computes it because
+                           §7.1.1.2's `document.domain` setter reads the same fact. */
+                        "core/frame/agent_cluster.c",
                         /* Indexed Database §4.3's `[SameObject] readonly attribute IDBFactory indexedDB`, a
                            member of the WindowOrWorkerGlobalScope mixin Window includes — installed with the
                            component that builds the object it answers with, the same rule navigation.c's
@@ -288,7 +292,13 @@ const INTERFACES = {
   HTMLLinkElement:     [...HTML_BASE],
   HTMLMetaElement:     [...HTML_BASE],
   HTMLDivElement:      [...HTML_BASE],
-  Document:            ["core/dom/document.c", "core/dom/node.c", "core/events/event_target.c"],
+  /* §3.1.1's partial interface is installed by THREE components and the row named one, which since attribution
+     no longer changes the count — it changes what the CROSS-CHECK is over. Named here so that this row states
+     what Document is really built out of: §3.1.4/§3.1.5's `cookie`, `referrer`, `lastModified` and
+     `readyState` are document_metadata.c's, and §7.1.1.2's `domain` is document_domain.c's, each for the
+     reason its own header gives. */
+  Document:            ["core/dom/document.c", "core/dom/document_metadata.c", "core/dom/document_domain.c",
+                        "core/dom/node.c", "core/events/event_target.c"],
   /* DOM §4.5.1 and §4.6 — the interface that BUILDS a document and the interface a doctype IS. DocumentType's
      file list carries node.c for the reason Element's does: it inherits Node, and node.c is also where the
      ChildNode mixin it INCLUDES is installed. DOMImplementation inherits nothing, so it names only its own. */

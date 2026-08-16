@@ -6,6 +6,9 @@
 
 #include "check.h"
 #include "core/url/origin.h"
+/* §7.1.1's one mutable component is per-flow state, so the one place it is written captures it — the browser
+   owns the API, the solver owns the time travel. */
+#include "solver/cow.h"
 
 /* §7.1.1's TWO SHAPES IN ONE RECORD, and `nonce` is which: NON-ZERO is the OPAQUE origin — "an internal value,
    with no serialization it can be recreated from … for which the only meaningful operation is testing for
@@ -23,19 +26,33 @@ struct Origin {
     UrlHost  host;
     int      port;        /* §7.1.1's port; -1 is the spec's null — tuple only */
     /* §7.1.1's DOMAIN: "null unless stated otherwise", and §7.1.1.2's `document.domain` setter is the only
-       thing in the platform that states otherwise. This engine does not have that member — a web API it has
-       not built is honestly ABSENT — so every origin here has a null domain, and the day the setter lands it
-       writes HERE. It is a field rather than an omission because §7.1.1's SAME ORIGIN-DOMAIN is defined over
-       it and §7.3.1's `content document` filters on that algorithm, so the code that reads it is already
-       written below. Note also that an origin is SHARED between Documents (§7.3.1's inheritance cases), and
-       the standard says so precisely to state that document.domain "affects both" — which is why origins are
-       never interned by value here: two Documents the spec gives separate tuple origins to must not become
-       one record that a future setter would change for both. */
-    char    *domain;
+       thing in the platform that states otherwise — origin_set_domain below is that setter's step 6 and the
+       only writer there is or can be. NULL is the spec's null.
+       IT IS A POINTER INTO AGENT-LIFETIME STORAGE and never an inline value, because this slot is the one
+       mutable field of an otherwise immutable record: the running flow captures it into its COW delta by BYTES
+       before writing, and a byte capture may only ever restore a pointer that is still live. g_domains below is
+       what keeps every parsed domain alive for the agent, exactly as g_origins does for the records.
+       AN ORIGIN IS SHARED BETWEEN DOCUMENTS (§7.3.1's inheritance cases), and the standard says so precisely to
+       state that document.domain "affects both" — which is why origins are never interned BY VALUE here: two
+       Documents the spec gives separate tuple origins to must not become one record this setter changes for
+       both, and two Documents it gives ONE record to must. */
+    const UrlHost *domain;
     char    *serialized;  /* §7.1.1's serialization, computed once — see origin_serialized */
     uint32_t id;
     Origin  *next;
 };
+
+/* EVERY DOMAIN §7.1.1.2's SETTER HAS EVER PARSED, in a list of stable nodes for the agent. A relaxed domain is
+   never freed and never overwritten in place: the slot that names it is captured by BYTES into a flow's delta,
+   so a second `document.domain =` that reused the storage would rewrite what a parked sibling still points at,
+   and a free would leave it pointing at nothing. Appending instead makes the slot's every historical value live
+   — which is the same rule g_origins states for the records themselves. */
+typedef struct OriginDomain {
+    UrlHost              host;
+    struct OriginDomain *next;
+} OriginDomain;
+
+static OriginDomain *g_domains;
 
 /* EVERY ORIGIN THIS AGENT HAS MINTED. They are immutable and live for the agent: a parked flow's COW delta
    holds a POD pointer to one (window_proxy.c captures its record by bytes), so freeing one before the agent
@@ -85,21 +102,6 @@ static void origin_host_copy(UrlHost *dst, const UrlHost *src)
     dst->domain = src->domain ? origin_strdup(src->domain) : NULL;
 }
 
-/* URL §4.2's HOST EQUALITY, which §7.1.1 step 2 means by "their hosts … are identical". By VALUE, over the
-   parsed host: two hosts of different KINDS are different however they spell, an IPv4 is a number, an IPv6 is
-   eight of them, and a domain is already lowercased ASCII by domain-to-ASCII when the parser built it. */
-static bool origin_host_equal(const UrlHost *a, const UrlHost *b)
-{
-    if (a->kind != b->kind) return false;
-    switch (a->kind) {
-    case URL_HOST_DOMAIN:
-    case URL_HOST_OPAQUE: return a->domain && b->domain && !strcmp(a->domain, b->domain);
-    case URL_HOST_IPV4:   return a->ipv4 == b->ipv4;
-    case URL_HOST_IPV6:   return memcmp(a->ipv6, b->ipv6, sizeof a->ipv6) == 0;
-    default:              return true;   /* the null and empty hosts carry no payload to compare */
-    }
-}
-
 /* §7.1.1's TUPLE ORIGIN. NOT INTERNED — see the `domain` field for why two equal tuples must stay two
    records. */
 static const Origin *origin_tuple_new(const char *scheme, const UrlHost *host, int port)
@@ -130,7 +132,7 @@ bool origin_same(const Origin *a, const Origin *b)
     DCHECK(a != NULL && b != NULL, "§7.1.1's same origin was asked about a NULL origin");
     if (a->nonce || b->nonce)
         return a->nonce == b->nonce;      /* step 1, and step 2's "both tuple origins" failing */
-    return !strcmp(a->scheme, b->scheme) && origin_host_equal(&a->host, &b->host) && a->port == b->port;
+    return !strcmp(a->scheme, b->scheme) && url_host_equal(&a->host, &b->host) && a->port == b->port;
 }
 
 /* §7.1.1: "Two origins, A and B, are said to be same origin-domain if the following algorithm returns true:
@@ -139,16 +141,73 @@ bool origin_same(const Origin *a, const Origin *b)
         1. If A and B's schemes are identical, and their domains are identical and non-null, then return true.
         2. Otherwise, if A and B are same origin and their domains are both null, return true.
      3. Return false."
-   IT IS NOT A LAXER SAME-ORIGIN: the standard's own table has a row where two origins are same origin-domain
-   and NOT same origin (equal domains, different ports) and a row the other way (same origin, one domain set). */
-bool origin_same_domain(const Origin *a, const Origin *b)
+   IT IS NOT A LAXER SAME-ORIGIN, and the standard's own five-row table is what says so. Two rows disagree, one
+   in each direction, and both are answered here rather than approximated:
+
+     A = ("https", "example.org", 314, "example.org")   B = ("https", "example.org", 420, "example.org")
+       same origin ❌ (the PORTS differ, and step 2 of same origin compares them) — same origin-domain ✅
+       (step 2.1 compares SCHEME and DOMAIN and never looks at the port).
+     A = ("https", "example.org", null, null)           B = ("https", "example.org", null, "example.org")
+       same origin ✅ (identical tuples) — same origin-domain ❌ (step 2.1 needs BOTH domains non-null and
+       step 2.2 needs BOTH null, so a pair with one relaxed side satisfies neither).
+
+   The second row is the one a page reaches by itself: one Document sets `document.domain` and its same-origin
+   sibling has not, and §7.3.1's `content document` — which filters on THIS algorithm — answers null. */
+bool origin_same_origin_domain(const Origin *a, const Origin *b)
 {
     DCHECK(a != NULL && b != NULL, "§7.1.1's same origin-domain was asked about a NULL origin");
     if (a->nonce || b->nonce)
         return a->nonce == b->nonce;                                        /* step 1 */
-    if (!strcmp(a->scheme, b->scheme) && a->domain && b->domain && !strcmp(a->domain, b->domain))
+    if (!strcmp(a->scheme, b->scheme) && a->domain && b->domain && url_host_equal(a->domain, b->domain))
         return true;                                                        /* step 2.1 */
     return origin_same(a, b) && !a->domain && !b->domain;                   /* step 2.2 */
+}
+
+/* §7.1.1's EFFECTIVE DOMAIN, all three steps — the value §7.1.1.2's getter serializes and the host its setter
+   measures the assigned value against. */
+const UrlHost *origin_effective_domain(const Origin *o)
+{
+    DCHECK(o != NULL, "§7.1.1's effective domain was asked of no origin");
+    if (o->nonce) return NULL;      /* step 1 — an opaque origin has no components at all */
+    if (o->domain) return o->domain;                                        /* step 2 */
+    return &o->host;                                                        /* step 3 */
+}
+
+void origin_set_domain(JSContext *ctx, JSValueConst owner, const Origin *o, const UrlHost *domain)
+{
+    Origin *m = (Origin *)o;   /* §7.1.1's one mutable component — see origin.h */
+    OriginDomain *d;
+
+    DCHECK(o != NULL && domain != NULL, "§7.1.1.2 step 6 was asked to set a domain on no origin, or to no host");
+    DCHECK(!o->nonce, "§7.1.1.2 step 6 reached an OPAQUE origin — only the domain of a TUPLE origin can be "
+                      "changed, and the setter's step 3 throws a SecurityError before this because an opaque "
+                      "origin's effective domain is null");
+    /* THE INSTANCE BOUNDARY, ASSERTED RATHER THAN ARGUED. An instance is an ORIGIN-KEYED agent cluster
+       (SECURITY.md), so every Document in this heap is same origin with this agent and a Document at another
+       origin is another INSTANCE holding its own records. A domain written on an origin that is NOT this
+       agent's could only be a PEER's — a record origin_parse minted out of a serialization — and writing one
+       would be this engine claiming same origin-DOMAIN across an instance boundary. It also could not be
+       observed if it were: §7.1.1's serialization has no domain component, so an origin that crossed a
+       boundary as bytes always arrives with a null domain, and step 2.1 needs BOTH sides non-null. The
+       relaxation is therefore confined to this heap by construction, and this is where that is checked. */
+    DCHECK(origin_same(o, origin_agent()),
+           "§7.1.1.2's setter reached an origin that is not this agent's — an instance is an ORIGIN-KEYED agent "
+           "cluster, so the only origins in this heap are this agent's own; one that is not came from "
+           "origin_parse, which is how a PEER INSTANCE's principal arrives, and relaxing a peer's domain would "
+           "be claiming same origin-domain across the boundary that exists to prevent exactly that");
+    d = calloc(1, sizeof *d);
+    CHECK(d != NULL, "origin: OOM recording a relaxed domain — §7.1.1.2's setter has already passed every one "
+                     "of its security checks at this point, so there is no answer left that is not this one");
+    origin_host_copy(&d->host, domain);
+    d->next = g_domains;
+    g_domains = d;
+    /* THE SOLVER OWNS THE TIME TRAVEL — the same split every DOM write host-edge follows. The slot is shared
+       baseline state (an origin lives for the agent and several Documents may hold this one record), so the
+       running flow captures its BYTES before the write; without it, one forked arm's relaxation would decide
+       every sibling arm's `contentDocument`. Only the slot, never the whole record: `serialized` is a lazily
+       computed memo of an immutable value and reverting it would leak the string and recompute it. */
+    cow_capture_host_state(ctx, owner, &m->domain, sizeof m->domain);
+    m->domain = &d->host;
 }
 
 /* §7.1.1's SERIALIZATION: "1. If origin is an opaque origin, then return `null`. 2. Otherwise, let result be
@@ -373,16 +432,25 @@ const Origin *origin_by_id(uint32_t id)
 void origin_release(void)
 {
     Origin *o = g_origins;
+    OriginDomain *d = g_domains;
 
     while (o) {
         Origin *n = o->next;
         free(o->scheme);
-        free(o->host.domain);   /* the only part of a parsed host that carries memory */
-        free(o->domain);
+        url_host_free(&o->host);
         free(o->serialized);
         free(o);
         o = n;
     }
+    /* The relaxed domains outlive the records that point at them by exactly nothing: both lists go together,
+       and neither is walked from the other. */
+    while (d) {
+        OriginDomain *n = d->next;
+        url_host_free(&d->host);
+        free(d);
+        d = n;
+    }
+    g_domains = NULL;
     g_origins = NULL;
     g_agent = NULL;
     g_next_id = 1;
