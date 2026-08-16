@@ -1747,6 +1747,14 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
                    fragment parse produced inert, because §13.4's default scripting mode marked it already
                    started. core/html/html_script.c owns both halves of that pair. */
                 html_script_prepare(ctx, el);
+                /* HTML §4.8.12: an inserted `<source>` STARTS its parent media element's resource selection
+                   algorithm, which is how a `<video>` with no `src` and only `<source>` children ever loads
+                   anything. It is here rather than on node.c's tree-hook list because that list is the DOM's
+                   own step families and this is an HTML ELEMENT INSERTION STEPS entry — the same family as the
+                   `<script>` above and the `<iframe>` above that, which need this seam's realm (the inserted
+                   node's document, not the mutating one) and its position (insert step 7, before step 8's
+                   mutation record). */
+                media_element_source_inserted(ctx, el);
                 /* DOM §4.2.3's insertion steps: an element that ENTERS a document gets its connectedCallback if
                    it is already custom, and is otherwise tried for upgrade — the other half of "learned by
                    execution", beside the <script> preparation right above it. The upgrade is ENQUEUED, never

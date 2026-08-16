@@ -31,8 +31,11 @@
  * steps are an OUTCOME FORK (solver/decide.h's seam, the same one JSON.parse over unknown text uses). Outcome
  * 0 — the arm a run with no forking policy takes, which is step_fork_run's rule — is the resource being
  * USABLE, because that is the ordinary completion and the one an @S candidate re-fire must follow to a sink.
- * Outcome 1 is §4.8.11.5's "failed with attribute" branch, which sets `error` to a MEDIA_ERR_SRC_NOT_SUPPORTED
- * MediaError and fires `error`. Both arms are real code in real pages and they run DIFFERENT endpoints: one
+ * Outcome 1 is the load having failed, and WHICH of §4.8.11.5's three failure labels that reaches belongs to
+ * the MODE: object and attribute mode run the dedicated media source failure steps (a
+ * MEDIA_ERR_SRC_NOT_SUPPORTED MediaError, `error` at the media element, the play promises rejected), while
+ * children mode fires `error` at the `source` ELEMENT and goes looking for the next candidate — it never sets
+ * `error` at all. Both arms are real code in real pages and they run DIFFERENT endpoints: one
  * flow reaches `oncanplay`/`onloadedmetadata`, its sibling reaches `onerror` and whatever fallback it fetches.
  * That fork is the whole value of this file to the solver, and it is why the load path had to be a state
  * machine rather than a getter that shrugs.
@@ -125,6 +128,26 @@ static bool media_is_node(const lxb_dom_node_t *n)
            (lxb_html_tree_node_is(n, LXB_TAG_AUDIO) || lxb_html_tree_node_is(n, LXB_TAG_VIDEO));
 }
 
+/* WHICH NODES ARE `source` ELEMENTS — §4.8.11.5 step 10's "source element child" and §4.8.12's insertion
+   steps, over the interned tag id and the namespace for media_is_node's two reasons: an SVG `<source>` is not
+   one, and the question is asked of every child of every media element and of every inserted node. */
+static bool media_source_is(const lxb_dom_node_t *n)
+{
+    return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && lxb_html_tree_node_is(n, LXB_TAG_SOURCE);
+}
+
+/* §4.8.11.5 step 10's "the first source element child in tree order", or NULL — ONE walker, so the mode
+   selection and the parse boundary's §4.8.12 sweep cannot disagree about what a candidate is. */
+static lxb_dom_node_t *media_first_source(const lxb_dom_node_t *el)
+{
+    lxb_dom_node_t *c;
+
+    DCHECK(el != NULL, "§4.8.11.5 step 10 was asked for the source children of nothing");
+    for (c = el->first_child; c; c = c->next)
+        if (media_source_is(c)) return c;
+    return NULL;
+}
+
 /* The same question asked of a VALUE — the brand every member of this file performs. It is asked of the NODE
    rather than of a wrapper class, because that is what the spec says a media element is. */
 static bool media_is(JSContext *ctx, JSValueConst v)
@@ -167,6 +190,12 @@ static JSValue media_state(JSContext *ctx, JSValueConst el)
     JS_SetPropertyStr(ctx, st, "volume", JS_NewFloat64(ctx, 1.0));
     JS_SetPropertyStr(ctx, st, "muted", JS_NewInt32(ctx, MUTED_DEFAULT));
     JS_SetPropertyStr(ctx, st, "loadedData", JS_FALSE);   /* §4.8.11.7's "first time … since load()" latch */
+    /* §4.8.11.5 step 14's CHILDREN MODE parked this element at its WAITING step, whose only wake is a `source`
+       inserted into it — so the flag is read by §4.8.12's source element insertion steps and by nothing else.
+       It is a POSITIVE statement and not a hole: false is "this element is not waiting at a pointer", which is
+       a different fact from NETWORK_NO_SOURCE, since step 1 and the dedicated media source failure steps both
+       leave that same network state behind without any wait. */
+    JS_SetPropertyStr(ctx, st, "sourceWait", JS_FALSE);
     {
         JSValue promises = JS_NewArray(ctx);
         CHECK(!JS_IsException(promises), "§4.8.11.8: OOM building the list of pending play promises");
@@ -459,7 +488,7 @@ static JSValue js_media_error_field(JSContext *ctx, JSValueConst this_val, int m
  * ONE MACHINE, because the tasks §4.8.11 queues differ in exactly two ways: which events they fire, in order,
  * and what they do to the list of pending play promises when the fires are done. Both are ARGUMENTS. A machine
  * per event name would be the same algorithm written out once per string. */
-enum { MTA_FIRE = 0, MTA_RESOLVE, MTA_REJECT_ABORT, MTA_REJECT_NOT_SUPPORTED };
+enum { MTA_FIRE = 0, MTA_RESOLVE, MTA_REJECT_ABORT, MTA_FAILURE };
 
 typedef struct {
     JSStepHdr hdr;
@@ -520,6 +549,27 @@ static int media_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue
             s->ev = s->reason = JS_UNDEFINED;
             STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
             STEP_CB_FOREACH(s->ccb, k) s->ccb[k] = JS_UNDEFINED;
+            /* §4.8.11.5's DEDICATED MEDIA SOURCE FAILURE STEPS 1-4, WHICH RUN IN THIS TASK RATHER THAN AT THE
+               ENQUEUE. The standard queues a media element task "to run the dedicated media source failure
+               steps", so between the algorithm's failure and this task `error` is still null and networkState
+               is still NETWORK_LOADING — which is what a page reading `v.error` from a microtask observes.
+               Running them at the enqueue reported the finished state for that whole window. Steps 5 and 6 are
+               this machine's own two arms: the `error` fire and the "NotSupportedError" rejection. */
+            if (action == MTA_FAILURE) {
+                JSValue fst = media_state(ctx, element);
+                JSValue err = media_error_new(ctx, MEDIA_ERR_SRC_NOT_SUPPORTED);
+
+                CHECK(!JS_IsException(err), "§4.8.11.1: OOM creating a MediaError");
+                JS_SetPropertyStr(ctx, fst, "error", err);              /* step 1 */
+                realm_awaits(ctx, "HTMLMediaElement.prototype.textTracks",
+                             "HTML §4.8.11.5's dedicated media source failure steps step 2 must FORGET the "
+                             "media element's media-resource-specific tracks — remove them from the list of "
+                             "text tracks and empty the AudioTrackList and VideoTrackList — write that step "
+                             "here");
+                st_set_int(ctx, fst, "networkState", NETWORK_NO_SOURCE); /* step 3 */
+                st_set_bool(ctx, fst, "showPoster", true);               /* step 4 */
+                JS_FreeValue(ctx, fst);
+            }
         }
         for (;;) {
             if (JS_IsUndefined(s->ev)) {
@@ -729,17 +779,67 @@ static void media_set_ready_state(JSContext *ctx, JSValueConst el, JSValueConst 
 /* ---- §4.8.11.5's RESOURCE SELECTION ALGORITHM -----------------------------------------------------------------
  *
  * "This algorithm is always invoked as part of a task, but one of the first steps in the algorithm is to
- * return and continue running the remaining steps in parallel" — so it is a JOB, like every task above, and a
- * step machine because it holds the OUTCOME FORK that decides whether the resource is usable. */
+ * return and continue running the remaining steps in parallel" — the step that returns is step 4, so steps 1-3
+ * run in the INVOKING task (media_invoke_selection below) and this machine is what step 4 awaits. It is a step
+ * machine because it holds the OUTCOME FORK that decides whether the resource is usable, and because the
+ * standard's own "end the synchronous section" is a REST POINT at six separate steps of it.
+ *
+ * THE MODE AND THE OUTCOME ARE TWO ANSWERS AND THE PRODUCER USED TO GIVE ONE. media_select_resource returned a
+ * `char *`, and NULL stood for BOTH "step 11's otherwise — there is no candidate at all" AND "attribute mode
+ * whose src attribute is the empty string". The caller read every NULL as step 11 and went silently to
+ * NETWORK_EMPTY, so `<video src="">` fired NOTHING — while §4.8.11.5's attribute mode step 1 says "if the src
+ * attribute's value is the empty string, then end the synchronous section, and jump down to the failed with
+ * attribute step below", and that step is BELOW step 12's NETWORK_LOADING and step 13's queued `loadstart`. A
+ * page whose framework renders `<video src="">` on its first pass and listens for `error` heard neither event,
+ * and the element it was watching claimed never to have started.
+ *
+ * THE SAME CONFLATION ATE THE CHILDREN MODE, TWICE. Step 10 chooses that mode from the PRESENCE of a `source`
+ * element child, so `<video><source></video>` is in children mode and owes a `loadstart`, an `error` AT THE
+ * SOURCE ELEMENT, and NETWORK_NO_SOURCE — and the old scan, which returned the first `source` child carrying a
+ * non-empty `src` and NULL otherwise, produced step 11's silent NETWORK_EMPTY for all of it. It also skipped
+ * over an unusable candidate rather than FAILING at it, so the `error` the standard fires at each rejected
+ * `source` (the event the fallback idiom in §4.8.12's own example listens for) never fired at all. Object mode
+ * was the third state the one string carried: a malloc'd "" meaning "currentSrc is the empty string, go and
+ * fetch the provider object".
+ *
+ * So the producer answers the MODE, the candidate rides with it, and the caller cannot conflate two outcomes
+ * because they are no longer one value. The three failure LABELS the standard writes are three stages, and
+ * which one a failed load reaches is the MODE's to say — failed with media provider and failed with attribute
+ * run the dedicated media source failure steps at the media element, and failed with elements does something
+ * else entirely (it fires at the candidate and never touches `error` or the play promises). */
+enum { MEDIA_MODE_NONE = 0, MEDIA_MODE_OBJECT, MEDIA_MODE_ATTRIBUTE, MEDIA_MODE_CHILDREN };
+
 typedef struct {
     JSStepHdr hdr;
     JSValue   over;   /* the media resource the fork is asked about (owned across the ask) */
+    /* §4.8.11.5's `candidate`, which is also the node BEFORE its `pointer`: the find next candidate step walks
+       the sibling chain forward from it. A raw lexbor node, exactly as core/dom/element.c's tree-steps buffer
+       holds two, because the tree a parked flow names is that flow's own through the DOM COW delta — there is
+       no reference to take and the fork's byte copy is the whole contract. */
+    lxb_dom_node_t *candidate;
+    uint8_t   mode;
 } MediaSelect;
 
+/* THE STAGES ARE THE STANDARD'S OWN SYNCHRONOUS SECTIONS, AND THAT IS WHAT DECIDES WHERE THEY MAY DIVIDE.
+   A stage boundary is a rest point, and a rest point here is not merely an engine convenience: this machine's
+   siblings on the frontier include ITS OWN queued media element tasks, so a rest between two ⌛ steps runs the
+   page's `loadstart` listener inside a span the standard declares atomic — and `video.removeAttribute('src')`
+   from that listener would land between step 9's mode selection and step 14's read of the same attribute. So
+   the span from step 5 to each mode's "end the synchronous section" is ONE stage, not because the page happens
+   to be quiet across it (which JSTrampStepDef::steps rightly calls a cap wearing a justification) but because
+   the standard forbids the page from running there at all. Every boundary below is an "end the synchronous
+   section", an "await a stable state", or the fetch. */
 #define MEDIA_SELECT_STAGES(X) \
-    X(MS_SELECT, "HTML §4.8.11.5 resource selection algorithm steps 1-9 (the network state, the mode, the " \
-                 "candidate, currentSrc, and the queued loadstart)") \
-    X(MS_FETCH,  "HTML §4.8.11.5 the media data processing steps list (whether the resource is usable)")
+    X(MS_SELECT,     "HTML §4.8.11.5 steps 5-13 and step 14's per-mode synchronous steps, to the first \"end " \
+                     "the synchronous section\" (the mode, the candidate, step 11's otherwise, " \
+                     "NETWORK_LOADING, the queued loadstart, and currentSrc)") \
+    X(MS_FETCH,      "HTML §4.8.11.5 step 14's resource fetch algorithm and media data processing steps " \
+                     "(whether the resource is usable)") \
+    X(MS_FAILED_SRC, "HTML §4.8.11.5 step 14's failed with media provider / failed with attribute step") \
+    X(MS_FAILED_EL,  "HTML §4.8.11.5 step 14's failed with elements step") \
+    X(MS_RESELECT,   "HTML §4.8.11.5 step 14's children mode second synchronous section (forget the " \
+                     "media-resource-specific tracks, find next candidate, the search loop, and the waiting " \
+                     "step)")
 enum { MEDIA_SELECT_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const MEDIA_SELECT_STEPS[] = { MEDIA_SELECT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -752,62 +852,97 @@ static void media_select_visit(JSContext *ctx, void *stp, JSStepVisit *v)
     v->val(ctx, &s->over);
 }
 
-/* §4.8.11.5's DEDICATED MEDIA SOURCE FAILURE STEPS, with the pending play promises this run took. */
+/* "Take pending play promises and queue a media element task given the media element to run the DEDICATED
+   MEDIA SOURCE FAILURE STEPS with the result" — the whole of what the two `src`-side failure labels do. The
+   steps themselves run inside the task (media_task_step's MTA_FAILURE arm), which is where the standard puts
+   them and which is what makes `v.error` null for every turn until it executes. */
 static void media_failure(JSContext *ctx, JSValueConst el, JSValueConst st)
 {
     static const char *const ERROR_EV[] = { "error" };
-    JSValue err = media_error_new(ctx, MEDIA_ERR_SRC_NOT_SUPPORTED);
 
-    CHECK(!JS_IsException(err), "§4.8.11.1: OOM creating a MediaError");
-    JS_SetPropertyStr(ctx, (JSValue)st, "error", err);
-    st_set_int(ctx, st, "networkState", NETWORK_NO_SOURCE);
-    st_set_bool(ctx, st, "showPoster", true);
     media_queue_task(ctx, el, media_event_list(ctx, ERROR_EV, 1), media_take_play_promises(ctx, st),
-                     MTA_REJECT_NOT_SUPPORTED);
+                     MTA_FAILURE);
 }
 
-/* §4.8.11.5's mode selection, steps 6-9: the srcObject takes priority, then the src attribute, then a `source`
-   element child. Returns the currentSrc the algorithm sets, or NULL when there is no candidate at all. */
-static char *media_select_resource(JSContext *ctx, JSValueConst el, JSValueConst st)
+/* §4.8.11.5's STEPS 6-11 — the MODE, and the children mode's first candidate with it. Two answers, because
+   they are two questions: the mode decides which of step 14's three branches runs AND which failure label a
+   failed load reaches, and neither is recoverable from a string. Step 11's "otherwise" is its own value
+   (MEDIA_MODE_NONE) rather than an absent one, which is the whole of the defect this replaces. */
+static int media_select_mode(JSContext *ctx, JSValueConst el, JSValueConst st, lxb_dom_node_t **candidate)
 {
     JSValue obj = JS_GetPropertyStr(ctx, st, "srcObject");
     bool has_object = !JS_IsNull(obj) && !JS_IsUndefined(obj);
     char *src;
-    lxb_dom_node_t *child;
 
     JS_FreeValue(ctx, obj);
-    /* Mode OBJECT: "set the currentSrc attribute to the empty string" — an assigned media provider object has
-       no URL, and the empty string is what the page reads back. */
-    if (has_object) {
-        char *empty = malloc(1);
-        CHECK(empty != NULL, "§4.8.11.5: OOM setting currentSrc for a media provider object");
-        empty[0] = 0;
-        return empty;
-    }
-    /* Mode ATTRIBUTE: "if the src attribute's value is the empty string … jump down to the failed with
-       attribute step", otherwise currentSrc is the resolved URL. The resolution is the reflection's, which is
-       the raw attribute in this engine. */
+    *candidate = NULL;                                                          /* step 7 */
+    if (has_object) return MEDIA_MODE_OBJECT;                                   /* step 8 */
+    /* Step 9: "otherwise, if the media element has a src attribute, then set mode to attribute" — PRESENCE,
+       never the value. `<video src="">` HAS one, and the empty string is answered five steps later, after the
+       loadstart, by the failed with attribute step. */
     src = element_attr_get(ctx, el, "src");
-    if (src) {
-        if (src[0]) return src;
-        free(src);
-        return NULL;
-    }
-    /* Mode CHILDREN: "the first source element child in tree order" — its `src` attribute is the candidate.
-       §4.8.11.5's pointer walk over later `source` children exists to try the NEXT candidate when one fails,
-       and this engine has no failure to retry after: the outcome fork decides the resource, not the list. */
-    for (child = lxb_dom_interface_node(element_of_value(el))->first_child; child; child = child->next) {
-        if (child->type != LXB_DOM_NODE_TYPE_ELEMENT || !lxb_html_tree_node_is(child, LXB_TAG_SOURCE))
-            continue;   /* the interned id and the namespace, for media_is_node's second reason */
-        {
-            JSValue wrapper = element_wrap(ctx, lxb_dom_interface_element(child));
-            src = element_attr_get(ctx, wrapper, "src");
-            JS_FreeValue(ctx, wrapper);
+    if (src) { free(src); return MEDIA_MODE_ATTRIBUTE; }
+    /* Step 10: "otherwise, if the media element has a source element child, then set mode to children and set
+       candidate to the first source element child in tree order" — again PRESENCE. Whether that child names a
+       resource is step 14's question and it is answered by FAILING at the candidate, not by looking past it. */
+    *candidate = media_first_source(lxb_dom_interface_node(element_of_value(el)));
+    if (*candidate) return MEDIA_MODE_CHILDREN;
+    return MEDIA_MODE_NONE;                                                     /* step 11 */
+}
+
+/* §4.8.11.5 step 14's CHILDREN MODE steps 2-7, "Process candidate" — the span the find next candidate step
+   JUMPS BACK INTO, and therefore a function rather than an arm: the two synchronous sections that reach it are
+   two stages, and a shared span written once per stage is two spans one edit apart from disagreeing. It reads
+   and writes the machine's own state and returns the STAGE TO REST AT — MS_FETCH when the candidate names a
+   resource (s->over is the question the fork will be asked), MS_FAILED_EL when it does not. */
+static int media_process_candidate(JSContext *ctx, MediaSelect *s, JSValueConst st)
+{
+    JSValue cand;
+    char *src, *attr;
+    bool usable;
+
+    DCHECK(s->mode == MEDIA_MODE_CHILDREN, "§4.8.11.5's process candidate step ran in another mode");
+    DCHECK(media_source_is(s->candidate),
+           "§4.8.11.5's process candidate step was entered with something that is not a `source` element — "
+           "step 10 and the find next candidate step are the only two writers of the candidate");
+    cand = element_wrap(ctx, lxb_dom_interface_element(s->candidate));
+    /* Step 2, "Process candidate": "if candidate does not have a src attribute, or if its src attribute's
+       value is the empty string, then end the synchronous section, and jump down to the failed with elements
+       step below". */
+    src = element_attr_get(ctx, cand, "src");
+    usable = src != NULL && src[0] != 0;
+    /* Step 3: "if candidate has a media attribute whose value does not match the environment". */
+    if (usable) {
+        attr = element_attr_get(ctx, cand, "media");
+        if (attr) {
+            free(attr);
+            DFAIL("HTML §4.8.11.5 step 14's children mode step 3 must evaluate a `source` element's `media` "
+                  "attribute against the environment, and core/css/media_query_list.c exports no evaluator to "
+                  "ask — export one and ask it here. It is a FORK and not a test: this engine's viewport is a "
+                  "MODELLED default carried as a concolic example, so a candidate gated on `(min-width: …)` "
+                  "is two worlds and both of them ship a resource, exactly as matchMedia's `.matches` is two "
+                  "worlds");
         }
-        if (src && src[0]) return src;
-        free(src);
     }
-    return NULL;
+    /* Steps 4-5's urlRecord: the resolution is the reflection's, which is the raw attribute here.
+       Step 6: "if candidate has a type attribute whose value, when parsed as a MIME type …, represents a type
+       that the user agent knows it cannot render" — §4.8.11.3's own question, which the modelled device
+       answers, and the empty string is what "knows it cannot render" means there. */
+    if (usable) {
+        attr = element_attr_get(ctx, cand, "type");
+        if (attr && device_can_play(attr)[0] == 0) usable = false;
+        free(attr);
+    }
+    JS_FreeValue(ctx, cand);
+    if (!usable) {
+        free(src);
+        return MS_FAILED_EL;
+    }
+    /* Step 7: "set the currentSrc attribute to the result of applying the URL serializer to urlRecord". */
+    JS_SetPropertyStr(ctx, (JSValue)st, "currentSrc", JS_NewString(ctx, src));
+    free(src);
+    s->over = media_resource_value(ctx, st);
+    return MS_FETCH;
 }
 
 static int media_select_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -823,27 +958,63 @@ static int media_select_step(JSContext *ctx, void *stp, JSValue cb_result, JSVal
     STEP_DISPATCH(MEDIA_SELECT_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
 
     STEP_ARM(MS_SELECT); {
-        char *chosen;
+        int next;
 
         s->over = JS_UNDEFINED;
-        /* Steps 1-2: NETWORK_NO_SOURCE, and the show poster flag. */
-        st_set_int(ctx, st, "networkState", NETWORK_NO_SOURCE);
-        st_set_bool(ctx, st, "showPoster", true);
-        chosen = media_select_resource(ctx, el, st);
-        if (!chosen) {
-            /* Step 9's otherwise: NETWORK_EMPTY, and the algorithm ends without a loadstart. */
+        s->candidate = NULL;
+        /* Step 5: "if the media element's blocked-on-parser flag is false, then populate the list of pending
+           text tracks." */
+        realm_awaits(ctx, "HTMLMediaElement.prototype.textTracks",
+                     "HTML §4.8.11.5 step 5 must POPULATE THE LIST OF PENDING TEXT TRACKS when the media "
+                     "element's blocked-on-parser flag is false — write that step here");
+        s->mode = (uint8_t)media_select_mode(ctx, el, st, &s->candidate);
+        if (s->mode == MEDIA_MODE_NONE) {
+            /* Step 11: NETWORK_EMPTY, and the algorithm ENDS with no `loadstart`. That is the ONLY outcome
+               that ends here, and telling it apart from a mode whose candidate cannot be USED is the whole of
+               what this stage's producer had to start answering. */
             st_set_int(ctx, st, "networkState", NETWORK_EMPTY);
             JS_FreeValue(ctx, st);
             return JS_STEP_DONE;
         }
-        JS_SetPropertyStr(ctx, st, "currentSrc", JS_NewString(ctx, chosen));
-        free(chosen);
+        /* Steps 12-13, which EVERY mode reaches — that is what the standard's numbering says, and what the old
+           producer's single NULL denied to `<video src="">` and to a `<video>` whose sources are unusable. */
         st_set_int(ctx, st, "networkState", NETWORK_LOADING);
         media_queue_fire(ctx, el, "loadstart");
-        s->over = media_resource_value(ctx, st);
-        STEP_GOTO(s->hdr.stage, MS_FETCH, NULL);
+        if (s->mode == MEDIA_MODE_CHILDREN) {
+            next = media_process_candidate(ctx, s, st);
+        } else if (s->mode == MEDIA_MODE_OBJECT) {
+            /* Object mode step 1: "set the currentSrc attribute to the empty string" — an assigned media
+               provider object has no URL, and the empty string is what the page reads back. */
+            JS_SetPropertyStr(ctx, st, "currentSrc", JS_NewString(ctx, ""));
+            s->over = media_resource_value(ctx, st);
+            next = MS_FETCH;
+        } else {
+            char *src = element_attr_get(ctx, el, "src");
+
+            /* THE ATTRIBUTE IS READ HERE AND NOT AT STEP 9, and nothing rests in between, which is what makes
+               this assert an invariant rather than a race: step 9 picked attribute mode from the attribute's
+               PRESENCE, and both reads are inside the one synchronous section. */
+            DCHECK(src != NULL,
+                   "§4.8.11.5 is in attribute mode on an element with no `src` attribute — step 9 chooses "
+                   "that mode from the attribute's presence, and no step between the two ends the "
+                   "synchronous section, so nothing can have removed it");
+            if (!src[0]) {
+                /* Attribute mode step 1: "if the src attribute's value is the empty string, then end the
+                   synchronous section, and jump down to the failed with attribute step below" — BELOW, which
+                   is after the `loadstart` this stage has already queued. */
+                next = MS_FAILED_SRC;
+            } else {
+                /* Attribute mode steps 2-3: urlRecord, and currentSrc as its serialization. The resolution is
+                   the reflection's, which is the raw attribute in this engine. */
+                JS_SetPropertyStr(ctx, st, "currentSrc", JS_NewString(ctx, src));
+                s->over = media_resource_value(ctx, st);
+                next = MS_FETCH;
+            }
+            free(src);
+        }
+        STEP_GOTO(s->hdr.stage, next, NULL);
         JS_FreeValue(ctx, st);
-        return JS_STEP_YIELD;   /* the driver re-enters at MS_FETCH; an arm ends in a return */
+        return JS_STEP_YIELD;   /* "End the synchronous section" — an arm ends in a return */
     }
 
     STEP_ARM(MS_FETCH);
@@ -857,9 +1028,11 @@ static int media_select_step(JSContext *ctx, void *stp, JSValue cb_result, JSVal
         JS_FreeValue(ctx, s->over);
         s->over = JS_UNDEFINED;
         if (arm != 0) {
-            media_failure(ctx, el, st);
+            /* "If that algorithm returns without aborting this one, then the load failed" — and WHICH failure
+               step that is belongs to the MODE, which is the second reason the mode had to survive step 11. */
+            STEP_GOTO(s->hdr.stage, s->mode == MEDIA_MODE_CHILDREN ? MS_FAILED_EL : MS_FAILED_SRC, NULL);
             JS_FreeValue(ctx, st);
-            return JS_STEP_DONE;
+            return JS_STEP_YIELD;
         }
         /* The media data processing steps' "once enough of the media data has been fetched to determine the
            duration of the media resource": establish the timeline, set both positions to the earliest possible
@@ -879,6 +1052,85 @@ static int media_select_step(JSContext *ctx, void *stp, JSValue cb_result, JSVal
         media_queue_fire(ctx, el, "suspend");
         JS_FreeValue(ctx, st);
         return JS_STEP_DONE;
+
+    STEP_ARM(MS_FAILED_SRC);
+        DCHECK(s->mode == MEDIA_MODE_OBJECT || s->mode == MEDIA_MODE_ATTRIBUTE,
+               "§4.8.11.5's failed with attribute step was reached in children mode — children mode fails at "
+               "its own label, which fires at the `source` element and never touches `error`");
+        /* "Failed with media provider" / "Failed with attribute": "Take pending play promises and queue a
+           media element task given the media element to run the dedicated media source failure steps with the
+           result." Then "wait for the task queued by the previous step to have executed" and "return. The
+           element won't attempt to load another resource until this algorithm is triggered again" — this
+           machine has nothing after the wait, so the wait and the return are the same instruction. */
+        media_failure(ctx, el, st);
+        JS_FreeValue(ctx, st);
+        return JS_STEP_DONE;
+
+    STEP_ARM(MS_FAILED_EL); {
+        JSValue cand;
+
+        DCHECK(media_source_is(s->candidate),
+               "§4.8.11.5's failed with elements step has no `source` element to fire at");
+        /* "Failed with elements: Queue a media element task given the media element to fire an event named
+           error AT CANDIDATE." At the `source` element, and the DEDICATED MEDIA SOURCE FAILURE STEPS DO NOT
+           RUN: children mode never sets the media element's `error`, never rejects its play promises, and
+           never ends the algorithm here — it goes looking for the next candidate. Conflating this label with
+           the other two would report a `<video>` with one unusable `<source>` as MEDIA_ERR_SRC_NOT_SUPPORTED,
+           and a page's `video.onerror` fallback would fire where a real browser fires `source.onerror`. */
+        cand = element_wrap(ctx, lxb_dom_interface_element(s->candidate));
+        media_queue_fire(ctx, cand, "error");
+        JS_FreeValue(ctx, cand);
+        STEP_GOTO(s->hdr.stage, MS_RESELECT, NULL);
+        JS_FreeValue(ctx, st);
+        return JS_STEP_YIELD;   /* "Await a stable state." */
+    }
+
+    STEP_ARM(MS_RESELECT); {
+        lxb_dom_node_t *n;
+
+        realm_awaits(ctx, "HTMLMediaElement.prototype.textTracks",
+                     "HTML §4.8.11.5 step 14's children mode must FORGET the media element's "
+                     "media-resource-specific tracks before it looks for the next candidate — write that "
+                     "step here");
+        /* "⌛ Find next candidate: let candidate be null. ⌛ Search loop: if the node after pointer is the end
+           of the list, then jump to the waiting step below. ⌛ If the node after pointer is a source element,
+           let candidate be that element. ⌛ Advance pointer… ⌛ If candidate is null, jump back to the search
+           loop step. Otherwise, jump back to the process candidate step." Pointer is the position immediately
+           after the node this run last processed, so the search loop IS the sibling chain from it, and the
+           jump back into process candidate is a jump back into the FIRST synchronous section — which is why
+           that span is a function both stages call and not an arm one of them owns. */
+        DCHECK(s->candidate->parent == lxb_dom_interface_node(element_of_value(el)),
+               "§4.8.11.5's pointer is no longer between two children of the media element. The standard's "
+               "pointer update rules — \"if the node before pointer is removed, let pointer be the point "
+               "between the node after pointer and the node before the node after pointer\" — are not built, "
+               "and the `error` the failed with elements step queued at the candidate has a listener that can "
+               "remove exactly that node. Build the pointer as a position the DOM mutation chokepoint "
+               "maintains, the way core/dom/element.c's tree-steps cursor is maintained");
+        for (n = s->candidate->next; n; n = n->next)
+            if (media_source_is(n)) break;
+        if (n) {
+            int next;
+
+            s->candidate = n;
+            next = media_process_candidate(ctx, s, st);
+            STEP_GOTO(s->hdr.stage, next, NULL);
+            JS_FreeValue(ctx, st);
+            return JS_STEP_YIELD;
+        }
+        /* "⌛ Waiting: set the element's networkState attribute to the NETWORK_NO_SOURCE value. ⌛ Set the
+           element's show poster flag to true." The algorithm then waits "until the node after pointer is a
+           node other than the end of the list", and the standard says out loud that this "might wait
+           forever": the ONLY thing that can end the wait is a `source` inserted into this element, which is
+           where §4.8.12's source element insertion steps stand. So the wait is RECORDED where its waker can
+           read it and this flow ENDS rather than spinning — a JS_STEP_YIELD loop over a condition no code in
+           this flow can change is a monopolizer, not a park. media_element_source_inserted below crashes by
+           name on the insertion that would have to resume it. */
+        st_set_int(ctx, st, "networkState", NETWORK_NO_SOURCE);
+        st_set_bool(ctx, st, "showPoster", true);
+        st_set_bool(ctx, st, "sourceWait", true);
+        JS_FreeValue(ctx, st);
+        return JS_STEP_DONE;
+    }
 }
 
 static const JSTrampStepDef media_select_def = {
@@ -888,12 +1140,30 @@ static const JSTrampStepDef media_select_def = {
     .steps = MEDIA_SELECT_STEPS
 };
 
-/* "Invoke the media element's resource selection algorithm" — as the task the standard says it is. */
+/* "Invoke the media element's resource selection algorithm."
+ *
+ * STEPS 1-3 RUN HERE, IN THE INVOKING TASK, and the job is what step 4's "await a stable state" awaits. That
+ * is what the algorithm's own first paragraph says — "one of the first steps in the algorithm is to return and
+ * continue running the remaining steps in parallel", and the step that returns is step 4, not step 1.
+ *
+ * AND THE PLACEMENT IS LOAD-BEARING, NOT A TIDY-UP. §4.8.12's source element insertion steps invoke this only
+ * "if parent is a media element that has no src attribute and whose networkState has the value NETWORK_EMPTY",
+ * so `<video><source src=a><source src=b></video>` must invoke it from the FIRST child's insertion and not
+ * from the second. With step 1 inside the enqueued job the network state was still NETWORK_EMPTY when the
+ * second child arrived, and one element would have run two resource selection algorithms over one tree —
+ * §scheduler's double-load, arriving for the same reason it always does: a step that became a work item was
+ * read at the wrong time. */
 static void media_invoke_selection(JSContext *ctx, JSValueConst el)
 {
-    JSValue fn;
+    JSValue fn, st = media_state(ctx, el);
 
     DCHECK(g_select_stepid >= 0, "§4.8.11.5 was invoked before its machine was registered");
+    st_set_int(ctx, st, "networkState", NETWORK_NO_SOURCE);   /* step 1 */
+    st_set_bool(ctx, st, "showPoster", true);                 /* step 2 */
+    /* A new run of the algorithm is not the run that parked at step 14's children mode waiting step, so the
+       pointer that run was waiting on is not this one's to be woken at. */
+    st_set_bool(ctx, st, "sourceWait", false);
+    JS_FreeValue(ctx, st);
     fn = JS_NewCFunction2(ctx, NULL, "mediaResourceSelection", 1, JS_CFUNC_step, g_select_stepid);
     CHECK(!JS_IsException(fn), "§4.8.11.5: the resource selection task's callee could not be allocated");
     JS_EnqueueCallJob(ctx, fn, 1, &el);
@@ -1024,7 +1294,16 @@ void media_element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const cha
  * on its own turn, and the walk that seeded them returns in O(nodes) with no page code having run.
  *
  * PRESENCE, NOT VALUE, is the condition: `<video src="">` IS created with a src attribute, and §4.8.11.5's
- * attribute mode is where the empty string is answered. */
+ * attribute mode is where the empty string is answered — with a `loadstart` and an `error`, which is exactly
+ * what a producer that could not tell an empty `src` from no candidate at all used to deny it.
+ *
+ * AND IT CARRIES §4.8.12's SOURCE ELEMENT INSERTION STEPS FOR THE SAME PARSE, because those are what start a
+ * `<video>` that has no `src` and only `<source>` children — the shape every page that ships more than one
+ * codec is written in. A parser-inserted `<source>` reaches no mutation chokepoint, so the insertion steps
+ * that would have invoked the algorithm from the FIRST such child never ran and that whole family of elements
+ * sat at NETWORK_EMPTY exactly as `<video src>` did before 09849674. Asking it here rather than per `<source>`
+ * is the same statement in one place: media_invoke_selection's step 1 leaves the element at NETWORK_NO_SOURCE,
+ * which is precisely the condition under which those steps decline to invoke it a second time. */
 void media_element_parsed(JSContext *ctx, lxb_dom_node_t *root)
 {
     lxb_dom_node_t *n;
@@ -1035,12 +1314,63 @@ void media_element_parsed(JSContext *ctx, lxb_dom_node_t *root)
         JSValue wrap;
 
         if (!media_is_node(n)) continue;
-        if (!lxb_dom_element_has_attribute(lxb_dom_interface_element(n), (const lxb_char_t *)"src", 3))
+        if (!lxb_dom_element_has_attribute(lxb_dom_interface_element(n), (const lxb_char_t *)"src", 3) &&
+            !media_first_source(n))
             continue;
         wrap = node_wrap(ctx, n);
         media_invoke_selection(ctx, wrap);
         JS_FreeValue(ctx, wrap);
     }
+}
+
+/* ---- §4.8.12's SOURCE ELEMENT INSERTION STEPS ----------------------------------------------------------------
+ *
+ * "The source HTML element insertion steps, given insertedNode, are: 1. Let parent be insertedNode's parent.
+ * 2. If parent is a media element that has no src attribute and whose networkState has the value
+ * NETWORK_EMPTY, then invoke that media element's resource selection algorithm."
+ *
+ * IT IS NOT A node_add_tree_hook, AND THAT IS A STATEMENT ABOUT WHAT THAT LIST IS. Its members are the DOM's
+ * own step families — §5.5's live-range pre-remove, §6.1's NodeIterator pre-remove, §4.2.2's slot steps,
+ * §4.3's mutation records — plus the RECORDER that feeds §4.2.3's drain. Every HTML ELEMENT INSERTION STEPS
+ * entry already lives in that drain instead (html_script_prepare, iframe_create_navigable,
+ * custom_elements_element_connected), for three things a hook cannot give: the drain runs in the INSERTED
+ * NODE'S document realm rather than in whichever realm performed the write, it runs per node at a rest point
+ * that can yield and fork, and it runs at §4.2.3 insert step 7 — BEFORE step 8's mutation record, which a
+ * sixth hook registered after mutation_observer_tree_steps would run after. (The list's bound is real and not
+ * a truncation: node_add_tree_hook CHECKs it in dev and in release, so a seventh registrant would abort at
+ * registration rather than be dropped. Nothing here needs the sixth slot.) */
+void media_element_source_inserted(JSContext *ctx, lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *parent;
+    JSValue wrap, st;
+    char *src;
+    bool has_src;
+
+    if (!media_source_is(lxb_dom_interface_node(el))) return;
+    parent = lxb_dom_interface_node(el)->parent;                       /* step 1 */
+    if (!media_is_node(parent)) return;
+    DCHECK(g_ready, "a `source` was inserted into a media element before §4.8.11 was declared");
+    wrap = node_wrap(ctx, parent);
+    st = media_state(ctx, wrap);
+    src = element_attr_get(ctx, wrap, "src");
+    has_src = src != NULL;
+    free(src);
+    /* Step 2. */
+    if (!has_src && st_int(ctx, st, "networkState") == NETWORK_EMPTY) {
+        media_invoke_selection(ctx, wrap);
+    } else if (st_bool(ctx, st, "sourceWait")) {
+        /* THE OTHER CONSUMER OF THIS EVENT, which the standard states inside §4.8.11.5 rather than here. */
+        DFAIL("a `source` was inserted into a media element parked at HTML §4.8.11.5 step 14's children mode "
+              "WAITING step, and that insertion is the wake the step is waiting for: \"wait until the node "
+              "after pointer is a node other than the end of the list\", then set the delaying-the-load-event "
+              "flag back to true, set the networkState back to NETWORK_LOADING, and jump back to the find "
+              "next candidate step. This engine ENDS that flow at the wait rather than parking it, so the "
+              "pointer it stopped at was never recorded and there is nothing here to resume. Build it: record "
+              "the pointer beside `sourceWait` where MS_RESELECT sets that flag, and re-enter the machine at "
+              "MS_RESELECT from here");
+    }
+    JS_FreeValue(ctx, st);
+    JS_FreeValue(ctx, wrap);
 }
 
 /* ---- the members ------------------------------------------------------------------------------------------- */
