@@ -1,4 +1,5 @@
 /* See node_heap.h. */
+#include <stdio.h>    /* snprintf — the teardown assert formats the two live counts into its own message */
 #include <stddef.h>
 #include <stdint.h>
 
@@ -98,12 +99,34 @@ void node_heap_detach(lxb_dom_document_t *doc)
                TREE and nothing that left it.
              - AND AN ORDER, not a leak: every delta must be released BEFORE the last document detaches, since a
                kind-4 node freed after this line is freed out of an arena that is gone. */
-        DCHECK(g_nodes->ref_count == 0 && g_text->ref_count == 0,
-               "the agent's DOM heap still holds live allocations after the last document that could name them "
-               "was destroyed — either a per-flow delta was released after this point rather than before it, or "
-               "a node is reachable from no document's tree and no delta: a DOM §4.8 shadow root, whose edge "
-               "from its host is a slot on the host's WRAPPER and which no C walk can reach, or a node created "
-               "while capture was off and then detached");
+        /* THE TWO COUNTS ARE THE DIAGNOSIS AND THE PROSE ALONE IS NOT. This named three causes and printed
+           neither number, so the reader standing at the teardown could not tell which of the three they were
+           looking at — and the three want opposite fixes. §Testing's rule that a message naming several causes
+           and distinguishing none of them is a report about nothing applies to a DCHECK exactly as it applied
+           to the kill that said "segfault/abort/timeout": the count is what separates them. A HANDFUL of nodes
+           with text near zero is a second tree nothing walked — a shadow root, whose whole content is a few
+           elements. A count in the HUNDREDS, with text in proportion, is an ordering fault: a delta released
+           after this line, so an entire flow's creations are still live. And nodes without text, or text
+           without nodes, is neither — it is one arena's free path missing while the other's runs.
+           §Testing states the general form of this at the allocation that OOMs: "the reader of a `@WHY` is
+           standing at the allocation, and 'OOM' alone tells them nothing about realms". */
+#if APICLIENT_DEV
+        {
+            char why[640];
+            snprintf(why, sizeof why,
+                     "the agent's DOM heap still holds %zu node allocation(s) and %zu text allocation(s) after "
+                     "the last document that could name them was destroyed. A HANDFUL is a second tree no C "
+                     "walk reaches — a DOM §4.8 shadow root, whose edge from its host is a slot on the host's "
+                     "WRAPPER, so only a per-flow delta's kind-4 entry ever frees one. HUNDREDS is the ORDER "
+                     "instead: a delta released after this line rather than before it, leaving a whole flow's "
+                     "creations live (and every one of them would then be freed out of an arena that is gone). "
+                     "Nodes without text or text without nodes is neither, and means one arena's free path is "
+                     "missing while the other's runs. A node created while capture was off and then detached "
+                     "is the remaining shape and looks like the first.",
+                     (size_t)g_nodes->ref_count, (size_t)g_text->ref_count);
+            DCHECK(g_nodes->ref_count == 0 && g_text->ref_count == 0, why);
+        }
+#endif
         g_nodes = lexbor_mraw_destroy(g_nodes, true);
         g_text  = lexbor_mraw_destroy(g_text, true);
     }
