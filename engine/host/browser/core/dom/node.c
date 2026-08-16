@@ -57,6 +57,8 @@
 #include "core/realm.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"   /* element_prefix — §4.4's three namespace lookups read the name §4.5 stored */
+#include "core/dom/attr_list.h"    /* dom_attr_clone / dom_attr_attach — §4.4 step 2's attribute half */
+#include "core/dom/name_intern.h"  /* §4.4's names in the COPY's document — see clone_element_into */
 /* §4.5 adopt's step 3 arm. The DOM defines a node's custom element registry and the standard states the
    re-derivation right here, in §4.5; HTML owns what a registry IS. shadow_root.c reaches across the same
    boundary for the same reason. */
@@ -1669,9 +1671,12 @@ static const IdlStepDecl NODE_NORM_STEP = {
    Lexbor's `lxb_dom_node_clone(n, true)` runs that walk to completion inside one opcode; it is iterative rather
    than recursive, so it never blew the C stack, and that is exactly the kind of thing that hides how long it
    holds the scheduler. `document.body.cloneNode(true)` is one opcode for the whole document.
-   LEXBOR STILL OWNS WHAT A COPY OF ONE NODE IS — `lxb_dom_document_import_node(doc, n, false)` is that
-   document's own clone_interface, so attributes, namespaces and per-interface fields are copied by the code the
-   tree builder uses. What moves here is the WALK, node by node, exactly as §8.4's serialiser did.
+   §4.4's "clone a single node" IS A PER-INTERFACE SWITCH in the standard itself — an element, a document, a
+   doctype, an attribute and a CharacterData each have their own step — and clone_a_single_node below is that
+   switch. LEXBOR OWNS EVERY ARM BUT THE ELEMENT'S: `lxb_dom_document_import_node(doc, n, false)` is the
+   document's own clone_interface, so a Text's data, a doctype's three names and every per-interface field are
+   copied by the code the tree builder uses. What moves here is the WALK, node by node, exactly as §8.4's
+   serialiser did.
    IT IS THE ALGORITHM AND NOT THE MEMBER: cloneNode is two steps over it and §5.5's extract and
    clone-the-contents are six more, so the state, the stage list and the body are all exported (node.h) and the
    member below is one caller of them. A second copier beside this one is a second answer to "what is a copy of
@@ -1811,6 +1816,86 @@ static lxb_dom_node_t *clone_a_document(lxb_dom_document_t *src)
     return lxb_dom_interface_node(copy);
 }
 
+/* DOM §4.4 "clone a single node", THE ELEMENT ARM: "let copy be the result of CREATING AN ELEMENT, given
+ * document, node's local name, node's namespace, node's namespace prefix and node's `is` value, with
+ * synchronous custom elements set to false … for each attribute in node's attribute list, append a clone of it".
+ * The standard says "creating an element", so the copy is created from the source's three NAMES and not
+ * produced by copying an element struct — and both halves of that turned out to matter.
+ *
+ * WHY IT IS NOT lxb_dom_document_import_node's, MEASURED. Its lxb_dom_element_interface_copy reaches
+ * lxb_dom_node_interface_copy, which takes an early return when the two documents are the same (an exact id
+ * copy — so a SAME-document clone was never folded, and the handover that sent me here was wrong about that)
+ * and otherwise re-appends the namespace through lxb_ns_append and the prefix through lxb_ns_prefix_append,
+ * both of which lower-case. So `document.cloneNode(true)` — whose copy IS made in a new document, because
+ * §4.4 step 2 sets `document` to the copy — returned a whole tree of namespaces and prefixes the page had
+ * never written, while `el.cloneNode(true)` returned the right ones. One member, two answers, decided by
+ * something the page cannot see.
+ *
+ * AND IT DROPPED THE QUALIFIED NAME IN BOTH. lxb_dom_element_interface_copy never assigns dst->qualified_name
+ * at all, and lxb_dom_element_qualified_name falls back to the LOCAL name when that field is zero — so a clone
+ * of `createElementNS(SVG_NS, "svg:rect")` reported `tagName` and `nodeName` as `rect`, and serialized as
+ * `<rect>`, in every document including its own. That is why this arm exists rather than a namespace repair
+ * bolted onto lexbor's copy: the names are the thing being copied, so they are all copied in one place.
+ *
+ * THE INTERFACE IS STILL LEXBOR'S. lxb_dom_document_create_interface picks the element struct from (tag id,
+ * namespace id) exactly as element_create_ns does, and it is handed the IMPORTED ids — which is the same
+ * ordering §4.5's storage step needs and for the same reason 0962568a gives: a folded namespace id chooses the
+ * wrong struct, and an element whose struct disagrees with its namespace is a state this engine must not
+ * reach. */
+static lxb_dom_node_t *clone_element_into(lxb_dom_document_t *doc, lxb_dom_element_t *src)
+{
+    lxb_dom_document_t *from = lxb_dom_interface_node(src)->owner_document;
+    lxb_tag_id_t tag = dom_import_tag(doc, from, src->node.local_name);
+    lxb_ns_id_t ns = dom_import_namespace(doc, from, src->node.ns);
+    lxb_dom_element_t *el;
+    lxb_dom_attr_t *a;
+
+    /* §4.4 also passes node's `is` VALUE to create-an-element, and nothing in this engine has ever set one —
+       element_create_ns does not take one and lexbor's own element_create is not called. So the copy having
+       none is exact today, and this is the assert that says so rather than a silent omission: the day `is`
+       becomes real, this fires at the one site that would have dropped it. */
+    DCHECK(src->is_value == NULL,
+           "an element carries an `is` value and §4.4's clone must pass it to create-an-element — build the "
+           "copy of it here, in the destination document's arena, beside the three names");
+    el = lxb_dom_interface_element(lxb_dom_document_create_interface(doc, tag, ns));
+    CHECK(el != NULL, "clone a single node: the element copy's interface could not be created");
+    el->node.local_name = tag;
+    el->node.ns = ns;
+    el->node.prefix = dom_import_prefix(doc, from, src->node.prefix);
+    el->qualified_name = dom_import_tag(doc, from, src->qualified_name);
+    /* §4.13.3: a copy is created with synchronous custom elements FALSE, so it is not upgraded here — it
+       becomes "custom" when §4.13's upgrade reaction runs, which the insertion steps enqueue. `undefined` is
+       what §4.13.1 calls an element that has not been through that, and lexbor spells it UNCUSTOMIZED. */
+    el->custom_state = LXB_DOM_ELEMENT_CUSTOM_STATE_UNCUSTOMIZED;
+    for (a = lxb_dom_element_first_attribute(src); a; a = lxb_dom_element_next_attribute(a))
+        dom_attr_attach(el, dom_attr_clone(doc, a), NULL);
+    return lxb_dom_interface_node(el);
+}
+
+/* §4.4 "clone a single node" — the per-interface switch the standard is written as. The default arm is
+   lexbor's clone_interface, and the ASSERTION IS WHY THAT IS EXACT rather than a hope: lxb_dom_node_interface_
+   copy re-appends a namespace or a prefix through its case-folding entry only for an id AT OR ABOVE
+   __LAST_ENTRY, and copies a STATIC one verbatim because the static tables are one shared array. Every node
+   kind that reaches here — Text, Comment, CDATASection, ProcessingInstruction, DocumentType,
+   DocumentFragment — is created by lexbor with LXB_NS_HTML and no prefix, both static. A page cannot give one
+   of them a namespace of its own, so an id above the table means this engine built the node, and the fold this
+   file exists to avoid would be back. The doctype's own name goes through the RAW qualified-name append, so it
+   is exact too. */
+static lxb_dom_node_t *clone_a_single_node(lxb_dom_document_t *doc, lxb_dom_node_t *n)
+{
+    lxb_dom_node_t *copy;
+
+    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT)
+        return clone_element_into(doc, lxb_dom_interface_element(n));
+    DCHECK(n->ns < LXB_NS__LAST_ENTRY && n->prefix < LXB_NS__LAST_ENTRY,
+           "a node that is not an element carries a non-static namespace or prefix — lexbor's clone re-appends "
+           "exactly those through its case-folding entry, so this kind needs an arm of its own above");
+    copy = lxb_dom_document_import_node(doc, n, false);
+    CHECK(copy != NULL, "clone a node: the Lexbor node copy failed — returning nothing would hand the page a "
+                        "null it has no way to distinguish from a node it never asked for");
+    return copy;
+}
+
 void node_clone_start(JSStepHdr *hdr, NodeCloneState *s, lxb_dom_node_t *node, bool subtree, int base, int after)
 {
     DCHECK(node != NULL, "`clone a node` was started on no node");
@@ -1846,10 +1931,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
             s->doc = lxb_dom_interface_document(s->copy);
         } else {
             s->doc = n->owner_document;      /* the argument's default: node's node document */
-            s->copy = lxb_dom_document_import_node(s->doc, n, false);
-            CHECK(s->copy != NULL, "clone a node: the Lexbor node copy failed — returning nothing would hand "
-                                   "the page a null it has no way to distinguish from a node it never asked "
-                                   "for");
+            s->copy = clone_a_single_node(s->doc, n);
             dom_cow_note_created(s->copy);   /* the clone ROOT only — its descendants are reachable through it */
         }
         /* NO EARLY RETURN FOR A SHALLOW CLONE. `subtree` gates step 5 and HTML §4.12.3, and step 6 is not
@@ -1864,9 +1946,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
 
     if (phase == NODE_CLONE_PHASE_COPY) {
         /* ONE NODE PER STEP: copy it into `document` and hang it under the copy of its parent. */
-        s->cnode = lxb_dom_document_import_node(s->doc, s->src, false);
-        CHECK(s->cnode != NULL, "clone a node: a descendant's Lexbor copy failed — the page would get a subtree "
-                                "with a hole in it and no way to tell");
+        s->cnode = clone_a_single_node(s->doc, s->src);
         dom_cow_insert_private(s->croot, s->dst, s->cnode);
         hdr->stage = base + NODE_CLONE_PHASE_TEMPLATE;
         return JS_STEP_YIELD;

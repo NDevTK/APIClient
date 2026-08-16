@@ -58,4 +58,26 @@ lxb_dom_attr_id_t dom_intern_attribute_local_name(lxb_dom_document_t *doc, const
    "get an attribute by name" matches on this one, so it is stored beside the local name and not derived. */
 lxb_dom_attr_id_t dom_intern_attribute_qualified_name(lxb_dom_document_t *doc, const char *qname, size_t len);
 
+/* ─── DOM §4.4 "clone a node" — THE SAME NAME, IN ANOTHER DOCUMENT'S HASHES ────────────────────────────────
+ *
+ * A name id belongs to the document whose hash it indexes, so a copy made in a DIFFERENT document has to be
+ * given the same BYTES again — and lexbor's own lxb_dom_node_interface_copy gives them back through the folding
+ * appends above, so `document.cloneNode(true)` returned a tree whose namespaces and prefixes were lower-cased
+ * even though nothing in it had ever been written that way.
+ *
+ * `to == from` RETURNS THE ID UNCHANGED, and that is not an optimisation — it is what the id MEANS. A same-
+ * document clone is by far the common one (`el.cloneNode(true)` never leaves its document) and re-interning
+ * would be a second entry for bytes the document already holds. A STATIC id is returned unchanged for the same
+ * reason from the other direction: the static tables are one shared array, so an id below __LAST_ENTRY names
+ * the same string in every document there will ever be.
+ *
+ * ONE ENTRY COVERS AN ELEMENT'S LOCAL NAME AND ITS QUALIFIED NAME, because both are ids into `tags`. */
+lxb_ns_id_t dom_import_namespace(lxb_dom_document_t *to, lxb_dom_document_t *from, lxb_ns_id_t id);
+lxb_ns_prefix_id_t dom_import_prefix(lxb_dom_document_t *to, lxb_dom_document_t *from, lxb_ns_prefix_id_t id);
+lxb_tag_id_t dom_import_tag(lxb_dom_document_t *to, lxb_dom_document_t *from, lxb_tag_id_t id);
+lxb_dom_attr_id_t dom_import_attribute_local_name(lxb_dom_document_t *to, lxb_dom_document_t *from,
+                                                  lxb_dom_attr_id_t id);
+lxb_dom_attr_id_t dom_import_attribute_qualified_name(lxb_dom_document_t *to, lxb_dom_document_t *from,
+                                                      lxb_dom_attr_id_t id);
+
 #endif

@@ -292,6 +292,40 @@ lxb_dom_attr_t *dom_attr_create(lxb_dom_document_t *doc, const char *ns, const c
     return a;
 }
 
+/* DOM §4.4 "clone a node" step 2's attribute half — "for each attribute in node's attribute list: let
+ * copyAttribute be a CLONE OF attribute with document; append copyAttribute to copy".
+ *
+ * IT IS NOT dom_attr_create OVER THE SOURCE'S BYTES, and that is the whole reason it is a separate entry: the
+ * three names are already interned in the SOURCE's hashes, so a clone into the same document is an ID COPY —
+ * which is what `el.cloneNode(true)` almost always is — and a clone into another document is a re-intern of
+ * exactly those bytes, both of which core/dom/name_intern.h's import entries answer. Going out through C
+ * strings would have to NUL-terminate and re-validate names §1.4 accepted once already.
+ *
+ * WHAT LEXBOR'S lxb_dom_attr_interface_clone DID INSTEAD, measured: for a copy into ANOTHER document it re-
+ * appended the namespace through lxb_ns_append and the local name through lxb_dom_attr_local_name_append, both
+ * of which lower-case — so `document.cloneNode(true)` came back with `xlink:href` in a namespace the page had
+ * never written and a `viewBox` spelled `viewbox`. The value is copied here rather than there for the same
+ * reason the names are: this file owns what an attribute's fields mean. */
+lxb_dom_attr_t *dom_attr_clone(lxb_dom_document_t *doc, const lxb_dom_attr_t *src)
+{
+    lxb_dom_document_t *from;
+    lxb_dom_attr_t *a;
+
+    DCHECK(doc && src, "an attribute clone was asked for with no document or no attribute");
+    from = src->node.owner_document;
+    a = lxb_dom_attr_interface_create(doc);
+    CHECK(a != NULL, "dom-attr-oom: an attribute clone could not be created");
+    a->node.local_name = dom_import_attribute_local_name(doc, from, src->node.local_name);
+    a->node.ns         = dom_import_namespace(doc, from, src->node.ns);
+    a->node.prefix     = dom_import_prefix(doc, from, src->node.prefix);
+    a->qualified_name  = dom_import_attribute_qualified_name(doc, from, src->qualified_name);
+    /* §4.9.2's value default again — a value-less attribute is a state the model does not have, and lexbor
+       leaves the field NULL on an attribute nothing has written. */
+    dom_attr_set_value(a, src->value ? (const char *)src->value->data : "",
+                       src->value ? src->value->length : 0);
+    return a;
+}
+
 void dom_attr_set_value(lxb_dom_attr_t *a, const char *val, size_t val_len)
 {
     lxb_status_t st;

@@ -128,3 +128,70 @@ lxb_dom_attr_id_t dom_intern_attribute_qualified_name(lxb_dom_document_t *doc, c
                         "is out of memory, and §4.9's setAttribute matches on exactly this name");
     return data->attr_id;
 }
+
+/* ─── §4.4's IMPORTS — see name_intern.h ───────────────────────────────────────────────────────────────────
+ * Each is the same two questions: is this id already an answer in the destination (same document, or a static
+ * id every document shares), and if not, what BYTES does it name in the source. */
+lxb_ns_id_t dom_import_namespace(lxb_dom_document_t *to, lxb_dom_document_t *from, lxb_ns_id_t id)
+{
+    size_t len = 0;
+    const lxb_char_t *s;
+
+    DCHECK(to != NULL && from != NULL, "a namespace was imported between documents one of which is not there");
+    if (to == from || id < LXB_NS__LAST_ENTRY) return id;
+    s = lxb_ns_by_id(from->ns, id, &len);
+    CHECK(s != NULL, "a node names a namespace its own document's hash cannot resolve — the id is the entry's "
+                     "own address, so an unresolvable one means the node outlived the document that named it");
+    return dom_intern_namespace(to, (const char *)s, len);
+}
+
+lxb_ns_prefix_id_t dom_import_prefix(lxb_dom_document_t *to, lxb_dom_document_t *from, lxb_ns_prefix_id_t id)
+{
+    const lxb_ns_prefix_data_t *d;
+
+    DCHECK(to != NULL && from != NULL, "a prefix was imported between documents one of which is not there");
+    if (to == from || id < LXB_NS__LAST_ENTRY) return id;
+    d = lxb_ns_prefix_data_by_id(from->prefix, id);
+    CHECK(d != NULL, "a node names a namespace prefix its own document's hash cannot resolve");
+    return dom_intern_prefix(to, (const char *)lexbor_hash_entry_str(&d->entry), d->entry.length);
+}
+
+lxb_tag_id_t dom_import_tag(lxb_dom_document_t *to, lxb_dom_document_t *from, lxb_tag_id_t id)
+{
+    const lxb_tag_data_t *d;
+
+    DCHECK(to != NULL && from != NULL, "a tag name was imported between documents one of which is not there");
+    if (to == from || id < LXB_TAG__LAST_ENTRY) return id;
+    /* No hash argument: a non-static tag id IS the entry's address, which is why lexbor's own reader takes
+       only the id. */
+    d = lxb_tag_data_by_id(id);
+    CHECK(d != NULL, "a node names a tag its own document's hash cannot resolve");
+    return dom_intern_element_local_name(to, (const char *)lexbor_hash_entry_str(&d->entry), d->entry.length);
+}
+
+lxb_dom_attr_id_t dom_import_attribute_local_name(lxb_dom_document_t *to, lxb_dom_document_t *from,
+                                                  lxb_dom_attr_id_t id)
+{
+    const lxb_dom_attr_data_t *d;
+
+    DCHECK(to != NULL && from != NULL, "an attribute name was imported between documents one of which is not "
+                                       "there");
+    if (to == from || id < LXB_DOM_ATTR__LAST_ENTRY) return id;
+    d = lxb_dom_attr_data_by_id(from->attrs, id);
+    CHECK(d != NULL, "an attribute names a local name its own document's hash cannot resolve");
+    return dom_intern_attribute_local_name(to, (const char *)lexbor_hash_entry_str(&d->entry), d->entry.length);
+}
+
+lxb_dom_attr_id_t dom_import_attribute_qualified_name(lxb_dom_document_t *to, lxb_dom_document_t *from,
+                                                      lxb_dom_attr_id_t id)
+{
+    const lxb_dom_attr_data_t *d;
+
+    DCHECK(to != NULL && from != NULL, "an attribute qualified name was imported between documents one of "
+                                       "which is not there");
+    if (to == from || id < LXB_DOM_ATTR__LAST_ENTRY) return id;
+    d = lxb_dom_attr_data_by_id(from->attrs, id);
+    CHECK(d != NULL, "an attribute names a qualified name its own document's hash cannot resolve");
+    return dom_intern_attribute_qualified_name(to, (const char *)lexbor_hash_entry_str(&d->entry),
+                                               d->entry.length);
+}

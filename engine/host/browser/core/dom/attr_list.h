@@ -40,6 +40,10 @@ lxb_dom_attr_t *dom_attr_get_qname(lxb_dom_element_t *el, const char *qname);
    and every caller that needs a name check has already run it. `ns`/`prefix` NULL is the null namespace, and a
    non-null prefix with a null namespace is unconstructible ("validate and extract" step 8) and DCHECKed. */
 lxb_dom_attr_t *dom_attr_create(lxb_dom_document_t *doc, const char *ns, const char *prefix, const char *local);
+/* §4.4 "clone a node" step 2's attribute half — a DETACHED copy of `src` belonging to `doc`, with the same
+   namespace, prefix, local name, qualified name and value. Same document is an id copy; another document
+   re-interns exactly those bytes. See attr_list.c for what lexbor's own attribute clone did to them. */
+lxb_dom_attr_t *dom_attr_clone(lxb_dom_document_t *doc, const lxb_dom_attr_t *src);
 /* §4.9 "change an attribute" step 2 — the VALUE, over an attribute that may or may not be on an element. */
 void dom_attr_set_value(lxb_dom_attr_t *a, const char *val, size_t val_len);
 /* §4.9 "append an attribute" steps 1 and 2, at a POSITION. `before` NULL appends at the end, which is what the
