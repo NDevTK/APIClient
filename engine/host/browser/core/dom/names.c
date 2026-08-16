@@ -3,6 +3,7 @@
 
 #include "check.h"
 #include "core/dom/names.h"
+#include "core/xml/xml_ns.h"   /* §3 fixes these two namespace names BY DEFINITION; steps 9-11 compare to them */
 
 /* Infra's three character classes, which is what the DOM's steps are written in terms of. */
 static bool ascii_whitespace(unsigned char c)
@@ -65,11 +66,14 @@ static bool no_forbidden(const char *name, size_t len, bool ban_equals)
 bool dom_valid_namespace_prefix(const char *name, size_t len) { return no_forbidden(name, len, false); }
 bool dom_valid_attribute_local_name(const char *name, size_t len) { return no_forbidden(name, len, true); }
 
-/* THE TWO NAMESPACES §1.4 NAMES BY IDENTITY. Written out rather than reached through lexbor's table because
-   these are the standard's own constants: the steps below compare against them, and a table lookup would make
-   the comparison depend on whether the document happened to have interned them. */
-#define NS_XML   "http://www.w3.org/XML/1998/namespace"
-#define NS_XMLNS "http://www.w3.org/2000/xmlns/"
+/* THE TWO NAMESPACES §1.4 NAMES BY IDENTITY. Still written out rather than reached through lexbor's table, for
+   the reason that stood here — these are the standard's own constants, the steps below compare against them,
+   and a table lookup would make the comparison depend on whether the document happened to have interned them
+   (and, as core/xml/xml_ns.h measures, would answer for a differently-cased spelling as well). Written out
+   ONCE: Namespaces in XML §3 is the section that fixes them, so the definitions live with that section and the
+   copies that stood here are gone. Two literals in two files that must never disagree are one drift away from
+   a NamespaceError the DOM throws and an XML parse does not. An alias here would be that second name again, so
+   the steps below spell XML_NS_XML_NAMESPACE and XML_NS_XMLNS_NAMESPACE. */
 
 static bool str_is(const char *s, size_t len, const char *lit)
 {
@@ -113,18 +117,18 @@ bool dom_validate_and_extract(JSContext *ctx, const char *ns, size_t ns_len,
         JS_ThrowDOMException(ctx, "NamespaceError", "a prefixed name needs a namespace");
         return false;
     }
-    if (str_is(out->prefix, out->prefix_len, "xml") && !str_is(ns, ns_len, NS_XML)) {   /* step 9 */
+    if (str_is(out->prefix, out->prefix_len, "xml") && !str_is(ns, ns_len, XML_NS_XML_NAMESPACE)) {   /* step 9 */
         JS_ThrowDOMException(ctx, "NamespaceError", "the \"xml\" prefix belongs to the XML namespace");
         return false;
     }
     /* step 10: EITHER the whole qualified name or the prefix being "xmlns" binds it to the XMLNS namespace —
        `xmlns` with no prefix at all is the one that matters, and reading only the prefix misses it. */
     if ((str_is(qname, qname_len, "xmlns") || str_is(out->prefix, out->prefix_len, "xmlns"))
-        && !str_is(ns, ns_len, NS_XMLNS)) {
+        && !str_is(ns, ns_len, XML_NS_XMLNS_NAMESPACE)) {
         JS_ThrowDOMException(ctx, "NamespaceError", "the \"xmlns\" name belongs to the XMLNS namespace");
         return false;
     }
-    if (str_is(ns, ns_len, NS_XMLNS)                              /* step 11 — step 10's converse */
+    if (str_is(ns, ns_len, XML_NS_XMLNS_NAMESPACE)   /* step 11 — step 10's converse */
         && !(str_is(qname, qname_len, "xmlns") || str_is(out->prefix, out->prefix_len, "xmlns"))) {
         JS_ThrowDOMException(ctx, "NamespaceError", "the XMLNS namespace only holds \"xmlns\" names");
         return false;

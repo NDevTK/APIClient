@@ -1,5 +1,6 @@
 /* See xml_name.h. */
 #include <stdint.h>
+#include <string.h>
 
 #include <lexbor/encoding/decode.h>
 
@@ -105,6 +106,47 @@ bool xml_name_is_name(const char *s, size_t len)
         DCHECK(p > was, "the UTF-8 walk consumed no bytes, so the Name production would never terminate");
         if (!(first ? name_start_char(cp) : name_char(cp))) return false;
         first = false;
+    }
+    return true;
+}
+
+/* Namespaces in XML 1.0 §3 [4]. The colon test runs FIRST and is a `memchr` — see xml_name.h for why one byte
+   is the whole of it — and the rest is [5] unchanged, because NCName subtracts a language from Name rather
+   than restricting Name's character classes. Note what this does NOT do: it does not ask whether the first
+   code point is a colon and then hand the tail to xml_name_is_name, which would accept `a:b`. */
+bool xml_name_is_ncname(const char *s, size_t len)
+{
+    if (!s || len == 0) return false;
+    if (memchr(s, ':', len) != NULL) return false;
+    return xml_name_is_name(s, len);
+}
+
+bool xml_name_parse_qname(const char *s, size_t len, XmlQName *out)
+{
+    const char *colon;
+
+    DCHECK(out != NULL, "the QName production was asked to parse into nothing");
+    if (!s || len == 0) return false;
+    colon = memchr(s, ':', len);
+    if (!colon) {                                     /* [9] UnprefixedName ::= LocalPart */
+        if (!xml_name_is_ncname(s, len)) return false;
+        out->prefix = NULL; out->prefix_len = 0;
+        out->local = s; out->local_len = len;
+        return true;
+    }
+    /* [8] PrefixedName ::= Prefix ':' LocalPart. The split is at the FIRST colon and BOTH halves must be
+       NCNames, which is what rejects a second colon: `a:b:c` splits to `a` and `b:c`, and the NCName test on
+       the tail is where the extra colon is found. So there is no separate "at most one colon" rule to state —
+       [10] and [11] already say it, and stating it twice is how the two spellings drift apart. */
+    {
+        size_t plen = (size_t)(colon - s);
+        const char *local = colon + 1;
+        size_t llen = len - plen - 1;
+
+        if (!xml_name_is_ncname(s, plen)) return false;
+        if (!xml_name_is_ncname(local, llen)) return false;
+        out->prefix = s; out->prefix_len = plen;
+        out->local = local; out->local_len = llen;
     }
     return true;
 }

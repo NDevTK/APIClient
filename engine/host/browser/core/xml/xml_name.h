@@ -1,10 +1,30 @@
-/* XML 1.0 (Fifth Edition) §2.3 — THE `Name` PRODUCTION.
+/* XML 1.0 (Fifth Edition) §2.3's `Name`, AND Namespaces in XML 1.0's `NCName` and `QName`.
  *
- * WHAT IT IS. Three productions and nothing else: [4] NameStartChar, [4a] NameChar, and
- * [5] Name ::= NameStartChar (NameChar)*. It is the LEAF of an XML parser and the piece everything above it
- * stands on — every element name, attribute name, processing-instruction target, entity name and notation name
- * a tokenizer scans is this production — which is why it is its own translation unit at the bottom of
- * core/xml/ rather than a static helper inside whichever file needs it first.
+ * WHAT IT IS. XML 1.0 §2.3's three productions — [4] NameStartChar, [4a] NameChar, and
+ * [5] Name ::= NameStartChar (NameChar)* — and the three that Namespaces in XML 1.0 builds directly on top of
+ * them: §3's [4] NCName, and §4's [7] QName with its [8] PrefixedName / [9] UnprefixedName split. It is the
+ * LEAF of an XML parser and the piece everything above it stands on — every element name, attribute name,
+ * processing-instruction target, entity name and notation name a tokenizer scans is one of these — which is why
+ * it is its own translation unit at the bottom of core/xml/ rather than a static helper inside whichever file
+ * needs it first.
+ *
+ * TWO STANDARDS IN ONE FILE, AND THEY CANNOT BE SEPARATED. Namespaces in XML defines its productions BY
+ * SUBTRACTION FROM AND COMPOSITION OF XML 1.0's: "[4] NCName ::= Name - (Char* ':' Char*)", whose own inline
+ * gloss reads "An XML Name, minus the colon", and "[10] Prefix ::= NCName", "[11] LocalPart ::= NCName". There
+ * is no second character class anywhere in Namespaces in XML — there is XML 1.0's, read with one code point
+ * excluded. Splitting them
+ * would leave core/xml/xml_ncname.c holding no data and no test of its own while forcing NAME_START_CHAR and
+ * NAME_CHAR_ONLY out of static scope, which is exactly the split core/fetch/port_blocking.c refuses and for
+ * exactly its reason: the two files would only ever change together, and the tables would become a data header
+ * with no algorithm attached — which is what core/url's idna_table.h and public_suffix_table.h are and what
+ * three lines of hand-transcribed spec text are not.
+ *
+ * A NOTE ON WHERE THE PRODUCTIONS ACTUALLY LIVE, because the section numbers are easy to get wrong and the
+ * queue that named this work did: NCName is production [4] of §3 "Declaring Namespaces", where it appears as
+ * the tail of [2] PrefixedAttName; QName is production [7] of §4 "Qualified Names", a section later. The
+ * namespace CONSTRAINTS that read them are elsewhere again — §3's Reserved Prefixes and Namespace Names, §5's
+ * Prefix Declared and No Prefix Undeclaring, §6.3's Attributes Unique — and none of them is in this file,
+ * because a constraint needs a scope and this file has no state. They are core/xml/xml_ns.h's.
  *
  * ITS CONSUMER TODAY IS THE DOM, NOT AN XML PARSER, and that is the standard's own arrangement rather than a
  * placeholder. DOM §4.13's "initialize a ProcessingInstruction node" step 1 is "if target does not match the
@@ -44,5 +64,37 @@
    truncated or structurally invalid sequence is an engine bug that crashes at the walk rather than a name this
    answers about. */
 bool xml_name_is_name(const char *s, size_t len);
+
+/* Namespaces in XML 1.0 §3 [4] `NCName ::= Name - (Char* ':' Char*)` — a Name with no colon ANYWHERE, not a
+   Name whose first character is not a colon. The subtracted language is every string with a colon in it, so
+   `a:b` is excluded by its interior colon and not by its start.
+
+   IT IS A BYTE TEST FOR THE COLON AND A CODE-POINT WALK FOR THE REST, and the halves are exact for different
+   reasons. U+003A is ASCII, so in UTF-8 it is the single byte 0x3A and — this is the load-bearing half — that
+   byte can never occur as a CONTINUATION byte of some other code point, because every continuation byte is
+   0x80..0xBF. So "does this string contain U+003A" and "does this byte run contain 0x3A" are the same question,
+   which is why core/dom/names.h's byte-walk argument applies to the colon and to nothing else here: every
+   OTHER distinction Namespaces in XML inherits is XML 1.0's character classes, which have holes above U+007F
+   (U+00D7) and therefore have to be walked as code points. */
+bool xml_name_is_ncname(const char *s, size_t len);
+
+/* Namespaces in XML 1.0 §4 [7] `QName`, split into the [10] `Prefix` and [11] `LocalPart` the caller needs.
+   `prefix` is NULL for [9] UnprefixedName — the standard's absence, not the empty string, since `:b` and `b`
+   are different strings and only the second is a QName. Both slices are BORROWED from `s`. */
+typedef struct {
+    const char *prefix; size_t prefix_len;
+    const char *local;  size_t local_len;
+} XmlQName;
+
+/* [7] QName ::= PrefixedName | UnprefixedName, where [8] PrefixedName ::= Prefix ':' LocalPart and both halves
+   are NCNames. Returns false and WRITES NOTHING when `s` is not a QName — a half-filled out-parameter is a
+   producer's field defaulted, which is worse than no answer.
+
+   THIS IS NOT DOM §1.4's SPLIT, AND THE DIFFERENCE IS OBSERVABLE. validate-and-extract splits at the FIRST
+   colon and keeps everything after it as the local name, so `a:b:c` is prefix `a` and local name `b:c` there
+   and `document.createElementNS(ns, "a:b:c")` builds an element. Here the same string is NOT a QName at all,
+   because `b:c` is not an NCName — an XML document containing `<a:b:c/>` is namespace-ill-formed. Both are
+   right for their own standard; core/dom/names.h states the ordering from its side. */
+bool xml_name_parse_qname(const char *s, size_t len, XmlQName *out);
 
 #endif
