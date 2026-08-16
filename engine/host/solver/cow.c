@@ -143,6 +143,78 @@ static void cow_desc_free(JSContext *ctx, JSPropertyDescriptor *d) {
     d->value = d->getter = d->setter = JS_UNDEFINED;
 }
 
+/* WHAT THIS FILE IS DOING TO THE HEAP RIGHT NOW — TWO DEPTHS, WHERE ONE FLAG ANSWERED BOTH QUESTIONS AND WAS
+   CLEARED BY ITS OWN NESTED USER.
+ *
+ * `g_capturing` was a single int, set to 1 by every capture AND by every swap and written back to 0 — a
+ * LITERAL — at each of their exits. That is sound until one of them runs inside another, and one of them does:
+ * growing a delta asks reclaim_realloc, which SELLS THE FRONTIER'S TAIL (solver/reclaim.h), and the sale runs
+ * flow_release and therefore cow_delta_release from inside cow_room_for_one — whose exit then wrote 0 over the
+ * 1 the capture had set. From that line to the end of the capture the page's write hooks were ARMED with the
+ * running flow's delta current, which is precisely the state cow_room_for_one's own comment says nothing here
+ * is written to meet: a capture raised inside the sale appends an entry to the very array being grown, and the
+ * publish that follows overwrites it with a pointer into the array realloc has freed.
+ *
+ * TWO NUMBERS BECAUSE THEY ARE TWO FACTS. "Do not re-capture, this is our own read or restore" is what both
+ * used to say and is all a swap can say. "A capture has READ the heap and has not yet written down what it
+ * read" is what only a capture can say, and it is the fact the sale has to respect — asserted at
+ * cow_install_chain, the one place the applied chain moves. DEPTHS rather than flags, so a nested user puts
+ * back what it found by construction instead of by remembering to.
+ *
+ * AND THIS IS WHY THE CAPTURES DISAGREE ABOUT ORDER AND DO NOT HAVE TO AGREE. Three read the state they are
+ * capturing BEFORE the entry is reserved (prop_write's baseline descriptor, async_state's settlement,
+ * module_eval's status) and five read it AFTER (host_state's bytes, host_record's fields, obj_state's blob,
+ * the buffer's bytes, the closure cell's value) — and cow_capture_buffer does both, taking the LENGTH before
+ * and the BYTES after, which is why its save CHECKs that the two agree. Both orders put a SALE between the
+ * read and the entry, so neither order is the safe one and marching them all into one order would buy nothing.
+ * What makes both correct is that a sale cannot change what the read saw, and that is two facts, each already
+ * a construction:
+ *   - it never touches the RUNNING flow's delta. engine_reclaim_tail sells flow_worst(flow_running()) and
+ *     asserts the flow it picked is not the running one, so the entry array a capture is growing and the
+ *     entries it is reading are not memory the sale can free.
+ *   - it cannot move the APPLIED CHAIN. The installed segment is the running delta's own base and every delta
+ *     holds one counted reference on its base, so a release's dying prefix — which stops at the first segment
+ *     whose refcount is not 1 — can never reach it, and cow_install_chain is therefore never entered from
+ *     inside a sale.
+ * That second one is a proof about refcounts, which is exactly the kind of statement that stops being true
+ * without anyone noticing, so it is held by the DCHECK at cow_install_chain rather than by this paragraph. */
+static int g_capturing;   /* a capture is between its READ of the heap and the entry it writes that read into */
+static int g_swapping;    /* one of this file's own heap operations (apply / unapply / fork / release) is running */
+
+/* The hooks' one question. A page write arriving while either is up is this file's own read or restore wearing
+   the page's hook, never the page's write, so it is dropped — the single test every hook here opens with. */
+static int cow_hooks_off(void) { return g_capturing > 0 || g_swapping > 0; }
+
+static void cow_capture_begin(void) { g_capturing++; }
+static void cow_capture_end(void) {
+    DCHECK(g_capturing > 0,
+           "a capture scope was closed that was never opened — the hooks are armed from here on with the "
+           "running flow's delta current, so the next allocation that sells a flow can re-enter this file "
+           "through the page's write hook and append to an array it is in the middle of growing");
+    g_capturing--;
+}
+static void cow_swap_begin(void) { g_swapping++; }
+static void cow_swap_end(void) {
+    DCHECK(g_swapping > 0,
+           "a swap scope was closed that was never opened — an apply or unapply's own writes to the heap would "
+           "then be captured back into the delta they are restoring");
+    g_swapping--;
+}
+
+/* THE DELTA'S OWN STORAGE, GROWN THROUGH ONE FUNCTION — the entry array and the hash index over it, which are
+   the two allocations this file makes for a delta and therefore the two that can SELL A FLOW from inside the
+   ask. The scope is asserted HERE and not at the producers, because this is the line every producer already
+   goes through: a seventh capture written tomorrow does not get to choose whether it opens the scope, it
+   aborts at its first entry. */
+static void *cow_delta_alloc(void *p, size_t n) {
+    DCHECK(g_capturing > 0,
+           "a COW delta grew its own storage outside a capture scope — this allocation can SELL A FLOW, and a "
+           "sale runs the scheduler's release path with the page's write hooks ARMED, so a capture raised "
+           "inside it appends an entry to the very array this call is growing and the caller's publish then "
+           "overwrites it with a pointer into the array realloc just freed");
+    return reclaim_realloc(p, n);
+}
+
 /* forked = has this flow snapshot-forked a sibling yet? Until it has, every object it CREATED (flow_local) is
    truly private — no other flow can observe it — so capturing its mutations is pure waste (keeps the delta
    O(shared baseline touched), not O(the run's transients). Once forked, the snapshot shares the frame's
@@ -212,7 +284,7 @@ static void cow_hash_rebuild(CowDelta *d) {   /* size to >= 2*n (power of two), 
     int nc = 16;
     int *nh;
     while (nc < d->n * 2) nc *= 2;
-    nh = reclaim_realloc(d->hash, (size_t)nc * sizeof(int));
+    nh = cow_delta_alloc(d->hash, (size_t)nc * sizeof(int));
     CHECK(nh, "cow: OOM hash index");
     d->hash = nh; d->hash_cap = nc;
     memset(d->hash, 0, (size_t)d->hash_cap * sizeof(int));
@@ -248,8 +320,10 @@ static int cow_hash_find(CowDelta *d, void *objptr, uint32_t atom, void *vref) {
    capacity is PUBLISHED ONLY AFTER the allocation returns. Doubling `d->cap` first — which is what eleven
    copies of this block did — leaves `d->e` pointing at the old, smaller array while `d->cap` advertises the
    new size, and anything that reaches `d` during the sale writes past its end. That was safe only because
-   every capture entry point happens to be closed by `g_capturing`, which is an argument rather than a
-   construction, and an argument the twelfth copy would not have carried.
+   every capture entry point happens to be closed by `g_capturing`, which was an argument rather than a
+   construction, and an argument the twelfth copy would not have carried — and it was not even true, because a
+   sale's own cow_delta_release cleared the flag on its way out. Both halves are construction now: the capture
+   scope is a depth, and cow_delta_alloc refuses to hand a delta memory outside one.
    Answers whether the array actually GREW, because the five callers that keep a sized hash index rebuild it
    exactly then — rebuilding on every capture instead is quadratic. */
 static int cow_room_for_one(CowDelta *d, const char *why) {
@@ -259,7 +333,7 @@ static int cow_room_for_one(CowDelta *d, const char *why) {
     if (d->n < d->cap)
         return 0;
     nc = d->cap ? d->cap * 2 : 32;
-    ne = reclaim_realloc(d->e, (size_t)nc * sizeof(CowEntry));
+    ne = cow_delta_alloc(d->e, (size_t)nc * sizeof(CowEntry));
     /* THE EDGE MAKES THE FAILURE RECOVERABLE; THIS IS STILL THE ANSWER WHEN THERE IS NOTHING LEFT TO SELL.
        The caller's own sentence is carried through rather than replaced by one generic line, because which
        capture was lost is the whole of what a reader needs here. */
@@ -269,7 +343,6 @@ static int cow_room_for_one(CowDelta *d, const char *why) {
 }
 
 static CowDelta *g_current = NULL;   /* the flow whose writes are captured right now (scheduler-owned) */
-static int g_capturing = 0;          /* re-entrancy guard: our own reads/restores must not re-capture */
 
 CowDelta *cow_delta_new(void) {
     CowDelta *d = reclaim_calloc(1, sizeof *d);
@@ -311,6 +384,10 @@ void cow_engine_write_end(void) {
    The default arm asserts rather than falling through: a kind nobody wrote an arm for must abort at the
    capture, not silently restore the wrong thing on the next context switch. */
 static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
+    /* IT ALLOCATES, SO IT CAN SELL A FLOW, and it is reached from both scopes — a capture taking its baseline
+       and a swap reading a flow's side back. Either way the hooks must already be down: armed, the blob
+       allocation's sale re-enters this file through the page's write hook. */
+    DCHECK(cow_hooks_off(), "a COW state blob was saved with the page's write hooks still armed");
     switch (e->state_kind) {
     case COW_STATE_MODULE: return JS_ModuleEvalStateSave(ctx, e->target);
     case COW_STATE_HOST: {
@@ -367,6 +444,9 @@ static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
     }
 }
 static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
+    /* AND IT WRITES THE HEAP — a buffer's bytes, a component's record, an object's prototype. Armed, each of
+       those lands back in the delta it is being restored out of, as a write the flow never made. */
+    DCHECK(cow_hooks_off(), "a COW state blob was restored with the page's write hooks still armed");
     switch (e->state_kind) {
     case COW_STATE_MODULE: JS_ModuleEvalStateRestore(ctx, e->target, blob); break;
     case COW_STATE_HOST:
@@ -432,7 +512,7 @@ static void cow_state_free(JSRuntime *rt, const CowEntry *e, void *blob) {
 }
 
 void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
-    if (g_capturing || !g_current) return;
+    if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     /* FLOW-PRIVATE skip — the O(shared-state) invariant. An object created AFTER this flow's fork (flow_gen >
        fork_gen) is private to the flow: no sibling can observe it, so its writes are never captured. A baseline
@@ -440,7 +520,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;
     if (cow_hash_find(d, JS_VALUE_GET_PTR(obj), atom, NULL) >= 0) return;   /* capture each slot ONCE (O(1)) */
 
-    g_capturing = 1;
+    cow_capture_begin();
     JSPropertyDescriptor base;
     /* the SLOT, not [[GetOwnProperty]]: this runs inside a write hook, so a Proxy trap here would be the page's
        code with no flow base, and JS_GetOwnSlotDesc asserts that it is not reachable. An ACCESSOR is READ, not
@@ -465,7 +545,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->existed = existed;
     e->base = base;
     cow_hash_add_last(d);
-    g_capturing = 0;
+    cow_capture_end();
 }
 
 /* Record a CLOSURE CELL's pre-write value (JSCowVarRefHook) into the running flow's delta, so a snapshot-forked
@@ -483,11 +563,11 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
    capture uses. The flow-private skip is still applied (a post-fork private array — e.g. a per-flow accumulator
    built after the fork — is not captured). */
 void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
-    if (g_capturing || !g_current) return;
+    if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;
     if (cow_hash_find(d, JS_VALUE_GET_PTR(obj), atom, NULL) >= 0) return;   /* capture each slot ONCE (O(1)) */
-    g_capturing = 1;
+    cow_capture_begin();
     cow_room_for_one(d, "cow: OOM growing delta (arr_append)");
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
@@ -495,17 +575,17 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     e->atom = JS_DupAtom(ctx, atom);   /* a tagged-int index atom: dup is a no-op, kept for uniform free */
     e->existed = 0;                    /* an append creates the slot; unapply shrinks the dense part past it */
     cow_hash_add_last(d);   /* in the index so a later OVERWRITE of this index dedups to the append entry */
-    g_capturing = 0;
+    cow_capture_end();
 }
 
 /* Capture a KNOWN-NEW Set/Map record (JSTimeTravelHooks.map_add): the key is not already in the collection, so
    like an array append it is a fresh entry needing no dedup and no baseline lookup. Flow-private collections (a Set
    built after the fork) are skipped. base = key, cur = value; unapply deletes, apply re-adds. */
 void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst val) {
-    if (g_capturing || !g_current) return;
+    if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
-    g_capturing = 1;
+    cow_capture_begin();
     cow_room_for_one(d, "cow: OOM growing delta (map_add) — a lost Set/Map record leaks across flows");
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
@@ -515,17 +595,17 @@ void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSV
     e->cur_state = COW_CUR_PRESENT;   /* the record's value is the entry's own, not a slot read back off the heap */
     e->is_map = 1;                     /* not slot-keyed — kept out of the hash index, like gendata */
     e->map_op = COW_MAP_ADD;
-    g_capturing = 0;
+    cow_capture_end();
 }
 
 /* Capture a reversible OVERWRITE / DELETE of an existing Set/Map record (JSTimeTravelHooks.map_mutate) as an
    undo-log entry — see the CowEntry comment. op is COW_MAP_OVERWRITE (base=key, cur=new, map_old=old) or
    COW_MAP_DELETE (base=key, map_old=old). Flow-private collections are skipped. */
 void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op, int pos) {
-    if (g_capturing || !g_current) return;
+    if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip */
-    g_capturing = 1;
+    cow_capture_begin();
     cow_room_for_one(d, "cow: OOM growing delta (map_mutate) — a lost Set/Map mutation leaks across flows");
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
@@ -537,7 +617,7 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
     e->map_op = (op == JS_MAP_MUTATE_DELETE) ? COW_MAP_DELETE : COW_MAP_OVERWRITE;
     e->map_pos = pos;                         /* where the inverse must put the record back — see CowEntry */
     e->map_old = JS_DupValue(ctx, old_val);   /* the prior value, restored on unapply */
-    g_capturing = 0;
+    cow_capture_end();
 }
 
 /* Capture a shared async object's SETTLEMENT before this flow changes it (JSTimeTravelHooks.async_state). A
@@ -547,10 +627,10 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
    arm is lost rather than isolated. Flow-private promises (created after the fork) are skipped by the same
    generational test as every other capture — nothing else can observe them. */
 void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
-    if (g_capturing || !g_current) return;
+    if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
-    g_capturing = 1;
+    cow_capture_begin();
     void *blob = JS_AsyncStateSave(ctx, obj);
     /* The hook fires only for an object that HAS settlement state, so a NULL here is either that contract
        broken or an allocation failure — and both mean this flow's settle goes uncaptured and leaks into every
@@ -560,7 +640,7 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_ASYNC &&
             JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj)) {
             JS_AsyncStateFree(JS_GetRuntime(ctx), blob);
-            g_capturing = 0;
+            cow_capture_end();
             return;
         }
     if (cow_room_for_one(d, "cow: OOM growing delta (async_state) — a lost settlement leaks a flow's timeline"))
@@ -569,7 +649,7 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
     e->is_state = 1; e->state_kind = COW_STATE_ASYNC; e->a_base = blob;
-    g_capturing = 0;
+    cow_capture_end();
 }
 
 /* Capture a MODULE's evaluation state before this flow changes it (JSTimeTravelHooks.module_eval). Each flow is
@@ -603,6 +683,10 @@ void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_dat
         (void)base_data;
         return;
     }
+    /* AN ENTRY PRODUCER IS A CAPTURE, and this one ran with the hooks ARMED — the only producer here that did,
+       together with cow_delta_add_gendata. It reached cow_room_for_one, which can sell a flow, with the page's
+       write hook still pointed at this very delta. */
+    cow_capture_begin();
     if (cow_room_for_one(d, "cow: OOM growing delta (async_fork) — a lost activation swap corrupts a flow's timeline"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
@@ -613,14 +697,15 @@ void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_dat
        reference. */
     e->is_gendata = 2; e->g0 = base_data; e->g1 = cur_data;
     JS_SetObjAsyncData(closure, cur_data);
+    cow_capture_end();
 }
 
 void cow_capture_module_eval(JSContext *ctx, void *mod) {
-    if (g_capturing || !g_current || !mod) return;
+    if (cow_hooks_off() || !g_current || !mod) return;
     CowDelta *d = g_current;
     for (int i = 0; i < d->n; i++)                  /* one entry per module: the FIRST baseline is the baseline */
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_MODULE && d->e[i].target == mod) return;
-    g_capturing = 1;
+    cow_capture_begin();
     void *blob = JS_ModuleEvalStateSave(ctx, mod);
     CHECK(blob, "cow: a module's evaluation state could not be captured — a sibling flow would inherit this "
                 "flow's evaluation and read exports it never wrote");
@@ -629,7 +714,7 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->is_state = 1; e->state_kind = COW_STATE_MODULE; e->target = mod; e->a_base = blob;
-    g_capturing = 0;
+    cow_capture_end();
 }
 
 /* Capture a BROWSER COMPONENT's own mutable C record before this flow changes it. A component that keeps state
@@ -641,7 +726,7 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
    flow can outlive every other reference to it — a delta naming freed storage would write those bytes back over
    whatever now occupies them. The flow-private skip is the same generational test every other capture uses. */
 void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t n) {
-    if (g_capturing || !g_current) return;
+    if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     DCHECK(p != NULL && n > 0, "a component asked to capture no state — the call site has nothing to isolate");
     /* A POD LATCH ONLY, and this is where that is stated rather than only described. The blob is a memcpy, so a
@@ -658,7 +743,7 @@ void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t 
     if (JS_ObjFlowGen(owner) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     for (int i = 0; i < d->n; i++)                    /* one entry per record: the FIRST baseline is the baseline */
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_HOST && d->e[i].target == p) return;
-    g_capturing = 1;
+    cow_capture_begin();
     if (cow_room_for_one(d, "cow: OOM growing delta (host_state)"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
@@ -666,7 +751,7 @@ void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t 
     e->obj = JS_DupValue(ctx, owner);
     e->is_state = 1; e->state_kind = COW_STATE_HOST; e->target = p; e->a_len = n;
     e->a_base = cow_state_save(ctx, e);   /* the bytes as this flow found them */
-    g_capturing = 0;
+    cow_capture_end();
 }
 
 /* A SHARED ARRAY BUFFER'S BYTES — see cow.h for why the unit is the bytes and not a view's element.
@@ -674,7 +759,7 @@ void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t 
    would name is freed by a detach and reallocated by a resize; that is also why the save and the restore ask
    the buffer for its bytes rather than keeping the address they first saw. */
 void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
-    if (g_capturing || !g_current) return;
+    if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     uint32_t len;
     DCHECK(JS_IsObject(abuf), "a buffer's bytes were captured with no buffer object — the capture named a VIEW "
@@ -693,7 +778,7 @@ void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
     for (int i = 0; i < d->n; i++)                   /* one entry per buffer: the FIRST bytes are the baseline */
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_BUFFER &&
             JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(abuf)) return;
-    g_capturing = 1;
+    cow_capture_begin();
     if (cow_room_for_one(d, "cow: OOM growing delta (buffer bytes)"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
@@ -701,7 +786,7 @@ void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
     e->obj = JS_DupValue(ctx, abuf);
     e->is_state = 1; e->state_kind = COW_STATE_BUFFER; e->a_len = len;
     e->a_base = cow_state_save(ctx, e);   /* the bytes as this flow found them */
-    g_capturing = 0;
+    cow_capture_end();
 }
 
 /* A SHARED BUFFER'S LIFETIME — see cow.h for why this is asked at the mutation and not at the save.
@@ -711,7 +796,7 @@ void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
 void cow_capture_buffer_lifetime(JSContext *ctx, JSValueConst abuf) {
     CowDelta *d = g_current;
     (void)ctx;
-    if (g_capturing || !d) return;
+    if (cow_hooks_off() || !d) return;
     DCHECK(JS_IsObject(abuf), "a buffer's lifetime changed on something that is not a buffer object");
     if (JS_ObjFlowGen(abuf) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     CHECK_FAIL("a flow RESIZED, TRANSFERRED or DETACHED a SHARED ArrayBuffer: the byte entry is over the "
@@ -725,14 +810,14 @@ void cow_capture_buffer_lifetime(JSContext *ctx, JSValueConst abuf) {
    field, because the three fields are one object and the flow that reached one may write any of them; the
    dedup is therefore what makes six mutation sites cost one entry. */
 void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
-    if (g_capturing || !g_current) return;
+    if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     DCHECK(JS_IsObject(obj), "an object's own state was captured with no object");
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     for (int i = 0; i < d->n; i++)                  /* one entry per object: the FIRST state is the baseline */
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_OBJECT &&
             JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj)) return;
-    g_capturing = 1;
+    cow_capture_begin();
     if (cow_room_for_one(d, "cow: OOM growing delta (obj_state) — a lost freeze/prototype/internal slot leaks "
                             "one flow's write into every sibling"))
         cow_hash_rebuild(d);
@@ -741,7 +826,7 @@ void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
     e->obj = JS_DupValue(ctx, obj);
     e->is_state = 1; e->state_kind = COW_STATE_OBJECT;
     e->a_base = cow_state_save(ctx, e);   /* the object as this flow found it */
-    g_capturing = 0;
+    cow_capture_end();
 }
 
 /* THE SESSION'S CONTEXT — see cow.h. One document, one context; the DOM delta keeps its own for the same
@@ -751,7 +836,7 @@ void cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 
 void cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec) {
     JSContext *ctx = g_cow_ctx;
-    if (g_capturing || !g_current) return;
+    if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     DCHECK(ctx != NULL, "a component record was captured before cow_set_ctx named the session's context");
     DCHECK(p != NULL && rec != NULL && rec->size > 0, "a component record was captured with no layout");
@@ -777,7 +862,7 @@ void cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec) 
     if (JS_ObjFlowGen(owner) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     for (int i = 0; i < d->n; i++)
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_HOST_REC && d->e[i].target == p) return;
-    g_capturing = 1;
+    cow_capture_begin();
     if (cow_room_for_one(d, "cow: OOM growing delta (host_record)"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
@@ -785,14 +870,14 @@ void cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec) 
     e->obj = JS_DupValue(ctx, owner);
     e->is_state = 1; e->state_kind = COW_STATE_HOST_REC; e->target = p; e->rec = rec;
     e->a_base = cow_state_save(ctx, e);   /* the record as this flow found it */
-    g_capturing = 0;
+    cow_capture_end();
 }
 
 void cow_capture_varref(JSContext *ctx, void *vref) {
-    if (g_capturing || !g_current || !vref) return;
+    if (cow_hooks_off() || !g_current || !vref) return;
     CowDelta *d = g_current;
     if (cow_hash_find(d, NULL, 0, vref) >= 0) return;   /* capture each cell ONCE (O(1)) */
-    g_capturing = 1;
+    cow_capture_begin();
     cow_room_for_one(d, "cow: OOM growing delta (var_ref)");
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
@@ -801,7 +886,7 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
     e->vref = vref;
     JS_VarRefRef(vref);                  /* the DELTA owns it: the cell's own frames may die before the delta does */
     cow_hash_add_last(d);
-    g_capturing = 0;
+    cow_capture_end();
 }
 
 /* Record a per-flow generator-state swap (see cow.h). Dedup-REPLACES an existing entry for the same generator
@@ -817,11 +902,17 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
             return;
         }
     }
+    /* THE SIBLING'S DELTA IS STILL A DELTA, and growing one is still an allocation that can sell a flow. This
+       producer is called by the fork assembly rather than by a hook, so it never had a scope; that made it safe
+       only for as long as its one caller keeps the reclaim disarmed across the assembly, which is a fact about
+       engine.c and not about this line. */
+    cow_capture_begin();
     cow_room_for_one(d, "cow: OOM growing delta (gendata) — a lost generator swap corrupts per-flow state");
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, genobj);
     e->is_gendata = 1; e->g0 = base_gd; e->g1 = cur_gd;   /* adopts cur_gd's creation ref (freed on delta free) */
+    cow_capture_end();
 }
 
 /* PASS 1 of an unapply — READ this entry's flow-side state off the live heap. Writes nothing to the heap. */
@@ -931,9 +1022,9 @@ static void cow_unapply_entries(JSContext *ctx, CowEntry *ents, int n) {
    incoming flow's apply decides how much of it has to move, which for a sibling is none of it. */
 void cow_unapply(JSContext *ctx, CowDelta *d) {
     if (!d) return;
-    g_capturing = 1;
+    cow_swap_begin();
     cow_unapply_entries(ctx, d->e, d->n);
-    g_capturing = 0;
+    cow_swap_end();
     DCHECK(g_cow_installed == d->base,
            "the applied heap chain is not the running flow's — a delta was swapped without going through "
            "cow_apply, so the heap is showing a chain nobody is running");
@@ -986,10 +1077,10 @@ static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
 /* APPLY (parked -> flow): move the installed chain to this flow's, then its head on top. */
 void cow_apply(JSContext *ctx, CowDelta *d) {
     if (!d) return;
-    g_capturing = 1;
+    cow_swap_begin();
     cow_install_chain(ctx, d->base);
     cow_apply_entries(ctx, d->e, d->n);
-    g_capturing = 0;
+    cow_swap_end();
 }
 
 /* FORK a delta at a branch: FREEZE the running flow's head into a shared immutable segment BOTH flows
@@ -1030,13 +1121,17 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
         return d;
     }
     /* ALLOCATED WHILE THE WORLD IS CONSISTENT — before the unapply, not after it, which is the same rule as
-       publishing a capacity late. This allocation can SELL A FLOW (solver/reclaim.h), and a sale walks the
-       shared chain and may re-install it; asking for the memory here asks it while the running flow's head is
-       still applied and the heap shows exactly the timeline the chain names. Between the unapply and the
-       re-apply the head is half-taken-down, which is a state no other code in this file is written to meet. */
+       publishing a capacity late. This allocation can SELL A FLOW (solver/reclaim.h), and a sale releases a
+       parked delta — which walks the shared chain, frees the segments that die with it, and asks whether the
+       heap is showing one of them; asking for the memory here asks it while the running flow's head is still
+       applied and the heap shows exactly the timeline the chain names. Between the unapply and the
+       re-apply the head is half-taken-down, which is a state no other code in this file is written to meet.
+       INSIDE THE SWAP SCOPE, because "this allocation can sell a flow" is the same sentence that opens the
+       scope everywhere else in this file: a sale runs with whatever the hooks are set to, and a fork is not a
+       moment at which the page may capture anything. */
+    cow_swap_begin();
     seg = reclaim_malloc(sizeof *seg);
     CHECK(seg, "cow: OOM fork segment — a shared delta would be corrupted");
-    g_capturing = 1;
     /* THE FETCH, for an applied delta only: unapply is what puts each entry's branch-point value into `cur`. A
        parked delta's entries hold it already, and running this on one would read the heap of whatever flow IS
        applied and record another timeline's values as this delta's. */
@@ -1053,7 +1148,7 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     /* A PARKED FORK LEAVES g_cow_installed WHERE IT WAS, and that is coherent rather than a loose end: it names
        a chain below an unapplied head, exactly the state cow_unapply leaves, and cow_install_chain walks from
        it to whatever comes next. */
-    g_capturing = 0;
+    cow_swap_end();
     return d;
 }
 
@@ -1128,6 +1223,22 @@ void cow_swap_stats(long *count, long *total, long *max) {
 static void cow_install_chain(JSContext *ctx, CowSeg *want) {
     CowSeg *common = cow_seg_common(g_cow_installed, want), *s;
     long touched = 0;
+
+    /* THE HEAP MAY NOT MOVE UNDER A CAPTURE'S READ, AND THIS IS THE ONE PLACE IT COULD.
+       A capture reads a state off the live heap and writes it into an entry, and the ONE thing that can run
+       between those two is a SALE: cow_delta_alloc asks reclaim_realloc, which pages the frontier's tail out,
+       and a release walks the chain down to the deepest segment that survives it. Reaching here from inside
+       one is impossible — the segment the heap is SHOWING is the running flow's own base, every delta holds a
+       counted reference on its base, and a release's dying prefix stops at the first segment whose refcount is
+       not 1 — and that is a proof about refcounts, which is exactly the kind of statement that stops being
+       true without anyone noticing. It is the whole reason the captures may read before their allocation or
+       after it, so it is held here rather than restated at each of them: if this fires, the entry that capture
+       is about to write records a state belonging to a timeline the heap no longer shows, and every later
+       swap replays it. */
+    DCHECK(g_capturing == 0,
+           "the applied COW chain moved while a capture was standing on the heap it had just read — the entry "
+           "that capture is about to write would record a state from another flow's timeline, and every "
+           "context switch from then on replays it");
     for (s = g_cow_installed; s != common; s = s->base) {
         touched += s->n;
         cow_unapply_entries(ctx, s->e, s->n);
@@ -1165,10 +1276,10 @@ void cow_delta_release(JSContext *ctx, CowDelta *d) {
        switch-in then had to replay in full), and a PARKED one — an evicted tail, a foreign world's segment —
        where the installed chain belongs to whichever flow is RUNNING and a blanket revert silently rewound that
        flow's heap and left `g_cow_installed` NULL under it. */
-    g_capturing = 1;   /* the scheduler's own unapply is not a flow's write */
+    cow_swap_begin();   /* the scheduler's own unapply is not a flow's write */
     for (s = d->base; s != surv; s = s->base)
         if (s == g_cow_installed) { cow_install_chain(ctx, surv); break; }
-    g_capturing = 0;
+    cow_swap_end();
     cow_seg_unref(ctx, d->base); d->base = NULL;
     cow_entries_free(ctx, d->e, d->n);
     /* AND THE DELTA'S OWN ALLOCATIONS, which this function did not free — it released what the entries POINTED
