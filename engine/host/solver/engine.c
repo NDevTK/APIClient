@@ -1140,17 +1140,33 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                 const char *u2 = JS_IsString(uv2) ? JS_ToCString(ctx, uv2) : NULL;
                 char why[640];
                 int wi;
+                JSAtom cn = JS_ATOM_NULL;
+                const char *cns = NULL;
                 /* AND WHAT THE RECORD ACTUALLY IS, because "it has no urlList" names a hole and the FIELDS name
                    the object. Every candidate on this path is identifiable by its own property list in one
                    glance and by nothing else: `body,csp` is the peer's §7.4 navigation answer, `resolve,value,
                    url,…` is a pending ENTRY that reached the value slot, `urlList,status,…` minus the list is a
                    record that was built right and CHANGED afterwards, and a bare `{}` is an object nobody
-                   filled. Guessing between those cost a full round trip already. */
+                   filled. Guessing between those cost a full round trip already.
+                   AND THE CLASS, WHICH IS THE SPLIT THE FIELD LIST CANNOT MAKE. `tag=-1` is JS_TAG_OBJECT, so
+                   an EMPTY field list does not mean "not an object" — it means an object with no own string
+                   properties, and that is the signature of an entire FAMILY rather than of one mistake: a
+                   platform object keeps its whole state in a C opaque and has none by design (a Response, a
+                   Promise, a Headers), while a plain `Object` with none is either one nobody filled or one
+                   whose shape is no longer what it was. The first is a Fetch question and the second is a
+                   MEMORY question, and they have nothing in common but the symptom. The pointer rides along so
+                   the address can be matched against an allocator report. */
+                if (JS_IsObject(pv)) {
+                    cn = JS_GetClassName(JS_GetRuntime(ctx), JS_GetClassID(pv));
+                    cns = JS_AtomToCString(ctx, cn);
+                }
                 wi = snprintf(why, sizeof why,
                               "a fetch reply carrying no `urlList` is about to be delivered — the record on "
                               "this entry was not built by fetch_reply_new, so some other writer reached a "
-                              "FLOW_PENDING_RESOLVE entry. url=%s kind=%d tag=%d fields=",
-                              u2 ? u2 : "(none)", kind, (int)JS_VALUE_GET_TAG(pv));
+                              "FLOW_PENDING_RESOLVE entry. url=%s kind=%d tag=%d class=%s ptr=%p fields=",
+                              u2 ? u2 : "(none)", kind, (int)JS_VALUE_GET_TAG(pv),
+                              cns ? cns : "(not an object)",
+                              JS_IsObject(pv) ? JS_VALUE_GET_PTR(pv) : NULL);
                 if (JS_IsObject(pv)) {
                     JSPropertyEnum *tab = NULL;
                     uint32_t pn = 0, pi;
@@ -1167,6 +1183,8 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                         snprintf(why + wi, sizeof why - (size_t)wi, "(none)");
                 }
                 DCHECK(JS_IsArray(ul), why);
+                if (cns) JS_FreeCString(ctx, cns);
+                if (cn != JS_ATOM_NULL) JS_FreeAtom(ctx, cn);
                 if (u2) JS_FreeCString(ctx, u2);
                 JS_FreeValue(ctx, uv2);
                 JS_FreeValue(ctx, ul);
