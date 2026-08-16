@@ -342,6 +342,8 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
     JSValue promise, resolving[2], deliver;
     JSValueConst data[2];
     const char *u;
+    /* §5.3 step 2'S PARSED URL, kept for the host below. See where it is filled. */
+    char *abs = NULL;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise))
@@ -465,6 +467,26 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
             JS_FreeValue(ctx, resolving[1]);
             return promise;
         }
+        /* §5.3 STEP 2'S ANSWER, KEPT RATHER THAN THROWN AWAY — and this is the whole of the fix. The parse
+           above already resolved the page's string against the API base URL, which is what step 2 says the
+           request's URL IS; the record was then freed and the host was handed `u`, the RAW string the page
+           wrote. So a bundle's ordinary `fetch('/api/users')` asked the trusted zone to fetch the nine
+           characters `/api/users`, and §4.1 — "the response's URL list is a clone of the request's URL list" —
+           gave the reply a list whose one member is a relative reference. `response.url` then runs the URL
+           parser back over that member with NO BASE, because every item of a URL list is absolute by the time
+           it is in one, and refuses it: `a response's URL list held a string the URL parser refuses`, which is
+           where the WPT corpus aborts. Every host was papering over it differently — the smoke fixture
+           re-resolves against the document address before building its reply, the WPT runner passes `req.url`
+           straight through and aborts — which is exactly the shape of a contract that was never stated.
+           IT ALSO GIVES THE ENDPOINT SURFACE ITS HOST. `<METHOD> <host><path>` is the identity a learned schema
+           is filed under (engine.c), and a relative reference has no host to file it by, so two origins'
+           `/api/users` were one key.
+           A CONCOLIC IS EXEMPT, and that is not an oversight to tidy later: its shape is a DISPLAY form, not a
+           URL. `/api/u?uid={state}.id` does parse — the parser percent-encodes the braces — and serializing it
+           would hand back `%7Bstate%7D.id`, which is the quiet de-tainting the projection above exists to
+           prevent. A shape stays the shape. */
+        if (scheme && !concolic_is(url))
+            abs = url_serialize(&rec, /*exclude_fragment*/ false);
         url_record_free(&rec);
     }
     if (u) {
@@ -483,7 +505,10 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
             FetchRequest req;
             const char *m = JS_IsUndefined(method) ? NULL : JS_ToCString(ctx, method);
             req.method = m ? m : "GET";
-            req.url = u;
+            /* THE PARSED URL WHERE THERE IS ONE. `u` survives as the fallback for the two inputs that have no
+               parsed form: a concolic's shape, and a relative reference in a document with no address at all
+               (fetch_parse_url is absolute-only then, which is the honest answer for a platform-less build). */
+            req.url = abs ? abs : u;
             req.headers = hdrs;
             req.body = body;
             req.body_len = body_len;
@@ -493,6 +518,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
         }
         JS_FreeCString(ctx, u);
     }
+    free(abs);
     JS_FreeValue(ctx, resolving[0]);
     JS_FreeValue(ctx, resolving[1]);
     return promise;
