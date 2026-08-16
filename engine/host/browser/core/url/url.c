@@ -218,9 +218,11 @@ void url_host_free(UrlHost *h) { free(h->domain); h->domain = NULL; h->kind = UR
 
 /* §4.2's HOST EQUALITY, BY VALUE OVER THE PARSED HOST — "identical" wherever a standard compares two hosts:
    §7.1.1 step 2's same origin, §7.1.1's same origin-domain over two DOMAINS, §7.2.5's can-have-its-URL-rewritten
-   and §7.1.1.2's "hostSuffix does not equal originalHost". It lived THREE TIMES, once in each of those callers,
-   which is three chances for one edge to be read differently — and they had already drifted: two of them
-   answered a host of an undeclared kind with `true` where this one crashes. Two hosts of different KINDS are
+   and §7.1.1.2's "hostSuffix does not equal originalHost". It lived TWICE — once in origin.c and once in
+   history.c — and the two had already drifted at the edge that matters least until it matters: origin.c closed
+   its switch with `default: return true`, so a host of a kind url.h does not declare compared EQUAL to
+   anything, where history.c's crashed. One rule, one implementation, and the crashing reading is the one that
+   survived. Two hosts of different KINDS are
    different however they spell, an IPv4 is a number, an IPv6 is eight of them, and a domain is already
    lowercased ASCII by domain-to-ASCII when the parser built it. */
 bool url_host_equal(const UrlHost *a, const UrlHost *b)
