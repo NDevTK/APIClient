@@ -50,12 +50,17 @@ CssDefaulting css_defaulting_of(const char *name, const char *cascaded);
 bool css_property_inherited(const char *name);
 
 /* Is `value` one of CSS Cascade §7.3's CSS-WIDE KEYWORDS — `inherit`, `initial`, `unset`, `revert`,
-   `revert-layer`? Each is the ENTIRE value of a declaration when present, so this is an equality and not a
-   search, and each makes the value a product of §7's DEFAULTING step rather than of the declaration.
+   `revert-layer`, `revert-rule`? Each is the ENTIRE value of a declaration when present, so this is an
+   equality and not a search, and each makes the value a product of §7's DEFAULTING step rather than of the
+   declaration.
    EXPORTED because a SHORTHAND carrying one "sets all of its sub-properties to that keyword" (CSS Cascade
    §Shorthand Properties), which core/css/css_shorthand.h has to know BEFORE it tries the shorthand's own
    grammar: `border: initial` is not a `<line-width> || <line-style> || <color>`, and a keyword that reached
-   that grammar would be classified as one of its terms. */
+   that grammar would be classified as one of its terms. AND because the set is not only about declarations:
+   CSS Cascade §6.4.2 reserves exactly these keywords inside a `<layer-name>` ("the CSS-wide keywords are
+   reserved for future use, and cause the rule to be invalid at parse time if used as an <ident> in the
+   <layer-name>"), which core/css/css_at_rule_prelude.h asks here rather than restating — two copies could
+   disagree about `revert-rule`, and one of them did. */
 bool css_wide_keyword(const char *value);
 
 #endif

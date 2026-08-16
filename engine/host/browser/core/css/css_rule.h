@@ -1,7 +1,8 @@
 /* CSSOM §6.4's CSS RULES — §6.4.2 CSSRule, §6.4.5 CSSGroupingRule, §6.4.3 CSSStyleRule, §6.4.4 CSSImportRule,
  * §6.4.7 CSSPageRule, §6.4.8 CSSMarginRule and §6.4.9 CSSNamespaceRule, plus CSS Conditional §7.2's
  * CSSConditionRule and §7.3's CSSMediaRule (the `@media` half of the same object), CSS Fonts §12.1's
- * CSSFontFaceRule and CSS Animations §6.2/§6.3's CSSKeyframeRule and CSSKeyframesRule.
+ * CSSFontFaceRule, CSS Animations §6.2/§6.3's CSSKeyframeRule and CSSKeyframesRule, and CSS Cascade §8.1/§8.2's
+ * CSSLayerBlockRule and CSSLayerStatementRule.
  *
  * `CSSImportRule.styleSheet` IS ABSENT, AND IT IS THE ONE MEMBER OF THESE INTERFACES THAT IS. §6.4.4 defines it
  * as "the associated CSS style sheet, if any, or null otherwise" and its own note gives the case that produces
@@ -54,6 +55,25 @@
  * §6.6.1 write through `style`), which is what makes `selectorText`, `cssText`, `length` and
  * `getPropertyValue` agree without any of them asking for itself.
  *
+ * ONE `@layer` KEYWORD IS TWO INTERFACES, AND THE BLOCK IS WHAT DECIDES WHICH. CSS Cascade §6.4.4 gives the
+ * at-rule two grammars: §6.4.4.1's `@layer <layer-name>? { <rule-list> }` is §8.1's CSSLayerBlockRule and
+ * §6.4.4.2's `@layer <layer-name>#;` is §8.2's CSSLayerStatementRule, so the builder's `has_block` fork — the
+ * one `@import` and `@font-face` already take to tell a rule from a drop — here picks between two interfaces
+ * instead. They differ in EVERYTHING the interfaces differ in: a block is a §6.4.5 grouping rule holding the
+ * layer's rules ("such @layer block rules have the same restrictions and processing as a conditional group rule
+ * with a true condition"), a statement contains nothing at all; a block declares AT MOST ONE name and a
+ * statement ONE OR MORE; and they sit in different places in a sheet — §6.4.4.2 admits the statement before
+ * `@import` and `@namespace` as well as wherever any rule may go, which is the ONE rule type with two
+ * admissible positions and the reason css_rule.c states a sheet's prologue as a set of ZONES rather than as a
+ * rank per type. What they SHARE is the `<layer-name>` grammar, so they share one storage: §8.2 requires
+ * `nameList` "normalized following the same rule as the CSSLayerBlockRule's name attribute", and §8.1's `name`
+ * is that list read at index 0 — the empty string when there is nothing there, which is §6.4.2.1's anonymous
+ * layer.
+ * NEITHER HAS A `type` NUMBER, and that is §6.4.2 speaking rather than a gap: its table ends "otherwise, return
+ * 0" with the note that "this enumeration is thus frozen in its current state, and no new values will be added
+ * to reflect additional at-rules". So the stored discriminator continues past the table and `rule_legacy_type`
+ * maps it back — the same shape as the split below, and for the same reason.
+ *
  * A `@keyframes` HOLDS RULES AND IS NOT A §6.4.5 GROUPING RULE, so those are two questions here and not one.
  * CSS Animations §6.3.1 declares `interface CSSKeyframesRule : CSSRule` and then gives it a `cssRules` of its
  * own, an `appendRule(CSSOMString)`, a `deleteRule(CSSOMString)` and a `findRule(CSSOMString)` — a
@@ -91,8 +111,8 @@ void css_rule_init(JSContext *ctx);
 /* Every §6.4 and §7.x rule prototype for ONE realm — declared into core/realm.h's list. */
 void css_rule_install_proto(JSContext *ctx);
 /* `CSSRule`, `CSSGroupingRule`, `CSSStyleRule`, `CSSConditionRule`, `CSSMediaRule`, `CSSImportRule`,
-   `CSSNamespaceRule`, `CSSFontFaceRule`, `CSSPageRule`, `CSSMarginRule`, `CSSKeyframeRule` and
-   `CSSKeyframesRule` as globals. */
+   `CSSNamespaceRule`, `CSSFontFaceRule`, `CSSPageRule`, `CSSMarginRule`, `CSSKeyframeRule`,
+   `CSSKeyframesRule`, `CSSLayerBlockRule` and `CSSLayerStatementRule` as globals. */
 void css_rule_install(JSContext *ctx, JSValueConst global);
 void css_rule_free(JSRuntime *rt);
 
@@ -136,7 +156,10 @@ void css_rule_build_sheet(JSContext *ctx, JSValueConst list, JSValueConst parent
    sheet's `@namespace` rules, which go in verbatim because the selectors are written against the prefixes they
    bind. `*pn` is how many rules were emitted, which is what the caller's round-trip assertion compares the
    re-parse against.
-   OWNED. NULL when a stored text could not be read back, which leaves a pending exception on `ctx`. */
+   OWNED. NULL when the sheet cannot be resolved at all: a stored text that could not be read back, which
+   leaves a pending exception on `ctx`, or a rule the cascade has no answer for — which in a DEV build has
+   already aborted at the rule (CSS Cascade §6.4's cascade layers are the one such rule), so the whole-sheet
+   abandonment is what RELEASE does with a capability release cannot add. */
 char *css_rule_cascade_text(JSContext *ctx, JSValueConst list, uint32_t *pn);
 
 #endif

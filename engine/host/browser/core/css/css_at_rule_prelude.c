@@ -521,3 +521,105 @@ fail:
     pre_close(&p);
     return NULL;
 }
+
+/* ---- CSS Cascade §6.4.2's `<layer-name>`, as §6.4.4's two at-rules take it ---------------------------------
+ *
+ * See css_at_rule_prelude.h for why one entry serves both `@layer` grammars, why an empty list is an answer
+ * rather than a failure, where the whitespace is significant, and why each name crosses serialized. */
+
+static void pre_layer_names_push(CssLayerNames *out, char *one)   /* CONSUMES one */
+{
+    char **grown = realloc(out->v, (size_t)(out->n + 1) * sizeof(*grown));
+
+    CHECK(grown != NULL, "cssom: OOM collecting an `@layer` at-rule's layer names");
+    out->v = grown;
+    out->v[out->n++] = one;
+}
+
+void css_layer_names_free(CssLayerNames *p)
+{
+    unsigned i;
+
+    DCHECK(p != NULL, "an `@layer` at-rule's layer names were freed through no list");
+    for (i = 0; i < p->n; i++) free(p->v[i]);
+    free(p->v);
+    p->v = NULL;
+    p->n = 0;
+}
+
+/* ONE `<layer-name> = <ident> [ '.' <ident> ]*`, appended to `out` ALREADY SERIALIZED.
+   EVERY PEEK HERE IS THE RAW ONE, for the reason `pre_page_selector`'s are: `pre_peek_ws` would eat exactly the
+   whitespace §6.4.2 forbids between the segments, so a whitespace token simply ends the name and the caller
+   then requires a comma or the end of the prelude where it stands. */
+static bool pre_layer_name(Prelude *p, PBuf *out)
+{
+    for (;;) {
+        lxb_css_syntax_token_t *t = pre_peek(p);
+        const lxb_css_syntax_token_string_t *s;
+        char *raw, *id;
+
+        if (!t || t->type != LXB_CSS_SYNTAX_TOKEN_IDENT) return false;
+        s = lxb_css_syntax_token_string(t);
+        raw = pre_copy((const char *)s->data, s->length);
+        /* §6.4.2: "The CSS-wide keywords are reserved for future use, and cause the rule to be INVALID AT
+           PARSE TIME if used as an <ident> in the <layer-name>." The token's own value is what is tested, so
+           `@layer \69 nherit` is refused too — an escape is spelling and not a different identifier. */
+        if (css_wide_keyword(raw)) { free(raw); return false; }
+        id = css_serialize_identifier(raw, s->length);
+        free(raw);
+        pre_take(p);
+        pbuf_add(out, id);
+        free(id);
+        /* `[ '.' <ident> ]*`. CSS Syntax tokenizes a period that does not start a number as a DELIM, so this
+           is the whole of the separator test — and a `.` followed by anything but an ident (`a.`, `a.5b`) ends
+           the loop with the cursor on it, which the caller then refuses as neither a comma nor the end. */
+        t = pre_peek(p);
+        if (!t || t->type != LXB_CSS_SYNTAX_TOKEN_DELIM || lxb_css_syntax_token_delim_char(t) != '.')
+            return true;
+        pre_take(p);
+        pbuf_add(out, ".");
+    }
+}
+
+bool css_prelude_layer_names(const char *prelude, size_t len, CssLayerNames *out)
+{
+    Prelude p = { NULL, NULL, 0 };
+    CssLayerNames got = { NULL, 0 };
+    lxb_css_syntax_token_t *t;
+
+    DCHECK(out != NULL, "an `@layer` at-rule's prelude was parsed with nowhere to report its layer names");
+    if (!pre_open(&p, prelude, len)) return false;
+    t = pre_peek_ws(&p);
+    if (!t) goto fail;
+    /* The EMPTY prelude is `@layer { }`'s ANONYMOUS layer — no names at all, which is a real answer and the one
+       thing the two callers disagree about. The loop is entered only when there is something to read, and it is
+       left only at the END of the prelude, so a trailing comma reaches `pre_layer_name` with the EOF token in
+       front of it and is refused there. */
+    if (t->type != LXB_CSS_SYNTAX_TOKEN__EOF) {
+        for (;;) {
+            PBuf one = { NULL, 0, 0 };
+
+            if (!pre_layer_name(&p, &one)) { free(one.s); goto fail; }
+            DCHECK(one.s != NULL && one.s[0] != '\0',
+                   "a `<layer-name>` parsed to nothing — the production's first term is an `<ident>` and the "
+                   "parse above answers false without one, so a match has appended at least one segment");
+            pre_layer_names_push(&got, one.s);
+            t = pre_peek_ws(&p);
+            if (!t) goto fail;
+            if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) break;
+            /* The `#` multiplier, whose commas MAY carry whitespace — it is only INSIDE a name that §6.4.2
+               forbids it. */
+            if (t->type != LXB_CSS_SYNTAX_TOKEN_COMMA) goto fail;
+            pre_take(&p);
+            if (!pre_peek_ws(&p)) goto fail;
+        }
+    }
+    pre_close(&p);
+    *out = got;
+    return true;
+
+fail:
+    css_layer_names_free(&got);
+    pre_close(&p);
+    return false;
+}

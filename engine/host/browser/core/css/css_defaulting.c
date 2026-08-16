@@ -22,10 +22,20 @@ static bool css_def_keyword_is(const char *v, const char *kw)
     return true;
 }
 
-/* §7.3's CSS-WIDE KEYWORDS, in the order the section defines them. `revert-rule` (css-cascade-6 §7.3.6) is NOT
-   here: lexbor's grammar does not admit it, so a declaration carrying one never reaches a cascade in this
-   engine and a row for it would describe a value nothing can produce. */
-static const char *const CSS_WIDE[] = { "inherit", "initial", "unset", "revert", "revert-layer" };
+/* §7.3's CSS-WIDE KEYWORDS, in the order the section defines them — css-cascade-5 §7.3.1 through §7.3.6, whose
+   own opening sentence names the last three together ("the keywords revert, revert-layer, and revert-rule are
+   cascade-dependent keywords; some contexts may restrict their use while allowing the other CSS-wide
+   keywords").
+   §7.3.6's `revert-rule` USED TO BE OFF THIS LIST, on the stated ground that lexbor's grammar does not admit it
+   so no declaration carrying one can reach a cascade. That ground was real and it was about DECLARATIONS only,
+   and this set has a second consumer that does not go through lexbor's property grammar at all: CSS Cascade
+   §6.4.2 refuses a `<layer-name>` segment that is a CSS-wide keyword, and core/css/css_at_rule_prelude.c
+   tokenizes that prelude itself — so `@layer revert-rule { }` reaches the question and the missing row would
+   have answered it wrong. It is one SET, asked from two directions, and the row that is unreachable from one
+   direction is load-bearing from the other. (The old note also cited css-cascade-6, which has no §7.3 at all;
+   the keyword is css-cascade-5's.) */
+static const char *const CSS_WIDE[] = { "inherit", "initial", "unset", "revert", "revert-layer",
+                                        "revert-rule" };
 
 bool css_wide_keyword(const char *v)
 {
@@ -112,18 +122,23 @@ CssDefaulting css_defaulting_of(const char *name, const char *cascaded)
        as initial" — which is why §7.2's line is read here and not only above. */
     if (css_def_keyword_is(cascaded, "unset"))
         return css_property_inherited(name) ? CSS_DEFAULTING_INHERITED : CSS_DEFAULTING_INITIAL;
-    DCHECK(css_def_keyword_is(cascaded, "revert") || css_def_keyword_is(cascaded, "revert-layer"),
-           "a CSS-wide keyword reached §7's defaulting that is none of the five — CSS_WIDE and this switch are "
+    DCHECK(css_def_keyword_is(cascaded, "revert") || css_def_keyword_is(cascaded, "revert-layer") ||
+           css_def_keyword_is(cascaded, "revert-rule"),
+           "a CSS-wide keyword reached §7's defaulting that is none of the six — CSS_WIDE and this switch are "
            "one list and have come apart");
-    DFAIL("CSS Cascade §7.3.4's `revert` and §7.3.5's `revert-layer` roll the cascade BACK — to the cascaded "
-          "value of the earlier ORIGIN, and to the earlier cascade LAYER — so the specified value is what the "
-          "cascade would have answered had the current origin's (or the current layer's) declarations not been "
+    DFAIL("CSS Cascade §7.3.4's `revert`, §7.3.5's `revert-layer` and §7.3.6's `revert-rule` roll the cascade "
+          "BACK — to the cascaded value of the earlier ORIGIN, to the earlier cascade LAYER, and to the "
+          "earlier RULE — so the specified value is what the "
+          "cascade would have answered had the current origin's (or the current layer's, or the current "
+          "rule's) declarations not been "
           "there at all. The cascade in css_style_declaration.c cannot be asked that question: it walks its "
           "layers in order and returns the first that answers, keeping no record of WHICH origin the winner "
           "came from and no way to be re-run with an origin excluded — and `revert` is defined by the origin "
           "of the DECLARATION carrying it, not of the element. BUILD the cascade as a list of matched "
-          "declarations tagged with their origin and layer, resolved by one ordering pass, so both keywords "
-          "are the same pass run with a CEILING; note that §7.3.4 makes `revert` in the user-agent origin "
-          "equivalent to `unset`, which is the base case that terminates the roll-back");
+          "declarations tagged with their origin and layer, resolved by one ordering pass, so all three "
+          "keywords are the same pass run with a CEILING; note that §7.3.4 makes `revert` in the user-agent "
+          "origin equivalent to `unset`, which is the base case that terminates the roll-back. THE CASCADE "
+          "LAYER HALF OF THAT REBUILD IS THE SAME ONE core/css/css_rule.c's author-cascade arm for a `@layer` "
+          "block asks for — CSS Cascade §6.1 puts Layers above Specificity — so the two are ONE capability");
     return CSS_DEFAULTING_INITIAL;
 }

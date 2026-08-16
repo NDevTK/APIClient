@@ -303,6 +303,13 @@ const INTERFACES = {
      exotic hooks. */
   CSSKeyframeRule:      "core/css/css_rule.c",
   CSSKeyframesRule:     "core/css/css_rule.c",
+  /* CSS Cascade §8.1 and §8.2, same component and the same reason. CSSLayerBlockRule inherits
+     CSSGroupingRule — §6.4.4.1 makes a `@layer` block "a conditional group rule with a true condition" and the
+     IDL follows — so its row is expected to report NOTHING missing: `cssRules`, `insertRule` and `deleteRule`
+     are reachable on one and really are installed. CSSLayerStatementRule inherits CSSRule and declares only
+     `nameList`, so it is expected to report nothing either. */
+  CSSLayerBlockRule:    "core/css/css_rule.c",
+  CSSLayerStatementRule: "core/css/css_rule.c",
   /* CSS Fonts §12.1's and CSSOM §6.4.7's descriptor blocks. Their file is the DECLARATION-BLOCK component and
      not the rule's: the descriptor attributes are installed beside §6.6.1's per-property ones, over the same
      record. Both rows are expected to report nothing missing — each interface's members are exactly its own

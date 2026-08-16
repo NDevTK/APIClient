@@ -32,23 +32,59 @@
 #include "core/realm.h"
 #include "solver/cow.h"
 
-/* §6.4's TYPE state item, which IS which interface this rule is — the values are §6.4.2's own constants, so
-   there is one number rather than a stored type beside an interface tag that could disagree with it. CSS
-   Animations §6.1.1's `partial interface CSSRule` adds the two in the middle, exactly as CSS Conditional §7.1
-   adds SUPPORTS_RULE to a list CSSOM calls frozen. */
+/* §6.4's TYPE state item, which IS which interface this rule is. For every interface §6.4.2's `type` table
+   NAMES, the discriminator and that table's number are ONE number rather than a stored type beside an interface
+   tag that could disagree with it — CSS Animations §6.1.1's `partial interface CSSRule` adds the two in the
+   middle, exactly as CSS Conditional §7.1 adds SUPPORTS_RULE to a list CSSOM calls frozen.
+   AND THE TABLE RAN OUT, WHICH IS THE SPEC'S OWN DECISION RATHER THAN A GAP TO INVENT A NUMBER FOR. §6.4.2's
+   `type` ends "Otherwise: return 0" and attaches the reason: "this enumeration is thus FROZEN in its current
+   state, and no new values will be added to reflect additional at-rules; all at-rules beyond the ones listed
+   above will return 0." So CSS Cascade §8.1's and §8.2's `@layer` interfaces have no number at all, and neither
+   will the next interface that lands. The discriminator therefore CONTINUES PAST the table and
+   `rule_legacy_type` maps it back — one fact split into two the moment they stopped agreeing, exactly as
+   `rule_type_has_child_rules` and `rule_type_is_grouping` are. */
 enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE_FONT_FACE = 5,
        RULE_TYPE_PAGE = 6, RULE_TYPE_KEYFRAMES = 7, RULE_TYPE_KEYFRAME = 8, RULE_TYPE_MARGIN = 9,
-       RULE_TYPE_NAMESPACE = 10 };
+       RULE_TYPE_NAMESPACE = 10,
+       /* At and above this, §6.4.2's `type` answers 0 — the interfaces its frozen table does not name. */
+       RULE_TYPE_UNNUMBERED = 0x100,
+       RULE_TYPE_LAYER_BLOCK = RULE_TYPE_UNNUMBERED, RULE_TYPE_LAYER_STATEMENT };
 
-/* WHERE A RULE MAY SIT IN A STYLE SHEET, as the one number the ordering CSS specifies is stated over. CSS
-   Cascade §2: "any @import rules must precede all other valid at-rules and style rules in a style sheet";
-   CSS Namespaces §2: "any @namespace rules must follow all @charset and @import rules and precede all other
-   non-ignored at-rules and style rules". So a sheet's rules are RANK-SORTED, and §6.4 step 5's "cannot be
-   inserted ... due to constraints specified by CSS" is exactly "the insertion would break that sort". Stating
-   it as a rank rather than as a pair of special cases is what makes both directions fall out of one test: a
-   style rule BEFORE an `@import` is refused (css/cssom/insertRule-import-no-index.html) by the same line that
-   refuses an `@import` after one. */
-enum { RANK_IMPORT = 0, RANK_NAMESPACE = 1, RANK_OTHER = 2 };
+/* WHERE A RULE MAY SIT IN A STYLE SHEET. A sheet's rules are a PROLOGUE followed by a body, and three standards
+   write that prologue between them:
+     CSS Cascade §2 — "any @import rules must precede all other valid at-rules and style rules in a style sheet
+       (ignoring @charset, @supports-condition, and @layer statement rules) and must not have any other valid
+       at-rules or style rules between it and previous @import rules, or else the @import rule is invalid";
+     CSS Namespaces §2 — "any @namespace rules must follow all @charset and @import rules and precede all other
+       non-ignored at-rules and style rules";
+     CSS Cascade §6.4.4.2 — "such empty @layer rules are allowed BEFORE @import and @namespace rules (after the
+       @charset rule, if any) AS WELL AS everywhere @layer block at-rules are allowed", whose note spells out
+       what that costs: "no @layer rules are allowed between @import and @namespace rules. Any @layer rule that
+       comes after an @import or @namespace rule will cause any subsequent @import or @namespace rules to be
+       ignored."
+   Together those are exactly `[@layer statement]* [@import]* [@namespace]* [anything]*`, and §6.4 step 5's
+   "cannot be inserted ... due to constraints specified by CSS" is "the insertion would not match it".
+   IT IS A SET OF ZONES PER RULE TYPE AND NOT A RANK, AND THE `@layer` STATEMENT IS WHY — it is the one type
+   with TWO admissible positions, which a single rank per type cannot state. The comment this replaces
+   PREDICTED that such a rule would simply take `@import`'s rank, and that was wrong in BOTH directions: a rank
+   shared with `@import` would have REFUSED `@layer a;` after a style rule, which §6.4.4.2 allows outright, and
+   ADMITTED one between an `@import` and an `@namespace`, which its note forbids. Stating the whole prologue is
+   what keeps both directions falling out of one walk — a style rule BEFORE an `@import` is refused
+   (css/cssom/insertRule-import-no-index.html) by the same walk that refuses an `@import` after one. */
+enum { ZONE_LEAD = 0, ZONE_IMPORT, ZONE_NAMESPACE, ZONE_BODY, ZONE_N };
+#define ZONE_BIT(z) (1u << (unsigned)(z))
+
+/* §6.4.2's `type` for a rule whose interface is `type` — the frozen table's number, or its own "otherwise,
+   return 0" for an interface the table does not name. */
+static uint32_t rule_legacy_type(uint16_t type)
+{
+    if (type >= RULE_TYPE_UNNUMBERED) return 0;
+    DCHECK(type >= RULE_TYPE_STYLE && type <= RULE_TYPE_NAMESPACE,
+           "a CSS rule's interface discriminator is neither one of §6.4.2's table numbers nor above the end of "
+           "the table — the enum above is the one place both halves are declared, so a value between them "
+           "means a row was added without deciding which half it is in");
+    return type;
+}
 
 typedef struct CssRuleData {
     JSValue parent_style_sheet;  /* §6.4.2 "parent CSS style sheet" (OWNED) */
@@ -98,6 +134,19 @@ typedef struct CssRuleData {
        codepoint-by-codepoint equal"), settable, and serialized by a rule of its own. One slot would have had
        to be read with the rule's type in hand at every site anyway, which is two facts wearing one name. */
     JSValue keyframes_name;
+    /* CSS Cascade §8.1's `name` and §8.2's `nameList` — the `<layer-name>`s the `@layer` at-rule ITSELF
+       declares, as the FROZEN Array §8.2's `FrozenArray<CSSOMString>` value IS (Web IDL §2.13.35: such a value
+       is "a reference to an object that holds a fixed length array of unmodifiable values", so the freeze
+       belongs to the stored value and not to the getter). JS_NULL on every rule that is not an `@layer`.
+       ONE FIELD FOR TWO INTERFACES, unlike `at_name` and `keyframes_name` beside it, and the test is the one
+       those two failed: those are two DIFFERENT facts under one word (a closed at-keyword out of CSS Paged
+       Media's sixteen, against an author `<custom-ident>` that is case-sensitive and settable). These are the
+       SAME fact under two multipliers — core/css/css_at_rule_prelude.h parses `<layer-name>?` and
+       `<layer-name>#` with one grammar and normalizes both the same way, which is what §8.2 requires outright
+       ("normalized following the same rule as the CSSLayerBlockRule's name attribute"). A block rule's list
+       holds at most one entry and §8.1's `name` is that entry, or the empty string for §6.4.2.1's anonymous
+       layer; a statement rule's holds one or more. Two fields could disagree about which. (OWNED) */
+    JSValue layer_names;
     uint16_t type;
 } CssRuleData;
 
@@ -107,7 +156,8 @@ static JSClassID g_rule_class;
    CSSGroupingRule or CSSConditionRule) and the rest are concrete; all are held the same way because a rule is
    built with an EXPLICIT prototype chosen from its type, so the class's own proto slot decides nothing. */
 enum { PROTO_RULE = 0, PROTO_GROUPING, PROTO_STYLE, PROTO_CONDITION, PROTO_MEDIA, PROTO_IMPORT,
-       PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_PAGE, PROTO_MARGIN, PROTO_KEYFRAMES, PROTO_KEYFRAME, PROTO_N };
+       PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_PAGE, PROTO_MARGIN, PROTO_KEYFRAMES, PROTO_KEYFRAME,
+       PROTO_LAYER_BLOCK, PROTO_LAYER_STATEMENT, PROTO_N };
 static int g_proto_slot[PROTO_N];
 static int g_id_set_selector = -1, g_id_set_page_selector = -1, g_id_set_key_text = -1,
            g_id_set_keyframes_name = -1, g_id_set_css_text = -1, g_id_insert_rule = -1, g_id_delete_rule = -1,
@@ -129,6 +179,7 @@ static const uint16_t RULE_VALS[] = {
     (uint16_t)offsetof(CssRuleData, prefix),
     (uint16_t)offsetof(CssRuleData, at_name),
     (uint16_t)offsetof(CssRuleData, keyframes_name),
+    (uint16_t)offsetof(CssRuleData, layer_names),
 };
 static const CowRecord RULE_REC = { sizeof(CssRuleData), RULE_VALS,
                                     (int)(sizeof(RULE_VALS) / sizeof(RULE_VALS[0])) };
@@ -195,6 +246,7 @@ static void rule_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, r->prefix);
     JS_FreeValueRT(rt, r->at_name);
     JS_FreeValueRT(rt, r->keyframes_name);
+    JS_FreeValueRT(rt, r->layer_names);
     free(r);
 }
 
@@ -218,11 +270,15 @@ static void rule_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
     JS_MarkValue(rt, r->prefix, mark_func);
     JS_MarkValue(rt, r->at_name, mark_func);
     JS_MarkValue(rt, r->keyframes_name, mark_func);
+    JS_MarkValue(rt, r->layer_names, mark_func);
 }
 
 /* ---- §6.4's CSS RULE LIST, as INFRA's list operations over an Array ---------------------------------------- */
 
-static uint32_t rules_len(JSContext *ctx, JSValueConst list)
+/* AN ARRAY'S `length`, which is INFRA's SIZE over one. It is not named for rule lists any more: a `@layer`
+   at-rule's `<layer-name>` list is an Array on the record too, and one length reader is what stops the two
+   collections growing two implementations that could disagree. */
+static uint32_t array_len(JSContext *ctx, JSValueConst list)
 {
     JSValue len = JS_GetPropertyStr(ctx, list, "length");
     uint32_t n = 0;
@@ -234,7 +290,7 @@ static uint32_t rules_len(JSContext *ctx, JSValueConst list)
 
 static void rules_insert_at(JSContext *ctx, JSValueConst list, uint32_t i, JSValue v)   /* CONSUMES v */
 {
-    uint32_t n = rules_len(ctx, list), k;
+    uint32_t n = array_len(ctx, list), k;
 
     DCHECK(i <= n, "§6.4 inserted a CSS rule at an index past the end of the list");
     for (k = n; k > i; k--)
@@ -244,7 +300,7 @@ static void rules_insert_at(JSContext *ctx, JSValueConst list, uint32_t i, JSVal
 
 static void rules_remove_at(JSContext *ctx, JSValueConst list, uint32_t i)
 {
-    uint32_t n = rules_len(ctx, list), k;
+    uint32_t n = array_len(ctx, list), k;
 
     DCHECK(i < n, "§6.4 removed a CSS rule at an index the list does not have");
     for (k = i + 1; k < n; k++)
@@ -261,7 +317,7 @@ static void rules_remove_at(JSContext *ctx, JSValueConst list, uint32_t i)
 static bool rule_type_has_child_rules(uint16_t type)
 {
     return type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_PAGE ||
-           type == RULE_TYPE_KEYFRAMES;
+           type == RULE_TYPE_KEYFRAMES || type == RULE_TYPE_LAYER_BLOCK;
 }
 
 /* IS THIS RULE TYPE A §6.4.5 GROUPING RULE — "an at-rule that CONTAINS OTHER RULES nested inside itself", plus
@@ -273,10 +329,16 @@ static bool rule_type_has_child_rules(uint16_t type)
    rules and is `interface CSSKeyframesRule : CSSRule` — it does not inherit CSSGroupingRule and declares its
    OWN `cssRules`, `appendRule(CSSOMString)` and `deleteRule(CSSOMString)`, whose argument is a keyframe
    SELECTOR where §6.4.5's is an index. Answering both questions from one predicate would have put §6.4.5's
-   index-taking `deleteRule` on a `@keyframes` beside the selector-taking one it really has. */
+   index-taking `deleteRule` on a `@keyframes` beside the selector-taking one it really has.
+   CSS Cascade §8.1's CSSLayerBlockRule answers YES to BOTH, and that is stated twice over rather than assumed:
+   its IDL is `interface CSSLayerBlockRule : CSSGroupingRule`, and §6.4.4.1 gives the reason behind the IDL —
+   "such @layer block rules have the same restrictions and processing as a conditional group rule
+   [CSS-CONDITIONAL-3] with a true condition". A CSSConditionRule it is NOT: a layer has no condition, so
+   §7.2's `conditionText` is not on it and this predicate is not that one. */
 static bool rule_type_is_grouping(uint16_t type)
 {
-    bool grouping = type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_PAGE;
+    bool grouping = type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_PAGE ||
+                    type == RULE_TYPE_LAYER_BLOCK;
 
     DCHECK(!grouping || rule_type_has_child_rules(type),
            "a rule type is a §6.4.5 grouping rule and yet holds no child rules — CSSGroupingRule is DEFINED as "
@@ -352,6 +414,7 @@ static JSValue rule_new(JSContext *ctx, int proto_slot, uint16_t type, JSValueCo
     r->prefix = JS_NULL;
     r->at_name = JS_NULL;
     r->keyframes_name = JS_NULL;
+    r->layer_names = JS_NULL;
     JS_SetOpaque(obj, r);
     return obj;
 }
@@ -613,6 +676,81 @@ static JSValue keyframe_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
     return obj;
 }
 
+/* THE `<layer-name>`s AN `@layer` AT-RULE DECLARES, as the frozen Array both interfaces answer from. The freeze
+   is Web IDL §3.2.27's create-a-frozen-array ("perform SetIntegrityLevel(array, "frozen")") and it is applied
+   HERE, once, because §8.2 types `nameList` a `FrozenArray<CSSOMString>` and §2.13.35 makes that type's values
+   REFERENCES to a frozen object — so the frozen array is the value the record holds, which is also what makes
+   `rule.nameList === rule.nameList` answer the way a reference does. */
+static JSValue layer_names_array(JSContext *ctx, const CssLayerNames *names)
+{
+    JSValue a = JS_NewArray(ctx);
+    unsigned i;
+
+    CHECK(!JS_IsException(a), "cssom: an `@layer` rule's layer name list could not be allocated");
+    for (i = 0; i < names->n; i++) {
+        DCHECK(names->v[i] != NULL,
+               "an `@layer` rule's parsed name list holds nothing where a `<layer-name>` belongs — the one "
+               "parser appends a serialized name per entry and asserts that it is non-empty");
+        JS_SetPropertyUint32(ctx, a, i, JS_NewString(ctx, names->v[i]));
+    }
+    CHECK(idl_freeze_array(ctx, a) == 0, "cssom: an `@layer` rule's layer name list could not be frozen");
+    return a;
+}
+
+/* A CSS Cascade §8.1 CSSLayerBlockRule over the `@layer` BLOCK at-rule's prelude. §6.4.4.1's grammar is
+   `@layer <layer-name>? { <rule-list> }` — AT MOST ONE name — so a prelude carrying a list is an at-rule whose
+   grammar failed, which CSS Syntax drops and which is JS_UNDEFINED here, the same answer `@keyframes none {}`
+   gets. The EMPTY list is the other outcome and it IS a rule: §6.4.2.1's anonymous layer, whose `name` §8.1
+   states as the empty string and whose every occurrence is a layer of its own ("multiple unnamed layer rules
+   place their styles into separate layers, as each occurrence is referencing a distinct anonymous layer name").
+   The child list `rule_new` gives it is where the layer's rules go. */
+static JSValue layer_block_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
+                                    const char *prelude)
+{
+    CssLayerNames names = { NULL, 0 };
+    JSValue obj;
+    CssRuleData *r;
+
+    DCHECK(prelude != NULL,
+           "a CSSLayerBlockRule was built with no prelude — `@layer { }` declares the ANONYMOUS layer, which is "
+           "an EMPTY `<layer-name>?` and not the absence of a prelude");
+    if (!css_prelude_layer_names(prelude, strlen(prelude), &names)) return JS_UNDEFINED;
+    if (names.n > 1) { css_layer_names_free(&names); return JS_UNDEFINED; }
+    obj = rule_new(ctx, PROTO_LAYER_BLOCK, RULE_TYPE_LAYER_BLOCK, parent_style_sheet, parent_rule);
+    if (JS_IsException(obj)) { css_layer_names_free(&names); return obj; }
+    r = JS_GetOpaque(obj, g_rule_class);
+    JS_FreeValue(ctx, r->layer_names);
+    r->layer_names = layer_names_array(ctx, &names);
+    css_layer_names_free(&names);
+    return obj;
+}
+
+/* A CSS Cascade §8.2 CSSLayerStatementRule over the `@layer` STATEMENT at-rule's prelude. §6.4.4.2's grammar is
+   `@layer <layer-name>#;` — ONE OR MORE names, "unlike the block syntax, multiple comma-separated layer names
+   can be provided in this syntax, declaring each of the layers in the order specified" — so the `#` multiplier
+   has no zero-length arm and `@layer ;` is an at-rule whose grammar failed. That is the ONE thing this creator
+   and the block's disagree about, which is why they share the grammar and not the multiplicity.
+   It gets NO child list: a statement at-rule has no block at all, so it contains no rules and its `cssRules`
+   is not merely empty but absent — §8.2 declares `interface CSSLayerStatementRule : CSSRule`. */
+static JSValue layer_statement_rule_new(JSContext *ctx, JSValueConst parent_style_sheet,
+                                        JSValueConst parent_rule, const char *prelude)
+{
+    CssLayerNames names = { NULL, 0 };
+    JSValue obj;
+    CssRuleData *r;
+
+    DCHECK(prelude != NULL, "a CSSLayerStatementRule was built with no prelude");
+    if (!css_prelude_layer_names(prelude, strlen(prelude), &names)) return JS_UNDEFINED;
+    if (names.n == 0) { css_layer_names_free(&names); return JS_UNDEFINED; }
+    obj = rule_new(ctx, PROTO_LAYER_STATEMENT, RULE_TYPE_LAYER_STATEMENT, parent_style_sheet, parent_rule);
+    if (JS_IsException(obj)) { css_layer_names_free(&names); return obj; }
+    r = JS_GetOpaque(obj, g_rule_class);
+    JS_FreeValue(ctx, r->layer_names);
+    r->layer_names = layer_names_array(ctx, &names);
+    css_layer_names_free(&names);
+    return obj;
+}
+
 static void rule_orphan(JSContext *ctx, JSValueConst rule)
 {
     /* THE BRAND IS ASSERTED, NOT THROWN: this is an algorithm §6.4 invokes on a rule it already holds, never a
@@ -769,6 +907,19 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        written directly inside a `@keyframes` is not in a `<keyframe-block>` and §3 admits nothing else. */
     if (strcmp(pr->at_name, "keyframes") == 0)
         return pr->has_block ? keyframes_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude) : JS_UNDEFINED;
+    /* CSS Cascade §6.4.4 gives `@layer` TWO grammars and the BLOCK is what tells them apart: §6.4.4.1's block
+       at-rule is `@layer <layer-name>? { <rule-list> }` and §6.4.4.2's statement at-rule is
+       `@layer <layer-name>#;`. So `has_block` forks here as it does for `@import` and `@font-face` — and this
+       is the one place in this builder where it chooses between two INTERFACES rather than between a rule and a
+       drop, because both shapes are real rules.
+       ITS BODY IS A RULE LIST AND NOTHING ELSE (§6.4.4.1's `<rule-list>`), so the declarations the parse
+       reports for it are not read — the same sentence `@keyframes` gets and for the same reason. A declaration
+       written where §6.4.4.1 admits only rules is invalid in that context and CSS Syntax drops it; inside a
+       NESTED `@layer` it would be CSSOM's CSSNestedDeclarations, a rule interface this build does not have and
+       whose absence the parse walk already records. */
+    if (strcmp(pr->at_name, "layer") == 0)
+        return pr->has_block ? layer_block_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude)
+                             : layer_statement_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude);
     if (at_rule_dropped(pr->at_name)) return JS_UNDEFINED;
     if (!b->unbuilt[0]) snprintf(b->unbuilt, sizeof b->unbuilt, "%s", pr->at_name);
     return JS_UNDEFINED;
@@ -805,7 +956,7 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
         JS_FreeValue(b->ctx, rule);
         return build_push(b, JS_UNDEFINED);
     }
-    JS_SetPropertyUint32(b->ctx, list, rules_len(b->ctx, list), JS_DupValue(b->ctx, rule));
+    JS_SetPropertyUint32(b->ctx, list, array_len(b->ctx, list), JS_DupValue(b->ctx, rule));
     JS_FreeValue(b->ctx, list);
     if (!parent) b->n_top++;
     return build_push(b, rule);
@@ -822,10 +973,11 @@ static void rule_unbuilt_fail(const char *name)
              "CSSOM §6.4 has no interface built for the at-rule `@%s`, so a stylesheet containing one cannot be "
              "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "
              "CSSMarginRule, §6.4.9's CSSNamespaceRule, CSS Conditional §7.2's CSSConditionRule, §7.3's "
-             "CSSMediaRule, CSS Fonts §12.1's CSSFontFaceRule and CSS Animations §6.2/§6.3's CSSKeyframeRule "
-             "and CSSKeyframesRule are built; what remains is CSS Conditional §7.4's CSSSupportsRule (whose "
-             "condition needs CSS.supports to evaluate), CSS Cascade's CSSLayerBlockRule and "
-             "CSSLayerStatementRule, and CSS Contain's CSSContainerRule. Build the one this names and mint it "
+             "CSSMediaRule, CSS Fonts §12.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's CSSKeyframeRule "
+             "and CSSKeyframesRule, and CSS Cascade §8.1/§8.2's CSSLayerBlockRule and CSSLayerStatementRule "
+             "are built; what remains is CSS Conditional §7.4's CSSSupportsRule (whose "
+             "condition needs CSS.supports to evaluate), CSS Cascade 6 §4.1's CSSScopeRule and CSS Contain's "
+             "CSSContainerRule. Build the one this names and mint it "
              "in rule_from_parse — do NOT skip the rule, because every index after it would then name a "
              "different rule than the page's",
              name);
@@ -872,11 +1024,32 @@ static uint16_t rule_type_at(JSContext *ctx, JSValueConst list, uint32_t i)
     return type;
 }
 
-static int rule_rank(uint16_t type)
+/* THE ZONES A RULE OF THIS TYPE MAY OCCUPY — see the ZONE_ enum for the three sentences the table transcribes. */
+static unsigned rule_zones(uint16_t type)
 {
-    if (type == RULE_TYPE_IMPORT) return RANK_IMPORT;
-    if (type == RULE_TYPE_NAMESPACE) return RANK_NAMESPACE;
-    return RANK_OTHER;
+    if (type == RULE_TYPE_IMPORT) return ZONE_BIT(ZONE_IMPORT);
+    if (type == RULE_TYPE_NAMESPACE) return ZONE_BIT(ZONE_NAMESPACE);
+    /* THE ONE TYPE WITH TWO, and the GAP between them is as load-bearing as the bits: §6.4.4.2 allows a `@layer`
+       statement before the prologue AND wherever a block at-rule is (which is wherever any rule is), and its
+       note forbids exactly what lies between — "no @layer rules are allowed between @import and @namespace
+       rules". */
+    if (type == RULE_TYPE_LAYER_STATEMENT) return ZONE_BIT(ZONE_LEAD) | ZONE_BIT(ZONE_BODY);
+    return ZONE_BIT(ZONE_BODY);
+}
+
+/* The EARLIEST zone `zones` admits that is not before `*pfloor`, TAKEN. False when there is none, which is the
+   sequence the prologue does not match. Taking the earliest is never wrong and so this needs no search: a
+   smaller floor admits every assignment a larger one does, so a greedy walk that fails has no assignment it
+   could have missed. */
+static bool zone_take(unsigned zones, int *pfloor)
+{
+    int z;
+
+    DCHECK(zones != 0, "a CSS rule type may occupy NO zone of a style sheet — every rule this build makes is a "
+                       "rule some sheet can hold, so an empty set is the zone table having lost a row");
+    for (z = *pfloor; z < ZONE_N; z++)
+        if (zones & ZONE_BIT(z)) { *pfloor = z; return true; }
+    return false;
 }
 
 /* §6.4 STEP 5 — "if new rule cannot be inserted into list at the zero-indexed position index due to
@@ -885,47 +1058,55 @@ static int rule_rank(uint16_t type)
      - `nested` set (§6.4.5's insertRule, into a grouping rule): an `@import` and an `@namespace` cannot go
        inside one AT ALL — CSS Cascade §2 and CSS Namespaces §2 both state their position relative to a STYLE
        SHEET, and neither is a rule a conditional group may contain.
-     - `nested` unset: the sheet's rules are rank-ordered (see the RANK_ enum), so the constraint is that the
-       insertion must not break that order. Asking it in BOTH directions is what the tests pin from both
-       sides: a style rule inserted at index 0 of a sheet holding an `@import` is refused by the same line that
-       refuses an `@import` inserted after one.
+     - `nested` unset: the sheet's rules must match the PROLOGUE the ZONE_ enum transcribes, so the constraint
+       is that the insertion must not break it. Asking it of the RESULTING list is what makes both directions
+       one walk: a style rule inserted at index 0 of a sheet holding an `@import` is refused by the same line
+       that refuses an `@import` inserted after one, because each leaves the same list.
    CSS Paged Media §4.3's "the @page rule can only contain page properties and margin at-rules" is NOT asked
    here, and that is not an omission: step 3's parse runs with the enclosing rule already in hand (see
    `rule_from_parse`, which is reached from this algorithm and from the sheet parse alike), so a style rule
    written into an `@page` is dropped by CSS Syntax before step 4 counts the rules and the answer is step 4's
-   SyntaxError. Asking again here would be an arm no input can reach.
-   THE ONE RANK THIS BUILD CANNOT SEE is CSS Cascade §6.4.4.2's `@layer` STATEMENT rule, which shares
-   `@import`'s position ("ignoring @charset, @supports-condition, and @layer statement rules"). It has no
-   interface here, so no such rule can be in a list to be mis-ranked; when CSSLayerStatementRule lands it takes
-   RANK_IMPORT and nothing else changes. */
+   SyntaxError. Asking again here would be an arm no input can reach. */
 static bool insert_position_ok(JSContext *ctx, JSValueConst list, uint32_t index, uint16_t type, bool nested)
 {
-    uint32_t n, i;
-    int rank;
+    uint32_t n, k;
+    int zone_floor = ZONE_LEAD;
 
+    /* A `@layer` is not among the two, and both halves of §6.4.4 say so: §6.4.4.2 admits the statement
+       "everywhere @layer block at-rules are allowed", and §6.4.4.1 makes the block a conditional group rule
+       with a true condition — which is a rule a conditional group rule may contain. */
     if (nested) return type != RULE_TYPE_IMPORT && type != RULE_TYPE_NAMESPACE;
-    rank = rule_rank(type);
-    n = rules_len(ctx, list);
-    for (i = 0; i < n; i++) {
-        int other = rule_rank(rule_type_at(ctx, list, i));
+    n = array_len(ctx, list);
+    DCHECK(index <= n,
+           "§6.4 step 5 was asked about an index past the end of the rule list — step 2 refuses one before the "
+           "parse even runs, and this step runs after it");
+    /* THE RESULTING LIST, walked once: position k holds the new rule at `index` and the old list either side. */
+    for (k = 0; k <= n; k++) {
+        uint16_t t = k == index ? type : rule_type_at(ctx, list, k < index ? k : k - 1);
 
-        if (i < index ? other > rank : other < rank) return false;
+        if (!zone_take(rule_zones(t), &zone_floor)) return false;
     }
     return true;
 }
 
 /* §6.4's "list contains anything other than @import at-rules, and @namespace at-rules" — the condition BOTH
    step 6 of insert and step 4 of remove are stated over, so it is one function reached from two places rather
-   than two spellings of one sentence. */
-static bool list_is_only_import_and_namespace(JSContext *ctx, JSValueConst list)
+   than two spellings of one sentence.
+   IT IS ASKED OF THE ZONE TABLE AND NOT OF A SECOND ENUMERATION, and that is what makes it right for a rule
+   CSSOM's sentence could not name. The two at-rules CSSOM lists ARE the sheet prologue as CSSOM knew it, and
+   CSS Cascade §6.4.4.2 later put a third rule in that same prologue — "such empty @layer rules are allowed
+   before @import and @namespace rules (after the @charset rule, if any)". Reading CSSOM's two names literally
+   would refuse `insertRule('@namespace ...')` into a sheet whose own text `@layer a; @import url(x);` PARSES
+   as valid, which is the parse and the CSSOM algorithm disagreeing about one fact; the standard that knows
+   `@layer` exists is the one that decides it. So the question asked is "can everything already in the list sit
+   at or before the `@namespace` zone", which answers CSSOM's own two names identically. */
+static bool list_is_prologue_only(JSContext *ctx, JSValueConst list)
 {
-    uint32_t n = rules_len(ctx, list), i;
+    const unsigned before = ZONE_BIT(ZONE_LEAD) | ZONE_BIT(ZONE_IMPORT) | ZONE_BIT(ZONE_NAMESPACE);
+    uint32_t n = array_len(ctx, list), i;
 
-    for (i = 0; i < n; i++) {
-        uint16_t t = rule_type_at(ctx, list, i);
-
-        if (t != RULE_TYPE_IMPORT && t != RULE_TYPE_NAMESPACE) return false;
-    }
+    for (i = 0; i < n; i++)
+        if (!(rule_zones(rule_type_at(ctx, list, i)) & before)) return false;
     return true;
 }
 
@@ -941,7 +1122,7 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
     /* STEP 2, FIRST and before the parse, which is the order the algorithm states: a bad index throws even for
        text that would not have parsed. `index > length` and NOT `>=` — appending at the very end is LEGAL, and
        that asymmetry against remove's `>=` is the whole reason both are spelled out here. */
-    if (index > rules_len(ctx, list))
+    if (index > array_len(ctx, list))
         return JS_ThrowDOMException(ctx, "IndexSizeError", "the index is past the end of the rule list");
     /* STEP 3 — "parse a CSS rule". CSS Syntax's parse-a-RULE is ONE rule and a syntax error for anything else,
        which is what a parse reporting a count other than one MEANS. It is built into a SCRATCH list so that a
@@ -987,7 +1168,7 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
            position may be perfectly legal (an `@namespace` at index 0 of a sheet whose only other rule is a
            style rule passes the rank test) and the insertion is still refused, which is exactly what
            css/cssom/at-namespace.html asserts. */
-        if (nr->type == RULE_TYPE_NAMESPACE && !list_is_only_import_and_namespace(ctx, list)) {
+        if (nr->type == RULE_TYPE_NAMESPACE && !list_is_prologue_only(ctx, list)) {
             JS_FreeValue(ctx, built);
             return JS_ThrowDOMException(ctx, "InvalidStateError",
                                         "an @namespace rule cannot be inserted into a style sheet that holds "
@@ -1004,7 +1185,7 @@ JSValue css_rule_list_delete(JSContext *ctx, JSValueConst list, uint32_t index)
 
     DCHECK(JS_IsArray(list), "§6.4's remove a CSS rule was given something that is not a CSS rule list");
     /* STEP 2 — `index >= length`, the asymmetry against insert's `>`. */
-    if (index >= rules_len(ctx, list))
+    if (index >= array_len(ctx, list))
         return JS_ThrowDOMException(ctx, "IndexSizeError", "the index is at or past the end of the rule list");
     old = JS_GetPropertyUint32(ctx, list, index);        /* STEP 3 */
     DCHECK(css_rule_is(old), "§6.4's remove a CSS rule found something that is not a CSS rule at its index");
@@ -1012,7 +1193,7 @@ JSValue css_rule_list_delete(JSContext *ctx, JSValueConst list, uint32_t index)
        and @namespace at-rules, throw an InvalidStateError". The list is the one the rule is still IN, so the
        test includes the rule being removed, which is why a sheet of nothing but namespaces can lose one. */
     if (css_rule_is(old) && rule_of(old)->type == RULE_TYPE_NAMESPACE &&
-        !list_is_only_import_and_namespace(ctx, list)) {
+        !list_is_prologue_only(ctx, list)) {
         JS_FreeValue(ctx, old);
         return JS_ThrowDOMException(ctx, "InvalidStateError",
                                     "an @namespace rule cannot be removed from a style sheet that holds "
@@ -1088,7 +1269,7 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out);
 static char **rule_children_serialized(JSContext *ctx, JSValueConst rule, unsigned *pn)
 {
     JSValue kids = rule_child_rules(ctx, rule);
-    uint32_t n = rules_len(ctx, kids), i;
+    uint32_t n = array_len(ctx, kids), i;
     char **out = NULL;
     unsigned kept = 0;
 
@@ -1282,26 +1463,134 @@ static bool keyframe_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
     return true;
 }
 
-/* §6.4's CSSMediaRule arm: "@media", a SPACE, the media query list, a SPACE and "{", a newline, then each
-   nested rule (filtering out empty strings, indented by two spaces, joined with newline), a newline and "}".
+/* §6.4's CSSMediaRule arm, from its second piece on: a SPACE and "{", a newline, then each nested rule
+   (filtering out empty strings, indented by two spaces, joined with newline), a newline and "}".
    THE FINAL NEWLINE BELONGS TO THE ITEMS AND NOT TO THE CLOSING BRACE, which is what makes `@media print {}`
    serialize as "@media print {\n}" rather than "@media print {\n\n}" — the shape every engine produces and the
-   one css/cssom/serialize-media-rule.html asserts byte for byte, `@media {}`'s two spaces included. */
-static bool media_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+   one css/cssom/serialize-media-rule.html asserts byte for byte, `@media {}`'s two spaces included.
+   IT IS ALSO CSS Cascade §8.1's ARM, AND THAT IS A DERIVATION WITH A NORMATIVE SENTENCE UNDER IT rather than a
+   resemblance: §6.4 states no arm for CSSLayerBlockRule at all, and §6.4.4.1 says "such @layer block rules have
+   the same restrictions and PROCESSING as a conditional group rule [CSS-CONDITIONAL-3] with a true condition" —
+   of which §6.4 states exactly one. It is NOT `decls_and_rules_serialize`'s shape, and the difference is the
+   BODY: that arm is for a rule holding declarations BESIDE rules (§6.4.3's and §6.4.7's), and a `@layer`
+   block's body is §6.4.4.1's `<rule-list>` with no declarations in it at all. So the two rules differ only in
+   step 1's PREFIX, which is the caller's to build. */
+static bool group_rules_serialize(JSContext *ctx, JSValueConst rule, const char *prefix, size_t prefix_len,
+                                  RBuf *out)
 {
-    char *text = media_list_text(ctx, r->media);
     char **kids;
     unsigned nk, i;
 
-    if (!text) return false;
+    DCHECK(prefix != NULL, "a group rule was serialized with no prefix — every caller writes its at-keyword "
+                           "first, so a null is a buffer that was never appended to");
     kids = rule_children_serialized(ctx, rule, &nk);
-    rbuf_add(out, "@media ");
-    rbuf_add(out, text);
-    free(text);
+    rbuf_add_n(out, prefix, prefix_len);
     rbuf_add(out, " {\n");
     for (i = 0; i < nk; i++) { rbuf_add_indented(out, kids[i]); rbuf_add(out, "\n"); }
     rbuf_add(out, "}");
     serialized_free(kids, nk);
+    return true;
+}
+
+/* §6.4's CSSMediaRule arm's step 1: "@media", a SPACE, and the media query list. The space is UNCONDITIONAL
+   here where §6.4.7's and §8.1's are not, and the grammars are why: `@media`'s `<media-query-list>` always
+   exists (an absent one is the EMPTY list, which is what `@media {}`'s two spaces are), while a page selector
+   list and a `<layer-name>` are `?` — optional productions with no separator to write when they are not
+   there. */
+static bool media_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+{
+    char *text = media_list_text(ctx, r->media);
+    RBuf prefix = { NULL, 0, 0 };
+    bool ok;
+
+    if (!text) return false;
+    rbuf_add(&prefix, "@media ");
+    rbuf_add(&prefix, text);
+    free(text);
+    ok = group_rules_serialize(ctx, rule, prefix.s, prefix.len, out);
+    free(prefix.s);
+    return ok;
+}
+
+/* THE `<layer-name>`s A RULE DECLARES, read back out of the frozen Array. `*pn` is how many, and ZERO IS AN
+   ANSWER — §6.4.2.1's anonymous layer, which only `@layer { }` has — which is why the FAILURE is the return
+   value and not an empty list: a caller that read "no names" out of a string conversion that threw would print
+   `@layer {` for a rule that declares one, and that is a plausible datum rather than a crash. False leaves the
+   caller's pending exception. OWNED on true: the caller frees the array and its entries. */
+static bool rule_layer_names(JSContext *ctx, CssRuleData *r, char ***pv, unsigned *pn)
+{
+    uint32_t n = array_len(ctx, r->layer_names), i;
+    char **out;
+
+    DCHECK(JS_IsArray(r->layer_names),
+           "an `@layer` rule's layer name list is not an Array — both creators build one before the rule is "
+           "handed to anybody, and nothing replaces it");
+    *pv = NULL;
+    *pn = 0;
+    if (!n) return true;
+    out = calloc(n, sizeof(*out));
+    CHECK(out != NULL, "cssom: OOM reading an `@layer` rule's layer names");
+    for (i = 0; i < n; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, r->layer_names, i);
+        size_t l = 0;
+
+        out[i] = rule_text_copy(ctx, v, &l);
+        JS_FreeValue(ctx, v);
+        DCHECK(out[i] != NULL,
+               "an `@layer` rule's layer name list holds something that is not a string — the one creator "
+               "fills it from core/css/css_at_rule_prelude.h's serialized names and then FREEZES it, so a null "
+               "here means the string conversion itself failed");
+        if (!out[i]) { serialized_free(out, i); return false; }
+    }
+    *pv = out;
+    *pn = n;
+    return true;
+}
+
+/* CSS Cascade §8.1's arm, DERIVED. §6.4 states none, so the pieces come from §6.4.4.1's own grammar
+   (`@layer <layer-name>? { <rule-list> }`) laid over the one arm §6.4 does state for a conditional group rule:
+   the at-keyword, the name when the rule declares one, and the group body above.
+   THE SPACE IS INSIDE THE CONDITIONAL, which is the whole of why `@layer {}` reads back as "@layer {\n}" and
+   not as "@layer  {\n}" — the `?` in the grammar means there is no separator to write for a rule that declares
+   no name, which is the identical reason §6.4.7's `@page {}` has one space and not two. */
+static bool layer_block_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+{
+    RBuf prefix = { NULL, 0, 0 };
+    char **names;
+    unsigned n;
+    bool ok;
+
+    if (!rule_layer_names(ctx, r, &names, &n)) return false;
+    DCHECK(n <= 1, "a §8.1 layer block rule declares more than one `<layer-name>` — §6.4.4.1's grammar is "
+                   "`<layer-name>?`, and its creator refuses a prelude carrying a list");
+    rbuf_add(&prefix, "@layer");
+    if (n) { rbuf_add(&prefix, " "); rbuf_add(&prefix, names[0]); }
+    serialized_free(names, n);
+    ok = group_rules_serialize(ctx, rule, prefix.s, prefix.len, out);
+    free(prefix.s);
+    return ok;
+}
+
+/* CSS Cascade §8.2's arm, DERIVED the same way and from the same place: §6.4 states none, so the pieces are
+   §6.4.4.2's own grammar `@layer <layer-name>#;` — the at-keyword, a SPACE, the names through CSSOM §2.1's
+   serialize-a-comma-separated-list (", "), and the SEMICOLON that makes it a statement at-rule. The space is
+   unconditional here and conditional in the arm above because the multipliers differ: `#` has no zero-length
+   arm, so a statement rule always declares at least one name and its creator refuses a prelude that does not. */
+static bool layer_statement_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+{
+    char **names;
+    unsigned n, i;
+
+    if (!rule_layer_names(ctx, r, &names, &n)) return false;
+    DCHECK(n >= 1, "a §8.2 layer statement rule declares NO `<layer-name>` — §6.4.4.2's `#` multiplier has no "
+                   "zero-length arm, and its creator refuses a prelude with no name in it");
+    rbuf_add(out, "@layer ");
+    for (i = 0; i < n; i++) {
+        if (i) rbuf_add(out, ", ");
+        rbuf_add(out, names[i]);
+    }
+    serialized_free(names, n);
+    rbuf_add(out, ";");
     return true;
 }
 
@@ -1456,6 +1745,8 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
     case RULE_TYPE_MARGIN:    return margin_rule_serialize(ctx, r, out);
     case RULE_TYPE_KEYFRAMES: return keyframes_rule_serialize(ctx, r, rule, out);
     case RULE_TYPE_KEYFRAME:  return keyframe_rule_serialize(ctx, r, out);
+    case RULE_TYPE_LAYER_BLOCK:     return layer_block_rule_serialize(ctx, r, rule, out);
+    case RULE_TYPE_LAYER_STATEMENT: return layer_statement_rule_serialize(ctx, r, out);
     default:
         DCHECK(r->type == RULE_TYPE_STYLE, "§6.4's serialize a CSS rule met a rule type it has no arm for");
         return style_rule_serialize(ctx, r, rule, out);
@@ -1467,7 +1758,7 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
 enum { CR_PARENT_RULE = 0, CR_PARENT_STYLE_SHEET, CR_TYPE, CR_CSS_TEXT, CR_SELECTOR_TEXT, CR_CONDITION_TEXT,
        CR_MEDIA, CR_MATCHES, CR_CSS_RULES, CR_HREF, CR_IMPORT_MEDIA, CR_LAYER_NAME, CR_SUPPORTS_TEXT,
        CR_NAMESPACE_URI, CR_PREFIX, CR_PAGE_SELECTOR_TEXT, CR_MARGIN_NAME, CR_KEY_TEXT, CR_KEYFRAMES_NAME,
-       CR_KEYFRAMES_CSS_RULES, CR_KEYFRAMES_LENGTH };
+       CR_KEYFRAMES_CSS_RULES, CR_KEYFRAMES_LENGTH, CR_LAYER_BLOCK_NAME, CR_LAYER_NAME_LIST };
 
 /* §6.4.5's `[SameObject] cssRules` and CSS Animations §6.3.2's, which are one read of one Array. The
    collection is remembered on the record because both are [SameObject], and it SHARES the very Array the
@@ -1496,11 +1787,13 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
         r = rule_here(ctx, this_val);
         return r ? JS_DupValue(ctx, r->parent_style_sheet) : JS_EXCEPTION;
     /* §6.4.2's deprecated `type`: the rule's own TYPE state item, which §6.4 says is "initialized when a rule
-       is created and cannot change". The enumeration is FROZEN by CSSOM ("no new values will be added"), so a
-       rule interface that lands later brings its own constant with it rather than needing one invented here. */
+       is created and cannot change" — mapped through the frozen table, because past its end the answer §6.4.2
+       states is 0 and not a number this file could invent. `layerRule.type === 0`, and the spec's own note
+       says what a page should read instead: "to tell what type of rule a given object is, it is recommended to
+       check rule.constructor.name". */
     case CR_TYPE:
         r = rule_here(ctx, this_val);
-        return r ? JS_NewUint32(ctx, r->type) : JS_EXCEPTION;
+        return r ? JS_NewUint32(ctx, rule_legacy_type(r->type)) : JS_EXCEPTION;
     case CR_CSS_TEXT: {
         RBuf b = { NULL, 0, 0 };
         JSValue out;
@@ -1623,7 +1916,33 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
        pairs with the indexed getter below. */
     case CR_KEYFRAMES_LENGTH:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
-        return r ? JS_NewUint32(ctx, rules_len(ctx, r->child_rules)) : JS_EXCEPTION;
+        return r ? JS_NewUint32(ctx, array_len(ctx, r->child_rules)) : JS_EXCEPTION;
+    /* CSS Cascade §8.1: "Its name attribute represents the layer name declared by the at-rule ITSELF, and is
+       an empty string if the layer is anonymous." The emphasis is §8.1's own, and its worked example is what
+       it buys: inside `@layer outer { @layer foo.bar { } }` "the name of the inner @layer rule is 'foo.bar'
+       (and not 'outer.foo.bar')" — so this is the rule's own prelude and never a concatenation with the
+       enclosing layers', which is also why nothing here walks `parent_rule`.
+       It is index 0 of the ONE list both interfaces answer from: §6.4.4.1's `<layer-name>?` is a list of at
+       most one, and an EMPTY one is §6.4.2.1's anonymous layer — which is where the empty string comes from,
+       so the two are one storage and not a string beside a list that could disagree. */
+    case CR_LAYER_BLOCK_NAME: {
+        JSValue first;
+
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_LAYER_BLOCK, "CSSLayerBlockRule");
+        if (!r) return JS_EXCEPTION;
+        first = JS_GetPropertyUint32(ctx, r->layer_names, 0);
+        if (!JS_IsUndefined(first)) return first;
+        JS_FreeValue(ctx, first);
+        return JS_NewString(ctx, "");
+    }
+    /* CSS Cascade §8.2: "Its nameList attribute represents the list of layer names declared by the at-rule,
+       NORMALIZED FOLLOWING THE SAME RULE as the CSSLayerBlockRule's name attribute." One normalization is
+       therefore one storage, and core/css/css_at_rule_prelude.h is where it happens — for both at-rules, out
+       of one grammar. The Array is the record's own and is already FROZEN, which is what a `FrozenArray<T>`
+       VALUE is (Web IDL §2.13.35), so this is a read of a reference and not a per-read conversion. */
+    case CR_LAYER_NAME_LIST:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_LAYER_STATEMENT, "CSSLayerStatementRule");
+        return r ? JS_DupValue(ctx, r->layer_names) : JS_EXCEPTION;
     /* §6.4.5: "The cssRules attribute must return a CSSRuleList object for the child CSS rules." [SameObject],
        so the collection is remembered on the record — and it shares the very Array the children live in, which
        is what its liveness IS. */
@@ -1795,7 +2114,7 @@ static int keyframes_match_last(JSContext *ctx, CssRuleData *r, const char *sele
     int found = -1;
 
     if (!want) return -1;
-    n = rules_len(ctx, r->child_rules);
+    n = array_len(ctx, r->child_rules);
     for (i = 0; i < n; i++) {
         JSValue kid = JS_GetPropertyUint32(ctx, r->child_rules, i);
         CssRuleData *kr = rule_of(kid);
@@ -1855,7 +2174,7 @@ static JSValue js_rule_append_rule(JSContext *ctx, JSValueConst this_val, int ar
     built = JS_GetPropertyUint32(ctx, scratch, 0);
     JS_FreeValue(ctx, scratch);
     DCHECK(css_rule_is(built), "§6.3.4's appendRule built something that is not a CSS rule");
-    JS_SetPropertyUint32(ctx, r->child_rules, rules_len(ctx, r->child_rules), built);
+    JS_SetPropertyUint32(ctx, r->child_rules, array_len(ctx, r->child_rules), built);
     return JS_UNDEFINED;
 }
 
@@ -1927,7 +2246,7 @@ static uint32_t keyframes_indexed_length(JSContext *ctx, JSValueConst self)
     DCHECK(r != NULL && r->type == RULE_TYPE_KEYFRAMES,
            "§6.3.3's indexed getter was asked for its length by something that is not a CSSKeyframesRule — the "
            "decl is handed out only for one type, so reaching this from another is that test having changed");
-    return r ? rules_len(ctx, r->child_rules) : 0;
+    return r ? array_len(ctx, r->child_rules) : 0;
 }
 
 static JSValue keyframes_indexed_item(JSContext *ctx, JSValueConst self, uint32_t i)
@@ -2188,12 +2507,42 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, RBuf *out, uint3
        ANIMATION that names it (§4.1's `animation-name`), which is a step after the cascade rather than a rule
        in it — CSS Cascade §6.1 puts animations in an origin of their own, above every author declaration. */
     if (r->type == RULE_TYPE_KEYFRAMES) return true;
+    /* NOR DOES A §6.4.4.2 `@layer` STATEMENT, and its reason is the narrowest of the five: it is the at-rule
+       for "declaring a named layer WITHOUT ASSIGNING ANY RULES" (CSS Cascade §6.4.1), so there is nothing
+       inside it for a selector to match. What it does contribute is the layer ORDER — §6.4.3 sorts cascade
+       layers "by the order in which they first are declared" — and in this build nothing can be IN a layer for
+       that order to decide between: the only two things that put rules in one are a `@layer` BLOCK, whose arm
+       below crashes rather than answering, and an `@import ... layer(x)`, whose sheet css_rule.h records is
+       never fetched. So this is a real emptiness and not an omission. */
+    if (r->type == RULE_TYPE_LAYER_STATEMENT) return true;
+    /* AND A §6.4.4.1 `@layer` BLOCK IS THE ONE THAT CANNOT BE ANSWERED YET. Flattening its children into the
+       sheet the way the `@media` arm above flattens its own would be a WRONG answer rather than a missing one,
+       which is why this crashes instead. */
+    if (r->type == RULE_TYPE_LAYER_BLOCK) {
+        DFAIL("CSS Cascade §6.4's CASCADE LAYERS are a cascade SORT STEP this cascade does not have. §6.1 puts "
+              "Layers ABOVE Specificity in the sorting order — \"when comparing declarations that belong to "
+              "different layers, then for normal rules the declaration whose cascade layer is latest in the "
+              "layer order wins, and for important rules the declaration whose cascade layer is earliest "
+              "wins\" — so `@layer a { #x { color: red } } p { color: blue }` resolves to BLUE on a "
+              "`<p id=x>`, and no reordering of a flat sheet can express that, because order of appearance is "
+              "the LAST tiebreak and sits below specificity. Emitting the children here would therefore hand "
+              "the matcher a sheet that computes a real-looking wrong value with nothing to say so. BUILD "
+              "§6.4.3's LAYER ORDER (\"cascade layers are sorted by the order in which they first are "
+              "declared, with nested layers grouped within their parent layer. Unlayered rules are sorted "
+              "later than any layered rules within the same parent layer\") as one pass over these rule "
+              "objects, tag every matched declaration in css_style_declaration.c's author cascade with the "
+              "layer it came from, and resolve by ONE ordering pass — which is the SAME rebuild "
+              "css_defaulting.c's `revert`/`revert-layer` DFAIL asks for, so the two are one capability and "
+              "not two. Note that §6.4.3 also makes a layer declared inside a conditional group rule "
+              "contribute to the order only when its condition holds");
+        return false;
+    }
     DCHECK(r->type == RULE_TYPE_STYLE, "the author cascade met a rule type it has no arm for");
     /* CSS NESTING IS NOT FLATTENED, and must not be: a nested style rule's selector is RELATIVE to its parent's
        (`&`, and the implicit descendant a bare compound selector carries), so lifting it to the top level of
        the re-parsed text would make it match elements the page never selected. The resolution is CSS Nesting's
        own — build it, over the parent's selector list, rather than letting the rule style the wrong subtree. */
-    DCHECK(rules_len(ctx, r->child_rules) == 0,
+    DCHECK(array_len(ctx, r->child_rules) == 0,
            "a §6.4.3 style rule has NESTED rules and the author cascade has no CSS Nesting: a nested rule's "
            "selector is relative to its parent's, so it cannot be flattened into the sheet's top level. Build "
            "css-nesting-1 §2's nest-containing resolution (the nested selector becomes `:is(parent) sel`) and "
@@ -2222,7 +2571,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, RBuf *out, uint3
 
 static bool cascade_emit(JSContext *ctx, JSValueConst list, RBuf *out, uint32_t *pn)
 {
-    uint32_t n = rules_len(ctx, list), i;
+    uint32_t n = array_len(ctx, list), i;
 
     for (i = 0; i < n; i++) {
         JSValue rule = JS_GetPropertyUint32(ctx, list, i);
@@ -2294,6 +2643,10 @@ void css_rule_init(JSContext *ctx)
     g_proto_slot[PROTO_MARGIN] = realm_value_declare(ctx, "CSSOM §6.4.8 CSSMarginRule.prototype");
     g_proto_slot[PROTO_KEYFRAMES] = realm_value_declare(ctx, "CSS Animations §6.3 CSSKeyframesRule.prototype");
     g_proto_slot[PROTO_KEYFRAME] = realm_value_declare(ctx, "CSS Animations §6.2 CSSKeyframeRule.prototype");
+    g_proto_slot[PROTO_LAYER_BLOCK] =
+        realm_value_declare(ctx, "CSS Cascade §8.1 CSSLayerBlockRule.prototype");
+    g_proto_slot[PROTO_LAYER_STATEMENT] =
+        realm_value_declare(ctx, "CSS Cascade §8.2 CSSLayerStatementRule.prototype");
     g_id_set_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_selector, 0);
     g_id_set_page_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_page_selector, 0);
     g_id_set_key_text = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_key_text, 0);
@@ -2323,7 +2676,7 @@ void css_rule_init(JSContext *ctx)
 void css_rule_install_proto(JSContext *ctx)
 {
     JSValue base, grouping, style, condition, media, import_rule, ns, font_face, page, margin;
-    JSValue keyframes, keyframe;
+    JSValue keyframes, keyframe, layer_block, layer_statement;
 
     DCHECK(g_rule_class != 0, "a realm asked for the rule prototypes before the interfaces existed");
 
@@ -2458,9 +2811,31 @@ void css_rule_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, keyframe, "style", js_rule_style, STYLE_OF_KEYFRAME,
                          cssom_put_forwards_setter());
 
+    /* CSS Cascade §8.1's CSSLayerBlockRule.prototype. It derives from CSSGroupingRule — `interface
+       CSSLayerBlockRule : CSSGroupingRule` — and §6.4.4.1 gives the reason the IDL encodes: "such @layer block
+       rules have the same restrictions and processing as a conditional group rule [CSS-CONDITIONAL-3] with a
+       TRUE condition". So `cssRules`, `insertRule` and `deleteRule` are reachable on one and are exactly the
+       right members for it. It is NOT a CSSConditionRule, and that is the half of the sentence that matters
+       here: a layer has no condition to read back, so CSS Conditional §7.2's `conditionText` is absent and the
+       prototype chains to CSSGroupingRule directly, exactly as §6.4.7's CSSPageRule does. */
+    layer_block = JS_NewObjectProto(ctx, grouping);
+    CHECK(!JS_IsException(layer_block), "CSSLayerBlockRule.prototype could not be allocated");
+    idl_interface_tag(ctx, layer_block, "CSSLayerBlockRule");
+    idl_install_accessor(ctx, layer_block, "name", js_rule_get, CR_LAYER_BLOCK_NAME, -1);
+
+    /* CSS Cascade §8.2's CSSLayerStatementRule.prototype — from CSSRule directly, because §6.4.4.2's at-rule
+       has no block at all and therefore contains no rules: `interface CSSLayerStatementRule : CSSRule`. Its
+       one member is a `FrozenArray<CSSOMString>`, whose freeze is on the stored VALUE (see the record). */
+    layer_statement = JS_NewObjectProto(ctx, base);
+    CHECK(!JS_IsException(layer_statement), "CSSLayerStatementRule.prototype could not be allocated");
+    idl_interface_tag(ctx, layer_statement, "CSSLayerStatementRule");
+    idl_install_accessor(ctx, layer_statement, "nameList", js_rule_get, CR_LAYER_NAME_LIST, -1);
+
     /* Each into the realm's own slot, which asserts on its own that this install ran once in this realm. */
     realm_value_set(ctx, g_proto_slot[PROTO_KEYFRAMES], keyframes);
     realm_value_set(ctx, g_proto_slot[PROTO_KEYFRAME], keyframe);
+    realm_value_set(ctx, g_proto_slot[PROTO_LAYER_BLOCK], layer_block);
+    realm_value_set(ctx, g_proto_slot[PROTO_LAYER_STATEMENT], layer_statement);
     realm_value_set(ctx, g_proto_slot[PROTO_IMPORT], import_rule);
     realm_value_set(ctx, g_proto_slot[PROTO_NAMESPACE], ns);
     realm_value_set(ctx, g_proto_slot[PROTO_FONT_FACE], font_face);
@@ -2499,6 +2874,11 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
            still not a CSSGroupingRule, which is the IDL's own statement and not a simplification. */
         { "CSSKeyframeRule",   PROTO_KEYFRAME,   0 },
         { "CSSKeyframesRule",  PROTO_KEYFRAMES,  0 },
+        /* CSS Cascade §8.1 derives from CSSGroupingRule (index 1) — §6.4.4.1 makes a `@layer` block a
+           conditional group rule with a true condition — while §8.2's derives from CSSRule, because a
+           statement at-rule has no block and so contains nothing. */
+        { "CSSLayerBlockRule",     PROTO_LAYER_BLOCK,     1 },
+        { "CSSLayerStatementRule", PROTO_LAYER_STATEMENT, 0 },
     };
     JSValue iface[sizeof(IFACES) / sizeof(IFACES[0])];
     unsigned i, n = sizeof(IFACES) / sizeof(IFACES[0]);

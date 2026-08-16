@@ -1,5 +1,6 @@
 /* AN AT-RULE'S PRELUDE, sliced into the parts its own grammar names — CSS Cascade §2's `@import`, CSS
- * Namespaces §2's `@namespace`, CSS Paged Media §4.3's `@page` and CSS Animations §3's `@keyframes`.
+ * Namespaces §2's `@namespace`, CSS Paged Media §4.3's `@page`, CSS Animations §3's `@keyframes` and CSS
+ * Cascade §6.4.4's `@layer`.
  *
  * A `<keyframe-block>`'s PRELUDE IS IN HERE TOO, AND IT IS NOT A CATEGORY SLIP. §3 defines `@keyframes` as
  * `@keyframes <keyframes-name> { <qualified-rule-list> }` and then defines `<keyframe-block> =
@@ -154,5 +155,47 @@ bool css_prelude_keyframes_name_excluded(const char *name);
  * OWNED. NULL when the text is not a keyframe selector list, and never the empty string: the `#` multiplier
  * has no zero-length arm, so `{ }` with no prelude at all is not a `<keyframe-block>`. */
 char *css_prelude_keyframe_selectors(const char *prelude, size_t len);
+
+/* CSS Cascade §6.4.2's `<layer-name> = <ident> [ '.' <ident> ]*`, as the LIST the two `@layer` at-rules take,
+ * PARSED AND SERIALIZED IN ONE STEP for the reason `css_prelude_page_selectors` is: the only thing this engine
+ * ever does with the parse is serialize it back, because a rule is made of TEXT (core/css/css_rule.h).
+ *
+ * ONE ENTRY FOR TWO AT-RULES BECAUSE IT IS ONE PRODUCTION UNDER TWO MULTIPLIERS. §6.4.4.1's block at-rule is
+ * `@layer <layer-name>? { <rule-list> }` and §6.4.4.2's statement at-rule is `@layer <layer-name>#;`, so what a
+ * NAME is does not differ at all and only HOW MANY the rule may declare does — which is the CALLER's question,
+ * because it is exactly what tells the two INTERFACES apart. `n` is therefore a real answer at every value, and
+ * ZERO is the interesting one: it is §6.4.2.1's anonymous layer ("when a @layer rule omits its <layer-name> ...
+ * its layer name gains a unique anonymous segment; it therefore cannot be referenced from the outside"), which
+ * `?` admits and `#` does not.
+ *
+ * THE GRAMMAR IS WHITESPACE-SENSITIVE INSIDE A NAME AND NOT BETWEEN THEM, which is the whole reason it is
+ * tokenized rather than split on `.` and `,`: §6.4.2 calls a layer name "a period-separated list of <ident>
+ * tokens with no intervening white space", so `a.b` is one name and `a . b` is not a name at all, while the `#`
+ * multiplier's commas may carry whitespace as every other one's may. It is the same distinction CSS Paged Media
+ * §4.3 draws inside a `<page-selector>` and lexbor's tokenizer answers it the same way, by emitting a
+ * WHITESPACE token where there is whitespace.
+ *
+ * WHAT IS REFUSED IS §6.4.2's OWN SENTENCE and no more: "The CSS-wide keywords are reserved for future use, and
+ * cause the rule to be invalid at parse time if used as an <ident> in the <layer-name>." That set is
+ * core/css/css_defaulting.h's, asked and never restated. It is NOT the `<keyframes-name>` set beside it, and
+ * the difference is the production: `<layer-name>` is `<ident>` where `<keyframes-name>` is `<custom-ident>`,
+ * so CSS Values §4.2's reserved `default` is a perfectly good layer name and so is `none`.
+ *
+ * EACH NAME CROSSES SERIALIZED — every segment through CSSOM §2.1's serialize-an-identifier, joined by `.`.
+ * §6.4.2 gives a layer name its identity by its segments ("layer names represent the same cascade layer if they
+ * contain the same segments in the same order"), so the escapes are the only thing to normalise and the case
+ * stays the author's. Serializing here rather than at the rule is also what keeps `a\.b` — ONE segment
+ * containing a period — distinguishable from `a.b`, which a raw join could not be; and it is what makes
+ * `cssText` re-parse as the rule it came from, the property every serialize-a-CSS-rule arm has to have.
+ *
+ * Answers false when the prelude is not a `<layer-name>#` at all, in which case NOTHING is allocated — an
+ * at-rule whose grammar failed, which CSS Syntax drops. */
+typedef struct {
+    char   **v;   /* each `<layer-name>`, serialized. OWNED. */
+    unsigned n;   /* how many — ZERO is `@layer { }`'s anonymous layer and not a failure */
+} CssLayerNames;
+
+bool css_prelude_layer_names(const char *prelude, size_t len, CssLayerNames *out);
+void css_layer_names_free(CssLayerNames *p);
 
 #endif
