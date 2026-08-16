@@ -22,10 +22,12 @@ void idb_database_free(JSRuntime *rt);
 JSValue idb_database_find(JSContext *ctx, const char *name);
 JSValue idb_database_create(JSContext *ctx, const char *name);
 
-/* §2.1's VERSION. It is set by an upgrade transaction and by nothing else, which is a fact about §5.1's
-   caller rather than about this record. */
+/* §2.1's VERSION. There is no setter, and its absence is the standard's own sentence rather than a gap: "The
+   only way to change the version is using an upgrade transaction", and there is no transaction yet — so the
+   version a database has is the 0 it was created with, and the member that changes it arrives with §5.1's
+   upgrade-a-database, which is the only algorithm allowed to. A setter standing here now would be an export
+   with no caller: code nothing exercises, in a component whose whole claim is that it is exercised. */
 double idb_database_version(JSContext *ctx, JSValueConst db);
-void   idb_database_set_version(JSContext *ctx, JSValueConst db, double version);
 
 /* §2.2's SET OF OBJECT STORES. A store has a name unique within its database, OPTIONALLY a key path (with one
    it "uses in-line keys", without one "out-of-line keys") and OPTIONALLY a key generator — both are on the

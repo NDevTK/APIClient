@@ -183,13 +183,6 @@ double idb_database_version(JSContext *ctx, JSValueConst db)
     return out;
 }
 
-void idb_database_set_version(JSContext *ctx, JSValueConst db, double version)
-{
-    DCHECK(version >= 0, "a database's version was set below zero — §2.1's version counts up from 0 and §5.1's "
-                         "open refuses a version of 0 from a page");
-    JS_SetPropertyStr(ctx, db, IDB_DB_VERSION, JS_NewFloat64(ctx, version));
-}
-
 /* ---- §2.2's object store ------------------------------------------------------------------------------------ */
 
 JSValue idb_object_store_create(JSContext *ctx, JSValueConst db, const char *name, JSValue key_path,
