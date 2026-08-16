@@ -318,14 +318,17 @@ static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
         uint32_t len;
         const uint8_t *bytes = JS_GetBufferBytes(e->obj, &len);
         void *blob;
+        /* THE BACKSTOP, NOT THE STATEMENT — cow_capture_buffer_lifetime refuses the detach and the resize AT
+           the mutation, where neither ordering can slip past. These two said the same thing from here, and
+           from here they could only see a buffer this flow had already captured: reaching either one now means
+           storage moved without passing that capture point, which is a route to build rather than a resize to
+           report. */
         CHECK(bytes != NULL,
-              "a COW delta is saving the bytes of a DETACHED buffer: a flow transferred it and the storage the "
-              "entry names is freed, so build the buffer-LIFETIME entry (detach and resize are mutations of the "
-              "buffer object, which an entry over its contents cannot express)");
+              "a COW delta is saving the bytes of a DETACHED buffer, and the detach did not pass "
+              "cow_capture_buffer_lifetime — route whatever freed this storage through it");
         CHECK(len == (uint32_t)e->a_len,
-              "a COW delta is saving a different number of bytes than it captured: a flow RESIZED the buffer, "
-              "which is a mutation of the buffer object rather than of its contents — build the "
-              "buffer-lifetime entry beside the byte entry");
+              "a COW delta is saving a different number of bytes than it captured, and the resize did not pass "
+              "cow_capture_buffer_lifetime — route whatever moved this storage through it");
         blob = reclaim_malloc(e->a_len);
         CHECK(blob, "cow: OOM saving a buffer's bytes — a lost baseline write leaks one flow's typed-array "
                     "state into every sibling");
@@ -631,8 +634,13 @@ void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
     if (JS_ObjFlowGen(abuf) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     /* A DETACHED buffer answers NULL and an empty one answers zero bytes. Neither is a failure and neither is a
        hole a default is filling: a buffer with no bytes has nothing a flow could have written, so there is
-       nothing to isolate. A flow that detaches a buffer it HAS captured is a different question, and it aborts
-       at the save/restore naming the buffer-lifetime entry. */
+       nothing to isolate, and this entry is over CONTENTS.
+       IT WAS READ AS THE HOLE THROUGH WHICH A ZERO-LENGTH RESIZABLE BUFFER ESCAPED, and it is not: a flow that
+       resizes a zero-length buffer up and writes into it does capture — after the resize, with the post-resize
+       bytes as its baseline — and what escaped is the RESIZE, which no length this line could have recorded
+       would have held. The same escape happens with a buffer that was never empty (resize FIRST, write second),
+       so removing this skip would have closed one ordering and left the other. It is closed at the mutation
+       instead: cow_capture_buffer_lifetime below. */
     if (!JS_GetBufferBytes(abuf, &len) || len == 0) return;
     for (int i = 0; i < d->n; i++)                   /* one entry per buffer: the FIRST bytes are the baseline */
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_BUFFER &&
@@ -646,6 +654,23 @@ void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
     e->is_state = 1; e->state_kind = COW_STATE_BUFFER; e->a_len = len;
     e->a_base = cow_state_save(ctx, e);   /* the bytes as this flow found them */
     g_capturing = 0;
+}
+
+/* A SHARED BUFFER'S LIFETIME — see cow.h for why this is asked at the mutation and not at the save.
+   It captures nothing, because there is nothing yet to capture it INTO: the byte entry holds contents and this
+   is the storage those contents live in. What it does is turn the silent half of one defect into the loud half
+   it already had, at the one point both halves pass through. */
+void cow_capture_buffer_lifetime(JSContext *ctx, JSValueConst abuf) {
+    CowDelta *d = g_current;
+    (void)ctx;
+    if (g_capturing || !d) return;
+    DCHECK(JS_IsObject(abuf), "a buffer's lifetime changed on something that is not a buffer object");
+    if (JS_ObjFlowGen(abuf) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
+    CHECK_FAIL("a flow RESIZED, TRANSFERRED or DETACHED a SHARED ArrayBuffer: the byte entry is over the "
+               "buffer's CONTENTS and this moves the storage they live in, so the sibling would inherit both "
+               "the new length and this flow's writes — build the buffer-LIFETIME entry (the buffer object's "
+               "byte length, its detached state, and the count each view over it carries), swapped like every "
+               "other entry, beside COW_STATE_BUFFER");
 }
 
 /* THE SESSION'S CONTEXT — see cow.h. One document, one context; the DOM delta keeps its own for the same
@@ -1125,6 +1150,7 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork)
     static JSTimeTravelHooks HOOKS = {
         .prop_write = cow_capture_hook, .cell_write = cow_capture_varref,
         .arr_append = cow_capture_arr_append, .buf_write = cow_capture_buffer,
+        .buf_lifetime = cow_capture_buffer_lifetime,
         .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate,
         .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval,
         .async_fork = cow_capture_async_fork };
