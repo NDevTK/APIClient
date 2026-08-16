@@ -90,18 +90,24 @@ function buildLexbor(force) {
 buildLexbor(process.argv[2] === "lexbor");
 if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
 
-// (The old browser IDL codegen — idlgen.mjs -> idl_generated.h — drove the deleted Blink-mirroring browser
-// components. With the browser half removed pending re-build against the rewritten fork, there is nothing to
-// generate; re-add the idlgen step when those components are rebuilt.)
+// THE IDL GAP AUDIT IS NOT IN THIS BUILD, AND THAT ABSENCE IS THE WORK — it is not a note about history.
+// engine/idlgen.mjs's own header says it "Runs at build time (best-effort)", and CLAUDE.md §Web-IDL says it
+// DIFFS the spec member list against what each component installs at build time. Nothing in this tree calls
+// it: grep answers this comment and idlgen.mjs itself. What stood here said the browser half had been deleted
+// and there was therefore "nothing to generate" — that stopped being true when the components came back, and
+// the sentence went on reading as authoritative while walkC(join(HOST,"browser")) below grew to 157 real
+// components. The output is host/browser/platform_names.h (the [Exposed=Window] table solver/absent.c decides
+// ReferenceError-vs-fork on), which is COMMITTED so the build works with no network — the long-gone
+// idl_generated.h it named is not what idlgen writes. So a spec member no component installs is reported by
+// NOBODY today. Wiring the audit in here is the next diff, and it must FAIL rather than warn, like every other
+// gate — a best-effort step that is skipped when @webref/idl is absent is a gate that silently is not one.
 
-// THE NEW-WORLD SOLVER CORE. The OLD main.c scheduler + heap_cow + the entire browser half were deleted as
-// legacy: they were built on the fork's PREVIOUS hook API (JS_SetCowCaptureHooks / JS_SetFlowYieldHook /
-// JS_SetArrayIterHook / …), which the rewritten fork replaced with the time-travel hook system
-// (JS_SetTimeTravelHooks + JS_FlowNew/Resume/Clone + JS_SetBranchHook/ForkHook/PreemptHook). These are the
-// files that actually link against the current fork. There is no qjs_* extension ABI entry yet — test_forced.c
-// is the node smoke-test main (build.mjs's milestone signal: does the new world compile + link + run + PASS its
-// @H/@S fixture). Rebuilding the production ABI entry that wraps engine.c's scheduler for the offscreen
-// document — and re-growing the browser components against the new fork — is the next keystone.
+// THE SOLVER CORE AND THE BROWSER HALF ARE BOTH IN THE PROGRAM, and both entries are BUILT. The note that
+// stood here — "there is no qjs_* extension ABI entry yet" — was false in the way CLAUDE.md §DFAIL describes:
+// main.c IS that entry, QJS_ABI below is checked against its own QJS_EXPORT bodies in both directions, and
+// link() emits both artifacts (test_forced.c -> out/qjs.js, main.c -> extension/lib/qjs/qjs.mjs). Neither may
+// be dropped from the compile: §Testing's "a translation unit no gate compiles is outside the gate" is exactly
+// how the shipped ABI entry rotted the last time only one of the two was linked.
 /* Every .c under a directory, sorted — the same rule engine/wpt.mjs uses to decide what the gate links, and
    for the same reason its comment gives: a list picked per component only ever describes what was needed the
    last time someone remembered to edit it. */
