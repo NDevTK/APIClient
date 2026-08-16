@@ -122,4 +122,12 @@ void css_color_serialize_html(const CssColor *c, char out[8]);
    Returns the length written, not counting the NUL. */
 size_t css_color_serialize_function(const CssColor *c, char out[CSS_COLOR_FUNCTION_MAX]);
 
+/* CSS Color 4 §16.2's SERIALIZATION OF AN sRGB VALUE — the LEGACY comma form, `rgb(255, 0, 0)` or
+   `rgba(255, 0, 0, 0.5)`, which is what a COMPUTED or USED colour serializes as and what a page comparing
+   against getComputedStyle reads. §16.2.2 routes a colour with a MISSING component to the `color(srgb ...)`
+   form instead, because the comma form cannot write `none`, so the answer is not always an `rgb()` and the
+   buffer is the same one that form needs. The colour must already be sRGB (§11's conversion is the caller's).
+   Returns the length written, not counting the NUL. */
+size_t css_color_serialize_srgb(const CssColor *c, char out[CSS_COLOR_FUNCTION_MAX]);
+
 #endif

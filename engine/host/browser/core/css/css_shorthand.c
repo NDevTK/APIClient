@@ -946,6 +946,10 @@ bool css_shorthand_complete_for(const char *longhand)
          width, height, min-width, max-width, min-height, max-height — NO shorthand sets any of them. CSS 2.1
            has none, and css-sizing adds none: `flex` sets `flex-basis`, not `width`, and `aspect-ratio` is a
            longhand of its own;
+         color — NO shorthand sets it. It is the one property in CSSOM §9's unconditional used-value list that
+           is in this state: `background-color` is set by `background`, `outline-color` by `outline`, and
+           `caret-color` by css-ui-4's `caret`, and none of those three shorthands is in the table above, so
+           none of the three can be recorded until it is;
          the twelve border side longhands — THREE shorthands set each and all three are in the table above:
            `border-width` (or `border-style`, or `border-color`), `border-<side>` and `border`, which is
            css-backgrounds-3 §3.3, §3.2, §3.1 and §3.4. `border-image` sets no width, style or color longhand
@@ -960,7 +964,7 @@ bool css_shorthand_complete_for(const char *longhand)
        A name absent from this list is not "probably fine": it is a question nobody has answered, and the
        answer decides whether a `margin: 0` two lines up was read or ignored. */
     static const char *const RECORDED[] = {
-        "overflow-x", "overflow-y", "display", "float", "position", "box-sizing",
+        "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color",
         "margin-top", "margin-right", "margin-bottom", "margin-left",
         "padding-top", "padding-right", "padding-bottom", "padding-left",
         "width", "height", "min-width", "max-width", "min-height", "max-height",

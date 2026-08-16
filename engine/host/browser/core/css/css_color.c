@@ -860,7 +860,7 @@ void css_color_serialize_html(const CssColor *c, char out[8])
  * with far more decimals than the grid — enough that no double can be closer to a midpoint than the printed
  * digits can show — and the string is then rounded at the sixth decimal, with the midpoint going to the
  * GREATER of the two candidates, which is what "towards +∞" means for a negative component too. */
-static size_t css_color_write_number(double v, char *out, size_t cap)
+static size_t css_color_write_number_at(double v, size_t decimals, char *out, size_t cap)
 {
     char buf[384];
     int n;
@@ -870,6 +870,9 @@ static size_t css_color_write_number(double v, char *out, size_t cap)
     DCHECK(isfinite(v), "a non-finite component reached CSS Color 4 §16.5's serialization — §16.5 allows an "
                         "implementation-defined limit for values approaching infinity and this component does "
                         "not impose one, so build that limit where the components are computed");
+    DCHECK(decimals >= 1 && decimals <= 20,
+           "a decimal grid outside the two CSS Color 4 states — §16.1.2 and §16.5's six places, and §16.1.1's "
+           "two for a LEGACY alpha — reached this rounding, whose thirty printed decimals are what bound it");
     n = snprintf(buf, sizeof buf, "%.30f", v);
     CHECK(n > 0 && (size_t)n + 2 <= sizeof buf,
           "css color: a <number>'s decimal expansion did not fit the buffer §16.5's serialization prints it in");
@@ -881,8 +884,8 @@ static size_t css_color_write_number(double v, char *out, size_t cap)
            "the decimal expansion of a <number> came back from snprintf without the thirty decimal places it "
            "was asked for — the rounding below indexes them by position");
 
-    /* Round at the sixth decimal: the digits beyond it decide, and an exact midpoint goes upwards. */
-    tail = dot + 7;
+    /* Round at the LAST decimal of the grid: the digits beyond it decide, and an exact midpoint goes upwards. */
+    tail = dot + decimals + 1;
     if (buf[tail] > '5') {
         up = true;
     }
@@ -892,7 +895,7 @@ static size_t css_color_write_number(double v, char *out, size_t cap)
     }
 
     if (up) {
-        i = dot + 6;
+        i = dot + decimals;
         for (;;) {
             if (buf[i] == '.') { i--; continue; }
             if (buf[i] < '9') { buf[i]++; break; }
@@ -909,13 +912,69 @@ static size_t css_color_write_number(double v, char *out, size_t cap)
         }
     }
 
-    len = dot + 7;
+    len = dot + decimals + 1;
     while (len > 0 && buf[len - 1] == '0') len--;
     if (len > 0 && buf[len - 1] == '.') len--;
     buf[len] = 0;
 
     CHECK(len + 1 <= cap, "css color: §16.5's serialization ran out of room for a component");
     memcpy(out, buf, len + 1);
+    return len;
+}
+
+/* §16.1.2 and §16.5's grid: "the serialized value must contain six decimal places (unless trailing zeroes have
+   been removed)". */
+static size_t css_color_write_number(double v, char *out, size_t cap)
+{
+    return css_color_write_number_at(v, 6, out, cap);
+}
+
+/* CSS Color 4 §16.2's SERIALIZATION OF AN sRGB VALUE, which is the form a COMPUTED or USED colour takes: "for
+ * the computed and used value, the corresponding sRGB value is used", so a `red` that was a keyword in the
+ * declared value is `rgb(255, 0, 0)` here, and `transparent` is `rgba(0, 0, 0, 0)`.
+ * §16.2.2 STATES IT AS TWO FORMS AND THE MISSING COMPONENTS DECIDE WHICH. With none missing it is the LEGACY
+ * comma form — `rgb()` when the clamped alpha is exactly 1 and `rgba()` otherwise, function name in ASCII
+ * lowercase, the three components as `<number>`s in [0, 255] "regardless of the bit depth with which they are
+ * stored", commas each followed by exactly one ASCII space, including the one before the alpha ("not slash").
+ * With at least one component missing the legacy form "cannot represent none", so §16.2.2 sends the value to
+ * the `color(srgb ...)` form instead — which is `css_color_serialize_function` and is why this delegates to it
+ * rather than converting the `none` to a zero. That delegation is the whole reason both live in one file.
+ * THE ALPHA IS §16.1.1's LEGACY ALPHA and not §16.1.2's: "the serialized value must contain at least two
+ * decimal places (unless trailing zeroes have been removed)", which is the precision that round-trips an
+ * integer percentage, rounded towards +∞ like every other number here.
+ * Returns the length written, not counting the NUL. */
+size_t css_color_serialize_srgb(const CssColor *c, char out[CSS_COLOR_FUNCTION_MAX])
+{
+    int v[3], i, n;
+    size_t len;
+
+    DCHECK(c != NULL, "css color: an sRGB serialization was asked for with no colour");
+    DCHECK(c->space == CSS_COLOR_SPACE_SRGB,
+           "CSS Color 4 §16.2's serialization is stated for an sRGB value and the colour reaching it is in "
+           "another colour space — §11's conversion is what puts a computed colour in sRGB, and the caller "
+           "that chose this form over the one for its own space skipped it");
+    /* §16.2.2's second branch, verbatim in its condition: "if the value has at least one missing color
+       component, the serialization form is chosen to preserve those components as the none keyword". */
+    if (c->missing != 0u) return css_color_serialize_function(c, out);
+    DCHECK(c->a >= 0.0 && c->a <= 1.0,
+           "an alpha outside [0, 1] reached §16.2's serialization — CSS Color 4 §16.1.2 states that an "
+           "<alpha-value> outside the range is clamped at parse time, so it was not");
+    for (i = 0; i < 3; i++) v[i] = css_round_255(c->c[i]);
+    n = snprintf(out, CSS_COLOR_FUNCTION_MAX, "%s(%d, %d, %d", c->a == 1.0 ? "rgb" : "rgba",
+                 v[0], v[1], v[2]);
+    CHECK(n > 0 && (size_t)n < CSS_COLOR_FUNCTION_MAX, "css color: §16.2's components did not fit");
+    len = (size_t)n;
+    /* "if the alpha is exactly 1, the rgb() form is used, with an implicit alpha; otherwise, the rgba() form is
+       used, with an explicit alpha value." */
+    if (c->a != 1.0) {
+        CHECK(len + 2 < CSS_COLOR_FUNCTION_MAX, "css color: §16.2's alpha separator did not fit");
+        out[len++] = ',';
+        out[len++] = ' ';
+        len += css_color_write_number_at(c->a, 2, out + len, CSS_COLOR_FUNCTION_MAX - len);
+    }
+    CHECK(len + 2 <= CSS_COLOR_FUNCTION_MAX, "css color: §16.2's closing parenthesis did not fit");
+    out[len++] = ')';
+    out[len] = 0;
     return len;
 }
 

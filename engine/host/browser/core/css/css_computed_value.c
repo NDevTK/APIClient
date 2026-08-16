@@ -8,6 +8,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
+#include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_length.h"
@@ -29,6 +30,22 @@ static char *css_cv_strdup(const char *s)
 static bool css_cv_is(const char *v, const char *kw)
 {
     return v != NULL && strcmp(v, kw) == 0;
+}
+
+/* The same question, ASCII CASE-INSENSITIVELY and over the surrounding whitespace a serialization may leave —
+   CSS Syntax makes a keyword ASCII case-insensitive, so `currentColor` and `currentcolor` are one value, and
+   the spelling with the capital C is the one every stylesheet on the web actually writes. */
+static bool css_cv_kw_is(const char *v, const char *kw)
+{
+    size_t n, k = strlen(kw), j;
+
+    if (v == NULL) return false;
+    while (*v && isspace((unsigned char)*v)) v++;
+    for (n = strlen(v); n > 0 && isspace((unsigned char)v[n - 1]); n--) { }
+    if (n != k) return false;
+    for (j = 0; j < k; j++)
+        if ((char)tolower((unsigned char)v[j]) != kw[j]) return false;
+    return true;
 }
 
 /* "The ROOT ELEMENT" — the element whose parent is the Document itself. CSS Display §2.8 gives it its own
@@ -606,6 +623,34 @@ static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, cons
     return out;
 }
 
+/* CSS Color 4's `currentcolor`, RESOLVED — "the used value of the `currentcolor` keyword is the used value of
+   the `color` property on the same element", and "if the `currentcolor` keyword is set on the `color` property
+   itself, it is treated as `color: inherit`".
+   BOTH ARMS ARE HERE AND NOT IN css_color.c, because both are questions about the ELEMENT and the TREE. That
+   component's parse is called with a string and no context element (its own header says so), so it resolves
+   the keyword against the `color` property's INITIAL value — which is exactly right for HTML §4.10.5.1.14's
+   colour well control, and would be an element's colour answered from nowhere here.
+   THE RECURSION TERMINATES AT THE ROOT, where §7.2's inherited value is the initial value and the initial value
+   of `color` is not `currentcolor` — asserted, because that is the only shape that would make it a definition
+   of itself. OWNED. */
+static char *css_cv_used_color_value(lxb_dom_element_t *el, const char *name)
+{
+    char *spec = css_cv_specified(el, name);
+    lxb_dom_element_t *parent;
+
+    if (!css_cv_kw_is(spec, "currentcolor")) return spec;
+    free(spec);
+    if (strcmp(name, "color") != 0) return css_cv_used_color_value(el, "color");
+    parent = css_cv_parent_element(el);
+    if (parent != NULL) return css_cv_used_color_value(parent, "color");
+    spec = cssom_initial_value("color");
+    DCHECK(!css_cv_kw_is(spec, "currentcolor"),
+           "`color`'s own INITIAL value came back as `currentcolor`, which makes the root element's used colour "
+           "a definition of itself. CSS Color 4 gives the property an initial value of `canvastext`, so this is "
+           "lexbor's registry answering something else and the walk above has no base case");
+    return spec;
+}
+
 /* §9's two escapes read "the resolved value of the display property", which is the computed one — `display` is
    in "any other property". */
 static bool resolved_display_generates_a_box(lxb_dom_element_t *el)
@@ -716,21 +761,68 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
               "constraint equation as its width, against the PADDING EDGE of its nearest positioned ancestor, "
               "which used_value.c's §10.1 fourth case crashes for and names in full");
         break;
-    case CSS_RESOLVED_USED:
-        DFAIL("CSSOM §9 makes this property's resolved value the USED value unconditionally — it is one of the "
-              "COLOR properties, whose used value is the computed value with `currentcolor` resolved against "
-              "the element's own computed `color`. THE INHERITANCE IS BUILT: CSS Cascade §7 "
-              "(core/css/css_defaulting.h) knows `color` is an inherited property, so an element that declares "
-              "none takes its parent's, and `css_cv_specified` above answers the specified value of every one "
-              "of these longhands. What is missing is the SERIALIZATION, and it is CSS Color 4 §16.2's LEGACY "
-              "sRGB form rather than a general one: a used color serializes as `rgb(255, 0, 0)` with the three "
-              "components rounded to integers in 0-255 and comma-separated, or as `rgba(r, g, b, a)` when the "
-              "alpha is not 1 — which is what a page comparing against getComputedStyle expects and is NOT the "
-              "`color(srgb ...)` form css_color_serialize_function writes. BUILD §16.2 beside it in "
-              "core/css/css_color.c (the parse, the color spaces and §16.5's number rules are already there), "
-              "then resolve `currentcolor` here: for the `color` property itself CSS Color 4 makes it compute "
-              "to `inherit`, and for every other one it is this element's own computed `color`");
-        break;
+    case CSS_RESOLVED_USED: {
+        /* "The resolved value is the used value" — unconditionally, with no `Applies to:` conjunct and no
+           `display` escape, which is why this arm asks neither. The used value of a COLOR is CSS Color 4's:
+           the computed value with `currentcolor` resolved, converted to sRGB by §11 and serialized by §16.2 in
+           the LEGACY comma form, which is what `rgb(255, 0, 0)` is and what a page comparing against
+           getComputedStyle reads. */
+        char *spec;
+        CssColor color;
+        char text[CSS_COLOR_FUNCTION_MAX];
+
+        if (strcmp(name, "box-shadow") == 0) {
+            DFAIL("CSSOM §9 puts `box-shadow` in the same unconditional used-value list as the colors, and it "
+                  "is the one member that is not a `<color>`: css-backgrounds-3 §7.2 makes it a comma-separated "
+                  "list of shadows, each two to four LENGTHS plus a colour plus an optional `inset`, and the "
+                  "used value resolves the colour of each (a shadow with no colour is `currentcolor`) and "
+                  "absolutizes each length. Every piece it needs exists — `css_cv_used_color_value` below "
+                  "resolves the colour and css_length.h absolutizes the lengths — and what does not is the "
+                  "GRAMMAR: `<shadow>#` is a list this file does not parse and lexbor's registry hands back as "
+                  "one serialized string. BUILD the `<shadow>` list as its own component, since css-backgrounds "
+                  "§7.2's serialization order (colour, offsets, blur, spread, `inset`) is a rule of its own");
+            break;
+        }
+        DCHECK(css_shorthand_complete_for(name),
+               "a used COLOR was derived for a property whose SHORTHANDS are not all expanded by "
+               "css_shorthand.c, so the cascade it reads may never have looked at the declaration that set it "
+               "— a `background: red` two lines above a `backgroundColor` read is invisible, and the answer "
+               "would be the property's initial value with nothing to say so. THREE of §9's colors are in this "
+               "state and each names one missing shorthand: `background-color` needs `background`, "
+               "`outline-color` needs `outline`, and `caret-color` needs css-ui-4's `caret`. BUILD the "
+               "shorthand's row in css_shorthand.c's table and record the longhand in "
+               "css_shorthand_complete_for");
+        spec = css_cv_used_color_value(el, name);
+        if (spec == NULL) {
+            DFAIL("CSSOM §9's used-value list carries the LOGICAL colour spellings beside the physical ones — "
+                  "`border-block-start-color`, `border-inline-end-color` and the other two — and this engine "
+                  "has no value for one at all: lexbor's property registry does not carry them, so §6's "
+                  "cascade answers nothing and §7.1 has no initial value to fall to. They are not aliases: "
+                  "css-logical §2 maps each to a PHYSICAL side through the element's computed `writing-mode` "
+                  "and `direction`, which is the same mapping css_property_applies.c and css_length.c's "
+                  "`vi`/`vb` arm name. BUILD the logical-to-physical mapping, and each of these becomes the "
+                  "physical longhand it resolves to on this element");
+            break;
+        }
+        if (!css_color_parse(spec, strlen(spec), &color)) {
+            DFAIL("a colour-valued property's specified value is not a `<color>` CSS Color 4's grammar accepts. "
+                  "The value that reaches here past `currentcolor` and past §7's CSS-wide keywords is either "
+                  "css-ui-4's `outline-color: invert` — a real keyword whose used value is a COLOUR INVERSION "
+                  "of what is behind the outline, which no serialization can name and which every user agent "
+                  "answers as the computed keyword instead — or a `color-mix()`, a `light-dark()` or a "
+                  "relative-colour form the parse does not have. BUILD the missing production in "
+                  "core/css/css_color.c, and give `invert` §9's computed-value escape, which is the one place "
+                  "a used colour has no number");
+            free(spec);
+            break;
+        }
+        free(spec);
+        /* §11's conversion, which is what makes the serialization below sRGB's: a `lab()` or an `oklch()`
+           declaration is a colour in another space until this runs, and §16.2's form is stated for sRGB. */
+        css_color_convert(&color, CSS_COLOR_SPACE_SRGB);
+        css_color_serialize_srgb(&color, text);
+        return JS_NewString(ctx, text);
+    }
     case CSS_RESOLVED_LINE_HEIGHT: {
         /* "The resolved value is normal if the computed value is normal, or the used value otherwise." The
            computed value is asked for through §7's defaulting because `line-height` is an INHERITED property:

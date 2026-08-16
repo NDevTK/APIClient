@@ -1140,6 +1140,21 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
     { "border-bottom-style", "none" }, { "border-left-style", "none" },
 };
 
+/* THE INITIAL VALUES LEXBOR'S REGISTRY GETS WRONG, each with the answer it gives today so the row EXPIRES.
+   This is a different table from the one above and deliberately so: there the registry is silent and the fact
+   has one source, here it SPEAKS and disagrees with the property's own `Initial:` line, so the row has to say
+   what it is overriding or it is one fact with two sources and no way to tell which is stale. The DCHECK below
+   re-reads the registry every time and fires the day lexbor's answer changes — which is the same shape
+   css_color.c uses for the one `<color>` production it reads itself, and for the same reason: a vendored
+   parser is a moving target and a silent divergence from it is worse than a crash.
+   CSS Color 4 §3.2 gives `color` an `Initial:` line of `CanvasText`; lexbor answers `currentcolor`, which
+   cannot be an initial value at all — §6.4 makes currentcolor's used value the used value of `color` on the
+   same element, so on the root element, where §7.2's inherited value IS the initial value, it would be a
+   definition of itself with no base case. */
+static const struct { const char *name; const char *initial; const char *registry; } CSSD_INITIAL_WRONG[] = {
+    { "color", "canvastext", "currentcolor" },
+};
+
 /* CSS Cascade §7.1's INITIAL VALUE, straight out of Lexbor's registry, which is where the spec's own initial
    values live, and out of the table above for the properties it has no entry for.
    IT IS NOT A LAYER OF THE CASCADE, which is why it is no longer the last thing `cssom_cascaded_value` tries.
@@ -1154,6 +1169,25 @@ char *cssom_initial_value(const char *name)
     CssBuf b = { 0 };
     unsigned i;
 
+    for (i = 0; i < sizeof(CSSD_INITIAL_WRONG) / sizeof(CSSD_INITIAL_WRONG[0]); i++) {
+        char *out;
+
+        if (strcmp(CSSD_INITIAL_WRONG[i].name, name) != 0) continue;
+        DCHECK(e != NULL && e->initial != NULL,
+               "a property this file OVERRIDES the registry's initial value for has no registry entry at all — "
+               "the row exists to disagree with lexbor, so with nothing to disagree with it belongs in "
+               "CSSD_INITIAL_UNREGISTERED instead");
+        lxb_css_property_serialize(e->initial, e->unique, css_buf_cb, &b);
+        DCHECK(b.s != NULL && strcmp(b.s, CSSD_INITIAL_WRONG[i].registry) == 0,
+               "lexbor's registry no longer answers the initial value this row was written to override. That "
+               "is the row's own expiry condition: DELETE it and let the registry answer, after checking that "
+               "what it now says is the property's `Initial:` line");
+        free(b.s);
+        out = strdup(CSSD_INITIAL_WRONG[i].initial);
+        CHECK(out != NULL, "cssom: OOM copying an initial value — a dropped one reads as no value at all, "
+                           "which is a cascade that stopped before its last layer");
+        return out;
+    }
     if (e && e->initial) {
         lxb_css_property_serialize(e->initial, e->unique, css_buf_cb, &b);
         return b.s;
