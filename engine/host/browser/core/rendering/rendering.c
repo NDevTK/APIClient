@@ -22,6 +22,7 @@
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
 #include "core/timing/event_loop.h"
+#include "core/timing/hr_time.h"
 #include "core/timing/timer.h"
 #include "solver/engine.h"
 
@@ -136,7 +137,8 @@ static JSValue rendering_collect_docs(JSContext *ctx)
                  "changes — CSSOM VIEW §4.2 fires `change` at each MediaQueryList whose matches state has "     \
                  "changed, in the order they were created, oldest first), one MediaQueryList per rest")         \
     X(UR_FRAMES, "HTML §8.1.7.3 update the rendering step 14 (for each doc: run the animation frame callbacks " \
-                 "with the relative high resolution time of frameTimestamp — HTML §8.9), one callback per "     \
+                 "with the relative high resolution time given frameTimestamp and doc's relevant global "       \
+                 "object — HTML §8.9), one callback per "                                                      \
                  "rest")                                                                                       \
     X(UR_FOCUS,  "HTML §8.1.7.3 update the rendering step 17, the FOCUS FIXUP RULE (for each doc: if doc's "    \
                  "focused area is no longer a focusable area, run HTML §6.6.4's focusing steps for doc's "      \
@@ -647,12 +649,23 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                 if (JS_IsUndefined(s->fn)) { s->k++; continue; }
             }
             {
-                /* THE RELATIVE HIGH RESOLUTION TIME OF frameTimestamp — a real DOMHighResTimeStamp off the one
-                   virtual clock, not a placeholder: §Headless's missing piece is a display, and the moment a
-                   frame is served exists without one. Web IDL §3.12 invokes a callback with thisArg UNDEFINED
-                   when none is given, which is what §8.9 gives; a sloppy callback still sees the global
-                   because that substitution is the language's, and a strict one must see undefined. */
-                JSValue now = JS_NewFloat64(docctx, s->frame_ts), out;
+                /* THE RELATIVE HIGH RESOLUTION TIME GIVEN frameTimestamp AND doc's RELEVANT GLOBAL OBJECT —
+                   HR-TIME §4's operation, and the argument list of this step names it rather than describing
+                   it, so it is COMPUTED here and not approximated. frameTimestamp is an UNSAFE moment (step 1
+                   takes it from the event loop's last render opportunity time, and step 15 takes
+                   unsafeStyleAndLayoutStartTime off the same clock); what a callback receives is that moment
+                   coarsened and measured from ITS OWN document's time origin. This used to pass frameTimestamp
+                   itself under a comment claiming it was already the relative time — equal only while every
+                   environment's origin is zero, which stops being true the moment a page has a second
+                   document, and wrong in exactly the direction that makes a child frame's animation clock run
+                   ahead of the document it is in.
+                   IT IS ASKED OF docctx, because the step says doc's relevant global object: a conversion done
+                   in the machine's own realm would measure every child document's frame from the top-level
+                   traversable's origin, which is the defect §3.7 exists to prevent one link up.
+                   Web IDL §3.12 invokes a callback with thisArg UNDEFINED when none is given, which is what
+                   §8.9 gives; a sloppy callback still sees the global because that substitution is the
+                   language's, and a strict one must see undefined. */
+                JSValue now = JS_NewFloat64(docctx, hr_time_relative(docctx, s->frame_ts)), out;
                 JSValueConst argv[1];
 
                 argv[0] = now;

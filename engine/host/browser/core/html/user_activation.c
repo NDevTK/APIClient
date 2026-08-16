@@ -11,7 +11,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/html/html_iframe.h"
 #include "core/html/user_activation.h"
-#include "core/timing/event_loop.h"
+#include "core/timing/hr_time.h"
 #include "solver/concolic.h"
 
 /* §6.4.1's TWO PER-WINDOW VALUES, and the initial value of each is the whole of what "never activated" means.
@@ -142,12 +142,15 @@ static int ua_ask(JSContext *ctx, JSStepHdr *h, JSValue last, const char *op, bo
     return 0;
 }
 
-/* §6.4.1's "current high resolution time given W" — the event loop's one virtual clock (event_loop.h). A
-   second time source would order an activation against the tasks that observe it differently from the queue
-   that ran them, which is the one thing that clock exists to keep consistent. */
+/* §6.4.1's "current high resolution time given W" — HR-TIME §4's operation, over the event loop's one virtual
+   clock (core/timing/hr_time.h). It used to read that clock directly, which answered a DIFFERENT question:
+   §6.4.1 measures from W's own environment's TIME ORIGIN, and the raw clock is the unsafe shared current time,
+   so the two agree only while every environment's origin is zero. `ctx` IS the W the standard names — the
+   three questions below are asked of a Window and answered against a timestamp stored in that same Window's
+   record, so both ends of every comparison are measured from one origin. */
 static double ua_now(JSContext *ctx)
 {
-    return event_loop_now(ctx);
+    return hr_time_current(ctx);
 }
 
 int user_activation_sticky_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, bool *out)
@@ -268,12 +271,19 @@ int user_activation_history_action_run(JSContext *ctx, JSStepHdr *h, uint8_t *ph
    exactly one thing, §6.10's CloseWatcher machinery, which this engine has no interface for: there is no
    manager here to notify, in the same sense §7.5.10's worker loops iterate a set that is empty by construction.
    The day CloseWatcher lands it brings its manager, and its manager brings this line. */
-static void ua_activate(JSContext *rctx, double now)
+static void ua_activate(JSContext *rctx)
 {
     /* Step 5.1 — and this is the write that turns the unknown into a fact. Once a trusted input event has
        reached this Window, this engine has OBSERVED the activation and its timestamp is an ordinary number, so
-       every one of §6.4.1's three questions is arithmetic from here and nothing forks over it again. */
-    ua_set(rctx, UA_LAST, JS_NewFloat64(rctx, now));
+       every one of §6.4.1's three questions is arithmetic from here and nothing forks over it again.
+       THE MOMENT IS THIS WINDOW'S OWN, and that is why it is read here rather than passed in. Step 5.1 sets
+       "window's last activation timestamp to THE CURRENT HIGH RESOLUTION TIME", which HR-TIME §4 defines only
+       given a global object — and §6.4.1 then reads it back through `ua_now` given that same Window. Each
+       Window in this walk has its own environment and therefore its own TIME ORIGIN, so one number computed in
+       the initiating document and written into every frame of the page would be a duration measured from one
+       origin and compared against another: an ancestor created before this document would report an activation
+       in its own future, and §6.4.1's transient-activation window would be shifted by the difference. */
+    ua_set(rctx, UA_LAST, JS_NewFloat64(rctx, ua_now(rctx)));
 }
 
 /* THE ACTIVE DOCUMENT'S REALM OF A NAVIGABLE IN THE SET — with the two states that are not realms named at the
@@ -302,14 +312,14 @@ static JSContext *ua_window_realm(JSContext *ctx, JSValueConst proxy)
 /* STEP 3 — "Extend windows with the active window of each of document's ancestor navigables". NO ORIGIN FILTER:
    a cross-origin ancestor is activated too, which is what makes a click inside an advertisement's frame count
    as an interaction with the page that embeds it. */
-static void ua_notify_ancestors(JSContext *ctx, JSValueConst self, double now)
+static void ua_notify_ancestors(JSContext *ctx, JSValueConst self)
 {
     JSValue p = window_proxy_parent_navigable(ctx, self);
 
     while (window_proxy_is(p)) {
         JSValue next;
 
-        ua_activate(ua_window_realm(ctx, p), now);
+        ua_activate(ua_window_realm(ctx, p));
         next = window_proxy_parent_navigable(ctx, p);
         JS_FreeValue(ctx, p);
         p = next;
@@ -327,7 +337,7 @@ static void ua_notify_ancestors(JSContext *ctx, JSValueConst self, double now)
    cannot fail and a filter that is not evaluated look identical afterwards.
    THE STACK IS A JS ARRAY, the shape navigable.c's tree walk already uses: no C recursion, so a document nested
    as deeply as a page cares to nest it costs heap and not stack. */
-static void ua_notify_descendants(JSContext *ctx, JSContext *from, double now)
+static void ua_notify_descendants(JSContext *ctx, JSContext *from)
 {
     JSValue stack = JS_NewArray(ctx);
     uint32_t ntop = 0;
@@ -357,7 +367,7 @@ static void ua_notify_descendants(JSContext *ctx, JSContext *from, double now)
                "a navigable THIS agent holds answered cross-origin — an instance is an origin-keyed agent "
                "cluster, so every document in it shares one origin and ua_window_realm has already crashed on "
                "the ones that do not");
-        if (same) ua_activate(kctx, now);
+        if (same) ua_activate(kctx);
         n = iframe_child_navigable_count(kctx);
         for (i = n - 1; i >= 0; i--)
             JS_SetPropertyUint32(ctx, stack, ntop++, iframe_child_navigable(kctx, i));
@@ -369,7 +379,6 @@ static void ua_notify_descendants(JSContext *ctx, JSContext *from, double now)
 void user_activation_notify(JSContext *ctx)
 {
     JSValueConst self = document_window_proxy(ctx);
-    double now = ua_now(ctx);
 
     /* STEP 1. A document that is not fully active is not being interacted with: it is not the active document
        of a navigable in the tree, so there is no input path to it at all. */
@@ -377,9 +386,9 @@ void user_activation_notify(JSContext *ctx)
            "§6.4.2 step 1: an activation notification was performed for a Document that is not FULLY ACTIVE — "
            "a trusted input event is dispatched into the navigable's active document and nothing else");
     DCHECK(window_proxy_is(self), "§6.4.2's activation notification ran in a realm with no navigable");
-    ua_activate(ctx, now);                        /* step 2: « document's relevant global object » */
-    ua_notify_ancestors(ctx, self, now);          /* step 3 */
-    ua_notify_descendants(ctx, ctx, now);         /* step 4 */
+    ua_activate(ctx);                             /* step 2: « document's relevant global object » */
+    ua_notify_ancestors(ctx, self);               /* step 3 */
+    ua_notify_descendants(ctx, ctx);              /* step 4 */
 }
 
 /* THE TWO CONSUMPTIONS' SHARED SET — steps 1-4 of both: "If W's navigable is null, then return"; the top-level

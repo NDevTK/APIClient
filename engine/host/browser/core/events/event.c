@@ -49,7 +49,7 @@
 #include "core/events/keyboard_event.h"
 #include "core/events/focus_event.h"
 #include "core/events/event_path.h"
-#include "core/timing/event_loop.h"
+#include "core/timing/hr_time.h"
 
 /* The private key the event's internal slots hang off — a Symbol, so a page enumerating the object cannot see
    it and cannot collide with it, for the reason the platform uses internal slots. */
@@ -365,10 +365,15 @@ static JSValue event_make_proto(JSContext *ctx, JSValueConst proto, JSValueConst
     JS_SetPropertyStr(ctx, slots, "cancelable", JS_NewBool(ctx, cancelable));
     JS_SetPropertyStr(ctx, slots, "composed", JS_NewBool(ctx, composed));
     JS_SetPropertyStr(ctx, slots, "isTrusted", JS_NewBool(ctx, trusted));
-    /* §2.2 timeStamp — the moment the event was created, on the VIRTUAL clock the timer task source orders by.
-       There is no wall clock in a headless run and a second time source would disagree with the queue that runs
-       the listeners, so there is one clock and this reads it. */
-    JS_SetPropertyStr(ctx, slots, "timeStamp", JS_NewFloat64(ctx, event_loop_now(ctx)));
+    /* §2.5 timeStamp — "the result of calling CURRENT HIGH RESOLUTION TIME with this's relevant global object"
+       for the constructor, and "the RELATIVE high resolution coarse time given time and event's relevant global
+       object" for the inner event creation steps, whose `time` for every fire in this engine is now. Both are
+       HR-TIME §4's one operation over the moment the event was created, so this asks the component that owns it
+       (core/timing/hr_time.h) rather than reading the raw clock: the number a page sees is measured from ITS
+       OWN environment's TIME ORIGIN and coarsened to the resolution §4 gives an environment without the
+       cross-origin isolated capability. `ctx` IS the relevant global object — an Event is minted in the realm
+       whose algorithm is firing it, which is what makes a child document's `event.timeStamp` its own clock's. */
+    JS_SetPropertyStr(ctx, slots, "timeStamp", JS_NewFloat64(ctx, hr_time_current(ctx)));
     JS_SetPropertyStr(ctx, slots, "canceled", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopPropagation", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopImmediate", JS_FALSE);

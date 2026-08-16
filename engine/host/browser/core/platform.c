@@ -57,6 +57,7 @@
 #include "core/streams/writable_stream.h"
 #include "core/structured_clone.h"
 #include "core/timing/event_loop.h"
+#include "core/timing/hr_time.h"
 #include "core/timing/timer.h"
 #include "core/url/origin.h"
 #include "core/url/url.h"
@@ -99,6 +100,7 @@ static void d_fs_handle(JSContext *c, const PlatformAgent *a) { (void)a; fs_hand
 static void d_storage_manager(JSContext *c, const PlatformAgent *a) { (void)a; storage_manager_init(c); }
 static void d_fs_access(JSContext *c, const PlatformAgent *a) { (void)a; file_system_access_init(c); }
 static void d_file_picker(JSContext *c, const PlatformAgent *a) { (void)a; file_picker_init(c); }
+static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
 static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
 static void d_report_exception(JSContext *c, const PlatformAgent *a) { (void)a; report_exception_init(c); }
 static void d_message_port(JSContext *c, const PlatformAgent *a) { (void)a; message_port_init(c); }
@@ -140,6 +142,7 @@ static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; mod
 
 /* ---- the agent half, undone ----------------------------------------------------------------------------- */
 
+static void r_hr_time(void) { hr_time_free(); }
 static void r_cookie_jar(void) { cookie_jar_free(); }
 static void r_navigate_event_fire(void) { navigate_event_fire_free(); }
 
@@ -191,6 +194,16 @@ static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
    which CREATES a child navigable — so the browsing context, the WindowProxy class and §7.4's create must all
    already be here. */
 static const PlatformComponent PLATFORM[] = {
+    /* HR-TIME §4's TIME ORIGIN IS THE FIRST FIELD A REALM GETS, and the position is the argument. §4 puts the
+       field on the ENVIRONMENT SETTINGS OBJECT and says it holds "a moment early in the initialization" of it;
+       core/realm.h creates that environment with the realm and stamps §8.1.3.1's top-level creation URL before
+       running this list at all, so the moment named here is the same one, and being first among the intrinsics
+       is what makes it impossible for a later install to stamp a timestamp out of a realm that has no origin
+       yet — which is what DOM §2.5 does for every Event that is ever minted.
+       IT DEPENDS ON NOTHING IN THIS LIST. Its install reads the event loop's virtual clock, and the loop's
+       record is built in the DECLARE pass, which runs to the end before the first realm's intrinsics begin —
+       so a row this early is not a row that reads a half-built agent. */
+    { "hr_time",             d_hr_time,             NULL,        r_hr_time },
     { "url",                 d_url,                 i_url },
     { "url_search_params",   d_usp,                 i_usp },
     { "form_data",           d_form_data,           i_form_data },
