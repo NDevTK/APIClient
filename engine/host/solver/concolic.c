@@ -418,10 +418,16 @@ static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
    the concrete breakout payload instead of a concolic, so the REAL code builds the exploit and it fires. */
 static char *g_cand_src = NULL, *g_cand_payload = NULL;
 
-/* THE DECLARED SOURCES and what their component does to an attacker's bytes. Small and fixed: a source that
-   declares nothing delivers as-is, which is right for injected server state (`window.__STATE`) — the attacker
-   writes that JSON directly and no component transforms it. */
-typedef struct { char *src; char *encode; char prefix; SourceDeliverKind deliver; } SourceDelivery;
+/* THE DECLARED SOURCES and what their component does to an attacker's bytes. A source that declares nothing
+   delivers as-is, which is right for injected server state (`window.__STATE`) — the attacker writes that JSON
+   directly and no component transforms it.
+   AND EVERY ROW CARRIES ITS CLAIMANT. The array is this component's storage and each row is another
+   component's agent state (core/platform.h's fourth paragraph), so the row has to say WHOSE — that is what
+   `concolic_undeclare_sources` is keyed by, what the duplicate assert reports the existing owner from, and
+   what concolic_free names when a release did not finish. The pointer is the caller's static component name,
+   held the way core/agent_state.h holds one and for the same reason: it outlives the agent it names. */
+typedef struct { const char *component; char *src; char *encode; char prefix; SourceDeliverKind deliver; }
+        SourceDelivery;
 static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
 
@@ -441,10 +447,15 @@ static const char *deliver_token(SourceDeliverKind k)
     return NULL;
 }
 
-void concolic_declare_source(const char *src, const char *encode, char prefix, SourceDeliverKind deliver)
+void concolic_declare_source(const char *component, const char *src, const char *encode, char prefix,
+                             SourceDeliverKind deliver)
 {
     int i;
     CHECK(src != NULL, "a source was declared with no identity");
+    DCHECK(component != NULL && *component,
+           "an attacker source was declared by no component — the row is a CLAIM whose claimant gives it back "
+           "at its own release, so a row with no owner is a row nobody can release and a registry whose "
+           "emptiness asserts nothing about anybody");
     /* THE TWO HALVES OF ONE DECLARATION MUST AGREE. A value carried in the victim's own address has the
        component it is carried at, and a value carried by any other mechanism has none — so a `#` beside a
        `plant`, or an `address` with no component, is a declaration whose reproduction cannot be built from it
@@ -454,7 +465,20 @@ void concolic_declare_source(const char *src, const char *encode, char prefix, S
            "victim's own address has a component, and it always has one");
     for (i = 0; i < g_srcs_n; i++)
         if (!strcmp(g_srcs[i].src, src)) {
-            DCHECK(0, "a source declared its browser delivery twice — one component owns one source");
+            /* WHO ALREADY OWNS IT IS THE HALF THAT SAYS WHAT WENT WRONG. The same component declaring twice is
+               a declaration that ran twice or a claimant whose rows are dynamic and did not ask first; a
+               DIFFERENT component is two claimants over one source, and then the give-back of either takes a
+               row it does not own. The old message could not tell those apart. */
+#if APICLIENT_DEV
+            static char msg[400];
+            snprintf(msg, sizeof msg,
+                     "a source declared its browser delivery twice — `%s` is already declared by %s, and one "
+                     "component owns one source in BOTH directions. A second declaration by that same "
+                     "component is a claimant with dynamic rows that did not ask concolic_source_declared_by "
+                     "first; a declaration by any other is two claimants over one row, whichever of them "
+                     "releases first taking a row it does not own", src, g_srcs[i].component);
+            DFAIL(msg);
+#endif
             return;
         }
     if (g_srcs_n == g_srcs_cap) {
@@ -463,12 +487,79 @@ void concolic_declare_source(const char *src, const char *encode, char prefix, S
         CHECK(a != NULL, "concolic: OOM declaring a source's delivery");
         g_srcs = a; g_srcs_cap = c;
     }
+    g_srcs[g_srcs_n].component = component;
     g_srcs[g_srcs_n].src = strdup(src);
     g_srcs[g_srcs_n].encode = strdup(encode ? encode : "");
     g_srcs[g_srcs_n].prefix = prefix;
     g_srcs[g_srcs_n].deliver = deliver;
     CHECK(g_srcs[g_srcs_n].src && g_srcs[g_srcs_n].encode, "concolic: OOM declaring a source's delivery");
     g_srcs_n++;
+}
+
+/* THE CLAIM, GIVEN BACK BY THE COMPONENT THAT MADE IT — core/platform.h's fourth paragraph, for the one
+ * registry in the solver half that a browser component writes into. A declared row is agent state whose
+ * STORAGE is this file's array and whose CLAIM is the declaring component's, so the claimant removes its own
+ * rows at its own release and concolic_free asserts, at this component's, that none are left.
+ *
+ * KEYED BY THE CLAIMANT AND NOT BY THE SOURCE, and the difference is not spelling. A release naming each
+ * source reads well where the rows are FIXED and fails where they are not: core/file/file_system.c declares
+ * `file:NAME` per file the device has held, so it would have to keep a parallel list of the names it declared
+ * — a second copy of this array, with its own growth, its own OOM edge and its own dedup, which must agree
+ * with this one and has nothing to make it. That is the hand-copied-list defect core/platform.h and
+ * core/realm.h exist to abolish, in miniature, and the next claimant with dynamic rows writes it again. The
+ * owner is on the row instead: one list, and the give-back reads it.
+ *
+ * IT IS NOT A BULK RESET, WHICH IS WHAT KEEPS THE HOLDER'S ASSERT FALSIFIABLE. A call that emptied the array
+ * would be a release undoing a declaration it did not make — the shape core/platform.c's own table check
+ * forbids one column up, and the shape three of core/dom/document.c's sub-components were in until b87eef36
+ * moved them back to their declarer — and "every claimant gave its rows back" and "one claimant forgot and the
+ * wipe covered it" would then be the same state. Removing exactly the caller's rows is what makes
+ * `g_srcs_n == 0` a fact about the CLAIMANTS, and what lets the assert name the one that did not finish.
+ *
+ * ZERO ROWS IS A LEGITIMATE ANSWER and is deliberately not asserted against: a component whose rows are
+ * dynamic declares as many as the agent gave it, and none is one of those numbers. What a claimant that
+ * declared and did not release costs is the assert at concolic_free, which is where it is owed. */
+void concolic_undeclare_sources(const char *component)
+{
+    int i = 0;
+
+    DCHECK(component != NULL && *component,
+           "the source registry was asked to give back the claims of no component — the claim is keyed by its "
+           "claimant, and a release with no name would either take every row or none");
+    while (i < g_srcs_n) {
+        if (strcmp(g_srcs[i].component, component) != 0) { i++; continue; }
+        free(g_srcs[i].src);
+        free(g_srcs[i].encode);
+        /* THE ORDER OF THE REST IS PRESERVED rather than closed with a swap. Every read of this array is a
+           lookup by identity, so order decides no answer — but it decides the order a WALK would report, and a
+           registry that reshuffles itself when an unrelated component releases is a registry whose contents
+           depend on teardown. Declaration order is a fact about the browser; nothing here may make it a fact
+           about the sequence of frees. */
+        memmove(&g_srcs[i], &g_srcs[i + 1], (size_t)(g_srcs_n - i - 1) * sizeof *g_srcs);
+        g_srcs_n--;
+    }
+}
+
+int concolic_source_declared_by(const char *component, const char *src)
+{
+    int i;
+
+    DCHECK(component != NULL && *component && src != NULL,
+           "the source registry was asked whether a component owns a row, with no component or no source — "
+           "the answer decides whether a claimant declares a second time, so a half-formed question would "
+           "either drop a source or trip the duplicate assert");
+    for (i = 0; i < g_srcs_n; i++)
+        if (!strcmp(g_srcs[i].src, src)) {
+            /* THE DUPLICATE ASSERT SEEN FROM THE OTHER END. A claimant asking about a source ANOTHER component
+               declared is about to skip a declaration it owes, or — worse — to give back a row it does not
+               own, and the delivery a report then builds is for a source that component does not answer for. */
+            DCHECK(strcmp(g_srcs[i].component, component) == 0,
+                   "a component asked whether it owns an attacker source that a DIFFERENT component declared "
+                   "— one source is owned by one component in both directions, so this is either a source "
+                   "identity two components spell the same way or a claimant reaching into another's rows");
+            return 1;
+        }
+    return 0;
 }
 
 int concolic_source_delivery(const char *src, const char **kind, char *prefix)
@@ -1014,7 +1105,67 @@ void concolic_init(JSContext *ctx) {
     }
 }
 
-void concolic_free(JSContext *ctx) { (void)ctx; /* class lives with the runtime; per-value state freed by the finalizer */ }
+/* THE HOLDER'S END OF THE SOURCE REGISTRY — solver/engine.h's release column, run after the whole platform.
+ *
+ * THE ROWS ARE NOT FREED HERE. Each is a CLAIM whose claimant gives it back at its own release, and every one
+ * of those releases is a row on core/platform.h's third column — which platform_agent_free runs BEFORE the
+ * solver's. So an empty registry here is a checked statement about the CLAIMANTS, and a non-empty one names
+ * the one that did not finish rather than leaving a strdup'd row that answers a later agent's delivery
+ * question for a document that no longer exists.
+ *
+ * IT NAMES THE COMPONENT OUT OF THE DATA, which is the whole reason the row carries its claimant. The obvious
+ * message here lists the claimants and how many rows each owes, and that list is the stale-`DFAIL` failure
+ * mode CLAUDE.md describes: it stays true about the CONTRACT and goes wrong about THIS TREE the first time a
+ * component is added, renamed or moved, while reading as authoritative to whoever the abort sends looking. The
+ * row knows who owns it, so the assert reads it and this file names nobody.
+ *
+ * WHAT THIS OWNS IS THE ARRAY UNDER THEM, and it is freed rather than merely emptied. They are two different
+ * facts: `g_srcs_n` is what every lookup reads, and `g_srcs`/`g_srcs_cap` is a plain `malloc`'d buffer that no
+ * detector this tree has can see — not gc_obj_list (not a GC object), not the atom walk (not an atom), not
+ * JS_DUMP_LEAKS's malloc_count (it counts js_malloc_rt). A release that reset the count and kept the buffer is
+ * exactly the fetch_free shape core/agent_state.h records, one layer down: the next agent's first declaration
+ * grows a capacity a dead runtime's reclaim allocator sized. The COUNT goes with the buffer for a harder
+ * reason than symmetry — a release build compiles the assert above out, and a count left standing over a freed
+ * array is a use-after-free at the next lookup rather than a leak. */
+void concolic_free(void)
+{
+#if APICLIENT_DEV
+    if (g_srcs_n != 0) {
+        static char msg[400];
+
+        snprintf(msg, sizeof msg,
+                 "%s did not give back the attacker SOURCE `%s` before the solver's agent state was released. "
+                 "Each row is a claim in this component's array whose claimant releases it at its own "
+                 "concolic_undeclare_sources, on core/platform.h's release column, which platform_agent_free "
+                 "runs before this call. A row left behind is not only a leaked pair of strings: it describes "
+                 "a browser delivery for a document that is gone, and it is what the next agent's declaration "
+                 "of the same source collides with", g_srcs[0].component, g_srcs[0].src);
+        DFAIL(msg);
+    }
+#endif
+    free(g_srcs);
+    g_srcs = NULL;
+    g_srcs_n = g_srcs_cap = 0;
+    /* THE INSTALLED @S SUBSTITUTION IS THIS COMPONENT'S OWN COPY, not the flow's. concolic_set_candidate strdups
+       both halves out of the running flow at every switch, so the last flow to run leaves a pair behind that
+       the frontier's own release cannot reach — flow_registry_free frees the FLOW's strings, which were never
+       these. Freed rather than asserted null, because nothing orders the last switch against this call. */
+    free(g_cand_src);
+    free(g_cand_payload);
+    g_cand_src = g_cand_payload = NULL;
+    /* §Solver's VALUE CLASS IS DELIBERATELY NOT GIVEN BACK HERE, and that is asserted rather than commented —
+       the same statement core/dom/document.c makes about §gc's realm-mark hook, for the same reason. Every live
+       Concolic OUTLIVES this call: the objects are freed by JS_FreeRuntime, whose finalizer reaches each
+       record through this id, and the collection a host runs before it marks each example through it. An id
+       cleared here would make both of those read NULL — every record's shape, provenance, identity and example
+       retained with nothing naming them, and an example the collector stopped marking freed under a value that
+       still points at it. The id belongs to the runtime for as long as the runtime holds objects branded with
+       it, so this is where that is checked and not where it is undone. */
+    DCHECK(g_concolic_class != 0,
+           "the Concolic value class was given back before the runtime that issued it — it must NOT be, and "
+           "this is where that is checked: every value of this class is finalized by JS_FreeRuntime, which "
+           "reaches its record through this id, and the collection before it marks each example through it");
+}
 
 static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src, char *ident, JSValue example)
 {

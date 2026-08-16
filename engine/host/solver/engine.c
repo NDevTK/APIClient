@@ -4064,5 +4064,13 @@ void solver_agent_free(JSContext *ctx)
     solve_free();
     endpoint_free();
     req2proto_free();
+    /* THE CONCOLIC VALUE COMPONENT IS LAST, and the position is the argument. Its SOURCE REGISTRY is what a
+       report asks for a source's browser delivery — the encode set, the address component, the reproduction
+       mechanism — so every line above may still read it while it renders and releases what it holds. It is
+       also the one registry in this half that BROWSER components write into: each row is a claim given back by
+       its claimant on core/platform.h's release column, which platform_agent_free ran before this call, so the
+       assert at its first line is a checked statement about ITS CLAIMANTS rather than about this component —
+       and it names the one that did not finish out of the row, which is why nothing here has to list them. */
+    concolic_free();
 }
 

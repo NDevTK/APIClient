@@ -9,6 +9,8 @@
    allocated when the Window object is created", so the object is built WITH the realm and no host has an
    install line to remember. */
 void location_init(JSContext *ctx);
+/* The AGENT's half undone — core/platform.h's third column. It gives back the brand, the per-realm slot id and
+   the two SOURCE claims this component holds in solver/concolic.c's registry. */
 void location_free(void);
 
 /* THIS REALM'S Location object — §7.2.4's "the Window object's location getter steps are to return this's

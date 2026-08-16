@@ -55,6 +55,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "core/agent_state.h"
 #include "core/frame/location.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -419,6 +420,12 @@ static void location_install_realm(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
+/* THIS COMPONENT'S NAME, spelled once and used for both things a name is used for here: the slots it declares
+   to core/agent_state.h and the two rows it claims in solver/concolic.c's source registry. The registry's
+   give-back is keyed by it, so a declaration and a release naming two different owners is the one way that can
+   go wrong — and a literal typed out four times is how it would. */
+#define LOC_COMPONENT "location"
+
 void location_init(JSContext *ctx)
 {
     JSClassDef d = { "Location" };
@@ -436,20 +443,52 @@ void location_init(JSContext *ctx)
     /* BOTH ARE CARRIED IN THE VICTIM'S OWN ADDRESS, which is what makes them the two single-navigation sources
        — the attacker writes one URL and the victim's load of it is the whole PoC. The component each rides is
        the `prefix` already declared, so the reproduction needs nothing this line does not already say. */
-    concolic_declare_source("location.hash", " \"<>`", '#', SRC_DELIVER_ADDRESS);
-    concolic_declare_source("location.search", " \"#<>'", '?', SRC_DELIVER_ADDRESS);
+    concolic_declare_source(LOC_COMPONENT, "location.hash", " \"<>`", '#', SRC_DELIVER_ADDRESS);
+    concolic_declare_source(LOC_COMPONENT, "location.search", " \"#<>'", '?', SRC_DELIVER_ADDRESS);
 
     JS_NewClassID(JS_GetRuntime(ctx), &g_loc_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_loc_class, &d) == 0,
           "Location: the per-realm prototype slot could not be declared");
     g_obj_slot = realm_value_declare(ctx, "HTML §7.2.4 the Window's associated Location");
     realm_declare_intrinsic(location_install_realm);
+    agent_state_class(LOC_COMPONENT, &g_loc_class, "§7.2.4's per-realm prototype slot and brand");
+    agent_state_id(LOC_COMPONENT, &g_obj_slot, "the per-realm slot §7.2.4's one Location lives in");
 }
 
+/* THE AGENT'S HALF, UNDONE — core/platform.h's third column, which this component was NOT on: `location_free`
+ * was a line in main.c's teardown, and again in wpt_runner.c's, and again in test_forced.c's. That is the
+ * hand-copied list that file exists to abolish, and it was already one edit from the drift that cost the WPT
+ * runner §3.2's permission store and both delivery callees — a component released from a list one host writes
+ * out by hand is a component some other host leaks.
+ *
+ * IT IS ALSO WHAT MAKES THE ORDER OF THE TWO SOURCE CLAIMS A CHECKED FACT rather than a coincidence of three
+ * teardowns. The claims below are given back into solver/concolic.c's registry, and concolic_free asserts that
+ * registry is empty; the only thing that placed this release before that assert was that all three hosts
+ * happened to write the two lines in that order. On the column it is reverse declaration order that places it,
+ * and platform_agent_free runs before solver_agent_free by construction.
+ *
+ * AND THE CLASS WAS NEVER GIVEN BACK AT ALL, which is core/agent_state.h's dom_rect defect exactly: the release
+ * cleared the realm slot and left `g_loc_class` holding an id issued by a runtime that is going away. The next
+ * agent in the process would keep it — JS_NewClassID returns a non-zero id unchanged — and register §7.2.4's
+ * brand at a number the new runtime's own allocator is free to hand to some other component. Both slots are
+ * named to core/agent_state.h now, so platform_agent_free asserts each is back where a fresh process would
+ * have found it. */
 void location_free(void)
 {
+    DCHECK(g_obj_slot >= 0, "§7.2.4's Location was released in an agent that never declared it");
     /* The prototypes, the interface objects and the Locations are the REALMS' — each is released with its
-       context. What the agent holds is the slot, and a slot id is a class id in a runtime that is going away
-       with it. */
+       context. What the agent holds is the brand and the slot. */
     g_obj_slot = -1;
+    g_loc_class = 0;
+    /* THE SOURCE CLAIMS, GIVEN BACK BY THE COMPONENT THAT OWNS THE SOURCES, and LAST because they are declared
+       FIRST — a release is the inverse of its declaration. Their STORAGE is solver/concolic.c's registry and
+       the CLAIM is this component's (core/platform.h's fourth paragraph), so they come back at the release of
+       the component whose `location_init` states what a browser does to an attacker's bytes on their way into
+       a fragment and a query. A row left behind is not an idle string: it answers a later agent's delivery
+       question for a document that no longer exists, and it is what that agent's own declaration of
+       `location.hash` collides with.
+       ONE CALL FOR BOTH ROWS, and it names neither: the registry stores the claimant on the row, so what this
+       component gave back cannot drift from what it declared. A release reciting the two names could — and the
+       third claimant, whose rows are one per file on the device, could not recite them at all. */
+    concolic_undeclare_sources(LOC_COMPONENT);
 }

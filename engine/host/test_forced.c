@@ -3872,7 +3872,9 @@ int main(int argc, char **argv) {
        Arrays reached only through navigator_free, and the host that had no such line — the WPT runner —
        leaked both in every file it ran. A teardown each host writes out by hand is a teardown some host is
        missing a row of, and nothing reports it but the runtime's own leak walk, after the fact. */
-    location_free();
+    /* §7.2.4's Location is a ROW on that column too — it holds TWO CLAIMS in solver/concolic.c's source
+       registry, whose emptiness concolic_free asserts, and a claim placed by three hand-written lists is a
+       claim placed by nothing. */
     session_history_free();
     history_free();
     navigation_free(ctx);              /* HTML §7.2.6 the navigation API */

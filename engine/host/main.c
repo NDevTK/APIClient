@@ -573,7 +573,11 @@ QJS_EXPORT void qjs_teardown(void)
        Arrays reached only through navigator_free, and the host that had no such line — the WPT runner —
        leaked both in every file it ran. A teardown each host writes out by hand is a teardown some host is
        missing a row of, and nothing reports it but the runtime's own leak walk, after the fact. */
-    location_free();
+    /* §7.2.4's Location comes with them, and it is the one whose POSITION was load-bearing: it holds two
+       CLAIMS in solver/concolic.c's source registry — `location.hash` and `location.search` with their
+       percent-encode sets — and concolic_free asserts that registry is empty at the solver's release. That
+       ordering rested on three hand-written lists agreeing; on the column, reverse declaration order decides
+       it and platform_agent_free runs before solver_agent_free by construction. */
     session_history_free();
     history_free();
     navigation_free(g_ctx);              /* HTML §7.2.6 the navigation API */

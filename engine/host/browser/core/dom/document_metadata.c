@@ -246,6 +246,14 @@ static JSValue js_doc_set_cookie(JSContext *ctx, JSValueConst this_val, JSValueC
 
 /* ---- the declaration and the per-realm install ------------------------------------------------------------ */
 
+/* THIS COMPONENT'S NAME AS A CLAIMANT, spelled once. It is what solver/concolic.c's registry stores on each of
+   the two rows below and what the release hands back, so the declaration and the release cannot name two
+   different owners — which is the one way a give-back keyed by the claimant can go wrong, and the one way a
+   literal typed out twice invites it to. It is `document_metadata` and not `document` because the CLAIM is
+   this file's: §3.1.4's members are declared from document_init, but nothing in core/dom/document.c states
+   what a browser does to an attacker's bytes on their way into a cookie or a referrer. */
+#define DM_COMPONENT "document_metadata"
+
 void document_metadata_init(JSContext *ctx)
 {
     DCHECK(g_id_cookie_set < 0, "document_metadata_init ran twice — the setter's declaration and the two "
@@ -266,8 +274,8 @@ void document_metadata_init(JSContext *ctx)
        fires. A REFERRER is carried by the NAVIGATION: the victim arrives from an address the attacker owns, so
        the payload rides the attacker's URL rather than the victim's, which is a different mechanism and not a
        different encoding of the same one. */
-    concolic_declare_source("document.cookie", " \",;\\", 0, SRC_DELIVER_PLANT);
-    concolic_declare_source("document.referrer", " \"<>`#", 0, SRC_DELIVER_REFERRING_ADDRESS);
+    concolic_declare_source(DM_COMPONENT, "document.cookie", " \",;\\", 0, SRC_DELIVER_PLANT);
+    concolic_declare_source(DM_COMPONENT, "document.referrer", " \"<>`#", 0, SRC_DELIVER_REFERRING_ADDRESS);
     /* §3.1.1's `attribute USVString cookie` — the only read-write member here, and its type is what performs
        §3.2.11's scalar value conversion before the body ever sees the string. */
     g_id_cookie_set = idl_setter_id(ctx, IDL_USVSTRING, false, js_doc_set_cookie, 0);
@@ -288,15 +296,21 @@ void document_metadata_install(JSContext *ctx, JSValueConst proto)
  * gives them back. The setter's pool entry is the whole of what a C static holds here: the accessors are each
  * REALM's, installed onto the prototype that goes with its context, and the per-realm cookie store goes with it.
  *
- * THE TWO ATTACKER SOURCES ARE NOT GIVEN BACK, AND THAT IS A GAP RATHER THAN A DECISION. `document.cookie` and
- * `document.referrer` are declared into solver/concolic.c's source registry, whose storage is that component's
- * malloc'd array — a CLAIM in core/platform.h's fourth sense, owed back by its claimant. There is no
- * concolic_undeclare_source to give one back with, and the registry is neither freed nor reset by anything, so
- * a second agent in one process trips concolic_declare_source's own "declared its browser delivery twice"
- * assert. Three components are in that state (this one, core/frame/location.c and core/file/file_system.c) and
- * the fix is one mechanism for all three, so it is not half-built here. */
+ * AND THE TWO ATTACKER SOURCES, WHICH ARE A CLAIM AND NOT A HANDLE. `document.cookie` and `document.referrer`
+ * are declared into solver/concolic.c's source registry, whose STORAGE is that component's array and whose
+ * CLAIM is this one's — core/platform.h's fourth paragraph exactly, and the reason the give-back is here
+ * rather than a reset over there: a component that emptied the registry would be undoing a declaration it did
+ * not make, and concolic_free's own assert would then say nothing about anybody. Given back at the release of
+ * the component that owns the source, this file's declaration and this file's release are the two halves of
+ * one statement, and the holder's assert is what says so.
+ *
+ * LAST, BECAUSE THE SOURCES ARE DECLARED FIRST and a release is the inverse of its declaration. Nothing here
+ * reads either, so no dependency arranges it — which is exactly why it is worth writing the inverse anyway:
+ * the day one of these lines does depend on the other, the order that survives is the one that was already
+ * right for a reason rather than by accident. */
 void document_metadata_free(void)
 {
     DCHECK(g_id_cookie_set >= 0, "§3.1.4's members were released in an agent that never declared them");
     g_id_cookie_set = -1;
+    concolic_undeclare_sources(DM_COMPONENT);
 }

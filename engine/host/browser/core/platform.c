@@ -300,6 +300,16 @@ static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
  * `event_target`, so all three claims on that component are given back before it is released and its own
  * asserts are what say so. The hand-written lists had `event_target_free` BEFORE `message_port_free` in two of
  * the three hosts, which is that order exactly backwards. */
+/* HTML §7.2.4's Location, AND IT IS A CLAIMANT ROW RATHER THAN A HANDLE ROW. Its release was a line in each of
+   the three hosts' hand-written teardowns — the list this file exists to abolish, and the shape that cost the
+   WPT runner §3.2's permission store — while it held the brand for §7.2.4 (never given back at all, which is
+   core/agent_state.h's dom_rect defect) and TWO CLAIMS in solver/concolic.c's source registry: `location.hash`
+   and `location.search`, with the percent-encode set each component applies to an attacker's bytes.
+   THE CLAIMS ARE WHY THE POSITION MATTERS. concolic_free asserts that registry is empty, and the only thing
+   that used to place this release before that assert was three hosts happening to write the lines in that
+   order; on this column it is placed by reverse declaration order, and platform_agent_free runs before
+   solver_agent_free by construction. */
+static void r_location(JSRuntime *rt) { (void)rt; location_free(); }
 static void r_event_target(JSRuntime *rt) { event_target_free(rt); }
 static void r_message_port(JSRuntime *rt) { message_port_free(rt); }
 static void r_timer(JSRuntime *rt) { timer_free(rt); }
@@ -461,7 +471,7 @@ static const PlatformComponent PLATFORM[] = {
     { "report_exception",    d_report_exception,    NULL },
     { "message_port",        d_message_port,        i_message_port, r_message_port },
     { "xml_http_request",    d_xhr,                 i_xhr,       r_xhr },
-    { "location",            d_location,            NULL },
+    { "location",            d_location,            NULL,        r_location },
     /* §7.4.1's state machine BEFORE §7.2.5's History, whose every member reads the record it builds. */
     { "session_history",     d_session_history,     NULL },
     { "history",             d_history,             NULL },

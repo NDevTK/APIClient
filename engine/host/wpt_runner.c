@@ -1800,7 +1800,10 @@ int main(int argc, char **argv)
     media_query_list_free(ctx);
     viewport_free();
     visual_viewport_free();
-    location_free();
+    /* §7.2.4's Location is a ROW on core/platform.h's release column now, run by the platform_agent_free
+       above. It holds TWO CLAIMS in solver/concolic.c's source registry, and concolic_free asserts that
+       registry is empty — an ordering that used to rest on all three hosts writing these two lines the same
+       way round, and that reverse declaration order decides now. */
     session_history_free();
     history_free();
     navigation_free(ctx);              /* HTML §7.2.6 the navigation API */

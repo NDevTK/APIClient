@@ -71,6 +71,12 @@ static JSValue g_bucket_root = JS_UNDEFINED;
 static JSValue g_local_root  = JS_UNDEFINED;
 static int     g_ready;
 
+/* THIS COMPONENT'S NAME, spelled once — core/platform.c's row, core/agent_state.h's slots and the claimant on
+   every `file:NAME` row this component owns in solver/concolic.c's source registry. That registry's give-back
+   is keyed by it, so a declaration and a release naming two different owners is the one way it can go wrong,
+   and a literal typed out at six sites is how it would. */
+#define FS_COMPONENT "file_system"
+
 /* ---- §2.1's byte sequences, as JS values ------------------------------------------------------------------
  *
  * ONE CODE UNIT PER BYTE, and the conversion is spelled out rather than borrowed from an encoding: a byte
@@ -565,10 +571,20 @@ JSValue file_system_file_new(JSContext *ctx, JSValueConst entry)
    The DELIVERY is the user handing the document the file: no address carries these bytes and no navigation
    brings them, so a PoC over a file source reproduces only where the person reproducing it supplies the file —
    which is a fact that belongs in the emitted envelope rather than in a reader's head. */
+/* ONCE PER NAME, AND THE QUESTION IS ASKED OF THE REGISTRY SCOPED TO THIS COMPONENT. The test used to be
+   `concolic_source_encodes(src)`, which reads the WHOLE registry and so answers "yes" for a row another
+   component declared — this component would then skip a declaration it owes, and the release would hand back
+   rows it never made. Scoped, it is the claimant's own question about its own claims, answered by the one
+   list that holds them; nothing here keeps a second copy of what it declared, which is what a give-back keyed
+   by the SOURCE would have forced (see solver/concolic.c's give-back).
+   THE CLAIM'S LIFETIME IS THE AGENT'S AND NOT THE FILE'S. A device may hold a file, lose it and hold it again,
+   and the declaration must outlive the file either way: a parked @S flow carrying `file:report.csv` still has
+   to report the delivery its candidate was constrained by, and a row removed with the file would leave that
+   search with no declared mechanism at all — which §S(d) renders as an envelope this browser cannot build. */
 static void fs_declare_bytes_source(const char *src)
 {
-    if (concolic_source_encodes(src)) return;
-    concolic_declare_source(src, "", 0, SRC_DELIVER_USER_FILE);
+    if (concolic_source_declared_by(FS_COMPONENT, src)) return;
+    concolic_declare_source(FS_COMPONENT, src, "", 0, SRC_DELIVER_USER_FILE);
 }
 
 void file_system_local_add(JSContext *ctx, const char *name, const char *type,
@@ -620,10 +636,10 @@ void file_system_init(JSContext *ctx)
     g_local_root  = fs_entry_new(ctx, FS_KIND_DIRECTORY, FS_ROOT_LOCAL);
     g_fs_ctx = ctx;
     g_ready = 1;
-    agent_state_flag("file_system", &g_ready, "the declaration latch");
-    agent_state_value("file_system", &g_bucket_root, "§2.1's bucket file system root directory entry");
-    agent_state_value("file_system", &g_local_root, "§2.1's local root directory entry");
-    agent_state_ptr("file_system", &g_fs_ctx, "the realm the two roots were built in");
+    agent_state_flag(FS_COMPONENT, &g_ready, "the declaration latch");
+    agent_state_value(FS_COMPONENT, &g_bucket_root, "§2.1's bucket file system root directory entry");
+    agent_state_value(FS_COMPONENT, &g_local_root, "§2.1's local root directory entry");
+    agent_state_ptr(FS_COMPONENT, &g_fs_ctx, "the realm the two roots were built in");
 }
 
 /* AGAINST THE RUNTIME, because that is what the two roots belong to — see core/platform.h's third column. It
@@ -633,6 +649,19 @@ void file_system_init(JSContext *ctx)
    refcount 1 from outside the heap, and behind them the realm nothing could then collect. */
 void file_system_free(JSRuntime *rt)
 {
+    DCHECK(g_ready, "the one virtual filesystem was released in an agent that never built it");
+    /* THE CLAIMS THIS COMPONENT MADE IN ANOTHER, GIVEN BACK FIRST — one `file:NAME` per file the device has
+       held, declared at the edge those bytes entered through and owed back here (core/platform.h's fourth
+       paragraph), whose emptiness concolic_free asserts after the whole platform. FIRST because they are the
+       LAST thing this component declares: the two roots and the realm are stated by file_system_init and every
+       one of these arrived afterwards, at file_system_local_add, so the inverse of the declaration puts them
+       here. ONE CALL FOR HOWEVER MANY THERE ARE, which is the reason the give-back is keyed by the claimant
+       rather than by the source: this
+       component's row count is a fact about the agent's device, so a release that named its rows would have to
+       keep a list of them, and that list would be a second copy of the registry with nothing to keep it
+       honest. Zero rows is the ordinary state — no host in this tree calls file_system_local_add — and it is
+       not asserted against, because a device with no files is a device with no claims. */
+    concolic_undeclare_sources(FS_COMPONENT);
     JS_FreeValueRT(rt, g_bucket_root);
     JS_FreeValueRT(rt, g_local_root);
     g_bucket_root = g_local_root = JS_UNDEFINED;

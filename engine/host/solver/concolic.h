@@ -16,7 +16,12 @@
 
 /* Register the Concolic class in ctx's runtime (once, at engine init). */
 void concolic_init(JSContext *ctx);
-void concolic_free(JSContext *ctx);
+/* THE AGENT'S HALF, UNDONE — solver/engine.h's release column. What a C static holds here for the whole agent:
+   the SOURCE REGISTRY's array (whose rows are the declaring components' claims, given back at their own
+   releases, which this asserts and which it NAMES the delinquent component of) and the installed @S
+   substitution. The value CLASS is deliberately not among them and the release says why at the line that
+   checks it. */
+void concolic_free(void);
 
 /* Mint a concolic value AT A SOURCE — the root of a derivation, where an unknown enters the program. `shape`
    is the @H/@S display form ("{hash}", "/api/{region}"); `src` is the PROVENANCE (may equal shape), which is
@@ -149,7 +154,32 @@ typedef enum {
     SRC_DELIVER_REFERRING_ADDRESS,    /* the payload rides the address the victim ARRIVES FROM */
     SRC_DELIVER_USER_FILE,            /* the user hands the document a file whose bytes the attacker chose */
 } SourceDeliverKind;
-void        concolic_declare_source(const char *src, const char *encode, char prefix, SourceDeliverKind deliver);
+/* AND EVERY ROW NAMES ITS CLAIMANT — the declare, the give-back and the ask-first below are one mechanism
+   around that one field. A declaration here is core/platform.h's FOURTH paragraph exactly: the STORAGE is this component's array and
+   the CLAIM is the declaring component's agent state, so the claimant gives it back at its own release and the
+   holder asserts at its own that nothing is left pointing into it. `component` is that claimant — the same
+   name core/platform.c's row and core/agent_state.h's slots use, and stored as the pointer for the reason that
+   file stores it that way: a component name is a static string that outlives the agent it names.
+   IT IS A FIELD RATHER THAN A CONVENTION BECAUSE THE GIVE-BACK IS KEYED BY IT. The alternative — a give-back
+   naming each SOURCE — reads well for the two components whose rows are fixed and fails for the one whose rows
+   are not: core/file/file_system.c declares `file:NAME` per file the device holds, so a by-name release forces
+   that component to keep its own parallel list of what it declared, which is a SECOND copy of this array that
+   must agree with it. One list, here, with the owner on the row: nothing to drift, and the holder's assert can
+   NAME the component that did not finish instead of reciting a list of files that goes stale. */
+void        concolic_declare_source(const char *component, const char *src, const char *encode, char prefix,
+                                    SourceDeliverKind deliver);
+/* THE CLAIM, GIVEN BACK — called from the claimant's own `_free`, once, whatever number of rows it declared,
+   and concolic_free asserts the registry is empty afterwards. It removes THIS component's rows and no others,
+   which is what keeps that assert falsifiable: a claimant that forgot leaves its rows behind and is named. A
+   call that emptied the registry outright would be a release undoing a declaration it did not make — the shape
+   core/platform.c's own table check forbids one column up — and "everyone gave their rows back" and "one
+   claimant forgot and the wipe covered it" would then be the same state. */
+void        concolic_undeclare_sources(const char *component);
+/* DOES THIS COMPONENT ALREADY OWN A ROW FOR THIS SOURCE? The question a claimant whose rows are DYNAMIC has,
+   asked of the one registry rather than of a private copy of it — `concolic_source_encodes(src)` is the wrong
+   question for it, because that reads the whole registry and answers "yes" for a row another component
+   declared. Aborts if the source is declared by somebody else: one source is owned by one component. */
+int         concolic_source_declared_by(const char *component, const char *src);
 /* THE DECLARED DELIVERY as a report states it: the mechanism's TOKEN and the address component the payload
    rides (0 for every mechanism that is not an address). Returns 0 when this source declared none — which is a
    FACT, not a default: server-injected page state (`window.__FLAGS`) is written by the attacker directly and
