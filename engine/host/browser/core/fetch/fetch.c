@@ -262,25 +262,62 @@ static int g_deliver_stepid = -1;
 JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
                         const char *body, size_t body_len, const char *const *url_list, int url_list_n)
 {
-    JSValue o = JS_NewObject(ctx), h;
+    JSValue o = JS_NewObject(ctx), h, v;
     int i;
 
-    if (JS_IsException(o)) return o;
+    /* A RECORD THIS FUNCTION FAILED TO BUILD IS NOT A REPLY, AND IT USED TO BE RETURNED AS ONE. Eleven
+       allocations and property writes stood here and not one return value was read, so every way this can fail
+       produced the SAME answer as success: an object. A caller cannot tell those apart — `JS_IsObject` says yes
+       to both — and the flow parked on the reply is resumed with a Response built out of nothing, which is the
+       consumer-defaults rule from the other side: the producer handed over a plausible datum in place of a
+       measurement.
+       IT WAS NOT HYPOTHETICAL. The smoke fixture aborted in the delivery on a record whose own property list
+       was EMPTY — `fields=(none)`, engine.c's provide-side contract assert — which is exactly what this
+       function returns when the writes below fail and it reports nothing.
+       THEY ARE `CHECK`, NOT `DCHECK`, AND THAT IS LOAD-BEARING TWICE OVER. An allocation failure is CLAUDE.md's
+       named CHECK case — a dropped work item corrupts the frontier, and a reply is the work item a suspended
+       flow is waiting on — so it must abort in release too, where there is no version of this the engine may
+       proceed past. And a DCHECK's condition is UNEVALUATED in release: writing the record inside one would
+       compile the whole build away and return the empty object always. The side effects belong in the
+       condition here precisely because this macro keeps them. */
+    CHECK(!JS_IsException(o), "fetch: OOM allocating the host's reply record — the flow parked on this reply "
+                              "would resume holding a Response with no status, no headers and no body");
     DCHECK(url_list_n >= 1,
            "a host built a reply with an empty URL list — §4.1 gives a fetched response at least a clone of "
            "the request's URL list, and `url`/`redirected` are read off nothing else");
-    JS_SetPropertyStr(ctx, o, "urlList", response_url_list(ctx, url_list, url_list_n));
-    JS_SetPropertyStr(ctx, o, "status", JS_NewInt32(ctx, status));
-    JS_SetPropertyStr(ctx, o, "statusText", JS_NewString(ctx, status_text ? status_text : ""));
-    JS_SetPropertyStr(ctx, o, "body", JS_NewStringLen(ctx, body ? body : "", body_len));
+    /* §2.2.6's URL LIST FIRST, and checked on its own line, because it is the field the delivery reads before
+       any other and the one a host cannot invent (fetch.h). A list that failed to build must never reach the
+       record as `undefined`. */
+    v = response_url_list(ctx, url_list, url_list_n);
+    CHECK(!JS_IsException(v), "fetch: OOM building a reply's §2.2.6 URL list — `url` and `redirected` are read "
+                              "off nothing else, so the Response would report a different address than the one "
+                              "that was fetched");
+    CHECK(JS_SetPropertyStr(ctx, o, "urlList", v) >= 0, "fetch: a reply record refused its URL list");
+    CHECK(JS_SetPropertyStr(ctx, o, "status", JS_NewInt32(ctx, status)) >= 0,
+          "fetch: a reply record refused its status");
+    v = JS_NewString(ctx, status_text ? status_text : "");
+    CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's status message");
+    CHECK(JS_SetPropertyStr(ctx, o, "statusText", v) >= 0, "fetch: a reply record refused its status message");
+    v = JS_NewStringLen(ctx, body ? body : "", body_len);
+    CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's body — a body that silently became empty is a "
+                              "page reading a successful response with nothing in it");
+    CHECK(JS_SetPropertyStr(ctx, o, "body", v) >= 0, "fetch: a reply record refused its body");
     h = JS_NewArray(ctx);
+    CHECK(!JS_IsException(h), "fetch: OOM allocating a reply's header list");
     for (i = 0; headers && i < headers->n; i++) {
         JSValue pair = JS_NewArray(ctx);
-        JS_SetPropertyUint32(ctx, pair, 0, JS_NewString(ctx, headers->e[i].name));
-        JS_SetPropertyUint32(ctx, pair, 1, JS_NewString(ctx, headers->e[i].value));
-        JS_SetPropertyUint32(ctx, h, (uint32_t)i, pair);
+        CHECK(!JS_IsException(pair), "fetch: OOM allocating a reply header's name/value pair");
+        v = JS_NewString(ctx, headers->e[i].name);
+        CHECK(!JS_IsException(v), "fetch: OOM allocating a reply header's name");
+        CHECK(JS_SetPropertyUint32(ctx, pair, 0, v) >= 0, "fetch: a header pair refused its name");
+        v = JS_NewString(ctx, headers->e[i].value);
+        CHECK(!JS_IsException(v), "fetch: OOM allocating a reply header's value");
+        CHECK(JS_SetPropertyUint32(ctx, pair, 1, v) >= 0, "fetch: a header pair refused its value");
+        CHECK(JS_SetPropertyUint32(ctx, h, (uint32_t)i, pair) >= 0,
+              "fetch: a reply's header list refused a pair — the Content-Type that decides whether a body "
+              "parses is one of these");
     }
-    JS_SetPropertyStr(ctx, o, "headers", h);
+    CHECK(JS_SetPropertyStr(ctx, o, "headers", h) >= 0, "fetch: a reply record refused its header list");
     return o;
 }
 
