@@ -28,15 +28,18 @@
    body it would have skipped only on magic bytes is one whose essence is not `text/x-component` either way. So
    the sniff decided ZERO of the endpoints in this engine's @H surface, and removing it from this process
    removes no measurement — it removes a vote the renderer is not entitled to.
-   WHERE THE COMPUTED TYPE COMES FROM WHEN IT COMES: the trusted zone, on the record, stamped like the sender's
-   origin on a cross-document message — and it is NOT a field yet, because no zone can write one. §7 cannot live
-   in `safe-fetch.js` (CLAUDE.md: the only irreducible JS is a bridge, never logic) and it cannot live here, so
-   it belongs to a BROWSER-PROCESS instance that does not exist. A second wasm-ld link out of this same object
-   set was tried as one and is deleted: it produced a second artifact, not a second process — same objects, one
-   realm, the host holding an exported HEAPU8 over each — so what remains to be built is an instance across a
-   real module boundary (`core/mime/mime_sniff.h` names the shape). A `computedType` field added now would be
-   read here and written nowhere, which is the exact contract CLAUDE.md calls greppable and mechanical, with a
-   DCHECK that could only fire on every reply for a value that decides nothing. */
+   WHERE THE COMPUTED TYPE COMES FROM: the BROWSER PROCESS, which now exists —
+   `engine/host/browser_process/network/mime_sniff.c`, linked into a program of its own and run inside a
+   dedicated Worker of the offscreen (`extension/browser-process.js`), reached only by postMessage. That is what
+   this paragraph used to say did not exist, and the two attempts it warned about are worth keeping distinct: a
+   second wasm-ld link out of THIS object set is not a process (same objects, one realm, the host holding an
+   exported HEAPU8 over each), while a separate module in a separate realm on a separate thread is.
+   IT IS STILL NOT A FIELD ON THE REPLY RECORD, and that half of the warning stands unchanged. The browser
+   process serves exactly one operation today — the CORB verdict `extension/lib/safe-fetch.js` asks for at its
+   script gate — so nothing yet STAMPS a computed type onto a reply the way the trusted zone stamps a sender's
+   origin onto a message. Adding a `computedType` here first would be read here and written nowhere, which is
+   the contract CLAUDE.md calls greppable and mechanical, with a DCHECK that could only fire on every reply for
+   a value that decides nothing. The order is: the plumbing, then the reader. */
 static bool is_asset(const MimeType *m)
 {
     return mime_type_is_image(m) || mime_type_is_audio_or_video(m) ||

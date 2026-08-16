@@ -37,12 +37,21 @@ if [ ! -d "$LEXBOR" ]; then
   exit 1
 fi
 
+# THE IR FILE IS NAMED AFTER THE UNIT'S PATH, NOT ITS BASENAME, and that is a correctness fix rather than
+# tidiness. Two units in this program are called main.c — engine/host/main.c is the renderer's ABI entry and
+# engine/host/browser_process/main.c is the browser process's — so under `basename` the second compile
+# OVERWROTE the first's .ll, `llvm-link` was handed the same file twice, and `n` still counted two. The
+# coverage check compares that count against build.mjs's list, so it would have PASSED over a module missing a
+# translation unit: exactly the "silently covers a fraction of the program, and its zero is believed" failure
+# this file's own header warns about, arriving through the filename.
+# -I$H/browser_process is the browser process's own root, the way -I$H/browser is the renderer's: its
+# components include each other as "network/corb.h".
 n=0
 LLS=""
 for f in $UNITS; do
-  b=$(basename "$f" .c)
+  b=$(printf '%s' "${f#$ROOT/}" | tr '/.' '__')
   clang -O0 -w -S -emit-llvm -DNDEBUG -D_GNU_SOURCE -DCONFIG_VERSION='"t262"' -DAPICLIENT_DEV=1 \
-        -I"$Q" -I"$H" -I"$H/browser" -I"$LEXBOR" "$f" -o "$OUT/$b.ll"
+        -I"$Q" -I"$H" -I"$H/browser" -I"$H/browser_process" -I"$LEXBOR" "$f" -o "$OUT/$b.ll"
   LLS="$LLS $OUT/$b.ll"
   n=$((n + 1))
 done

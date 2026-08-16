@@ -25,7 +25,6 @@
 #include <string.h>
 
 #include "check.h"
-#include "core/encoding/encoding.h"   /* §4.2's get an encoding, which §3.5 step 3 runs on the charset */
 #include "core/mime/mime_type.h"
 
 /* ---- Fetch §2.2 and MIME Sniffing §3: the code point classes the algorithm is written on ---------------- */
@@ -485,25 +484,7 @@ bool mime_type_extract(MimeType *out, const char *value)
     return have;
 }
 
-/* ---- Fetch §3.5 "legacy extract an encoding" ------------------------------------------------------------ */
-
-/* The four steps, in order, each with its own return. Every one of them answers `fallbackEncoding`, which is
-   why the algorithm is "legacy": the header gets to narrow the answer and never to widen it into a failure. */
-int mime_type_legacy_extract_encoding(const MimeType *m, int fallback_encoding)
-{
-    const char *charset;
-    int tentative;
-
-    /* "If mimeType is failure, then return fallbackEncoding." */
-    if (!m) return fallback_encoding;
-    /* "If mimeType["charset"] does not exist, then return fallbackEncoding." — the record's own ordered map,
-       and `mime_type_parameter` answers NULL for exactly the standard's "does not exist". A charset present and
-       EMPTY is not this case: §4.4 drops a parameter with no value, so it never reaches the record. */
-    charset = mime_type_parameter(m, "charset");
-    if (!charset) return fallback_encoding;
-    /* "Let tentativeEncoding be the result of getting an encoding from mimeType["charset"]. If
-       tentativeEncoding is failure, then return fallbackEncoding. Return tentativeEncoding." A label this
-       registry does not know is the standard's failure, and the fallback stands. */
-    tentative = encoding_lookup(charset, strlen(charset));
-    return tentative < 0 ? fallback_encoding : tentative;
-}
+/* Fetch §3.5's "legacy extract an encoding" is DECLARED in this component's header and DEFINED in
+   mime_type_encoding.c, which is the only line of core/mime that reaches outside the C library. Its own file
+   says why: this record is a pure value type over strings, and the program that computes §7 over it — the
+   browser process — has no JS realm to link core/encoding's translation unit into. */

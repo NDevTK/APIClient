@@ -135,17 +135,30 @@ const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (th
 /* THE TWO ENTRIES, NAMED — they are alternatives at the LINK and identical everywhere else, which is the whole
    reason both can be verified for the price of one. test_forced.c owns main() and runs on load; main.c owns the
    qjs_* ABI the bridge drives through ccall and must not run on load.
-   A THIRD ENTRY STOOD HERE AND IS DELETED — a "trusted" program linked out of its own source subtree so that
-   MIME Sniffing §7 would not link into the renderer. A SEPARATE LINK IS NOT A PROCESS BOUNDARY. Every object
-   below is offered to every link, so the two artifacts were built from the same objects and the trusted one was
-   in fact built from the whole engine and was the LARGER of the two; the 0.04 MB against 6.60 MB was wasm-ld
-   dead-stripping, not isolation. Both Modules instantiate in the offscreen's own realm and the host holds an
-   exported HEAPU8 over each, so nothing about the link kept either out of the other's memory. The real boundary
-   is a sandboxed opaque-origin frame (extension/renderer.html + extension/renderer-host.js) and a trusted
-   instance is provisioned across one of those or not at all — engine/host/browser/core/mime/mime_sniff.h states
-   that at the component the move was made for. */
+   A THIRD ENTRY STOOD HERE AND WAS DELETED, AND THE REASON IS WHAT SHAPES THE ONE BELOW. It was a "trusted"
+   program linked out of its own source subtree so that MIME Sniffing §7 would not link into the renderer, and
+   A SEPARATE LINK IS NOT A PROCESS BOUNDARY: every object in THIS list was offered to every link, so the two
+   artifacts were built from the same objects and the trusted one was in fact built from the whole engine and
+   was the LARGER of the two — the 0.04 MB against 6.60 MB was wasm-ld dead-stripping, not isolation. Both
+   Modules instantiated in the offscreen's own realm with the host holding an exported HEAPU8 over each, so
+   nothing about the link kept either out of the other's memory. A real boundary is a REALM the host cannot
+   reach into: for the untrusted renderer that is a sandboxed opaque-origin frame (extension/renderer.html +
+   extension/renderer-host.js), and for the trusted network service it is a dedicated WORKER
+   (extension/browser-process.js) — see BPROC_SOURCES below and browser_process/network/mime_sniff.h. */
 const ENTRY_SMOKE = join(HOST, "test_forced.c");
 const ENTRY_ABI   = join(HOST, "main.c");
+/* THE THIRD PROGRAM IS BACK AND THE PARAGRAPH ABOVE IS WHY IT IS DIFFERENT THIS TIME. What was deleted was a
+   second link out of THIS list; what is here is a program with its OWN source list, its OWN objects (compiled
+   below into `bp_`-prefixed object files with their own include path) and its OWN runtime — a dedicated Worker
+   of the offscreen document, `extension/browser-process.js`, holding its own realm, its own module instance and
+   its own thread, reachable only by postMessage. The link is not the boundary and never was; the WORKER is, and
+   the link is what keeps §7 out of the renderer's symbol table so a renderer-side caller fails to link rather
+   than aborting at run time. Nothing in SHARED_SOURCES is offered to it: it links four files, one of which
+   (core/mime/mime_type.c) is a SOURCE both programs compile, which is what a shared source is — the same
+   algorithm in two programs, the way Chromium's net/ links into both of its. */
+const BPROC_DIR = join(HOST, "browser_process");
+const BPROC_SOURCES = walkC(BPROC_DIR).concat([join(HOST, "browser", "core", "mime", "mime_type.c")]).sort();
+const BPROC_OUT = join(ENGINE, "..", "extension", "lib", "bproc");
 const SHARED_SOURCES = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
   .map((f) => join(QJS, f))
   .concat([
@@ -164,7 +177,9 @@ const SHARED_SOURCES = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
    single entry the `abi` argument selected, and that argument is gone: it chose which of the two programs a run
    produced, and a run now produces both, so nothing is left for it to select. check_recursion.sh shells in here
    for this list, and an answer naming one entry excluded the other from the recursion check too. */
-const sources = SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI]);
+/* DEDUPED, because core/mime/mime_type.c is in two PROGRAMS and is one FILE — check_recursion.sh reads this
+   list to decide what to analyse, and a file named twice is a unit analysed twice. */
+const sources = [...new Set(SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI], BPROC_SOURCES))];
 
 /* WHAT THE PROGRAM IS, asked rather than copied. check_recursion.sh needs exactly this list — its header says
    "the unit list mirrors engine/build.mjs" — and it was a second copy that had drifted to a THIRD of it: every
@@ -304,22 +319,36 @@ const QJS_ABI = ["qjs_init", "qjs_bundle_id", "qjs_begin", "qjs_step", "qjs_resu
    define is `--export=` of a symbol that does not exist, which wasm-ld reports as an undefined export only
    because ERROR_ON_UNDEFINED_SYMBOLS happens to be on. Read from the source rather than restated: `QJS_EXPORT`
    is exactly the marker main.c puts on every ABI body.
-   IT IS A BLOCK AND NOT A PARAMETERISED HELPER, because there is ONE ABI. It was generalised over an entry
-   file, a marker and a prefix to serve a second one, and that entry is deleted — a helper kept for a caller
-   that no longer exists is scaffolding whose comment has to lie about why it is a helper. */
-{
-  const _mainSrc = readFileSync(join(HOST, "main.c"), "utf8");
-  const _defined = [...new Set([..._mainSrc.matchAll(/QJS_EXPORT\s+[\w \t*]+?\b(qjs_\w+)\s*\(/g)].map((m) => m[1]))];
-  const _missing = _defined.filter((f) => !QJS_ABI.includes(f));
-  const _phantom = QJS_ABI.filter((f) => !_defined.includes(f));
-  if (_missing.length || _phantom.length) {
-    console.error("[build] the ABI list and main.c's QJS_EXPORT entries disagree — the list IS the ABI, so a\n" +
-                  "[build] disagreement is either an entry nothing can call or an export of nothing:\n" +
-                  (_missing.length ? "[build]   defined in main.c, missing from QJS_ABI: " + _missing.join(", ") + "\n" : "") +
-                  (_phantom.length ? "[build]   named in QJS_ABI, defined nowhere:       " + _phantom.join(", ") + "\n" : ""));
+   IT IS A HELPER AGAIN, AND THE PARAGRAPH THAT SAID IT MUST NOT BE IS WHY THIS ONE SAYS SO. That paragraph
+   read "there is ONE ABI … a helper kept for a caller that no longer exists is scaffolding", and it was true of
+   the tree that deleted the second wasm-ld link. There are two PROGRAMS again — the renderer's qjs_* entry and
+   the browser process's bp_* entry, in different source lists, behind a real boundary — so the second caller
+   exists and the reason for a block is gone with it. The check is what must not be per-program: a second copy
+   of these five lines is the hand-maintained list this file spends its length warning about, and the shape it
+   fails in is silence — an entry added to one program's list with the copy for the other left unedited exports
+   nothing and says nothing. */
+function abiCheck(program, entrySrc, marker, prefix, list) {
+  const src = readFileSync(entrySrc, "utf8");
+  const re = new RegExp(marker + "\\s+[\\w \\t*]+?\\b(" + prefix + "\\w+)\\s*\\(", "g");
+  const defined = [...new Set([...src.matchAll(re)].map((m) => m[1]))];
+  const missing = defined.filter((f) => !list.includes(f));
+  const phantom = list.filter((f) => !defined.includes(f));
+  if (missing.length || phantom.length) {
+    console.error("[build] the " + program + " ABI list and its entry's " + marker + " bodies disagree — the\n" +
+                  "[build] list IS the ABI, so a disagreement is either an entry nothing can call or an export\n" +
+                  "[build] of nothing (" + entrySrc + "):\n" +
+                  (missing.length ? "[build]   defined in the entry, missing from the list: " + missing.join(", ") + "\n" : "") +
+                  (phantom.length ? "[build]   named in the list, defined nowhere:          " + phantom.join(", ") + "\n" : ""));
     process.exit(1);
   }
 }
+abiCheck("renderer", join(HOST, "main.c"), "QJS_EXPORT", "qjs_", QJS_ABI);
+/* THE BROWSER PROCESS'S ABI, and it is ONE entry because a network service answers questions about bytes and
+   holds no state between them. It is enforced by the same call for the same reason: `bp_corb_check` reaching
+   `Module` because EXPORT_KEEPALIVE happens to be on is not an ABI, it is an accident that survives until a
+   setting changes. */
+const BP_ABI = ["bp_corb_check"];
+abiCheck("browser process", join(BPROC_DIR, "main.c"), "BP_EXPORT", "bp_", BP_ABI);
 
 /* COMPILE FLAGS AND LINK FLAGS ARE SEPARATED, and that separation is what lets both entries be verified.
    They used to be one list handed to one emcc invocation that compiled and linked together, which forced two
@@ -456,6 +485,50 @@ function link(what, entryObj, ldflags, out) {
 link("smoke", objPath(ENTRY_SMOKE), LDFLAGS_SMOKE, join(OUT, "qjs.js"));
 link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs"));
 
+/* ── THE BROWSER PROCESS ──────────────────────────────────────────────────────────────────────────────────
+   A SECOND PROGRAM, NOT A SECOND LINK OF THE FIRST. Its objects are compiled here, from BPROC_SOURCES only,
+   under `bp_`-prefixed paths so that a file both programs contain (core/mime/mime_type.c) cannot be handed
+   from one compile's cache to the other's link — the include path differs, and an object cache keyed on the
+   source path alone would silently reuse an object built with the wrong `-I`. It links no lexbor, no quickjs
+   and nothing under host/solver or host/browser except the MIME record, which is what makes a renderer-side
+   call to §7 an undefined symbol.
+   IT IS SEQUENTIAL because it is four translation units; the parallel pump above exists for 130. */
+{
+  mkdirSync(BPROC_OUT, { recursive: true });
+  const bpObj = (src) => join(OBJDIR, "bp_" + resolve(src).replace(/[\\/:]/g, "_") + ".o");
+  const BPCFLAGS = [
+    "-I", HOST, "-I", join(HOST, "browser"), "-I", BPROC_DIR,   // "network/corb.h" and "core/mime/mime_type.h"
+    "-O1", "-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
+    "-Werror=implicit-function-declaration",
+    "-D_GNU_SOURCE",
+    "-DAPICLIENT_DEV=" + (process.argv.includes("release") ? "0" : "1"),
+  ];
+  for (const src of BPROC_SOURCES) {
+    const obj = bpObj(src);
+    if (!objIsStale(src, obj)) continue;
+    const c = spawnSync(EMCC, [...BPCFLAGS, "-MMD", "-MF", obj.replace(/\.o$/, ".d"), "-c", src, "-o", obj],
+                        { stdio: "inherit", shell: true, cwd: QJS });
+    if (c.status !== 0) { console.error("[build] browser process: " + src + " did not compile"); process.exit(1); }
+  }
+  const l = spawnSync(EMCC, [
+    ...BPROC_SOURCES.map(bpObj),
+    /* THERE IS NO `main()` IN THIS PROGRAM AND THE LINK SAYS SO RATHER THAN LEAVING IT TO BE INFERRED. A
+       network service is entered by its callers; browser_process/main.c owns the ABI the way host/main.c owns
+       qjs_*, and neither runs on load. emcc would reach the same conclusion on its own (no `_main` in
+       EXPORTED_FUNCTIONS turns EXPECT_MAIN off), and that is precisely the shape the ABI check above refuses to
+       depend on: a property held by the accident of a default is a property the next setting change takes away
+       with no diagnostic. */
+    "--no-entry",
+    "-sALLOW_MEMORY_GROWTH=1",
+    "-sEXPORTED_FUNCTIONS=" + JSON.stringify(BP_ABI.map((f) => "_" + f).concat(["_malloc", "_free"])),
+    "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "HEAPU8"]),
+    "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createBrowserProcess", "-sINVOKE_RUN=0",
+    "-o", join(BPROC_OUT, "bproc.mjs"),
+  ], { stdio: "inherit", shell: true, cwd: QJS });
+  if (l.status !== 0) { console.error("[build] browser process LINK FAILED rc=" + l.status); process.exit(l.status || 1); }
+  console.log("[build] OK -> " + join(BPROC_OUT, "bproc.mjs"));
+}
+
 /* THE ARTIFACT RECORDS THE REVISION IT WAS BUILT FROM, because engine/solvergate.mjs runs this file and
    never compiles anything, so without a stamp the only question it could ask about the program was how old
    the FILE was. That answer is wrong in exactly the mode CLAUDE.md §Testing mandates: `git worktree add`
@@ -502,4 +575,18 @@ stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
     process.exit(t.status || 1);
   }
   console.log("[build] two-instance ABI drive PASS");
+}
+
+/* AND THE BROWSER PROCESS IS DRIVEN TOO, for the reason every other target here is: a program that is only
+   built is the excluded test one layer down. engine/bproc.mjs loads the module just linked and puts the
+   MISLABELLED cases through it — the only cases §7 and CORB exist for — so the C is exercised in a process
+   with no browser in it, and the live-Chrome probe (self.browserProcessProbe) is then measuring the WORKER
+   boundary rather than the algorithm. */
+{
+  const t = spawnSync(process.execPath, [join(ENGINE, "bproc.mjs")], { stdio: "inherit", shell: false });
+  if (t.status !== 0) {
+    console.error("[build] the browser-process drive FAILED rc=" + (t.status ?? "signal"));
+    process.exit(t.status || 1);
+  }
+  console.log("[build] browser-process drive PASS");
 }

@@ -53,7 +53,9 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
    is the driver and the bridge relays. What DID move is the part that needed no JS caller at all, because the
    engine already holds the input: React Flight is now read at `engine_provide`, the one point every fetched
    reply crosses exactly once, and the magic-byte classifier's ALGORITHM became the standard it was a
-   hand-rolled copy of (core/mime/mime_sniff.c, WHATWG MIME Sniffing §6/§7). The remainder is re-stepped to the
+   hand-rolled copy of (browser_process/network/mime_sniff.c, WHATWG MIME Sniffing §6/§7 — it was written under
+   core/mime and has since moved into the browser process's own source list, which is where §7 belongs and what
+   makes a renderer-side call to it an undefined symbol). The remainder is re-stepped to the
    files that call it. A row's step is a claim about THIS tree, so a step that disagrees with its own reason is
    the stale-DFAIL failure mode wearing a number. */
 const LEDGER = [
@@ -72,6 +74,22 @@ const LEDGER = [
          "require-corp plus Chromium's CORP/ACAO-for-web-accessible-only rule sees to that), then carries the " +
          "qjs_* ABI across a MessagePort in `M.ccall`'s own shape. No analysis logic, no policy, no key: the " +
          "pool that owns the agent-cluster question passes the name in." },
+  { f: "browser-process-host.js", zone: "BRIDGE:1,5",
+    why: "THE TRUSTED SIDE OF THE BROWSER PROCESS — renderer-host.js's counterpart, facing the other way. It " +
+         "provisions extension/browser-process.js as a dedicated module Worker (its own realm, its own module " +
+         "instance, its own thread, and no HEAPU8 held over it by anybody) and relays ONE operation to it: the " +
+         "CORB decision safe-fetch.js takes at its `opts.as === \"script\"` gate. That is reason 1 (the fetch " +
+         "chokepoint's own check) reached through reason 5 (loading the WASM), which is why the row names " +
+         "both. WHAT IT DOES NOT HOLD is the decision: §7 and Chromium's CORB analyzer are C in another " +
+         "program, and what stays on this side is the ORIGIN COMPARISON alone, because SECURITY.md makes the " +
+         "same-origin principal the browser's `MessageSender.origin` and forbids re-deriving it from a URL. A " +
+         "browser-stated boolean crosses; no URL and no principal ever do." },
+  { f: "browser-process.js", zone: "BRIDGE:5",
+    why: "THE BROWSER PROCESS's own bootstrap, and the whole of the JS inside that boundary: instantiate the " +
+         "module, place a resource header in ITS linear memory, call one entry, post the record back. It is " +
+         "the same role renderer.html's bootstrap plays for a renderer and it is measured the same way — a " +
+         "line here that decided anything about a response would be the logic this move exists to delete, " +
+         "since the point of a network service is that the algorithm is the standard's and not a zone's." },
   { f: "lib/safe-fetch.js", zone: "BRIDGE:1",
     why: "THE network chokepoint. SOP/CORS/PNA/CORB/GET-only cannot live inside the untrusted WASM — " +
          "SECURITY.md §Network. THIS ROW WAS FALSE UNTIL THE BODY BECAME BYTES: the file ended in " +
@@ -81,10 +99,17 @@ const LEDGER = [
          "would have needed to catch it. HTML §8.1.4.2's classic-script decode (core/loader/script_fetch.c) " +
          "honours the response's charset LABEL, and it had never once been handed the bytes that label " +
          "describes. The chokepoint now answers a Uint8Array on every path and each consumer runs the decode " +
-         "ITS standard names. What keeps this row BRIDGE is that nothing left is an algorithm over content: " +
-         "SOP/CORS/PNA/GET-only are decided from the URL, the principal and the headers, and CORB's sniff is " +
-         "a CHECK decoding the bytes it judges — the one read of a body here, and it stays because a " +
-         "cross-origin data body must never reach QuickJS as code." },
+         "ITS standard names. AND THE LAST CLAUSE OF THIS ROW WAS THE NEXT THING TO GO. It used to defend " +
+         "CORB's byte sniff as \"a CHECK decoding the bytes it judges\", which excused four functions — " +
+         "`_jsMime`, `_corbProtectedMime`, `_sniffsProtected`, `_corbAllowsScript` — that between them were a " +
+         "hand-rolled HTML JavaScript-MIME-type list, a hand-rolled CORB-protected set, and a body sniff " +
+         "taking `charAt(0) === \"<\"` for markup and a `JSON.parse` of the WHOLE body for JSON. A check is " +
+         "still an algorithm over content when it is one, and this one had a standard: WHATWG MIME Sniffing " +
+         "§7, which in a real browser runs in the NETWORK SERVICE. All four are deleted and the decision is " +
+         "asked of engine/host/browser_process/network/{mime_sniff,corb}.c across browser-process-host.js. " +
+         "What keeps this row BRIDGE is now literal: every remaining rule is decided from the URL, the " +
+         "principal and the headers, and the one fact about the body that this file still states is which " +
+         "BYTES to hand over." },
   { f: "lib/persistence.js", zone: "BRIDGE:2",
     why: "IndexedDB open/get/put/clear. The WASM cannot reach IDB." },
   { f: "background.js", zone: "BRIDGE:3",
@@ -118,9 +143,14 @@ const LEDGER = [
          "is that a producer whose consumers still live in JS is not first, and there is no host→engine " +
          "COMPUTE edge for a JS caller to reach a moved callee through — the engine is the driver and adding " +
          "one would be the orchestration layer inverted. The ALGORITHMS are already in C: the magic-byte " +
-         "classifier's standard is core/mime/mime_sniff.c (WHATWG MIME Sniffing §6/§7, which also deletes the " +
-         "JS's invented SVG/CSS/VTT/HLS/DASH sniffs), and a discovery document's schema graph is read by " +
-         "engine/host/solver/discovery.c." },
+         "classifier's standard is browser_process/network/mime_sniff.c (WHATWG MIME Sniffing §6/§7, which " +
+         "also deletes the JS's invented SVG/CSS/VTT/HLS/DASH sniffs), and a discovery document's schema " +
+         "graph is read by engine/host/solver/discovery.c. THE STANDARD BEING IN C IS NOT THIS FILE'S COPY " +
+         "BEING GONE, and the distinction is the reason this row still exists: §7 now runs in the BROWSER " +
+         "PROCESS, whose one shipped entry answers a CORB verdict for a script load, and `classifyResponseAsset` " +
+         "asks a different question (is this reply a static asset to skip) on behalf of a JS caller in " +
+         "lib/response-decode.js. Deleting it would remove a live caller's only implementation to make this " +
+         "row shorter." },
   { f: "lib/protobuf.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
     why: "a wire CODEC. §A JS-engine encoding builtin is modeled FAITHFULLY — the engine runs the real codec; a second one in JS is the redundant layer." },
   { f: "lib/protocol-parsers.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
@@ -164,7 +194,15 @@ const LEDGER = [
 const files = [];
 (function walk(d) {
   for (const e of readdirSync(d, { withFileTypes: true })) {
-    if (e.name === "qjs" || e.name === "icons") continue;
+    /* `lib/qjs` and `lib/bproc` hold LINKED PROGRAMS, not surface JS — engine/build.mjs emits the renderer's
+       into one and the browser process's into the other, both gitignored — and `icons` holds no JS at all.
+       THE SKIP IS STRUCTURAL AND NOT A FILTER THAT HAPPENS TO WORK: today the collector takes `.js` and
+       emscripten's glue is `.mjs`, so nothing in either directory is collected in any case, and a comment
+       claiming otherwise would be describing a rule this file does not have. What names them here is that a
+       program's output extension is the LINKER'S decision (`-o …mjs` on one line of build.mjs), and a
+       classification gate must not depend on it: change that flag and a 100 KB glue file would arrive as a new
+       unclassified surface file with a row nobody could honestly write for it. */
+    if (e.name === "qjs" || e.name === "bproc" || e.name === "icons") continue;
     const p = join(d, e.name);
     if (e.isDirectory()) walk(p);
     else if (e.name.endsWith(".js")) files.push(relative(ROOT, p).split("\\").join("/"));

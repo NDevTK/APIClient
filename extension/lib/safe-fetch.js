@@ -55,10 +55,12 @@
 // TRANSIT, so what the engine saw was a plausible string.
 // Nothing about the SECURITY invariants moves with it: SOP/CORS/PNA/method/
 // credentials are decided from the URL, the principal and the headers and never from
-// the body, and the one check that does read the body — CORB's sniff below — still
-// runs here, on these bytes, at the same point in this function. It decodes what it
-// needs for its own comparison, which is a check reading its evidence rather than a
-// transform applied to what crosses.
+// the body. The one check that reads the body is CORB's sniff, and it is decided at
+// the same point in this function as before by a DIFFERENT PROGRAM — the browser
+// process, a Worker of this document holding WHATWG MIME Sniffing §7 and Chromium's
+// CORB analyzer in C. This zone hands it the first bytes and the browser-stated
+// principal comparison and reads back a verdict; it runs no algorithm over content
+// itself, which is what a bridge means.
 // urlList is Fetch §2.2.6's RESPONSE URL LIST, and this is the ONLY zone that can
 // report it: the redirect chain exists here and nowhere else. §5.5 defines
 // `response.url` as its LAST item and `response.redirected` as "its size is greater
@@ -80,34 +82,28 @@
 // same-origin) — never a cross-origin HTML/JSON/etc. DATA body read as code.
 // Lives here (the chokepoint) so every code-loader gets it and a new one can't
 // forget it (the chunk path previously had none).
-function _jsMime(m) {
-  return m === "text/javascript" || m === "application/javascript" ||
-    m === "application/ecmascript" || m === "text/ecmascript" ||
-    m === "application/x-javascript" || m === "text/x-javascript" ||
-    m === "application/x-ecmascript" || m === "text/jscript" ||
-    m === "application/node" || /^text\/javascript1\.[0-5]$/.test(m);
-}
-function _corbProtectedMime(m) {
-  return m === "text/html" || m === "text/xml" || m === "application/xml" ||
-    /\+xml$/.test(m) || m === "application/json" || /\+json$/.test(m) ||
-    /^multipart\//.test(m);
-}
-// CORB's own sniff, over BYTES — the check decoding the evidence it judges, which is
-// what Chrome's ORB does too (it attempts a JSON parse of the body). The head is
-// decoded first and the whole body only in the branch that actually needs it, so a
-// multi-megabyte JS chunk (which starts with none of `<`, `{`, `[`) costs one 4 KiB
-// decode rather than a full one.
-function _sniffsProtected(bytes) {
-  var dec = new TextDecoder("utf-8");   // strips a UTF-8 BOM, exactly as resp.text() did
-  var h = dec.decode(bytes.subarray(0, 4096)).replace(/^﻿/, "").replace(/^\s+/, "");
-  if (h.charAt(0) === "<") return true; // HTML/XML/SVG/markup
-  if (h.charAt(0) === "{" || h.charAt(0) === "[") {
-    try { JSON.parse(new TextDecoder("utf-8").decode(bytes)); return true; } catch (e) {
-      try { JSON.parse(h); return true; } catch (_) {}
-    }
-  }
-  return false;
-}
+//
+// THE DECISION IS NO LONGER TAKEN HERE, AND THAT IS THE POINT OF THIS ROW BEING
+// BRIDGE:1. Four functions stood at this spot — `_jsMime`, `_corbProtectedMime`,
+// `_sniffsProtected` and `_corbAllowsScript` — and between them they were a
+// hand-rolled implementation of two standards: HTML's JavaScript-MIME-type list,
+// Chromium's CORB-protected set, and a body sniff that took `bytes.charAt(0) ===
+// "<"` for markup and `JSON.parse` of the ENTIRE body for JSON. CLAUDE.md
+// §Architecture leaves this zone a BRIDGE and never logic; the jsaudit row
+// defending it said what kept it BRIDGE was that "nothing left is an algorithm
+// over content", and a byte sniff is exactly that. It is now
+// engine/host/browser_process/network/{mime_sniff,corb}.c, running in a program
+// of its own — a dedicated Worker of this document, its own realm, its own
+// module, its own thread, reached only by postMessage
+// (extension/browser-process-host.js). §7's sniffing algorithm is the NETWORK
+// SERVICE'S in a real browser and CORB gates on its result, so the one place it
+// may run is beside this chokepoint's SOP/CORS and never inside the renderer.
+// WHAT REMAINS HERE IS THE PRINCIPAL, and it stays for SECURITY.md's reason: the
+// same-origin comparison is made from `opts.pageOrigin`, the BROWSER-provided
+// `MessageSender.origin`, and is never re-parsed from a URL. What crosses the
+// boundary is that comparison's ANSWER — a browser-stated boolean — exactly as a
+// delivered cross-document message carries an origin the trusted zone stamped.
+//
 // A REAL (tuple) origin — scheme://host[:port] — usable for same-origin and CORS.
 // An OPAQUE origin reports "null" (sandboxed iframe / data: / sandboxed doc) or
 // our minted "null:<uuid>" token (per-document, and for a mixed-origin buffer);
@@ -119,19 +115,16 @@ function _isRealOrigin(o) { return typeof o === "string" && o.indexOf("://") > 0
 // empty STRING: a caller that must tell "no bytes" from "bytes I cannot read" reads
 // `ok`/`status`, and a body is one type on every path this function has.
 function _NO_BYTES() { return new Uint8Array(0); }
-function _corbAllowsScript(mime, nosniff, body, scriptUrl, pageOrigin) {
-  mime = String(mime || "").split(";")[0].trim().toLowerCase();
-  var cross = true;
-  // scriptUrl is a network resource — its origin IS its url's origin. pageOrigin is
-  // the AUTHORITATIVE browser origin of the loading document, passed in; NEVER
-  // url-parsed (a sandboxed frame's url would fabricate a tuple origin it lacks).
-  // No real pageOrigin -> treat as cross-origin (strict CORB).
-  try { var _so = new URL(scriptUrl).origin; cross = !(_isRealOrigin(_so) && _isRealOrigin(pageOrigin) && _so === pageOrigin); } catch (e) { cross = true; }
-  if (!cross) return !(_corbProtectedMime(mime) && !_jsMime(mime)); // same-origin: only skip the page's own non-JS data
-  if (_corbProtectedMime(mime)) return false;          // CORB-protected type
-  if (nosniff && !_jsMime(mime)) return false;          // browser blocks too
-  if (_sniffsProtected(body)) return false;             // mislabeled data
-  return true;
+// THE PRINCIPAL COMPARISON, and the whole of what this file still decides about
+// CORB. `scriptUrl` is a network resource, so its origin IS its URL's origin;
+// `pageOrigin` is the AUTHORITATIVE browser origin of the loading document, passed
+// in and NEVER url-parsed (a sandboxed frame's url would fabricate a tuple origin
+// it lacks). No real pageOrigin -> not same-origin -> strict CORB, which is the
+// fail-closed direction: an opaque origin is same-origin with nothing.
+function _corbSameOrigin(scriptUrl, pageOrigin) {
+  var so;
+  try { so = new URL(scriptUrl).origin; } catch (e) { return false; }
+  return _isRealOrigin(so) && _isRealOrigin(pageOrigin) && so === pageOrigin;
 }
 
 // Private/loopback/link-local classification (RFC1918 + loopback + IPv6 ULA/LL)
@@ -272,12 +265,34 @@ async function safeFetch(url, opts) {
   // loads ("sourcemap"/"config"/data — not executed) are exempt. Whether the
   // result later REACHES QuickJS is the caller's documented contract, not
   // enforced here (safeFetch returns bytes; the engine boundary is downstream).
-  if (opts.as === "script" && resp.ok &&
-      !_corbAllowsScript(headers["content-type"] || "",
-        (headers["x-content-type-options"] || "").toLowerCase().indexOf("nosniff") >= 0,
-        body, parsed.href, opts.pageOrigin || ""))
-    return { ok: false, status: 0, statusText: "blocked-corb", headers: headers, body: _NO_BYTES(),
-             urlList: _urlList(parsed.href, resp) };
+  if (opts.as === "script" && resp.ok) {
+    // THE BROWSER PROCESS DECIDES, AND ITS ABSENCE IS FATAL RATHER THAN PERMISSIVE.
+    // This is a CHECK and not a DCHECK because CORB is a security boundary
+    // (SECURITY.md §Network): a build in which the network service did not load must
+    // refuse the load, in release too, never ingest a cross-origin body because the
+    // thing that judges it is missing. Failing open here is the exact shape a
+    // legacy fallback has.
+    CHECK(typeof self.browserProcessCorb === "function",
+          "a script load reached the CORB gate with no browser process to decide it — " +
+          "extension/browser-process-host.js installs self.browserProcessCorb in this document, and without " +
+          "it a cross-origin HTML or JSON body would be handed to a code loader unjudged");
+    // ABSENCE IS READ AS A POSITIVE STATEMENT, never filled in. A response with no
+    // `Content-Type` is §5.1's "the supplied MIME type is undefined" — which sends
+    // §7 to its step 2 and lets the BYTES name the type — and that is a different
+    // input from the empty string the `|| ""` here used to manufacture.
+    var _ct = headers["content-type"];
+    var _cto = headers["x-content-type-options"];
+    var _v = await self.browserProcessCorb(
+      typeof _ct === "string" ? _ct : null,
+      typeof _cto === "string" && _cto.toLowerCase().indexOf("nosniff") >= 0,
+      _corbSameOrigin(parsed.href, opts.pageOrigin), body);
+    // `reason` names the rule that decided and `computed` is §7's answer for what the
+    // resource actually is; both ride the status message, which is where this file
+    // already puts the ground for every other refusal (`blocked-scheme:https:`).
+    if (!_v.allow)
+      return { ok: false, status: 0, statusText: "blocked-corb:" + _v.reason + ":" + _v.computed,
+               headers: headers, body: _NO_BYTES(), urlList: _urlList(parsed.href, resp) };
+  }
   // OWN SOP/CORS for a CREDENTIALED reply. The browser does NOT apply the same-origin
   // policy to an extension fetch with host_permissions (it can read any origin), so
   // when cookies are attached we MUST enforce SOP + CORS HERE on the bytes before

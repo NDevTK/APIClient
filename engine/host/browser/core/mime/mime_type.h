@@ -38,7 +38,8 @@ const char *mime_type_parameter(const MimeType *m, const char *name);
 /* §4.6's MIME TYPE GROUPS. Only the groups this engine's algorithms branch on are here — each arrives with the
    algorithm that first needs it, and a group nobody calls is a table no gate can audit. XHR §3.6.6's "set a
    document response" tests HTML and XML; §7's MIME type sniffing tests XML, HTML, image and audio-or-video
-   (core/mime/mime_sniff.c, which no renderer-side caller may reach — see its header); solver/reply_decode.c
+   (browser_process/network/mime_sniff.c — a different PROGRAM, which is why this record is a pure value type
+   over strings with no dependency outside the C library); solver/reply_decode.c
    tests image, audio-or-video, font, ZIP-based and archive over the SUPPLIED type to decide whether a reply
    body has any structure to learn from. The JSON and JavaScript groups are still ABSENT
    — nothing branches on them yet. */
@@ -64,8 +65,12 @@ bool mime_type_extract(MimeType *out, const char *content_type_value);
    exist, then return fallbackEncoding. Let tentativeEncoding be the result of getting an encoding from
    mimeType["charset"]. If tentativeEncoding is failure, then return fallbackEncoding. Return
    tentativeEncoding."
-   IT LIVES BESIDE `extract a MIME type` BECAUSE IT IS THE SAME HEADER'S OTHER HALF — Fetch states both in §3.5,
-   and its own caller (HTML §8.1.4.2's fetch a classic script) runs them back to back on one header list. `m` is
+   IT IS DECLARED BESIDE `extract a MIME type` BECAUSE IT IS THE SAME HEADER'S OTHER HALF — Fetch states both in
+   §3.5, and its own caller (HTML §8.1.4.2's fetch a classic script) runs them back to back on one header list.
+   It is DEFINED in mime_type_encoding.c rather than in mime_type.c, and that file states why: it is the only
+   line of core/mime that reaches outside the C library, and holding it in the record's own translation unit put
+   the entire JS realm (core/encoding is the TextEncoder/TextDecoder component) behind a pure value type — which
+   is what stopped a realm-free program from linking the record at all. `m` is
    NULL for the spec's FAILURE, which is the one value a parsed record can never be, so the two arms of "failure
    or a MIME type" are one parameter. Both the fallback and the answer are ids in the Encoding registry
    (core/encoding), so a caller never holds a label it has not resolved.
