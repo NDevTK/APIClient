@@ -201,15 +201,21 @@ for (const u of got) console.log('  ' + u);
 const readsAnswered = [...reads.values()].filter((r) => r.answered).length;
 console.log(`cross-agent reads asked: ${reads.size}   answered: ${readsAnswered}`);
 for (const r of reads.values()) console.log(`  [${r.asker}] ${r.answered ? 'ANSWERED' : 'UNANSWERED'} ${r.op}`);
-/* THE SEAM'S OWN COUNT, from the receiving instance. `_worldSegments` is how many foreign worlds hold a segment
-   here; `_worldSegmentsForked` is how many of those were built by FORKING an ancestor the ancestry named, which
-   is the number this driver exists to move off zero. */
+/* THE SEAM'S OWN COUNTS, from the receiving instance, and HELD IS NOT MADE. This line printed one number under
+   a sentence describing the other: `_worldSegments` carried world.c's CUMULATIVE materialized count while the
+   words beside it said "how many foreign worlds hold a segment here", which is the live table. The two agree
+   exactly until world_release runs — the one event a segment count exists to make visible — so the print was
+   at its most wrong precisely where this driver is looking. Both cross now: `held` is the live table,
+   `made` is how many were ever materialized, and `forked` is how many of those were built by FORKING an
+   ancestor the ancestry named, which is the number this driver exists to move off zero. held far below made is
+   a seam that materialized and released; held == made is a live peer; held above made is impossible and
+   world.c DCHECKs it. */
 let forked = 0;
 for (const e of engines) {
   const r = JSON.parse(e.str('qjs_result'));
   forked += r._worldSegmentsForked;
-  console.log(`[${e.docId}] worldSegments=${r._worldSegments} forkedFromAncestor=${r._worldSegmentsForked} ` +
-              `flows=${r._flows} switches=${r._switches}`);
+  console.log(`[${e.docId}] worldSegments held=${r._worldSegmentsHeld} made=${r._worldSegmentsMade} ` +
+              `forkedFromAncestor=${r._worldSegmentsForked} flows=${r._flows} switches=${r._switches}`);
 }
 
 /* WHAT MAKES THIS A SMOKE TEST RATHER THAN A PRINTOUT. Four things have to have happened, and each of them is

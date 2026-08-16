@@ -57,16 +57,17 @@ function assertResultDocument(r) {
          "Send panel resolves a request body with. An absent one is every learned field, service, method and " +
          "OAuth scope arriving as nothing, and the Send panel offering an empty body for an endpoint the " +
          "server has already described");
-  /* THE SEVEN COST COUNTERS ARE ONE FIELD, because result.c writes them in ONE snprintf — there is no arm in
-     which four arrive and three do not. So the contract is all-of-them, and asserting a subset of a set that
+  /* THE EIGHT COST COUNTERS ARE ONE FIELD, because result.c writes them in ONE snprintf — there is no arm in
+     which five arrive and three do not. So the contract is all-of-them, and asserting a subset of a set that
      is emitted atomically is not a weaker check, it is a check on the wrong thing: it passes for exactly the
      document shapes it was meant to reject. `_switches` alone was asserted here while the other six were read
      below with a `|| 0` beside each, which is the file's own recorded defect (see `_orphans` at the return)
-     re-spelt: a name the engine stops writing becomes a zero the diagnostic reports forever. */
+     re-spelt: a name the engine stops writing becomes a zero the diagnostic reports forever. The seam's live
+     table and its cumulative history are two of the eight and NOT one field named twice — result.c says why. */
   for (const k of ["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun",
-                   "_worldSegments", "_worldSegmentsForked"]) {
+                   "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked"]) {
     DCHECK(typeof r[k] === "number",
-           "the engine's result document carries no " + k + " count — solver/result.c emits all seven cost " +
+           "the engine's result document carries no " + k + " count — solver/result.c emits all eight cost " +
            "counters in one snprintf, so a missing one is that composition having changed under this seam, " +
            "not a run that happened not to do the thing. They are the only OBSERVABLE that the single BFS " +
            "context-switches, forks and pumps jobs rather than running its flows FIFO");
@@ -123,7 +124,8 @@ function linesToAnalysis(lines, msg, expectResult) {
        NOT wrapped in a swallowing try/catch: every value here is a number off a document asserted above. */
     ? { switches: result._switches, flows: result._flows, candidates: result._candidates,
         jobsQueued: result._jobsQueued, jobsRun: result._jobsRun,
-        worldSegments: result._worldSegments, worldSegmentsForked: result._worldSegmentsForked,
+        worldSegmentsHeld: result._worldSegmentsHeld, worldSegmentsMade: result._worldSegmentsMade,
+        worldSegmentsForked: result._worldSegmentsForked,
         park: result._park.length, resumed: resumed, url: (msg && msg.sourceUrl) || "" }
     /* A CRASH RECORD HAS NO DOCUMENT BY CONSTRUCTION, and the honest report of that is the ABSENCE, not seven
        zeroes. Zeroes here read as "the engine ran and did nothing" — indistinguishable in the log from a real

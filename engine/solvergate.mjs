@@ -45,7 +45,8 @@
  * Both are solver-semantics regressions and neither has any other detector in this tree.
  *
  * WHAT IT DOES NOT COMPARE, and each name is here because it is a COST rather than a finding: `_switches`,
- * `_flows`, `_candidates`, `_jobsQueued`, `_jobsRun`, `_worldSegments`, `_worldSegmentsForked`, `_park`, and a
+ * `_flows`, `_candidates`, `_jobsQueued`, `_jobsRun`, `_worldSegmentsHeld`, `_worldSegmentsMade`,
+ * `_worldSegmentsForked`, `_park`, and a
  * parked search's `tried`. `_switches` exists precisely BECAUSE it differs between an interleaving scheduler
  * and a FIFO one (result.c says so), so comparing it would fail every schedule by construction. Everything
  * else is compared BY DEFAULT — a field added to the result document is a field this gate holds invariant
@@ -232,7 +233,7 @@ async function child(docPath, schedName) {
    about a name that might mean something else somewhere else. */
 const DROP = new Map([
   ["", new Set(["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun",
-                "_worldSegments", "_worldSegmentsForked", "_park"])],
+                "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked", "_park"])],
   [".securitySinks[]", new Set(["tried"])],
 ]);
 function canonStr(v, path) {

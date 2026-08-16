@@ -157,10 +157,13 @@ char *result_json(JSContext *ctx) {
     char *out;
 
     if (!eps || !sinks || !errs || !schemas) { free(eps); free(sinks); free(errs); free(schemas); return NULL; }
-    /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur: 182 bytes of literal and seven
-       counters whose full-width decimals are 104 more. It was 192 for a shape whose widest form was already
-       197 — inside only because the real numbers are small — and the two added below would have taken it
-       further past. The DCHECK under the snprintf is the second half of this, not a substitute for it. */
+    /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur. Counted rather than estimated,
+       and stated so the count can be re-done: the format's fixed bytes are 227 with its conversion specifiers
+       and 208 without them, and the eight counters' full-width decimals are 115 (five ints at 11, three longs
+       at 20), so the worst case is 323 against this 384. It was 192 for a shape whose widest form was already
+       197 — inside only because the real numbers are small. The DCHECK under the snprintf is the second half of
+       this, not a substitute for it: the arithmetic is what makes the buffer right, the assert is what catches
+       the arithmetic being re-done wrong. */
     /* THE PARK DOCUMENT RIDES THE RESULT, because it IS a result: it is what this engine has left to say about
        a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
        case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
@@ -170,21 +173,31 @@ char *result_json(JSContext *ctx) {
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
            times as long grew its frontier or grew the work inside each flow, and those need opposite fixes.
-           AND WHAT THE CROSS-INSTANCE SEAM DID: how many foreign worlds hold a segment here and how many of
-           those were built by forking an ancestor. A delivery arriving says nothing about whether the ancestry
-           it carried was ever used, and a mechanism nobody can see run is one that has never run. */
-        int seg = 0, segf = 0;
+           AND WHAT THE CROSS-INSTANCE SEAM DID. A delivery arriving says nothing about whether the ancestry it
+           carried was ever used, and a mechanism nobody can see run is one that has never run. */
+        /* HELD AND MADE ARE TWO NUMBERS AND THIS EMITTED ONE OF THEM UNDER THE OTHER'S NAME. `_worldSegments`
+           carried `world_segment_stats`'s materialized count — a CUMULATIVE history that only
+           world_segment_counts_reset lowers — while every reader's prose described the LIVE table (route.mjs:
+           "how many foreign worlds hold a segment here"). They agree exactly until world_release runs, which is
+           the one event the number exists to make visible, so the field was at its most wrong precisely when it
+           mattered. cold.c's park hook had already worked this out and prints both, in the words this comment
+           owes it: "held alone cannot say: with made beside it, held=0 is impossible to reach, held=4/made=4 is
+           a live peer, and a held that is far below made is a seam that materialized and released". So both
+           cross the seam, each named for the number it is, and `world_segments_held`'s own DCHECK (a table
+           larger than its history was grown by something that is not world.c) rides along with them. */
+        int held = world_segments_held(), made = 0, segf = 0;
         int m;
-        world_segment_stats(&seg, &segf);
+        world_segment_stats(&made, &segf);
         m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
                              "\"probeResults\":%s,"
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
                              "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,"
-                             "\"_worldSegments\":%d,\"_worldSegmentsForked\":%d,\"_park\":%s}",
+                             "\"_worldSegmentsHeld\":%d,\"_worldSegmentsMade\":%d,"
+                             "\"_worldSegmentsForked\":%d,\"_park\":%s}",
                      eps, sinks, errs, schemas, engine_switch_count(), flow_created_count(), solve_candidate_count(),
-                     engine_jobs_queued(), engine_jobs_run(), seg, segf, cold_park_json());
+                     engine_jobs_queued(), engine_jobs_run(), held, made, segf, cold_park_json());
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED. It was 192 bytes for three counters and is now carrying
-           seven, whose widest form is 104 digits beside 182 bytes of literal — inside the slack only because
+           eight, whose widest form is 115 digits beside 208 bytes of literal — inside the slack only because
            the real numbers are small. A truncation here does not lose a digit, it loses the closing brace: the host
            gets a document that will not parse and reports NOTHING for the page, which is the loudest possible
            consequence arriving as the quietest possible bug. snprintf already told us; nothing was asking. */
