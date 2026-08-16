@@ -197,9 +197,27 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mim
         /* §5.1's first arm: the body's stream IS this one. There are no bytes until it is read, and `.body`
            answers the very stream the page handed in — which is what makes `new Response(rs).body === rs`
            behave and what a page teeing a response's body depends on. A stream has no Content-Type. */
+        /* THE ARM'S OWN REFUSAL, which is a step of the extraction and not a caller's guard: "If object is
+           disturbed or locked, then throw a TypeError." A stream someone already holds a reader on has no
+           bytes left to give this body — `const r = rs.getReader(); new Response(rs)` must throw where the
+           page wrote it, and without this it succeeded and handed back a Response whose body could never be
+           read, the failure arriving later at a `text()` nothing in the page connected to the constructor.
+           Both slots are read through the INTERNAL operations: `locked` is "[[reader]] is not undefined" and
+           `disturbed` is §4.2's flag, so a page that patched `ReadableStream.prototype.locked` cannot decide
+           whether its own stream is acceptable as a body. */
+        bool locked = false;
+        readable_stream_query(init, NULL, &locked);
+        if (locked || readable_stream_disturbed(init)) {
+            JS_ThrowTypeError(ctx, "a body cannot be extracted from a ReadableStream that is disturbed or "
+                                   "locked");
+            return -1;
+        }
         JS_FreeValue(ctx, b->stream);
         b->stream = JS_DupValue(ctx, init);
-        free(b->bytes);
+        /* js_free, because body_state_set allocates these with js_mallocz and body_state_free releases them
+           with js_free_rt — the libc `free` that stood here would have handed a quickjs allocation to the
+           wrong allocator the first time this arm ran over a state that already carried bytes. */
+        js_free(ctx, b->bytes);
         b->bytes = NULL;
         b->len = 0;
         b->has = 1;

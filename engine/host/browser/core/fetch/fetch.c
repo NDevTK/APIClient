@@ -476,6 +476,19 @@ static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
             if (m) { header_list_append(&s->hdrs, "content-type", m); JS_FreeCString(ctx, m); }
             free(have);
         }
+        /* A STREAM-BACKED BODY HAS NO BYTES YET, AND THE PARK TAKES BYTES. §5.1's ReadableStream arm sets the
+           body's stream and leaves `source` null — there is nothing to send until the stream is READ — while
+           every other arm produces the bytes during extraction. This park read `bytes`, which the stream arm
+           never writes, so `fetch(u, {method:"POST", body: stream})` went to the host as a POST with an EMPTY
+           body and the endpoint surface recorded that request as the one the page made: a producer writing
+           `stream` and a consumer reading `bytes`, with the mismatch coming out as a plausible datum instead
+           of a crash. What to build is §5.1's transmission: fully read the body's stream BEFORE this point —
+           a stage of this machine that acquires a reader and reads to the end, the way body.c's readers do,
+           driven as a FLOW because each read answers a promise — and hand the park the bytes it produced. */
+        DCHECK(!(s->body.has && !s->body.bytes),
+               "fetch() reached the host edge with a STREAM-BACKED request body: §5.1's ReadableStream arm "
+               "leaves the bytes in the stream and this edge takes bytes. Build the full read as a stage of "
+               "this machine (acquire a reader, read to the end, accumulate) and park with those bytes");
         promise = fetch_park(ctx, s->url, s->method, s->input, &s->hdrs,
                              s->body.has ? s->body.bytes : NULL, s->body.len);
     }

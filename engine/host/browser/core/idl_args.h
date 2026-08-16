@@ -160,10 +160,9 @@ typedef enum {
     /* `BodyInit?` — Fetch's `(ReadableStream or Blob or BufferSource or FormData or URLSearchParams or
        USVString)?`. Its rule is a BRAND check like the two above, but against the BUFFER SOURCE shape rather
        than one class: an ArrayBuffer or any ArrayBufferView crosses as itself, null and undefined are the IDL
-       null, and everything else is the union's USVString arm. Blob, FormData and URLSearchParams are brand
-       tests beside it now that those interfaces exist; ReadableStream is the one arm still absent, and it
-       becomes one more test in this same place. The body learns nothing either way — §5.1's extraction reads
-       the arm back off the value. */
+       null, and everything else is the union's USVString arm. Blob, FormData, URLSearchParams and
+       ReadableStream are brand tests beside it, each asked of the component that owns the interface. The body
+       learns nothing either way — §5.1's extraction reads the arm back off the value. */
     IDL_BODYINIT_NULLABLE,
     /* `sequence<BlobPart>` — §3.2.20's iterator-protocol conversion with `(BufferSource or Blob or USVString)`
        as the element type. Named for the IDL type it IS, the way IDL_BODYINIT_NULLABLE is: the union's brand
