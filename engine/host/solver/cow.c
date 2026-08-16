@@ -693,7 +693,27 @@ static void cow_restore_base(JSContext *ctx, CowEntry *e) {
     }
     if (e->vref) { JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->base)); return; }
     uint32_t ai;
-    if (e->existed) JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->base));   /* -> baseline */
+    if (e->existed) {
+        /* THE BASELINE VALUE, PUT BACK — AND ASSERTED, because a restore that does not LAND is how the missing
+           half of an entry surfaces, and until this line it did not surface at all.
+           THE READ SIDE ALREADY DREW THIS LINE AND THE WRITE SIDE NEVER DID: JS_GetOwnSlot is "a SLOT's stored
+           value, never an operation", and asserts that neither a Proxy nor an accessor can reach it. This is a
+           [[Set]] — an operation THROUGH the slot — so it refuses whatever the flow left behind that a [[Set]]
+           cannot reach, and it refuses by THROWING (it carries JS_PROP_THROW) inside a context switch that has
+           no flow base to run an exception on. THREE shapes reach it today: a slot the flow narrowed with a
+           define (Object.freeze, `{writable:false}`), which this entry holds no ATTRIBUTES to widen back; a
+           slot the flow DELETED off a non-extensible object, which a [[Set]] may not re-create; and a capture
+           whose write then THREW, which is a spurious entry over a slot that was already read-only (`Math.PI =
+           1` in a flow captures, fails, and comes back here). Each one silently left a pending TypeError
+           belonging to no flow, which the next thing to check for an exception read as its own. */
+        int put = JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->base));
+        DCHECK(put > 0,
+               "a captured slot's baseline value could not be put back: the restore is a [[Set]] where it must "
+               "WRITE THE SLOT, so it refuses a slot this flow narrowed to non-writable or deleted off a "
+               "non-extensible object — build JS_GetOwnSlot's write twin, and give the entry the DESCRIPTOR "
+               "(the C/W/E flags, and the accessor pair JS_GetOwnSlot refuses on both sides of the round trip) "
+               "so there is something to put back");
+    }
     else if (JS_IsArrayIndexSlot(e->obj, e->atom, &ai))
         /* flow-CREATED array append: TRUNCATE the array to this index (frees the tail), removing it. Entries
            are processed in reverse (highest index first), so a contiguous run of appends shrinks one-by-one
