@@ -2103,6 +2103,14 @@ static int engine_reclaim_set(int v) { int prev = g_reclaim_allowed; g_reclaim_a
    is the fetch side of it, with the difference that the fetch side had an assert to keep honest. */
 static long g_paged_owed;
 
+/* HOW MANY FLOWS THIS SESSION ACTUALLY SOLD. The pager's whole claim is that `live` stops tracking `flows`
+   under pressure, and until this counter existed that claim had no WRITER: `live < flows` is equally the
+   signature of flows FINISHING, and `_park`'s record count is two record kinds (segments and flows) added
+   together, so neither of the two numbers a run already printed can answer "did it page". CLAUDE.md's rule is
+   that a consumer never defaults a producer's field; the same rule read forwards is that a measurement gets a
+   producer before it gets quoted. */
+static long g_flows_sold;
+
 int engine_take_paged_owed(void) {
     if (g_paged_owed <= 0)
         return 0;
@@ -2130,6 +2138,24 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     tail = flow_worst(flow_running());
     if (!tail)
         return 0;   /* the floor: nothing here but the flow that is running */
+    /* AND THE SHARPER STATEMENT, WHICH THE SOLVER'S OWN ALLOCATIONS MADE NECESSARY. "Not the flow the
+       scheduler is switched into" is how flow_worst is CONSTRUCTED; what has to be true at this line is that
+       the flow being sold is not the flow this allocation is FOR. Since the engine's own allocations now ask
+       here (solver/reclaim.h), the caller is very often GROWING the running flow's own state — its delta's
+       entry array, its DOM undo log — and holding the old buffer in a local across this call. Selling that
+       flow would free the buffer the caller is about to write through, and the corruption would look like a
+       COW bug rather than a paging one. The exclusion is the construction; this is the assertion. */
+    DCHECK(tail != flow_running(),
+           "the pager chose the flow the scheduler is switched into — the allocation that asked for this "
+           "memory is usually growing that flow's own delta or undo log, so selling it frees the buffer the "
+           "caller is holding and is about to write through");
+    /* AND IT IS STILL IN THE REGISTRY — a separate fact with a separate failure. flow_worst walks the members,
+       so a non-member here is a stale Flow* the frontier already removed, and cold_park_flow would then write a
+       recipe for a flow that does not exist and flow_release would free it a second time. Two facts, two
+       asserts: a conjunction reports whichever failed under whichever message was written for the other. */
+    DCHECK(flow_is_member(tail),
+           "the pager chose a flow that is not in the frontier — flow_worst walks the registry, so this is a "
+           "stale pointer, and both the park below it and the release after it would act on freed memory");
     /* WRITE IT DOWN, THEN GIVE ITS RAM BACK — in that order, because the release is what makes the recipe the
        only remaining copy of this flow. cold_park_flow appends one record to the session's park document (the
        host stores it under this bundle's key and the next session MERGES it back in); flow_release unapplies
@@ -2141,6 +2167,7 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     g_paged_owed += pending_count(tail->pending);
     cold_park_flow(tail);
     flow_release(g_sess_ctx, tail);
+    g_flows_sold++;
     return 1;
 }
 
@@ -2149,6 +2176,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
     g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_srcs = srcs; g_sess_n = n; g_sess_cur = NULL; g_sess_live = 1;
     g_parked = 0;
     g_paged_owed = 0;   /* replies owed to flows this session paged out — see engine_take_paged_owed */
+    g_flows_sold = 0;   /* …and how many flows that was, which is what @PROGRESS's `sold` reports */
     /* WHAT AN UNCANCELLED REJECTION MEANS is this half's answer: the browser half fires the event and honours
        preventDefault, and a reason that survives that is a page error exactly like a script that threw. */
     unhandled_rejection_set_report_hook(result_page_error_value);
@@ -2919,9 +2947,13 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                            JS_TrampFrameCount(JS_GetRuntime(g_sess_ctx)),
                            (long long)engine_c_alloc_live() / 1024, (long long)engine_c_alloc_arena() / 1024);
                 }
-                printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"live\":%d,\"objects\":%lld,"
+                /* `sold` BETWEEN THEM, because it is the only thing that makes the gap between `flows` and
+                   `live` readable. A frontier that stops growing has either finished flows or PAGED them, and
+                   those are opposite verdicts on the same two numbers: the first says the document drained,
+                   the second says the RAM floor is being traded for cold-tier records. See g_flows_sold. */
+                printf("@PROGRESS {\"switches\":%d,\"flows\":%ld,\"live\":%d,\"sold\":%ld,\"objects\":%lld,"
                        "\"heapKiB\":%lld,\"script\":%d,\"candidates\":%d,\"running\":\"%s\",\"forkedAt\":{",
-                       g_switches, flow_created_count(), flow_count(),
+                       g_switches, flow_created_count(), flow_count(), g_flows_sold,
                        (long long)mem.obj_count, (long long)(mem.malloc_size / 1024),
                        g_sess_cur ? g_sess_cur->script_i : -1, last_cands,
                        g_sess_cur && g_sess_cur->cand_sink ? g_sess_cur->cand_sink : "-");

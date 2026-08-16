@@ -11,6 +11,7 @@
 #include "solver/decide.h"     /* …and its suspended decision vector */
 #include "solver/concolic.h"   /* …and its suspended path constraint */
 #include "solver/cold.h"       /* …and the park document written out of all of them */
+#include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
 #include <stdlib.h>
 
@@ -318,11 +319,16 @@ long flow_created_count(void) { return g_flows_created; }
 static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     g_flows_created++;
     if (g_flows_n >= g_flows_cap) {
-        g_flows_cap = g_flows_cap ? g_flows_cap * 2 : 32;
-        g_flows = realloc(g_flows, (size_t)g_flows_cap * sizeof(Flow *));
-        CHECK(g_flows, "flow_add: OOM growing the frontier — a dropped flow corrupts BFS exploration");
+        int nc = g_flows_cap ? g_flows_cap * 2 : 32;
+        /* THE REGISTRY IS WHAT THE SALE WALKS. This allocation can page a flow out (solver/reclaim.h), and the
+           pager's own flow_remove swap-removes from THIS array — so the array, its count and its capacity must
+           all still describe the buffer that exists for the whole of the ask. Publishing the doubled capacity
+           first would advertise room the buffer does not have to the one caller guaranteed to be inside it. */
+        Flow **nf = reclaim_realloc(g_flows, (size_t)nc * sizeof(Flow *));
+        CHECK(nf, "flow_add: OOM growing the frontier — a dropped flow corrupts BFS exploration");
+        g_flows = nf; g_flows_cap = nc;
     }
-    Flow *f = calloc(1, sizeof(Flow));
+    Flow *f = reclaim_calloc(1, sizeof(Flow));
     CHECK(f, "flow_add: OOM allocating a flow — a dropped flow corrupts the frontier");
     f->fn = JS_DupValue(ctx, fn);
     /* THE PENDING REGISTER IS EMPTY, AND EMPTY IS NOT AN ARRAY. Most flows never park on anything, so

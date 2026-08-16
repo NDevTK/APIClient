@@ -1,5 +1,6 @@
 /* Per-flow swappable COW delta — see cow.h. */
 #include "solver/cow.h"
+#include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -117,9 +118,15 @@ static void cow_hash_put(CowDelta *d, int idx) {   /* insert entry idx; caller g
     d->hash[h] = idx + 1;
 }
 static void cow_hash_rebuild(CowDelta *d) {   /* size to >= 2*n (power of two), re-insert every entry */
-    d->hash_cap = 16; while (d->hash_cap < d->n * 2) d->hash_cap *= 2;
-    d->hash = realloc(d->hash, (size_t)d->hash_cap * sizeof(int));
-    CHECK(d->hash, "cow: OOM hash index");
+    /* SIZED IN A LOCAL AND PUBLISHED AFTER — same rule as cow_room_for_one below, and here it is the INDEX
+       rather than the entries: a `hash_cap` advertising the new size over the old, smaller table makes every
+       cow_hash_find that ran during the sale read past its end. */
+    int nc = 16;
+    int *nh;
+    while (nc < d->n * 2) nc *= 2;
+    nh = reclaim_realloc(d->hash, (size_t)nc * sizeof(int));
+    CHECK(nh, "cow: OOM hash index");
+    d->hash = nh; d->hash_cap = nc;
     memset(d->hash, 0, (size_t)d->hash_cap * sizeof(int));
     for (int i = 0; i < d->n; i++) if (!d->e[i].is_gendata && !d->e[i].is_state) cow_hash_put(d, i);   /* gendata/async aren't slot-keyed */
 }
@@ -142,11 +149,37 @@ static int cow_hash_find(CowDelta *d, void *objptr, uint32_t atom, void *vref) {
     return -1;
 }
 
+/* ROOM FOR ONE MORE ENTRY, in ONE place, and the reason it is one place is the refusal edge underneath it.
+   `reclaim_realloc` can SELL A FLOW from inside the ask (solver/reclaim.h), and selling one runs this file's
+   own release code, so for the whole of that call `d` must describe the buffer that ACTUALLY EXISTS: the new
+   capacity is PUBLISHED ONLY AFTER the allocation returns. Doubling `d->cap` first — which is what eleven
+   copies of this block did — leaves `d->e` pointing at the old, smaller array while `d->cap` advertises the
+   new size, and anything that reaches `d` during the sale writes past its end. That was safe only because
+   every capture entry point happens to be closed by `g_capturing`, which is an argument rather than a
+   construction, and an argument the twelfth copy would not have carried.
+   Answers whether the array actually GREW, because the five callers that keep a sized hash index rebuild it
+   exactly then — rebuilding on every capture instead is quadratic. */
+static int cow_room_for_one(CowDelta *d, const char *why) {
+    int nc;
+    CowEntry *ne;
+
+    if (d->n < d->cap)
+        return 0;
+    nc = d->cap ? d->cap * 2 : 32;
+    ne = reclaim_realloc(d->e, (size_t)nc * sizeof(CowEntry));
+    /* THE EDGE MAKES THE FAILURE RECOVERABLE; THIS IS STILL THE ANSWER WHEN THERE IS NOTHING LEFT TO SELL.
+       The caller's own sentence is carried through rather than replaced by one generic line, because which
+       capture was lost is the whole of what a reader needs here. */
+    CHECK(ne, why);
+    d->e = ne; d->cap = nc;
+    return 1;
+}
+
 static CowDelta *g_current = NULL;   /* the flow whose writes are captured right now (scheduler-owned) */
 static int g_capturing = 0;          /* re-entrancy guard: our own reads/restores must not re-capture */
 
 CowDelta *cow_delta_new(void) {
-    CowDelta *d = calloc(1, sizeof *d);
+    CowDelta *d = reclaim_calloc(1, sizeof *d);
     CHECK(d, "cow: OOM new delta");
     return d;
 }
@@ -183,7 +216,7 @@ static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
     switch (e->state_kind) {
     case COW_STATE_MODULE: return JS_ModuleEvalStateSave(ctx, e->target);
     case COW_STATE_HOST: {
-        void *blob = malloc(e->a_len);
+        void *blob = reclaim_malloc(e->a_len);
         CHECK(blob, "cow: OOM saving a component's own state — a lost latch leaks one flow's read into another");
         memcpy(blob, e->target, e->a_len);
         return blob;
@@ -191,7 +224,7 @@ static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
     case COW_STATE_HOST_REC: {
         /* The bytes, then ONE REFERENCE PER OWNED VALUE. The memcpy already put the value's bits in the blob;
            the dup is what makes that a reference the blob holds rather than one it silently shares. */
-        void *blob = malloc(e->rec->size);
+        void *blob = reclaim_malloc(e->rec->size);
         int i;
         CHECK(blob, "cow: OOM saving a component's record");
         memcpy(blob, e->target, e->rec->size);
@@ -276,11 +309,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
        here would be the page's code with no flow base. JS_GetOwnSlot asserts that neither is reachable. */
     int existed = JS_GetOwnSlot(ctx, &base, obj, atom) > 0;
 
-    if (d->n >= d->cap) {
-        d->cap = d->cap ? d->cap * 2 : 32;
-        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta — a lost baseline write leaks state across flows");
-    }
+    cow_room_for_one(d, "cow: OOM growing delta — a lost baseline write leaks state across flows");
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, obj);
     e->atom = JS_DupAtom(ctx, atom);
@@ -308,11 +337,7 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;
     g_capturing = 1;
-    if (d->n >= d->cap) {
-        d->cap = d->cap ? d->cap * 2 : 32;
-        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta (arr_append)");
-    }
+    cow_room_for_one(d, "cow: OOM growing delta (arr_append)");
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, obj);
     e->atom = JS_DupAtom(ctx, atom);   /* a tagged-int index atom: dup is a no-op, kept for uniform free */
@@ -335,11 +360,7 @@ void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSV
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     g_capturing = 1;
-    if (d->n >= d->cap) {
-        d->cap = d->cap ? d->cap * 2 : 32;
-        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta (map_add) — a lost Set/Map record leaks across flows");
-    }
+    cow_room_for_one(d, "cow: OOM growing delta (map_add) — a lost Set/Map record leaks across flows");
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, obj);
     e->atom = JS_ATOM_NULL;
@@ -363,11 +384,7 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip */
     g_capturing = 1;
-    if (d->n >= d->cap) {
-        d->cap = d->cap ? d->cap * 2 : 32;
-        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta (map_mutate) — a lost Set/Map mutation leaks across flows");
-    }
+    cow_room_for_one(d, "cow: OOM growing delta (map_mutate) — a lost Set/Map mutation leaks across flows");
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, obj);
     e->atom = JS_ATOM_NULL;
@@ -407,12 +424,8 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
             g_capturing = 0;
             return;
         }
-    if (d->n >= d->cap) {
-        d->cap = d->cap ? d->cap * 2 : 32;
-        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta (async_state) — a lost settlement leaks a flow's timeline");
+    if (cow_room_for_one(d, "cow: OOM growing delta (async_state) — a lost settlement leaks a flow's timeline"))
         cow_hash_rebuild(d);
-    }
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, obj);
     e->atom = JS_ATOM_NULL; e->existed = 0;
@@ -455,12 +468,8 @@ void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_dat
         (void)base_data;
         return;
     }
-    if (d->n >= d->cap) {
-        d->cap = d->cap ? d->cap * 2 : 32;
-        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta (async_fork) — a lost activation swap corrupts a flow's timeline");
+    if (cow_room_for_one(d, "cow: OOM growing delta (async_fork) — a lost activation swap corrupts a flow's timeline"))
         cow_hash_rebuild(d);
-    }
     CowEntry *e = &d->e[d->n++];
     memset(e, 0, sizeof *e);
     e->obj = JS_DupValue(ctx, closure);
@@ -481,12 +490,8 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
     void *blob = JS_ModuleEvalStateSave(ctx, mod);
     CHECK(blob, "cow: a module's evaluation state could not be captured — a sibling flow would inherit this "
                 "flow's evaluation and read exports it never wrote");
-    if (d->n >= d->cap) {
-        d->cap = d->cap ? d->cap * 2 : 32;
-        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta (module_eval)");
+    if (cow_room_for_one(d, "cow: OOM growing delta (module_eval)"))
         cow_hash_rebuild(d);
-    }
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_UNDEFINED;
     e->atom = JS_ATOM_NULL; e->existed = 0;
@@ -525,12 +530,8 @@ void cow_capture_host_state(JSContext *ctx, JSValueConst owner, void *p, size_t 
     for (int i = 0; i < d->n; i++)                    /* one entry per record: the FIRST baseline is the baseline */
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_HOST && d->e[i].target == p) return;
     g_capturing = 1;
-    if (d->n >= d->cap) {
-        d->cap = d->cap ? d->cap * 2 : 32;
-        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta (host_state)");
+    if (cow_room_for_one(d, "cow: OOM growing delta (host_state)"))
         cow_hash_rebuild(d);
-    }
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, owner);
     e->atom = JS_ATOM_NULL; e->existed = 0;
@@ -577,12 +578,8 @@ void cow_capture_host_record(JSValueConst owner, void *p, const CowRecord *rec) 
     for (int i = 0; i < d->n; i++)
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_HOST_REC && d->e[i].target == p) return;
     g_capturing = 1;
-    if (d->n >= d->cap) {
-        d->cap = d->cap ? d->cap * 2 : 32;
-        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta (host_record)");
+    if (cow_room_for_one(d, "cow: OOM growing delta (host_record)"))
         cow_hash_rebuild(d);
-    }
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, owner);
     e->atom = JS_ATOM_NULL; e->existed = 0;
@@ -601,11 +598,7 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
     CowDelta *d = g_current;
     if (cow_hash_find(d, NULL, 0, vref) >= 0) return;   /* capture each cell ONCE (O(1)) */
     g_capturing = 1;
-    if (d->n >= d->cap) {
-        d->cap = d->cap ? d->cap * 2 : 32;
-        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta (var_ref)");
-    }
+    cow_room_for_one(d, "cow: OOM growing delta (var_ref)");
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_UNDEFINED; e->atom = JS_ATOM_NULL; e->existed = 0;
     e->base = JS_VarRefGetValue(vref);   /* owned dup of the cell's current (baseline) value */
@@ -632,11 +625,7 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
             return;
         }
     }
-    if (d->n >= d->cap) {
-        d->cap = d->cap ? d->cap * 2 : 32;
-        d->e = realloc(d->e, (size_t)d->cap * sizeof(CowEntry));
-        CHECK(d->e, "cow: OOM growing delta (gendata) — a lost generator swap corrupts per-flow state");
-    }
+    cow_room_for_one(d, "cow: OOM growing delta (gendata) — a lost generator swap corrupts per-flow state");
     CowEntry *e = &d->e[d->n++];
     e->obj = JS_DupValue(ctx, genobj);
     e->atom = JS_ATOM_NULL; e->existed = 0; e->base = JS_UNDEFINED;
@@ -758,13 +747,18 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
         if (d->base) d->base->refcount++;
         return d;
     }
+    /* ALLOCATED WHILE THE WORLD IS CONSISTENT — before the unapply, not after it, which is the same rule as
+       publishing a capacity late. This allocation can SELL A FLOW (solver/reclaim.h), and a sale walks the
+       shared chain and may re-install it; asking for the memory here asks it while the running flow's head is
+       still applied and the heap shows exactly the timeline the chain names. Between the unapply and the
+       re-apply the head is half-taken-down, which is a state no other code in this file is written to meet. */
+    seg = reclaim_malloc(sizeof *seg);
+    CHECK(seg, "cow: OOM fork segment — a shared delta would be corrupted");
     g_capturing = 1;
     /* THE FETCH, for an applied delta only: unapply is what puts each entry's branch-point value into `cur`. A
        parked delta's entries hold it already, and running this on one would read the heap of whatever flow IS
        applied and record another timeline's values as this delta's. */
     if (applied) cow_unapply_entries(ctx, src->e, src->n);
-    seg = malloc(sizeof *seg);
-    CHECK(seg, "cow: OOM fork segment — a shared delta would be corrupted");
     seg->e = src->e; seg->n = src->n; seg->base = src->base; seg->refcount = 2;   /* running flow + sibling */
     g_seg_live++; g_seg_entries_live += seg->n;
     src->e = NULL; src->n = 0; src->cap = 0;   /* fresh empty head for the running flow */

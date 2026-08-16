@@ -42,6 +42,59 @@
 
 #include "quickjs.h"
 
+/* ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+   AND THE THIRD ALLOCATOR, WHICH IS THE SOLVER'S OWN — the one with no injection point to take.
+ *
+ * With the runtime's allocator and lexbor's both routed, the wall run died at dom_cow.c's undo-log realloc:
+ * `perFlowKiB 487464` against `domSegKiB 316067`, so roughly 800 MB of a 2 GB address space is the frontier's
+ * own bookkeeping — its heap deltas, its DOM undo logs, the frozen segments they fork into, and the flows
+ * themselves — allocated by direct calls to the C library. There is nothing to hand a set of function pointers
+ * to; the sites have to ask.
+ *
+ * THE RULE IS ONE SENTENCE: AN ALLOCATION THE ENGINE MAKES FOR A RUNNING FLOW MUST BE ABLE TO SHRINK THE
+ * FRONTIER BEFORE IT FAILS. In practice that is the frontier's own state — cow.c's delta entries and their
+ * frozen segments, dom_cow.c's undo log and document segments, decide.c's and concolic.c's chains, flow.c's
+ * registry and the Flow structs themselves — and the transients computed from it on the same path, which are
+ * not worth telling apart: an engine holding a releasable working set should spend it rather than abort,
+ * whichever of its own allocations happens to be the one that asks.
+ * EVERY SUCH SITE KEEPS ITS `CHECK`. The edge is what makes the failure recoverable; the CHECK is still the
+ * truth when the engine answers that it has nothing left to sell. A site that traded its CHECK for this has
+ * traded a crash for a silently corrupted delta — dom_cow.c's undo log is the one that proves it, since a
+ * capture it cannot record is a DOM write that never reverts.
+ *
+ * ONE PLACE IS DELIBERATELY NOT CONVERTED: the park document (cold.c's park_reserve). It is the SALE'S OWN
+ * OUTPUT, so an allocation it cannot make is not one another sale could fund — every sale needs it first. Its
+ * CHECK is the floor and says so.
+ *
+ * THE RECLAIM RE-ENTERS THE STRUCTURE BEING GROWN, and at these sites that is not a hazard to argue away but
+ * the ordinary case: selling a flow frees delta entries and DOM segments, so a reclaim raised by dom_cow's own
+ * realloc runs dom_cow's own code. Three things make it sound, and the third is the one converting a site has
+ * to get right.
+ *   - THE ONE-DEEP LATCH inside JS_ReclaimMemory (quickjs.h): an allocation made BY the sale refuses without
+ *     asking again, so the frees the sale performs cannot recurse into another sale. This is the first place
+ *     that latch is load-bearing rather than defensive.
+ *   - THE FLOW SOLD IS NEVER THE FLOW THE ALLOCATION IS FOR. engine_reclaim_tail takes flow_worst(running)
+ *     and asserts both halves of that, which at these sites is the sharper statement that the buffer the
+ *     caller is about to write through cannot be the buffer the sale just freed. Hence the conversion rule:
+ *     THE POINTER HANDED TO reclaim_realloc MUST BELONG TO THE RUNNING FLOW OR TO NO FLOW AT ALL. `dst`
+ *     survives a refusal (C leaves it untouched when realloc returns NULL) and the retry hands it back, so a
+ *     buffer a SALE could free is a use-after-free on the second attempt — and it would surface as the second
+ *     attempt succeeding, which is the shape that never reproduces.
+ *   - AND EVERY STRUCTURE DESCRIBES THE BUFFER THAT EXISTS, FOR THE WHOLE OF THE ASK. A capacity doubled
+ *     BEFORE the allocation advertises room the array does not have to everything the sale runs; a segment
+ *     allocated in the middle of a fork's unapply/re-apply round trip asks while the head is half-taken-down.
+ *     So the capacity is published only after the allocation returns (cow.c's cow_room_for_one is the one
+ *     copy of that, concolic.c and flow.c say it at their single sites) and the fork segments are allocated
+ *     before their round trip begins. This is the half that is CONSTRUCTION rather than argument, and it is
+ *     the half that survives the next site somebody adds.
+ *
+ * THERE IS NO reclaim_free, AND THAT IS NOT AN OMISSION. These three are the C allocator plus a retry, so what
+ * they return is freed by plain free() and a converted site's free needs no edit at all. A refusal is the only
+ * thing this file adds; ownership is untouched. */
+void *reclaim_malloc(size_t size);
+void *reclaim_realloc(void *ptr, size_t size);
+void *reclaim_calloc(size_t num, size_t size);
+
 /* Route this instance's OTHER allocators into `cb`, and install `cb` as the runtime's own reclaim hook. One
    call, because "which allocators refuse through the edge" is one fact and a second install site is a list to
    forget. Asserts it is not being pointed at a second runtime: lexbor's allocator is process-global, so two

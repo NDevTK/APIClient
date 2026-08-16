@@ -3,6 +3,7 @@
 #include "solver/concolic.h"
 #include "solver/flow.h"
 #include "solver/engine.h"
+#include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -69,7 +70,7 @@ static void dec_ensure(int n) {
     if (n <= g_dec_cap) return;
     int nc = g_dec_cap ? g_dec_cap * 2 : 64;
     while (nc < n) nc *= 2;
-    g_dec = realloc(g_dec, (size_t)nc);
+    g_dec = reclaim_realloc(g_dec, (size_t)nc);
     CHECK(g_dec, "decide: OOM growing the decision vector — depth is bounded only by the RAM/disk floor");
     g_dec_cap = nc;
 }
@@ -153,9 +154,9 @@ static DecSeg *dec_freeze(void) {
         if (g_dec_base) g_dec_base->refcount++;
         return g_dec_base;
     }
-    s = malloc(sizeof *s);
+    s = reclaim_malloc(sizeof *s);
     CHECK(s, "decide: OOM freezing the decision vector into a shared segment");
-    s->e = malloc((size_t)g_dec_n);
+    s->e = reclaim_malloc((size_t)g_dec_n);
     CHECK(s->e, "decide: OOM freezing the decision vector's entries");
     memcpy(s->e, g_dec, (size_t)g_dec_n);
     s->n = g_dec_n; s->below = g_dec_below; s->base = g_dec_base; s->refcount = 2;   /* running flow + caller */
@@ -169,9 +170,9 @@ static DecSeg *dec_freeze(void) {
 /* ONE MORE DECISION over `base`, as its own segment — the sibling's arm at the branch. It takes the caller's
    reference on `base` (the fork's freeze produced exactly one to give). */
 static DecSeg *dec_seg_arm(DecSeg *base, int arm) {
-    DecSeg *s = malloc(sizeof *s);
+    DecSeg *s = reclaim_malloc(sizeof *s);
     CHECK(s, "decide: OOM recording a sibling's arm");
-    s->e = malloc(1);
+    s->e = reclaim_malloc(1);
     CHECK(s->e, "decide: OOM recording a sibling's arm");
     s->e[0] = (signed char)arm;
     s->n = 1; s->below = base ? base->below + base->n : 0;
@@ -279,7 +280,7 @@ long decide_fork_total(void) { return g_fork_total; }
    every park AND on every fork, which is where the quadratic came from. */
 typedef struct { DecSeg *seg; int c; } DecideBlob;
 void *decide_suspend(void) {
-    DecideBlob *b = malloc(sizeof *b); CHECK(b, "decide: OOM suspend blob");
+    DecideBlob *b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM suspend blob");
     b->seg = dec_freeze();   /* the blob owns the reference the freeze hands back */
     b->c = g_c;
     return b;
@@ -332,9 +333,9 @@ void *decide_seg_new(void *base, const signed char *arms, int n) {
 
     DCHECK(n > 0, "a decision segment was rebuilt with no arms — every flow standing on it would replay its "
                   "path one decision short, and every branch after that would read the next flow's answer");
-    s = malloc(sizeof *s);
+    s = reclaim_malloc(sizeof *s);
     CHECK(s, "decide: OOM rebuilding a parked decision segment");
-    s->e = malloc((size_t)n);
+    s->e = reclaim_malloc((size_t)n);
     CHECK(s->e, "decide: OOM rebuilding a parked decision segment's arms");
     memcpy(s->e, arms, (size_t)n);
     s->n = n;
@@ -377,7 +378,7 @@ void decide_seg_set_park_id(const void *seg, long id) {
 }
 
 void *decide_blob_new(void *seg) {
-    DecideBlob *b = malloc(sizeof *b);
+    DecideBlob *b = reclaim_malloc(sizeof *b);
     CHECK(b, "decide: OOM rebuilding a parked flow's decision state");
     b->seg = seg;
     if (seg) ((DecSeg *)seg)->refcount++;
@@ -405,7 +406,7 @@ void decide_live_stats(long *entries, long *bytes) {
    (cursor). c = cursor so on resume the sibling re-executes the OP_if and replays exactly this arm — never
    re-forks, never re-runs the prefix. */
 static void *decide_fork_blob(int cursor, int arm) {
-    DecideBlob *b = malloc(sizeof *b); CHECK(b, "decide: OOM fork blob");
+    DecideBlob *b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM fork blob");
     /* A FORK IS ALWAYS AT THE END, and that is what makes the freeze the sibling's whole prefix rather than a
        prefix of it. decide_arm reaches the forking branch only when the cursor has caught up with the vector
        (the replay arm consumes a recorded slot, the constraint arm consumes none and records none), so the head

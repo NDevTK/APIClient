@@ -3,6 +3,7 @@
 #include "solver/concolic.h"
 #include "solver/absent.h"
 #include "solver/flow.h"
+#include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
 #include <stdlib.h>
 #include <string.h>
@@ -93,10 +94,15 @@ static void cons_hash_put(int idx) {   /* insert head entry idx; caller guarante
     g_pins_hash[h] = idx + 1;
 }
 static void cons_hash_rebuild(void) {   /* size to >= 2*n (power of two), re-insert every head entry */
-    int i;
-    g_pins_hash_cap = 16; while (g_pins_hash_cap < g_pins_n * 2) g_pins_hash_cap *= 2;
-    g_pins_hash = realloc(g_pins_hash, (size_t)g_pins_hash_cap * sizeof(int));
-    CHECK(g_pins_hash, "concolic: OOM path-constraint index");
+    int i, nc = 16;
+    int *nh;
+    /* SIZED IN A LOCAL, PUBLISHED AFTER — the allocation can sell a flow (solver/reclaim.h), and a `cap`
+       advertising the new size over the old table is an out-of-bounds read for anything that looks a pin up
+       while the sale runs. */
+    while (nc < g_pins_n * 2) nc *= 2;
+    nh = reclaim_realloc(g_pins_hash, (size_t)nc * sizeof(int));
+    CHECK(nh, "concolic: OOM path-constraint index");
+    g_pins_hash = nh; g_pins_hash_cap = nc;
     memset(g_pins_hash, 0, (size_t)g_pins_hash_cap * sizeof(int));
     for (i = 0; i < g_pins_n; i++) cons_hash_put(i);
 }
@@ -121,9 +127,10 @@ static Cons *cons_entry(const char *key) {
     if (i >= 0) return &g_pins[i];
     below = cons_lookup(key);   /* the head misses, so this is the chain's entry or nothing */
     if (g_pins_n >= g_pins_cap) {
-        g_pins_cap = g_pins_cap ? g_pins_cap * 2 : 8;
-        g_pins = realloc(g_pins, (size_t)g_pins_cap * sizeof(Cons));
-        CHECK(g_pins, "concolic: OOM path constraint");
+        int nc = g_pins_cap ? g_pins_cap * 2 : 8;
+        Cons *np = reclaim_realloc(g_pins, (size_t)nc * sizeof(Cons));
+        CHECK(np, "concolic: OOM path constraint");
+        g_pins = np; g_pins_cap = nc;   /* published after the ask — see cons_hash_rebuild */
     }
     g_pins[g_pins_n].key = strdup(key); CHECK(g_pins[g_pins_n].key, "concolic: OOM constraint key");
     g_pins[g_pins_n].val = (below && below->val) ? strdup(below->val) : NULL;
@@ -177,7 +184,7 @@ void concolic_clear_pins(void) {
    starting knowledge, which is the same object either way and is why one function serves both. */
 typedef struct { ConsSeg *seg; } PinBlob;
 void *concolic_pins_suspend(void) {
-    PinBlob *b = malloc(sizeof *b);
+    PinBlob *b = reclaim_malloc(sizeof *b);
     CHECK(b, "concolic: the path constraint could not be parked — the frontier never drops a work item, and a "
              "flow whose constraint is lost would re-fork every branch it has already decided");
     if (g_pins_n == 0) {
@@ -191,7 +198,7 @@ void *concolic_pins_suspend(void) {
     DCHECK(g_pins_hash != NULL, "a non-empty constraint head is being frozen with no index — every read of the "
                                 "frozen segment would miss and the fact would be re-forked");
     {
-        ConsSeg *s = malloc(sizeof *s);
+        ConsSeg *s = reclaim_malloc(sizeof *s);
         CHECK(s, "concolic: OOM freezing the path constraint into a shared segment");
         s->e = g_pins; s->n = g_pins_n; s->hash = g_pins_hash; s->hash_cap = g_pins_hash_cap;
         s->base = g_pins_base; s->refcount = 2;   /* the running flow + this blob */
@@ -226,7 +233,7 @@ void concolic_pins_resume(void *blob) {
    had already decided. This is the honest way to satisfy it — an empty chain, not a NULL the assert is taught
    to tolerate. */
 void *concolic_pins_blob_empty(void) {
-    PinBlob *b = malloc(sizeof *b);
+    PinBlob *b = reclaim_malloc(sizeof *b);
     CHECK(b, "concolic: a resumed flow's empty path constraint could not be allocated");
     b->seg = NULL;
     return b;
@@ -304,7 +311,7 @@ void concolic_declare_source(const char *src, const char *encode, char prefix, S
         }
     if (g_srcs_n == g_srcs_cap) {
         int c = g_srcs_cap ? g_srcs_cap * 2 : 8;
-        SourceDelivery *a = realloc(g_srcs, (size_t)c * sizeof *a);
+        SourceDelivery *a = reclaim_realloc(g_srcs, (size_t)c * sizeof *a);
         CHECK(a != NULL, "concolic: OOM declaring a source's delivery");
         g_srcs = a; g_srcs_cap = c;
     }
@@ -370,7 +377,7 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *pay
     if (!d) return JS_NewString(ctx, payload);   /* an undeclared source is delivered as itself */
 
     n = strlen(payload);
-    out = malloc(n * 3 + 2);
+    out = reclaim_malloc(n * 3 + 2);
     CHECK(out != NULL, "concolic: OOM delivering a candidate");
     if (d->prefix) out[o++] = d->prefix;
     for (p = (const unsigned char *)payload; *p; p++) {
@@ -726,7 +733,7 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
     DCHECK(g_concolic_class != 0, "concolic_new before concolic_init — the class is unregistered");
     JSValue obj = JS_NewObjectClass(ctx, g_concolic_class);
     if (JS_IsException(obj)) { JS_FreeValue(ctx, example); return obj; }
-    Concolic *c = calloc(1, sizeof *c);
+    Concolic *c = reclaim_calloc(1, sizeof *c);
     CHECK(c, "concolic_new: OOM allocating value state — a dropped concolic corrupts the flow's domain");
     c->shape = strdup(shape ? shape : "{}");
     c->src = src ? strdup(src) : NULL;
@@ -782,7 +789,7 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp) {
     char *shb = cb ? strdup(concolic_shape_c(b) ? concolic_shape_c(b) : "{}") : cstr_dup(ctx, b);
     CHECK(sha && shb, "concolic +: OOM shape");
     size_t ln = strlen(sha) + strlen(shb) + 1;
-    char *shape = malloc(ln); CHECK(shape, "concolic +: OOM shape concat");
+    char *shape = reclaim_malloc(ln); CHECK(shape, "concolic +: OOM shape concat");
     snprintf(shape, ln, "%s%s", sha, shb);
     const char *src = ca ? concolic_src_c(a) : concolic_src_c(b);
 
@@ -791,7 +798,20 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp) {
     JSValue example = JS_UNDEFINED;
     if (!JS_IsUndefined(exa) && !JS_IsUndefined(exb)) {
         const char *pa = JS_ToCString(ctx, exa), *pb = JS_ToCString(ctx, exb);
-        if (pa && pb) { size_t l = strlen(pa) + strlen(pb) + 1; char *e = malloc(l); if (e) { snprintf(e, l, "%s%s", pa, pb); example = JS_NewString(ctx, e); free(e); } }
+        /* THE `if (e)` THAT USED TO STAND HERE WAS THE CONCEALMENT, not the safety. §Solver-half: the example
+           propagates because the engine RUNS the real op, so a `+` that quietly produced no example turns a
+           computed value into a shape — an @H row that says `{a}{b}` where the code determined `/api/us-east-1`
+           — and nothing anywhere says a concatenation was dropped. With the refusal edge underneath it a NULL
+           is the physical floor and nothing else, which is exactly what a CHECK is for. */
+        if (pa && pb) {
+            size_t l = strlen(pa) + strlen(pb) + 1;
+            char *e = reclaim_malloc(l);
+            CHECK(e, "concolic +: the concatenated example could not be allocated — the sum would carry a "
+                     "shape where the code computed a value");
+            snprintf(e, l, "%s%s", pa, pb);
+            example = JS_NewString(ctx, e);
+            free(e);
+        }
         if (pa) JS_FreeCString(ctx, pa); if (pb) JS_FreeCString(ctx, pb);
     }
     JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);

@@ -15,10 +15,15 @@
    asserts that only one runtime ever claims it. */
 static JSRuntime *g_rt;
 
-/* THE FOUR WRAPPERS. Each is the plain C allocator plus the refusal edge: try, and if the answer is no, ask
-   the engine to give a flow back and try again — for as long as it keeps saying it gave one. The loop's end is
-   the engine answering that it has nothing left, which is the physical floor, and never a count of attempts. */
-static void *lx_malloc(size_t size)
+/* THE ALLOCATOR, AND THERE IS ONE OF IT. Each is the plain C allocator plus the refusal edge: try, and if the
+   answer is no, ask the engine to give a flow back and try again — for as long as it keeps saying it gave one.
+   The loop's end is the engine answering that it has nothing left, which is the physical floor, and never a
+   count of attempts.
+   THE SOLVER'S SITES AND LEXBOR'S ARE THE SAME THREE FUNCTIONS, not two families that happen to agree: these
+   are what lexbor_memory_setup is handed below, because `void *(*)(size_t)` and the rest are exactly the
+   shapes it takes. A second copy for the second consumer is the hand-copied list build.mjs warns about, and
+   the copy that drifted would be the one whose retry loop someone "simplified". */
+void *reclaim_malloc(size_t size)
 {
     for (;;) {
         void *p = malloc(size);
@@ -29,7 +34,7 @@ static void *lx_malloc(size_t size)
     }
 }
 
-static void *lx_realloc(void *dst, size_t size)
+void *reclaim_realloc(void *dst, size_t size)
 {
     for (;;) {
         void *p = realloc(dst, size);
@@ -43,7 +48,7 @@ static void *lx_realloc(void *dst, size_t size)
     }
 }
 
-static void *lx_calloc(size_t num, size_t size)
+void *reclaim_calloc(size_t num, size_t size)
 {
     for (;;) {
         void *p = calloc(num, size);
@@ -82,7 +87,7 @@ void reclaim_install(JSRuntime *rt, JSMemoryReclaimFunc *cb, void *opaque)
        this call is the one that also names the runtime: a wrapper installed with no runtime recorded is a
        wrapper that would have to be installed twice to be useful, and the second install is the one that gets
        forgotten. Re-setting the same four pointers on a later session is a no-op by construction. */
-    CHECK(lexbor_memory_setup(lx_malloc, lx_realloc, lx_calloc, lx_free) == LXB_STATUS_OK,
+    CHECK(lexbor_memory_setup(reclaim_malloc, reclaim_realloc, reclaim_calloc, lx_free) == LXB_STATUS_OK,
           "the browser half's allocator could not be routed through the engine's refusal edge — every DOM "
           "allocation would then reach the RAM floor with a frontier full of paged-out-able flows behind it");
 }

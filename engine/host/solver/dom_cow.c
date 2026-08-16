@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"        /* CHECK — an OOM here corrupts DOM isolation, fatal in every build */
 #include "solver/dom_cow.h"
 #include "core/dom/node.h"   /* node_wrap_forget — a destroyed node hands back its wrapper */
@@ -150,7 +151,7 @@ static char *attr_old_value(lxb_dom_element_t *el, const char *ns, const char *l
     if (!a) return NULL;
     v = lxb_dom_attr_value(a, &vl);
     if (!v) return NULL;
-    copy = malloc(vl + 1);
+    copy = reclaim_malloc(vl + 1);
     CHECK(copy != NULL, "dom-cow-oom: §9.4.6's old attribute value could not be copied — the change steps run "
                         "after the write and the element no longer holds it");
     memcpy(copy, v, vl);
@@ -202,8 +203,18 @@ static void dom_undo_push(DomUndo u) {
     if (g_dom_undo_n >= g_dom_undo_cap) {
         int nc = g_dom_undo_cap ? g_dom_undo_cap * 2 : 64;
         /* Skipping a DOM capture silently breaks DOM isolation (this flow's DOM write never reverts -> leaks
-           into the next flow's baseline -> wrong sinks/taint). OOM is a should-never-happen: CRASH, never skip. */
-        DomUndo *n = realloc(g_dom_undo, (size_t)nc * sizeof(DomUndo));
+           into the next flow's baseline -> wrong sinks/taint). OOM is a should-never-happen: CRASH, never skip.
+           AND THIS IS THE SITE THAT PROVED THE THIRD ALLOCATOR EXISTS. With the refusal edge in the runtime's
+           allocator and in lexbor's, a 2 GB wall run died HERE, with 9457 flows live and not one of them
+           paged, because this log is grown by a direct call to the C library and so had nothing to ask. It
+           asks now (solver/reclaim.h) and the CHECK stays: the edge makes the failure recoverable, and the
+           CHECK is still the answer when the engine has no flow left to sell.
+           THE RECLAIM RUNS THIS FILE'S OWN CODE — selling a flow frees DOM segments and destroys the nodes
+           they created — so the one-deep latch inside JS_ReclaimMemory is load-bearing here rather than
+           defensive: the frees it performs allocate at most plainly and cannot ask again from inside the ask.
+           `g_dom_undo` is the RUNNING flow's head and the sale never takes the running flow (asserted in
+           engine_reclaim_tail), so the buffer this is growing is not one the sale can free. */
+        DomUndo *n = reclaim_realloc(g_dom_undo, (size_t)nc * sizeof(DomUndo));
         CHECK(n, "dom-cow-oom: DOM undo-log realloc failed — DOM isolation would be silently corrupted");
         g_dom_undo = n; g_dom_undo_cap = nc;
     }
@@ -236,11 +247,11 @@ static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *
     CHECK(u.name, "dom-cow-oom: attr local-name strdup failed");
     if (ns) { u.ns = strdup(ns); CHECK(u.ns, "dom-cow-oom: attr namespace strdup failed"); }
     if (prefix) {
-        u.prefix = malloc(pl + 1);
+        u.prefix = reclaim_malloc(pl + 1);
         CHECK(u.prefix, "dom-cow-oom: attr prefix copy failed");
         memcpy(u.prefix, prefix, pl); u.prefix[pl] = 0;
     }
-    if (cur) { u.old = malloc(vl ? vl : 1); CHECK(u.old, "dom-cow-oom: baseline attr snapshot malloc failed — the delta could not restore its baseline"); memcpy(u.old, cur, vl); u.old_len = vl; }
+    if (cur) { u.old = reclaim_malloc(vl ? vl : 1); CHECK(u.old, "dom-cow-oom: baseline attr snapshot malloc failed — the delta could not restore its baseline"); memcpy(u.old, cur, vl); u.old_len = vl; }
     u.sh_old = shadow_snapshot(el, ATTR_SLOT_ATTRIBUTE, ns, local, &u.sh_had);   /* baseline TAINT reverts with the value */
     u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
@@ -278,7 +289,7 @@ void dom_insert_capture(lxb_dom_node_t *node) {
 typedef struct { char *ns; char *prefix; char *local; } AttrIdent;
 
 static char *dupn(const lxb_char_t *s, size_t n) {
-    char *p = malloc(n + 1);
+    char *p = reclaim_malloc(n + 1);
     CHECK(p != NULL, "dom-cow-oom: an attribute identity could not be copied");
     memcpy(p, s, n); p[n] = 0;
     return p;
@@ -325,7 +336,7 @@ static void dom_attr_node_value_capture(lxb_dom_attr_t *a, const AttrIdent *id) 
     u.kind = 7; u.node = lxb_dom_interface_node(a); u.sh_old = u.sh_cur = JS_UNDEFINED;
     v = lxb_dom_attr_value(a, &vl);
     if (v) {
-        u.old = malloc(vl ? vl : 1);
+        u.old = reclaim_malloc(vl ? vl : 1);
         CHECK(u.old, "dom-cow-oom: a detached attribute's baseline value could not be snapshotted");
         memcpy(u.old, v, vl); u.old_len = vl;
     }
@@ -1009,7 +1020,7 @@ void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
         DomUndo u; memset(&u, 0, sizeof u);
         u.kind = 3; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;
         u.had = 1; u.old_len = cd->data.length;
-        u.old = malloc(u.old_len ? u.old_len : 1);
+        u.old = reclaim_malloc(u.old_len ? u.old_len : 1);
         CHECK(u.old != NULL, "dom-cow-oom: the character-data baseline snapshot failed — unapply would lose the "
                              "text the baseline had");
         memcpy(u.old, cd->data.data, u.old_len);
@@ -1057,7 +1068,7 @@ static void dom_unapply_entry(DomUndo *u) {
             /* AND THE NODE, for the same reason the baseline side holds one: the attribute the FLOW put here
                may be a different Attr from the baseline's, and the page may be holding it. */
             u->cur_attr = a; u->cur_attr_next = a ? a->next : NULL;
-            if (c) { u->cur = malloc(vl ? vl : 1); CHECK(u->cur, "dom-cow-oom: parked flow attr snapshot malloc failed — apply would lose the flow's DOM write"); memcpy(u->cur, c, vl); u->cur_len = vl; }
+            if (c) { u->cur = reclaim_malloc(vl ? vl : 1); CHECK(u->cur, "dom-cow-oom: parked flow attr snapshot malloc failed — apply would lose the flow's DOM write"); memcpy(u->cur, c, vl); u->cur_len = vl; }
         }
         if (g_cow_ctx) JS_FreeValue(g_cow_ctx, u->sh_cur);
         u->sh_cur = shadow_snapshot(u->sh_owner, u->slot, u->ns, u->name, &u->sh_cur_had);   /* stash the flow's taint shadow */
@@ -1070,7 +1081,7 @@ static void dom_unapply_entry(DomUndo *u) {
         lxb_dom_attr_t *a = lxb_dom_interface_attr(u->node);
         size_t vl = 0; const lxb_char_t *c = lxb_dom_attr_value(a, &vl);
         free(u->cur); u->cur = NULL; u->cur_len = 0; u->cur_had = 1;       /* stash the flow's bytes */
-        if (c) { u->cur = malloc(vl ? vl : 1);
+        if (c) { u->cur = reclaim_malloc(vl ? vl : 1);
                  CHECK(u->cur, "dom-cow-oom: parked detached-attribute snapshot malloc failed");
                  memcpy(u->cur, c, vl); u->cur_len = vl; }
         if (g_cow_ctx) JS_FreeValue(g_cow_ctx, u->sh_cur);
@@ -1080,7 +1091,7 @@ static void dom_unapply_entry(DomUndo *u) {
     } else if (u->kind == 3) {
         lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(u->node);
         free(u->cur); u->cur_len = cd->data.length; u->cur_had = 1;       /* stash the flow's text */
-        u->cur = malloc(u->cur_len ? u->cur_len : 1);
+        u->cur = reclaim_malloc(u->cur_len ? u->cur_len : 1);
         CHECK(u->cur != NULL, "dom-cow-oom: the parked character-data snapshot failed — apply would lose the "
                               "flow's text write");
         memcpy(u->cur, cd->data.data, u->cur_len);
@@ -1241,10 +1252,15 @@ void dom_apply(void) {
    (defensive symmetry with the heap fork — the internal set/remove goes straight to Lexbor, not the capturing
    host-edge, so no re-capture, but the guard documents+enforces the invariant). Returns the shared base. */
 void *dom_cow_fork(void) {
+    /* ASKED BEFORE THE UNAPPLY, because this allocation can SELL A FLOW (solver/reclaim.h) and a sale walks
+       the frozen document chain. Between the unapply below and the re-apply at the end, the running flow's
+       head is half-taken-down and the document shows a tree no entry describes; nothing in this file is
+       written to meet a re-entry there. The seg's three fields are all readable now, so there is nothing the
+       later position bought. */
+    DomSeg *seg = reclaim_malloc(sizeof(DomSeg));
+    CHECK(seg, "dom-cow-oom: fork segment alloc failed — a shared DOM delta would be corrupted");
     int sv = g_dom_capture; g_dom_capture = 0;
     for (int i = g_dom_undo_n - 1; i >= 0; i--) dom_unapply_entry(&g_dom_undo[i]);
-    DomSeg *seg = malloc(sizeof(DomSeg));
-    CHECK(seg, "dom-cow-oom: fork segment alloc failed — a shared DOM delta would be corrupted");
     seg->e = g_dom_undo; seg->n = g_dom_undo_n; seg->base = g_dom_base; seg->refcount = 2;   /* running flow + sibling */
     g_dom_seg_live++; g_dom_seg_entries_live += seg->n;
     g_dom_undo = NULL; g_dom_undo_n = 0; g_dom_undo_cap = 0;   /* fresh empty head for the running flow */
