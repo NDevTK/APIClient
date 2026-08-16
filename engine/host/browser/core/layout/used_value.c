@@ -165,7 +165,7 @@ static UvSurround uv_surround(lxb_dom_element_t *el, bool vertical)
         { "border-left-width", "border-right-width" }, { "border-top-width", "border-bottom-width" },
     };
     int axis = vertical ? 1 : 0, i;
-    UvSurround s = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
+    UvSurround s = { css_px(0.0), css_px(0.0) };
 
     for (i = 0; i < 2; i++) {
         CssLength len = css_computed_length(el, BORDERS[axis][i]);

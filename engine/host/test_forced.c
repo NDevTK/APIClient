@@ -468,6 +468,16 @@ static const char *HTML =
     "var csp = document.createElement('p'); document.body.appendChild(csp);"
     "fetch('/api/cssua?v=' + (getComputedStyle(csp).display === 'block' &&"
     " getComputedStyle(document.createElement('span')).display === 'inline' ? 'isua' : 'wrong'));"
+    /* A USED VALUE THAT IS A JOINT FUNCTION OF TWO ENVIRONMENT FACTS — the shape a box with a border has, and
+       the one that used to crash. CSS 2.1 §10.3.3 solves this `width: auto` against the INITIAL CONTAINING
+       BLOCK and subtracts a border css-values §6 SNAPPED to a whole number of DEVICE PIXELS, so the number
+       moves with both and its domain is ONE identity over the pair (solver/concolic.h) rather than either
+       fact alone. There is no token to compare against: the value is a concolic, so what this asserts is the
+       arithmetic's own asserts staying silent, and what it emits is the joint shape. */
+    "var jw = document.createElement('p'); document.body.appendChild(jw);"
+    "jw.style.setProperty('border-left-style', 'solid');"
+    "jw.style.setProperty('border-left-width', '1px');"
+    "fetch('/api/cssjoint?w=' + getComputedStyle(jw).width);"
     /* element.style WRITES go through setAttribute's chokepoint, so an inline style time-travels like every
        other DOM write — and [SameObject] means the page gets the same declaration back each read. */
     "cs.style.color = 'red'; cs.style.setProperty('padding-left', '2px');"

@@ -120,10 +120,17 @@ CssPx viewport_icb_width(JSContext *ctx);
 CssPx viewport_icb_height(JSContext *ctx);
 
 /* THE ONE SEAM A VALUE DERIVED FROM THIS COMPONENT'S FACTS CROSSES to become what the page reads, and the ONE
-   switch over `CssEnvFact` — so a length that crosses to JS anywhere in this engine mints its domain here or
+   table over `CssEnvFact` — so a length that crosses to JS anywhere in this engine mints its domain here or
    not at all. The facts are the ICB's two dimensions and the DEVICE PIXEL RATIO, which css-values §6's
    snap-a-length-as-a-line-width divides a computed `border-*-width` by, so a page measuring a border is asking
    the same question `devicePixelRatio > 1` asks and gets the same source key for it.
+   A LENGTH IS A FUNCTION OF A SET OF THEM, AND THE SET IS ONE DOMAIN. The used content width of a `width: auto`
+   box with a real border is `containing block − margins − paddings − snapped borders`, so it moves with the ICB
+   AND with the ratio, and `100vmin` takes both viewport axes as operands in a single token. Each fact in the
+   set contributes one member of solver/concolic.h's JOINT source identity, which is where the ordering and the
+   set's own invariants live; this seam contributes only WHICH facts and what each is called — including §4's
+   "or zero if there is no viewport", which is asked PER FACT because a rectangle a navigable presents and an
+   output device's ratio are absent under different conditions.
    `computed` is the SERIALIZED example the member's own IDL type demanded (CSSOM §6.7.2's `1264px` for a
    resolved value, §6's `long` for a client extent) and is CONSUMED. A length whose `env` is CSS_ENV_NONE is
    handed back unchanged — that is the positive statement css_length.h describes, not a missing domain. */

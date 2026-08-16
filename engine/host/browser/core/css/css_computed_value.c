@@ -239,7 +239,7 @@ static CssLength computed_length(JSContext *realm, char *spec)
    the wrong arm would have to be reading by mistake. */
 static CssLength css_cv_px(CssPx px)
 {
-    CssLength out = { CSS_LENGTH_ABSOLUTE, { 0.0, CSS_ENV_NONE, NULL }, 0.0, { '\0' } };
+    CssLength out = { CSS_LENGTH_ABSOLUTE, css_px(0.0), 0.0, { '\0' } };
 
     out.px = px;
     return out;

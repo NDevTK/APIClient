@@ -884,3 +884,86 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
         return computed;
     return concolic_new(ctx, shape, src, computed);
 }
+
+/* THE JOINT DOMAIN — see concolic.h for what reaches it, why the identity is the SET and not an expression over
+   it, and why a narrowing of the joint narrows no member.
+   THE SEPARATOR IS PART OF THE IDENTITY, so a member that contained it would let two different sets compose to
+   one key — the truncation defect in a different costume, and asserted here rather than trusted. */
+#define CONCOLIC_JOINT_SEP " & "
+
+/* The permutation that sorts `srcs`, so the composed key is a property of the set. Insertion sort: `n` is a
+   component's fact count and never a page's data, and the sort must be over the same order the shapes are then
+   joined in or the display and the key would name their members in two different orders. */
+static void concolic_joint_order(const char *const *srcs, int n, int *order)
+{
+    int i, j;
+
+    for (i = 0; i < n; i++) order[i] = i;
+    for (i = 1; i < n; i++) {
+        int cur = order[i];
+        for (j = i; j > 0 && strcmp(srcs[order[j - 1]], srcs[cur]) > 0; j--) order[j] = order[j - 1];
+        order[j] = cur;
+    }
+}
+
+static char *concolic_joint_join(const char *const *parts, const int *order, int n)
+{
+    size_t seplen = strlen(CONCOLIC_JOINT_SEP), len = 1, at = 0;
+    char *out;
+    int i;
+
+    for (i = 0; i < n; i++) len += strlen(parts[order[i]]) + (i ? seplen : 0);
+    /* SIZED FROM THE MEMBERS RATHER THAN INTO A FIXED BUFFER: a truncated identity is two different domains
+       under one key, so a later branch over one would be decided by a branch over the other. */
+    out = reclaim_malloc(len);
+    CHECK(out, "concolic: OOM composing a JOINT source identity — a value whose domain could not be spelled "
+               "would cross to the page as a bare number with every arm behind it deleted");
+    for (i = 0; i < n; i++) {
+        if (i) { memcpy(out + at, CONCOLIC_JOINT_SEP, seplen); at += seplen; }
+        memcpy(out + at, parts[order[i]], strlen(parts[order[i]]));
+        at += strlen(parts[order[i]]);
+    }
+    out[at] = '\0';
+    DCHECK(at + 1 == len, "a joint identity was composed to a different length than it was measured for");
+    return out;
+}
+
+JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, const char *const *srcs,
+                                   int n, JSValue computed)
+{
+    int *order;
+    char *shape, *src;
+    JSValue out;
+    int i;
+
+    DCHECK(n >= 1 && shapes != NULL && srcs != NULL,
+           "a joint domain was minted over NO members — a value derived from nothing is one the cascade and "
+           "the layout determined, and its caller must hand back the computed value rather than ask for a "
+           "domain over an empty set");
+    if (!g_source_overlay)
+        return computed;
+    for (i = 0; i < n; i++) {
+        DCHECK(shapes[i] != NULL && srcs[i] != NULL,
+               "a member of a joint domain arrived with no display shape or no source identity — every member "
+               "is one row of its component's own seam, so a NULL is a row that was never filled in");
+        DCHECK(strstr(srcs[i], CONCOLIC_JOINT_SEP) == NULL && strstr(shapes[i], CONCOLIC_JOINT_SEP) == NULL,
+               "a member's own identity contains the separator a joint identity is composed with, so two "
+               "DIFFERENT sets of facts would compose to the same key — and a branch over one would then be "
+               "decided by a branch the flow took over the other. Give the composition a separator this "
+               "component's identities cannot contain");
+    }
+    order = reclaim_malloc((size_t)n * sizeof *order);
+    CHECK(order, "concolic: OOM ordering a joint domain's members");
+    concolic_joint_order(srcs, n, order);
+    for (i = 1; i < n; i++)
+        DCHECK(strcmp(srcs[order[i - 1]], srcs[order[i]]) < 0,
+               "the SAME source appears twice in one joint domain. A set holds each member once, so this key "
+               "would count how many times the arithmetic touched a fact rather than name which facts the "
+               "value is a function of — and the same dependence assembled by a different route would carry a "
+               "different identity and fork a predicate this flow has already decided");
+    shape = concolic_joint_join(shapes, order, n);
+    src = concolic_joint_join(srcs, order, n);
+    out = concolic_source_wrap(ctx, shape, src, computed);
+    free(order); free(shape); free(src);
+    return out;
+}

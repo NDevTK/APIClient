@@ -96,9 +96,11 @@
  * already absolutized when it reaches this component, so a `width: 50vw` arrives carrying the ICB's fact and a
  * `border: 1px solid` arrives carrying the DEVICE PIXEL RATIO's — css-values §6 snaps a border width to a whole
  * number of device pixels, so the seven terms of §10.3.3's equation are not all functions of the same
- * environment fact, and a box with a real border and a `width: auto` is a function of BOTH. That combination
- * crashes in css_length.c naming the multi-fact domain, which is the honest answer: one source key cannot spell
- * a relation over a pair, and keeping either fact alone would report a narrowing the page never made.
+ * environment fact, and a box with a real border and a `width: auto` is a function of BOTH. THE ANSWER CARRIES
+ * BOTH: css_length.h makes a length's fact a SET and every arm below unions its operands', so the used width is
+ * one value whose domain is the RELATION between the initial containing block and the device pixel ratio —
+ * solver/concolic.h's joint source identity — and not a choice between them. Nothing here has to know that:
+ * the arithmetic is stated over the examples exactly as it was, and the union rides it.
  *
  * NOTHING HERE IS STORED, SO NOTHING HERE TIME-TRAVELS — and that is a decision with a reason, not an omission.
  * A layout is per-flow state: two flows with different DOMs have different boxes, and a box tree cached across
@@ -125,8 +127,8 @@
    naming its own section; there is no fallback answer.
    IT IS A `CssPx` AND NOT A `double` because §10.1's base case is the viewport — see the header above and
    css_length.h. A caller that reports one to a page mints its domain through `viewport_env_derived`; a caller
-   that does arithmetic on one uses css_length.h's, which propagates the fact and crashes where two facts
-   would have to be carried by one source key. */
+   that does arithmetic on one uses css_length.h's, which carries the UNION of its operands' facts, so a used
+   value that is a joint function of several of them stays one value with one domain. */
 CssPx used_value_px(lxb_dom_element_t *el, const char *name);
 
 /* THE USED EXTENT OF THE PADDING EDGE on one axis, in CSS pixels — the horizontal one for `vertical` false and

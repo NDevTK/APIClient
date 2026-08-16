@@ -103,21 +103,45 @@ CssPx viewport_icb_height(JSContext *ctx)
     return css_px_env(CSS_ENV_ICB_HEIGHT, ctx, viewport_height(ctx));
 }
 
-/* See viewport.h: the one switch over CssEnvFact, so a length mints its domain in one place.
+/* ONE ROW PER FACT, INDEXED BY THE FACT ITSELF — the one table over `CssEnvFact`, so a length mints its domain
+   in one place whether it is a function of one fact or of three.
    THE SECOND COLUMN IS §4's "OR ZERO IF THERE IS NO VIEWPORT", asked per FACT because the facts differ on it
    and js_vp_get below already draws the same line at the same place: the INITIAL CONTAINING BLOCK has the
    dimensions of the viewport, so a document no navigable presents has none — while `devicePixelRatio`'s
    algorithm asks about the OUTPUT DEVICE, which exists whether or not this document is on it. One condition
    for both would either crash for a border width on a DOMParser element or wave through a length derived from
    a rectangle that does not exist. */
+static const struct { const char *member; bool presented; } VIEWPORT_FACT[CSS_ENV_FACT_COUNT] = {
+    [CSS_ENV_ICB_WIDTH]          = { "initialContainingBlock.width",  true  },
+    [CSS_ENV_ICB_HEIGHT]         = { "initialContainingBlock.height", true  },
+    [CSS_ENV_DEVICE_PIXEL_RATIO] = { "devicePixelRatio",              false },
+};
+
+/* THE SOURCE KEY, SPELLED ONCE — the document is part of it for media_query_list.c's reason (viewport.h), and
+   both the member seam and the derived-length seam below compose it from here so a joint identity's members
+   and a member read directly by a page cannot come out under two different names for one fact. */
+#define VIEWPORT_SRC_MAX 128
+
+static void viewport_src_key(JSContext *ctx, const char *member, char *out, size_t n)
+{
+    JSValueConst self = document_window_proxy(ctx);
+
+    DCHECK(window_proxy_is(self),
+           "a viewport-derived member was read in a realm whose document has no WindowProxy — a viewport "
+           "belongs to a navigable, and every Document this agent holds is one's active document");
+    DCHECK(strlen(member) + 24 < n, "a CSSOM VIEW member name longer than any in the IDL");
+    snprintf(out, n, "{viewport#%u}%s", (unsigned)window_proxy_doc(self), member);
+}
+
+/* See viewport.h: the one place a length's fact SET becomes a domain a page can fork on. Every fact in the set
+   contributes one member of solver/concolic.h's JOINT identity, in the table's own order — which the solver
+   canonicalizes, so the identity is the set's and not this loop's. */
 JSValue viewport_env_derived(CssPx len, JSValue computed)
 {
-    static const struct { const char *member; bool presented; } FACT[] = {
-        { NULL,                            false },
-        { "initialContainingBlock.width",  true  },
-        { "initialContainingBlock.height", true  },
-        { "devicePixelRatio",              false },
-    };
+    const char *shapes[CSS_ENV_FACT_COUNT];
+    const char *srcs[CSS_ENV_FACT_COUNT];
+    char key[CSS_ENV_FACT_COUNT][VIEWPORT_SRC_MAX];
+    int f, n = 0;
 
     if (len.env == CSS_ENV_NONE) {
         DCHECK(len.realm == NULL,
@@ -126,30 +150,40 @@ JSValue viewport_env_derived(CssPx len, JSValue computed)
                "field-by-field past that entry");
         return computed;
     }
-    DCHECK((unsigned)len.env < sizeof(FACT) / sizeof(FACT[0]),
+    DCHECK(len.realm != NULL,
+           "a length that is a function of an environment fact reached the boundary with no realm to answer it "
+           "per — a child navigable's ICB is 300 CSS pixels wide and the top-level traversable's is 1280, so "
+           "the fact alone does not say which question this is");
+    DCHECK((len.env & ~CSS_ENV_ALL) == CSS_ENV_NONE,
            "a length carries a CssEnvFact this seam has no member name for. Every fact is one core/frame/"
            "viewport.h has decided is PICKED — css_length.h says so, and the test for one is this component's "
            "— so a new fact is a new row HERE, and a fact without one would cross to the page as a bare number "
            "with its domain dropped");
-    DCHECK(!FACT[len.env].presented || viewport_exists(len.realm),
-           "a length derived from the INITIAL CONTAINING BLOCK reached the page out of a realm whose document "
-           "is not being presented. §10.1's ICB has the dimensions of the viewport, and viewport.h makes a "
-           "document that is not fully active have none — so this length was derived from a rectangle that "
-           "does not exist rather than from one whose size is a UA choice");
-    return viewport_env_value(len.realm, FACT[len.env].member, computed);
+    for (f = 0; f < CSS_ENV_FACT_COUNT; f++) {
+        if (!(len.env & CSS_ENV_BIT(f))) continue;
+        DCHECK(VIEWPORT_FACT[f].member != NULL,
+               "a fact this seam declares has no member name in its row — the table is indexed BY the fact, so "
+               "a hole in it is a fact whose row was never written and whose domain would be spelled empty");
+        DCHECK(!VIEWPORT_FACT[f].presented || viewport_exists(len.realm),
+               "a length derived from the INITIAL CONTAINING BLOCK reached the page out of a realm whose "
+               "document is not being presented. §10.1's ICB has the dimensions of the viewport, and "
+               "viewport.h makes a document that is not fully active have none — so this length was derived "
+               "from a rectangle that does not exist rather than from one whose size is a UA choice");
+        viewport_src_key(len.realm, VIEWPORT_FACT[f].member, key[n], sizeof key[n]);
+        shapes[n] = VIEWPORT_FACT[f].member;
+        srcs[n] = key[n];
+        n++;
+    }
+    DCHECK(n >= 1, "a non-empty fact set named no facts — the set and the table have come apart");
+    return concolic_source_wrap_joint(len.realm, shapes, srcs, n, computed);
 }
 
 /* See viewport.h: the one seam, and the one speller of the key. */
 JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
 {
-    JSValueConst self = document_window_proxy(ctx);
-    char src[128];
+    char src[VIEWPORT_SRC_MAX];
 
-    DCHECK(window_proxy_is(self),
-           "a viewport-derived member was read in a realm whose document has no WindowProxy — a viewport "
-           "belongs to a navigable, and every Document this agent holds is one's active document");
-    DCHECK(strlen(member) + 24 < sizeof(src), "a CSSOM VIEW member name longer than any in the IDL");
-    snprintf(src, sizeof(src), "{viewport#%u}%s", (unsigned)window_proxy_doc(self), member);
+    viewport_src_key(ctx, member, src, sizeof src);
     return concolic_source_wrap(ctx, member, src, computed);
 }
 

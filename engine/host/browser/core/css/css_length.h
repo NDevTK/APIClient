@@ -60,49 +60,70 @@
  * Threading a JSValue through a layout instead would put a concolic exactly where C compares, which is the one
  * thing viewport.h forbids: a C `if` over a concolic silently picks one arm and says nothing about the other.
  *
- * AND TWO FACTS IN ONE LENGTH ARE A DOMAIN THIS SEAM CANNOT SPELL, so the combination CRASHES rather than
- * picking one. A `width: 50vh` inside a percentage-margined box derives from both viewport axes at once, `100vmin`
- * derives from both in one token, and a `width: auto` box with a real border derives from the ICB and from the
- * DEVICE PIXEL RATIO the border width was snapped to — each would need a domain over a PAIR of facts, one
- * source key cannot say that, and a length that silently kept only the first fact would report a narrowing the
- * page never made. */
+ * AND A LENGTH IS A FUNCTION OF A SET OF FACTS, WHICH IS ONE DOMAIN AND NOT TWO VALUES. A `width: auto` box
+ * with a real border is a function of the initial containing block AND of the device pixel ratio css-values §6
+ * snapped that border to; `100vmin` is a function of both viewport axes in one token; a `50vh` inside a
+ * percentage-margined box is a function of both axes through the arithmetic. So `env` is a SET, and a sum, a
+ * difference and the larger of two lengths carry the UNION of their operands' — solver/concolic.h's JOINT
+ * source identity is what that set becomes at the boundary, and it is ONE concolic with ONE identity, never a
+ * second value beside the first.
+ * IT IS A SET AND NOT AN ORDERED PAIR, for the reason every canonical key exists: `cb - margins - borders` and
+ * `cb - borders - margins` are the same dependence, and two spellings of one identity fork the same predicate
+ * twice. IT IS A SET AND NOT AN EXPRESSION over the facts, because an expression is the recorded transform
+ * CLAUDE.md's §Re-execution forbids — what rides the value here is PROVENANCE (which facts it is a function of),
+ * never the operation (how), and the EXAMPLE is right because the arithmetic below actually runs on the modelled
+ * numbers. AND IT IS A SET RATHER THAN A PAIR: three facts already meet in one length (a `100vmin` width on a
+ * box whose border was snapped), so an arity is one more thing to be wrong about.
+ * THE SET IS OVER-REPORTED WHERE THE ARITHMETIC CANCELS — `a - a` over one fact still carries it — which is the
+ * direction css_px_max chooses and for its reason: over-reporting the dependence forks a world the page might
+ * not have needed, under-reporting it deletes one it did, and CLAUDE.md's §Headless errs toward the first. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_LENGTH_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_LENGTH_H
 #include <stdbool.h>
 
 #include "quickjs.h"
 
-/* THE ENVIRONMENT FACT A LENGTH DERIVES FROM. Every entry is a fact core/frame/viewport.h has already decided
-   is PICKED rather than DERIVED — the test is that component's, not this one's, and a fact that fails it (a
-   scroll position, a screen coordinate) must never appear here. `CSS_ENV_NONE` is a POSITIVE statement and not
-   an absence: the length is one this cascade and this layout determined out of the author's own declarations,
-   so its domain is a single point and there is no arm to explore. */
+/* ONE ENVIRONMENT FACT. Every entry is a fact core/frame/viewport.h has already decided is PICKED rather than
+   DERIVED — the test is that component's, not this one's, and a fact that fails it (a scroll position, a screen
+   coordinate) must never appear here. A fact is an INDEX: it names one row of the table in that component's
+   seam, and it is one BIT of the set below. */
 typedef enum {
-    CSS_ENV_NONE = 0,      /* a number the cascade and the layout determined */
-    CSS_ENV_ICB_WIDTH,     /* CSS 2.1 §10.1's initial containing block, whose dimensions are the viewport's */
+    CSS_ENV_ICB_WIDTH = 0, /* CSS 2.1 §10.1's initial containing block, whose dimensions are the viewport's */
     CSS_ENV_ICB_HEIGHT,
     /* CSSOM VIEW §4's `devicePixelRatio`, which css-values §6's SNAP A LENGTH AS A LINE WIDTH divides a
        border width by. `devicePixelRatio > 1` is the retina gate a bundle puts a second image host behind, and
        it reaches a length as well as a member: a `border: 1px solid` is one device pixel at every ratio, so it
        is 1 CSS pixel at 1x and two thirds of one at 1.5x. */
-    CSS_ENV_DEVICE_PIXEL_RATIO
+    CSS_ENV_DEVICE_PIXEL_RATIO,
+    CSS_ENV_FACT_COUNT
 } CssEnvFact;
+
+/* THE SET OF FACTS A LENGTH IS A JOINT FUNCTION OF — see the header for why a set and not a pair, an order or
+   an expression. `CSS_ENV_NONE` is the EMPTY set, and it is a POSITIVE statement rather than an absence: the
+   length is one this cascade and this layout determined out of the author's own declarations, so its domain is
+   a single point and there is no arm to explore. */
+typedef unsigned CssEnvSet;
+#define CSS_ENV_NONE     ((CssEnvSet)0)
+#define CSS_ENV_BIT(f)   (((CssEnvSet)1u) << (f))
+#define CSS_ENV_ALL      ((CssEnvSet)((1u << CSS_ENV_FACT_COUNT) - 1u))
 
 typedef struct {
     double      px;      /* THE EXAMPLE — the modelled number, always present, and what C compares */
-    CssEnvFact  env;
+    CssEnvSet   env;
     JSContext  *realm;   /* the realm whose environment `env` names; NULL exactly when `env` is CSS_ENV_NONE */
 } CssPx;
 
 /* A length the cascade and the layout determined. */
 CssPx css_px(double px);
-/* A length derived from `fact` in `realm`, carrying `px` as its example. */
+/* A length derived from ONE fact in `realm`, carrying `px` as its example — the only way a fact enters a
+   length, so the set below is only ever assembled by the arithmetic. */
 CssPx css_px_env(CssEnvFact fact, JSContext *realm, double px);
 
-/* ARITHMETIC OVER THE EXAMPLE, PROPAGATING THE FACT. The sum of a determined length and a derived one is
-   derived; the sum of two lengths derived from the SAME fact in the same realm is derived from it too (a
-   percentage margin and a percentage padding both resolve against the containing block's width, and their sum
-   is still one function of it); and two DIFFERENT facts crash, for the reason the header gives. */
+/* ARITHMETIC OVER THE EXAMPLE, PROPAGATING THE SET. The sum of a determined length and a derived one is
+   derived; the sum of two lengths derived from the SAME fact is derived from that one fact (a percentage margin
+   and a percentage padding both resolve against the containing block's width, and their sum is still one
+   function of it); and the sum of two lengths derived from DIFFERENT facts is a function of BOTH, which is the
+   union and is what the boundary mints one joint domain from. */
 CssPx css_px_add(CssPx a, CssPx b);
 CssPx css_px_sub(CssPx a, CssPx b);
 /* `k` is a pure ratio — a percentage divided by 100 — so it changes no fact. */
@@ -112,8 +133,9 @@ CssPx css_px_scale(CssPx a, double k);
    css-sizing §5's floor of a content box at zero, CSS 2.1 §10.4 step 3's clamp of a tentative used width by
    `min-width`, and css-values §6.1.2.2's `vmin`/`vmax`, which are the smaller and larger of `vw` and `vh`.
    Deciding WHICH is larger on the modelled viewport is media_query.h's layering — §4 answers
-   `(max-width: 768px)` against the same modelled number — and the result carries the fact either operand had,
-   because the operand that lost at this viewport is the one that wins at another. */
+   `(max-width: 768px)` against the same modelled number — and the result carries the UNION of the two operands'
+   facts, because the operand that lost at this viewport is the one that wins at another. That is why `100vmin`
+   is a function of both viewport axes and not of whichever one is smaller at 1280 x 720. */
 CssPx css_px_max(CssPx a, CssPx b);
 CssPx css_px_min(CssPx a, CssPx b);
 
@@ -172,8 +194,8 @@ bool css_length_is_length(const char *value);
    whole reason this takes a realm and answers a `CssPx`. A ratio of 1 leaves every whole number of CSS pixels
    alone and a ratio of 1.5 does not, so the result is a function of a fact viewport.h models as a forkable
    environment SOURCE, and a length that lost that fact would report `1px` as an author's own number. A border
-   width that is ITSELF viewport-derived (`border-width: 1vw`) meets a second fact here and crashes for the
-   reason the header gives. */
+   width that is ITSELF viewport-derived (`border-width: 1vw`) is a function of the ratio AND of the viewport,
+   and the answer carries both. */
 CssPx css_length_snap_line_width(JSContext *realm, CssPx len);
 
 /* CSSOM §6.7.2's "serialize a CSS value" for an absolute length and for a percentage: the number, then `px` or

@@ -30,30 +30,40 @@ CssPx css_px(double px)
 
 CssPx css_px_env(CssEnvFact fact, JSContext *realm, double px)
 {
-    CssPx out = { px, fact, realm };
+    CssPx out = css_px(px);
 
-    DCHECK(fact != CSS_ENV_NONE && realm != NULL,
+    /* ASSERTED BEFORE THE SHIFT, because the fact IS the bit position: a fact outside the enum would shift by
+       more than the set is wide and the length would come out of this entry a function of nothing. */
+    DCHECK((unsigned)fact < (unsigned)CSS_ENV_FACT_COUNT && realm != NULL,
            "a length was said to derive from an ENVIRONMENT FACT with no fact or no realm to name it — the two "
            "travel together because the mint at the JS boundary needs both (which viewport, and which of its "
            "dimensions), and a length carrying one without the other could not be turned into a domain");
+    out.env = CSS_ENV_BIT(fact);
+    out.realm = realm;
     return out;
 }
 
-/* The one place two lengths' facts meet, so the one place the pair can be asserted. */
+/* THE UNION, WHICH IS THE WHOLE OF THE PROPAGATION — a length is a joint function of every fact either operand
+   was a function of, and nothing here records WHICH function it is (that would be the transform-expression
+   §Re-execution forbids; the example is right because the caller's real arithmetic produced `px`).
+   THE REALM IS ONE, and it is asserted rather than merged: §10.1's containing-block chain and §6's snap are
+   stated over one document, so two realms meeting in one length would mean a layout spanning documents — at
+   which point the SET would have to carry a realm per fact, since `{viewport#3}` and `{viewport#7}` are two
+   different questions with the same member name. */
 static CssPx css_px_combine(CssPx a, CssPx b, double px)
 {
-    CssPx out = { px, a.env, a.realm };
+    CssPx out = { px, a.env | b.env, a.realm ? a.realm : b.realm };
 
-    if (a.env == CSS_ENV_NONE) { out.env = b.env; out.realm = b.realm; return out; }
-    if (b.env == CSS_ENV_NONE) return out;
-    DCHECK(a.env == b.env && a.realm == b.realm,
-           "two lengths derived from DIFFERENT environment facts were combined into one. A concolic carries ONE "
-           "source identity, so the result's domain would be a relation over a PAIR of facts — a `width: 50vh` "
-           "inside a percentage-margined box is a function of both viewport axes at once, `100vmin` is one in a "
-           "single token, and a `width: auto` box whose border width css-values §6 SNAPPED to a device pixel is "
-           "a function of the initial containing block AND of the device pixel ratio — and keeping either one "
-           "alone would report a narrowing the page never made. BUILD the multi-fact domain in "
-           "solver/concolic.h, or resolve the second fact before it reaches this arithmetic");
+    DCHECK((a.env == CSS_ENV_NONE) == (a.realm == NULL) && (b.env == CSS_ENV_NONE) == (b.realm == NULL),
+           "a length reached the arithmetic carrying facts without a realm, or a realm without facts — the two "
+           "are written together by css_px_env and by nothing else, so one without the other is a length "
+           "assembled field-by-field past that entry");
+    DCHECK(a.realm == NULL || b.realm == NULL || a.realm == b.realm,
+           "two lengths derived from the environments of DIFFERENT REALMS were combined into one. A child "
+           "navigable's initial containing block is 300 CSS pixels wide and its parent's is 1280, so the two "
+           "facts are different questions under one member name — and §10.1's containing-block chain walks one "
+           "document, so this is arithmetic spanning two. BUILD the realm into the fact set (a realm per member "
+           "rather than one per length) at the point a length is allowed to cross a document boundary");
     return out;
 }
 
@@ -68,7 +78,7 @@ CssPx css_px_scale(CssPx a, double k)
     return out;
 }
 
-/* THE LARGER (AND THE SMALLER) EXAMPLE, CARRYING BOTH OPERANDS' FACT — which is why these are `css_px_combine`
+/* THE LARGER (AND THE SMALLER) EXAMPLE, CARRYING BOTH OPERANDS' FACTS — which is why these are `css_px_combine`
    and not `a.px > b.px ? a : b`. Returning the winner whole would drop the loser's fact, and the loser is the
    arm the OTHER viewport takes: css-sizing §5's floor picks the declared length at 1280 and the four-term
    surround at 320, so a result that kept only the winner would report a length as environment-independent in
@@ -176,9 +186,11 @@ static CssPx css_len_viewport(JSContext *realm, const char *unit, double k)
     if (strcmp(unit, "vw") == 0)   return css_px_scale(w, k);
     if (strcmp(unit, "vh") == 0)   return css_px_scale(h, k);
     /* §6.1.2.2: "vmin: equal to the smaller of vw and vh", "vmax: … the larger". BOTH axes are operands, so
-       both facts reach the result and css_px_combine crashes naming the multi-fact domain — which is the
-       honest answer and not a gap in this arm: a page that branches on a `100vmin` box IS branching on a
-       relation between the two viewport dimensions, and a domain over one of them cannot say so. */
+       both facts reach the result and the answer is a JOINT function of them — which is exactly what a page
+       branching on a `100vmin` box is branching on, a relation between the two viewport dimensions, and what a
+       domain over either one alone could not say. Which axis is smaller is decided on the modelled viewport
+       (media_query.h's layering) and the fact the loser carried survives the decision, because at another
+       viewport it is the winner. */
     if (strcmp(unit, "vmin") == 0) return css_px_min(css_px_scale(w, k), css_px_scale(h, k));
     if (strcmp(unit, "vmax") == 0) return css_px_max(css_px_scale(w, k), css_px_scale(h, k));
     DCHECK(strcmp(unit, "vi") == 0 || strcmp(unit, "vb") == 0,
@@ -225,7 +237,7 @@ static void css_len_keyword(CssLength *out, const char *kw)
 
 CssLength css_length_parse(JSContext *realm, const char *value)
 {
-    CssLength out = { CSS_LENGTH_KEYWORD, { 0.0, CSS_ENV_NONE, NULL }, 0.0, { '\0' } };
+    CssLength out = { CSS_LENGTH_KEYWORD, css_px(0.0), 0.0, { '\0' } };
     char unit[CSS_LEN_UNIT_MAX];
     const char *p = value;
     char *end = NULL;
@@ -372,8 +384,9 @@ bool css_length_is_length(const char *value)
    text. viewport.h makes `devicePixelRatio` a PICKED environment fact for the reason it gives — `> 1` is the
    retina gate — so a snapped width is a function of a source a page can branch on, and reporting the modelled
    `1px` as a number the author's own declaration determined would delete that arm exactly as a bare 1280
-   deletes the mobile one. The combine is what carries it, and it is also what CRASHES when the width being
-   snapped is ITSELF derived (`border-width: 1vw`): that answer is a function of two facts at once. */
+   deletes the mobile one. The combine is what carries it, and it is also what makes a width that is ITSELF
+   derived (`border-width: 1vw`) come out a function of the viewport AND of the ratio — two facts in one length,
+   which is one joint domain and not a choice between them. */
 CssPx css_length_snap_line_width(JSContext *realm, CssPx len)
 {
     double ratio, device, snapped, out;

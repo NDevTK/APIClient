@@ -51,6 +51,41 @@ void concolic_install_source_overlay(void);
    one is. `computed` is consumed either way. */
 JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src, JSValue computed);
 
+/* A VALUE THAT IS A JOINT FUNCTION OF SEVERAL SOURCES — ONE concolic, ONE identity, a domain over the SET.
+ *
+ * WHAT REACHES THIS. A `width: auto` box with a real border has a used content width of `containing block −
+ * margins − paddings − snapped borders`, and css-values §6 snaps that border to a whole number of DEVICE
+ * PIXELS: the number is a joint function of the initial containing block and of the device pixel ratio, and a
+ * page comparing it against 700 is branching on the pair. `100vmin` is the same shape in one token (both
+ * viewport axes are operands of §6.1.2.2's smaller-of), and three facts already meet where the two combine.
+ * Neither operand's identity can answer for the result: keeping the first reports a narrowing over the ICB the
+ * page never made, and keeping the largest, or the one that won a `max`, reports a dependence that reverses at
+ * another viewport.
+ *
+ * THE IDENTITY IS THE MEMBERS' OWN, CANONICALLY ORDERED — sorted here, so the key is a property of the SET and
+ * not of the arithmetic that assembled it. `cb - margins - borders` and `cb - borders - margins` are one
+ * dependence, and two spellings of one identity would fork the same predicate twice; a caller-chosen order
+ * would put that canonicalization in every caller, which is the one-fact-answered-from-many-places defect
+ * CLAUDE.md §per-realm names. A duplicate member is a CRASH rather than a dedup: a set holds each member once,
+ * and a key that counted how many times the arithmetic touched a fact would depend on the arithmetic again.
+ *
+ * IT IS A SET AND NOT AN EXPRESSION over the sources. An expression is the recorded transform §Re-execution
+ * forbids — it cannot see interprocedural or shared-mutable state, and building one beside the sound
+ * re-execution search is the cardinal misread of §Solver-half. What propagates is PROVENANCE (which inputs),
+ * never the operation; the EXAMPLE is right because the engine ran the real arithmetic.
+ *
+ * SO A NARROWING OF THE JOINT NARROWS NOTHING ELSE, and that is the sound direction rather than a limitation.
+ * Taking the true arm of `usedWidth < 700` records a fact about THIS relation; it does not pin the ICB (many
+ * pairs give one width, and inverting the derivation is the banned expression again), and a flow that has
+ * already decided `innerWidth < 768` does not decide this one. Both keep forking, which errs toward MORE
+ * exploration exactly as §Headless requires.
+ *
+ * `shapes[i]` is member i's display form and `srcs[i]` its source identity, `n >= 1` of them; the degenerate
+ * n == 1 composes to the member itself, so there is one path and no second spelling for a single source.
+ * `computed` is CONSUMED and becomes the joint value's example. */
+JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, const char *const *srcs,
+                                   int n, JSValue computed);
+
 /* Propagation through `+` — install with JS_SetConcolicAddHook. */
 int         concolic_add_hook(JSContext *ctx, JSValue *sp);
 
