@@ -174,6 +174,77 @@ function _originForDoc(documentId) {
   return (documentId && _docOrigins.get(documentId)) || "";
 }
 
+/* THE BROWSER-STATED FACTS OF ONE DOCUMENT, MINTED IN ONE PLACE OUT OF THE ONE OBJECT THAT CARRIES THEM.
+   This is the JS half of engine/host/browser_process/host_facts.h — the same record, field for field, in the
+   only zone that can obtain it. Every field here is an answer `chrome.runtime` gave and that NO WASM instance
+   can ask for: SECURITY.md keys authorization on `sender.tab.url` and fixes the credentialed-read principal at
+   `MessageSender.origin` precisely because the browser process stamps them and a renderer cannot forge one.
+   When safeFetch's SOP/CORS moves into the trusted browser-process WASM instance, this record is what crosses
+   to it; the policy is an ALGORITHM and may move, these are FACTS and may not.
+
+   IT TAKES A `MessageSender` AND NOTHING ELSE, which is the whole mechanism. A caller cannot state one of
+   these values without holding the object the browser filled in, so the failure this exists to prevent —
+   deriving a principal from an address — has no argument to travel in. That failure is not hypothetical:
+   SECURITY.md records a `scripts[0].url` fallback that WAS the analysis principal for a while, and bridge.js
+   carries a standing @security-finding against the obvious "fix" of passing `originOf(msg.sourceUrl)` to the
+   chokepoint. A sandboxed frame reports an ordinary-looking address and an OPAQUE origin, so the address
+   fabricates a tuple origin the browser refused to give that document — and grants it same-origin access to
+   the embedder's authenticated bytes.
+
+   `stated` IS THE BRAND, and it is read by `_statedFacts` below at every consumer. It mirrors
+   host_facts.h's HOST_PRINCIPAL_STATED for the same reason that word exists there: JS has no types to make
+   `{origin: originOf(url)}` unrepresentable, so the consumer asserts that what it was handed came from HERE.
+   It catches the accident, which is the failure mode inside a trusted zone; it is not an anti-forgery device,
+   and this comment does not claim to be one. */
+const _BROWSER_STATED = "MessageSender";
+function _browserFacts(sender) {
+  DCHECK(!!sender && typeof sender === "object" && !!sender.tab,
+         "browser facts were asked for out of something that is not a content-script MessageSender — every " +
+         "field below is a browser answer, and a record built from anything else is this zone inventing them");
+  DCHECK(!!sender.documentId,
+         "a content message reached the fact mint with no documentId — it is the only stable per-document " +
+         "identity (a (tab, frame) pair is reused across navigations at a DIFFERENT origin), so it is the key " +
+         "the principal is remembered by and the name the engine pool answers \"who holds this document?\" by");
+  DCHECK(typeof sender.url === "string" && sender.url !== "",
+         "a content message reached the fact mint with no sender.url — the document's OWN address is the " +
+         "private-network principal and the engine's window.location, and no other document's address may " +
+         "stand in for it: a frame in a tab whose top is http://localhost/ would inherit that PRIVATE " +
+         "classification and be allowed to reach the user's intranet on its behalf");
+  DCHECK(typeof sender.tab.url === "string" && sender.tab.url !== "",
+         "a content message reached the fact mint with no sender.tab.url — HTML §8.1.3.1's TOP-LEVEL " +
+         "CREATION URL decides §8.1.3.5's secure context, and the extension holds <all_urls>, so the browser " +
+         "always states it and its absence is a broken invariant rather than a value to substitute for");
+  const facts = {
+    stated: _BROWSER_STATED,
+    documentId: sender.documentId,            // the identity every other fact is keyed by
+    origin: _senderOrigin(sender),            // MessageSender.origin, opaque-unique — the credentialed-read principal
+    url: sender.url,                          // this document's OWN address — the private-network principal
+    topLevelUrl: sender.tab.url,              // HTML §8.1.3.1's top-level creation URL — SECURITY.md's authorization key
+    tabId: sender.tab.id,                     // the browsing-context group half of the agent-cluster key
+    frameId: sender.frameId || 0,             // browser-set; 0 IS the top-level traversable, never a frame's own claim
+  };
+  DCHECK(typeof facts.origin === "string" && facts.origin !== "",
+         "the principal mint answered an empty origin — _senderOrigin returns the browser's tuple origin or a " +
+         "per-document opaque token, and an empty one is neither: it would compare same-origin with every " +
+         "other document that also failed to state one");
+  DCHECK(facts.tabId != null,
+         "a content message named no tab — the tab id is the browsing-context group half of the (group, " +
+         "origin) agent cluster one WASM instance IS, and a document with no group shares one heap and one " +
+         "principal with every document of its origin in every tab the user has open");
+  return Object.freeze(facts);
+}
+/* THE READER, so a consumer never defaults one of these into existence. CLAUDE.md: a value the producer can
+   legitimately omit is a POSITIVE statement the consumer reads as one — and none of these can be omitted, so
+   the honest read is an assertion rather than an `||`. CHECK and not DCHECK: this is the authorization
+   boundary itself, and continuing in release with a principal this zone did not mint is worse than aborting. */
+function _statedFacts(facts) {
+  CHECK(!!facts && facts.stated === _BROWSER_STATED,
+        "a record that did not come from _browserFacts was read as this document's browser-stated facts — " +
+        "the principal, the address and the group are chrome.* answers, and a value assembled anywhere else " +
+        "is this zone deciding an origin instead of being told one");
+  return facts;
+}
+
 // Prioritization (recency + grind focus) is NOT driven by browser navigation or
 // tab events anymore — those operate at the TAB level and can only guess which
 // frame is the "main" document. It is driven by each document's own CONTENT_HTML
@@ -517,8 +588,11 @@ function collectKeysForService(tab, service, hostname) {
        of this one, so removing it leaves ONE security merge instead of two.
      * `_markSecurityFindingChanges` — wrote `_changeType` and `_fixedCount`. Neither name has a reader.
      * THE SCRIPT CONCATENATION (`combined`/`scriptOffsets`/`scriptUrls`/`totalChars`/`_analyzeDiag`). The
-       CONTENT_HTML handler sets `_buf.scripts = []` and nothing ever pushes to it — the engine sources every
+       CONTENT_HTML handler set `_buf.scripts = []` and nothing ever pushed to it — the engine sources every
        script itself (Lexbor parses the HTML; `qjs_run_doc_scripts` runs inline + external in document order).
+       That empty array is gone too, with `_buf.pending` and `_buf.loadFired` beside it: a writer whose reader
+       was deleted is the same broken contract as a reader whose writer was, and this sentence would otherwise
+       be describing a line that no longer exists.
        The concatenation therefore built `""`, `analysis.scriptOffsets` had no reader, and `_analyzeDiag`
        reported `n:0, hasCDN:false` for every document there has ever been — a diagnostic answering from a
        collection its producer stopped filling.
@@ -542,14 +616,19 @@ async function _dispatchDocument(docKey) {
   DCHECK(!!buf, "a document was handed to the analysis with no script buffer — the CONTENT_HTML handler " +
                 "creates the buffer immediately before this call, so its absence is that record being lost " +
                 "between the two lines");
-  DCHECK(buf.docKey === docKey, "a script buffer is filed under a documentId that is not its own — every " +
-                                "principal this analysis runs under (the SSRF origin, window.location, the " +
-                                "credentialed-read origin) is read off this buffer, so a mis-filed one " +
-                                "analyses a document under another document's identity");
+  /* THE FACTS THIS DOCUMENT IS ANALYSED UNDER, AND THE ASSERTION THAT THEY ARE THE BROWSER'S. Everything the
+     analysis is authorized by — the private-network principal, window.location, the credentialed-read origin,
+     the agent-cluster key — is read out of this one record, so a record this zone did not mint from a
+     MessageSender is the whole analysis running under an identity nobody was told. */
+  var facts = _statedFacts(buf.facts);
+  DCHECK(facts.documentId === docKey,
+         "a script buffer is filed under a documentId that is not its own — every principal this analysis " +
+         "runs under is read off this record, so a mis-filed one analyses a document under another " +
+         "document's identity");
   DCHECK(!!buf.pageHtml, "a document reached the analysis with no page HTML — content.js refuses to ship an " +
                          "empty body (it throws), so this is the bundle that was fetched being lost on the " +
                          "way here, and analysing nothing would report the page as clean");
-  var tabId = buf.tabId;
+  var tabId = facts.tabId;
   var tab = getDoc(docKey);
   var _ep = _dataEpoch;   // a Clear during the engine round-trip invalidates this run
 
@@ -560,19 +639,21 @@ async function _dispatchDocument(docKey) {
   tab.endpoints.forEach(function (val, key) { if (key.startsWith("AST ")) keysToDelete.push(key); });
   for (var di = 0; di < keysToDelete.length; di++) tab.endpoints.delete(keysToDelete[di]);
 
-  // Source URL for the analysis. SECURITY: this becomes the analysis PRINCIPAL — safeFetch's
-  // origin-relative SSRF origin (self.__sfPageOrigin in the worker) AND window.location. It MUST derive
-  // only from the browser-provided sender.url (captured into buf.url on CONTENT_HTML), NEVER a
-  // content-script-supplied value (msg.url -> scripts[0].url) — else a hostile page could claim a localhost
-  // origin to defeat the SSRF guard. No untrusted fallback: unknown origin leaves tabUrl "" -> safeFetch's
-  // safe default (block private) + a placeholder window.location. Per-DOCUMENT principal: buf.url is THIS
-  // document's own browser-provided url, not the tab's — a sub-frame analyses as its own origin, never the
-  // embedder's.
-  var tabUrl = buf.url || buf.pageUrl || "";
+  /* THE ANALYSIS PRINCIPAL. This becomes safeFetch's `opts.pageUrl` — the origin-relative private-network
+     principal — and the engine's `window.location`. It is the DOCUMENT'S OWN browser-provided address, never
+     the tab's (a sub-frame analyses as itself, never as its embedder) and never a content-script-supplied
+     value: SECURITY.md records a `msg.url -> scripts[0].url` fallback that was an actual hole here.
+     `buf.url || buf.pageUrl || ""` STOOD HERE AND `buf.pageUrl` HAD NO WRITER. Nothing in the extension has
+     ever set it, so the limb was a defaulted read of a field no producer produces — CLAUDE.md's "a name that
+     is READ somewhere and WRITTEN nowhere is a broken contract, and a default is what stops it being a crash".
+     Worse than dead: the only value in this zone that has ever been spelled `pageUrl` is the one content.js
+     puts in its own CONTENT_HTML message (content.js:263), so the one plausible way to make that limb fire
+     would have re-introduced by name the exact content-script-stated principal SECURITY.md says was removed. */
+  var tabUrl = facts.url;
   var response;
   try {
     response = await sendToOffscreen({
-      type: "AST_ANALYZE", sourceUrl: tabUrl, documentId: docKey, origin: buf.origin,
+      type: "AST_ANALYZE", sourceUrl: tabUrl, documentId: facts.documentId, origin: facts.origin,
       // THE AGENT CLUSTER THIS DOCUMENT BELONGS TO — SECURITY.md keys one WASM instance on
       // `(browsing-context group, origin)`, and BOTH halves have to be BROWSER-STATED because the untrusted
       // engine may state neither. `origin` above is the MessageSender principal (opaque-unique per document);
@@ -584,12 +665,15 @@ async function _dispatchDocument(docKey) {
       // two documents of one tab in two clusters when they are cross-origin. `frameId` distinguishes the
       // group's TOP document from a sub-frame, which the pool needs because a same-origin sub-frame is created
       // and run INSIDE its cluster's instance (§4.8.5's insertion steps) while a top document is not.
-      groupId: buf.tabId, frameId: buf.frameId,
+      groupId: facts.tabId, frameId: facts.frameId,
       // HTML §8.1.3.1's TOP-LEVEL CREATION URL — the browser-provided address of the top of this document's
       // navigable chain, captured on CONTENT_HTML from sender.tab.url. It is NOT sourceUrl: this document may
       // be a sub-frame, and §8.1.3.5 decides secure-context (and therefore which [SecureContext] members the
       // engine installs) from the TOP of the chain rather than from the frame's own address.
-      topLevelUrl: buf.topLevelUrl || tabUrl,
+      // `|| tabUrl` went with it: the mint asserts sender.tab.url, so a top-level address that is missing here
+      // is a broken invariant and not a document that legitimately has none — substituting the frame's OWN
+      // address for its embedder's is precisely the ancestral answer Secure Contexts §4.2 exists to refuse.
+      topLevelUrl: facts.topLevelUrl,
       pageHtml: tab._pageHtml || null,
       responseHeaders: tab._responseHeaders || {},   // real CSP/Content-Type -> engine (header-CSP is the PRIMARY policy; meta-CSP is secondary)
       // Participate in the GLOBAL cross-session frontier: this engine's residue parks to IDB under RAM
@@ -771,14 +855,18 @@ function handleContentMessage(msg, sender) {
   // on grind-completion stays evicted (its log is global + sender-tagged, and the
   // learners route to globalStore-only via _docForLearning). getDoc (create) ONLY
   // for CONTENT_HTML; otherwise refresh identity if the doc still lives.
-  const _origin = _senderOrigin(sender);
+  /* ONE MINT PER MESSAGE, and the DocData is stamped from it rather than from `sender` a field at a time.
+     `if (sender.url) doc.url = sender.url` stood here, which is a guarded assign past a broken invariant: a
+     content message with no address left the DocData holding the PREVIOUS document's url at this key, and that
+     url is the private-network principal. The mint asserts instead. */
+  const _facts = _browserFacts(sender);
   const doc = (msg.type === "CONTENT_HTML") ? getDoc(documentId) : state.docs.get(documentId);
   if (doc) {
-    doc.tabId = tabId;
-    doc.frameId = sender.frameId || 0;
-    if (sender.url) doc.url = sender.url;
-    doc.origin = _origin;
-    if (sender.tab.title) doc.title = sender.tab.title;
+    doc.tabId = _facts.tabId;
+    doc.frameId = _facts.frameId;
+    doc.url = _facts.url;
+    doc.origin = _facts.origin;
+    if (sender.tab.title) doc.title = sender.tab.title;   // UI label; the browser legitimately has none yet
   }
 
   // RESPONSE_BODY comes from intercept.js via content.js relay
@@ -840,50 +928,22 @@ function handleContentMessage(msg, sender) {
     var _dk = documentId;
     var _buf = _scriptBuffers.get(_dk);
     if (!_buf) { _buf = {}; _scriptBuffers.set(_dk, _buf); }
-    // Each buffer IS this document's frame record, identified by its documentId
-    // (docKey) — never a tab-relative frameId. There is no separate frame table: a
-    // tab's frames ARE its buffers (GET_FRAMES lists them; routing + the response
-    // origin-lookup key on documentId, which Chrome's messaging accepts directly).
-    // The origin is AUTHORITATIVE (sender.origin via _senderOrigin), never URL-parsed
-    // (a sandboxed frame's URL parses to a real origin it does NOT have — its true
-    // origin is opaque, which _senderOrigin reflects), with no nav-event-vs-message
-    // race. We do NOT record "isTop": a frame can't prove it is the main frame from
-    // its own report — a fenced frame is its tree's root and would impersonate it.
-    _buf.tabId = tabId;
-    /* THE FRAME'S OWN ID, BROWSER-SET, and it is on the buffer because the ANALYSIS needs it: bridge.js keys a
-       WASM instance on the (browsing-context group, origin) agent cluster, and telling a SUB-FRAME (which its
-       cluster's instance already runs as a realm of its own — §4.8.5 creates it inside that heap) from the
-       group's TOP document (which it does not) is what frame 0 answers. This is not the "isTop" the comment
-       above refuses to record: that would be a frame's claim ABOUT ITSELF, and `sender.frameId` comes from the
-       browser process, the same provenance as `sender.tab.url`. */
-    _buf.frameId = doc.frameId;
-    _buf.docKey = _dk;
-    _buf.origin = doc.origin;                                         // credentialed-read principal (per-document; = _senderOrigin(sender))
-    // THIS DOCUMENT'S OWN ADDRESS, WHICH IS THE SSRF PRINCIPAL — and a sub-frame must never analyse under the
-    // EMBEDDER's. This fell back to `sender.tab.url` when the frame's own address was missing, which is the
-    // one substitution that inverts safeFetch's origin-relative rule: SECURITY.md allows a private target
-    // "unless the page principal is itself private — a public page cannot use the extension's host
-    // permissions to reach the user's localhost/intranet". A frame in a tab whose top document is
-    // http://localhost/ would have inherited that PRIVATE classification and been allowed to fetch the user's
-    // intranet on its behalf. sender.url is browser-set and present on every content-script message, so its
-    // absence is a broken invariant, not a case to substitute a different document's address for — and ""
-    // is what the chokepoint already treats as unknown (public, private targets blocked).
-    DCHECK(!!doc.url, "a CONTENT_HTML arrived with no sender.url — the document's own address is the SSRF " +
-                      "principal and the engine's window.location, and no other document's address may stand in for it");
-    _buf.url = doc.url;                                               // SSRF origin + window.location (document's own url)
-    // HTML §8.1.3.1's TOP-LEVEL CREATION URL for this document's environment — the address of the document at
-    // the TOP of its navigable chain, which is the TAB's url and is browser-provided exactly like sender.url
-    // (SECURITY.md already keys authorization on sender.tab.url for the same reason: a frame cannot state it
-    // about itself). §8.1.3.5 reads it to decide whether the engine's realm for this document is a SECURE
-    // CONTEXT, and Web IDL §3.3.13's members exist in that realm or do not by that answer — so a sub-frame that
-    // answered from its OWN address would report an https frame inside an http page as secure, which is the
-    // ancestral hole Secure Contexts §4.2 exists to close. A sender with NO TAB is not in one, so it is its own
-    // top: that is the real answer for it, not a fallback for a value that went missing.
-    _buf.topLevelUrl = (sender.tab && sender.tab.url) || _buf.url;
+    /* THE BUFFER CARRIES THE FACT RECORD, NOT SIX COPIES OF ITS FIELDS. Each of tabId / frameId / docKey /
+       origin / url / topLevelUrl used to be re-stated here off `doc` or off `sender`, and every restatement is
+       a place a value can be substituted for a neighbouring one — which is exactly what happened at the
+       address: `_buf.url` once fell back to `sender.tab.url`, inverting the origin-relative rule (a frame in a
+       tab whose top is http://localhost/ inherited that PRIVATE classification and could reach the user's
+       intranet on its behalf). One record, minted from the MessageSender, asserted at the mint.
+       WE STILL DO NOT RECORD "isTop": a frame cannot prove it is the main frame from its own report — a fenced
+       frame is its own tree's root and would impersonate it. `frameId` is the browser's answer to that
+       question, the same provenance as `sender.tab.url`, and bridge.js reads it to tell a SUB-frame (which its
+       cluster's instance already runs as a realm of its own, §4.8.5) from the group's TOP document. */
+    _buf.facts = _facts;
     _buf.pageHtml = doc._pageHtml;
-    _buf.scripts = [];   // engine-sourced: Lexbor parses the HTML, qjs_run_doc_scripts runs inline + external scripts — one system
-    _buf.pending = 0;
-    _buf.loadFired = true;
+    /* `_buf.scripts = []`, `_buf.pending = 0` and `_buf.loadFired = true` are DELETED — three writers with no
+       reader anywhere in the extension. The engine sources every script itself (Lexbor parses this HTML and
+       qjs_run_doc_scripts runs inline + external in document order), which is why nothing ever pushed to the
+       array; the other two are the remains of a load-tracking handshake that went with it. */
     /* THIS DOCUMENT NOW BECOMES WORK ON THE ONE FRONTIER — it APPENDS its flows (boot fork + orphans) and
        does not start a run, a scheduler or an attention of its own. `lastActivatedTs` went with the queue
        that read it: it ordered documents by RECENCY, and recency is not value. The only order is the level-1
