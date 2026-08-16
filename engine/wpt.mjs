@@ -91,7 +91,15 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                    "dom/observable", "dom/ranges", "dom/traversal",
                    /* HTML §8.5.4/§8.5.5 — innerHTML, outerHTML, insertAdjacentHTML and the fragment parsing
                       algorithm, which element.c implements and which SPEC_STEPS.md §4 is the conversion target
-                      for. DOMParser and XMLSerializer live here too and are absent, which this measures. */
+                      for. THIS ROW USED TO SAY DOMParser AND XMLSerializer "live here too and are absent",
+                      and half of it has stopped being true: §8.5.1's DOMParser is core/html/domparser.c, whose
+                      `text/html` arm is the engine's own document parse and whose XML arm CRASHES by name.
+                      So what this directory measures now is three different things and the row says which:
+                      the `text/html` files are a real number where they were a missing global, §8.5.8's
+                      XMLSerializer is still honestly absent (engine/idlgen.mjs's UNBUILT names why), and every
+                      file that reaches an XML type ABORTS on a capability neither interface can have until an
+                      XML parser exists — including the two that do both, which abort partway. A count is not
+                      quoted here on purpose: this row says what is measured, not what it measures. */
                    "domparsing",
                    /* THE COMPONENTS' OWN SPEC DIRECTORIES, each named because the component exists in
                       engine/host/browser/core and its tests were not being collected: request.c and body.c

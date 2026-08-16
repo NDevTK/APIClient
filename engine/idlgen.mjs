@@ -362,6 +362,12 @@ const INTERFACES = {
      file list carries node.c for the reason Element's does: it inherits Node, and node.c is also where the
      ChildNode mixin it INCLUDES is installed. DOMImplementation inherits nothing, so it names only its own. */
   DOMImplementation:    "core/dom/dom_implementation.c",
+  /* HTML §8.5's two DOM-parsing-and-serialization interfaces. Neither inherits anything, so each names only
+     its own file. XMLSerializer's row names a file that does not exist yet, which is what makes its absence
+     CHECKABLE from both sides: the UNBUILT entry below says the absence is intended, and the moment
+     xml_serializer.c lands the `stale` half of that pair fires and forces the entry out. */
+  DOMParser:            "core/html/domparser.c",
+  XMLSerializer:        "core/html/xml_serializer.c",
   DocumentType:        ["core/dom/document_type.c", "core/dom/node.c", "core/events/event_target.c"],
   HTMLTemplateElement: [...HTML_BASE],
   /* HTML §4.8.11's media elements. HTMLMediaElement is a real state machine over a modelled device, and the
@@ -526,6 +532,17 @@ const UNBUILT = {
   NavigationTransition: "reports an ONGOING navigation, which only an INTERCEPTED navigate event creates",
   NavigationActivation: "written by §7.4.6.2 step 7, whose branch is unreachable without a cross-document "
                         + "traversal or a reload — session_history.c's DCHECK names it",
+  /* HTML §8.5.8. `serializeToString` IS DOM-Parsing §3.2.1's XML serialization algorithm — a different walk
+     from HTML §13.3's, which core/html/fragment_serializer.c implements: §3.2.1 preserves every namespaceURI
+     through a namespace prefix map copied per element, and emits an empty-element tag for a childless element
+     outside the HTML namespace. Nothing in fragment_serializer.c answers either question, so this is a
+     component and not a magic on that one.
+     IT IS BLOCKED ON THE XML PARSER, and that is a measured fact rather than a preference: every subtest in
+     wpt/domparsing/XMLSerializer-serializeToString.html builds its input with
+     `new DOMParser().parseFromString(…, 'text/xml')`, which core/html/domparser.c crashes for by name. A
+     serializer landed first would be a component no gate could exercise. */
+  XMLSerializer:        "DOM-Parsing §3.2.1's XML serialization; its only corpus builds every fixture through "
+                        + "parseFromString(…, 'text/xml'), which domparser.c's DFAIL names the parser for",
 };
 const unbuiltSeen = [], unmapped = [], stale = [];
 

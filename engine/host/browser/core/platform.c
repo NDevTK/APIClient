@@ -44,6 +44,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
+#include "core/html/domparser.h"
 #include "core/html/form_data.h"
 #include "core/html/html_iframe.h"
 #include "core/html/unhandled_rejection.h"
@@ -162,6 +163,7 @@ static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_i
 static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_init(c); }
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
 static void d_cookie_jar(JSContext *c, const PlatformAgent *a) { (void)a; cookie_jar_init(c); }
+static void d_domparser(JSContext *c, const PlatformAgent *a) { (void)a; domparser_init(c); }
 /* §16.2.1.9's host hook is the RUNTIME's, which is what an agent is. `import(specifier)` with none installed
    resolved to nothing at all — no module, no error, no record — and a page that asks to load code and is
    answered silently is the one shape an unbuilt capability must not have. */
@@ -244,6 +246,7 @@ static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
     document_install(c, g, d->dom, d->url, d->csp, d->sandbox_flags, d->doc_id, d->nav_proxy);
 }
+static void i_domparser(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; domparser_install(c, g); }
 
 /* THE LIST. ORDER IS DEPENDENCY ORDER and it is ONE order for both halves, which is what keeps a component to
    one row: a declaration that has to precede another's (EventTarget before Window, because Window.prototype
@@ -406,6 +409,12 @@ static const PlatformComponent PLATFORM[] = {
        and not to any JSContext — which means nothing frees it when a realm goes. */
     { "cookie_jar",          d_cookie_jar,          NULL,        r_cookie_jar },
     { "document",            d_document,            i_document },
+    /* HTML §8.5.1's DOMParser, AFTER `document` — not because its install needs one (it puts an interface
+       object on the global and nothing else) but because that is what this list's order MEANS: every member of
+       this interface builds a second Document through core/dom/document.h's `document_new`, so the component
+       that owns Documents is what it is declared against. Its own prototype chains to Object.prototype, so no
+       earlier row is required for that half. */
+    { "domparser",           d_domparser,           i_domparser },
     { "module_loader",       d_module_loader,       NULL },
 };
 static const int PLATFORM_N = (int)(sizeof PLATFORM / sizeof PLATFORM[0]);
@@ -473,6 +482,7 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "IDBObjectStore",        "idb_object_store" },
     { "IDBVersionChangeEvent", "idb_version_change_event" },
     { "Observable",            "observable" },
+    { "DOMParser",             "domparser" },
 };
 static const int PLATFORM_WITNESS_N = (int)(sizeof PLATFORM_WITNESS / sizeof PLATFORM_WITNESS[0]);
 
