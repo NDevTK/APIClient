@@ -19,6 +19,7 @@ import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSy
 import { dirname, join, resolve } from "node:path";
 import { cpus } from "node:os";
 import { fileURLToPath } from "node:url";
+import { stampArtifact } from "./gate_revision.mjs";
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const QJS = join(ENGINE, "qjs");
@@ -432,6 +433,16 @@ function link(what, entryObj, ldflags, out) {
 }
 link("smoke", objPath(ENTRY_SMOKE), LDFLAGS_SMOKE, join(OUT, "qjs.js"));
 link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs"));
+/* THE ARTIFACT RECORDS THE REVISION IT WAS BUILT FROM, because engine/solvergate.mjs runs this file and
+   never compiles anything, so without a stamp the only question it could ask about the program was how old
+   the FILE was. That answer is wrong in exactly the mode CLAUDE.md §Testing mandates: `git worktree add`
+   writes every tracked file at the checkout instant, so in a frozen snapshot every source is newer than
+   any artifact and the check reported a build OF that revision as stale against 600 sources, three minutes
+   after the checkout. The stamp is computed by gate_revision.mjs itself rather than re-derived here, so
+   what is written and what is checked are the same answer by construction. The cone is what this link
+   actually compiled — the host and the submodule — and not the whole tree, for the reason that file gives:
+   another agent's popup edit is not a reason to distrust a JS-engine number. */
+stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
 
 // Milestone smoke test: run test_forced.c's main (the @H merge + @S sink fire-verification on a fixture doc) —
 // the design-correctness signal until the live-Chrome harness is re-wired to a rebuilt production ABI entry.

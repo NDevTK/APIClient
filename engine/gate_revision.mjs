@@ -35,7 +35,7 @@
  * producer's field. A run that could not ask git and a run that asked and got an answer must not read alike.
  */
 import { spawnSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { statSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const ENGINE = import.meta.dirname;
@@ -63,14 +63,67 @@ function dirtyIn(cwd, cone) {
   return out.split("\n").map((l) => l.trimEnd()).filter(Boolean);
 }
 
-/* A GATE THAT DOES NOT BUILD MEASURES AN ARTIFACT, AND THE ARTIFACT'S AGE IS THEN THE REAL IDENTITY.
- * engine/solvergate.mjs runs `extension/lib/qjs/qjs.mjs` — the shipped wasm — and never compiles anything, so
- * a revision line about the TREE would be a confident false statement about the program: the tree can be six
- * commits ahead of the .wasm that answers every question in the run. That is the same defect this whole file
- * exists for, one layer over: a number attributed to a revision that never produced it. So an artifact-driven
- * gate reports which SOURCES ARE NEWER THAN THE THING IT RAN, by mtime, over the git-tracked files of its own
- * cone — tracked, because an untracked scratch file under engine/host is not what `build.mjs` compiled either.
- * The list is the work item: every one of those is a change the run did not contain. */
+/* THE ARTIFACT CARRIES ITS OWN IDENTITY, BECAUSE AN MTIME IS NOT ONE — and the mtime answer was wrong in
+ * exactly the mode §Testing MANDATES. `git worktree add --detach` writes every tracked file at the checkout
+ * instant, so in a frozen snapshot every source is newer than any artifact built before it, whatever revision
+ * built it: the first snapshot run of this mechanism reported "THE ARTIFACT IS OLDER THAN THE TREE — 600
+ * tracked source(s) have changed since" about a build of that very revision, three minutes after the checkout.
+ * This file already names the failure while excluding `test262/` for one instance of it — "a diagnostic that
+ * always says yes is the same as one that never fires" — and the general case is the same defect, because a
+ * checkout re-materializes EVERYTHING, not just the corpus.
+ *
+ * So `build.mjs` STAMPS the artifact with the revision it was built from, through this same file, and the
+ * comparison is between REVISIONS. That is a fact rather than a heuristic and it reads identically in a fresh
+ * worktree and in the shared checkout. Three answers, and each is a different statement:
+ *   - stamped and EQUAL to this tree      -> the artifact is a build of the revision above.
+ *   - stamped and DIFFERENT               -> named, with whether the build's revision is an ancestor of this
+ *                                            one (behind by N commits, the ordinary case) or unrelated.
+ *   - stamped from a DIRTY tree           -> there IS no revision that describes it, and saying so is stronger
+ *                                            than any timestamp: the build is the artifact of an edit.
+ * An UNSTAMPED artifact predates this mechanism, and mtime is then all there is. It is still reported, and
+ * reported AS a heuristic — §Offensive-programming's rule that a run which could not ask and a run which asked
+ * must not read alike applies to the answer's KIND as much as to its value. */
+const STAMP_SUFFIX = ".build.json";
+const stampPath = (artifact) => artifact + STAMP_SUFFIX;
+
+/* WRITTEN BY THE BUILD, THROUGH THE ONE PLACE THAT ANSWERS "what revision is this tree". `build.mjs` does not
+   re-derive the pair — it calls gateRevision() and writes what a gate would have computed, so the stamp and
+   the check are the same answer by construction rather than by two authors agreeing. */
+export function stampArtifact(artifact, cone) {
+  const rev = gateRevision(cone);
+  writeFileSync(stampPath(artifact), JSON.stringify(
+    { head: rev.head, branch: rev.branch, qjsHead: rev.qjsHead, qjsPinned: rev.qjsPinned,
+      dirty: rev.dirty, cone, at: new Date().toISOString() }, null, 1));
+  return rev;
+}
+
+function readStamp(artifact) {
+  try { return JSON.parse(readFileSync(stampPath(artifact), "utf8")); }
+  catch { return null; }
+}
+
+/* HOW FAR BEHIND, and in which direction. `--is-ancestor` is the question that separates "this build is six
+   commits old" from "this build is off a branch that is not in this history at all", and the two need
+   different responses from whoever reads the line. A repository that cannot answer keeps the failure. */
+function behindBy(oldSha, newSha) {
+  if (!oldSha || !newSha || oldSha.startsWith("<") || newSha.startsWith("<")) return null;
+  if (oldSha === newSha) return { same: true };
+  /* A COMMIT THIS REPOSITORY DOES NOT HAVE IS NOT A COMMIT ON ANOTHER BRANCH, and `--is-ancestor` answers
+     both with the same non-zero status. Reporting them alike is §Testing's own defect — the test262 kill that
+     named "segfault/abort/timeout" through one message and distinguished none of them — so the resolvability
+     is asked FIRST and separately. An unresolvable stamp means the artifact was built from a tree this
+     checkout has never fetched (a stale clone, a dropped branch, a corrupt stamp), and the remedy is to fetch
+     or rebuild; a resolvable non-ancestor means a real divergence, and the remedy is to find out whose. */
+  if (ask(ROOT, "rev-parse", "--verify", "--quiet", oldSha + "^{commit}").startsWith("<"))
+    return { unresolvable: true };
+  const r = spawnSync("git", ["merge-base", "--is-ancestor", oldSha, newSha], { cwd: ROOT, encoding: "utf8" });
+  if (r.error) return { unknown: String(r.error.message || r.error) };
+  if (r.status !== 0) return { unrelated: true };
+  return { behind: ask(ROOT, "rev-list", "--count", oldSha + ".." + newSha) };
+}
+
+/* THE MTIME FALLBACK, kept ONLY for an artifact with no stamp. Unchanged in what it computes and changed in
+ * what it claims: its caller reports it as a heuristic, never as the identity. */
 function stalerThan(artifact, cone) {
   let art;
   try { art = statSync(artifact).mtimeMs; }
@@ -122,6 +175,7 @@ function stalerThan(artifact, cone) {
 export function gateRevision(cone, artifact = null) {
   const superDirty = dirtyIn(ROOT, cone.filter((p) => p !== SUBMODULE_PATH));
   const wantsQjs = cone.includes(SUBMODULE_PATH);
+  const stamp = artifact ? readStamp(artifact) : null;
   return {
     head: ask(ROOT, "rev-parse", "HEAD"),
     branch: ask(ROOT, "rev-parse", "--abbrev-ref", "HEAD"),
@@ -132,7 +186,10 @@ export function gateRevision(cone, artifact = null) {
     dirty: [...superDirty, ...(wantsQjs ? dirtyIn(QJS, ["."]).map((l) => l + "   (in " + SUBMODULE_PATH + ")")
                                         : [])],
     artifact,
-    stale: artifact ? stalerThan(artifact, cone) : null,
+    /* THE STAMP IS THE ANSWER AND THE MTIME IS THE FALLBACK — asked in that order, and only ONE of the two is
+       ever carried, so a reader cannot mistake which kind of answer arrived. */
+    stamp,
+    stale: artifact && !stamp ? stalerThan(artifact, cone) : null,
     cone,
   };
 }
@@ -168,20 +225,51 @@ export function revisionLines(rev) {
   /* THE PROGRAM, WHEN IT IS NOT THE ONE THIS RUN LINKED. Reported after the revision and never instead of it:
      both facts are needed, because a clean tree in front of a six-commit-old artifact is the most misleading
      pair there is — every line above says "quotable" about a program that is not the one that ran. */
-  if (rev.stale) {
+  if (rev.stamp) {
+    const s = rev.stamp;
+    if (s.dirty && s.dirty.length) {
+      /* THE STRONGEST OF THE THREE ANSWERS, and the only one no timestamp could ever give: the build was made
+         from a tree that no revision contains, so there is nothing to compare it TO. */
+      out.push(`[rev] THE ARTIFACT WAS BUILT FROM A DIRTY TREE — ${rev.artifact} was stamped ${s.at} at ` +
+               `${short(s.head)} with ${s.dirty.length} path(s) of its cone modified, so no revision describes ` +
+               `the program this run measured. Rebuild from a frozen snapshot before quoting this number.`);
+      for (const l of s.dirty) out.push(`[rev]   built-with ${l}`);
+    } else {
+      const eng = behindBy(s.head, rev.head), qjs = behindBy(s.qjsHead, rev.qjsHead);
+      const both = (eng && eng.same) && (!s.qjsHead || (qjs && qjs.same));
+      if (both) {
+        out.push(`[rev] the artifact ${rev.artifact} was BUILT FROM THIS REVISION (stamped ${s.at}) — the ` +
+                 `program measured and the tree named above are the same thing`);
+      } else {
+        const say = (what, from, d) =>
+          !d ? `${what} ${short(from)} (could not be compared)`
+             : d.same ? `${what} ${short(from)} (same)`
+             : d.unresolvable ? `${what} ${short(from)}, a commit THIS CHECKOUT DOES NOT HAVE — fetch it or ` +
+                                `rebuild; the stamp names a tree that was never here`
+             : d.unrelated ? `${what} ${short(from)}, which is NOT an ancestor of this tree's`
+             : d.unknown ? `${what} ${short(from)} (${d.unknown})`
+             : `${what} ${short(from)}, ${d.behind} commit(s) behind`;
+        out.push(`[rev] THE ARTIFACT IS NOT A BUILD OF THIS REVISION — ${rev.artifact} was stamped ${s.at} at ` +
+                 `${say("engine", s.head, eng)}` + (s.qjsHead ? `, ${say("qjs", s.qjsHead, qjs)}` : "") +
+                 `. This run measured that BUILD, not the revision above; rebuild ` +
+                 `(\`node engine/build.mjs\`) or quote the number against the build instead.`);
+      }
+    }
+  } else if (rev.stale) {
+    /* NO STAMP: the artifact predates the stamping, so mtime is all there is — and it is reported AS a
+       heuristic, because in a frozen snapshot every file is newer than every artifact and the answer is
+       meaningless there. A reader must be able to tell this line from the stamped ones above. */
     if (rev.stale.missing)
       out.push(`[rev] THE ARTIFACT THIS GATE RUNS IS NOT THERE — ${rev.artifact}: ${rev.stale.missing}`);
     else if (rev.stale.broke)
       out.push(`[rev] THE ARTIFACT'S AGE COULD NOT BE DECIDED — ${rev.stale.broke}`);
-    else if (rev.stale.count) {
-      out.push(`[rev] THE ARTIFACT IS OLDER THAN THE TREE — ${rev.artifact} was built ${rev.stale.at} and ` +
-               `${rev.stale.count} tracked source(s) of this gate's cone have changed since, most recently ` +
-               `${rev.stale.newest} at ${rev.stale.newest_at}. This run measured that BUILD, not the revision ` +
-               `above; rebuild (\`node engine/build.mjs\`) or quote the number against the build instead.`);
-    } else {
-      out.push(`[rev] the artifact ${rev.artifact} (built ${rev.stale.at}) is NEWER than every tracked source ` +
-               `of this gate's cone — it is a build OF the tree above`);
-    }
+    else
+      out.push(`[rev] THE ARTIFACT CARRIES NO BUILD STAMP — ${rev.artifact} was built ${rev.stale.at} by a ` +
+               `build that did not record its revision, so its identity is unknown and only its TIMESTAMP can ` +
+               `be compared: ${rev.stale.count} tracked source(s) of this gate's cone are newer` +
+               (rev.stale.newest ? `, most recently ${rev.stale.newest} at ${rev.stale.newest_at}` : "") +
+               `. In a frozen snapshot every file is newer than every artifact, so treat this as a HINT and ` +
+               `rebuild (\`node engine/build.mjs\`) to get an answer.`);
   }
   return out;
 }

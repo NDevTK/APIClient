@@ -13,6 +13,10 @@ extension/lib/qjs/*.cow.gen.js
 # engine/host/main.c + the engine/qjs submodule). Regenerable; not committed to avoid binary churn.
 extension/lib/qjs/qjs.mjs
 extension/lib/qjs/qjs.wasm
+# THE ARTIFACT'S BUILD STAMP — the revision `build.mjs` linked it from, written through gate_revision.mjs
+# so the stamp and the check are one answer. Output beside the output it describes, and ignored for the
+# same reason: committing it would pin an identity to a tree that no longer has the artifact it names.
+extension/lib/qjs/qjs.mjs.build.json
 # engine/host/out/ IS BUILD OUTPUT, ALL OF IT. This said the opposite — "qjs.js and qjs.wasm are the shipped
 # artifacts and are committed" — and build.mjs:110 states in its own words that they are not: `link()` emits
 # `test_forced.c -> out/qjs.js` and `main.c -> extension/lib/qjs/qjs.mjs`, and the second one is the shipped
