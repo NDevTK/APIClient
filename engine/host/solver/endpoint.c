@@ -18,7 +18,10 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
    is exactly what a param's example values already do. */
 static int header_is_shape(const char *v) { return strchr(v, '{') != NULL; }
 
-static void endpoint_merge_headers(Endpoint *e, const EndpointHeader *hdrs, int nhdrs) {
+/* Returns HOW MANY HEADER NAMES THIS ENDPOINT DID NOT HAVE BEFORE — the caller credits the WFQ with it, and
+   that is the whole reason this is not `void` any more. See the merge site. */
+static int endpoint_merge_headers(Endpoint *e, const EndpointHeader *hdrs, int nhdrs) {
+    int gained = 0;
     for (int i = 0; i < nhdrs; i++) {
         const char *n = hdrs[i].name, *v = hdrs[i].value ? hdrs[i].value : "";
         int j, found = 0;
@@ -43,7 +46,9 @@ static void endpoint_merge_headers(Endpoint *e, const EndpointHeader *hdrs, int 
         e->hdrs[e->nh].value = strdup(v);
         CHECK(e->hdrs[e->nh].name && e->hdrs[e->nh].value, "endpoint: OOM copying a header");
         e->nh++;
+        gained++;
     }
+    return gained;
 }
 
 static Endpoint *g_eps = NULL;
@@ -107,7 +112,23 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     for (int i = 0; i < g_eps_n; i++) {                 /* merge into an existing same-identity endpoint */
         if (same_identity(&g_eps[i], method, path, kv, n)) {
             for (int j = 0; j < n; j++) param_add_val(&g_eps[i].params[j], kv[j].val);
-            endpoint_merge_headers(&g_eps[i], hdrs, nhdrs);
+            /* A REQUIRED HEADER THIS ENDPOINT DID NOT HAVE IS EMITTED OUTPUT, and this path credited the WFQ
+               with nothing for it. An endpoint's IDENTITY is method + path + param NAMES (same_identity), so a
+               flow that builds a differently-SHAPED request already earns its point below — what reached here
+               and went uncounted was a flow that called a known endpoint and revealed that it also wants
+               `Authorization`, or a content type, or an API key. §What-the-tool-produces names required headers
+               as one of the things this engine exists to learn, so a flow that learns one has emitted, and the
+               ranking has to see it or the arm that found the authenticated call sinks back among arms that
+               found nothing.
+               STRUCTURE, NOT DATA — the line this credit stops at, and the reason `param_add_val` above earns
+               nothing. A header NAME is a fact about what the endpoint requires, bounded by the code; a param
+               VALUE is a better example of something already known, and it is unbounded in the INPUT, so a loop
+               over opaque data could mint credit without limit and outrank the whole frontier by generating
+               strings. One point per merge that gained structure, matching the granularity below: an endpoint
+               is one discovery however many headers arrive with it, and a header the surface gains later is
+               one more. */
+            if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
+                flow_credit_emit(1.0);
             goto done;
         }
     }
@@ -117,7 +138,10 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     e->method = strdup(method); e->path = strdup(path);
     if (n) { e->params = calloc(n, sizeof(Param)); CHECK(e->params, "endpoint: OOM params"); }
     for (int j = 0; j < n; j++) { e->params[e->np].name = strdup(kv[j].name); param_add_val(&e->params[e->np], kv[j].val); e->np++; }
-    endpoint_merge_headers(e, hdrs, nhdrs);
+    /* The count is deliberately DROPPED here: every header of a brand-new endpoint is new, and the discovery
+       being credited is the ENDPOINT. Crediting both would price one sighting at one point plus one per header
+       it happened to carry, which makes a request's header count part of the ranking. */
+    (void)endpoint_merge_headers(e, hdrs, nhdrs);
     flow_credit_emit(1.0);   /* a NEW endpoint: this flow just emitted value-of-information -> WFQ reward */
 done:
     free(path);
