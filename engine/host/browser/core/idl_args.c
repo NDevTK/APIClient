@@ -671,6 +671,27 @@ static const void *idl_body_state_const(const IdlMember *m, const void *st)
    "every argument from here on" and not a position of its own, which is why the count differs — and why §3.6.2's
    absent-optional rule stops there: each value a page passes to a `T...` tail is CONVERTED, so
    `el.append('a', undefined)` appends the text "undefined" rather than skipping an argument. */
+/* IS THIS DECLARED TYPE A DICTIONARY — the plain one and the three unions whose OMITTED arm is one.
+ *
+ * IT IS ASKED BECAUSE AN OMITTED DICTIONARY ARGUMENT IS NOT AN ABSENT ONE. §3.6.2's rule that an optional
+ * argument given `undefined` is absent is about a value type, where the body has to tell "no base" from the
+ * base `undefined` — but Web IDL writes `optional D options = {}`, and §3.2.17 converting `undefined` to D
+ * yields a dictionary carrying every member's DEFAULT. So the body of such a member sees a dictionary whether
+ * or not the page passed one, and there is no state in which it sees `undefined`.
+ *
+ * THIS FILE ALREADY PERFORMED THAT CONVERSION AND THE LOOP NEVER REACHED IT. `s->n` was min(argc, nargs), so a
+ * call that omitted the trailing dictionary never visited its position at all, and every such body had to
+ * hand-roll `argc > N ? argv[N] : JS_UNDEFINED` — which is the consumer-side default §Offensive-programming
+ * names, one call site at a time. It read as correct wherever the IDL default happened to equal what the
+ * hand-rolled `undefined` produced (`idl_dict_bool` answers false, and `= false` is the common default), and
+ * it was WRONG wherever it did not: HTML §9.4.4's `WindowPostMessageOptions` gives `targetOrigin` the default
+ * "/", so `window.postMessage(msg)` read an undefined target origin where the spec reads "/". */
+static bool idl_type_is_dictionary(IdlArgType t)
+{
+    return t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST || t == IDL_STRING_OR_DICT ||
+           t == IDL_USVSTRING_OR_DICT;
+}
+
 static int idl_declared_positions(const IdlMember *m)
 {
     DCHECK(!m->variadic || m->nargs >= 1,
@@ -1213,6 +1234,16 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 return JS_STEP_ABRUPT;
             }
         }
+        /* A DECLARED DICTIONARY POSITION IS CONVERTED EVEN WHEN THE PAGE STOPPED SHORT OF IT, because its
+           value is the IDL's `= {}` and not the page's — see idl_type_is_dictionary. Every position between
+           is optional (a required one was already a TypeError above) and takes §3.6.2's absent path, so it
+           reaches the body as the `undefined` it would have anyway; what changes is only that the dictionary
+           behind them exists. A VARIADIC member may not declare one at all, which the conversion asserts. */
+        if (!m->variadic) {
+            for (r = s->n; r < m->nargs; r++)
+                if (idl_type_is_dictionary(m->types[r]))
+                    s->n = r + 1;
+        }
         s->result = JS_UNDEFINED;
         s->dict_v = JS_UNDEFINED;
         s->conv = m->variadic ? JS_NewArray(ctx) : JS_UNDEFINED;
@@ -1260,7 +1291,11 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            list of optionality values of the remaining entry", and the entry that made this position optional is
            exactly the one step 4 just removed — so `postMessage(m, undefined, [p])` converts the string
            "undefined" rather than treating the target origin as absent. */
-        if (!step4_only_longer &&
+        /* …AND IT IS NOT ABOUT A DICTIONARY. `store.createObjectStore('s', undefined)` and
+           `store.createObjectStore('s')` are the same call, and both are `options = {}` with every member at
+           its declared default — so a dictionary position falls through to the conversion below, which is
+           what §3.2.17 says converting `undefined` to a dictionary produces. */
+        if (!step4_only_longer && !idl_type_is_dictionary(t) &&
             s->i < idl_declared_positions(m) && s->i >= m->first_optional && JS_IsUndefined(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
@@ -2089,8 +2124,7 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
     if (members) {
         int ndict = 0;
         for (k = 0; k < nargs; k++)
-            if (types[k] == IDL_DICT || types[k] == IDL_DICT_OR_BOOL_FIRST ||
-                types[k] == IDL_STRING_OR_DICT || types[k] == IDL_USVSTRING_OR_DICT) ndict++;
+            if (idl_type_is_dictionary(types[k])) ndict++;
         DCHECK(ndict == 1, "a member declared dictionary members but not exactly one dictionary argument — the "
                            "conversion cursor is per-member, so a second dictionary would read the first's "
                            "names");

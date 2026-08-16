@@ -209,7 +209,9 @@ static const IdlDictMember VCE_INIT[] = {
 
 static JSValue js_vce_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    JSValueConst init = argc > 1 ? argv[1] : JS_UNDEFINED;
+    /* `optional IDBVersionChangeEventInit eventInitDict = {}` — the dictionary exists whether or not the page
+       wrote one, so it is read out of the vector rather than reconstructed from `argc`. */
+    JSValueConst init = argv[1];
     JSValue ev, old, nv, proto;
     double oldv = 0;
 
@@ -218,6 +220,8 @@ static JSValue js_vce_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         return JS_ThrowTypeError(ctx, "constructor IDBVersionChangeEvent requires 'new'");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "IDBVersionChangeEvent constructor requires a type");
+    DCHECK(JS_IsObject(init), "the IDBVersionChangeEvent constructor was handed no init dictionary — its IDL "
+                              "writes `= {}`, so the conversion builds one carrying every declared default");
     old = idl_dict_get(ctx, init, "oldVersion");
     DCHECK(!JS_IsUndefined(old), "IDBVersionChangeEventInit's `oldVersion` is declared with the IDL's own "
                                  "`= 0`, so the conversion places it whether or not the page wrote one — an "

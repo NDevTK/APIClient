@@ -324,13 +324,20 @@ static int conn_upgrade_transaction(JSContext *ctx, JSValueConst c, JSValue *pdb
 static JSValue js_conn_create_object_store(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                            int magic)
 {
-    JSValueConst options = argc > 1 ? argv[1] : JS_UNDEFINED;
+    /* THE OPTIONS ARE READ OUT OF THE VECTOR AND NOT OUT OF `argc`. `optional IDBObjectStoreParameters
+       options = {}` means the dictionary EXISTS whether or not the page wrote one, carrying every member's
+       declared default — so a body that wrote `argc > 1 ? argv[1] : JS_UNDEFINED` would be filling a hole the
+       conversion does not leave, which is the consumer-side default §Offensive-programming names. */
+    JSValueConst options = argv[1];
     JSValue db = JS_UNDEFINED, tx = JS_UNDEFINED, key_path, existing, store, handle;
     const char *name = NULL, *path = NULL;
     size_t path_len = 0;
     bool auto_increment;
 
-    (void)magic;
+    (void)magic; (void)argc;
+    DCHECK(JS_IsObject(options), "§4.4's createObjectStore was handed no options dictionary — the IDL writes "
+                                 "`optional IDBObjectStoreParameters options = {}`, so the conversion builds "
+                                 "one with every member at its default even for `createObjectStore(name)`");
     if (!conn_brand(ctx, this_val)) return JS_EXCEPTION;
     if (conn_upgrade_transaction(ctx, this_val, &db, &tx) < 0) return JS_EXCEPTION;
     name = JS_ToCString(ctx, argv[0]);

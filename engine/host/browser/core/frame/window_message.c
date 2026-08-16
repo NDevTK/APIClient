@@ -384,11 +384,17 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
               "the way a branch on unknown external input forks anywhere else, rather than deciding it here");
     /* THE OVERLOAD, READ BACK OFF THE CONVERTED VALUE. A STRING is §3.6's longer entry — the legacy
        `(message, targetOrigin, transfer)` — and an OBJECT is the options dictionary the declaration built.
-       UNDEFINED is the second argument not being there at all, which is the dictionary with every member at
-       its default; idl_dict_get answers exactly that for it, so the two share one path. */
-    DCHECK(JS_IsString(second) || JS_IsObject(second) || JS_IsUndefined(second),
-           "postMessage's second argument reached the body as neither a string, a dictionary nor absent — "
-           "IDL_USVSTRING_OR_DICT resolves to one of those three and nothing else");
+       THERE IS NO THIRD STATE, and that is the declaration's doing rather than this body's: `optional
+       WindowPostMessageOptions options = {}` means an omitted second argument IS a dictionary carrying every
+       member's default, which the argument machine now materializes (core/idl_args.c,
+       idl_type_is_dictionary). The sentence that used to stand here said `undefined` reached this body and
+       that idl_dict_get answered the defaults for it — it does not: it answers UNDEFINED, so
+       `window.postMessage(msg)` read an undefined target origin where §9.4.4 reads the IDL's "/". The assert
+       is what keeps that from coming back silently. */
+    DCHECK(JS_IsString(second) || JS_IsObject(second),
+           "postMessage's second argument reached the body as neither a string nor a dictionary — "
+           "IDL_USVSTRING_OR_DICT resolves to one of those two, and an OMITTED one is the `= {}` dictionary "
+           "rather than an absent argument");
     DCHECK(JS_IsString(second) || argc <= 2,
            "postMessage was called with three arguments and a second that is not a string — §3.6 step 4 "
            "removes the options entry at that arity, so the conversion owed a USVString here");
