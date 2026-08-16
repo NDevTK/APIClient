@@ -831,7 +831,22 @@ for (const { file: f, kind, variant } of runs) {
                           : `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(1)}s of CPU, ` +
                             `load average ${loadavg()[0].toFixed(1)} on ${cpus().length} cores — starved, not blocked; RE-RUN THIS FILE ALONE`)
                   : "signal " + r.signal;
-      failures.push(`  ABORT  ${rel}\n         ${cause}`);
+      /* AND WHAT THE WALK ACTUALLY FOUND, because "the runtime went down holding live objects" without saying
+         WHICH is a number about nothing — the one abort cause in this gate that names a defect and then throws
+         away its own evidence. quickjs's JS_FreeRuntime already prints all three censuses to stderr and this
+         driver already has them in `out`: `[gcleak]` counts the survivors per KIND with the class NAME (the
+         atom table is still alive there, which is what makes naming possible at all), `[gcroot]` re-lists after
+         gc_decref so it shows only what is rooted from OUTSIDE the heap — the only line that names a CULPRIT,
+         since every object in a leaked cycle is innocent — and `[stepleak]` names each continuation-holding
+         builtin that was dropped rather than finished.
+         THEY RIDE THE ABORT rather than being aggregated, because they are a fact about THIS file: two files
+         leaking one Array each and one file leaking a realm are three different pieces of work, and a total
+         would say "1552 objects" and send the reader to the wrong one. Discarding them cost a full measure-and-
+         report round trip per diagnosis: the count sat at 128 → 107 → 104 across three revisions while nobody
+         could see that it is a per-FILE boolean over SEVERAL universal leaks, so fixing one of them could not
+         move it at all. This is what tells the difference. */
+      const census = out.split("\n").filter((l) => /^\[(gcleak|gcroot|stepleak)\]/.test(l));
+      failures.push(`  ABORT  ${rel}\n         ${cause}` + census.map((l) => `\n         ${l}`).join(""));
     }
     /* THE `@WPTHANDLER` BRANCH IS GONE, not disabled. It excused a test that asks for a wptserve `.py` handler
        back when this driver served the corpus off disk — and engine/wptserve.py now runs WPT'S OWN server, which

@@ -2473,13 +2473,16 @@ int main(int argc, char **argv) {
     request_free(ctx);   /* Response.prototype — one object, held for the runtime's life */
     idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     navigable_free(ctx);
-    navigator_free();   /* the two per-realm slot ids; each realm's Navigator went with its context */
+    /* navigator (and Permissions §6 + §3.2's store with it), storage_manager and screen are ROWS on
+       core/platform.h's release column now, run by the platform_agent_free above. §3.2's store is two live
+       Arrays reached only through navigator_free, and the host that had no such line — the WPT runner —
+       leaked both in every file it ran. A teardown each host writes out by hand is a teardown some host is
+       missing a row of, and nothing reports it but the runtime's own leak walk, after the fact. */
     location_free();
     session_history_free();
     history_free();
     navigation_free(ctx);              /* HTML §7.2.6 the navigation API */
     navigation_history_entry_free(ctx);
-    screen_free();
     window_free(ctx);
     remote_object_free(ctx);
     window_proxy_free(ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */

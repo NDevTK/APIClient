@@ -477,7 +477,6 @@ QJS_EXPORT void qjs_teardown(void)
     file_system_access_free();
     fs_handle_free();
     fs_writable_free();
-    storage_manager_free();
     file_system_free(g_ctx);   /* the two roots are the agent's, and they outlive no agent */
     encoding_free(g_ctx);
     text_stream_free(g_ctx);
@@ -486,13 +485,16 @@ QJS_EXPORT void qjs_teardown(void)
     request_free(g_ctx);   /* Response.prototype — one object, held for the runtime's life */
     idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
     navigable_free(g_ctx);
-    navigator_free();   /* the two per-realm slot ids; each realm's Navigator went with its context */
+    /* navigator (and Permissions §6 + §3.2's store with it), storage_manager and screen are ROWS on
+       core/platform.h's release column now, run by the platform_agent_free above. §3.2's store is two live
+       Arrays reached only through navigator_free, and the host that had no such line — the WPT runner —
+       leaked both in every file it ran. A teardown each host writes out by hand is a teardown some host is
+       missing a row of, and nothing reports it but the runtime's own leak walk, after the fact. */
     location_free();
     session_history_free();
     history_free();
     navigation_free(g_ctx);              /* HTML §7.2.6 the navigation API */
     navigation_history_entry_free(g_ctx);
-    screen_free();
     window_free(g_ctx);
     remote_object_free(g_ctx);
     window_proxy_free(g_ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */

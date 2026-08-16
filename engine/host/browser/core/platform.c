@@ -163,6 +163,18 @@ static void r_navigate_event_fire(JSRuntime *rt) { (void)rt; navigate_event_fire
    JS_FreeRuntime's gc_obj_list walk with a leaked Array, so a test that had already passed was reported as an
    abort. That is exactly the drift this column exists to end. */
 static void r_unhandled_rejection(JSRuntime *rt) { unhandled_rejection_free(rt); }
+/* PERMISSIONS §3.2's STORE IS TWO LIVE ARRAYS, and it is reached only through navigator_free — Permissions is
+   declared from navigator_init, so it is released from there, which is right and is exactly why this row has to
+   exist. The WPT runner had no `navigator_free` line, so §3.2's store and the sources record beside it were
+   built for every file that gate ran and freed for none: two leaked GC objects per file, which is enough on its
+   own to end every run on JS_FreeRuntime's leak walk. It is the same defect as the row above, found by the same
+   reading, and the count could not show the first one being fixed while this one was still there — an abort is
+   per FILE, so removing one of several universal leaks moves it by nothing.
+   §6.4.4's UserActivation and Screen come with it: same column, same reason, and a component released from a
+   list one host writes out by hand is a component some other host leaks. */
+static void r_navigator(JSRuntime *rt) { (void)rt; navigator_free(); }
+static void r_screen(JSRuntime *rt) { (void)rt; screen_free(); }
+static void r_storage_manager(JSRuntime *rt) { (void)rt; storage_manager_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -248,7 +260,7 @@ static const PlatformComponent PLATFORM[] = {
     /* §8.10.1's Navigator, and with it Permissions §6 (navigator.permissions), Storage §2 and File System §3
        (navigator.storage) and §6.4.4's UserActivation. This row is the one whose absence from one host's copy
        of the list left four standards uncollected by the gate that reports on them. */
-    { "navigator",           d_navigator,           NULL },
+    { "navigator",           d_navigator,           NULL,        r_navigator },
     /* THE ONE VIRTUAL FILESYSTEM and the File System Standard over it. The MODEL goes first (its two roots are
        built at this pre-boot baseline, so no flow's creation becomes every sibling's); §2.5's stream after §5's
        WritableStream, whose prototype it chains to; §2.2-§2.4's handles after the stream, since
@@ -257,7 +269,7 @@ static const PlatformComponent PLATFORM[] = {
     { "file_system",         d_file_system,         NULL },
     { "file_system_writable", d_fs_writable,        NULL },
     { "file_system_handle",  d_fs_handle,           NULL },
-    { "storage_manager",     d_storage_manager,     NULL },
+    { "storage_manager",     d_storage_manager,     NULL,        r_storage_manager },
     /* FILE SYSTEM ACCESS, a DIFFERENT standard over that same model: §2.2's "file-system" powerful feature and
        §2.3's two members, then §3's three pickers. Both rows come after `navigator` because Permissions §4's
        registry — where the feature's row lives — is declared under it, and after `file_system_handle` because
@@ -294,7 +306,7 @@ static const PlatformComponent PLATFORM[] = {
        any navigation enqueues one. It installs no member of its own: the interfaces it builds objects of
        are `navigation_destination` above and NavigateEvent under `event`. */
     { "navigate_event_fire", d_navigate_event_fire, NULL,        r_navigate_event_fire },
-    { "screen",              d_screen,              NULL },
+    { "screen",              d_screen,              NULL,        r_screen },
     { "navigable",           d_navigable,           i_navigable },
     /* HTML §8.1.7's EVENT LOOP, before the task sources that are ordered by it: the virtual clock, §8.1.7.1's
        last render opportunity time and the insertion order a source breaks its ties by are the LOOP's, and
