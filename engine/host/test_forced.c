@@ -3752,9 +3752,6 @@ int main(int argc, char **argv) {
     free(js);
     /* THE PLATFORM'S OWN LIST, UNDONE — see main.c's teardown: one call, whatever this browser declared. */
     platform_agent_free();
-    solve_free();
-    endpoint_free();
-    req2proto_free();
 
     rendering_free(ctx);
     page_reveal_free(ctx);
@@ -3805,13 +3802,9 @@ int main(int argc, char **argv) {
     window_free(ctx);
     remote_object_free(ctx);
     window_proxy_free(ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
-    flow_registry_free(ctx);
-    /* THE TAINT SHADOW, which had no teardown caller at all. It is a global table of (element, slot) -> opaque,
-       every entry holding a dup'd JSValue — so a shadow still standing when the runtime goes down is a leaked
-       GC object the `gc_obj_list` walk reports with nothing naming the owner, and the table's own array is
-       leaked whether or not any entry survives. It is freed HERE, with the frontier, because that is what it
-       belongs to: a shadow exists because some flow stored a source in an attribute. */
-    attr_shadow_free(ctx);
+    /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
+       these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
+    solver_agent_free(ctx);
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);

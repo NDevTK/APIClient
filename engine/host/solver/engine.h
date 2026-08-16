@@ -350,4 +350,29 @@ long engine_jobs_run(void);
    behind it. */
 void engine_set_wrap_stats(void (*fn)(long *n, long *cap));
 
+/* THE SOLVER'S AGENT-LIFETIME STATE, RELEASED IN ONE CALL — core/platform.h's release column, for this half.
+ *
+ * The browser half's teardown is a LIST every host goes through so that a host cannot express an omission. The
+ * solver half had no such call and its teardown was six lines written by hand into three hosts, which had
+ * drifted exactly the way that list drifted before it had one: `solve_free`, `endpoint_free` and
+ * `req2proto_free` were in main.c and test_forced.c and in NEITHER of the WPT runner's, and `attr_shadow_free`
+ * was in test_forced.c alone, so the two hosts that lack it leak §@S's (element, slot) -> opaque map — every
+ * entry a dup'd JSValue — whenever a flow stores a source in a DOM string slot.
+ *
+ * AND THIS CLASS CANNOT BE FOUND BY A DETECTOR, which is why the answer is a column and not a better walk. The
+ * three emission tables are plain `malloc` holding no JSValue and no atom: the runtime's gc_obj_list walk
+ * cannot see them (not GC objects), the atom walk cannot see them (not atoms), and even JS_DUMP_LEAKS's
+ * `malloc_count` cannot (it counts `js_malloc_rt`, not `malloc`). Nothing quickjs has will ever report one.
+ * The taint shadow is the mirror case: its entries ARE GC objects, so the gc_obj_list DCHECK would name them —
+ * but only on a run where a flow actually stored a source in an attribute, which is the product entry under
+ * real solver input, and no gate runs that entry. Both halves of the divergence were therefore invisible for
+ * the same structural reason and not by luck.
+ *
+ * ORDER IS REVERSE DEPENDENCY, like the column it mirrors. The frontier goes first because everything under it
+ * is reached through it (flow_registry_free already cascades the world registry, the decision chain, the path
+ * constraint's pins, the cold tier and the pending register — it is this column in miniature and says so at
+ * each line); the taint shadow next, because a shadow exists only because some flow wrote one; the emission
+ * tables last, since they are read out of the result document long before any teardown runs. */
+void solver_agent_free(JSContext *ctx);
+
 #endif

@@ -1815,7 +1815,9 @@ int main(int argc, char **argv)
        is what makes the frontier a set of snapshots), so a host doing it as well would be the second scheduler
        this conversion removed, expressed as one line of teardown. A flow still switched in at this point is a
        session that never closed, and flow_release says so at the flow it reaches. */
-    flow_registry_free(ctx);
+    /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
+       these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
+    solver_agent_free(ctx);
     document_free(ctx);
     /* THE WHOLE DOM GROUP — element_free's cascade, the <iframe> element and GEOMETRY INTERFACES §3/§4 — is a
        set of ROWS on core/platform.h's release column now, run by the platform_agent_free above. `document`
@@ -1823,7 +1825,6 @@ int main(int argc, char **argv)
     window_free(ctx);
     remote_object_free(ctx);
     window_proxy_free(ctx);
-    world_registry_free(ctx);
     report_exception_free(ctx);
     event_free(ctx);
     event_target_free(ctx);

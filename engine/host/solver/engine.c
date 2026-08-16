@@ -22,6 +22,8 @@
 #include "solver/reclaim.h"   /* …and its RAM edge: which allocators can sell a flow rather than fail */
 #include "solver/req2proto.h" /* an API's own rejection is a description of the request it wanted — see engine_provide */
 #include "solver/discovery.h" /* …and an API's own PUBLISHED description: the flow this engine seeds to fetch one */
+#include "solver/endpoint.h"    /* the @H surface, and one of the three tables no leak walk in this runtime can see */
+#include "solver/attr_shadow.h" /* …and the taint shadow, whose entries ARE GC objects and are leaked by two hosts */
 #include "check.h"
 #include <time.h>
 #include <stdlib.h>
@@ -3889,5 +3891,18 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
 void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n,
                 const char *recipes) {
     run_scheduler(ctx, bodies, srcs, types, n, 1, recipes);
+}
+
+/* See solver/engine.h — the solver half's release column, in reverse dependency order. */
+void solver_agent_free(JSContext *ctx)
+{
+    DCHECK(ctx != NULL, "the solver's agent state was released against no realm — the frontier's flows hold "
+                        "JSValues and its deltas hold the writes those flows made, so there is a realm they "
+                        "belong to and a release with none would drop them against nothing");
+    flow_registry_free(ctx);
+    attr_shadow_free(ctx);
+    solve_free();
+    endpoint_free();
+    req2proto_free();
 }
 

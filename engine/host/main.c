@@ -512,9 +512,6 @@ QJS_EXPORT void qjs_teardown(void)
     /* THE PLATFORM'S OWN LIST, UNDONE — every component's agent-lifetime release, in one call, so the next one
        to hold agent state is not a fourth copy of a list that has already drifted once. */
     platform_agent_free();
-    solve_free();
-    endpoint_free();
-    req2proto_free();
     rendering_free(g_ctx);
     page_reveal_free(g_ctx);
     media_query_list_free(g_ctx);
@@ -576,10 +573,16 @@ QJS_EXPORT void qjs_teardown(void)
     window_free(g_ctx);
     remote_object_free(g_ctx);
     window_proxy_free(g_ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
-    flow_registry_free(g_ctx);
-    /* THE WORLD REGISTRY holds a COW DELTA per foreign world, and a delta holds the JSValues it captured — so
-       leaving it behind pins every object any cross-document flow ever wrote through. */
-    world_registry_free(g_ctx);
+    /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
+       these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
+    solver_agent_free(g_ctx);
+    /* THE WORLD REGISTRY IS NOT NAMED HERE, AND WAS NOT BEING FREED A SECOND TIME BY ACCIDENT EITHER — it was,
+       and the redundancy is what made a hand-written list read as correct. flow_registry_free has released it
+       since the world namespace came up with the frontier, and says so at its own first line; this call was a
+       second one, harmless only because world_registry_free nulls everything it frees. It is the duplicate
+       node_free in element_free again: a line whose safety rests on a callee happening to be idempotent, and
+       which made an audit of the three teardowns report test_forced.c as MISSING the release when test_forced.c
+       was the only host that had it right. */
     /* THE COLLECTION IS PART OF THE TEARDOWN, not an optimisation: a run leaves flow-local garbage that is
        unreachable but not yet collected, and gc_obj_list counts it exactly as it counts a real leak. */
     if (g_rt) JS_RunGC(g_rt);
