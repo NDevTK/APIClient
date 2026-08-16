@@ -403,7 +403,7 @@ static void html_fire(const char *html) {
         lxb_dom_element_t *root = lxb_dom_document_element(&doc->dom_document);
         if (root) html_fire_walk(lxb_dom_interface_node(root));
     }
-    lxb_html_document_destroy(doc);
+    dom_document_destroy(doc);
 }
 
 /* URL firing oracle: navigating to a `javascript:` URL executes its JS. So the "fire" is: if the URL scheme is

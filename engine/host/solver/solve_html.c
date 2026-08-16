@@ -235,7 +235,7 @@ static int quote_ends_value(const char *witness, size_t at, char q) {
         if (locate(doc, &lo) && lo.kind == LOC_ATTR_VALUE)
             ends = memchr(lo.val, q, lo.val_n) == NULL;
     }
-    lxb_html_document_destroy(doc);
+    dom_document_destroy(doc);
     free(w);
     return ends;
 }
@@ -262,7 +262,7 @@ static int space_starts_attribute(const char *witness, size_t at) {
             }
         }
     }
-    lxb_html_document_destroy(doc);
+    dom_document_destroy(doc);
     free(w);
     return found;
 }
@@ -349,14 +349,14 @@ static int breakouts_at(const char *witness, size_t after, SolveHtmlEmit emit, v
 
     CHECK(doc != NULL, "solve_html: OOM parsing a sink output for its breakout context");
     if (lxb_html_document_parse(doc, (const lxb_char_t *)witness, strlen(witness)) != LXB_STATUS_OK) {
-        lxb_html_document_destroy(doc);
+        dom_document_destroy(doc);
         DFAIL("the real HTML parser refused a string an HTML sink was handed - HTML 13.2 makes every byte "
               "sequence a parseable document, so this is Lexbor reporting an allocation failure and the "
               "derivation has just measured nothing");
         return 0;
     }
     if (!locate(doc, &lo)) {
-        lxb_html_document_destroy(doc);
+        dom_document_destroy(doc);
         DFAIL("the sink output carries the @S context locator but the real parse put it in no element, "
               "attribute, text, comment or CDATA node - the states that consume bytes and produce no node are "
               "the DOCTYPE states (13.2.5.53-.68), the processing-instruction states (13.2.5.72-.76), and an "
@@ -392,7 +392,7 @@ static int breakouts_at(const char *witness, size_t after, SolveHtmlEmit emit, v
         DFAIL("the locator was placed by a node kind this derivation does not name");
         break;
     }
-    lxb_html_document_destroy(doc);
+    dom_document_destroy(doc);
     return n;
 }
 

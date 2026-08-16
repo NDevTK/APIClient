@@ -5,6 +5,7 @@
 #include <lexbor/dom/interfaces/element.h>
 
 #include "check.h"
+#include "core/dom/node_heap.h"
 #include "core/dom/node_interface.h"
 
 /* THE TWO ARMS ARE THE TWO WAYS lexbor's KEY IS NOT AN IDENTITY — see node_interface.h for the measurement of
@@ -78,7 +79,30 @@ lxb_html_document_t *dom_document_create(void)
            "a freshly created document already destroys its nodes through a dispatcher that is not lexbor's "
            "HTML one — name the third one here before it is overwritten");
     doc->destroy_interface = dom_node_interface_destroy;
+    /* AND THE ARENAS ARE THE AGENT'S, from here rather than from the first adopt — see core/dom/node_heap.h.
+       Here, because it is the only moment the document has none of its own bytes yet, and because a document
+       that reached its first node with private arenas can never be given the agent's afterwards. */
+    node_heap_attach(doc);
     return dom;
+}
+
+void dom_document_destroy(lxb_html_document_t *dom)
+{
+    lxb_dom_document_t *doc;
+    lxb_dom_node_t *child;
+
+    DCHECK(dom != NULL, "no document was destroyed");
+    doc = lxb_dom_interface_document(dom);
+    DCHECK(dom_document_owns_node_interfaces(doc),
+           "a document is being destroyed that does not destroy its nodes through this engine's dispatcher — "
+           "it was not built by dom_document_create, so it never took the agent's heap and this entry would "
+           "hand back arenas it does not hold");
+    /* `lxb_dom_node_destroy_deep` DETACHES each node before it frees it, so the document's child list drains
+       as the loop runs; it is iterative, so the depth of the page's markup costs no C stack. */
+    while ((child = doc->node.first_child) != NULL)
+        lxb_dom_node_destroy_deep(child);
+    node_heap_detach(doc);
+    lxb_html_document_destroy(dom);
 }
 
 lxb_dom_interface_t *dom_element_interface_create(lxb_dom_document_t *doc, lxb_tag_id_t tag, lxb_ns_id_t ns)

@@ -59,6 +59,7 @@
 #include "core/dom/element.h"   /* element_prefix — §4.4's three namespace lookups read the name §4.5 stored */
 #include "core/dom/attr_list.h"    /* dom_attr_clone / dom_attr_attach — §4.4 step 2's attribute half */
 #include "core/dom/name_intern.h"  /* §4.4's names in the COPY's document — see clone_element_into */
+#include "core/dom/node_heap.h"    /* …and whose arenas the node's BYTES are in, which §4.5 also decides */
 #include "core/dom/node_interface.h" /* …and which C struct those names mean, on create AND on destroy */
 /* §4.5 adopt's step 3 arm. The DOM defines a node's custom element registry and the standard states the
    re-derivation right here, in §4.5; HTML owns what a registry IS. shadow_root.c reaches across the same
@@ -546,6 +547,10 @@ static void node_set_node_document(lxb_dom_node_t *n, lxb_dom_document_t *doc)
         DCHECK(dom_names_owned_by(doc, n),
                "a node already in this document holds a name id minted in another one — nothing on the adopt "
                "path will move it now, and it names hash memory that document's destroy will free");
+        DCHECK(dom_storage_owned_by(doc, n),
+               "a node already in this document is allocated out of arenas this document does not name — "
+               "lxb_dom_node_interface_destroy frees through `owner_document->mraw`, so it would hand the "
+               "chunk to an allocator that never allocated it");
         return;
     }
     dom_import_node_names(doc, n->owner_document, n);
@@ -554,6 +559,16 @@ static void node_set_node_document(lxb_dom_node_t *n, lxb_dom_document_t *doc)
        sibling arm that never adopted still reads the document it knew — names included, because the delta's
        swap re-imports them in the direction it moves the pointer. */
     dom_cow_set_node_document(n, doc);
+    /* AND THE BYTES DID NOT HAVE TO MOVE, which is a statement about the heap and not an omission. A node's
+       struct address IS its identity — its parent, its siblings, the delta's entries and the wrapper map all
+       name it — so it cannot be copied into another arena the way its names are re-interned; the fix is that
+       every document in this agent allocates out of ONE pair of arenas, so the destination's `mraw` IS the
+       source's and no document's destroy can free memory another document's nodes live in. This is the
+       assertion that says so at the one line that would otherwise have created the dangling pointer. */
+    DCHECK(dom_storage_owned_by(doc, n),
+           "DOM §4.5 adopt moved a node into a document whose arenas are not the ones the node's bytes are in "
+           "— core/dom/node_heap.h is the agent heap that makes that impossible, so a document reaching here "
+           "with private arenas was not built by dom_document_create");
 }
 
 static void node_adopt_push(NodeAdoptStack *s, lxb_dom_node_t *root, lxb_dom_document_t *doc)

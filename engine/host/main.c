@@ -594,7 +594,7 @@ QJS_EXPORT void qjs_teardown(void)
        outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
        unfinished machine by the step it rests at. */
     idl_async_iter_free();
-    lxb_html_document_destroy(g_dom);
+    dom_document_destroy(g_dom);
     g_dom = NULL;
     g_begun = 0;
     g_done = 0;

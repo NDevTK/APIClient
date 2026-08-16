@@ -1994,8 +1994,8 @@ static void document_policy_selftest(void)
 
     policy_container_free(p);
     policy_container_free(empty);
-    lxb_html_document_destroy(dom);
-    lxb_html_document_destroy(plain);
+    dom_document_destroy(dom);
+    dom_document_destroy(plain);
 }
 
 /* THE CROSS-INSTANCE HALF OF THE COW DELTA. One WASM instance is one document regardless of origin, so a flow
@@ -3214,7 +3214,7 @@ int main(int argc, char **argv) {
     engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.n, cold_residue);   /* @H + @S detection */
     /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */
     doc_scripts_free(&scripts);
-    lxb_html_document_destroy(dom);
+    dom_document_destroy(dom);
     free(cold_residue); cold_residue = NULL;   /* engine_sched_begin rebuilt from it; the text was borrowed */
 
     /* ─── THE COLD TIER'S TWO ENDS, EACH REPORTED PER RECORD KIND ────────────────────────────────────────────

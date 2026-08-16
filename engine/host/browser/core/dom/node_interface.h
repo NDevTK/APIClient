@@ -50,6 +50,17 @@
    names `@HEAP`'s `childRealms` and says a Document is probably NOT what filled the heap). */
 lxb_html_document_t *dom_document_create(void);
 
+/* THE ONE PLACE A DOCUMENT IS DESTROYED, and it exists because `lxb_html_document_destroy` is no longer that
+   place: a document's nodes come out of the AGENT's heap (core/dom/node_heap.h), so lexbor's destroy would
+   free arenas every other document in this instance is still allocating out of. This one frees the nodes the
+   document actually owns — one at a time, through the same per-interface destructors a single-node destroy
+   uses — hands the arenas back, and then lets lexbor's destroy do what is still its: the four name hashes, the
+   parser unref, and the document struct.
+   THE NODES GO BEFORE THE ARENAS, which is the same ordering the per-flow delta already states for its own two
+   passes (solver/dom_cow.c's kind-4-before-kind-5 release): a node freed after its arena is a read of memory
+   that is gone. */
+void dom_document_destroy(lxb_html_document_t *dom);
+
 /* THE ONE PLACE AN ELEMENT INTERFACE IS MADE — `lxb_dom_document_create_interface` with the invariant above
    asserted at it. Both callers (DOM §4.5's storage step in core/dom/element.c, §4.4's clone in
    core/dom/node.c) go through it, and it is where a document that bypassed `dom_document_create` is caught:
