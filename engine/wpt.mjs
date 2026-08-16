@@ -157,6 +157,19 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       directory is the honest measurement of that: a component whose spec directory is not
                       checked out is a component whose gate cannot fail. */
                    "webmessaging",
+                   /* INDEXED DATABASE — core/indexeddb. The reason this was held back is gone: every file in
+                      this directory opens with `indexedDB.open`, which until now had no code at all, so the
+                      whole standard would have reported one abort and said nothing about anything. §5.1 is
+                      now three step machines and the round trip runs, which means the directory stops being
+                      "no result" and becomes a real fraction — and §Testing's rule is that a directory which
+                      ABORTS is not better than one reporting errors, it is the same failures with the count
+                      hidden. Expect a bad first number: most files reach `db.transaction(…)` in their second
+                      act, which is absent, and a large share reach §5.5 step 2's unbuilt REVERT. That is the
+                      honest first measurement of this area rather than a reason to leave it out.
+                      TWO LEVELS, the same shape `FileAPI` and `dom` carry above and for the identical reason:
+                      the standard's own level holds `idlharness.any.js` and `bindings-inject-key.any.js`,
+                      which cone mode checks out and a subdirectory-only listing collects with nothing. */
+                   "IndexedDB", "IndexedDB/resources",
                    /* HTML §7.2.5.1 AND §7.4 — WindowProxy and popups. `window.open`, `opener`, `parent`,
                       `top`, `frames`, named access, and what a cross-origin WindowProxy may expose. This
                       engine has just grown a WindowProxy member surface and §7.4's open(), and neither had a
