@@ -124,10 +124,13 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global);
    `oncurrententrychange` and `ondispose` arrive in the one X-list through these two bits — and only the
    handlers whose events something actually fires are listed there, because an event handler IDL attribute for
    an event no algorithm dispatches is the shape-only member the IDL audit exists to expose. */
+/* EH_IDB_REQUEST is Indexed Database §4.1's two on IDBRequest and EH_IDB_TRANSACTION is §4.10's three on
+   IDBTransaction, each declared ON its own interface. `onerror` belongs to both AND to GlobalEventHandlers
+   and XHR, and `onabort` to three owners already — which is exactly what a bitmask is for. */
 enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 16,
        EH_MEDIA_QUERY_LIST = 32, EH_XHR = 64, EH_XHR_READYSTATE = 128, EH_SHADOW_ROOT = 256,
        EH_VISUAL_VIEWPORT = 512, EH_PERMISSION_STATUS = 1024, EH_NAVIGATION = 2048,
-       EH_NAVIGATION_HISTORY_ENTRY = 4096 };
+       EH_NAVIGATION_HISTORY_ENTRY = 4096, EH_IDB_REQUEST = 8192, EH_IDB_TRANSACTION = 16384 };
 /* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);

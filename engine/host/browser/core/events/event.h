@@ -116,4 +116,23 @@ JSValue event_path_first_invocation_target(JSContext *ctx, JSValueConst ev);
 bool    event_dispatch_flag(JSContext *ctx, JSValueConst ev);
 void    event_set_dispatch_flag(JSContext *ctx, JSValueConst ev, bool on);
 
+/* §2.9's legacyOutputDidListenersThrowFlag — "inner invoke" step 2.11 sets it when a listener throws, and it
+ * is an OUTPUT of the dispatch rather than a state of the event.
+ *
+ * IT LIVES ON THE EVENT because that is the only thing the two sides share. The spec passes it as an optional
+ * output parameter of `dispatch`, and this engine's dispatch is a step machine reached through a call request
+ * whose one result is §2.9's own return value (`!canceled`) — a second out-parameter would have to be threaded
+ * through the request's operand shape, which is the interpreter's and not this component's. The event is
+ * created by the algorithm that fires it, dispatched once and dropped, so there is exactly one reader and
+ * exactly one writer, and `event_end_dispatch` deliberately does NOT clear it: the whole point is that the
+ * caller reads it AFTER the dispatch has returned.
+ *
+ * ONE STANDARD USES IT and its two algorithms are the reason this exists: Indexed Database §5.9 step 9.2 and
+ * §5.10 step 9.2 ABORT the transaction when a listener threw — which is how a page whose `onsuccess` throws
+ * gets its whole transaction rolled back with an "AbortError" rather than a silently committed one. Without
+ * the flag that arm cannot be written at all, and the failure mode is invisible: the transaction commits and
+ * every record it wrote stays. */
+bool    event_listeners_threw(JSContext *ctx, JSValueConst ev);
+void    event_set_listeners_threw(JSContext *ctx, JSValueConst ev, bool on);
+
 #endif

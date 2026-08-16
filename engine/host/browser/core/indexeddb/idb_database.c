@@ -183,6 +183,44 @@ double idb_database_version(JSContext *ctx, JSValueConst db)
     return out;
 }
 
+/* ---- §2.1.1's database connection ---------------------------------------------------------------------------- */
+
+#define IDB_CONN_DATABASE "database"
+#define IDB_CONN_VERSION  "version"        /* §2.1.1's version, "set when the connection is created" */
+#define IDB_CONN_STORES   "stores"         /* §2.1.1's object store set */
+#define IDB_CONN_CLOSING  "closePending"   /* §2.1.1's close pending flag, "initially false" */
+
+JSValue idb_connection_open(JSContext *ctx, JSValueConst db)
+{
+    JSValue conn, stores;
+
+    DCHECK(JS_IsObject(db), "a connection was opened to something that is not a §2.1 database");
+    conn = idl_slots_new(ctx);
+    CHECK(!JS_IsException(conn), "IndexedDB: §2.1.1's connection record could not be allocated");
+    stores = JS_GetPropertyStr(ctx, db, IDB_DB_STORES);
+    DCHECK(JS_IsObject(stores), "a database carried no set of object stores");
+    JS_SetPropertyStr(ctx, conn, IDB_CONN_DATABASE, JS_DupValue(ctx, db));
+    /* "A connection has a version, which is set when the connection is created." */
+    JS_SetPropertyStr(ctx, conn, IDB_CONN_VERSION, JS_NewFloat64(ctx, idb_database_version(ctx, db)));
+    /* "An object store set, which is initialized to the set of object stores in the associated database when
+       the connection is created. The contents of the set will remain constant except when an upgrade
+       transaction is live." The SAME record, not a copy: with no upgrade transaction in existence there is
+       nothing that can make the two diverge, and a copy taken now would be a second answer to one question
+       the day §5.7 lands — which is exactly the shape §Offensive-programming calls a plausible datum. */
+    JS_SetPropertyStr(ctx, conn, IDB_CONN_STORES, stores);
+    JS_SetPropertyStr(ctx, conn, IDB_CONN_CLOSING, JS_FALSE);
+    return conn;
+}
+
+JSValue idb_connection_database(JSContext *ctx, JSValueConst connection)
+{
+    JSValue db = JS_GetPropertyStr(ctx, connection, IDB_CONN_DATABASE);
+
+    DCHECK(JS_IsObject(db), "a connection carried no database — every connection is built by "
+                            "idb_connection_open, which gives it one");
+    return db;
+}
+
 /* ---- §2.2's object store ------------------------------------------------------------------------------------ */
 
 JSValue idb_object_store_create(JSContext *ctx, JSValueConst db, const char *name, JSValue key_path,

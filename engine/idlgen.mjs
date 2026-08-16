@@ -146,6 +146,16 @@ const INTERFACES = {
      sentence in a comment somebody has to keep true. */
   IDBKeyRange:          "core/indexeddb/idb_key_range.c",
   IDBFactory:           "core/indexeddb/indexed_db.c",
+  /* §4.1's IDBRequest and §4.10's IDBTransaction. Each inherits EventTarget, so event_target.c is named
+     beside it for the three members it contributes AND for the event handler IDL attributes, which live on
+     that component's one X-list — naming only the component would report `onsuccess`, `onerror`,
+     `onabort` and `oncomplete` as absent when they are installed.
+     THE ROWS ARE WHAT MAKE THE GAP A NUMBER. IDBTransaction ships `mode`, `durability`, `error`, `commit()`
+     and `abort()` and NOT `db`, `objectStoreNames` or `objectStore()` — those three need §4.4's IDBDatabase,
+     a DOMStringList and §4.6's object store handle, which is the next subproblem. Without a row the audit
+     would report the interface as nothing at all rather than as three members to build. */
+  IDBRequest:          ["core/indexeddb/idb_request.c", "core/events/event_target.c"],
+  IDBTransaction:      ["core/indexeddb/idb_transaction.c", "core/events/event_target.c"],
   /* Headers exists and had no row, so the audit said nothing about it at all — which is the lying-by-omission
      this map's own comment names, and it was silent from the moment the component landed. */
   /* An `iterable<>` interface's keys/values/entries/forEach are installed by the SHARED default iterator

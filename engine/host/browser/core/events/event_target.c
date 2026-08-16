@@ -622,7 +622,7 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
  * handler per-flow for free, so `onclick` assigned in one arm of a fork is invisible to its sibling. */
 #define EVENT_HANDLERS(X)                                                                                     \
     /* GlobalEventHandlers — HTML §8.1.7.2.1, on Window, Document and Element alike. */                       \
-    X("onabort", EH_GLOBAL | EH_SIGNAL | EH_XHR) X("onauxclick", EH_GLOBAL) X("onbeforeinput", EH_GLOBAL)          \
+    X("onabort", EH_GLOBAL | EH_SIGNAL | EH_XHR | EH_IDB_TRANSACTION) X("onauxclick", EH_GLOBAL) X("onbeforeinput", EH_GLOBAL)          \
     X("onbeforematch", EH_GLOBAL) X("onbeforetoggle", EH_GLOBAL) X("onblur", EH_GLOBAL) X("oncancel", EH_GLOBAL)      \
     X("oncanplay", EH_GLOBAL) X("oncanplaythrough", EH_GLOBAL)                          \
     /* `onchange` has THREE owners — GlobalEventHandlers, CSSOM VIEW §4.2's MediaQueryList and Permissions
@@ -634,7 +634,8 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("oncontextrestored", EH_GLOBAL) X("oncuechange", EH_GLOBAL) X("ondblclick", EH_GLOBAL) X("ondrag", EH_GLOBAL)   \
     X("ondragend", EH_GLOBAL) X("ondragenter", EH_GLOBAL) X("ondragleave", EH_GLOBAL) X("ondragover", EH_GLOBAL)      \
     X("ondragstart", EH_GLOBAL) X("ondrop", EH_GLOBAL) X("ondurationchange", EH_GLOBAL) X("onemptied", EH_GLOBAL)     \
-    X("onended", EH_GLOBAL) X("onerror", EH_GLOBAL | EH_XHR) X("onfocus", EH_GLOBAL) X("onformdata", EH_GLOBAL)                \
+    X("onended", EH_GLOBAL) X("onerror", EH_GLOBAL | EH_XHR | EH_IDB_REQUEST | EH_IDB_TRANSACTION)              \
+    X("onfocus", EH_GLOBAL) X("onformdata", EH_GLOBAL)                \
     X("oninput", EH_GLOBAL) X("oninvalid", EH_GLOBAL) X("onkeydown", EH_GLOBAL) X("onkeypress", EH_GLOBAL)            \
     X("onkeyup", EH_GLOBAL) X("onload", EH_GLOBAL | EH_XHR) X("onloadeddata", EH_GLOBAL) X("onloadedmetadata", EH_GLOBAL)      \
     X("onloadstart", EH_GLOBAL | EH_XHR) X("onmousedown", EH_GLOBAL) X("onmouseenter", EH_GLOBAL) X("onmouseleave", EH_GLOBAL) \
@@ -670,7 +671,12 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
        dispatches is the shape-only member the IDL audit exists to expose. */                             \
     X("oncurrententrychange", EH_NAVIGATION) X("onnavigate", EH_NAVIGATION)                               \
     X("onnavigateerror", EH_NAVIGATION) X("onnavigatesuccess", EH_NAVIGATION)                             \
-    X("ondispose", EH_NAVIGATION_HISTORY_ENTRY)
+    X("ondispose", EH_NAVIGATION_HISTORY_ENTRY)                                                           \
+    /* Indexed Database §4.1's `onsuccess` and §4.10's `oncomplete` — the two names that belong to NO other
+       mixin, so this list is where they arrive. Each came WITH the algorithm that fires it: §5.9's fire a
+       success event and §5.4's commit task, because a handler attribute for an event nothing dispatches is
+       the shape-only member the IDL audit exists to expose. */                                           \
+    X("onsuccess", EH_IDB_REQUEST) X("oncomplete", EH_IDB_TRANSACTION)
 
 /* The NAMES are string literals, not stringified identifiers, so the IDL gap auditor — which scans a component
    for the property names it installs — can SEE them. Behind a `#n` it saw none of these and reported all ninety
@@ -1650,6 +1656,10 @@ listener_threw:
                 if (s->in_passive) { event_set_in_passive(ctx, s->ev, false); s->in_passive = 0; }
                 JS_FreeValue(ctx, s->lcb);
                 s->lcb = JS_UNDEFINED;
+                /* §2.9 "inner invoke" step 2.11's OTHER half: "set legacyOutputDidListenersThrowFlag". It is
+                   an output of the dispatch and it survives it — see event.h. Indexed Database §5.9/§5.10
+                   read it to decide whether the transaction rolls back. */
+                event_set_listeners_threw(ctx, s->ev, true);
                 s->exc = JS_GetException(ctx);
                 s->reporting = 1;
             }

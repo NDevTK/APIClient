@@ -71,6 +71,16 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx));
    moments on the ONE virtual clock and this one defers to a timer that expires first. */
 void engine_set_rendering_hook(int (*fn)(JSContext *ctx));
 void engine_set_document_done_hook(int (*fn)(JSContext *ctx));
+/* THE END OF A MICROTASK CHECKPOINT — HTML §8.1.7.3's "perform a microtask checkpoint", the step that runs
+   once the microtask queue has drained and before the checkpoint flag is cleared. It is a SCHEDULER fact and
+   nothing else can answer it: the checkpoint is over exactly when the flow that just ran a unit of work holds
+   no microtask, which is a property of the frontier and not of any call site.
+   Registered by the browser component that owns the steps HTML invokes there, for the same reason the timer
+   step is registered rather than named — the scheduler may not depend on the browser half. Today's one caller
+   is Indexed Database §2.7.1's "cleanup Indexed Database transactions", which is what deactivates a
+   transaction a script created and left active; its own note ("the steps are run at most once for each
+   transaction") is why asking at every step costs nothing. */
+void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx));
 
 /* solver_decide calls this at a forking branch to stash the sibling's hot decision + pins; the interpreter's
    fork hook (engine_fork_finalize) assembles the sibling from the frame clone + these. */

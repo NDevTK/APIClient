@@ -180,6 +180,23 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx)) { g_timer_hook = fn; }
 static int (*g_rendering_hook)(JSContext *ctx);
 void engine_set_rendering_hook(int (*fn)(JSContext *ctx)) { g_rendering_hook = fn; }
 
+/* THE END OF A MICROTASK CHECKPOINT — HTML §8.1.7.3, registered by the browser component that owns what HTML
+   invokes there. See engine.h; the one caller today is Indexed Database §2.7.1's transaction cleanup. */
+static void (*g_checkpoint_hook)(JSContext *ctx);
+void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx)) { g_checkpoint_hook = fn; }
+
+/* Does this flow still hold a MICROTASK? The checkpoint is over exactly when it does not — a task on the queue
+   is the NEXT turn of the event loop and not part of this checkpoint, which is the same distinction
+   flow_run_one_job's pick already makes. */
+static int flow_has_microtask(const Flow *f)
+{
+    int i;
+
+    for (i = 0; i < f->njob; i++)
+        if (!f->jobs[i].task) return 1;
+    return 0;
+}
+
 /* THE SESSION. The dispatch loop is not a function that drains — it is a state machine its HOST steps, because
    the cooperative-quantum yield in CLAUDE.md's §scheduler is exactly that: after a bounded wall-clock slice the
    scheduler RETURNS so the one thread pumps its message port, streams findings, interleaves other documents,
@@ -2993,6 +3010,21 @@ static int engine_sched_slice(void) {
             int prev_reclaim = engine_reclaim_set(1);
             int r = flow_step(ctx, cur, bodies, n);
             engine_reclaim_set(prev_reclaim);
+            /* HTML §8.1.7.3's END OF A MICROTASK CHECKPOINT. The flow has run a unit of work — a script, a
+               microtask, a task — and if it holds no microtask the queue has drained, which is the moment
+               HTML runs the steps other standards register there. It is asked HERE rather than inside
+               flow_run_one_job because a SCRIPT that queued nothing at all still ends in a checkpoint, and
+               that path never reaches the job pump. Running it more often than a browser would costs nothing
+               and changes nothing: every consumer's steps are idempotent by their own definition (Indexed
+               Database §2.7.1 empties its set and then answers false), which is the same property that lets
+               HTML itself re-enter the checkpoint from clean-up-after-running-script.
+               A FINISHED FLOW IS NOT ASKED, and that is not a hole: the steps registered here QUEUE work (a
+               deactivated transaction with an empty request list commits, which is a database task), and a
+               task enqueued on a flow that has finished is a dropped work item — §scheduler's razor. Nothing
+               is left behind either, because the flow's own COW delta carries every transaction it created
+               and unapplies with it. */
+            if (g_checkpoint_hook && r != FLOW_STEP_DONE && !flow_has_microtask(cur))
+                g_checkpoint_hook(ctx);
             /* THE CHARGE, AND IT IS CHARGED TO THE FLOW THAT RAN. `flow_age_running` bills whoever the registry
                says is running, and that is only the flow this step advanced while nothing between the switch-in
                above and here has changed it — a step that returned with a different flow running would bill the

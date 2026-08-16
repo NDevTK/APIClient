@@ -29,6 +29,25 @@ JSValue idb_database_create(JSContext *ctx, const char *name);
    with no caller: code nothing exercises, in a component whose whole claim is that it is exercised. */
 double idb_database_version(JSContext *ctx, JSValueConst db);
 
+/* §2.1.1's CONNECTION — "script does not interact with databases directly; instead, script has indirect access
+   via a connection ... it is also the only way to obtain a transaction for that database".
+ *
+ * IT IS §2.7'S PLUMBING AND THAT IS WHY IT IS HERE RATHER THAN WITH §4.4's IDBDatabase. A transaction is
+ * "created through a connection, which is the transaction's connection", so the connection is a SUBPROBLEM of
+ * the transaction and not of the interface over it: IDBDatabase is §4.4's page-facing object, and this is the
+ * §2.1.1 record it will be a view of. The record is an internal-slot object like §2.1's database and §2.2's
+ * store, so it time-travels for free.
+ *
+ * "The act of opening a database creates a connection" — §5.1's open is the only algorithm that may, and it
+ * does not exist; until then the caller is a host that stands in for it. A connection has "a version, which is
+ * set when the connection is created", "a close pending flag which is initially false" and "an object store
+ * set, which is initialized to the set of object stores in the associated database when the connection is
+ * created". OWNED. */
+JSValue idb_connection_open(JSContext *ctx, JSValueConst db);
+/* The connection's associated database, which §4.10's `db` getter and §5.4's upgrade arm both reach through.
+   OWNED. */
+JSValue idb_connection_database(JSContext *ctx, JSValueConst connection);
+
 /* §2.2's SET OF OBJECT STORES. A store has a name unique within its database, OPTIONALLY a key path (with one
    it "uses in-line keys", without one "out-of-line keys") and OPTIONALLY a key generator — both are on the
    record because §2.2 puts them there, and both are what §6.1's first step branches on. `key_path` is JS_NULL

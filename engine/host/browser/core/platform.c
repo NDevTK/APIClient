@@ -48,6 +48,8 @@
 #include "core/html/unhandled_rejection.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key_range.h"
+#include "core/indexeddb/idb_request.h"
+#include "core/indexeddb/idb_transaction.h"
 #include "core/indexeddb/indexed_db.h"
 #include "core/loader/cookie_jar.h"
 #include "core/loader/module_loader.h"
@@ -112,6 +114,8 @@ static void d_file_picker(JSContext *c, const PlatformAgent *a) { (void)a; file_
 static void d_idb_key_range(JSContext *c, const PlatformAgent *a) { (void)a; idb_key_range_init(c); }
 static void d_indexed_db(JSContext *c, const PlatformAgent *a) { (void)a; indexed_db_init(c); }
 static void d_idb_database(JSContext *c, const PlatformAgent *a) { (void)a; idb_database_init(c); }
+static void d_idb_transaction(JSContext *c, const PlatformAgent *a) { (void)a; idb_transaction_init(c); }
+static void d_idb_request(JSContext *c, const PlatformAgent *a) { (void)a; idb_request_init(c); }
 static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
 static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
 static void d_report_exception(JSContext *c, const PlatformAgent *a) { (void)a; report_exception_init(c); }
@@ -180,6 +184,12 @@ static void r_storage_manager(JSRuntime *rt) { (void)rt; storage_manager_free();
 /* INDEXED DATABASE §2.1's set of databases — one live record per storage key, holding every object store and
    every record in them. It is the agent's for the reason its row states, so it is freed here. */
 static void r_idb_database(JSRuntime *rt) { idb_database_free(rt); }
+/* Each holds ONE runtime-lifetime value for the agent — the private Symbol its instances' internal slots
+   hang off — and the transaction additionally holds §2.7.2's live set and §2.7.1's cleanup set. A component
+   that mints a runtime-lifetime value owns it, and nothing else can free one: a per-realm value would go with
+   its context, and these belong to the agent. */
+static void r_idb_transaction(JSRuntime *rt) { idb_transaction_free(rt); }
+static void r_idb_request(JSRuntime *rt) { idb_request_free(rt); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -300,6 +310,14 @@ static const PlatformComponent PLATFORM[] = {
     { "idb_key_range",       d_idb_key_range,       NULL },
     { "indexed_db",          d_indexed_db,          NULL },
     { "idb_database",        d_idb_database,        NULL,        r_idb_database },
+    /* §2.7's TRANSACTION and §2.8's REQUEST, in that order because a request is placed against a transaction
+       and §5.6 asserts its state before it makes one. Both are declared after §2.7's EventTarget above,
+       because each interface prototype CHAINS to that one and core/realm.h builds the per-realm prototypes in
+       declaration order — an interface declared first would chain to a prototype that did not exist yet.
+       Neither has a document half: both install per REALM, since §3.7 gives every realm its own interface
+       prototype and a C member answers in the realm that defined it. */
+    { "idb_transaction",     d_idb_transaction,     NULL,        r_idb_transaction },
+    { "idb_request",         d_idb_request,         NULL,        r_idb_request },
     { "event",               d_event,               i_event },
     /* Declared by the components that own the events they carry; the interface objects are this realm's. */
     { "message_event",       NULL,                  i_message_event },
@@ -421,6 +439,8 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "DOMRectList",           "dom_rect_list" },
     { "IDBKeyRange",           "idb_key_range" },
     { "indexedDB",             "indexed_db" },
+    { "IDBTransaction",        "idb_transaction" },
+    { "IDBRequest",            "idb_request" },
     { "Observable",            "observable" },
 };
 static const int PLATFORM_WITNESS_N = (int)(sizeof PLATFORM_WITNESS / sizeof PLATFORM_WITNESS[0]);

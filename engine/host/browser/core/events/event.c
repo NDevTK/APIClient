@@ -170,6 +170,14 @@ void event_set_dispatch_flag(JSContext *ctx, JSValueConst ev, bool on)
     event_write_flag(ctx, ev, "dispatch", on);
 }
 
+/* §2.9's legacyOutputDidListenersThrowFlag — see event.h for why the dispatch's second output rides the event.
+   It is NOT cleared by event_end_dispatch: its reader runs after the dispatch has returned. */
+bool event_listeners_threw(JSContext *ctx, JSValueConst ev) { return event_read_flag(ctx, ev, "listenersThrew"); }
+void event_set_listeners_threw(JSContext *ctx, JSValueConst ev, bool on)
+{
+    event_write_flag(ctx, ev, "listenersThrew", on);
+}
+
 /* §2.9 step 3: an event the PAGE dispatches is not trusted, whatever it was when it was constructed. */
 void event_set_trusted(JSContext *ctx, JSValueConst ev, bool trusted)
 {
