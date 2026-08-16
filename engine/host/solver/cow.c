@@ -446,7 +446,16 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
        code with no flow base, and JS_GetOwnSlotDesc asserts that it is not reachable. An ACCESSOR is READ, not
        refused: its getter and setter are function objects the descriptor carries and neither side ever calls
        one, so a flow redefining a shared accessor is isolated like any other slot. */
-    int existed = JS_GetOwnSlotDesc(ctx, &base, obj, atom) > 0;
+    int has = JS_GetOwnSlotDesc(ctx, &base, obj, atom);
+    /* `> 0` USED TO BE THE WHOLE TEST, so a -1 became existed=0: an entry saying the slot is ABSENT for a slot
+       that EXISTS — apply would then delete it — and a live exception belonging to no flow, which the next
+       thing to check for one reads as its own. It was reachable: a module namespace's export in TDZ answered
+       [[GetOwnProperty]] with a ReferenceError, and `delete ns.x` captures before it learns what the slot is.
+       The read is a SLOT read now and does not ask that question, so the one remaining -1 is the one this
+       assert names — and it is the same one cow_save_cur's read-back names, which is why the two agree. */
+    DCHECK(has >= 0, "reading a slot's baseline state THREW during a capture — a delta is capturing something "
+                     "that is not an object, and a write hook has no flow base to run an exception on");
+    int existed = has > 0;
 
     cow_room_for_one(d, "cow: OOM growing delta — a lost baseline write leaks state across flows");
     CowEntry *e = &d->e[d->n++];
