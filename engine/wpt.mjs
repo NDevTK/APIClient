@@ -151,11 +151,24 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                    "streams", "streams/readable-streams", "streams/resources", "streams/writable-streams",
                    "streams/piping", "streams/transform-streams", "streams/readable-byte-streams",
                    "streams/transferable",
-                   /* HTML 9.4's MESSAGING. Cross-document and cross-worker messaging is where popups, iframes
-                      and this engine's one-WASM-instance-per-DOCUMENT rule meet, and it is also where the
-                      solver's `message.origin` attacker source comes from. None of it exists yet, so this
-                      directory is the honest measurement of that: a component whose spec directory is not
-                      checked out is a component whose gate cannot fail. */
+                   /* HTML §9.4's MESSAGING. Cross-document messaging is where popups, iframes and this
+                      engine's one-instance-per-ORIGIN-KEYED-AGENT-CLUSTER rule meet, and it is also where the
+                      solver's `message.origin` attacker source comes from.
+                      WHAT THIS ROW USED TO SAY WAS "None of it exists yet", AND THAT HAD STOPPED BEING TRUE.
+                      It is the stale-DFAIL failure exactly: accurate about the SPEC, wrong about THIS TREE,
+                      and it reads as authoritative while sending the next reader to build what is already
+                      here. Five components implement this standard — events/message_port.c,
+                      events/message_event.c, events/broadcast_channel.c, frame/window_message.c and
+                      structured_clone.c, 2674 lines between them — installing MessageChannel, port1/port2,
+                      postMessage, start, close, and MessageEvent's data/origin/source/ports/lastEventId, with
+                      no js_noop among them. So this directory is not measuring an absence; it is measuring
+                      components that exist, which is the stronger reason to collect it.
+                      AND IT HAS ALREADY CAUGHT ONE: `window.postMessage(msg)` was reading an UNDEFINED
+                      targetOrigin where §9.4.4 reads `"/"`, because the conversion never visited an omitted
+                      dictionary argument's position. That was a live defect in shipped code, found by reading
+                      rather than by this gate — which is the argument for pointing the gate at it.
+                      WHAT IS GENUINELY ABSENT is the WORKER half: there is no worker component in
+                      browser/core at all, so every cross-worker file here measures that honestly. */
                    "webmessaging",
                    /* INDEXED DATABASE — core/indexeddb. The reason this was held back is gone: every file in
                       this directory opens with `indexedDB.open`, which until now had no code at all, so the
