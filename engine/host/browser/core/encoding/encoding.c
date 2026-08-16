@@ -569,7 +569,7 @@ static int iso2022jp_step(EncDecoder *d, uint8_t b, EncBuf *o, bool fatal)
 }
 
 /* Run `len` bytes through the receiver's decoder. Returns -1 with a TypeError live in fatal mode. */
-static int decoder_run(JSContext *ctx, EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
+static int decoder_run(EncDecoder *d, const uint8_t *p, size_t len, EncBuf *o)
 {
     int row = ENCODING_SINGLE_BYTE_ROW[d->enc];
     size_t i = 0;
@@ -625,10 +625,11 @@ static int decoder_run(JSContext *ctx, EncDecoder *d, const uint8_t *p, size_t l
                   "names now has one, so reaching this means a NEW encoding was added to the registry and the "
                   "decode was not");
         }
-        if (err && d->fatal) {
-            JS_ThrowTypeError(ctx, "the encoded data was not valid %s", ENCODING_NAMES[d->enc]);
-            return -1;
-        }
+        /* §4.1's "fatal" error mode RETURNS the error to whoever is processing the queue; it does not itself
+           know what a caller makes of one. §7.1's decode() makes it a TypeError, and §6's byte-sequence hooks
+           below have no realm to throw into at all — reaching for a `ctx` here is the whole reason this
+           function used to need one. */
+        if (err && d->fatal) return -1;
         if (repeat) dec_push_back(d, b);
     }
     return 0;
@@ -681,10 +682,12 @@ JSValue enc_decoder_decode(JSContext *ctx, EncDecoder *d, const uint8_t *p, size
     EncBuf o = { 0 };
 
     DCHECK(d != NULL, "bytes were run through a decoder that does not exist");
-    if (decoder_run(ctx, d, p, len, &o) < 0) {
+    if (decoder_run(d, p, len, &o) < 0) {
+        /* §7.1 step 4: "If … a decoder error occurs, then throw a TypeError." The decoder answered the error;
+           this is the caller that has a realm to turn it into one. */
         free(o.b);
         decoder_reset(d);
-        return JS_EXCEPTION;
+        return JS_ThrowTypeError(ctx, "the encoded data was not valid %s", ENCODING_NAMES[d->enc]);
     }
     if (!stream) {
         /* THE FLUSH. An incomplete sequence held across the last chunk is an error here — a stream that ends
@@ -716,10 +719,13 @@ JSValue enc_decoder_decode(JSContext *ctx, EncDecoder *d, const uint8_t *p, size
                 d->jis_state = d->jis_out;
             }
             enc_put(&o, 0xFFFD);
-            if (d->nback && decoder_run(ctx, d, NULL, 0, &o) < 0) {
-                free(o.b);
-                decoder_reset(d);
-                return JS_EXCEPTION;
+            if (d->nback) {
+                /* This arm is the NON-fatal one — the fatal flush returned above — and "replacement" has no
+                   error to hand back, so a failure here would mean the mode was not the one this branch is. */
+                int r2 = decoder_run(d, NULL, 0, &o);
+                DCHECK(r2 == 0, "the flush's pushback answered a decoder error in \"replacement\" error mode, "
+                                "which pushes U+FFFD and continues rather than returning one");
+                (void)r2;
             }
         }
         decoder_reset(d);
@@ -801,6 +807,66 @@ int  enc_decoder_encoding(const EncDecoder *d) { return (int)d->enc; }
 int encoding_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp, size_t *plen, JSValue *pbuf)
 {
     return enc_buffer_source(ctx, v, pp, plen, pbuf);
+}
+
+/* ---- §6's HOOKS FOR STANDARDS, OVER BYTES -----------------------------------------------------------------
+ *
+ * A decoder INSTANCE is what the standard passes to "process a queue", and these two build one on the stack:
+ * the hook runs a whole byte sequence to its end and keeps nothing between calls, which is the one shape the
+ * heap-allocated streaming decoder exists for and this does not need. */
+
+/* "To UTF-8 decode without BOM an I/O queue of bytes ioQueue given an optional I/O queue of scalar values
+   output …: Process a queue with an instance of UTF-8's decoder, ioQueue, output, and "replacement". Return
+   output." */
+char *encoding_utf8_decode_without_bom(const char *p, size_t n, size_t *out_n)
+{
+    EncDecoder d;
+    EncBuf o = { 0 };
+    int r;
+
+    memset(&d, 0, sizeof d);
+    d.enc = ENC_UTF_8;
+    d.fatal = 0;                       /* the hook's error mode is "replacement", which is what makes U+FFFD */
+    decoder_reset(&d);
+    r = decoder_run(&d, (const uint8_t *)p, n, &o);
+    DCHECK(r == 0, "a decode in \"replacement\" error mode answered an error — that mode pushes U+FFFD and "
+                   "continues, so there is nothing for it to answer with");
+    (void)r;
+    /* THE END OF THE QUEUE. "If byte is end-of-queue and UTF-8 bytes needed is not 0, then set UTF-8 bytes
+       needed to 0 and return error" — a sequence the input stops in the middle of is one error, and
+       "replacement" makes it one U+FFFD. Without this a trailing `%C3` would vanish instead. */
+    if (d.needed != 0) enc_put(&o, 0xFFFD);
+    /* NUL-TERMINATED BESIDE THE LENGTH, which is the contract every byte-string in this engine has: the length
+       is the truth (a decoded U+0000 is a character), and the terminator is what lets a sequence without one
+       be handed to a C string reader. */
+    {
+        char *g = realloc(o.b, o.n + 1);
+        CHECK(g, "encoding: OOM terminating a UTF-8 decode");
+        o.b = g;
+        o.b[o.n] = 0;
+    }
+    if (out_n) *out_n = o.n;
+    return o.b;
+}
+
+bool encoding_is_scalar_value_string(const char *p, size_t n)
+{
+    EncDecoder d;
+    EncBuf o = { 0 };
+    int r;
+
+    memset(&d, 0, sizeof d);
+    d.enc = ENC_UTF_8;
+    /* "fatal" is the mode that RETURNS the error instead of replacing it, so it is the mode a PREDICATE asks
+       in — and asking the decoder is what keeps this one statement about well-formedness rather than a second
+       validator that would disagree with the decoder about an overlong form. */
+    d.fatal = 1;
+    decoder_reset(&d);
+    r = decoder_run(&d, (const uint8_t *)p, n, &o);
+    free(o.b);
+    /* A sequence the bytes END inside is not a scalar value either — that is the same end-of-queue error the
+       decode hook above turns into U+FFFD. */
+    return r == 0 && d.needed == 0;
 }
 
 /* §7.1's constructor. `label` resolving to `replacement` is a RangeError as much as an unknown label is — the

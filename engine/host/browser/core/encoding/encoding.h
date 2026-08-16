@@ -41,4 +41,25 @@ JSValue enc_decoder_decode(JSContext *ctx, EncDecoder *d, const uint8_t *p, size
    caller frees once it is done with the pointer. Returns 0, or -1 with an exception live. */
 int encoding_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp, size_t *plen, JSValue *pbuf);
 
+/* ---- §6's HOOKS FOR STANDARDS ------------------------------------------------------------------------------
+ *
+ * "For identifiers or byte sequences within a format or protocol, use UTF-8 decode without BOM." Those callers
+ * are other standards' algorithms, not the JS interfaces: they hold their strings as UTF-8 BYTES and run in C
+ * with no realm to throw into, so the hook is over bytes and answers bytes. It is the SAME decoder §7.1 drives,
+ * because a second one would drift from it at exactly the edges the standard is about (an overlong form, a
+ * surrogate spelled in three bytes, a sequence the input ends in the middle of). */
+
+/* "To UTF-8 decode without BOM an I/O queue of bytes ioQueue …: Process a queue with an instance of UTF-8's
+   decoder, ioQueue, output, and "replacement"." A malformed sequence therefore becomes U+FFFD rather than
+   surviving as the raw byte it was. The BOM is NOT removed — dropping it is §7.1's own step over the decoded
+   output, and its absence here is what the hook's name says. Returns a malloc'd, NUL-terminated sequence of
+   WELL-FORMED UTF-8; `*out_n` is its length, which is not strlen when a U+0000 decoded. */
+char *encoding_utf8_decode_without_bom(const char *p, size_t n, size_t *out_n);
+
+/* Infra's "scalar value string" — a string whose code points are all scalar values — over the UTF-8 BYTES a C
+   component holds one as, which it is exactly when those bytes are well-formed UTF-8. This is what a standard's
+   own `Assert: … is a scalar value string` is written as, so it is a DCHECK's condition: it allocates a scratch
+   buffer and frees it, and touches nothing the program can observe. */
+bool encoding_is_scalar_value_string(const char *p, size_t n);
+
 #endif

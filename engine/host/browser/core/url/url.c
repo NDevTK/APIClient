@@ -28,6 +28,7 @@
 #include "quickjs-step.h"
 #include "core/url/url.h"
 #include "core/url/origin.h"   /* §4.7's origin is a RECORD; this file only ever serializes one */
+#include "core/encoding/encoding.h"   /* §6's "UTF-8 decode without BOM", which §5.1 runs on a percent-decoding */
 #include "solver/concolic.h"   /* §4.1 over unknown input answers at the operator, not at the coercion */
 #include "core/file/blob.h"
 #include "core/url/idna.h"
@@ -1365,7 +1366,15 @@ void url_encoded_list_append(UrlEncodedList *l, const char *name, size_t nn, con
 
 /* THE PARSER. Split on `&`; each sequence splits at its FIRST `=` (and is all-name when it has none); `+`
    becomes a space in BOTH halves and only then is the percent-decoding run. Doing the two in the other order
-   would decode a `%2B` into a `+` and then turn that into a space, which is a different string. */
+   would decode a `%2B` into a `+` and then turn that into a space, which is a different string.
+ *
+ * AND THE PERCENT-DECODING IS NOT YET THE STRING. Step 3.5: "Let nameString and valueString be the result of
+ * running UTF-8 decode without BOM on the percent-decoding of name and value, respectively." The percent-decode
+ * answers BYTES, and `a=%FF` answers one byte that no UTF-8 sequence contains — so the decode is the step that
+ * makes them text, one U+FFFD per the standard's "replacement" error mode. Storing the raw bytes was invisible
+ * through `get`, whose JS string conversion replaces them the same way, and visible through the SERIALIZER,
+ * which re-percent-encoded the byte it had been handed: `new URLSearchParams("a=%FF").toString()` answered
+ * `a=%FF` where every browser answers `a=%EF%BF%BD`. */
 void url_encoded_parse(UrlEncodedList *out, const char *s, size_t len)
 {
     size_t i = 0;
@@ -1383,16 +1392,18 @@ void url_encoded_parse(UrlEncodedList *out, const char *s, size_t len)
             size_t nn = (eq == (size_t)-1) ? end - start : eq - start;
             size_t vn = (eq == (size_t)-1) ? 0 : end - eq - 1;
             char *nplus = url_encoded_strdup(nb, nn), *vplus;
-            char *ndec, *vdec;
-            size_t ndn = 0, vdn = 0, k;
+            char *ndec, *vdec, *nstr, *vstr;
+            size_t ndn = 0, vdn = 0, nsn = 0, vsn = 0, k;
             if (eq != (size_t)-1) vb = s + eq + 1;
             vplus = url_encoded_strdup(vb, vn);
             for (k = 0; k < nn; k++) if (nplus[k] == '+') nplus[k] = ' ';
             for (k = 0; k < vn; k++) if (vplus[k] == '+') vplus[k] = ' ';
             ndec = url_percent_decode(nplus, nn, &ndn);
             vdec = url_percent_decode(vplus, vn, &vdn);
-            url_encoded_list_append(out, ndec, ndn, vdec, vdn);
-            free(nplus); free(vplus); free(ndec); free(vdec);
+            nstr = encoding_utf8_decode_without_bom(ndec, ndn, &nsn);   /* step 3.5 */
+            vstr = encoding_utf8_decode_without_bom(vdec, vdn, &vsn);
+            url_encoded_list_append(out, nstr, nsn, vstr, vsn);
+            free(nplus); free(vplus); free(ndec); free(vdec); free(nstr); free(vstr);
         }
         if (end >= len) break;
     }
@@ -1407,9 +1418,20 @@ char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n)
     int i;
 
     for (i = 0; i < l->n; i++) {
-        char *en = url_percent_encode(l->e[i].name, l->e[i].nlen, URL_SET_URLENCODED);
-        char *ev = url_percent_encode(l->e[i].value, l->e[i].vlen, URL_SET_URLENCODED);
-        size_t need = strlen(en) + strlen(ev) + 3;
+        char *en, *ev;
+        size_t need;
+        /* §5.2 step 3.1, WORD FOR WORD: "Assert: tuple's name and tuple's value are scalar value strings."
+           It is the serializer's assert and it is about its PRODUCERS — every one of them has to make it hold,
+           which §5.1's parser does by running UTF-8 decode without BOM and §6.2's members do by taking
+           USVString. It could not be written while the parser stored the raw percent-decoded bytes, because
+           the bytes of `a=%FF` are not a scalar value string and this is the line that would have said so. */
+        DCHECK(encoding_is_scalar_value_string(l->e[i].name, l->e[i].nlen) &&
+               encoding_is_scalar_value_string(l->e[i].value, l->e[i].vlen),
+               "§5.2's assert: an urlencoded tuple's name or value is not a scalar value string — the producer "
+               "of this list skipped UTF-8 decode without BOM");
+        en = url_percent_encode(l->e[i].name, l->e[i].nlen, URL_SET_URLENCODED);
+        ev = url_percent_encode(l->e[i].value, l->e[i].vlen, URL_SET_URLENCODED);
+        need = strlen(en) + strlen(ev) + 3;
         if (n + need > cap) {
             cap = (n + need) * 2;
             out = realloc(out, cap);
