@@ -47,6 +47,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
@@ -441,6 +442,10 @@ void file_system_access_init(JSContext *ctx)
     idl_optional_from(0);
     g_id_request = idl_method_id_step(ctx, OPTS_ONLY, 1, FSA_PERM_OPTIONS, 1, &FSA_DECL, M_REQUEST);
     idl_optional_from(0);
+    agent_state_id("file_system_access", &g_feature,
+                   "§4's registry row for the \"file-system\" powerful feature, and the declaration latch");
+    agent_state_id("file_system_access", &g_id_query, "§2.3's queryPermission machine");
+    agent_state_id("file_system_access", &g_id_request, "§2.3's requestPermission machine");
     realm_declare_intrinsic(fs_access_install_realm);
 }
 

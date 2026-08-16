@@ -39,6 +39,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
@@ -1231,19 +1232,34 @@ void idb_transaction_init(JSContext *ctx)
        bracket around whoever created the transaction. */
     engine_set_checkpoint_hook(idb_transaction_cleanup);
     g_ready = 1;
+    agent_state_flag("idb_transaction", &g_ready, "the declaration latch");
+    agent_state_ptr("idb_transaction", &g_tx_rt, "the runtime §2.7's two sets were allocated in");
+    agent_state_value("idb_transaction", &g_key, "§2.7's internal-slot key");
+    agent_state_value("idb_transaction", &g_live, "§2.7.2's set of live transactions");
+    agent_state_value("idb_transaction", &g_cleanup, "§2.7.1's cleanup set");
     realm_declare_intrinsic(idb_transaction_install_realm);
 }
 
 void idb_transaction_free(JSRuntime *rt)
 {
-    if (!g_ready)
-        return;
+    /* NOT `if (!g_ready) return;`. The release is the inverse of the DECLARATION and rides the same row of
+       core/platform.c's one list, whose declare pass is unconditional and whose table asserts that a release
+       row has a declare — so a release reaching here undeclared is not a state to tolerate, it is a host that
+       tore this component down with something that is not the platform's list. */
+    DCHECK(g_ready, "§2.7's transaction machinery was released in an agent that never declared it");
     DCHECK(rt == g_tx_rt, "idb_transaction_free was given a runtime that is not the one it declared into");
+    /* §2.7.1'S CLEANUP GOES FIRST, and for the reason unhandled_rejection.c gives for the rejection tracker:
+       the hook is a callback INTO this component held by the ONE frontier (solver/engine.c), and this release
+       is about to free both of the sets it walks. It was never cleared at all — solver_agent_free runs AFTER
+       platform_agent_free, so between the two calls the scheduler held a checkpoint hook whose component had
+       already given back §2.7.2's live set and §2.7.1's cleanup set. */
+    engine_set_checkpoint_hook(NULL);
     JS_FreeValueRT(rt, g_key);
     JS_FreeValueRT(rt, g_live);
     JS_FreeValueRT(rt, g_cleanup);
     g_key = JS_UNDEFINED;
     g_live = JS_UNDEFINED;
     g_cleanup = JS_UNDEFINED;
+    g_tx_rt = NULL;
     g_ready = 0;
 }

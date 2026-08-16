@@ -1,7 +1,9 @@
 /* See platform.h. */
+#include <stdio.h>
 #include <string.h>
 
 #include "check.h"
+#include "core/agent_state.h"
 #include "core/css/media_query_list.h"
 #include "core/dom/abort.h"
 #include "core/dom/document.h"
@@ -588,6 +590,43 @@ static void platform_check_table(void)
     }
 }
 
+/* THE THIRD COLUMN'S OWN OTHER SIDE. The witness table above asserts what a component INSTALLS; this asserts
+   what a component HOLDS, and it is the same argument: a release column that is only ever RUN is unfalsifiable,
+   because a release that frees a value and keeps its handle looks exactly like one that works.
+ *
+ * BOTH DIRECTIONS ARE THE SAME MISTAKE SEEN FROM ITS TWO ENDS. A row with a release that declared no agent
+ * state is a release nothing can check — and the four defects core/agent_state.h names were all found by
+ * reading rather than by any detector, which is what "cannot be checked" costs. A row with NO release that
+ * declared agent state is the other one, and it is the shape of every leak this file's comments record: a C
+ * static held for the whole agent with an empty third column, reported eventually as an anonymous Function or
+ * a directory entry with nothing naming its owner. */
+static void platform_check_agent_state(void)
+{
+#if APICLIENT_DEV
+    int i;
+
+    for (i = 0; i < PLATFORM_N; i++) {
+        static char msg[320];
+        int n = agent_state_count(PLATFORM[i].name);
+
+        if (PLATFORM[i].release != NULL && n == 0) {
+            snprintf(msg, sizeof msg,
+                     "%s is on the release column and declared no agent state — the release column is the "
+                     "inverse of the declaration, and a release with nothing declared against it cannot be "
+                     "asserted to have undone anything (core/agent_state.h)", PLATFORM[i].name);
+            DFAIL(msg);
+        }
+        if (PLATFORM[i].release == NULL && n > 0) {
+            snprintf(msg, sizeof msg,
+                     "%s declared agent state and has no release — what a C static holds for the whole agent "
+                     "is freed by nothing when the agent goes, which is what every leak this file's comments "
+                     "record already was", PLATFORM[i].name);
+            DFAIL(msg);
+        }
+    }
+#endif
+}
+
 void platform_agent_init(JSContext *ctx, const PlatformAgent *agent)
 {
     int i;
@@ -626,6 +665,7 @@ void platform_agent_init(JSContext *ctx, const PlatformAgent *agent)
     for (i = 0; i < PLATFORM_N; i++)
         if (PLATFORM[i].declare)
             PLATFORM[i].declare(ctx, agent);
+    platform_check_agent_state();
     /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
        here, through the same one call a child navigable's realm makes — so the first document cannot get a
        different set from the rest, which is the whole failure mode this file and core/realm.h exist to end. */
@@ -649,6 +689,11 @@ void platform_agent_free(void)
        released here, once, when nothing is left that could read it. */
     agent_cluster_release();   /* the cluster names an origin, so it goes BEFORE the origins it named */
     origin_release();
+    /* EVERY DECLARED SLOT IS BACK WHERE A FRESH PROCESS WOULD HAVE FOUND IT, asserted here because here is the
+       last instant at which the question has an answer: after this the agent is gone and the next reader of a
+       stale handle is a SECOND agent's `_init`, which consults it precisely to decide that it need not run. */
+    agent_state_check_released();
+    agent_state_reset();
     g_declared_in = NULL;
 }
 

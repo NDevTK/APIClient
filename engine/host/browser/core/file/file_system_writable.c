@@ -27,6 +27,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
@@ -856,6 +857,14 @@ void fs_writable_init(JSContext *ctx)
     g_id_write = idl_method_id_step(ctx, WRITE_ARGS, 1, NULL, 0, &FWM_DECL, FWM_WRITE_M);
     g_id_seek = idl_method_id_step(ctx, NUM_ARGS, 1, NULL, 0, &FWM_DECL, FWM_SEEK_M);
     g_id_truncate = idl_method_id_step(ctx, NUM_ARGS, 1, NULL, 0, &FWM_DECL, FWM_TRUNCATE_M);
+    agent_state_id("file_system_writable", &g_stepid_write, "§2.5.1's write machine, and the declaration latch");
+    agent_state_id("file_system_writable", &g_stepid_close, "§4.3.4's close machine");
+    agent_state_id("file_system_writable", &g_stepid_abort, "§4.3.5's abort machine");
+    agent_state_atom("file_system_writable", &g_slot_key, "§2.5's internal-slot key");
+    agent_state_atom("file_system_writable", &g_atom_type, "the write-params `type` member name");
+    agent_state_atom("file_system_writable", &g_atom_data, "the write-params `data` member name");
+    agent_state_atom("file_system_writable", &g_atom_position, "the write-params `position` member name");
+    agent_state_atom("file_system_writable", &g_atom_size, "the write-params `size` member name");
     realm_declare_intrinsic(fs_writable_install_realm);
 }
 

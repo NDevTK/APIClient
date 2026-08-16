@@ -35,6 +35,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/events/event_target.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
@@ -736,15 +737,19 @@ void idb_connection_init(JSContext *ctx)
     idl_optional_from(1);                      /* `optional IDBObjectStoreParameters options = {}` */
     g_id_delete_store = idl_method_id(ctx, DELETE_ARGS, 1, js_conn_delete_object_store, 0);
     g_ready = 1;
+    agent_state_flag("idb_connection", &g_ready, "the declaration latch");
+    agent_state_ptr("idb_connection", &g_conn_rt, "the runtime §2.1.1's slot key was minted in");
+    agent_state_value("idb_connection", &g_key, "§2.1.1's internal-slot key");
     realm_declare_intrinsic(idb_connection_install_realm);
 }
 
 void idb_connection_free(JSRuntime *rt)
 {
-    if (!g_ready)
-        return;
+    /* NOT `if (!g_ready) return;` — see idb_transaction_free. */
+    DCHECK(g_ready, "§2.1.1's connection machinery was released in an agent that never declared it");
     DCHECK(rt == g_conn_rt, "idb_connection_free was given a runtime that is not the one it declared into");
     JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
+    g_conn_rt = NULL;
     g_ready = 0;
 }

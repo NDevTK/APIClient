@@ -42,6 +42,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/idl_args.h"
@@ -915,16 +916,24 @@ void idb_open_init(JSContext *ctx)
        the component that performs §5.1, which is what makes each of them one question with one asker. */
     idb_connection_set_closed_hook(idb_open_connection_closed);
     idb_transaction_set_upgrade_finished_hook(idb_open_upgrade_finished);
+    agent_state_value("idb_open", &g_queues, "§2.8.2's connection queues, and the declaration latch");
+    agent_state_value("idb_open", &g_blocked, "§5.1 step 10.6's blocked list");
+    agent_state_id("idb_open", &g_open_stepid, "§5.1's open machine");
+    agent_state_id("idb_open", &g_upgrade_stepid, "§5.1's run-an-upgrade-transaction machine");
+    agent_state_id("idb_open", &g_result_stepid, "§5.1's deliver-the-result machine");
 }
 
 void idb_open_free(JSRuntime *rt)
 {
-    if (JS_IsUndefined(g_queues))
-        return;
+    /* NOT `if (JS_IsUndefined(g_queues)) return;` — the declare pass of core/platform.c's one list is
+       unconditional and its table asserts a release row has a declare, so an undeclared release is a host
+       tearing this component down with something that is not that list. */
+    DCHECK(!JS_IsUndefined(g_queues), "§2.8.2's queues were released in an agent that never declared them");
     idb_connection_set_closed_hook(NULL);
     idb_transaction_set_upgrade_finished_hook(NULL);
     JS_FreeValueRT(rt, g_queues);
     JS_FreeValueRT(rt, g_blocked);
     g_queues = JS_UNDEFINED;
     g_blocked = JS_UNDEFINED;
+    g_open_stepid = g_upgrade_stepid = g_result_stepid = -1;
 }

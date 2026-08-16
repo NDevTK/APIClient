@@ -13,6 +13,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/dom/abort.h"
 #include "core/dom/document.h"
 #include "core/events/event.h"
@@ -617,6 +618,8 @@ void navigate_event_fire_init(JSContext *ctx)
     g_commit_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_nef_commit_def);
     CHECK(g_commit_stepid >= 0,
           "the navigate event commit handler's step definition could not be registered");
+    agent_state_id("navigate_event_fire", &g_commit_stepid,
+                   "§7.2.6.10.4's commit-handler machine, and the declaration latch");
 }
 
 void navigate_event_fire_free(void)

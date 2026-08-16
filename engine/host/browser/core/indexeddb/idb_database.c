@@ -58,6 +58,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_slots.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key.h"
@@ -273,6 +274,8 @@ void idb_database_init(JSContext *ctx)
                                         "storage area of its own");
     g_databases = idl_slots_new(ctx);
     CHECK(!JS_IsException(g_databases), "IndexedDB: §2.1's set of databases could not be allocated");
+    agent_state_value("idb_database", &g_databases,
+                      "§2.1's set of databases for this storage key, and the declaration latch");
 }
 
 void idb_database_free(JSRuntime *rt)

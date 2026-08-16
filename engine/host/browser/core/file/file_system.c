@@ -36,6 +36,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/file/blob.h"
 #include "core/file/file_system.h"
 #include "core/idl_slots.h"
@@ -619,6 +620,10 @@ void file_system_init(JSContext *ctx)
     g_local_root  = fs_entry_new(ctx, FS_KIND_DIRECTORY, FS_ROOT_LOCAL);
     g_fs_ctx = ctx;
     g_ready = 1;
+    agent_state_flag("file_system", &g_ready, "the declaration latch");
+    agent_state_value("file_system", &g_bucket_root, "§2.1's bucket file system root directory entry");
+    agent_state_value("file_system", &g_local_root, "§2.1's local root directory entry");
+    agent_state_ptr("file_system", &g_fs_ctx, "the realm the two roots were built in");
 }
 
 /* AGAINST THE RUNTIME, because that is what the two roots belong to — see core/platform.h's third column. It

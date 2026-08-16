@@ -30,6 +30,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/structured_clone.h"
@@ -563,11 +564,18 @@ void window_message_init(JSContext *ctx)
        the per-DOCUMENT install, so a second same-origin realm overwrote it and the first realm's copy became
        unreachable with nothing to free it: JS_FreeRuntime's gc_obj_list walk counted it, which is the leak
        gate doing exactly its job. */
+    /* THE DECLARATION LATCH, AND THIS COMPONENT WAS THE ONE WITHOUT ONE. Every other row on core/platform.c's
+       release column asserts its own `_init` did not run twice; this one asserted nothing, so a second
+       declaration would have overwritten the callee below with nothing left holding the first — the exact leak
+       the paragraph under this one records, arriving by the other door. */
+    DCHECK(g_id_post < 0, "window_message_init ran twice — §9.4.4's declaration is made once per AGENT");
     g_deliver_fn = JS_NewCFunction(ctx, js_window_deliver, "", 2);
     CHECK(JS_IsFunction(ctx, g_deliver_fn), "the window delivery task's callee could not be allocated");
     g_id_post = idl_method_id_dict(ctx, POST_ARGS, 3, POST_OPTS,
                                    (int)(sizeof POST_OPTS / sizeof POST_OPTS[0]), js_window_post, 0);
     idl_optional_from(1);
+    agent_state_id("window_message", &g_id_post, "§9.4.4's postMessage declaration, and the declaration latch");
+    agent_state_value("window_message", &g_deliver_fn, "§9.4.4's delivery-task callee, one per agent");
     realm_declare_intrinsic(window_message_install_proto);
 }
 
@@ -595,4 +603,5 @@ void window_message_free(JSRuntime *rt)
 {
     JS_FreeValueRT(rt, g_deliver_fn);
     g_deliver_fn = JS_UNDEFINED;
+    g_id_post = -1;   /* the latch the init above consults — see core/agent_state.h */
 }

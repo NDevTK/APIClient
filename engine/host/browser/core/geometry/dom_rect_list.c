@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
 #include "core/idl_args.h"
@@ -135,7 +136,9 @@ void dom_rect_list_init(JSContext *ctx)
     JSClassDef d = { "DOMRectList" };
     static const IdlArgType ONE_ULONG[1] = { IDL_UNSIGNED_LONG };
 
-    if (g_list_class) return;   /* one AGENT, one class and one pool entry */
+    /* NOT `if (g_list_class) return;` — one declaration site, so it could never be true, and it hid
+       dom_rect_list_free leaving the class id set. See core/agent_state.h. */
+    DCHECK(g_list_class == 0, "dom_rect_list_init ran twice — the class is declared once per AGENT");
     JS_NewClassID(JS_GetRuntime(ctx), &g_list_class);
     JS_NewClass(JS_GetRuntime(ctx), g_list_class, &d);
     g_rects_key = JS_NewSymbol(ctx, "domRectListRects", false);
@@ -143,6 +146,10 @@ void dom_rect_list_init(JSContext *ctx)
     g_atom_rects = JS_ValueToAtom(ctx, g_rects_key);
     CHECK(g_atom_rects != JS_ATOM_NULL, "the DOMRectList slot key could not be interned");
     g_id_item = idl_method_id(ctx, ONE_ULONG, 1, js_drl_item, 0);
+    agent_state_class("dom_rect_list", &g_list_class, "the DOMRectList class, and the declaration latch");
+    agent_state_value("dom_rect_list", &g_rects_key, "the private Symbol the rectangle Array hangs off");
+    agent_state_atom("dom_rect_list", &g_atom_rects, "that Symbol, interned");
+    agent_state_id("dom_rect_list", &g_id_item, "the `item` declaration");
     realm_declare_intrinsic(dom_rect_list_install_proto);
 }
 
@@ -179,10 +186,13 @@ void dom_rect_list_install(JSContext *ctx, JSValueConst global)
 
 void dom_rect_list_free(JSRuntime *rt)
 {
-    if (!g_list_class) return;
+    /* NOT `if (!g_list_class) return;` — the declare pass of core/platform.c's one list is unconditional, and
+       a guard on the very handle this release must clear is the shape that hid it not being cleared. */
+    DCHECK(g_list_class != 0, "DOMRectList was released in an agent that never declared it");
     JS_FreeAtomRT(rt, g_atom_rects);
     g_atom_rects = JS_ATOM_NULL;
     JS_FreeValueRT(rt, g_rects_key);
     g_rects_key = JS_UNDEFINED;
     g_id_item = -1;
+    g_list_class = 0;   /* the latch the init above consults — see core/agent_state.h */
 }

@@ -43,6 +43,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/events/event.h"
@@ -324,6 +325,11 @@ void unhandled_rejection_init(JSContext *ctx)
        is built from that same one. */
     g_id_pre_ctor = idl_method_id_dict(ctx, PRE_CTOR_ARGS, 2, PRE_INIT,
                                        (int)(sizeof(PRE_INIT) / sizeof(PRE_INIT[0])), js_pre_ctor, 0);
+    agent_state_flag("unhandled_rejection", &g_ready, "the declaration latch");
+    agent_state_value("unhandled_rejection", &g_list, "§8.1.7.5's list of about-to-be-notified rejections");
+    agent_state_value("unhandled_rejection", &g_pre_key, "PromiseRejectionEvent's internal-slot key");
+    agent_state_id("unhandled_rejection", &g_notify_slot, "§8.1.4.7's notifyRejected realm slot");
+    agent_state_id("unhandled_rejection", &g_notify_stepid, "§8.1.4.7's notification driver machine");
     realm_declare_intrinsic(unhandled_rejection_install_proto);
 }
 
@@ -397,5 +403,9 @@ void unhandled_rejection_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_list);   /* the prototypes are the REALMS' — each is released with its context */
     JS_FreeValueRT(rt, g_pre_key);
     g_list = g_pre_key = JS_UNDEFINED;   /* the per-realm driver is released with its context */
+    /* THE TWO REGISTRATIONS, GIVEN BACK. They name a realm slot and a step machine in a runtime that is going
+       away — but they are also what the init above would find set, and this file's own paragraph about the
+       early-return is the argument for why leaving them is not harmless. */
+    g_notify_slot = g_notify_stepid = -1;
     g_report = NULL;
 }

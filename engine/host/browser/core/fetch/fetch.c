@@ -24,6 +24,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "solver/endpoint.h"
+#include "core/agent_state.h"
 #include "core/fetch/fetch.h"
 #include "core/fetch/data_url.h"
 #include "core/file/blob.h"
@@ -897,8 +898,13 @@ void fetch_init(JSContext *ctx)
     DCHECK(g_fetch_rt == NULL || g_fetch_rt == rt,
            "fetch was declared into a second runtime — its atoms and step id belong to the first, and one WASM "
            "instance is one document");
-    if (g_fetch_stepid >= 0)
-        return;
+    /* NOT `if (g_fetch_stepid >= 0) return;`. fetch has exactly ONE declaration site — core/platform.c's row —
+       so this test could never be true, and what it DID do was turn the release below forgetting this latch
+       into a silent wrong answer instead of a crash: a second agent in one process reached here, was told it
+       had already been declared, and went on with four atom handles reading JS_ATOM_NULL — which is a VALID
+       atom id, so every read of §5's `method`/`body`/`url`/`headers` would have answered `<null>` with nothing
+       anywhere to say so. See core/agent_state.h. */
+    DCHECK(g_fetch_stepid < 0, "fetch_init ran twice — §5's machines are declared once per AGENT");
     g_fetch_rt = rt;
     /* The reply's delivery, declared once for the runtime — every parked fetch mints a CLOSURE over this
        one definition rather than a definition per request. */
@@ -916,6 +922,13 @@ void fetch_init(JSContext *ctx)
     g_atom_url    = JS_NewAtom(ctx, "url");
     g_atom_headers = JS_NewAtom(ctx, "headers");
     g_fetch_stepid = JS_RegisterStepDef(rt, &js_fetch_def);
+    agent_state_id("fetch", &g_fetch_stepid, "§5.3's fetch machine, and the declaration latch");
+    agent_state_id("fetch", &g_deliver_stepid, "the reply-delivery machine every parked fetch closes over");
+    agent_state_ptr("fetch", &g_fetch_rt, "the runtime §5's four names were interned in");
+    agent_state_atom("fetch", &g_atom_method, "§5.3's `method` member name");
+    agent_state_atom("fetch", &g_atom_body, "§5.3's `body` member name");
+    agent_state_atom("fetch", &g_atom_url, "§5.3's `url` member name");
+    agent_state_atom("fetch", &g_atom_headers, "§5.3's `headers` member name");
 }
 
 /* §5's FOUR REQUEST/RESPONSE FIELD NAMES, given back. This component had NO release at all — it was one of
@@ -934,6 +947,14 @@ void fetch_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_url);
     JS_FreeAtomRT(rt, g_atom_headers);
     g_atom_method = g_atom_body = g_atom_url = g_atom_headers = JS_ATOM_NULL;
+    /* AND THE THREE HANDLES THE DECLARATION SET, which this release did not touch while fetch_init opened by
+       reading one of them to decide it had nothing to do. Giving the four names back and keeping the latch is
+       strictly worse than keeping both: the next agent then finds a fetch that says it is declared and whose
+       every name is JS_ATOM_NULL. core/agent_state.h asserts all seven of these at the end of the release
+       column, which is what makes this a crash rather than a wrong answer an agent later. */
+    g_fetch_stepid = -1;
+    g_deliver_stepid = -1;
+    g_fetch_rt = NULL;
 }
 
 void fetch_install(JSContext *ctx, JSValueConst global)

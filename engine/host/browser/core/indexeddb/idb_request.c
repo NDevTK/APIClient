@@ -35,6 +35,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
@@ -728,15 +729,20 @@ void idb_request_init(JSContext *ctx)
     g_exec_stepid = JS_RegisterStepDef(rt, &js_idb_req_def);
     g_abort_stepid = JS_RegisterStepDef(rt, &js_idb_req_abort_def);
     g_ready = 1;
+    agent_state_flag("idb_request", &g_ready, "the declaration latch");
+    agent_state_ptr("idb_request", &g_req_rt, "the runtime §2.8's slot key was minted in");
+    agent_state_value("idb_request", &g_key, "§2.8's internal-slot key");
     realm_declare_intrinsic(idb_request_install_realm);
 }
 
 void idb_request_free(JSRuntime *rt)
 {
-    if (!g_ready)
-        return;
+    /* NOT `if (!g_ready) return;` — see idb_transaction_free: the declare pass is unconditional, so an
+       undeclared release is a teardown by something that is not core/platform.c's one list. */
+    DCHECK(g_ready, "§2.8's request machinery was released in an agent that never declared it");
     DCHECK(rt == g_req_rt, "idb_request_free was given a runtime that is not the one it declared into");
     JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
+    g_req_rt = NULL;
     g_ready = 0;
 }

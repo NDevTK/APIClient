@@ -34,6 +34,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/geometry/dom_rect.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -362,7 +363,10 @@ void dom_rect_init(JSContext *ctx)
     static const int N_INIT = (int)(sizeof(DOM_RECT_INIT) / sizeof(DOM_RECT_INIT[0]));
     int i;
 
-    if (g_ro_class) return;   /* one AGENT, one pair of classes and one set of pool entries */
+    /* NOT `if (g_ro_class) return;`. This component has exactly ONE declaration site — core/platform.c's row —
+       so the test could never be true, and it hid dom_rect_free leaving both class ids set. See
+       core/agent_state.h. */
+    DCHECK(g_ro_class == 0, "dom_rect_init ran twice — §3 and §4's classes are declared once per AGENT");
     JS_NewClassID(JS_GetRuntime(ctx), &g_ro_class);
     JS_NewClass(JS_GetRuntime(ctx), g_ro_class, &ro);
     JS_NewClassID(JS_GetRuntime(ctx), &g_rect_class);
@@ -382,6 +386,10 @@ void dom_rect_init(JSContext *ctx)
     for (i = DR_X; i <= DR_HEIGHT; i++)
         g_id_set[i] = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_dr_set, i);
 
+    agent_state_class("dom_rect", &g_ro_class, "§3's DOMRectReadOnly class, and the declaration latch");
+    agent_state_class("dom_rect", &g_rect_class, "§4's DOMRect class");
+    agent_state_id("dom_rect", &g_id_ctor_ro, "§3's constructor declaration");
+    agent_state_id("dom_rect", &g_id_ctor_rect, "§4's constructor declaration");
     realm_declare_intrinsic(dom_rect_install_protos);
 }
 
@@ -444,7 +452,11 @@ void dom_rect_install(JSContext *ctx, JSValueConst global)
 
 void dom_rect_free(void)
 {
-    /* The prototypes are the REALMS' — released with their contexts — and the pool entries are the agent's. */
+    /* The prototypes are the REALMS' — released with their contexts — and the pool entries are the agent's.
+       THE TWO CLASS IDS COME BACK TOO, and they are the reason this release is not just a tidy-up: the init
+       above consulted g_ro_class to decide whether it had anything to do, so leaving it set made a second
+       agent's DOMRect a pair of classes registered in a runtime that no longer exists. */
+    g_ro_class = g_rect_class = 0;
     g_id_ctor_ro = g_id_ctor_rect = g_id_from_ro = g_id_from_rect = g_id_tojson = -1;
     g_id_set[0] = g_id_set[1] = g_id_set[2] = g_id_set[3] = -1;
 }

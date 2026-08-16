@@ -45,6 +45,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/file/file_system.h"
@@ -228,6 +229,9 @@ void storage_manager_init(JSContext *ctx)
           "StorageManager: the per-realm prototype slot could not be declared");
     g_obj_slot = realm_value_declare(ctx, "Storage §2 the Navigator's associated StorageManager");
     g_id_get_directory = idl_method_id_step(ctx, NULL, 0, NULL, 0, &SM_DECL, 0);
+    agent_state_id("storage_manager", &g_obj_slot,
+                   "Storage §2's associated-StorageManager realm slot, and the declaration latch");
+    agent_state_id("storage_manager", &g_id_get_directory, "§3's getDirectory machine");
     realm_declare_intrinsic(storage_manager_install_realm);
 }
 

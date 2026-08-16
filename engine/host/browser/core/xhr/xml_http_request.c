@@ -50,6 +50,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/json_buf.h"
@@ -2029,7 +2030,11 @@ void xhr_init(JSContext *ctx)
     JSRuntime *rt = JS_GetRuntime(ctx);
 
     DCHECK(g_xhr_rt == NULL || g_xhr_rt == rt, "XMLHttpRequest was declared into a second runtime");
-    if (g_ready) return;
+    /* NOT `if (g_ready) return;`. This component has exactly ONE declaration site — core/platform.c's row —
+       so the test could never be true, and what it could do was hide a release that left the latch set: the
+       second agent would then get an XMLHttpRequest reporting itself declared with every step id belonging to
+       a runtime that is gone. core/agent_state.h names the three components where that had already happened. */
+    DCHECK(!g_ready, "xhr_init ran twice — one instance is one document is one agent");
     g_xhr_rt = rt;
     JS_NewClassID(rt, &g_xhr_class);
     JS_NewClass(rt, g_xhr_class, &xd);
@@ -2059,6 +2064,13 @@ void xhr_init(JSContext *ctx)
        Headers and §6's Response. */
     progress_event_init(ctx);
     g_ready = 1;
+    agent_state_flag("xml_http_request", &g_ready, "the declaration latch");
+    agent_state_ptr("xml_http_request", &g_xhr_rt, "the runtime this interface's machines were registered in");
+    agent_state_id("xml_http_request", &g_ctor_stepid, "§3.5.1's constructor machine");
+    agent_state_id("xml_http_request", &g_open_stepid, "§3.5.2's open machine");
+    agent_state_id("xml_http_request", &g_send_stepid, "§3.5.6's send machine");
+    agent_state_id("xml_http_request", &g_abort_stepid, "§3.5.7's abort machine");
+    agent_state_id("xml_http_request", &g_run_stepid, "the request-running machine");
     realm_declare_intrinsic(xhr_install_protos);
 }
 
@@ -2158,7 +2170,8 @@ void xhr_install(JSContext *ctx, JSValueConst global)
 
 void xhr_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
+    /* NOT `if (!g_ready) return;` — the declare pass of core/platform.c's one list is unconditional. */
+    DCHECK(g_ready, "XMLHttpRequest was released in an agent that never declared it");
     DCHECK(rt == g_xhr_rt, "XMLHttpRequest was released against a runtime that is not the one it declared in");
     progress_event_free(rt);
     g_ready = 0;

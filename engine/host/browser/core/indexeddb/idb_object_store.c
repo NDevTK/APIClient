@@ -33,6 +33,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/indexeddb/idb_connection.h"
@@ -616,15 +617,19 @@ void idb_object_store_init(JSContext *ctx)
     g_id_get_key = idl_method_id(ctx, GET_ARGS, 1, js_os_get, OS_GET_KEY);
     g_setter_name = idl_setter_id(ctx, IDL_DOMSTRING, /*null_to_empty*/ false, js_os_set_name, 0);
     g_ready = 1;
+    agent_state_flag("idb_object_store", &g_ready, "the declaration latch");
+    agent_state_ptr("idb_object_store", &g_os_rt, "the runtime §2.2.1's slot key was minted in");
+    agent_state_value("idb_object_store", &g_key, "§2.2.1's internal-slot key");
     realm_declare_intrinsic(idb_object_store_install_realm);
 }
 
 void idb_object_store_free(JSRuntime *rt)
 {
-    if (!g_ready)
-        return;
+    /* NOT `if (!g_ready) return;` — see idb_transaction_free. */
+    DCHECK(g_ready, "§2.2.1's object-store machinery was released in an agent that never declared it");
     DCHECK(rt == g_os_rt, "idb_object_store_free was given a runtime that is not the one it declared into");
     JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
+    g_os_rt = NULL;
     g_ready = 0;
 }

@@ -25,6 +25,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/html/html_iframe.h"
 #include "core/dom/element.h"
 #include "core/dom/node.h"
@@ -337,6 +338,8 @@ void iframe_init(JSContext *ctx)
     DCHECK(g_atom_navigable == JS_ATOM_NULL, "iframe_init ran twice — one instance is one document");
     g_atom_navigable = JS_NewAtom(ctx, "apiclientNavigable");
     CHECK(g_atom_navigable != JS_ATOM_NULL, "the iframe navigable slot could not be interned");
+    agent_state_atom("html_iframe", &g_atom_navigable,
+                     "§4.8.5's navigable slot name on an iframe's wrapper, and the declaration latch");
 }
 
 /* Declared once per AGENT, installed per realm — see hyperlink.c for why the split exists at all. */

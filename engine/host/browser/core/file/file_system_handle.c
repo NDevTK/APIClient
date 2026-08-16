@@ -37,6 +37,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_async_iter.h"
 #include "core/realm.h"
@@ -876,6 +877,10 @@ void fs_handle_init(JSContext *ctx)
     /* §2.4.1's asynchronous iteration, declared with the members it sits beside because the class, the three
        method ids and the two step machines are the AGENT's, exactly as every id above is. */
     g_dir_iter_handle = idl_async_iter_declare(ctx, &FS_DIR_ITER_OPS);
+    agent_state_class("file_system_handle", &g_handle_class, "§2.2's opaque and brand, and the declaration latch");
+    agent_state_class("file_system_handle", &g_file_handle_class, "§2.3's per-realm prototype slot");
+    agent_state_class("file_system_handle", &g_dir_handle_class, "§2.4's per-realm prototype slot");
+    agent_state_id("file_system_handle", &g_dir_iter_handle, "§2.4.1's asynchronous iteration declaration");
     realm_declare_intrinsic(fs_handle_install_realm);
 }
 

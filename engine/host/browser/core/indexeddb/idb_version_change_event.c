@@ -37,6 +37,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/idl_args.h"
@@ -301,16 +302,20 @@ void idb_version_change_event_init(JSContext *ctx)
                                        (int)(sizeof VCE_INIT / sizeof VCE_INIT[0]), js_vce_ctor, 0);
     idl_optional_from(1);          /* `optional IDBVersionChangeEventInit eventInitDict = {}` */
     g_ready = 1;
+    agent_state_flag("idb_version_change_event", &g_ready, "the declaration latch");
+    agent_state_ptr("idb_version_change_event", &g_vce_rt, "the runtime §4.2's slot key was minted in");
+    agent_state_value("idb_version_change_event", &g_key, "§4.2's internal-slot key");
     realm_declare_intrinsic(idb_version_change_event_install_realm);
 }
 
 void idb_version_change_event_free(JSRuntime *rt)
 {
-    if (!g_ready)
-        return;
+    /* NOT `if (!g_ready) return;` — see idb_transaction_free. */
+    DCHECK(g_ready, "§4.2's interface was released in an agent that never declared it");
     DCHECK(rt == g_vce_rt, "idb_version_change_event_free was given a runtime that is not the one it declared "
                            "into");
     JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
+    g_vce_rt = NULL;
     g_ready = 0;
 }

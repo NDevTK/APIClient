@@ -42,6 +42,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/file/file_device.h"
@@ -943,6 +944,11 @@ void file_picker_init(JSContext *ctx)
                                         (int)(sizeof DIRECTORY_OPTIONS / sizeof DIRECTORY_OPTIONS[0]),
                                         &FPK_DECL, M_DIRECTORY);
     idl_optional_from(0);
+    agent_state_id("file_picker", &g_id_open, "§3.1's showOpenFilePicker machine, and the declaration latch");
+    agent_state_id("file_picker", &g_id_save, "§3.2's showSaveFilePicker machine");
+    agent_state_id("file_picker", &g_id_directory, "§3.3's showDirectoryPicker machine");
+    agent_state_value("file_picker", &g_recent, "§3.2.2's recently-picked directory map");
+    agent_state_ptr("file_picker", &g_rt, "the runtime §3.2.2's map was allocated in");
     /* THE THREE MEMBERS ARE `partial interface Window`'s AND EVERY REALM IS A WINDOW, so they are declared
        into core/realm.h's one list rather than installed by each host: a `file_picker_install` line hand-copied
        into each host's realm builder is exactly the list that file exists to abolish, and a realm missing from

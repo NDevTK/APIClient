@@ -35,6 +35,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "core/agent_state.h"
 #include "core/frame/screen.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -257,6 +258,8 @@ void screen_init(JSContext *ctx)
           "Screen: the per-realm prototype slot could not be declared");
     g_vals_slot = realm_value_declare(ctx, "CSSOM VIEW §4.3 the Screen's member values");
     g_obj_slot  = realm_value_declare(ctx, "CSSOM VIEW §4 the Window's associated Screen");
+    agent_state_id("screen", &g_vals_slot, "§4.3's member-values realm slot, and the declaration latch");
+    agent_state_id("screen", &g_obj_slot, "§4's associated-Screen realm slot");
     realm_declare_intrinsic(screen_install_realm);
 }
 

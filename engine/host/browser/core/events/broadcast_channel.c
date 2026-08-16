@@ -26,6 +26,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/structured_clone.h"
@@ -273,8 +274,10 @@ void broadcast_channel_init(JSContext *ctx)
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType CTOR_ARGS[1] = { IDL_DOMSTRING };
 
-    DCHECK(g_bc_rt == NULL || g_bc_rt == rt, "BroadcastChannel was installed into a second runtime");
-    if (g_bc_rt == rt) return;
+    /* NOT `if (g_bc_rt == rt) return;`. This component has exactly ONE declaration site — core/platform.c's
+       row — so the test could never be true, and what it could do is hide a release that left the latch set.
+       See core/agent_state.h. */
+    DCHECK(g_bc_rt == NULL, "broadcast_channel_init ran twice — §9.5's bus is declared once per AGENT");
     g_bc_rt = rt;
     JS_NewClassID(rt, &g_chan_class);
     JS_NewClass(rt, g_chan_class, &d);
@@ -290,6 +293,10 @@ void broadcast_channel_init(JSContext *ctx)
         g_id_close = idl_method_id(ctx, NULL, 0, js_chan_close, 0);
     }
     g_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 1, NULL, 0, &js_bc_ctor_decl, 0);
+    agent_state_ptr("broadcast_channel", &g_bc_rt, "the runtime §9.5's bus was declared in, and the latch");
+    agent_state_value("broadcast_channel", &g_registry, "§9.5's registry of open channels");
+    agent_state_value("broadcast_channel", &g_deliver_fn, "§9.5's delivery-task callee, one per agent");
+    agent_state_id("broadcast_channel", &g_ctor_stepid, "§9.5's constructor machine");
     realm_declare_intrinsic(broadcast_channel_install_proto);
 }
 
@@ -335,7 +342,8 @@ void broadcast_channel_install(JSContext *ctx, JSValueConst global)
 
 void broadcast_channel_free(JSRuntime *rt)
 {
-    if (!g_bc_rt) return;
+    /* NOT `if (!g_bc_rt) return;` — the declare pass of core/platform.c's one list is unconditional. */
+    DCHECK(g_bc_rt != NULL, "§9.5's bus was released in an agent that never declared it");
     DCHECK(rt == g_bc_rt, "§9.5's bus was released against a runtime that is not the one it was declared in");
     JS_FreeValueRT(rt, g_registry);
     JS_FreeValueRT(rt, g_deliver_fn);

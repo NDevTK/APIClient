@@ -27,6 +27,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/frame/navigation_destination.h"
 #include "core/frame/navigation_history_entry.h"
 #include "core/idl_args.h"
@@ -243,6 +244,10 @@ void navigation_destination_init(JSContext *ctx)
           "NavigationDestination: the per-realm prototype slot could not be declared");
     g_id_get_state = idl_method_id(ctx, NULL, 0, js_dest_get_state, 0);
     g_ready = 1;
+    agent_state_flag("navigation_destination", &g_ready, "the declaration latch");
+    agent_state_value("navigation_destination", &g_key,
+                      "§7.2.6.10.3's internal-slot key, the Symbol this component minted for the agent");
+    agent_state_id("navigation_destination", &g_id_get_state, "§7.2.6.10.3's getState declaration");
     realm_declare_intrinsic(navigation_destination_install_protos);
 }
 

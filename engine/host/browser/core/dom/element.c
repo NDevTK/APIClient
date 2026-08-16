@@ -26,6 +26,7 @@
 #include "solver/endpoint.h"
 #include "solver/engine.h"
 #include "solver/solve.h"
+#include "core/agent_state.h"
 #include "core/dom/element.h"
 #include "core/dom/name_intern.h"   /* §4.5's storage step stores the three names AS GIVEN — see that header */
 #include "core/dom/node_interface.h" /* …and the (local name, namespace) pair decides the element's C STRUCT */
@@ -2216,6 +2217,10 @@ void element_init(JSContext *ctx)
        the standard numbers that family after the mutation record the list's last entry queues. */
     html_style_element_init(ctx);
     html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */
+    agent_state_ptr("element", &g_element_rt,
+                    "the runtime this whole DOM group declared into, and the declaration latch");
+    agent_state_atom("element", &g_attrs_key, "the [SameObject] NamedNodeMap cache slot on an element's wrapper");
+    agent_state_ptr("element", &g_ts, "the tree-steps recorder's scratch list");
 }
 
 /* §4.9's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. It is DECLARED before custom_elements/cssom/html_element

@@ -64,6 +64,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/loader/cookie_jar.h"
 #include "core/url/url.h"
 
@@ -763,6 +764,12 @@ void cookie_jar_init(JSContext *ctx)
     g_jar = JS_NewObjectProto(ctx, JS_NULL);
     CHECK(!JS_IsException(g_jar), "§5.3's cookie store could not be allocated");
     g_ready = 1;
+    agent_state_flag("cookie_jar", &g_ready, "the declaration latch");
+    agent_state_value("cookie_jar", &g_jar, "RFC 6265 §5.3's cookie store");
+    agent_state_ptr("cookie_jar", &g_rt, "the runtime §5.3's store was allocated in");
+#if APICLIENT_DEV
+    agent_state_ptr("cookie_jar", &g_agent_host, "the agent host the dev-only same-host assertion compares");
+#endif
 }
 
 void cookie_jar_free(void)

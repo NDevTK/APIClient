@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/frame/agent_cluster.h"
 #include "core/realm.h"
 #include "core/timing/event_loop.h"
@@ -108,6 +109,7 @@ void hr_time_init(JSContext *ctx)
 {
     DCHECK(g_origin_slot < 0, "hr_time_init ran twice — the TIME ORIGIN's slot is declared once per AGENT");
     g_origin_slot = realm_value_declare(ctx, "HR-TIME §4 the environment settings object's time origin");
+    agent_state_id("hr_time", &g_origin_slot, "HR-TIME §4's time-origin realm slot");
     realm_declare_intrinsic(hr_time_install);
 }
 

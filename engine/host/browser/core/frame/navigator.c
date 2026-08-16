@@ -53,6 +53,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "core/agent_state.h"
 #include "core/frame/navigator.h"
 #include "core/html/user_activation.h"
 #include "core/idl_args.h"
@@ -415,6 +416,9 @@ void navigator_init(JSContext *ctx)
        entry and a member has ONE, so declaring inside the install would mint a second entry for the second
        realm's prototype — which is what the pool's seal asserts against. */
     g_id_java_enabled = idl_method_id(ctx, NULL, 0, js_nav_java_enabled, 0);
+    agent_state_id("navigator", &g_vals_slot, "§8.10.1's member-values realm slot, and the declaration latch");
+    agent_state_id("navigator", &g_obj_slot, "§7.2.5's associated-Navigator realm slot");
+    agent_state_id("navigator", &g_id_java_enabled, "§8.10.1's javaEnabled declaration");
     realm_declare_intrinsic(navigator_install_realm);
     /* PERMISSIONS §6.1 IS A PARTIAL INTERFACE OF THIS ONE, so this is where its whole component is declared —
        §3's model, §6.3's PermissionStatus and §6.2's Permissions. Declared AFTER the line above so the
