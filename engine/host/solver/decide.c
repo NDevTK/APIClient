@@ -66,6 +66,13 @@ static int g_c = 0;
 static JSValue g_cur_fn = JS_UNDEFINED;   /* borrowed from the running Flow (alive for the run) */
 static int g_running = 0;
 
+/* THE FORK CENSUS'S ROWS — declared here rather than beside fork_key_count because decide_free releases them
+   and stands above it, and a census whose teardown could not see it would hold one strdup per distinct
+   predicate past the session that made them. See fork_key_count for what the table is. */
+#define DECIDE_FORK_KEYS 64
+static struct { char *key; long n; } g_fork_keys[DECIDE_FORK_KEYS];
+static long g_fork_other, g_fork_total;
+
 static void dec_ensure(int n) {
     if (n <= g_dec_cap) return;
     int nc = g_dec_cap ? g_dec_cap * 2 : 64;
@@ -213,8 +220,12 @@ void decide_leave(JSContext *ctx) {
 /* THE SESSION'S TEARDOWN. The head buffer and any chain the last flow left standing are this file's, and
    nothing else frees them — the frontier's teardown frees the flows' BLOBS, which is a different reference. */
 void decide_free(void) {
+    int i;
+
     dec_clear();
     free(g_dec); g_dec = NULL; g_dec_cap = 0;
+    for (i = 0; i < DECIDE_FORK_KEYS; i++) { free(g_fork_keys[i].key); g_fork_keys[i].key = NULL; g_fork_keys[i].n = 0; }
+    g_fork_other = g_fork_total = 0;
     DCHECK(g_dec_seg_live == 0,
            "the decision chain outlived the session — a frozen segment is referenced by the flows forked below "
            "it and by nothing else, so one still live here is a blob the frontier's teardown did not release");
@@ -231,10 +242,9 @@ int decide_cursor(void) { return g_c; }
  * and a CHAIN — a source whose operation string carries a position — shows as many rows with one hit each,
  * which is itself the answer. A key that does not fit is counted in the overflow row rather than dropped: an
  * undercount that says so is a measurement, an undercount that does not is a lie. */
-#define DECIDE_FORK_KEYS 64
-static struct { char key[192]; long n; } g_fork_keys[DECIDE_FORK_KEYS];
-static long g_fork_other, g_fork_total;
-
+/* THE ROW HOLDS THE WHOLE KEY, because a census that truncates its own key merges the rows it exists to tell
+   apart — the same defect the key construction itself carried, one layer up, and it would report a frontier
+   growing at "one predicate" that is really two. The rows themselves are declared above decide_free. */
 static void fork_key_count(const char *key)
 {
     int i;
@@ -242,7 +252,8 @@ static void fork_key_count(const char *key)
     g_fork_total++;
     for (i = 0; i < DECIDE_FORK_KEYS; i++) {
         if (!g_fork_keys[i].n) {                       /* an empty row: claim it */
-            snprintf(g_fork_keys[i].key, sizeof g_fork_keys[i].key, "%s", key);
+            g_fork_keys[i].key = strdup(key);
+            CHECK(g_fork_keys[i].key, "decide: OOM recording which predicate is growing the frontier");
             g_fork_keys[i].n = 1;
             return;
         }
@@ -436,19 +447,34 @@ void *decide_fork_same_path(void) {
     return b;
 }
 
-/* THE PREDICATE'S IDENTITY, which is what the flow's constraint is keyed by. A bare truthiness test is about
-   the SOURCE, so the source path is the whole key; a comparison is about a source AND what it was compared
-   against, so `x === "a"` and `x === "b"` must stay independent facts. The separator is a control character no
-   field path contains, so the two key spaces cannot collide. Returns 0 when the condition has no source
-   identity to constrain — uncertainty, which keeps both arms. */
-static int decide_key(JSValueConst cond, char *buf, size_t n) {
-    const char *src = NULL, *tok = NULL;
-    int op = concolic_cmp(cond, &src, &tok);
-    if (!src) src = concolic_src_c(cond);
-    if (!src) return 0;
-    if (op == OPCMP_NONE) snprintf(buf, n, "%s", src);
-    else snprintf(buf, n, "%s\x01%d\x01%s", src, op, tok ? tok : "");
-    return 1;
+/* THE PREDICATE'S IDENTITY, which is what the flow's constraint is keyed by.
+ *
+ * IT IS THE IDENTITY OF THE VALUE THE BRANCH TESTS, and that one sentence is the whole rule — there is no
+ * second case for comparisons. A comparison RESULT is a derived value like any other, and concolic.c composes
+ * the operator and BOTH operands into its identity, so `if (x)`, `x < 700`, `x < 300`, `700 < x` and `x > 700`
+ * are five identities and five independent facts without this file knowing what any of them mean.
+ *
+ * IT USED TO KEY A COMPARISON ON THE OPERAND'S SOURCE PLUS AN OPERATOR AND A TOKEN, DEFAULTING BOTH — and the
+ * relational hook supplied neither, so `x\x01""\x01""` was every ordering over one source: in one flow
+ * `parseInt(gCS(a).width) < 700` and `parseInt(gCS(b).width) < 300` produced the SAME key and the second was
+ * decided by the first, pruning an arm the flow's constraint does not contradict. §Solver-half allows exactly
+ * one direction ("a contradicted branch is pruned (sound-only — uncertainty keeps the arm)") and that is the
+ * other one; a pruned arm emits nothing, so no gate could see it. The `tok ? tok : ""` was not the symptom, it
+ * was the CONCEALMENT: it turned "the producer does not produce this" into a plausible key. The consumer now
+ * has no field to default, because the whole predicate is the value's own identity.
+ *
+ * AND IT USED TO BE BUILT INTO A `char key[256]` WITH AN UNCHECKED snprintf, which is the same defect by a
+ * second route — concolic_exotic_get's field paths alone were 192 bytes, and a truncated key merges two
+ * predicates exactly as a dropped operator does. The composition is sized from its members and cannot
+ * truncate, and its length-prefixed fields mean no member can spell another's boundary.
+ *
+ * Returns a heap key the caller frees, or NULL when the value has no identity this engine can spell —
+ * uncertainty, which keeps both arms. */
+static char *decide_key(JSValueConst cond) {
+    const char *f[1];
+
+    f[0] = concolic_ident_c(cond);
+    return concolic_ident_compose("branch", f, 1);
 }
 
 /* See decide.h. It reads the constraint WITHOUT touching the decision vector or its cursor: a read is not a
@@ -456,15 +482,18 @@ static int decide_key(JSValueConst cond, char *buf, size_t n) {
    the same reason (a consumed slot would make the NEXT branch read someone else's answer). */
 int decide_value_arm(JSValueConst cond)
 {
-    char key[256];
+    char *key = decide_key(cond);
+    int arm;
 
-    if (!decide_key(cond, key, sizeof key)) return -1;
-    return concolic_branch_decided(key);
+    if (!key) return -1;
+    arm = concolic_branch_decided(key);
+    free(key);
+    return arm;
 }
 
-/* THE DECISION ITSELF, over a predicate identified by `key` (NULL when the condition has no source identity to
-   constrain — uncertainty, which keeps both arms). Every caller of this is a place the program's control flow
-   turns on unknown input, and there are two of them because a decision is not the same thing as an OP_if: a
+/* THE DECISION ITSELF, over a predicate identified by `key` (NULL when the value tested has no identity this
+   engine can spell — uncertainty, which keeps both arms). Every caller of this is a place the program's
+   control flow turns on unknown input, and there are two of them because a decision is not an OP_if: a
    BYTECODE BRANCH is one, and a NATIVE OPERATION whose completion depends on the same unknown is the other.
    They share this because they are the same decision — the same vector slot, the same constraint, the same
    replay on a resume — and the only difference is what the interpreter has to do about the arm afterwards. */
@@ -526,18 +555,20 @@ static int decide_arm(const char *key, int *forked) {
 }
 
 int solver_decide(JSContext *ctx, JSValueConst cond) {
+    const char *src = NULL, *tok = NULL;
+    char *key;
+    int op, forked = 0, arm;
+
     (void)ctx;
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 
     /* If the condition is a COMPARISON result (`x === 'admin'`), the taken arm may PIN the source to a concrete
        value — CONCRETIZE-ON-PIN, so later reads compute the REAL @H value, not the shape. */
-    const char *src = NULL, *tok = NULL;
-    int op = concolic_cmp(cond, &src, &tok);
+    op = concolic_cmp(cond, &src, &tok);
 
-    char key[256];
-    int keyed = decide_key(cond, key, sizeof key);
-    int forked = 0;
-    int arm = decide_arm(keyed ? key : NULL, &forked);
+    key = decide_key(cond);
+    arm = decide_arm(key, &forked);
+    free(key);
 
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
     if (src && tok && ((op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0)))
@@ -552,12 +583,11 @@ int solver_decide(JSContext *ctx, JSValueConst cond) {
  * machine states the question and this answers it out of the flow's decision vector, exactly as a branch's arm
  * comes out of it — which is what makes a sibling parked today and resumed next session take the same arm.
  *
- * The KEY is the operand's SOURCE plus the OPERATION, and the separator is a byte neither a field path nor an
- * operation name contains and is DIFFERENT from the comparison key's: `x === "a"` and `JSON.parse(x)` are two
- * facts about one source, and a key space they shared would let one answer the other. The operation string is
- * the machine's, so a machine that asks the same question at successive POSITIONS (an iteration over an unknown
- * collection) says so there — each position is its own predicate and must not be decided by the last one's
- * answer. */
+ * The KEY is the operand's IDENTITY plus the OPERATION, composed through the same encoding every other key in
+ * this engine goes through — so `x === "a"` and `JSON.parse(x)` are two facts about one value and no spelling
+ * of either can compose to the other's key. The operation string is the machine's, so a machine that asks the
+ * same question at successive POSITIONS (an iteration over an unknown collection) says so there — each position
+ * is its own predicate and must not be decided by the last one's answer. */
 int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
     (void)ctx;
     if (!g_running) return -1;
@@ -567,13 +597,22 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
                    "per ask; build the N-1 sibling prepare (a queue engine_fork_finalize drains) before a "
                    "machine declares more");
     {
-        const char *src = concolic_src_c(over);
-        char key[256];
+        const char *f[2];
+        char *key;
         int forked = 0, arm;
-        DCHECK(src != NULL, "an unknown operand with no source identity reached the outcome seam — its "
-                            "completions cannot be constrained, so two asks about it would be one fact");
-        snprintf(key, sizeof key, "%s\x02%s", src, op ? op : "");
+        DCHECK(concolic_src_c(over) != NULL,
+               "an unknown operand with no source identity reached the outcome seam — its completions cannot "
+               "be constrained, so two asks about it would be one fact");
+        DCHECK(op != NULL,
+               "a native operation asked the outcome seam to decide a completion without naming ITSELF — the "
+               "operation is half the predicate, and two operations over one operand would be one fact");
+        f[0] = concolic_ident_c(over); f[1] = op;
+        key = concolic_ident_compose("outcome", f, 2);
+        DCHECK(key != NULL, "an operand whose identity this engine cannot spell reached the outcome seam — "
+                            "with no key its completions are re-forked at every ask rather than replayed, "
+                            "which is sound and is not what a machine declaring a fork expects");
         arm = decide_arm(key, &forked);
+        free(key);
         return forked ? (arm | SOLVER_FORKED_BIT) : arm;
     }
 }

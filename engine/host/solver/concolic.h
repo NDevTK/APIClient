@@ -18,15 +18,39 @@
 void concolic_init(JSContext *ctx);
 void concolic_free(JSContext *ctx);
 
-/* Mint a concolic value. `shape` is the @H/@S display form ("{hash}", "/api/{region}"); `src` is the source
-   identity used to correlate constraints across a flow (may equal shape); `example` (consumed) is the concrete
-   example or JS_UNDEFINED when none is known yet. Returns a new owned JSValue. */
+/* Mint a concolic value AT A SOURCE — the root of a derivation, where an unknown enters the program. `shape`
+   is the @H/@S display form ("{hash}", "/api/{region}"); `src` is the PROVENANCE (may equal shape), which is
+   also this value's IDENTITY because nothing derived it; `example` (consumed) is the concrete example or
+   JS_UNDEFINED when none is known yet. Returns a new owned JSValue. A value produced BY an operation over an
+   unknown is not minted here — the operator's own hook composes its identity from its operands. */
 JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue example);
 
 /* Predicates + accessors — the ONLY concolic test is this domain-carrying one (never a binary know-nothing). */
 int         concolic_is(JSValueConst v);              /* 1 iff v is a concolic value */
 const char *concolic_shape_c(JSValueConst v);         /* display shape (NULL if not concolic) */
-const char *concolic_src_c(JSValueConst v);           /* source identity (NULL if not concolic) */
+const char *concolic_src_c(JSValueConst v);           /* PROVENANCE: which source (NULL if not concolic) */
+
+/* IDENTITY — WHICH VALUE THIS IS, and a different question from `concolic_src_c`'s WHERE IT CAME FROM.
+ *
+ * Provenance is INHERITED through a derivation (`location.hash.slice(1)` is still the fragment, for injection,
+ * for the declared percent-encode set, for what a report names). Identity is COMPOSED at every derivation,
+ * because it is what the per-flow path constraint is keyed by and a key must name the value a branch TESTS.
+ * One field answered both for a long time, and the consequence was silent and in the one direction §Solver-half
+ * forbids: `x`, `x*2`, `x < 700` and `x < 300` shared a provenance, so a flow's record of any of them DECIDED
+ * the rest and feasible-refinement pruned arms nothing contradicts. A pruned arm emits nothing, so no gate
+ * could ever see it.
+ * NULL means this engine cannot spell the value exactly (an operand that is a plain object or a symbol, a
+ * property name that would not convert). That is a POSITIVE statement — never decide from it, keep both arms —
+ * and it is why absence is safe here while a wrong identity is not. */
+const char *concolic_ident_c(JSValueConst v);
+
+/* THE ONE ENCODING every identity and every constraint key is written in — a TAG plus FIELDS, each written as
+   `<byte length>:<bytes>`. Two different (tag, fields) sequences can never write the same string, so a
+   collision is impossible BY CONSTRUCTION rather than detected: no field's contents can spell another field's
+   boundary, and the length is measured and written by the same two lines so no buffer can truncate. Returns a
+   heap string the caller frees, or NULL when any field is absent (the composition is then absent too).
+   decide.c builds its constraint keys with this, which is why the solver has ONE speller and not three. */
+char       *concolic_ident_compose(const char *tag, const char *const *fields, int n);
 JSValue     concolic_example(JSContext *ctx, JSValueConst v);   /* the concrete example (dup'd) or JS_UNDEFINED */
 void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example);   /* attach/replace (consumes example) */
 
@@ -141,9 +165,17 @@ const char *concolic_source_encodes(const char *src);
    the taken arm pins/negates. */
 enum { OPCMP_NONE = 0, OPCMP_EQ = 1, OPCMP_NE = 2 };
 JSValue     concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *tok);  /* a comparison-result bool */
-int         concolic_cmp(JSValueConst v, const char **psrc, const char **ptok);          /* OPCMP_* of a cmp result */
+/* THE PIN A TAKEN ARM CAN PERFORM, and nothing else — OPCMP_EQ/NE with the source and the concrete token, or
+   OPCMP_NONE. An ordering answers NONE because it pins nothing (`x > 5` narrows a domain and determines no
+   value; §Solver-half keeps that a domain-annotated shape rather than inventing a 6), and so does an equality
+   whose OTHER side is also unknown, because there is no concrete value to pin to. The PREDICATE itself is not
+   read through here: it lives in the value's identity, composed from the operator and both operands, which is
+   what decide.c keys the constraint by. */
+int         concolic_cmp(JSValueConst v, const char **psrc, const char **ptok);
 int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq);
-/* JSConcolicHooks.rel for < <= > >= — the ordering twin of cmp. */
+/* JSConcolicHooks.rel for < <= > >= — the ordering twin of cmp, and it composes its operator and BOTH operands
+   into the result's identity exactly as the equality hook does. It composed neither, which made every ordering
+   over one source ONE predicate: `parseInt(gCS(a).width) < 700` decided `parseInt(gCS(b).width) < 300`. */
 int         concolic_rel_hook(JSContext *ctx, JSValue *sp, int op);
 /* JSConcolicHooks.type_of — `typeof` an unknown is an unknown string, so the comparison forks. */
 JSValue     concolic_typeof_hook(JSContext *ctx, JSValueConst v);   /* JS_UNINITIALIZED = not concolic, run the real typeof */
@@ -164,11 +196,12 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
 void        concolic_pin(const char *src, const char *val);   /* EQ true-arm: this source now reads `val` (real @H value) */
 /* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
    `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The
-   branch records its outcome under `key` (the source path for a bare truthiness test, the source plus its
-   operator and token for a comparison, so two different predicates over one source stay independent) and a
-   later branch on the SAME key is DECIDED rather than forked. That is feasible-refinement — sound-only, since
-   it prunes an arm the flow's own constraint already contradicts, never one whose domain permits both — and it
-   is what keeps N tests of one flag from costing 2^N flows. -1 = not yet decided in this flow. */
+   branch records its outcome under `key` — which decide.c composes from the IDENTITY of the value the branch
+   tests, and a comparison result's identity already carries its operator and BOTH its operands — and a later
+   branch on the SAME key is DECIDED rather than forked. That is feasible-refinement, and it is sound ONLY
+   while the key names one predicate: it may prune an arm the flow's own constraint contradicts and never one
+   whose domain still permits both. It is what keeps N tests of one flag from costing 2^N flows. -1 = not yet
+   decided in this flow, which is also what an unspellable value answers for ever. */
 void        concolic_constrain_branch(const char *key, int truth);
 int         concolic_branch_decided(const char *key);
 void        concolic_clear_pins(void);                        /* per-flow: clear the whole constraint */

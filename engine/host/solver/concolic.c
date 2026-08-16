@@ -5,24 +5,171 @@
 #include "solver/flow.h"
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
 
-/* The per-value state hung off the JSObject via JS_SetOpaque. */
+/* The per-value state hung off the JSObject via JS_SetOpaque.
+ *
+ * `src` AND `ident` ARE TWO DIFFERENT FACTS, AND ONE FIELD USED TO ANSWER BOTH QUESTIONS.
+ *   `src` is PROVENANCE — which attacker source this value ultimately came from. It is deliberately INHERITED
+ *   unchanged through the operator derivations, because it is what an @S candidate is injected at, what a
+ *   source's declared percent-encode set is looked up by, and what a report names.
+ *   `ident` is IDENTITY — WHICH VALUE THIS IS. It is COMPOSED at every derivation, because it is what the
+ *   per-flow path constraint is keyed by, and a constraint key must name the value a branch tests.
+ * With one field answering both, `x`, `x*2`, `x < 700` and `x < 300` were ONE fact: a flow that decided any of
+ * them decided all of them, so feasible-refinement pruned arms the flow's constraint does not contradict —
+ * the one direction §Solver-half forbids ("a contradicted branch is pruned (sound-only — uncertainty keeps
+ * the arm)"), and the one that no gate can see, because a pruned arm emits nothing to be wrong.
+ *
+ * `ident` IS ABSENT (NULL) WHERE THIS ENGINE CANNOT SPELL THE VALUE EXACTLY — an operand that is a plain
+ * object or a symbol, a property name that would not convert. That is a POSITIVE statement and not a hole: a
+ * value with no identity is never decided from another value's record, so BOTH arms of every branch over it
+ * stay. Absence costs forks; a wrong identity costs the arm. */
 typedef struct {
     char *shape;        /* @H/@S display form */
-    char *src;          /* source identity (constraint correlation key) */
+    char *src;          /* PROVENANCE: the source this value derives from (@S injection, delivery, encode set) */
+    char *ident;        /* IDENTITY: this exact value, composed below. NULL = this engine cannot spell it */
     JSValue example;    /* concrete example, or JS_UNDEFINED */
-    int cmp_op;         /* for a COMPARISON RESULT: OPCMP_EQ/NE — `src <op> cmp_tok` (else OPCMP_NONE) */
-    char *cmp_tok;      /* the concrete side of the comparison */
+    int cmp_op;         /* for an EQUALITY RESULT: OPCMP_EQ/NE — `src <op> cmp_tok` (else OPCMP_NONE) */
+    char *cmp_tok;      /* the concrete side of the equality */
 } Concolic;
 
-/* THE PER-FLOW PATH CONSTRAINT. One map, keyed by SOURCE IDENTITY, carrying every fact this flow has learned
-   about the unknown input it read — which is the whole of what a DART/SAGE-lineage constraint is here, because
-   concrete execution grounds all shared and interprocedural state and only the INPUT variables are ever
-   symbolic. Two facts, because two things narrow a domain:
+/* ── THE ONE ENCODING ───────────────────────────────────────────────────────────────────────────────────────
+ * Every identity this file composes and every constraint key decide.c builds is a TAG plus a sequence of
+ * FIELDS, written as `<byte length>:<bytes>` each. Two properties follow from that and both are load-bearing:
+ *   - NO FIELD'S CONTENTS CAN SPELL ANOTHER FIELD'S BOUNDARY, so a member is never mistaken for a separator
+ *     and two different sequences can never write the same string. The separator-plus-forbidden-character
+ *     scheme concolic_source_wrap_joint uses cannot be applied here, because a member is often a PROPERTY NAME
+ *     and a page may name a property anything at all — a DCHECK forbidding a byte in it would be an abort the
+ *     page triggers.
+ *   - THE LENGTH IS MEASURED AND WRITTEN BY THE SAME TWO LINES, so a buffer that could truncate does not
+ *     exist. A truncated key is two different predicates under one name, which is the same defect as the
+ *     collapsed relational key arriving by a second route: `decide_key` built into a `char key[256]` with an
+ *     unchecked snprintf while concolic_exotic_get's shapes alone were 192 bytes.
+ * A member that is ABSENT makes the whole composition absent — see the struct above. */
+static size_t ident_field_len(const char *f)
+{
+    char pre[24];
+    int w = snprintf(pre, sizeof pre, "%lu:", (unsigned long)strlen(f));
+    DCHECK(w > 0 && (size_t)w < sizeof pre, "an identity field's length did not fit its own prefix");
+    return (size_t)w + strlen(f);
+}
+
+static size_t ident_field_put(char *out, size_t at, const char *f)
+{
+    char pre[24];
+    int w = snprintf(pre, sizeof pre, "%lu:", (unsigned long)strlen(f));
+    size_t l = strlen(f);
+    DCHECK(w > 0 && (size_t)w < sizeof pre, "an identity field's length did not fit its own prefix");
+    memcpy(out + at, pre, (size_t)w);
+    memcpy(out + at + (size_t)w, f, l);
+    return at + (size_t)w + l;
+}
+
+char *concolic_ident_compose(const char *tag, const char *const *fields, int n)
+{
+    size_t len, at;
+    char *out;
+    int i;
+
+    DCHECK(tag != NULL,
+           "an identity was composed with no TAG — the tag is what keeps a field read, a call, an arithmetic "
+           "result and a comparison over the same operands four different values");
+    DCHECK(n == 0 || fields != NULL, "an identity was composed with a member count and no members");
+    for (i = 0; i < n; i++)
+        if (!fields[i]) return NULL;   /* an unspellable member makes the whole identity absent */
+    len = ident_field_len(tag);
+    for (i = 0; i < n; i++) len += ident_field_len(fields[i]);
+    out = reclaim_malloc(len + 1);
+    CHECK(out, "concolic: OOM composing an identity — a value whose identity could not be spelled would be "
+               "decided by whatever constraint another value left under the key it fell back to");
+    at = ident_field_put(out, 0, tag);
+    for (i = 0; i < n; i++) at = ident_field_put(out, at, fields[i]);
+    out[at] = '\0';
+    DCHECK(at == len, "an identity was composed to a different length than it was measured for");
+    return out;
+}
+
+/* THE DISPLAY SHAPE, SIZED FROM ITS PARTS. Every shape in this file was a fixed 192- or 224-byte buffer, and
+   concolic_exotic_get's shape is ALSO the field path an @S candidate is injected at — so a chain long enough
+   to truncate gave two different sources one provenance. Measured once, written once, freed by the caller. */
+static char *shapef(const char *fmt, ...)
+{
+    va_list ap;
+    int n, m;
+    char *out;
+
+    va_start(ap, fmt);
+    n = vsnprintf(NULL, 0, fmt, ap);
+    va_end(ap);
+    CHECK(n >= 0, "concolic: a display shape could not be measured");
+    out = reclaim_malloc((size_t)n + 1);
+    CHECK(out, "concolic: OOM building a display shape");
+    va_start(ap, fmt);
+    m = vsnprintf(out, (size_t)n + 1, fmt, ap);
+    va_end(ap);
+    DCHECK(m == n, "a display shape was written to a different length than it was measured for");
+    (void)m;
+    return out;
+}
+
+/* A CONCRETE OPERAND'S IDENTITY IS ITS VALUE, AND ITS TYPE IS PART OF THAT — `x === 5` and `x === "5"` are two
+   predicates and their operands print the same. An OBJECT or a SYMBOL has no identity this engine can spell
+   (an object's is its address, which does not survive the park a resumed flow replays through, and coercing it
+   would run the page's own `toString` from C), so it answers absent and both arms of the branch stay. */
+static char *literal_ident(JSContext *ctx, JSValueConst v)
+{
+    const char *tag, *s;
+    const char *f[2];
+    char *r;
+
+    if (JS_IsString(v))         tag = "s";
+    else if (JS_IsNumber(v))    tag = "n";
+    else if (JS_IsBool(v))      tag = "b";
+    else if (JS_IsNull(v))      tag = "z";
+    else if (JS_IsUndefined(v)) tag = "u";
+    else if (JS_IsBigInt(v))    tag = "g";
+    else return NULL;
+    s = JS_ToCString(ctx, v);
+    if (!s) return NULL;
+    f[0] = tag; f[1] = s;
+    r = concolic_ident_compose("k", f, 2);
+    JS_FreeCString(ctx, s);
+    return r;
+}
+
+/* An operand's identity whichever kind it is, always OWNED by the caller (NULL = unspellable). */
+static char *ident_of_operand(JSContext *ctx, JSValueConst v)
+{
+    if (concolic_is(v)) {
+        const char *id = concolic_ident_c(v);
+        char *r;
+        if (!id) return NULL;
+        r = strdup(id);
+        CHECK(r, "concolic: OOM copying an operand's identity");
+        return r;
+    }
+    return literal_ident(ctx, v);
+}
+
+/* Mint a value DERIVED from an unknown one: `ident` is CONSUMED, `example` is CONSUMED, and the candidate
+   substitution applies exactly as it does to a source read (see concolic_new). */
+static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *src, char *ident, JSValue example);
+/* …and the same without the substitution, for a value that is NOT a source read: a comparison RESULT is a
+   boolean the operator computed, so handing the attacker's payload back in its place would answer a predicate
+   with a string. */
+static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src, char *ident, JSValue example);
+
+/* THE PER-FLOW PATH CONSTRAINT. One map carrying every fact this flow has learned about the unknown input it
+   read — which is the whole of what a DART/SAGE-lineage constraint is here, because concrete execution grounds
+   all shared and interprocedural state and only the INPUT variables are ever symbolic. Two facts, because two
+   things narrow a domain, and they are keyed by two different names for the good reason that they are facts
+   about two different things: a PIN is about a SOURCE (which is what a later read of that source looks itself
+   up by), a decided TRUTH is about a PREDICATE (decide.c composes its key from the tested value's identity,
+   the operator and both operands). One entry holds whichever of the two its key names:
      val   — an EQ gate PINNED the source to a concrete value on its true arm, so later reads compute the REAL
               @H value (`/api/admin`, never `/api/{state}.role`). CONCRETIZE-ON-PIN.
      truth — a PREDICATE over this source was already decided in this flow. `if (cfg.admin)` is not an equality
@@ -256,6 +403,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     if (!c) return;
     free(c->shape);
     free(c->src);
+    free(c->ident);
     free(c->cmp_tok);
     JS_FreeValueRT(rt, c->example);
     free(c);
@@ -421,25 +569,81 @@ void concolic_set_candidate(const char *src, const char *payload) {
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
+    const char *field, *pv, *f[2];
+    char *shape, *ident;
+    JSValue r;
+
     if (!c) return JS_UNDEFINED;
-    const char *field = JS_AtomToCString(ctx, atom);
-    char shape[192];
-    snprintf(shape, sizeof shape, "%s.%s", c->shape ? c->shape : "{}", field ? field : "?");
+    field = JS_AtomToCString(ctx, atom);
+    shape = shapef("%s.%s", c->shape ? c->shape : "{}", field ? field : "?");
+    f[0] = c->ident; f[1] = field;                           /* a name that would not convert -> no identity */
+    ident = concolic_ident_compose(".", f, 2);
     if (field) JS_FreeCString(ctx, field);
-    if (g_cand_src && !strcmp(shape, g_cand_src))            /* candidate run: this source -> the concrete breakout */
-        return concolic_deliver(ctx, shape, g_cand_payload);
-    const char *pv = pin_of(shape);                          /* an EQ gate pinned this source -> the real value */
-    if (pv) return JS_NewString(ctx, pv);
-    return concolic_new(ctx, shape, shape, JS_UNDEFINED);    /* src = the field path (precise @S identity) */
+    if (g_cand_src && !strcmp(shape, g_cand_src)) {          /* candidate run: this source -> the concrete breakout */
+        r = concolic_deliver(ctx, shape, g_cand_payload);
+        free(shape); free(ident);
+        return r;
+    }
+    pv = pin_of(shape);                                      /* an EQ gate pinned this source -> the real value */
+    if (pv) {
+        r = JS_NewString(ctx, pv);
+        free(shape); free(ident);
+        return r;
+    }
+    r = concolic_alloc(ctx, shape, shape, ident, JS_UNDEFINED);   /* src = the field path (precise @S identity) */
+    free(shape);
+    return r;
 }
 
-/* Mint a COMPARISON-RESULT concolic bool carrying `src <op> tok`, so `if (x === 'admin')` forks (instead of a
-   concrete false) and the taken arm can pin/negate. */
-JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *tok) {
-    JSValue r = concolic_new(ctx, "{cmp}", src, JS_UNDEFINED);
-    Concolic *c = JS_GetOpaque(r, g_concolic_class);
-    if (c) { c->cmp_op = op; c->cmp_tok = tok ? strdup(tok) : NULL; }
+/* MINT A COMPARISON RESULT — the boolean `if (x === 'admin')` and `if (x < 700)` branch on.
+ *
+ * ITS IDENTITY IS THE OPERATOR AND BOTH OPERANDS, which is the whole of the predicate, so a comparison result
+ * is an ordinary derived value as far as decide.c is concerned and that file needs no second key rule for it.
+ * `ia`/`ib` are the operands' identities in the order the composition wants them and are CONSUMED; `eq_kind`
+ * and `tok` are the PIN, which only an equality against a concrete side has (an ordering narrows a domain and
+ * determines no value — §Solver-half: a range-gated parameter stays a domain-annotated shape). */
+static JSValue pred_new(JSContext *ctx, const char *op, const char *src, char *ia, char *ib,
+                        int eq_kind, const char *tok)
+{
+    const char *f[3];
+    char *ident;
+    JSValue r;
+    Concolic *c;
+
+    DCHECK(op != NULL,
+           "a comparison result was minted with no OPERATOR. The operator is half the predicate: without it "
+           "`x < 700` and `x > 700` compose to one identity, the flow's record of either DECIDES the other, "
+           "and the arm it deletes is one nothing contradicts");
+    DCHECK(eq_kind == OPCMP_NONE || tok != NULL,
+           "a comparison result declares that its taken arm PINS but names no value to pin to — the two are "
+           "written together at the mint and read together by concolic_cmp");
+    f[0] = op; f[1] = ia; f[2] = ib;
+    ident = concolic_ident_compose("?", f, 3);
+    free(ia); free(ib);
+    /* NOT a source read, so no candidate substitution — see concolic_alloc's declaration. */
+    r = concolic_alloc(ctx, "{cmp}", src, ident, JS_UNDEFINED);
+    c = JS_GetOpaque(r, g_concolic_class);
+    DCHECK(c != NULL, "a comparison result was minted as something that is not a concolic value");
+    c->cmp_op = eq_kind;
+    c->cmp_tok = tok ? strdup(tok) : NULL;
+    CHECK(!tok || c->cmp_tok, "concolic: OOM recording the value an equality pins to");
     return r;
+}
+
+/* A COMPARISON-RESULT bool carrying `src <op> tok`, for a component whose IDL member IS a comparison over its
+   own source (HTML §6.6's `document.hidden` is `visibilityState === "hidden"`). It composes the identity the
+   page's own `x === tok` composes for the same source and token, which is what makes the two ONE constraint
+   entry — the property page_visibility.h states and now the encoding rather than a coincidence of spelling. */
+JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *tok) {
+    const char *sf[1], *kf[2];
+
+    DCHECK(op == OPCMP_EQ || op == OPCMP_NE,
+           "a comparison result was declared with an operator that is neither an equality nor an inequality — "
+           "an ordering is minted by the relational hook, which composes the engine's own operator id");
+    sf[0] = src;
+    kf[0] = "s"; kf[1] = tok;   /* the token is a string literal by construction here */
+    return pred_new(ctx, op == OPCMP_NE ? "!=" : "==", src,
+                    concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2), op, tok);
 }
 int concolic_cmp(JSValueConst v, const char **psrc, const char **ptok) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
@@ -448,17 +652,35 @@ int concolic_cmp(JSValueConst v, const char **psrc, const char **ptok) {
     return c->cmp_op;
 }
 
-/* JSConcolicCmpHook for == / === : a concolic operand -> a concolic bool carrying {src, op, tok}. Matches the
-   slow-eq stack effect (both operands freed, result in sp[-2]). is_neq flips EQ->NE. */
+/* JSConcolicCmpHook for == / === : a concolic operand -> a concolic bool whose IDENTITY is the operator and
+   both operands, and which additionally carries the PIN when one side is concrete. Matches the slow-eq stack
+   effect (both operands freed, result in sp[-2]). is_neq flips EQ->NE.
+   LOOSE AND STRICT EQUALITY ARRIVE HERE AS ONE OPERATOR, because the hook is handed only `is_neq` — so
+   `x == 'a'` and `x === 'a'` still compose to one identity and either decides the other. That is the same
+   defect this file just removed from the ordering hook, in the one place the host cannot see the distinction:
+   it needs quickjs to say which of the two called, the way JS_CARITH_* already spares the solver the opcode
+   numbers. */
 int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq) {
     JSValue a = sp[-2], b = sp[-1];
     int ca = concolic_is(a), cb = concolic_is(b);
+    JSValueConst opq, other;
+    const char *src;
+    char *tok = NULL, *iu, *io;
+    JSValue res;
+
     if (!ca && !cb) return 0;
-    JSValueConst opq = ca ? a : b, other = ca ? b : a;
-    const char *src = concolic_src_c(opq);
-    char *tok = NULL;
+    opq = ca ? a : b; other = ca ? b : a;
+    src = concolic_src_c(opq);
     if (!concolic_is(other)) { const char *s = JS_ToCString(ctx, other); if (s) { tok = strdup(s); JS_FreeCString(ctx, s); } }
-    JSValue res = concolic_new_cmp(ctx, src, is_neq ? OPCMP_NE : OPCMP_EQ, tok);
+    /* EQUALITY IS SYMMETRIC, so `x === 'a'` and `'a' === x` compose to ONE identity: the unknown operand is
+       written first, and where BOTH are unknown the two identities are ordered between themselves. Without
+       that the same predicate written the other way round would be a second fact and fork a second time —
+       which costs work but is sound; the ordering is what makes the sound answer also the cheap one. */
+    iu = ident_of_operand(ctx, opq);
+    io = ident_of_operand(ctx, other);
+    if (ca && cb && iu && io && strcmp(iu, io) > 0) { char *t = iu; iu = io; io = t; }
+    res = pred_new(ctx, is_neq ? "!=" : "==", src, iu, io,
+                   tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE, tok);
     free(tok);
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
     sp[-2] = res;
@@ -476,11 +698,30 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
                              int argc, JSValueConst *argv, int flags)
 {
     Concolic *c = JS_GetOpaque(func_obj, g_concolic_class);
-    char shape[224];
-    (void)this_val; (void)argc; (void)argv; (void)flags;
+    char *shape, *ident, **owned;
+    const char **f;
+    JSValue r;
+    int i;
+
+    (void)this_val; (void)flags;
     DCHECK(c != NULL, "the concolic call handler ran on something that is not a concolic value");
-    snprintf(shape, sizeof shape, "%s()", c->shape ? c->shape : "{}");
-    return concolic_new(ctx, shape, shape, JS_UNDEFINED);
+    shape = shapef("%s()", c->shape ? c->shape : "{}");
+    /* THE ARGUMENTS ARE PART OF THE CALL'S IDENTITY. `x.startsWith("/api")` and `x.startsWith("javascript:")`
+       are two gates over one source, and a call identity that dropped its arguments made the second DECIDED by
+       the first — the same collapse the relational operator's missing operand made, reached by another route.
+       An argument this engine cannot spell (a plain object) makes the whole identity absent, so both arms of
+       every branch over the result stay. */
+    owned = reclaim_malloc((size_t)(argc + 1) * sizeof *owned);
+    f = reclaim_malloc((size_t)(argc + 2) * sizeof *f);
+    CHECK(owned && f, "concolic: OOM identifying a call over an unknown value");
+    f[0] = c->ident;
+    for (i = 0; i < argc; i++) { owned[i] = ident_of_operand(ctx, argv[i]); f[i + 1] = owned[i]; }
+    ident = concolic_ident_compose("()", f, argc + 1);
+    for (i = 0; i < argc; i++) free(owned[i]);
+    free(owned); free(f);
+    r = concolic_derived(ctx, shape, shape, ident, JS_UNDEFINED);
+    free(shape);
+    return r;
 }
 
 /* ORDERING over an unknown is unknown. < <= > >= coerce with ToPrimitive, which a concolic cannot satisfy —
@@ -488,15 +729,31 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
    whole program with it: `document.cookie.indexOf("role=admin") >= 0` explored NEITHER arm, losing both the
    session path and the anonymous one. The result is a concolic BOOL, so the branch forks exactly as an equality
    gate does; it carries no {op,tok} constraint because an ordering does not PIN a value the way `=== 'admin'`
-   does — it narrows a domain, and the arm that is taken says which way. */
+   does — it narrows a domain, and the arm that is taken says which way.
+   IT CARRIES ITS OPERATOR AND BOTH OPERANDS ALL THE SAME, and dropping them was a soundness bug and not a
+   simplification. The equality hook above composed `{src, op, tok}`; this one composed nothing but the
+   operand's SOURCE, so every ordering over one source was one predicate: in one flow `parseInt(gCS(a).width)
+   < 700` and `parseInt(gCS(b).width) < 300` produced the same key and the second was DECIDED by the first,
+   pruning an arm the flow's constraint does not contradict. `x < 700` and `x > 700` were one fact too.
+   ORDERING IS NOT SYMMETRIC, so the operands keep the order the program wrote them: `x < 700` and `700 < x`
+   are two predicates and neither may answer the other. */
 int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     JSValue a = sp[-2], b = sp[-1];
     int ca = concolic_is(a), cb = concolic_is(b);
+    char opid[24];
+    int w;
+
     if (!ca && !cb) return 0;
-    (void)op;
+    /* THE OPERATOR ARRIVES AS THE ENGINE'S OWN OPCODE FOR IT (see the hook's contract in quickjs.h), which is
+       an identity and not a name. Nothing here interprets it — an ordering never pins, so the four operators
+       need only stay TOLD APART — and it is composed as a field like any other. */
+    w = snprintf(opid, sizeof opid, "rel%d", op);
+    DCHECK(w > 0 && (size_t)w < sizeof opid, "a relational operator's id did not fit its own buffer");
+    (void)w;
     {
         const char *src = concolic_src_c(ca ? a : b);
-        JSValue res = concolic_new(ctx, "{cmp}", src ? src : "{cmp}", JS_UNDEFINED);
+        JSValue res = pred_new(ctx, opid, src, ident_of_operand(ctx, a), ident_of_operand(ctx, b),
+                               OPCMP_NONE, NULL);
         JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
         sp[-2] = res;
     }
@@ -561,7 +818,7 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
     int ca = concolic_is(a), cb = nops == 2 && concolic_is(b);
     const char *name;
     int unary = 0;
-    char shape[192];
+    char *shape, *ident;
     const char *src;
     JSValue example = JS_UNDEFINED, res;
 
@@ -569,14 +826,27 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
     name = carith_name(op, &unary);
     src = ca ? concolic_src_c(a) : concolic_src_c(b);
 
+    /* THE OPERATOR AND ITS OPERANDS ARE THE IDENTITY, and the ARITY is part of it too: `carith_name` spells
+       negation and subtraction both `-`, and a one-member composition can never write the same bytes as a
+       two-member one. Without this `x` and `x*2` were one fact and `if (x) … if (x*2)` decided each other. */
     if (unary) {
-        snprintf(shape, sizeof shape, "%s%s", name, concolic_shape_c(a) ? concolic_shape_c(a) : "{}");
+        const char *f[1];
+        char *ia = ident_of_operand(ctx, a);
+        shape = shapef("%s%s", name, concolic_shape_c(a) ? concolic_shape_c(a) : "{}");
+        f[0] = ia;
+        ident = concolic_ident_compose(name, f, 1);
+        free(ia);
     } else {
+        const char *f[2];
+        char *ia = ident_of_operand(ctx, a), *ib = ident_of_operand(ctx, b);
         char *sa = ca ? strdup(concolic_shape_c(a) ? concolic_shape_c(a) : "{}") : cstr_dup(ctx, a);
         char *sb = cb ? strdup(concolic_shape_c(b) ? concolic_shape_c(b) : "{}") : cstr_dup(ctx, b);
         CHECK(sa && sb, "concolic arithmetic: OOM shape");
-        snprintf(shape, sizeof shape, "%s%s%s", sa, name, sb);
+        shape = shapef("%s%s%s", sa, name, sb);
         free(sa); free(sb);
+        f[0] = ia; f[1] = ib;
+        ident = concolic_ident_compose(name, f, 2);
+        free(ia); free(ib);
     }
 
     /* RUN THE REAL OP on the examples when there are any — the concrete half of the triple. */
@@ -593,7 +863,8 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
         JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
     }
 
-    res = concolic_new(ctx, shape, src ? src : shape, example);
+    res = concolic_derived(ctx, shape, src ? src : shape, ident, example);
+    free(shape);
     JS_FreeValue(ctx, sp[-nops]);
     if (nops == 2) JS_FreeValue(ctx, sp[-1]);
     sp[-nops] = res;
@@ -603,21 +874,25 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
 /* 7.1.17 ToString over unknown input: unknown, source kept, example computed by actually stringifying the
    example when there is one. */
 JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
-    const char *src, *sh;
-    char shape[192];
-    JSValue ex, example = JS_UNDEFINED;
+    const char *src, *sh, *f[1];
+    char *shape, *ident;
+    JSValue ex, example = JS_UNDEFINED, r;
 
     if (!concolic_is(v)) return JS_UNINITIALIZED;
     src = concolic_src_c(v);
     sh = concolic_shape_c(v);
-    snprintf(shape, sizeof shape, "String(%s)", sh ? sh : "{}");
+    shape = shapef("String(%s)", sh ? sh : "{}");
+    f[0] = concolic_ident_c(v);
+    ident = concolic_ident_compose("String", f, 1);
     ex = concolic_example(ctx, v);
     if (!JS_IsUndefined(ex)) {
         const char *p = JS_ToCString(ctx, ex);
         if (p) { example = JS_NewString(ctx, p); JS_FreeCString(ctx, p); }
     }
     JS_FreeValue(ctx, ex);
-    return concolic_new(ctx, shape, src ? src : shape, example);
+    r = concolic_derived(ctx, shape, src ? src : shape, ident, example);
+    free(shape);
+    return r;
 }
 
 /* A BUILTIN OVER AN UNKNOWN OPERAND — see the hook's contract in quickjs.h. The shape records WHICH operation
@@ -626,16 +901,25 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
    regex match over a known query string HAS a concrete answer, and producing it is the next step here), and
    inventing one would be a fabricated observation. */
 JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JSValue example) {
-    const char *src, *sh;
-    char shape[224];
+    const char *src, *sh, *f[2];
+    char *shape, *ident;
+    JSValue r;
 
     if (!concolic_is(v)) { JS_FreeValue(ctx, example); return JS_UNINITIALIZED; }
+    DCHECK(op != NULL,
+           "a builtin derived an unknown result without naming the OPERATION it was performing — the operation "
+           "is what tells two derivations from one operand apart, and a value that dropped it would be decided "
+           "by whichever of them this flow reached first");
     src = concolic_src_c(v);
     sh = concolic_shape_c(v);
-    snprintf(shape, sizeof shape, "%s.%s()", sh ? sh : "{}", op ? op : "builtin");
+    shape = shapef("%s.%s()", sh ? sh : "{}", op);
+    f[0] = concolic_ident_c(v); f[1] = op;
+    ident = concolic_ident_compose("b", f, 2);
     /* `example` is what the operator got by RUNNING THE REAL OPERATION on this operand's own example. It is
        never computed here and never predicted: the codec really encoded, the parser really parsed. */
-    return concolic_new(ctx, shape, src ? src : shape, example);
+    r = concolic_derived(ctx, shape, src ? src : shape, ident, example);
+    free(shape);
+    return r;
 }
 
 /* THE BYTES A DOM MEMBER NEEDS FROM AN ARGUMENT THAT MAY BE UNKNOWN — a selector, an attribute name, a class
@@ -671,23 +955,39 @@ JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
    value still forks, and a sink still solves for the key that would reach it. Example-free on purpose: which
    property the attacker names is exactly what is not known, and @H never invents one. */
 JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key) {
-    const char *src;
-    char shape[192];
+    const char *src, *f[2];
+    char *shape, *ident, *io, *ik;
+    JSValue r;
 
     if (!concolic_is(key)) return JS_UNINITIALIZED;
     src = concolic_src_c(key);
-    snprintf(shape, sizeof shape, "{}[%s]", concolic_shape_c(key) ? concolic_shape_c(key) : "{}");
-    (void)obj;
-    return concolic_new(ctx, shape, src ? src : shape, JS_UNDEFINED);
+    shape = shapef("{}[%s]", concolic_shape_c(key) ? concolic_shape_c(key) : "{}");
+    /* WHICH OBJECT WAS READ IS HALF THE IDENTITY: `a[x]` and `b[x]` are two reads and one must not decide the
+       other. An ordinary object has no identity that survives the park a resumed flow replays through, so the
+       composition is ABSENT there and every branch over the result keeps both arms. */
+    io = ident_of_operand(ctx, obj);
+    ik = ident_of_operand(ctx, key);
+    f[0] = io; f[1] = ik;
+    ident = concolic_ident_compose("[]", f, 2);
+    free(io); free(ik);
+    r = concolic_derived(ctx, shape, src ? src : shape, ident, JS_UNDEFINED);
+    free(shape);
+    return r;
 }
 
 JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
-    const char *src;
-    char shape[192];
+    const char *src, *f[1];
+    char *shape, *ident;
+    JSValue r;
+
     if (!concolic_is(v)) return JS_UNINITIALIZED;
     src = concolic_src_c(v);
-    snprintf(shape, sizeof shape, "typeof %s", src ? src : "{}");
-    return concolic_new(ctx, shape, shape, JS_UNDEFINED);
+    shape = shapef("typeof %s", src ? src : "{}");
+    f[0] = concolic_ident_c(v);
+    ident = concolic_ident_compose("typeof", f, 1);
+    r = concolic_derived(ctx, shape, shape, ident, JS_UNDEFINED);
+    free(shape);
+    return r;
 }
 
 /* `x in concolic` / property existence: a concolic collection "has" any key (so a membership gate still runs). */
@@ -716,7 +1016,30 @@ void concolic_init(JSContext *ctx) {
 
 void concolic_free(JSContext *ctx) { (void)ctx; /* class lives with the runtime; per-value state freed by the finalizer */ }
 
-JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue example) {
+static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src, char *ident, JSValue example)
+{
+    JSValue obj;
+    Concolic *c;
+
+    DCHECK(g_concolic_class != 0, "concolic_new before concolic_init — the class is unregistered");
+    obj = JS_NewObjectClass(ctx, g_concolic_class);
+    CHECK(!JS_IsException(obj), "concolic: the value object could not be allocated — a dropped concolic "
+                                "collapses a branch to a concrete arm and deletes everything behind the other");
+    c = reclaim_calloc(1, sizeof *c);
+    CHECK(c, "concolic_new: OOM allocating value state — a dropped concolic corrupts the flow's domain");
+    c->shape = strdup(shape ? shape : "{}");
+    CHECK(c->shape, "concolic: OOM copying a display shape");
+    c->src = src ? strdup(src) : NULL;
+    CHECK(!src || c->src, "concolic: OOM copying a source's provenance");
+    c->ident = ident;       /* consume — NULL means this engine cannot spell the value; see the struct */
+    c->example = example;   /* consume */
+    c->cmp_op = OPCMP_NONE;
+    JS_SetOpaque(obj, c);
+    return obj;
+}
+
+static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *src, char *ident, JSValue example)
+{
     /* A CANDIDATE RUN substitutes one source with a breakout. The check lived only in the field-read path, so a
        source installed as a plain property value — location.hash, document.cookie — was minted once at install
        and never passed through it: its candidate could not be delivered and the sink never fired. Minting is
@@ -728,18 +1051,20 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
            dormant leak the moment sources started carrying one: location.search/hash hand over the address's
            real query and fragment, so every candidate re-fire of a URL source leaked a string. */
         JS_FreeValue(ctx, example);
+        free(ident);
         return concolic_deliver(ctx, src, g_cand_payload);
     }
-    DCHECK(g_concolic_class != 0, "concolic_new before concolic_init — the class is unregistered");
-    JSValue obj = JS_NewObjectClass(ctx, g_concolic_class);
-    if (JS_IsException(obj)) { JS_FreeValue(ctx, example); return obj; }
-    Concolic *c = reclaim_calloc(1, sizeof *c);
-    CHECK(c, "concolic_new: OOM allocating value state — a dropped concolic corrupts the flow's domain");
-    c->shape = strdup(shape ? shape : "{}");
-    c->src = src ? strdup(src) : NULL;
-    c->example = example;   /* consume */
-    JS_SetOpaque(obj, c);
-    return obj;
+    return concolic_alloc(ctx, shape, src, ident, example);
+}
+
+/* A SOURCE READ — the root of every identity. Its identity IS its provenance, because nothing derived it: this
+   is where an unknown enters the program. A source with no provenance has no identity either, which is the
+   honest answer and the one that keeps both arms of every branch over it. */
+JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue example) {
+    const char *f[1];
+
+    f[0] = src;
+    return concolic_derived(ctx, shape, src, concolic_ident_compose("s", f, 1), example);
 }
 
 int concolic_is(JSValueConst v) {
@@ -754,6 +1079,11 @@ const char *concolic_shape_c(JSValueConst v) {
 const char *concolic_src_c(JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     return c ? c->src : NULL;
+}
+
+const char *concolic_ident_c(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    return c ? c->ident : NULL;
 }
 
 JSValue concolic_example(JSContext *ctx, JSValueConst v) {
@@ -816,7 +1146,11 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp) {
     }
     JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
 
-    JSValue result = concolic_new(ctx, shape, src, example);   /* consumes example */
+    char *ident;
+    { const char *f[2]; char *ia = ident_of_operand(ctx, a), *ib = ident_of_operand(ctx, b);
+      f[0] = ia; f[1] = ib; ident = concolic_ident_compose("+", f, 2); free(ia); free(ib); }
+
+    JSValue result = concolic_derived(ctx, shape, src, ident, example);   /* consumes example and ident */
     free(sha); free(shb); free(shape);
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
     sp[-2] = result;

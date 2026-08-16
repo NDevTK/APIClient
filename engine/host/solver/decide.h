@@ -44,11 +44,13 @@ void decide_leave(JSContext *ctx);
 /* WHAT THIS FLOW HAS ALREADY DECIDED ABOUT THIS PREDICATE — 1 true, 0 false, -1 not decided.
  *
  * ASKED BY VALUE, and that is the whole point of the seam. The path constraint is keyed by a string this file
- * builds from the value (decide_key: the source path for a bare truthiness test, the source plus its operator
- * and token for a comparison, separated by a control character no field path contains). A component that
- * wanted the same answer could rebuild that string — and then the key FORMAT would live in two places, which
- * is the second copy that is always subtly wrong the first time one of them changes. It hands over the VALUE
- * instead and this file keys it, so there is exactly one speller of the key.
+ * builds from the value (decide_key: the IDENTITY of the value the branch tests — and a comparison result's
+ * identity already carries its operator and both its operands, so there is no second rule for comparisons).
+ * A component that wanted the same answer could rebuild that string — and then the key FORMAT would live in
+ * two places, which is the second copy that is always subtly wrong the first time one of them changes. It
+ * hands over the VALUE instead and this file keys it, so there is exactly one speller of the key.
+ * -1 also answers for a value whose identity this engine cannot spell, which is the sound answer: nothing is
+ * decided from it and every branch over it keeps both arms.
  *
  * WHY A BROWSER COMPONENT NEEDS IT AT ALL: a C read cannot fork. HTML §8.1.7.3 step 3 asks whether a document
  * is hidden while the page's `if (document.hidden)` over the SAME source is a fork — so the engine's read must
