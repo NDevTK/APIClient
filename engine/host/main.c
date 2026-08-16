@@ -26,6 +26,7 @@
 #include "browser/core/fetch/response.h"
 #include "browser/core/fetch/request.h"
 #include "browser/core/url/url.h"
+#include "browser/core/url/origin.h"   /* §7.1.1's same origin: the one check that decides what may JOIN this agent */
 #include "browser/core/frame/window_proxy.h"
 #include "browser/core/events/broadcast_channel.h"
 #include "browser/core/frame/window_message.h"
@@ -185,25 +186,62 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
    letting this host hand back the empty about:blank Document. It did exactly that, silently, behind a
    `(void)url;`: `window.open("/admin")` produced a popup whose scripts never ran and nothing in the output
    distinguished it from a page that had none. */
+/* THE REALM, BEFORE ITS DOCUMENT — the half every realm this host builds after the agent's first one shares,
+   and the ONE place the per-realm intrinsic list is run for one. It is a step of its own rather than folded
+   into the builder below because its TWO callers differ in exactly one thing, and that thing has to happen
+   BETWEEN these two lines: WHOSE WindowProxy the document is installed with. §7.4's child navigable already
+   has one — the creator minted it when it created the navigable, so the proxy precedes the realm — while a
+   document the host JOINS is its navigable's first, so the proxy is minted ON this realm
+   (window_proxy_new_self reads §8.1.3.1's fields off it and adopts it) and cannot exist before it.
+   §3.7: a realm gets its OWN intrinsics — the members on them run in the realm that DEFINED them, so a realm
+   sharing the agent realm's EventTarget.prototype would resolve every unqualified `addEventListener` against
+   the FIRST realm's window. They come from the ONE list the components declared themselves into, so a
+   component added anywhere is installed in every realm with no host to edit — and a document that joins a
+   live agent goes through the same one call, which is the whole point of there being one.
+   `top_level_url` is HTML §8.1.3.1's, DECIDED BY THE OPERATION and handed over — §7.4's creator's for a
+   nested navigable, the navigable's own address for an auxiliary one, and the trusted zone's statement for a
+   joined document, whose embedder this instance cannot see. Passing `url` instead would make an about:blank
+   iframe of an http page a secure context. */
+static JSContext *engine_realm_new(JSRuntime *rt, const char *top_level_url)
+{
+    JSContext *ctx = JS_NewContext(rt);
+
+    CHECK(ctx != NULL, "a realm of this agent could not be created");
+    CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install in a realm");
+    realm_install_intrinsics(ctx, top_level_url);
+    return ctx;
+}
+
 static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                      const char *top_level_url, const char *origin, const char *csp,
                                      const char *csp_self_origin, SandboxFlags sandbox_flags, uint32_t doc_id,
                                      JSValueConst nav_proxy)
 {
-    JSContext *ctx = JS_NewContext(rt);
+    JSContext *ctx = engine_realm_new(rt, top_level_url);
 
-    CHECK(ctx != NULL, "a same-origin child navigable's realm could not be created");
-    CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install in a child realm");
-    /* §3.7: a realm gets its OWN intrinsics — the members on them run in the realm that DEFINED them, so a
-       child sharing the agent realm's EventTarget.prototype would resolve every unqualified
-       `addEventListener` against the PARENT's window. They come from the ONE list the components declared
-       themselves into, so a component added anywhere is installed in every realm with no host to edit.
-       §7.4 DECIDED THE CHILD'S TOP-LEVEL CREATION URL and handed it over — the creator's for a nested
-       navigable, the navigable's own address for an auxiliary one — so this passes it rather than `url`,
-       which would make an about:blank iframe of an http page a secure context. */
-    realm_install_intrinsics(ctx, top_level_url);
     engine_realm_install(ctx, dom, url, origin, csp, csp_self_origin, sandbox_flags, doc_id, nav_proxy);
     return ctx;
+}
+
+/* PARSE A DOCUMENT THIS HOST WAS HANDED — the root's at qjs_init, a joined one at qjs_join, and it is ONE
+   description because it is one operation: a Document of this agent is a real Lexbor tree over the bytes the
+   trusted zone captured, and tree construction always produces <html><head><body> so an empty or absent body
+   is still a document a page can append to.
+   A SECOND DOCUMENT PARSES INTO THE SAME ARENAS, and that is what makes joining possible at all rather than a
+   detail of it: core/dom/node_heap.h puts every node's storage on the AGENT's heap, not the Document's, so
+   the arenas outlive every document and DOM §4.5's adopt across two of this agent's documents is a pointer
+   write. A per-document arena could not do this — `iframe.contentDocument.body.appendChild(x)` would free one
+   document's bytes out of another's allocator — which is exactly why HTML's similar-origin window agent is
+   the boundary an instance is keyed on. */
+static lxb_html_document_t *engine_parse_document(const char *html)
+{
+    lxb_html_document_t *dom = dom_document_create();
+
+    CHECK(dom != NULL, "the document allocation failed");
+    if (html_parse_document(dom, (const lxb_char_t *)(html ? html : ""),
+                            html ? strlen(html) : 0) != LXB_STATUS_OK)
+        CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
+    return dom;
 }
 
 /* PHASE 1 — parse and identify. No script runs, which is the whole point: the host reads the frontier key back
@@ -334,11 +372,7 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
     concolic_install_hooks();
     concolic_install_source_overlay();   /* a SOLVER host: attacker-controlled values are symbolic sources */
 
-    g_dom = dom_document_create();
-    CHECK(g_dom != NULL, "the document allocation failed");
-    if (html_parse_document(g_dom, (const lxb_char_t *)(html ? html : ""),
-                            html ? strlen(html) : 0) != LXB_STATUS_OK)
-        CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
+    g_dom = engine_parse_document(html);
 
     /* Identity and script inventory from the DOM's OWN executable scripts: a concatenation of them cannot
        represent per-<script> scope and would shift with an inline script the page did not ship. */
@@ -382,6 +416,175 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
        are on the Document and on the agent's cluster; nothing the bundle runs can ask for a header again. */
     navigation_params_free(&np);
     free(origin);
+    return 0;
+}
+
+/* A SECOND DOCUMENT OF THIS AGENT CLUSTER, JOINED TO THE INSTANCE THAT IS ALREADY RUNNING IT.
+ *
+ * `qjs_init` ROOTS an agent — the runtime, the class registrations, the origin, the world registry, the
+ * frontier — and those exist ONCE. An instance is an ORIGIN-KEYED AGENT CLUSTER, `(browsing-context group,
+ * origin)`, so SEVERAL documents are one instance's, and every document of this cluster that this agent did
+ * not itself create arrives HERE: a same-origin frame the engine never modelled, a second cross-origin child
+ * of a peer's page at this origin, a navigation replacing the group's top. Until this entry existed the
+ * trusted zone's only alternative was a SECOND WASM instance for one agent cluster — a second heap for one
+ * similar-origin window agent, which HTML puts in one heap and then RELIES on (§4.5's adopt moves a live node
+ * across, `frame.contentWindow.onunload = fn` hands a live closure across) — so it asserted at each such
+ * arrival instead, and the assert is what this replaces.
+ *
+ * THE PARAMETERS ARE THE OPERATION'S, NOT THE TARGET'S, which is why they are `qjs_init`'s five and why not
+ * one of them is re-derived from the agent being joined. §scheduler's rule (§7.4 step 14 is the worked
+ * example): a join that read the address off the instance would join the document that instance was ROOTED
+ * at, a second time. What the TARGET decides is what is genuinely a fact about the target — its PRINCIPAL,
+ * its heap, its frontier and its IDENTITY.
+ *
+ * IDENTITY IS THE AGENT'S. `qjs_bundle_id` is not recomputed here and this entry does not touch it: the
+ * bundle id is the FRONTIER KEY, the key under which a whole cluster's parked residue was stored and will be
+ * stored again, and there is one frontier per instance because there is one scheduler per instance. A joined
+ * document contributing its own key would either split one cluster's residue across two rows or overwrite the
+ * root's with a frame's. `doc_id` names the DOCUMENT (the world registry's name, which is what a peer routes
+ * on); the bundle id names the AGENT.
+ *
+ * ONE INSTANCE PER (browsing-context group, ORIGIN) IS ASSERTED FATALLY. SECURITY.md makes the instance the
+ * PRINCIPAL — "a fetch is governed by a single, correct origin because there is exactly one origin in the
+ * instance that issued it" — so a document whose origin is not this agent's is not a fidelity gap to fill in
+ * later, it is two principals behind one `pageOrigin`, and every same-origin decision this instance makes
+ * afterwards is decided for the wrong one. That is a production invariant, so it is a `CHECK` and not a
+ * `DCHECK`. It fails CLOSED on an opaque origin on either side, because §7.1.1's opaque origin is same origin
+ * with nothing — including another opaque one — which is the same rule SECURITY.md states for the
+ * credentialed-read principal.
+ *
+ * THE DOCUMENT IS BUILT AT THE BASELINE, exactly as the root's is and for the same reason: it is a document
+ * the BROWSER holds, so it exists in every timeline this agent has rather than in the one that happened to
+ * create it. Its SCRIPTS are the other half and they are not baseline at all — they are the programs of a
+ * flow, minted for this document on the ONE frontier (engine_join_document). That split is the same one
+ * `qjs_init` + `qjs_begin` already are.
+ *
+ * `html` IS THE RESPONSE'S BYTES, `url` ITS ADDRESS, `doc_id` ITS NAME, `headers` ITS RESPONSE HEADER LIST and
+ * `top_level_url` HTML §8.1.3.1's TOP-LEVEL CREATION URL — each exactly what the same-named argument of
+ * `qjs_init` is, stated by the same zone for the same reason, and read here ONCE into the decisions §7.5.1
+ * creates a Document from. */
+QJS_EXPORT int qjs_join(const char *html, const char *url, const char *doc_id, const char *headers,
+                        const char *top_level_url)
+{
+    HeaderList response_headers;
+    NavigationParams np;
+    lxb_html_document_t *dom;
+    JSContext *cctx;
+    DocScripts scripts;
+    uint32_t doc;
+
+    /* A JOIN NEEDS AN AGENT TO JOIN, and a FRONTIER to put this document's scripts on. The first is qjs_init's
+       and the second is qjs_begin's, and they are two statements because a host holding the instance between
+       those two calls is a real state (it reads the bundle id there and looks up the prior session). A
+       document joined into that window would be parsed, given a realm, and never execute a line — which is
+       indistinguishable from a document that had no scripts, and is exactly the failure every seeding assert
+       in this engine exists to prevent. */
+    DCHECK(g_dom != NULL,
+           "qjs_join ran on an instance qjs_init never rooted — a join ADDS a document to a LIVE agent, so "
+           "there is no runtime to build its realm in, no origin to check it against and no heap for its tree");
+    DCHECK(g_begun,
+           "qjs_join ran before qjs_begin seeded the frontier — a joined document's scripts are members of the "
+           "ONE frontier, and there is no session for them to be members of yet");
+
+    /* THE PRINCIPAL, BEFORE ANYTHING IS BUILT OUT OF THE BYTES. §7.1.1's same origin, asked of the AGENT's own
+       record against this document's address, which is the one comparison that decides whether this document
+       belongs in this heap at all. It is asked FIRST because everything below it — the parse into the agent's
+       arenas, the realm, the flow — is work that cannot be undone once a wrong-origin document has done it. */
+    {
+        UrlRecord rec;
+
+        CHECK(url != NULL && *url && url_parse(&rec, url, strlen(url), NULL),
+              "a document was joined to this agent without an ADDRESS — a document is loaded FROM somewhere, "
+              "and every relative URL it builds resolves against it");
+        CHECK(origin_same_as_url(origin_agent(), &rec),
+              "a document whose origin is NOT this agent's principal was joined to it — an instance is an "
+              "ORIGIN-KEYED AGENT CLUSTER and SECURITY.md makes the instance the principal, so this would put "
+              "TWO origins behind one credentialed-read principal and behind one `pageOrigin`. A cross-origin "
+              "document is a SECOND INSTANCE the trusted zone provisions, never a second realm in this heap");
+        url_record_free(&rec);
+    }
+    CHECK(top_level_url != NULL && *top_level_url,
+          "a document was joined with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide whether "
+          "this document's realm is a secure context, and Web IDL §3.3.13's members exist or do not by that "
+          "answer, so the platform surface this document's bundle runs against would be a guess. Only the "
+          "trusted zone knows what embeds a document of this instance");
+    DCHECK(doc_id != NULL && *doc_id,
+           "a document was joined with no NAME — a peer routes a delivery and a cross-agent operation on that "
+           "name, and every flow of this document mints its worlds under it, so an unnamed document can take "
+           "no part in cross-document time travel");
+
+    /* §7.4.6's NAVIGATION PARAMS, decided at the RESPONSE and carried — the same read qjs_init makes over the
+       same header list, in the same component, because this is the same algorithm over a second response.
+       ZERO IS THE TARGET SNAPSHOT SANDBOXING FLAG SET, and here it is a narrower statement than qjs_init's: a
+       Document carrying §7.1.5's SANDBOXED ORIGIN flag is forced into a fresh OPAQUE origin, which is same
+       origin with NOTHING — so it could not have passed the principal CHECK above, and the one flag whose
+       absence this heap depends on is the one flag that cannot be present. The rest of §7.1.5's creation set
+       is the EMBEDDER's (an `<iframe sandbox=allow-same-origin>` attribute plus the embedder document's own
+       set) and lives in the instance that holds the embedder; this entry is not told it. */
+    memset(&response_headers, 0, sizeof response_headers);
+    header_list_parse_field_lines(&response_headers, headers);
+    navigation_params_from_response(&np, &response_headers, 0,
+                                    secure_context_url_potentially_trustworthy(top_level_url));
+    header_list_free(&response_headers);
+
+    /* THIS AGENT HOLDS IT — said before the realm is built, because §7.2.5.1's mint below asserts it and
+       because "this agent holds `doc`" is what makes every same-origin read through this document answer in
+       this turn instead of suspending on a peer that does not exist. */
+    doc = world_doc_intern(doc_id);
+    DCHECK(!world_doc_hosted(doc),
+           "the document this join names is one this agent ALREADY holds — a document is joined once, and "
+           "building a second realm for a name that already answers with one would leave every peer's route "
+           "to it resolving to whichever of the two the registry wrote last");
+    world_doc_adopt(doc);
+
+    dom = engine_parse_document(html);
+    cctx = engine_realm_new(g_rt, top_level_url);
+    {
+        /* NULL: THIS HOST DOES NOT KNOW THE NAVIGABLE'S NAME — the same statement qjs_init makes about the
+           root's, and true here for a second reason as well. The navigable was created by whoever embeds this
+           document, which is a peer instance or the browser itself; the `navigable.create` notice a peer emits
+           carries no name field, so `window.name` is unknown external input and reads concolic until something
+           states it. That is what `window_proxy_new_self` spells with a NULL, and what the §7.4 mint beside it
+           cannot spell at all (it answers "" for a name it was not given, because §7.4 always knows one). */
+        JSValue proxy = window_proxy_new_self(cctx, doc, NULL);
+
+        CHECK(!JS_IsException(proxy), "the joined navigable's WindowProxy could not be allocated");
+        /* THE PRINCIPAL AND CSP §2.2.2's SELF-ORIGIN ARE BOTH THE AGENT'S OWN RECORD, serialized — not a
+           second derivation from `url`. They are two different facts (a Document's principal and the origin
+           its policy resolves `'self'` against) and they agree here for the reason qjs_init can name for the
+           root: this Document IS the response's, loaded from `url` — and the CHECK above is what makes the
+           agent's record the right answer to both rather than a substitution that happens to match. */
+        engine_realm_install(cctx, dom, url, origin_serialized(origin_agent()), np.csp,
+                             origin_serialized(origin_agent()), np.sandbox_flags, doc, proxy);
+        JS_FreeValue(cctx, proxy);
+    }
+
+    if (g_joined_n == g_joined_cap) {
+        int cap = g_joined_cap ? g_joined_cap * 2 : 4;
+        JSContext **c = realloc(g_joined_ctx, (size_t)cap * sizeof *c);
+        lxb_html_document_t **d = realloc(g_joined_dom, (size_t)cap * sizeof *d);
+
+        CHECK(c != NULL && d != NULL, "the host ran out of memory recording a joined document — an unrecorded "
+                                      "one is a realm and a tree nothing gives back at teardown");
+        g_joined_ctx = c;
+        g_joined_dom = d;
+        g_joined_cap = cap;
+    }
+    g_joined_ctx[g_joined_n] = cctx;
+    g_joined_dom[g_joined_n] = dom;
+    g_joined_n++;
+
+    /* AND THE DOCUMENT RUNS ITS OWN SCRIPTS. A Document this agent built out of a response and never ran the
+       scripts of is not a document that has been analysed at all — measured on real Chrome, where a
+       same-origin child that got a realm, a tree and a WindowProxy and no seeding contributed ZERO endpoints
+       while the cross-origin spelling of the same page reported them. The inventory is the DOM's own
+       `<script>` scan, and it is FREED here rather than borrowed for the session: engine_join_document copies
+       every body it queues and resolves every `src` it parks on. */
+    scripts = document_exec_scripts(dom);
+    engine_join_document(cctx, doc, scripts.bodies, scripts.srcs, scripts.types, scripts.n);
+    doc_scripts_free(&scripts);
+
+    navigation_params_free(&np);
     return 0;
 }
 
@@ -533,6 +736,18 @@ QJS_EXPORT void qjs_teardown(void)
     abort_free(g_ctx);
     observable_free(g_ctx);
     document_free(g_ctx);   /* the Document and the window it fires `load` at — both HELD across the lifecycle */
+    /* AND THE HOST'S REFERENCE TO EVERY JOINED REALM, GIVEN BACK HERE rather than by a `document_free` of its
+       own. A joined document's per-realm record is released by quickjs's realm-teardown hook — the one
+       core/frame/navigable.c installs for EVERY realm of this agent, its first one included — so what this
+       line owes is the REFERENCE `qjs_join` kept, and the record follows whenever the realm's own graph is
+       collected (the JS_RunGC below, or JS_FreeRuntime). It cannot be the other order: releasing the record of
+       a realm the host still holds a reference to would leave a live realm whose Document is gone. The line
+       above is different for the reason its own note gives — `g_ctx` is the realm this host is standing in and
+       frees by hand at the end of this function, so nothing would reach the hook for it in time. */
+    {
+        int i;
+        for (i = 0; i < g_joined_n; i++) JS_FreeContext(g_joined_ctx[i]);
+    }
     /* THE WHOLE DOM GROUP — element_free's forty-two-component cascade, the <iframe> element and GEOMETRY
        INTERFACES §3/§4 — is NOT freed here any more: all four are ROWS on core/platform.h's release column, run
        by the platform_agent_free above, and reverse declaration order gives them the same sequence they had
@@ -606,6 +821,18 @@ QJS_EXPORT void qjs_teardown(void)
        outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
        unfinished machine by the step it rests at. */
     idl_async_iter_free();
+    /* EVERY DOCUMENT OF THIS AGENT, AND THE JOINED ONES FIRST — not for their own sake but for the ARENAS'.
+       core/dom/node_heap.h puts every node's storage on the AGENT's heap, and the arenas are destroyed with
+       the LAST document that gives up its claim, so the order among them decides nothing except which one
+       carries that out. It matters that they are ALL here: a joined tree left undestroyed is not a leak of one
+       document, it is the agent's whole node heap held by a claim nobody gives back. */
+    {
+        int i;
+        for (i = 0; i < g_joined_n; i++) dom_document_destroy(g_joined_dom[i]);
+    }
+    free(g_joined_ctx); g_joined_ctx = NULL;
+    free(g_joined_dom); g_joined_dom = NULL;
+    g_joined_n = g_joined_cap = 0;
     dom_document_destroy(g_dom);
     g_dom = NULL;
     g_begun = 0;

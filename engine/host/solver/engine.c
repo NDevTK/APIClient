@@ -12,6 +12,7 @@
 #include "solver/cow.h"
 #include "solver/world.h"   /* the routed record's world vector: whose timeline a delivery belongs to */
 #include "core/dom/document.h"   /* which DOCUMENT a parked program belongs to: the realm it is compiled in */
+#include "core/url/url.h"        /* §4.4's API base URL: what a joined document's own `<script src>` resolves against */
 #include "core/loader/script_fetch.h"   /* HTML §8.1.4.2: where a fetched body becomes a script's source text */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent OPERATION: what performs it */
@@ -133,11 +134,16 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
    the URL exactly as a fetch does (same register, same dedup, same stall accounting) and the drain queues the
    body as this flow's next script, so the loaded code runs in the world that injected it: its COW delta, its
    pins, its position in the BFS. A sibling that never took that branch never sees the script. */
-void engine_pending_script_url(JSContext *ctx, const char *url) {
-    Flow *f = flow_running();
+/* WHICH FLOW IS A PARAMETER, because there are two moments a document's external script becomes one flow's
+   owed reply and only one of them has a flow switched in. An INJECTED script is inserted by running code, so
+   the flow is the one that ran it; a JOINED document's own <script src> is registered against the boot flow
+   this engine mints for that document, at host time, before anything of it has run. Same register, same
+   dedup, same stall accounting — the caller states which member owes the reply rather than the register
+   asking a scheduler that is not currently running one. */
+static void pending_script_push(Flow *f, JSContext *ctx, const char *url) {
     JSValue e;
-    DCHECK(f != NULL, "a <script src> was injected outside a running flow");
-    DCHECK(url != NULL && *url, "a <script src> was injected with no URL");
+    DCHECK(f != NULL, "a <script src> was parked on with no flow to owe the reply to");
+    DCHECK(url != NULL && *url, "a <script src> was parked on with no URL");
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT);
     pending_set(e, PEND_URL, JS_NewString(ctx, url));
     /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
@@ -145,6 +151,12 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
        whichever realm the session happens to be rooted at. */
     pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
     JS_FreeValue(ctx, e);
+}
+
+void engine_pending_script_url(JSContext *ctx, const char *url) {
+    Flow *f = flow_running();
+    DCHECK(f != NULL, "a <script src> was injected outside a running flow");
+    pending_script_push(f, ctx, url);
 }
 
 /* PARK ON A PUBLISHED API DESCRIPTION — the engine's own probe (solver/discovery.h), and the reason a discovery
@@ -1791,15 +1803,18 @@ typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL, DYN_CROSS
    SESSION's ctx, with one `? :` for the cross-agent operation — so a document of this agent that is not the
    one the session was rooted in had no way onto the frontier at all, and the host that had such programs (a
    same-origin child navigable's classic scripts) kept a queue of its own and ran them itself. */
-static void engine_queue(uint32_t doc, const char *body, DynKind kind) {
-    Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
+/* WHICH FLOW OWNS THE PROGRAM IS A PARAMETER HERE and the running flow's identity is asked one level up, for
+   the same reason pending_script_push takes one: a program the page CAUSED to run belongs to the flow that ran
+   the code, and a JOINED document's own scripts belong to the boot flow this engine mints for that document
+   before any of it has run. Both are members of the one frontier; only one of them has the thread. */
+static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind kind) {
     /* A PROGRAM QUEUED WITH NO FLOW IS A DROPPED PROGRAM, and it used to leave silently. There is no global
-       queue to fall back to — the frontier IS the queue — so the caller is the one that has to be inside the
-       flow whose code caused this program to run: an injected <script>'s insertion, a document's own load job,
-       a fired PoC. A document whose scripts vanished here is indistinguishable from a document that had
-       none, which is exactly what this file's own routed-record asserts exist to prevent. */
-    DCHECK(f != NULL, "a program was queued with no flow running — a program is a work item of the ONE "
-                      "frontier and there is no member to give it to, so it would be dropped without a trace");
+       queue to fall back to — the frontier IS the queue — so the caller is the one that has to name the flow
+       whose sequence this program joins: an injected <script>'s insertion, a document's own load job, a fired
+       PoC, a joined document's boot. A document whose scripts vanished here is indistinguishable from a
+       document that had none, which is exactly what this file's own routed-record asserts exist to prevent. */
+    DCHECK(f != NULL, "a program was queued naming no flow — a program is a work item of the ONE frontier and "
+                      "there is no member to give it to, so it would be dropped without a trace");
     DCHECK(body != NULL, "a program was queued with no body — the caller has nothing to run and the queue "
                          "entry would be a slot the compile below dereferences");
     if (!body || !f) return;
@@ -1817,6 +1832,13 @@ static void engine_queue(uint32_t doc, const char *body, DynKind kind) {
     f->dyn_cand[f->dyn_n] = (unsigned char)kind;
     f->dyn_doc[f->dyn_n] = doc;
     f->dyn_n++;
+}
+
+static void engine_queue(uint32_t doc, const char *body, DynKind kind) {
+    Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
+    DCHECK(f != NULL, "a program was queued with no flow running — a program is a work item of the ONE "
+                      "frontier and there is no member to give it to, so it would be dropped without a trace");
+    engine_queue_into(f, doc, body, kind);
 }
 
 /* WHICH KIND THE PROGRAM AT `script_i` IS, asked at the two places that need it — the compile and the resume.
@@ -3049,6 +3071,109 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        nothing and aborted inside LEXBOR's, holding 315 MB of frozen document segments against 23 MB of heap
        ones. Most of this engine's memory is the HTML parser's, so most refusals are its. */
     reclaim_install(JS_GetRuntime(ctx), engine_reclaim_tail, NULL);
+}
+
+/* A SECOND DOCUMENT OF THIS AGENT, APPENDED TO THE FRONTIER THAT IS ALREADY RUNNING — see engine.h.
+ *
+ * IT IS ONE FLOW AND NOT A SESSION, and that is §scheduler's own sentence: a new document APPENDS its flows to
+ * the one continuous frontier and does not start a scheduler, a run, an attention or a counter. engine_sched_
+ * begin above is the ROOT document's seeding and asserts an EMPTY frontier because a boot flow and a parked
+ * residue are alternatives for one document; this is a DIFFERENT document, so it adds to whatever is there.
+ *
+ * THE FLOW STARTS PAST THE SESSION'S SEQUENCE, and that single line is what makes it this document's boot
+ * rather than a second boot of the root's. A flow's cursor indexes the session's static scripts on [0, n) and
+ * its own queued programs on [n, n + dyn_n); starting at `n` means this member has no static scripts at all —
+ * which is the truth, because the static sequence belongs to the document the session was opened over — and
+ * everything queued below is its whole program order. Left at zero it would re-run the ROOT's bundle in a
+ * second timeline and report that document's surface twice.
+ *
+ * THE ORDER IS THE DOCUMENT'S ORDER, and this seeds only the half of it that is already expressible — the same
+ * boundary core/frame/navigable.c's seeding hits and asserts, and for the same reason: an INLINE script is a
+ * program queued in place, while an EXTERNAL one is a reply this flow is OWED and joins the sequence when the
+ * register drains, which is after everything queued in this pass. An inline script FOLLOWING an external one
+ * would therefore run before the bundle it is written after. What removes the limit is the SESSION document's
+ * own mechanism (engine_pending_docscript fills the slot at the script's INDEX and the flow waits at that
+ * index) generalized to every document of this agent, and until that exists this crashes rather than silently
+ * reordering a page's own scripts. */
+void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
+                          const ScriptType *types, int n) {
+    Flow *f;
+    bool external_seeded = false;
+    int i;
+
+    DCHECK(g_sess_live, "a document was joined to an instance with no live session — the flow its scripts are "
+                        "the programs of would have no scheduler to run it, so the document would be parsed, "
+                        "given a realm, and never execute a line");
+    DCHECK(cctx != NULL, "a document was joined with no realm to compile its programs in");
+    DCHECK(doc != 0, "a document was joined naming no document — zero is the world registry's NONE, so the "
+                     "programs below would be compiled in whichever realm the session happens to be rooted at");
+    DCHECK(doc != g_sess_doc,
+           "the document this session was opened over was joined to its own agent a second time — its scripts "
+           "are already the frontier's, and a second boot flow over them explores the un-forked path twice");
+    DCHECK(doc_realm(doc) == cctx,
+           "a document was joined naming a realm that is not the one it answers with — the queue carries the "
+           "NAME and the compile resolves it, so the two disagreeing compiles this document's code in another "
+           "document's Window");
+    DCHECK(n == 0 || (bodies != NULL && srcs != NULL && types != NULL),
+           "a document was joined with a script inventory missing one of its three columns — bodies, srcs and "
+           "types are one table with one length, and the seeding below reads all three");
+
+    /* THE JOINED DOCUMENT'S BOOT FLOW: an empty decision vector over this agent's baseline, minted with a root
+       world of its own because it stands on no other flow's decisions. Every timeline this document ever has
+       is a fork of it, exactly as every timeline of the root is a fork of the flow engine_sched_begin adds. */
+    f = flow_add(g_sess_ctx, JS_UNDEFINED, WORLD_NONE);
+    f->script_i = g_sess_n;
+    for (i = 0; i < n; i++) {
+        /* §8.1.3.3'S TWO ALGORITHMS, and only one of them has a route from a queued program: the dynamic
+           sequence carries no ScriptType, so a module body on it would be compiled by the CLASSIC entry and
+           this document's own `import` would come back a SyntaxError from a parser that is perfectly correct.
+           The same gap core/frame/navigable.c names for a child navigable's Document, reached here by the
+           other of the two ways a Document of this agent comes into existence. */
+        DCHECK(types[i] != SCRIPT_TYPE_MODULE,
+               "a joined document carries a `<script type=module>` and this seam can only queue a CLASSIC "
+               "program — give the flow's dynamic script sequence a ScriptType per entry (engine_queue_script "
+               "and solver/flow.h's dyn arrays), the way the document's own sequence carries one, so flow_step "
+               "routes it to §8.1.3.3's module entry");
+        if (bodies[i]) {
+            DCHECK(!external_seeded,
+                   "a joined document has an INLINE script after an EXTERNAL one, and this seam cannot keep "
+                   "§4.12.1's document order across the two: an external script's program joins this flow when "
+                   "its fetch REPLIES, which is after everything queued in this pass, so the inline script "
+                   "would run before the bundle it is written after. Generalize the session document's script "
+                   "sequence — a slot per script INDEX that the flow waits at (engine_pending_docscript) — to "
+                   "every document of this agent");
+            engine_queue_into(f, doc, bodies[i], DYN_PAGE_SCRIPT);
+            continue;
+        }
+        DCHECK(srcs[i] != NULL,
+               "a joined document's script inventory holds an entry that is neither an inline body nor an "
+               "external address — document_exec_scripts states one of the two for every executable entry");
+        {
+            /* §4.4's API BASE URL IS THE JOINED DOCUMENT'S, not the session document's: `<script src=app.js>`
+               in a document at `/app/child.html` is `/app/app.js`, and resolving it against the document the
+               session happens to be rooted at is how a joined document's own bundle comes to be fetched from
+               another document's directory. */
+            UrlRecord base, rec;
+            const char *base_url = document_base_url(cctx);
+            bool have_base;
+            char *abs_url = NULL;
+
+            url_record_init(&base);
+            have_base = base_url && url_parse(&base, base_url, strlen(base_url), NULL);
+            url_record_init(&rec);
+            if (url_parse(&rec, srcs[i], strlen(srcs[i]), have_base ? &base : NULL))
+                abs_url = url_serialize(&rec, false);
+            url_record_free(&rec);
+            url_record_free(&base);
+            /* §4.12.1's OWN BRANCH for a `src` that does not parse — "return" — so the element runs no script.
+               It is the standard's answer and not a skip: what is still owed is the error event it fires at
+               the element, which needs a task on this document rather than anything here. */
+            if (!abs_url) continue;
+            pending_script_push(f, cctx, abs_url);
+            external_seeded = true;
+            free(abs_url);
+        }
+    }
 }
 
 /* One QUANTUM. Returns ENGINE_STEP_DONE when the frontier is empty (the session is closed and its hooks are

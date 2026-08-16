@@ -193,6 +193,33 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
                         int forking, const char *recipes);
 int  engine_sched_step(void);
 
+/* A SECOND DOCUMENT OF THIS AGENT RUNS ITS OWN SCRIPTS, ON THE FRONTIER THAT IS ALREADY RUNNING.
+ *
+ * An instance is an ORIGIN-KEYED AGENT CLUSTER, so several documents are one instance's — and a document the
+ * HOST hands over (`qjs_join`) is not one any flow of this agent created. That is the whole difference from
+ * §7.4's child navigable and it decides everything about this entry: a flow-created Document is built INSIDE
+ * the creating flow, so its scripts are that flow's next programs (core/frame/navigable.c seeds them there);
+ * a joined Document is built at the BASELINE like the root's, before any flow of it exists, so its scripts are
+ * the programs of a flow that has to be MINTED for them. There is no flow to queue into, which is why this is
+ * an entry of its own and not a second caller of engine_queue_script.
+ *
+ * IT IS A MEMBER OF THE ONE FRONTIER AND NOT A SECOND SESSION. §scheduler: a new document APPENDS its flows to
+ * the one continuous frontier; it does not start a scheduler, a run or an attention. So this adds ONE flow —
+ * the joined document's boot flow, an empty decision vector over the agent's baseline, ranked, preemptible,
+ * forkable and parkable exactly like the root's — and returns. Nothing runs here.
+ *
+ * `cctx` IS THAT DOCUMENT'S REALM, which is WHERE ITS PROGRAMS ARE COMPILED: a program is closed over the
+ * compiling realm's global, so a joined document's script compiled in the session's realm would define the
+ * joined document's globals on the root's Window and read the root's back as its own. It is asserted to be the
+ * realm `doc` answers with, because the queue carries the NAME and the compile resolves it.
+ *
+ * `bodies`/`srcs`/`types`/`n` are that document's §4.12.1 inventory (core/loader/document_scripts.h), in
+ * document order, and they are COPIED rather than borrowed — unlike engine_sched_begin's, which is the
+ * session's own sequence and lives as long as the session. A joined document's inventory is a fact the host
+ * read once out of a tree it then hands to this agent, so it has no owner to outlive this call. */
+void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
+                          const ScriptType *types, int n);
+
 /* THE RAM→DISK FLOOR. The HOST sees the pressure (it is the only zone that knows the other documents' engines
    and the summed working set) and asks this engine to give up its residue; the ENGINE decides when, which is
    the next step boundary with no flow switched in. The step that takes it writes the park document
