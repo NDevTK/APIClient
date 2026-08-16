@@ -57,9 +57,9 @@ if (!CLK_TCK) { console.error("[wpt] getconf CLK_TCK answered nothing, so a chil
    the rewrites and content types are then wptserve's own rather than a table copied into this file. */
 /* A PATH THAT CONTAINS ANOTHER LISTED PATH IS REPORTED AT THE FINER ONE. `dom` is one standard and eight
    COMPONENTS — Node/Document/Element, Event/EventTarget, AbortController, HTMLCollection, DOMTokenList, Range,
-   NodeIterator/TreeWalker, Observable — and three of those are not built at all, so a single `dom` row would
-   fold a hundred honest "this API does not exist" aborts into the same number as the nodes the engine does
-   implement. That is the sentence this file already applies to the TOTAL, one level down. So the list carries
+   NodeIterator/TreeWalker, Observable — which fail in DIFFERENT ways and at different depths, so a single
+   `dom` row would fold each component's answer into one number in which none of them is visible. That is the
+   sentence this file already applies to the TOTAL, one level down. So the list carries
    both: `dom` is what is CHECKED OUT and RUN (its ten root-level test files belong to no subdirectory and would
    otherwise be silently dropped), and `dom/nodes` and its siblings are REPORTING refinements — a path with a
    listed ancestor is never walked a second time, and byArea takes the LONGEST match. */
@@ -77,9 +77,16 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       — createElement, setAttribute, the mutation algorithms, innerHTML/outerHTML — and the gate
                       that would have judged them did not collect a single one of their tests, because this
                       standard's directory had never been checked out. It was verified against html/browsers
-                      instead, which is a different component. `dom/ranges`, `dom/traversal` and `dom/observable`
-                      have no implementation at all; they are checked out for exactly that reason — an area
-                      absent from this list is untested, which is a different statement from "passes". */
+                      instead, which is a different component.
+                      THIS ROW USED TO SAY `dom/ranges`, `dom/traversal` and `dom/observable` "have no
+                      implementation at all", AND THAT IS NO LONGER TRUE: range.c and abstract_range.c,
+                      node_iterator.c and tree_walker.c, observable.c with observable_ops.c — 4257 lines. The
+                      claim was written when it was true and was never revisited, which is the stale-DFAIL
+                      failure this project names: accurate about the SPEC, wrong about THIS TREE. It also made
+                      those three rows unreadable in the worst way, by pre-declaring their numbers as expected
+                      — a row nobody would read a regression out of. They stay listed, for the reason every
+                      other row is listed rather than that one: an area absent from this list is untested,
+                      which is a different statement from "passes". */
                    "dom", "dom/abort", "dom/collections", "dom/events", "dom/lists", "dom/nodes",
                    "dom/observable", "dom/ranges", "dom/traversal",
                    /* HTML §8.5.4/§8.5.5 — innerHTML, outerHTML, insertAdjacentHTML and the fragment parsing
