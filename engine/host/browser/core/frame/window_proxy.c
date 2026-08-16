@@ -1022,19 +1022,24 @@ static void proxy_capture_names(JSContext *ctx)
 }
 
 /* ECMA-262 6.1.7's ARRAY INDEX, spelled out rather than parsed: a canonical numeric string for an integer in
-   [0, 2**32-1). "01", "1.0" and " 1" are ordinary property names and a strtoul would call all three indices. */
-static bool proxy_atom_is_array_index(JSContext *ctx, JSAtom prop)
+   [0, 2**32-1). "01", "1.0" and " 1" are ordinary property names and a strtoul would call all three indices.
+   THE INDEX ITSELF IS THE ANSWER and not merely whether there is one. §7.2.3.5 step 2.1 is `! ToUint32(P)`,
+   which is the same digits this loop has already accumulated — deriving it a second time with a second parse
+   is the second answer that disagrees with the first for exactly the strings this one exists to reject. */
+static bool proxy_atom_index(JSContext *ctx, JSAtom prop, uint32_t *pidx)
 {
     JSValue v = JS_AtomToValue(ctx, prop);
     const char *s;
+    uint64_t n = 0;
     bool idx = false;
 
+    DCHECK(pidx != NULL, "§7.2.3.5's array-index test was asked without anywhere to put the index — the two "
+                         "are one answer, and a caller that wants only the boolean is about to re-parse it");
     if (!JS_IsString(v)) { JS_FreeValue(ctx, v); return false; }   /* a symbol is never an index */
     s = JS_ToCString(ctx, v);
     JS_FreeValue(ctx, v);
     if (!s) return false;
     if (s[0] && (s[0] != '0' || s[1] == 0)) {
-        uint64_t n = 0;
         int i;
         idx = true;
         for (i = 0; s[i]; i++) {
@@ -1044,18 +1049,104 @@ static bool proxy_atom_is_array_index(JSContext *ctx, JSAtom prop)
         if (idx && n >= 4294967295u) idx = false;
     }
     JS_FreeCString(ctx, s);
+    if (idx) *pidx = (uint32_t)n;
     return idx;
 }
 
-/* HTML §7.2.3.5 [[GetOwnProperty]], CROSS-ORIGIN BRANCH ONLY.
+/* HTML §7.2.3.5 STEP 2 — THE ARRAY-INDEX BRANCH, and it is the whole definition of indexed access rather than
+ * one of two: §7.2.2.2 says so in one sentence — "indexed access to document-tree child navigables is defined
+ * through the [[GetOwnProperty]] internal method of the WindowProxy object" — so `frames[0]`, `parent[1]`,
+ * `top[0]` and `otherW[0]` are one algorithm with one implementation, which is this.
  *
- * The SAME-ORIGIN branch is `OrdinaryGetOwnProperty(W, P)` — a forwarding to the other realm's Window that this
- * component does not perform, deliberately (see proxy_member_get: `otherW.self` must answer with the PROXY and
- * not with the other realm's global). Standing aside there leaves the prototype's accessors to answer exactly
- * as they do today; taking it over would be a second, larger change wearing this one's clothes. */
+ * IT RUNS BEFORE THE SAME-ORIGIN QUESTION, and that ordering is the bug this branch was in. Step 2 precedes
+ * step 3's `IsPlatformObjectSameOrigin(W)`, and this hook asked step 3 first and returned "no own property"
+ * for a same-origin W — so `frames[0][0]` walked off the end of the prototype chain and answered `undefined`
+ * about a grandchild navigable that exists, with nothing to say so. Every path through step 2 RETURNS, so an
+ * array index never reaches step 3 at all.
+ *
+ * THE LIST IS THE TARGET DOCUMENT'S, NEVER THE READING REALM'S — the same sentence `length` is answered by,
+ * because it is the same list. Two facts decide it without materializing anything:
+ *   a DESTROYED navigable has no active document, so it has no children;
+ *   a navigable whose realm has NOT been materialized is showing the initial about:blank Document §7.4 created
+ *     it with, an element can only get into that document by script, and script cannot run in a realm that
+ *     does not exist — so its child list is EMPTY, computed rather than assumed. Building a realm here to
+ *     count the frames in a document that provably has none is what made a read through a proxy cost a realm
+ *     per flow, which `length` already refuses for the identical reason.
+ * The walk itself is html_iframe.c's, over the Lexbor tree and each container's per-flow navigable slot — no
+ * page code, by construction, which is what lets this hook keep declaring get_own_property_no_user_code and is
+ * exactly what window.c's own exotic does for the global spelling of the same navigable.
+ *
+ * OUT OF RANGE IS TWO ANSWERS AND THEY ARE NOT INTERCHANGEABLE (step 2.4): `undefined` for a same-origin W
+ * says "that window has no such frame", and the SecurityError for a cross-origin one says "you may not look".
+ * A page tells them apart with a `try`/`catch`, which is how it feature-detects a cross-origin window at all. */
+static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, const ProxyData *p, uint32_t idx)
+{
+    JSValue child = JS_UNDEFINED;
+
+    /* THE INDEX IS A uint32 AND THE WALK COUNTS IN int, so the range above INT32_MAX is out of range rather
+       than a negative index. A document with that many child navigables is not reachable — but a cast that
+       wraps would ask for one, and the walk would answer for a frame at some other position. */
+    if (!wp_closed(p) && idx <= (uint32_t)INT32_MAX) {
+        if (!world_doc_hosted(p->doc)) {
+            /* §7.2.3.5 step 2.2 OF A DOCUMENT IN ANOTHER INSTANCE. Both halves of the answer are named here
+               because neither exists yet and each is a different kind of missing.
+               THE PEER-SIDE PROGRAM IS ALREADY BUILT: `windowproxy.get` runs `globalThis[__apiclientKey]` in
+               the named document's own realm (remote_op.c, engine.c's flow_perform), and §7.2.2.2 indexed
+               access on that realm's global IS this same step 2 performed there — so the member field carries
+               the decimal index and the peer needs nothing new to compute the answer. What it CANNOT do yet is
+               send it: the answer is a WindowProxy, and remote_object.c aborts rather than lending a navigable
+               as a generic cross-agent object reference, naming the navigable identity that has to cross
+               instead (document name, origin, browsing-context name, and the PARENT's document name, since a
+               navigable minted from a bare name would report itself top-level).
+               WHAT IS MISSING HERE IS THE SUSPEND. This is an exotic [[GetOwnProperty]] — a C hook that must
+               return a value — so it cannot park the flow the way `length` does, and `length` is only able to
+               because it is an IDL ACCESSOR driven as a step machine. There is exactly one read shape this
+               interpreter resolves at the operator site and drives on the trampoline (remote_object.c's block
+               comment, and quickjs.c's own DCHECK in tramp_walk_continues names the route: the keyed entry's
+               GP_GETOWNPROP). Route this class onto it, and step 2 becomes a step machine whose ASK stage
+               posts the record above and whose ANSWER stage mints the proxy — parked at `otherW[0]`, resumed
+               byte-identical, exactly as an await is. Answering `undefined` here is what this hook exists to
+               stop, and the SecurityError below is right only once the index is known to be out of range. */
+            DFAIL("an INDEXED read of a WindowProxy whose active document is in ANOTHER INSTANCE. The peer "
+                  "already computes it — `windowproxy.get` with the decimal index as the member runs "
+                  "§7.2.2.2's indexed access in that document's own realm — so what is missing is the two "
+                  "edges around it: a navigable must cross as its IDENTITY rather than as a generic object "
+                  "reference (remote_object.c aborts there and names the fields), and this read must SUSPEND, "
+                  "which an exotic [[GetOwnProperty]] cannot do. Route the class onto the keyed entry's "
+                  "GP_GETOWNPROP so step 2 is driven on the trampoline as a step machine, the way every other "
+                  "cross-instance read in this engine is");
+        } else if (p->realm) {
+            child = iframe_child_navigable(p->realm, (int)idx);
+        }
+    }
+    if (!JS_IsUndefined(child)) {                                  /* step 2.3 */
+        if (!desc) { JS_FreeValue(ctx, child); return 1; }
+        /* Step 2.5's descriptor exactly: [[Writable]] FALSE, [[Enumerable]] true, [[Configurable]] true — the
+           same three §7.2.2.2's global spelling reports, because it is the same step. */
+        desc->flags  = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE;
+        desc->getter = JS_UNDEFINED;
+        desc->setter = JS_UNDEFINED;
+        desc->value  = child;
+        return 1;
+    }
+    if (proxy_same_origin(p)) return 0;                            /* step 2.4.1 */
+    JS_ThrowDOMException(ctx, "SecurityError",                     /* step 2.4.2 */
+                         "the origins do not permit reading an indexed property of that Window");
+    return -1;
+}
+
+/* HTML §7.2.3.5 [[GetOwnProperty]] — STEP 2 FOR EVERY W, and steps 4 through 6 for a cross-origin one.
+ *
+ * STEP 3's SAME-ORIGIN BRANCH is `OrdinaryGetOwnProperty(W, P)` — a forwarding to the other realm's Window that
+ * this component does not perform, deliberately (see proxy_member_get: `otherW.self` must answer with the PROXY
+ * and not with the other realm's global). Standing aside there leaves the prototype's accessors to answer
+ * exactly as they do today; taking it over would be a second, larger change wearing this one's clothes. That is
+ * a statement about step 3 ALONE: step 2 runs for both origins and is above it in the algorithm, which is why
+ * it is above the same-origin return here too. */
 static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
 {
     ProxyData *p = proxy_of(obj);   /* CAPTURED: the origin this read is filtered by is per-flow state */
+    uint32_t idx;
     int i;
 
     if (!p) return 0;
@@ -1065,6 +1156,13 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
     DCHECK(g_xo_atom[0] != JS_ATOM_NULL && g_xo_fallback[0] != JS_ATOM_NULL,
            "a WindowProxy read reached §7.2.3.5 before this agent interned §7.2.1.3.1's property names — the "
            "class was registered without proxy_capture_names running beside it");
+
+    /* STEP 2, WHICH IS FIRST BECAUSE THE STANDARD PUTS IT FIRST. Every path through it returns, so an array
+       index reaches neither the cross-origin name list nor step 3 — and asking it here rather than after the
+       name loop is what makes that ordering a fact of the code instead of a claim about the thirteen names
+       being non-numeric. */
+    if (proxy_atom_index(ctx, prop, &idx))
+        return proxy_indexed_get_own(ctx, desc, p, idx);
 
     /* ASKED BEFORE THE ORIGINS ARE, and that order is the same one proxy_read_permitted uses for the same
        reason: a name on the standard's list is answered by the member that owns it whatever the origins are,
@@ -1085,16 +1183,6 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
             desc->setter = JS_UNDEFINED;
             return 1;
         }
-
-    if (proxy_atom_is_array_index(ctx, prop))
-        DFAIL("an INDEXED read of a cross-origin WindowProxy. §7.2.3.5 answers it out of the peer's document-"
-              "tree child navigables — `w[0]` is that child's WindowProxy when the index is in range and a "
-              "SecurityError when it is not — so neither answer can be produced without the peer's child "
-              "navigable LIST, which is a cross-instance read this engine does not make (`length` is the only "
-              "member that leaves the instance, and a count is not a list). Build it as a second "
-              "`windowproxy.get`-shaped operation returning the child's document name, mint the remote proxy "
-              "from it, and this branch becomes the in-range/out-of-range split. Answering `undefined` here is "
-              "what this hook exists to stop, and a SecurityError would be wrong for every in-range index");
 
     /* §7.2.1.3.2 step 2. */
     JS_ThrowDOMException(ctx, "SecurityError",

@@ -75,6 +75,8 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/frame/remote_object.h"
+#include "core/frame/window.h"
+#include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
@@ -396,6 +398,36 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
               "its own rather than a call to ref_mint");
         return strdup("u");
     }
+    /* A NAVIGABLE IS NOT AN OBJECT THIS AGENT MAY LEND, and it is stopped ABOVE the generic export rather than
+     * inside it, because everything below this line is right for a Document, an Error or a page's own object
+     * and wrong for a window in exactly the way that leaves no trace.
+     *
+     * WHAT WOULD HAPPEN OTHERWISE. `otherW[0]`'s peer-side program answers with a WindowProxy (§7.2.2.2), and
+     * the export below would name it `o<doc>:<id>` — so the asking agent would build a REFERENCE PROXY where a
+     * WindowProxy belongs. Every consequence of that is silent: `w[0].postMessage(…)` would park a flow on an
+     * `object.apply` instead of running §7.2.5.1's postMessage; `w[0] === w.frames[0]` would be false about one
+     * navigable; §7.2.5.1's cross-origin FILTER would not run at all, because a reference proxy forwards every
+     * key to the peer and the whole point of the WindowProxy surface is that thirteen names are answerable and
+     * the rest are a SecurityError. The two spellings of a window are one navigable (window_proxy.c says so
+     * about `parent`, `top` and `closed`), so the Window GLOBAL is refused here on the same line as its proxy —
+     * `remote.defaultView` reaches this with the peer's global and would lend the same wrong thing.
+     *
+     * WHAT CROSSES INSTEAD. A navigable crosses as its IDENTITY, the way `navigable.create` and a routed
+     * message's sender already do (navigable.c, window_message.c both build a remote proxy from one): the
+     * DOCUMENT NAME, the ORIGIN's serialization, the BROWSING-CONTEXT NAME, and the PARENT's document name —
+     * that last one because window_proxy_new_remote takes a parent and a navigable minted from a bare name
+     * would answer `parent === self` and report itself a top-level traversable. The receiving side resolves the
+     * document name FIRST: a name this agent hosts is its OWN WindowProxy, not a remote one, and only a name it
+     * does not hold is minted — kept one per document, because `w[0] === w[0]` is a page-visible identity and
+     * this file already keeps one reference per (doc, id) for exactly that reason. */
+    DCHECK(!window_proxy_is(v) && !window_is(v),
+           "a NAVIGABLE was about to cross an agent boundary as a generic object reference. A WindowProxy (and "
+           "the Window global, which is the same navigable spelled the other way) must cross as its IDENTITY — "
+           "document name, origin, browsing-context name, and the PARENT's document name — and be resolved on "
+           "the far side to that agent's own WindowProxy for the document, or to a remote one minted once per "
+           "document. Lending it as `o<doc>:<id>` hands the peer a reference proxy: postMessage would become an "
+           "object.apply, §7.2.5.1's cross-origin filter would never run, and `w[0] === w.frames[0]` would be "
+           "false about one navigable");
     if (JS_IsObject(v)) {
         /* AN OBJECT CROSSES AS ITS NAME, AND THE NAME SAYS WHOSE. A value that is ALREADY a reference re-emits
            the name it arrived with — exporting the proxy instead would make a round trip a proxy of a proxy,
