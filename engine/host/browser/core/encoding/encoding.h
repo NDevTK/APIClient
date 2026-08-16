@@ -43,11 +43,25 @@ int encoding_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp, s
 
 /* ---- §6's HOOKS FOR STANDARDS ------------------------------------------------------------------------------
  *
- * "For identifiers or byte sequences within a format or protocol, use UTF-8 decode without BOM." Those callers
- * are other standards' algorithms, not the JS interfaces: they hold their strings as UTF-8 BYTES and run in C
- * with no realm to throw into, so the hook is over bytes and answers bytes. It is the SAME decoder §7.1 drives,
- * because a second one would drift from it at exactly the edges the standard is about (an overlong form, a
- * surrogate spelled in three bytes, a sequence the input ends in the middle of). */
+ * "For decoding, UTF-8 decode is to be used by new formats. For identifiers or byte sequences within a format
+ * or protocol, use UTF-8 decode without BOM or UTF-8 decode without BOM or fail." Those callers are other
+ * standards' algorithms, not the JS interfaces: they hold their strings as UTF-8 BYTES and run in C with no
+ * realm to throw into, so the hook is over bytes and answers bytes. It is the SAME decoder §7.1 drives, because
+ * a second one would drift from it at exactly the edges the standard is about (an overlong form, a surrogate
+ * spelled in three bytes, a sequence the input ends in the middle of).
+ *
+ * WHICH ONE A CALLER RUNS IS THE CALLING STANDARD'S CHOICE, NOT A PREFERENCE, and the two differ by exactly the
+ * three bytes of §6's step 2. A caller therefore quotes the algorithm its own step names — HTML §7.4.2.3.2's
+ * javascript: URL links `#utf-8-decode`, URL §3.5's host parser and §5.1's urlencoded parser link
+ * `#utf-8-decode-without-bom` — and neither hook is a stand-in for the other. */
+
+/* "To UTF-8 decode an I/O queue of bytes ioQueue …: Let buffer be the result of peeking three bytes from
+   ioQueue, converted to a byte sequence. If buffer is 0xEF 0xBB 0xBF, then read three bytes from ioQueue. (Do
+   nothing with those bytes.) Process a queue with an instance of UTF-8's decoder, ioQueue, output, and
+   "replacement". Return output." Steps 3-4 ARE the without-BOM hook below, so this is the peek, the discard,
+   and then that hook — a second drive of the decoder is how the two would come to disagree. Same answer shape:
+   malloc'd, NUL-terminated, WELL-FORMED UTF-8, with `*out_n` its length. */
+char *encoding_utf8_decode(const char *p, size_t n, size_t *out_n);
 
 /* "To UTF-8 decode without BOM an I/O queue of bytes ioQueue …: Process a queue with an instance of UTF-8's
    decoder, ioQueue, output, and "replacement"." A malformed sequence therefore becomes U+FFFD rather than

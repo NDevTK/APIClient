@@ -15,6 +15,7 @@
 #include "core/html/html_iframe.h"   /* §7.2.5's document-tree child navigables — §7.1's walk descends them */
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
 #include "core/url/url.h"
+#include "core/encoding/encoding.h"   /* §6's UTF-8 decode, which §7.4.2.3.2 step 3 runs on a percent-decoding */
 #include "core/idl_args.h"
 #include "core/realm.h"              /* §8.1.3.1's environment: the creator's top-level creation URL */
 #include "solver/engine.h"
@@ -596,7 +597,6 @@ void navigable_evaluate_javascript_url(JSContext *ctx, const char *url)
     char *source;
     size_t n = 0;
 
-    (void)ctx;
     DCHECK(url != NULL, "evaluate a javascript: URL was handed no URL — step 1 serializes one that exists");
     /* Steps 1-2: the URL serializer, then "remove the leading `javascript:` from urlString". The caller parsed
        the URL, so the scheme is already decided and this asserts rather than re-deciding it — two answers to
@@ -605,14 +605,45 @@ void navigable_evaluate_javascript_url(JSContext *ctx, const char *url)
            "evaluate a javascript: URL was handed a URL of another scheme — step 2 removes a prefix that is "
            "not there, and what would run is the whole URL");
     encoded = url + (sizeof SCHEME - 1);
-    /* Step 3: "the UTF-8 decoding of the percent-decoding of encodedScriptSource". The percent-decode is the
-       URL Standard's; the UTF-8 decode is the identity over this engine's byte strings, which are UTF-8. */
-    source = url_percent_decode(encoded, strlen(encoded), &n);
-    CHECK(source != NULL, "navigable: OOM percent-decoding a javascript: URL's script source");
+    /* Step 3: "Let scriptSource be the UTF-8 decoding of the percent-decoding of encodedScriptSource."
+       TWO ALGORITHMS, AND THE SECOND IS NOT A FORMALITY. URL §1.3's percent-decode answers a BYTE SEQUENCE —
+       "let output be an empty byte sequence … append byte to output" — and `%XX` reaches every one of the 256,
+       so what comes back is not text and is not this engine's UTF-8. The decode is what makes it a string, and
+       the standard's own note beside percent-decode says why it cannot be skipped: "using anything but UTF-8
+       decode without BOM when input contains bytes that are not ASCII bytes might be insecure".
+       IT IS ENCODING §6's UTF-8 DECODE, NOT THE WITHOUT-BOM HOOK the rest of this tree runs. HTML links this
+       step at `#utf-8-decode`, whose first two steps are "let buffer be the result of peeking three bytes from
+       ioQueue … if buffer is 0xEF 0xBB 0xBF, then read three bytes from ioQueue" — and §6 says which callers
+       get which: "for decoding, UTF-8 decode is to be used by new formats. For identifiers or byte sequences
+       within a format or protocol, use UTF-8 decode without BOM". A script source is a format's text; a host
+       and a urlencoded name are identifiers within one, which is why url.c runs the other hook.
+       WHAT THIS ENGINE DID BEFORE, and it is not a rounding error: the percent-decoded bytes went to the
+       compiler as they came, so `javascript:%FF` handed the lexer a byte no UTF-8 sequence contains and the
+       page got a SyntaxError from quickjs's `next_token` ("invalid UTF-8 sequence") where the "replacement"
+       error mode puts one U+FFFD in the source and the program RUNS; and `javascript:x='%ED%A0%80'` went the
+       other way, compiling a lone surrogate — which that decoder accepts and this one replaces — into a string
+       no browser's decoder can produce. A `javascript:` URL is a sink whose breakout is constructed from the
+       bytes that survive to it, so a decode that disagrees with the browser's mis-places every one of them. */
+    {
+        size_t rawn = 0;
+        char *raw = url_percent_decode(encoded, strlen(encoded), &rawn);
+        source = encoding_utf8_decode(raw, rawn, &n);
+        free(raw);
+    }
+    /* AND THE RESULT IS A SCALAR VALUE STRING, which is what the error mode buys and is asserted rather than
+       assumed: "replacement" answers U+FFFD for every malformed sequence, so nothing ill-formed can leave that
+       hook. It is asserted HERE because of what this source reaches — a lexer that rejects an ill-formed byte
+       outright (quickjs.c's `invalid_utf8`), so the day the two disagree the page loses its program and the
+       only symptom is a SyntaxError the browser does not have. */
+    DCHECK(encoding_is_scalar_value_string(source, n),
+           "the UTF-8 decode of a javascript: URL's script source answered bytes that are not well-formed — "
+           "Encoding §6's hook runs its decoder in \"replacement\" error mode, which makes every malformed "
+           "sequence a U+FFFD, so this is the decoder contradicting its own error mode and what it reaches is "
+           "a compiler that refuses the byte rather than the program");
     DCHECK(strlen(source) == n,
-           "a javascript: URL's script source percent-decoded to bytes containing a U+0000, and the program "
-           "queue holds a NUL-terminated body — build the queue over a length so a source with a NUL in it "
-           "runs whole rather than truncated at it");
+           "a javascript: URL's script source decoded to a U+0000, and the program queue holds a NUL-terminated "
+           "body — build the queue over a length so a source with a NUL in it runs whole rather than truncated "
+           "at it");
     /* Steps 4-7: the classic script is created with the target navigable's active document's settings and API
        base URL — this document's, which is what makes this the same-navigable case the header names — and RUN.
        Its completion value decides step 9, and the scheduler is the only place that value exists (engine.h). */

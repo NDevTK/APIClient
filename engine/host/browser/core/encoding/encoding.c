@@ -811,9 +811,25 @@ int encoding_buffer_source(JSContext *ctx, JSValueConst v, const uint8_t **pp, s
 
 /* ---- §6's HOOKS FOR STANDARDS, OVER BYTES -----------------------------------------------------------------
  *
- * A decoder INSTANCE is what the standard passes to "process a queue", and these two build one on the stack:
- * the hook runs a whole byte sequence to its end and keeps nothing between calls, which is the one shape the
+ * A decoder INSTANCE is what the standard passes to "process a queue", and these build one on the stack: the
+ * hook runs a whole byte sequence to its end and keeps nothing between calls, which is the one shape the
  * heap-allocated streaming decoder exists for and this does not need. */
+
+/* "To UTF-8 decode an I/O queue of bytes ioQueue given an optional I/O queue of scalar values output …: Let
+   buffer be the result of peeking three bytes from ioQueue, converted to a byte sequence. If buffer is
+   0xEF 0xBB 0xBF, then read three bytes from ioQueue. (Do nothing with those bytes.) Process a queue with an
+   instance of UTF-8's decoder, ioQueue, output, and "replacement". Return output."
+   PEEKING THREE BYTES OF A QUEUE WITH FEWER IN IT ANSWERS WHAT IS THERE, so a sequence shorter than the BOM
+   cannot be one — which is why the length test is part of the comparison and not a guard around it. Steps 3-4
+   are the hook below, called rather than repeated: two drives of the decoder are two places to disagree about
+   an overlong form, which is the whole reason §6 defines one decoder for every standard that asks. */
+char *encoding_utf8_decode(const char *p, size_t n, size_t *out_n)
+{
+    static const char BOM[3] = { (char)0xEF, (char)0xBB, (char)0xBF };
+
+    if (n >= sizeof BOM && memcmp(p, BOM, sizeof BOM) == 0) { p += sizeof BOM; n -= sizeof BOM; }
+    return encoding_utf8_decode_without_bom(p, n, out_n);
+}
 
 /* "To UTF-8 decode without BOM an I/O queue of bytes ioQueue given an optional I/O queue of scalar values
    output …: Process a queue with an instance of UTF-8's decoder, ioQueue, output, and "replacement". Return
