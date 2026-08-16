@@ -44,6 +44,8 @@
 #include "core/html/form_data.h"
 #include "core/html/html_iframe.h"
 #include "core/html/unhandled_rejection.h"
+#include "core/indexeddb/idb_key_range.h"
+#include "core/indexeddb/indexed_db.h"
 #include "core/loader/cookie_jar.h"
 #include "core/loader/module_loader.h"
 #include "core/platform.h"
@@ -100,6 +102,8 @@ static void d_fs_handle(JSContext *c, const PlatformAgent *a) { (void)a; fs_hand
 static void d_storage_manager(JSContext *c, const PlatformAgent *a) { (void)a; storage_manager_init(c); }
 static void d_fs_access(JSContext *c, const PlatformAgent *a) { (void)a; file_system_access_init(c); }
 static void d_file_picker(JSContext *c, const PlatformAgent *a) { (void)a; file_picker_init(c); }
+static void d_idb_key_range(JSContext *c, const PlatformAgent *a) { (void)a; idb_key_range_init(c); }
+static void d_indexed_db(JSContext *c, const PlatformAgent *a) { (void)a; indexed_db_init(c); }
 static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
 static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
 static void d_report_exception(JSContext *c, const PlatformAgent *a) { (void)a; report_exception_init(c); }
@@ -245,6 +249,17 @@ static const PlatformComponent PLATFORM[] = {
        installs in declaration order. */
     { "file_system_access",  d_fs_access,           NULL },
     { "file_picker",         d_file_picker,         NULL },
+    /* INDEXED DATABASE, in the standard's own dependency order and no further. §2.4's KEY is what §2.2's list
+       of records is sorted by, what §2.9's range is bounded by and what §2.10's cursor walks in, so it is the
+       first thing that standard can have; §4.7's IDBKeyRange is the interface over it, and §4.3's IDBFactory
+       is the door the rest of the standard will be reached through. Neither row has a document half: both
+       install per REALM (core/realm.h), because §3.7 gives every realm its own interface prototype and because
+       the one IDBFactory `indexedDB` answers with is `[SameObject]` per realm.
+       WHAT THE TWO ROWS DO NOT BUILD is honestly absent and says so where a page reaches it: there is no
+       database, no connection, no transaction and no request yet, so `indexedDB.open` is a TypeError naming
+       the member rather than a shape-only object that would report a store nothing wrote to. */
+    { "idb_key_range",       d_idb_key_range,       NULL },
+    { "indexed_db",          d_indexed_db,          NULL },
     { "event",               d_event,               i_event },
     /* Declared by the components that own the events they carry; the interface objects are this realm's. */
     { "message_event",       NULL,                  i_message_event },
@@ -356,6 +371,8 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "PromiseRejectionEvent", "unhandled_rejection" },
     { "PageRevealEvent",       "page_reveal" },
     { "AbortController",       "abort" },
+    { "IDBKeyRange",           "idb_key_range" },
+    { "indexedDB",             "indexed_db" },
     { "Observable",            "observable" },
 };
 static const int PLATFORM_WITNESS_N = (int)(sizeof PLATFORM_WITNESS / sizeof PLATFORM_WITNESS[0]);
