@@ -3827,13 +3827,17 @@ int main(int argc, char **argv) {
     /* THE PLATFORM'S OWN LIST, UNDONE — see main.c's teardown: one call, whatever this browser declared. */
     platform_agent_free();
 
-    rendering_free(ctx);
+    /* rendering, timer, message_port and event_target are ROWS on core/platform.h's release column now,
+       run by the platform_agent_free above. Each of them CLAIMED a slot in another component — §8.1.7's
+       timer step and §8.1.7.3's in-parallel half on the ONE frontier, HTML §8.1.7.2's handler-set hook and
+       §2.9's tree walk and activation behaviour in the events layer — and not one of those claims was ever
+       given back. Two of these three hosts also ran event_target_free BEFORE message_port_free, which is
+       the order of that pair exactly backwards; reverse declaration order is what decides it now. */
     page_reveal_free(ctx);
     media_query_list_free(ctx);
     viewport_free();
     visual_viewport_free();
     animation_frame_free(ctx);
-    timer_free(ctx);        /* §8.6's declaration; each global's map went with its realm */
     event_loop_free(ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
     /* §8.1.7.5's rejection list is a row on core/platform.h's release column now, run by the
        platform_agent_free above — see main.c's teardown for what having it here cost the host that did not. */
@@ -3843,9 +3847,7 @@ int main(int argc, char **argv) {
     /* THE WHOLE DOM GROUP — element_free's cascade, the <iframe> element and GEOMETRY INTERFACES §3/§4 — is a
        set of ROWS on core/platform.h's release column now, run by the platform_agent_free above. `document`
        stays: document_free releases a REALM's record, not the agent's. See main.c's teardown. */
-    event_target_free(ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
-    message_port_free(ctx);
     report_exception_free(ctx);
     event_free(ctx);
     headers_free(ctx);    /* Headers.prototype and the name it interned */

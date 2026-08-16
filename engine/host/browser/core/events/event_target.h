@@ -14,7 +14,11 @@ void event_target_init(JSContext *ctx);                          /* the private 
    Symbol — so every instance leaked it. It was invisible while only the ABI entry installed listeners, because
    nothing there runs the leak check; the moment the fixture harness installed the same components it ships
    with, JS_FreeRuntime's gc_obj_list assert named it. */
-void event_target_free(JSContext *ctx);
+/* IT TAKES THE RUNTIME, which is what an AGENT is — see core/platform.h's release column. Nothing it gives back
+   is a realm's: the per-realm prototype is held in that realm's class-proto slot and goes with the context, and
+   what is left is two Symbols, a marker object, a class id and five step ids, all of them registrations in the
+   runtime. It was a line in each of three hosts' hand-written teardowns for no reason but this signature. */
+void event_target_free(JSRuntime *rt);
 
 /* WHAT THE EVENTS LAYER HAS TO ASK THE TREE. Two questions, and both are the DOM's rather than this file's, so
    the DOM registers them rather than this file naming node.c — which is what let the streams gate build with a
@@ -65,6 +69,9 @@ typedef struct EventTargetTree {
     bool    (*is_shadow_including_inclusive_ancestor)(JSContext *ctx, JSValueConst a, JSValueConst b);
     JSValue (*shadow_host)(JSContext *ctx, JSValueConst shadow_root);
 } EventTargetTree;
+/* ONE CLAIMANT, AND NULL GIVES IT BACK. The slot is this component's state and the walk is another component's
+   code, so the claimant releases it at ITS release — which core/platform.c's reverse-declaration order runs
+   first, and event_target_free asserts. */
 void event_target_set_tree(const EventTargetTree *tree);
 
 /* DOM §4.8's RETARGETING ALGORITHM — "to retarget an object A against an object B", the operation that decides
@@ -200,7 +207,8 @@ bool event_target_has_any_listener(JSContext *ctx, JSValueConst target);
    asking flow. So `run` has a step's return contract — JS_STEP_YIELD to be re-entered, JS_STEP_DONE when it is
    finished — and its own two words of state on the dispatch machine, which is already a step machine and can
    therefore hold the suspension. A `void` hook could only ever reach a SYNCHRONOUS behaviour, which is the same
-   ceiling `window.open` had while it was a plain C body. */
+   ceiling `window.open` had while it was a plain C body.
+   ONE CLAIMANT, AND A NULL PAIR GIVES IT BACK — see event_target_set_tree above for why. */
 void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
                                  int (*run)(JSContext *ctx, JSValueConst el, JSValueConst ev,
                                             uint8_t *phase, uint32_t *req));

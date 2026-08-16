@@ -12,6 +12,10 @@
    whose declare column was NULL — and its body read `options.transfer` with JS_GetPropertyStr from C. */
 void structured_clone_init(JSContext *ctx);
 void structured_clone_install(JSContext *ctx, JSValueConst global);
+/* Agent teardown — core/platform.h's release column. It gives back §2.7.6's pool entry and the registry of
+   transferable interfaces below, which is the AGENT's: a count carried into a second agent is a platform that
+   reports interfaces registered by a runtime that no longer exists. */
+void structured_clone_free(JSRuntime *rt);
 
 /* StructuredDeserialize(StructuredSerialize(v)) — a deep, cycle-preserving copy in this realm. Every caller in
    the platform that says "a serialized copy" performs this: a MessagePort delivering a message, a window post,

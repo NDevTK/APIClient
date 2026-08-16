@@ -3,6 +3,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
@@ -809,6 +810,9 @@ void rendering_init(JSContext *ctx)
        reason: the scheduler may not depend on the browser half by name. A host that drives its own pump asks
        rendering_run_opportunity directly. */
     engine_set_rendering_hook(rendering_run_opportunity);
+    agent_state_flag("rendering", &g_ready, "the declaration latch");
+    agent_state_id("rendering", &g_stepid, "§8.1.7.3's update-the-rendering machine");
+    agent_state_id("rendering", &g_driver_slot, "the per-realm slot the task source's driver is held in");
 }
 
 void rendering_install_driver(JSContext *ctx)
@@ -824,10 +828,20 @@ void rendering_install_driver(JSContext *ctx)
     realm_value_set(ctx, g_driver_slot, fn);
 }
 
-void rendering_free(JSContext *ctx)
+void rendering_free(JSRuntime *rt)
 {
-    (void)ctx;
-    if (!g_ready) return;
+    (void)rt;
+    /* NOT `if (!g_ready) return;`. The release is the inverse of the DECLARATION and rides the same row of
+       core/platform.c's one list, whose declare pass is unconditional. */
+    DCHECK(g_ready, "§8.1.7.3's rendering machinery was released in an agent that never declared it");
     g_ready = 0;
+    /* §8.1.7.3'S IN-PARALLEL HALF IS GIVEN BACK BY THE COMPONENT THAT CLAIMED IT. The slot lives on the ONE
+       frontier (solver/engine.c) and names `rendering_run_opportunity` in this file — the defect
+       core/agent_state.h found in idb_transaction. solver_agent_free asserts it. */
+    engine_set_rendering_hook(NULL);
+    /* AND THE STEP ID, which this release used to keep. It names a registration in the runtime that is going
+       away with it, and a second agent's declaration would have re-registered over the top of a number issued
+       by a dead one — core/agent_state.h's fetch defect, asserted by the registry. */
+    g_stepid = -1;
     g_driver_slot = -1;   /* the drivers are the REALMS' — each goes with its context */
 }

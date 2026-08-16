@@ -649,6 +649,13 @@ bool html_element_is(JSValueConst v)
 
 void html_element_free(JSRuntime *rt)
 {
+    /* THE TWO SLOTS THIS FILE CLAIMED IN OTHER COMPONENTS, GIVEN BACK FIRST. §2.9's activation behaviour is
+       core/events/event_target.c's slot pointing at core/html/hyperlink.c, and the element resolver is
+       core/dom/node.c's slot pointing at this file — each is a callback INTO a component the cascade around
+       this line is tearing down, which is the defect core/agent_state.h found in idb_transaction. Both
+       receivers assert at their own release that the claim is gone. */
+    hyperlink_free();
+    node_set_element_resolver(NULL);
     dom_string_map_free(rt);
     declarative_shadow_free();
     html_form_free(rt);

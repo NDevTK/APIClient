@@ -40,7 +40,16 @@
    run with no wrapped nodes should say. */
 static void (*g_wrap_stats)(long *n, long *cap);
 
-void engine_set_wrap_stats(void (*fn)(long *n, long *cap)) { g_wrap_stats = fn; }
+/* ONE CLAIMANT, AND NULL GIVES IT BACK. The slot is the frontier's and the answer is the DOM's, so the DOM
+   layer releases it at its own release — which the whole platform runs before solver_agent_free — and the
+   assert down there is what makes that ordering a checked fact rather than a remembered one. */
+void engine_set_wrap_stats(void (*fn)(long *n, long *cap))
+{
+    DCHECK(fn == NULL || g_wrap_stats == NULL,
+           "a second component claimed the wrapper-census hook — there is one identity map, and the second "
+           "claim silently decides what every diagnostic line reports");
+    g_wrap_stats = fn;
+}
 
 
 /* FETCH-AWAIT parking: a host fetch registers its resolve capability on THE RUNNING FLOW. A flow that awaits it
@@ -174,7 +183,13 @@ void engine_set_document_done_hook(int (*fn)(JSContext *ctx)) { g_docdone_hook =
    it here would make the scheduler depend on the browser half. Asked only where this flow has nothing else to
    run, which is the one moment virtual time may move — see timer.h. */
 static int (*g_timer_hook)(JSContext *ctx);
-void engine_set_timer_hook(int (*fn)(JSContext *ctx)) { g_timer_hook = fn; }
+void engine_set_timer_hook(int (*fn)(JSContext *ctx))
+{
+    DCHECK(fn == NULL || g_timer_hook == NULL,
+           "a second component claimed §8.1.7's timer step — there is ONE event loop per agent, and this was "
+           "being re-claimed once per REALM until core/timing/timer.c moved the line into its declaration");
+    g_timer_hook = fn;
+}
 
 /* THE EVENT LOOP'S OTHER CLOCK-DRIVEN SOURCE — §8.1.7.3's in-parallel half, which queues an update-the-
    rendering task on the rendering task source when a navigable has a rendering opportunity. Registered by the
@@ -182,12 +197,24 @@ void engine_set_timer_hook(int (*fn)(JSContext *ctx)) { g_timer_hook = fn; }
    browser half. It is asked immediately BEFORE the timer step and yields to a timer that expires first, so the
    ONE virtual clock still runs its two sources in the order their moments fall. */
 static int (*g_rendering_hook)(JSContext *ctx);
-void engine_set_rendering_hook(int (*fn)(JSContext *ctx)) { g_rendering_hook = fn; }
+void engine_set_rendering_hook(int (*fn)(JSContext *ctx))
+{
+    DCHECK(fn == NULL || g_rendering_hook == NULL,
+           "a second component claimed §8.1.7.3's in-parallel half — there is one rendering task source per "
+           "event loop, and the second claim silently decides every frame the first was queueing");
+    g_rendering_hook = fn;
+}
 
 /* THE END OF A MICROTASK CHECKPOINT — HTML §8.1.7.3, registered by the browser component that owns what HTML
    invokes there. See engine.h; the one caller today is Indexed Database §2.7.1's transaction cleanup. */
 static void (*g_checkpoint_hook)(JSContext *ctx);
-void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx)) { g_checkpoint_hook = fn; }
+void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx))
+{
+    DCHECK(fn == NULL || g_checkpoint_hook == NULL,
+           "a second component claimed the end-of-microtask-checkpoint step — HTML invokes ONE list there and "
+           "this slot holds one entry, so the second claim silently stops the first from running");
+    g_checkpoint_hook = fn;
+}
 
 /* Does this flow still hold a MICROTASK? The checkpoint is over exactly when it does not — a task on the queue
    is the NEXT turn of the event loop and not part of this checkpoint, which is the same distinction
@@ -3995,6 +4022,26 @@ void solver_agent_free(JSContext *ctx)
     DCHECK(ctx != NULL, "the solver's agent state was released against no realm — the frontier's flows hold "
                         "JSValues and its deltas hold the writes those flows made, so there is a realm they "
                         "belong to and a release with none would drop them against nothing");
+    /* NOTHING OF THE BROWSER HALF IS STILL REGISTERED HERE, AND THAT IS AN ORDERING STATEMENT RATHER THAN A
+       TIDINESS ONE. Each of these slots holds a C function pointer INTO a browser component, and every browser
+       component was released by platform_agent_free, which runs BEFORE this call — so a slot still set is the
+       scheduler holding a callback into state that has already been given back. That is exactly the defect
+       core/agent_state.h records for Indexed Database §2.7.1's cleanup: found by reading, invisible to both of
+       JS_FreeRuntime's censuses, because a stale handle gave its reference back and then kept the number.
+       The claimant releases; this asserts that it did. */
+    DCHECK(g_timer_hook == NULL,
+           "§8.1.7's timer step was still registered when the solver's agent state was released — "
+           "core/timing/timer.c claimed it and gives it back at timer_free, which is a row on "
+           "core/platform.h's release column and therefore runs first");
+    DCHECK(g_rendering_hook == NULL,
+           "§8.1.7.3's in-parallel half was still registered when the solver's agent state was released — "
+           "core/rendering/rendering.c claimed it and gives it back at rendering_free");
+    DCHECK(g_checkpoint_hook == NULL,
+           "the end-of-microtask-checkpoint step was still registered when the solver's agent state was "
+           "released — core/indexeddb/idb_transaction.c claimed it and gives it back at idb_transaction_free");
+    DCHECK(g_wrap_stats == NULL,
+           "the wrapper-census hook was still registered when the solver's agent state was released — "
+           "core/dom/node.c claimed it and gives it back at node_free, under the `element` row's cascade");
     flow_registry_free(ctx);
     attr_shadow_free(ctx);
     solve_free();

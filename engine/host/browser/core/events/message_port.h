@@ -9,7 +9,11 @@ void message_port_init(JSContext *ctx);
 /* §9.4.2/§9.4.3's two interface prototype objects for ONE realm — declared into core/realm.h's list. */
 void message_port_install_protos(JSContext *ctx);
 void message_port_install(JSContext *ctx, JSValueConst global);
-void message_port_free(JSContext *ctx);
+/* Agent teardown — core/platform.h's release column. It takes the RUNTIME because everything it gives back is
+   the agent's: two class ids, three pool entries, the delivery callee, the live-port table, and HTML §8.1.7.2's
+   handler-set hook, which this component claimed in core/events/event_target.c and must release before that
+   component does. The per-realm prototypes go with their contexts. */
+void message_port_free(JSRuntime *rt);
 
 /* IS THIS A MessagePort? MessageEvent's `source` union and its `sequence<MessagePort> ports` both brand-test,
    and a transfer list has to recognise one before it can refuse or move it. */

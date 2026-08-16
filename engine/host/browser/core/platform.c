@@ -266,6 +266,35 @@ static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
    `document` is NOT here, and the reason is the rule this column is stated by: document_free reads
    `doc_of(ctx)` and clears the realm's own opaque, so what it releases is a REALM's record and not the agent's.
    A row that wanted a JSContext is a per-realm component in the wrong column. */
+/* THE FOURTH THING A COMPONENT CAN HOLD FOR AN AGENT: A SLOT IN ANOTHER COMPONENT. These five were on no
+ * column at all, and the reason was the same signature that kept the DOM group off it — each `_free` took a
+ * JSContext, so it could not be a row, so it stayed a line in three hosts' hand-written teardowns. Not one of
+ * them releases anything a REALM owns: every prototype they build is in that realm's class-proto slot and goes
+ * with the context, and what is left over is class ids, step ids, interned atoms, private Symbols and — the
+ * part no detector could see — CLAIMS, in both directions: a slot one of them holds for somebody else, or a
+ * slot it took in somebody else.
+ *
+ * A CLAIM IS AGENT STATE WHOSE STORAGE IS IN THE OTHER COMPONENT, so it is released by the CLAIMANT and
+ * asserted by the HOLDER. `timer` and `rendering` CLAIM: §8.1.7's timer step and §8.1.7.3's in-parallel half
+ * are slots on the ONE frontier (solver/engine.c, released after the whole platform), and neither was ever
+ * given back — the timer's was not even claimed once, it was re-claimed by every REALM, out of the
+ * per-document install. `event_target` HOLDS four: §2.9's tree walk (core/dom/node.c), §2.9's activation
+ * predicate and behaviour (core/html/hyperlink.c) and HTML §8.1.7.2's handler-set hook
+ * (core/events/message_port.c), and not one of those three claimants released. `structured_clone` holds the
+ * transferable registry, which is one row and a count nothing ever reset. Every one of them is the defect
+ * core/agent_state.h found in Indexed Database §2.7.1's cleanup, and every one is invisible to both of
+ * JS_FreeRuntime's censuses for the reason that file gives.
+ *
+ * REVERSE DECLARATION ORDER IS WHAT MAKES IT WORK, and it works because the claims run the same way as the
+ * values: `element` (whose cascade reaches node.c and hyperlink.c) and `message_port` are both declared AFTER
+ * `event_target`, so all three claims on that component are given back before it is released and its own
+ * asserts are what say so. The hand-written lists had `event_target_free` BEFORE `message_port_free` in two of
+ * the three hosts, which is that order exactly backwards. */
+static void r_event_target(JSRuntime *rt) { event_target_free(rt); }
+static void r_message_port(JSRuntime *rt) { message_port_free(rt); }
+static void r_timer(JSRuntime *rt) { timer_free(rt); }
+static void r_structured_clone(JSRuntime *rt) { structured_clone_free(rt); }
+static void r_rendering(JSRuntime *rt) { rendering_free(rt); }
 static void r_element(JSRuntime *rt) { element_free(rt); }
 static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
 static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
@@ -345,7 +374,7 @@ static const PlatformComponent PLATFORM[] = {
     { "encoding",            d_encoding,            i_encoding },
     { "text_stream",         d_text_stream,         i_text_stream },
     /* §2.7 before §7.2.5, and its per-document half is inside window_install for the reason above. */
-    { "event_target",        d_event_target,        NULL },
+    { "event_target",        d_event_target,        NULL,        r_event_target },
     /* HTML §7.2.6.5's NavigationHistoryEntry, whose prototype chains to §2.7's and whose CLASS is what
        §7.2.7.1's `required NavigationHistoryEntry from` brands against — so it is declared before `event`,
        which is where every Event subclass including that one is declared. */
@@ -419,7 +448,7 @@ static const PlatformComponent PLATFORM[] = {
     { "message_event",       NULL,                  i_message_event },
     { "error_event",         NULL,                  i_error_event },
     { "report_exception",    d_report_exception,    NULL },
-    { "message_port",        d_message_port,        i_message_port },
+    { "message_port",        d_message_port,        i_message_port, r_message_port },
     { "xml_http_request",    d_xhr,                 i_xhr,       r_xhr },
     { "location",            d_location,            NULL },
     /* §7.4.1's state machine BEFORE §7.2.5's History, whose every member reads the record it builds. */
@@ -438,7 +467,7 @@ static const PlatformComponent PLATFORM[] = {
        last render opportunity time and the insertion order a source breaks its ties by are the LOOP's, and
        they are per-flow heap state, so the record has to exist before any flow can write one. */
     { "event_loop",          d_event_loop,          NULL },
-    { "timer",               d_timer,               i_timer },
+    { "timer",               d_timer,               i_timer,     r_timer },
     { "window_proxy",        d_window_proxy,        NULL },
     { "remote_object",       d_remote_object,       NULL },
     /* The PEER's half of the same seam: what this agent does when it is ASKED to perform one. Its per-realm
@@ -448,7 +477,7 @@ static const PlatformComponent PLATFORM[] = {
     /* AFTER window_proxy: §9.4.4's `postMessage` is installed on the WindowProxy PROTOTYPE. */
     { "window_message",      d_window_message,      i_window_message, r_window_message },
     { "broadcast_channel",   d_broadcast_channel,   i_broadcast_channel, r_broadcast_channel },
-    { "structured_clone",    d_structured_clone,    i_structured_clone },
+    { "structured_clone",    d_structured_clone,    i_structured_clone, r_structured_clone },
     { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection, r_unhandled_rejection },
     /* §8.9's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
     { "animation_frame",     d_animation_frame,     i_animation_frame },
@@ -457,7 +486,7 @@ static const PlatformComponent PLATFORM[] = {
     { "visual_viewport",     d_visual_viewport,     NULL },
     { "media_query_list",    d_media_query_list,    i_media_query_list },
     /* AFTER the three whose algorithms update-the-rendering's steps 8 and 10 are. */
-    { "rendering",           d_rendering,           NULL },
+    { "rendering",           d_rendering,           NULL,        r_rendering },
     { "fetch",               d_fetch,               i_fetch,     r_fetch },
     { "abort",               d_abort,               i_abort },
     { "observable",          d_observable,          i_observable },

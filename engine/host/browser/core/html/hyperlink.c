@@ -234,6 +234,20 @@ void hyperlink_declare(JSContext *ctx)
     event_target_set_activation(link_has_activation, link_run_activation);
 }
 
+void hyperlink_free(void)
+{
+    int i;
+
+    DCHECK(g_hl_tostring >= 0, "§4.6.3 was released in an agent that never declared it");
+    /* §2.9's ACTIVATION BEHAVIOUR IS GIVEN BACK BY WHOEVER CLAIMED IT, which is this file. The two pointers
+       live in core/events/event_target.c and point at code in THIS one, so a release that kept them would
+       leave the events layer holding a callback into a component the DOM group's cascade has already torn
+       down — the shape core/agent_state.h found in idb_transaction. event_target_free asserts it. */
+    event_target_set_activation(NULL, NULL);
+    for (i = 0; i < HL_N; i++) g_hl_set[i] = -1;
+    g_hl_tostring = -1;
+}
+
 void hyperlink_install(JSContext *ctx, JSValueConst proto)
 {
     int i;

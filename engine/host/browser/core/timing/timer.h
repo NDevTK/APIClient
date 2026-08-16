@@ -10,9 +10,11 @@
 void timer_init(JSContext *ctx);
 
 void timer_install(JSContext *ctx, JSValueConst global);
-/* Agent teardown: the interned keys and the declaration. Each global's MAP goes with its realm, and each
-   flow's entries go with the COW delta that holds them — there is no agent-wide list left to drop. */
-void timer_free(JSContext *ctx);
+/* Agent teardown — core/platform.h's release column: the interned keys, the realm slot, the host edge and
+   §8.1.7's timer step this component claimed on the ONE frontier. Each global's MAP goes with its realm, and
+   each flow's entries go with the COW delta that holds them — there is no agent-wide list left to drop, which
+   is why it takes the RUNTIME. */
+void timer_free(JSRuntime *rt);
 
 /* HTML §7.5.9 step 18's "clear window's map of active timers" — the unloading document's global, and only
    that one. It is a per-global map (§8.6), so clearing one document's takes nothing from a same-origin popup's.

@@ -248,7 +248,18 @@ static JSValue js_node_child_op(JSContext *ctx, JSValueConst this_val, int argc,
 /* WHICH HTML INTERFACE AN ELEMENT WEARS — the HTML layer's answer, and it takes a REALM because the prototype
    it names is that realm's. OWNED, like every other per-realm prototype read. */
 static JSValue (*g_element_resolver)(JSContext *ctx, lxb_dom_element_t *el);
-void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el)) { g_element_resolver = fn; }
+void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *el))
+{
+    /* ONE CLAIMANT, AND NULL GIVES IT BACK. The slot is this file's and the answer is the HTML layer's, so
+       html_element_free releases it and node_free asserts that it did — a resolver left pointing into a
+       component the cascade has already torn down is the defect core/agent_state.h found in idb_transaction. */
+    DCHECK(fn == NULL || g_element_resolver == NULL,
+           "a second component claimed the element-interface resolver — there is one answer per element, and "
+           "the second claim silently decides the prototype of every wrapper the first was building");
+    DCHECK(fn != NULL || g_element_resolver != NULL,
+           "the element-interface resolver was released by a component that never registered one");
+    g_element_resolver = fn;
+}
 
 /* THE TREE HOOK IS INSTALLED INTO THE CHOKEPOINT, not called from each mutation site, and the difference is a
    bug this file had: `element_on_inserted` was invoked from appendChild and NOWHERE else, so an element that
@@ -3225,6 +3236,20 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global)
 void node_free(JSRuntime *rt)
 {
     int i;
+    /* THE THREE SLOTS THIS FILE CLAIMED IN OTHER COMPONENTS, GIVEN BACK. Each is a C function pointer that
+       another component holds and that names code in THIS one, so a release that kept it would leave the
+       solver and the events layer calling into a DOM group the cascade above has already torn down — the
+       defect core/agent_state.h found in idb_transaction, three more times. The claimant releases, the
+       receiver asserts; core/platform.c's reverse-declaration order is what runs `element` before
+       `event_target`, and solver_agent_free runs after the whole platform. */
+    dom_cow_set_tree_hook(NULL);
+    event_target_set_tree(NULL);
+    engine_set_wrap_stats(NULL);
+    DCHECK(g_element_resolver == NULL,
+           "the element-interface resolver was still registered when the node layer was released — "
+           "core/html/html_element.c claimed it and gives it back at html_element_free, which the DOM group's "
+           "own cascade runs first");
+    g_tree_hook_n = 0;
     for (i = 0; i < g_wrap_cap; i++)
         if (g_wraps[i].n)
             JS_FreeValueRT(rt, g_wraps[i].obj);

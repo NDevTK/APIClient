@@ -20,6 +20,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_slots.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
@@ -55,6 +56,10 @@ static int (*g_run_activation)(JSContext *ctx, JSValueConst el, JSValueConst ev,
    event-handler section below. Declared here because event_target_init mints them. */
 static JSValue g_handler_key;
 static JSValue g_handler_marker;
+/* §9.4.2's handler-set hook — see event_target_set_handler_hook, far below, for what it is FOR. It is DEFINED
+   here, beside the other three slots another component claims, because event_target_init declares all four to
+   core/agent_state.h and a declaration needs the address. */
+static void (*g_handler_set_hook)(JSContext *ctx, JSValueConst target, const char *name);
 /* The DISPATCH_PAIR step declaration — the one door a C caller has into the §2.9 machine. The FUNCTION OBJECT
    is minted per fire, in the FIRING REALM, and is never installed anywhere the page can reach: a C function
    runs in the realm that DEFINED it (js_call_c_function does `ctx = p->u.cfunc.realm`), so one object held in a
@@ -64,6 +69,10 @@ static int g_dispatch_pair_stepid = -1;
 /* The ids JS_RegisterStepDef handed this runtime for add/removeEventListener. `type` is a Web IDL DOMString,
    so it is ToString on whatever the page passed and cannot be a JS_ToCString from C. */
 static int g_add_stepid = -1, g_remove_stepid = -1, g_dispatch_stepid = -1;
+/* §2.9's SYNTHETIC CLICK, whose declaration is beside its own step def far below. The ID is here with the
+   other four because event_target_init declares all five to core/agent_state.h and the release gives all five
+   back, and a slot named in one place and defined in another is how one of them came to be left set. */
+static int g_click_stepid = -1;
 /* §2.7's INTERFACE PROTOTYPE OBJECT. addEventListener, removeEventListener and dispatchEvent live HERE and
    nowhere else: every interface that inherits EventTarget — Node, AbortSignal, MessagePort, BroadcastChannel,
    Window — reaches them by CHAINING to it. They used to be installed onto each of those prototypes in turn,
@@ -93,10 +102,14 @@ void event_target_init(JSContext *ctx)
     CHECK(!JS_IsException(g_handler_key) && !JS_IsException(g_handler_marker),
           "the event-handler key or marker allocation failed");
     g_ready = 1;
-    if (g_add_stepid < 0) {
+    {
         /* (DOMString type, EventListener? callback, optional (AddEventListenerOptions or boolean) options) —
            removeEventListener's third is (EventListenerOptions or boolean), which is the same union with only
-           `capture` in it, and reading a member the IDL does not declare there simply never happens. */
+           `capture` in it, and reading a member the IDL does not declare there simply never happens.
+           NOT `if (g_add_stepid < 0)`. The test could only ever be true, because the assert at the top of this
+           function says this declaration happens once per agent — and what it could DO was hand a SECOND agent
+           the ids a dead runtime issued, which is core/agent_state.h's fetch defect exactly. The release below
+           gives them back and the registry asserts that it did. */
         static const IdlArgType ADD_ARGS[3] = { IDL_DOMSTRING, IDL_ANY, IDL_DICT_OR_BOOL_FIRST };
         static const IdlDictMember ADD_OPTS[] = {   /* `capture` FIRST: it is what the bare boolean means */
             { "capture", IDL_BOOLEAN }, { "once", IDL_BOOLEAN },
@@ -128,6 +141,25 @@ void event_target_init(JSContext *ctx)
        install was hand-copied into each host's realm builder, which is the exact failure core/realm.h exists
        to end; a host cannot now forget it, because there is no line to forget. */
     realm_declare_intrinsic(event_target_install);
+    agent_state_flag("event_target", &g_ready, "the declaration latch");
+    agent_state_value("event_target", &g_key, "§2.7's listener-map key");
+    agent_state_value("event_target", &g_handler_key, "HTML §8.1.7.2's handler-map key");
+    agent_state_value("event_target", &g_handler_marker, "HTML §8.1.7.2's handler placeholder in a listener list");
+    agent_state_class("event_target", &g_et_class, "§2.7's interface prototype slot and brand");
+    agent_state_id("event_target", &g_add_stepid, "§2.7's addEventListener machine");
+    agent_state_id("event_target", &g_remove_stepid, "§2.7's removeEventListener machine");
+    agent_state_id("event_target", &g_dispatch_stepid, "§2.7's dispatchEvent machine");
+    agent_state_id("event_target", &g_dispatch_pair_stepid, "§2.9's internal dispatch machine");
+    agent_state_id("event_target", &g_click_stepid, "§2.9's synthetic-click dispatch machine");
+    /* THE FOUR SLOTS OTHER COMPONENTS CLAIM — three claims, since §2.9's activation behaviour is a PAIR. Each
+       slot is this component's static and another component's obligation, so each is declared here, where the
+       state lives, and cleared by whoever claimed it. The release below asserts all four are back, which is
+       what puts the claimants BEFORE this row in core/platform.c's reverse-declaration order rather than
+       leaving that ordering to be remembered. */
+    agent_state_ptr("event_target", &g_tree, "§2.9's tree walk, claimed by core/dom/node.c");
+    agent_state_ptr("event_target", &g_has_activation, "§2.9's activation predicate, claimed by core/html/hyperlink.c");
+    agent_state_ptr("event_target", &g_run_activation, "§2.9's activation behaviour, claimed by core/html/hyperlink.c");
+    agent_state_ptr("event_target", &g_handler_set_hook, "§9.4.2's handler-set hook, claimed by core/events/message_port.c");
 }
 
 /* §2.7's prototype FOR THIS REALM. Owned — the caller frees. */
@@ -203,6 +235,17 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global)
 
 void event_target_set_tree(const EventTargetTree *tree)
 {
+    /* NULL IS THE RELEASE, and it is the same call because the slot has one owner: the component that
+       registered the walk gives it back at its own release, which must run BEFORE this one — see the assert in
+       event_target_free, which is what makes that ordering a checked fact rather than a remembered one. */
+    if (tree == NULL) {
+        DCHECK(g_tree != NULL, "§2.9's tree walk was released by a component that never registered one");
+        g_tree = NULL;
+        return;
+    }
+    DCHECK(g_tree == NULL,
+           "a second component registered §2.9's tree walk — there is ONE tree, and the second registration "
+           "silently decides every propagation path the first was answering");
     DCHECK(tree != NULL && tree->get_parent != NULL && tree->default_passive_target != NULL &&
            tree->root != NULL && tree->shadow_root_mode != NULL && tree->is_window != NULL &&
            tree->is_slot != NULL && tree->is_assigned_slottable != NULL &&
@@ -221,20 +264,50 @@ void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
     DCHECK((has != NULL) == (run != NULL),
            "half an activation behaviour was registered — a predicate with nothing to perform picks an "
            "activation target the dispatch then cannot run, and a performer with no predicate is never picked");
+    /* ONE CLAIMANT, AND NULL IS THE RELEASE — see event_target_set_tree for why the two are one call. */
+    DCHECK(has == NULL || g_has_activation == NULL,
+           "a second component registered §2.9's activation behaviour — there is one pair, and the second "
+           "claim silently decides what every activation target does");
+    DCHECK(has != NULL || g_has_activation != NULL,
+           "§2.9's activation behaviour was released by a component that never registered one");
     g_has_activation = has;
     g_run_activation = run;
 }
 
-void event_target_free(JSContext *ctx)
+void event_target_free(JSRuntime *rt)
 {
-    if (!g_ready)
-        return;
-    JS_FreeValue(ctx, g_key);
-    JS_FreeValue(ctx, g_handler_key);
-    JS_FreeValue(ctx, g_handler_marker);
+    /* NOT `if (!g_ready) return;`. The release is the inverse of the DECLARATION and rides the same row of
+       core/platform.c's one list, whose declare pass is unconditional and whose table asserts that a release
+       row has a declare — so a release reaching here undeclared is a host tearing this component down with
+       something that is not the platform's list. */
+    DCHECK(g_ready, "§2.7's event machinery was released in an agent that never declared it");
+    /* THE FOUR SLOTS OTHER COMPONENTS CLAIM ARE EMPTY BY NOW, AND THAT IS AN ORDERING STATEMENT. Each
+       claimant holds a C function pointer INTO its own component; this row is about to give back the state
+       those functions read, so a claimant still holding one is a component released AFTER the thing it points
+       into. core/platform.c's reverse-declaration order is what puts node/hyperlink/message_port first, and
+       this is where that order stops being something a reader has to reconstruct. */
+    DCHECK(g_tree == NULL,
+           "§2.9's tree walk was still registered when the event machinery was released — core/dom/node.c "
+           "claimed it and must give it back at node_free, which reverse-declaration order runs first");
+    DCHECK(g_has_activation == NULL && g_run_activation == NULL,
+           "§2.9's activation behaviour was still registered when the event machinery was released — "
+           "core/html/hyperlink.c claimed it and must give it back at hyperlink_free");
+    DCHECK(g_handler_set_hook == NULL,
+           "HTML §8.1.7.2's handler-set hook was still registered when the event machinery was released — "
+           "core/events/message_port.c claimed it and must give it back at message_port_free");
+    JS_FreeValueRT(rt, g_key);
+    JS_FreeValueRT(rt, g_handler_key);
+    JS_FreeValueRT(rt, g_handler_marker);
     /* THE PROTOTYPE IS NOT RELEASED HERE: each realm's is held by that realm's class-proto slot and goes with
        the realm. Neither is the dispatcher — there is no lasting one to hold. */
     g_key = g_handler_key = g_handler_marker = JS_UNDEFINED;
+    /* THE IDS THIS AGENT WAS ISSUED, GIVEN BACK. A step id and a class id name a registration in the runtime
+       that is going away with them; kept, they are what a SECOND agent's lazy `if (id < 0)` reads to decide it
+       need not register again — core/agent_state.h's fetch defect, and the registry below asserts it. */
+    g_et_class = 0;
+    g_add_stepid = g_remove_stepid = g_dispatch_stepid = -1;
+    g_dispatch_pair_stepid = -1;
+    g_click_stepid = -1;
     g_ready = 0;
 }
 
@@ -761,11 +834,15 @@ static JSValue js_handler_get(JSContext *ctx, JSValueConst this_val, int magic)
    MessagePort also STARTS the port, which is why a page that assigns onmessage never calls start() and a page
    that only uses addEventListener must. A general side-effect mechanism for a single member would be more
    machinery than the rule; instead the interested component registers here and decides for itself, by name and
-   by its own brand test, which keeps this file from knowing what a MessagePort is. */
-static void (*g_handler_set_hook)(JSContext *ctx, JSValueConst target, const char *name);
-
+   by its own brand test, which keeps this file from knowing what a MessagePort is. The slot itself is up with
+   the other three another component claims, because event_target_init declares it as agent state. */
 void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueConst target, const char *name))
 {
+    /* ONE CLAIMANT. A second component setting this would replace the first with nothing anywhere recording
+       that §9.4.2's port-start step had stopped running, which is a member that silently does half its job. */
+    DCHECK(after_set == NULL || g_handler_set_hook == NULL,
+           "a second component claimed HTML §8.1.7.2's handler-set hook — there is ONE, and the second claim "
+           "silently replaces the first");
     g_handler_set_hook = after_set;
 }
 
@@ -1817,7 +1894,6 @@ static const JSTrampStepDef js_click_def = {
     sizeof(JSDispatchState), js_dispatch_step, js_dispatch_fini, CLICK_SYNTH, .catches_abrupt = 1, .visit = js_dispatch_visit,
     .algorithm = "DOM §2.9 dispatch", .steps = DISPATCH_STEPS
 };
-static int g_click_stepid = -1;
 
 void event_target_install_click(JSContext *ctx, JSValueConst target)
 {

@@ -26,6 +26,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/structured_clone.h"
@@ -583,8 +584,10 @@ void message_port_init(JSContext *ctx)
     JSClassDef cd = { "MessageChannel" };
     JSRuntime *rt = JS_GetRuntime(ctx);
 
-    DCHECK(g_mp_rt == NULL || g_mp_rt == rt, "MessagePort was installed into a second runtime");
-    if (g_mp_rt == rt) return;
+    /* NOT `if (g_mp_rt == rt) return;`. This component has exactly ONE declaration site — core/platform.c's
+       row — so the test could never be true, and what it could do was hand a second agent the class ids, the
+       pool entries and the delivery callee a dead runtime issued. See core/agent_state.h. */
+    DCHECK(g_mp_rt == NULL, "message_port_init ran twice — §9.4.2's classes are declared once per AGENT");
     g_mp_rt = rt;
     JS_NewClassID(rt, &g_port_class);
     JS_NewClass(rt, g_port_class, &pd);
@@ -604,8 +607,19 @@ void message_port_init(JSContext *ctx)
     g_deliver_fn = JS_NewCFunction(ctx, js_port_deliver, "", 1);
     CHECK(JS_IsFunction(ctx, g_deliver_fn), "the port delivery task's callee could not be allocated");
     event_target_set_handler_hook(port_handler_set);
-    /* §9.4.2's interface is [Transferable], and this is where it says so. */
+    /* §9.4.2's interface is [Transferable], and this is where it says so. The registry is
+       core/structured_clone.c's own state and that component releases it whole — a row is a pointer to the
+       `static const` above and this file allocated nothing. */
     structured_register_transferable(&PORT_TRANSFERABLE);
+    agent_state_ptr("message_port", &g_mp_rt, "the runtime §9.4.2's classes were declared in, and the latch");
+    agent_state_class("message_port", &g_port_class, "§9.4.2's MessagePort class");
+    agent_state_class("message_port", &g_chan_class, "§9.4.3's MessageChannel class");
+    agent_state_value("message_port", &g_deliver_fn, "the queued port delivery task's callee");
+    agent_state_id("message_port", &g_chan_ctor_stepid, "§9.4.3's constructor machine");
+    agent_state_id("message_port", &g_id_post, "§9.4.2's postMessage declaration");
+    agent_state_id("message_port", &g_id_start, "§9.4.2's start declaration");
+    agent_state_id("message_port", &g_id_close, "§9.4.2's close declaration");
+    agent_state_ptr("message_port", &g_ports, "the live-port table §7.5.10 step 4 counts");
 }
 
 /* §9.4.2's AND §9.4.3's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. `postMessage` is the member that makes
@@ -657,12 +671,25 @@ void message_port_install(JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, chan_p);
 }
 
-void message_port_free(JSContext *ctx)
+void message_port_free(JSRuntime *rt)
 {
-    if (!g_mp_rt) return;
-    JS_FreeValue(ctx, g_deliver_fn);
+    /* NOT `if (!g_mp_rt) return;`. The release is the inverse of the DECLARATION and rides the same row of
+       core/platform.c's one list, whose declare pass is unconditional and whose table asserts that a release
+       row has a declare. */
+    DCHECK(g_mp_rt == rt, "§9.4.2's port machinery was released against a runtime that is not the one it "
+                          "declared in — every value below would have its reference subtracted from a runtime "
+                          "that never took it");
+    /* §8.1.7.2'S HANDLER-SET HOOK IS GIVEN BACK BY THE COMPONENT THAT CLAIMED IT, which is this one. The slot
+       is core/events/event_target.c's and it names `port_handler_set` in THIS file, so a release that kept it
+       would leave the events layer calling into a component whose classes and delivery callee are gone — the
+       defect core/agent_state.h found in idb_transaction. event_target_free asserts it, and reverse
+       declaration order is what runs this row first. */
+    event_target_set_handler_hook(NULL);
+    JS_FreeValueRT(rt, g_deliver_fn);
     g_deliver_fn = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
     g_mp_rt = NULL;
+    g_port_class = g_chan_class = 0;
+    g_id_post = g_id_start = g_id_close = -1;
     g_chan_ctor_stepid = -1;
     /* THE LIST GOES WITH THE AGENT, and it must be EMPTY by the time it does: every entry names a PortData the
        collector has not finalized, so a non-empty list here is a port the runtime teardown is about to leak. */

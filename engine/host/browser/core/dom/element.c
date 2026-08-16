@@ -2312,6 +2312,13 @@ void element_free(JSRuntime *rt)
            "every atom the cascade below gives back would have its reference subtracted from a runtime that "
            "never took it, and JS_FreeValueRT reports nothing at all when it is the wrong one");
     g_element_rt = NULL;
+    /* THE TWO DOM-WRITE HOOKS THIS FILE CLAIMED, GIVEN BACK BEFORE THE CASCADE RUNS. Both live in
+       solver/dom_cow.c and name code in this group — §4.3's character-data record and §4.9's attribute-changed
+       steps — so a release that kept them would leave the DOM chokepoint calling into components the lines
+       below are freeing. It is the defect core/agent_state.h found in idb_transaction, and it is here rather
+       than at the end because the very next call can run a finalizer that mutates the tree. */
+    dom_cow_set_cdata_hook(NULL);
+    dom_cow_set_attr_hook(NULL);
     /* THE TREE-STEPS RECORDER'S SCRATCH LIST. It is the chokepoint's own storage, refilled between members and
        emptied by every take, so anything still counted here is a mutation whose insertion steps no member ever
        drained — which the args machine already asserts at its own end and this states again at the teardown,

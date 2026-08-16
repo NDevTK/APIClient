@@ -59,6 +59,7 @@
  * injected <script> takes. It is not evaluated here: this component does not run page code. */
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/timing/timer.h"
 #include "core/timing/event_loop.h"
 #include "core/frame/navigable.h"
@@ -561,6 +562,19 @@ void timer_init(JSContext *ctx)
     g_slot = realm_value_declare(ctx, "§8.6 map of active timers");
     g_ready = 1;
     realm_declare_intrinsic(timer_install_map);
+    /* THE DRIVER MUST ASK, so it is told where to. Registered like the document's load-stage hook and for the
+       same reason: the scheduler may not depend on the browser half by name.
+       IT IS AN AGENT FACT AND WAS BEING STATED PER REALM. This line was in timer_install — the per-DOCUMENT
+       half — so every realm re-registered the same pointer with the ONE frontier, which is the shape
+       §per-realm-fact warns about read backwards: one fact, answered from as many places as there are
+       documents. There is one event loop per agent and one hook slot on it, so the claim is made once, here,
+       and given back once, below. */
+    engine_set_timer_hook(timer_run_due);
+    agent_state_flag("timer", &g_ready, "the declaration latch");
+    agent_state_atom("timer", &g_atom_map, "§8.6's map key on a global's timer record");
+    agent_state_atom("timer", &g_atom_next, "§8.6's next-handle key on that record");
+    agent_state_id("timer", &g_slot, "the per-realm slot §8.6's map is held in");
+    agent_state_ptr("timer", &g_script_sink, "the host edge a string-bodied setTimeout is queued through");
 }
 
 /* THE MAP IS BUILT AT REALM INSTALL, which puts a top-level realm's in the pre-boot BASELINE. Built lazily on
@@ -585,11 +599,6 @@ static void timer_install_map(JSContext *ctx)
 
 void timer_install(JSContext *ctx, JSValueConst global)
 {
-    /* THE DRIVER MUST ASK, so it is told where to. Registered like the document's load-stage hook and for the
-       same reason: the scheduler may not depend on the browser half by name. A host that registers nothing
-       simply never advances the clock, and a page whose work is behind a timer stalls visibly rather than
-       having that timer fire out of order. */
-    engine_set_timer_hook(timer_run_due);
     JSValue g = (JSValue)global;
     idl_install_method(ctx, g, "setTimeout", 2, g_id_set_timeout);
     idl_install_method(ctx, g, "setInterval", 2, g_id_set_interval);
@@ -599,15 +608,24 @@ void timer_install(JSContext *ctx, JSValueConst global)
                       JS_NewCFunction(ctx, js_queue_microtask, "queueMicrotask", 1));
 }
 
-void timer_free(JSContext *ctx)
+void timer_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
+    /* NOT `if (!g_ready) return;`. The release is the inverse of the DECLARATION and rides the same row of
+       core/platform.c's one list, whose declare pass is unconditional and whose table asserts a release row
+       has a declare. */
+    DCHECK(g_ready, "§8.6's timer machinery was released in an agent that never declared it");
     g_ready = 0;
+    /* §8.1.7'S TIMER STEP IS GIVEN BACK BY THE COMPONENT THAT CLAIMED IT. The slot lives on the ONE frontier
+       (solver/engine.c) and names `timer_run_due` in this file, so a release that kept it would leave the
+       scheduler asking a component whose interned keys and realm slot are gone — the defect
+       core/agent_state.h found in idb_transaction. solver_agent_free asserts it, and the whole platform is
+       released before the solver is. */
+    engine_set_timer_hook(NULL);
     /* The MAPS are the realms' — each is released with its context, which is what the per-realm slot array is
        for, and each flow's own entries go with the delta that holds them. What this owns is the two interned
        keys. */
-    JS_FreeAtom(ctx, g_atom_map);
-    JS_FreeAtom(ctx, g_atom_next);
+    JS_FreeAtomRT(rt, g_atom_map);
+    JS_FreeAtomRT(rt, g_atom_next);
     g_atom_map = g_atom_next = JS_ATOM_NULL;
     g_slot = -1;
     g_script_sink = NULL;

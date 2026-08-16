@@ -45,7 +45,10 @@ void rendering_init(JSContext *ctx);
 /* §3.7's per-realm half: this realm's driver function object, so a task queued for THIS navigable's window
    runs its steps in THAT realm. Declared into realm.h's one list. */
 void rendering_install_driver(JSContext *ctx);
-void rendering_free(JSContext *ctx);
+/* Agent teardown — core/platform.h's release column. It takes the RUNTIME because everything it gives back is
+   the agent's: §8.1.7.3's step id, the per-realm slot ID, and the in-parallel hook this component claimed on
+   the ONE frontier. Each realm's DRIVER goes with its context. */
+void rendering_free(JSRuntime *rt);
 
 /* THE IN-PARALLEL LOOP'S ONE STEP, asked by whoever drives the event loop and only when it has nothing else
    to run — the same moment, and for the same reason, that the timer source is asked (timer.h). Two task

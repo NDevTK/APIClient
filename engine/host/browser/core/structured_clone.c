@@ -35,6 +35,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/structured_clone.h"
 #include "solver/concolic.h"
@@ -308,8 +309,13 @@ void structured_register_transferable(const StructuredTransferable *t)
     int i;
     DCHECK(t != NULL && t->type && t->is && t->out && t->in,
            "a transferable was registered without its [[Type]] and all three of its steps");
+    /* NOT `if (g_transferable[i] == t) return;`. Each registrant registers from its own `_init`, which
+       core/platform.c runs once per agent, so the test could never be true — and what it could do was let a
+       SECOND agent inherit the first's rows, since this registry is reset by nothing but the release below. */
     for (i = 0; i < g_transferable_n; i++) {
-        if (g_transferable[i] == t) return;   /* one document, one registration */
+        DCHECK(g_transferable[i] != t,
+               "one transferable interface registered itself twice — its component declares once per agent, so "
+               "a second registration is a second declaration pass over a registry that was never given back");
         DCHECK(strcmp(g_transferable[i]->type, t->type) != 0,
                "two transferable interfaces registered under one [[Type]] — §2.7.8 chooses the receiving steps "
                "by that name, so a holder would be received by whichever of them the walk reached first");
@@ -615,6 +621,20 @@ void structured_clone_init(JSContext *ctx)
                                     (int)(sizeof CLONE_OPTS / sizeof CLONE_OPTS[0]),
                                     js_structured_clone, 0);
     idl_optional_from(1);   /* `structuredClone(value, optional StructuredSerializeOptions options = {})` */
+    agent_state_id("structured_clone", &g_id_clone, "§2.7.6's structuredClone declaration");
+    agent_state_flag("structured_clone", &g_transferable_n, "the platform's transferable-interface registry");
+}
+
+void structured_clone_free(JSRuntime *rt)
+{
+    (void)rt;
+    DCHECK(g_id_clone >= 0, "§2.7's serializer was released in an agent that never declared it");
+    /* THE REGISTRY IS THIS COMPONENT'S AND IT IS RELEASED HERE, not unregistered row by row by each registrant.
+       A row is a pointer to a `static const` the registrant never allocated, so there is nothing to give back
+       and no lifetime to get wrong — what is agent state is the COUNT, and a count carried into a second agent
+       is a platform that reports interfaces registered by a runtime that no longer exists. */
+    g_transferable_n = 0;
+    g_id_clone = -1;
 }
 
 void structured_clone_install(JSContext *ctx, JSValueConst global)

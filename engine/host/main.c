@@ -513,13 +513,17 @@ QJS_EXPORT void qjs_teardown(void)
     /* THE PLATFORM'S OWN LIST, UNDONE — every component's agent-lifetime release, in one call, so the next one
        to hold agent state is not a fourth copy of a list that has already drifted once. */
     platform_agent_free();
-    rendering_free(g_ctx);
+    /* rendering, timer, message_port and event_target are ROWS on core/platform.h's release column now,
+       run by the platform_agent_free above. Each of them CLAIMED a slot in another component — §8.1.7's
+       timer step and §8.1.7.3's in-parallel half on the ONE frontier, HTML §8.1.7.2's handler-set hook and
+       §2.9's tree walk and activation behaviour in the events layer — and not one of those claims was ever
+       given back. Two of these three hosts also ran event_target_free BEFORE message_port_free, which is
+       the order of that pair exactly backwards; reverse declaration order is what decides it now. */
     page_reveal_free(g_ctx);
     media_query_list_free(g_ctx);
     viewport_free();
     visual_viewport_free();
     animation_frame_free(g_ctx);
-    timer_free(g_ctx);        /* §8.6's declaration; each global's map went with its realm */
     event_loop_free(g_ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
     /* §8.1.7.5's rejection list is NOT freed here any more — it is a row on core/platform.h's release column,
        run by the platform_agent_free above. It was a line in this list and in nobody else's, and the host that
@@ -534,9 +538,7 @@ QJS_EXPORT void qjs_teardown(void)
        here. `document` stays, and stays FIRST, because document_free releases a REALM's record rather than the
        agent's: it reads `doc_of(ctx)` and clears this context's own opaque, which is the one thing that column
        cannot express. Every remaining line here is still a hand-copied teardown. */
-    event_target_free(g_ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */
-    message_port_free(g_ctx);
     report_exception_free(g_ctx);
     event_free(g_ctx);
     headers_free(g_ctx);    /* Headers.prototype and the name it interned */

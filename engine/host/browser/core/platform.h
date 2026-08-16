@@ -114,7 +114,24 @@ void platform_document_install(JSContext *ctx, JSValueConst global, const Platfo
  *
  * A RELEASE IS NOT A STEP MACHINE'S. It frees what a C static holds for the agent, which no `visit` names and
  * no JSContext frees — a per-realm value belongs in core/realm.h's slot store, which the runtime already frees
- * with the context, and a row that reaches for this column for one of those is answering the wrong question. */
+ * with the context, and a row that reaches for this column for one of those is answering the wrong question.
+ *
+ * A JSContext IN THE SIGNATURE IS NOT THE TEST. Read the wrong way round, the paragraph above says a component
+ * whose `_free` takes a JSContext belongs somewhere else — and that reading is what kept forty-odd components
+ * off this column while each of them held nothing but agent state. `event_target_free` took a ctx to drop three
+ * Symbols; `timer_free` took one to give back two atoms; every one of them says in its own comment that "the
+ * prototypes are the REALMS' — released with their contexts". The test is WHAT A RELEASE GIVES BACK, and the
+ * signature follows from it: JS_FreeValue is JS_FreeValueRT(ctx->rt, v), so a release that only drops values
+ * takes the runtime and becomes a row. `document` is the one component that genuinely fails the test — it reads
+ * `doc_of(ctx)` and clears the realm's own opaque — and it is the reason the paragraph exists, not a pattern.
+ *
+ * A COMPONENT CAN ALSO HOLD A SLOT IN ANOTHER COMPONENT, and that is the fourth thing this column is for. A
+ * hook, a tree walk, an activation behaviour, a census callback: the STORAGE is the other component's static
+ * and the CLAIM is this one's agent state, so the claimant gives it back at its own release and the holder
+ * asserts, at its own, that nothing is left pointing into it. That assert is what turns the order between the
+ * two into a checked fact — a claimant released after its holder is the scheduler-holding-a-freed-component
+ * defect core/agent_state.h records for Indexed Database §2.7.1, and reverse declaration order is what places
+ * them correctly, since a component that claims a slot in another one is declared after it. */
 void platform_agent_free(void);
 
 #endif
