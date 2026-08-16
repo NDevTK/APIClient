@@ -127,16 +127,15 @@ void engine_set_referenced(int referenced);
    qjs_step does; a one-call driver has no such caller, so a stall with nobody to answer it ended the run — and
    a flow that had issued a request stopped at that request, its continuation never reaching the reply. The
    provider fills what engine_pending_urls and engine_host_requests name, and answers how many entries it
-   filled.
-   IT IS CALLED AT EVERY SLICE BOUNDARY, not only on ENGINE_STEP_STALLED, and that is the SAME protocol the
-   extension's bridge speaks: main.c folds STALLED into YIELD deliberately, and the bridge pulls both registers
-   after every return. Paying only at a stall makes one flow's reply conditional on every OTHER flow in the
-   document also becoming blocked — the run-queue has to empty before the seam is reached at all — which is a
-   cross-flow coupling the scheduler forbids everywhere else, and which a document that forks faster than its
-   flows block never satisfies.
-   A 0 FILL IS AN ANSWER ONLY TO A STALL. At a quantum boundary there are runnable flows, so nothing to fill
-   means nothing was outstanding; at a stall it means nobody can supply what the frontier is parked on, and
-   that ends the run — the honest answer, with the surviving flows handed to the teardown as snapshots. */
+   filled; 0 at a stall ends the run, which is the honest answer to "nobody can supply this".
+   IT IS CALLED ONLY ON ENGINE_STEP_STALLED, AND THAT IS A KNOWN DEFECT rather than the design — the extension's
+   bridge pulls both registers after EVERY return (main.c folds STALLED into YIELD deliberately), so in the
+   product a blocked flow is answered at the next quantum, while here it is answered only once every OTHER flow
+   in the document has also blocked. That makes one flow's reply a function of its siblings' states, which is a
+   coupling the scheduler forbids everywhere else. Turning it into a per-slice payment is the fix and it is not
+   free: the attempt aborted the smoke fixture in the fetch delivery on a record with no §2.2.6 URL list, which
+   the drain's own assert now names at the entry rather than three frames later. run_scheduler carries the
+   sequence to follow. */
 void engine_set_provider(int (*provide)(JSContext *ctx));
 
 /* `recipes` is the PARKED RESIDUE the host stored for this bundle (';'-joined records — see solver/cold.h), or

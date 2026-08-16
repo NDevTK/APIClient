@@ -1068,6 +1068,34 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             DCHECK(JS_IsObject(pv) || JS_IsNull(pv),
                    "a fetch reply arrived as something other than the host's reply record — qjs_provide parses "
                    "the trusted zone's JSON, and a bare string here is a host still delivering only bytes");
+            /* AND IT IS A REPLY RECORD, ASKED HERE RATHER THAN THREE FRAMES LATER. `JS_IsObject` was the whole
+               of the shape test, and an object is exactly what the two WRONG values on this path also are — a
+               peer's `{body, csp}` navigation answer, a pending entry read for the wrong field. The delivery
+               machine then reads §2.2.6's URL list off it, finds nothing, and aborts in fetch.c with the record
+               in hand but NO WAY TO SAY WHICH ENTRY PRODUCED IT: not the URL, not the kind, not the flow. That
+               is what made a payment-schedule change read as a fetch bug.
+               `urlList` is the field to ask for because it is the one only the trusted zone can answer and the
+               one every producer of this record must therefore fill (fetch.h) — a record missing it was not
+               built by fetch_reply_new, whoever built it. Asked in a DEV block rather than inside the DCHECK's
+               condition, because the read allocates and a condition that is unevaluated in release may not own
+               a reference nothing frees. */
+#if APICLIENT_DEV
+            if (JS_IsObject(pv)) {
+                JSValue ul = JS_GetPropertyStr(ctx, pv, "urlList");
+                JSValue uv2 = pending_get(p, PEND_URL);
+                const char *u2 = JS_IsString(uv2) ? JS_ToCString(ctx, uv2) : NULL;
+                char why[512];
+                snprintf(why, sizeof why,
+                         "a fetch reply carrying no `urlList` is about to be delivered — the record on this "
+                         "entry was not built by fetch_reply_new, so some other writer reached a "
+                         "FLOW_PENDING_RESOLVE entry. url=%s kind=%d",
+                         u2 ? u2 : "(none)", kind);
+                DCHECK(JS_IsArray(ul), why);
+                if (u2) JS_FreeCString(ctx, u2);
+                JS_FreeValue(ctx, uv2);
+                JS_FreeValue(ctx, ul);
+            }
+#endif
             if (JS_CallAsFlow(ctx, resolve, pv) < 0) {
                 JSValue exc = JS_GetException(ctx);
                 JS_FreeValue(ctx, exc);   /* a rejected delivery is the page's to observe, not this drain's */
@@ -3072,49 +3100,59 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
        IndexedDB to have written the residue to, which is the extension's. */
     engine_sched_begin(ctx, bodies, srcs, n, forking, NULL);
     for (;;) {
-        int filled;
         r = engine_sched_step();
         if (r == ENGINE_STEP_DONE)
             break;
         /* THE HOST OWES A REPLY, so this is where it pays. Without this seam the loop had nowhere to answer a
            stall from and a request the trusted host must make simply ended the run: every flow that fetched
            stopped at its fetch, and its continuation — the part that reads the reply — never ran at all.
-           IT PAYS AT EVERY SLICE BOUNDARY, WHICH IS WHAT A SLICE BOUNDARY IS FOR, and paying only on STALLED —
-           which is what stood here — was a SECOND host policy beside the one this project ships. main.c folds
-           STALLED into YIELD deliberately ("the bridge speaks two values") and the extension's bridge pulls
-           qjs_pending and qjs_host_requests after EVERY return, so in the product a blocked flow is answered at
-           the next quantum. Here it was answered only once every OTHER flow in the document had also stopped:
-           the run-queue had to empty first, so flow A's reply was a function of flows B..Z's states, which is a
-           cross-flow coupling the scheduler forbids everywhere else. On a document that forks faster than its
-           flows block, that gate is not merely late — it is never reached. And "a host with nothing else to do
-           between quanta" is the whole reason this one may not defer: there is no other work for it to be
-           doing instead. */
-        filled = g_provider ? g_provider(ctx) : 0;
-        /* NOBODY CAN SUPPLY IT, so this driver stops driving — and STOPPING IS NOT THE SAME AS THE SESSION
-           ENDING, which is why the close is below rather than here. The frontier that remains is real (every
-           flow parked on a reply that never came), and it is handed to the teardown as SNAPSHOTS. The question
-           is unchanged and it is still asked only of a STALL: a slice that ended on its quantum still has
-           runnable flows, so a provider with nothing to fill THERE means nothing was outstanding, never that
-           nothing can be supplied. */
-        if (r == ENGINE_STEP_STALLED && filled == 0)
-            break;
-        /* AND THE PAYMENT WAS COMPLETE, asserted at the seam instead of inferred from a census line six minutes
-           later. This provider answers out of its OWN tables — a reply record it builds, a peer's answer it
-           stands in for — so unlike the extension's it has no asynchronous half and nothing it may legitimately
-           still owe once it has run. A record outstanding here is therefore one it was never handed or one it
-           walked past. `blocked` and `owed` cannot say which: they report the LEVEL of unanswered work, and a
-           frontier that keeps issuing requests reads identically whether the host is paying promptly or has
-           silently skipped a record. This says which, at the moment it happens, and it names the two registers
-           separately because they are two questions. */
-        DCHECK(!g_provider || *engine_host_requests() == '\0',
-               "the smoke host paid and a SYNCHRONOUS request is still outstanding — this provider answers "
-               "every record it is handed out of its own tables, so the flow blocked on this one is parked at "
-               "a call site nothing is going to resume, and its whole timeline is lost with nothing but a "
-               "`blocked` count to say which record it was");
-        DCHECK(!g_provider || *engine_pending_urls() == '\0',
-               "the smoke host paid and a reply is still owed — the same silence one register over: the flow "
-               "that issued this fetch keeps its snapshot and its continuation and is never handed the body, "
-               "so everything the page does behind that reply is missing from the run");
+           IT PAYS ONLY AT A STALL, AND THAT IS A KNOWN DEFECT WITH A KNOWN COST — read the paragraph below
+           before "fixing" it, because the obvious fix is the one that was tried and reverted.
+           The defect: a flow's reply is conditional on every OTHER flow in the document also becoming blocked,
+           since the run-queue must empty before a stall is reached at all. That is a cross-flow coupling the
+           scheduler forbids everywhere else, and main.c does NOT have it — the bridge folds STALLED into YIELD
+           and pulls qjs_pending and qjs_host_requests after every return, so in the product a blocked flow is
+           answered at the next quantum. This host is therefore the odd one out and it should not be.
+           THE FIX THAT IS NOT THE FIX: replacing this branch with an unconditional `g_provider(ctx)` per slice
+           makes the smoke fixture ABORT in the fetch delivery at its first replies —
+             fetch.c  "the host delivered a reply carrying no `urlList`"
+           — reached with `flows 1`, i.e. before the boot flow's first fork. The provider itself is not the
+           producer of that record: every reply it builds goes through fetch_reply_new with §2.2.6's list
+           (test_forced.c), and both registers are empty by the time it returns. So the record reaching the
+           delivery is one this file put on a RESOLVE entry, and the shape that can do that is a HOSTREQ answer
+           landing on a register the drain then walks — `pending_ready` answers YES for an ANSWERED HOSTREQ, and
+           at a stall that state cannot exist because the asking machine consumes its answer through
+           engine_host_take on the very next step, while at a quantum boundary nothing guarantees the asking
+           machine is the next thing to run. The drain's own assert (flow_drain_pending, strengthened below to
+           name the entry) is what will identify it; until it does, this stays a stall-only seam rather than a
+           change that leaves the fixture red for every agent.
+           WHAT MUST HAPPEN NEXT, in order: turn the seam on again, read the record the drain now names, and
+           fix the producer. This is not a bound and not a fallback — it is one host's payment schedule, and the
+           schedule is wrong. */
+        if (r == ENGINE_STEP_STALLED) {
+            /* NOBODY CAN SUPPLY IT, so this driver stops driving — and STOPPING IS NOT THE SAME AS THE SESSION
+               ENDING, which is why the close is below rather than here. The frontier that remains is real
+               (every flow parked on a reply that never came), and it is handed to the teardown as SNAPSHOTS. */
+            if (!g_provider || g_provider(ctx) == 0)
+                break;
+            /* AND THE PAYMENT WAS COMPLETE, asserted at the seam instead of inferred from a census line six
+               minutes later. This provider answers out of its OWN tables — a reply record it builds, a peer's
+               answer it stands in for — so unlike the extension's it has no asynchronous half and nothing it
+               may legitimately still owe once it has run. A record outstanding here is therefore one it was
+               never handed or one it walked past. `blocked` and `owed` cannot say which: they report the LEVEL
+               of unanswered work, and a frontier that keeps issuing requests reads identically whether the host
+               is paying promptly or has silently skipped a record. This says which, at the moment it happens,
+               and it names the two registers separately because they are two questions. */
+            DCHECK(*engine_host_requests() == '\0',
+                   "the smoke host paid and a SYNCHRONOUS request is still outstanding — this provider answers "
+                   "every record it is handed out of its own tables, so the flow blocked on this one is parked "
+                   "at a call site nothing is going to resume, and its whole timeline is lost with nothing but "
+                   "a `blocked` count to say which record it was");
+            DCHECK(*engine_pending_urls() == '\0',
+                   "the smoke host paid and a reply is still owed — the same silence one register over: the "
+                   "flow that issued this fetch keeps its snapshot and its continuation and is never handed the "
+                   "body, so everything the page does behind that reply is missing from the run");
+        }
         /* Either enough work has happened to be worth a line, or the SEARCH grew — a new candidate is the event
            that changes what the rest of the run will cost, so it is worth saying when it happens. */
         if (engine_work_done() >= next || solve_candidate_count() != last_cands) {
