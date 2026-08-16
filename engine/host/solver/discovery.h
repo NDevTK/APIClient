@@ -3,7 +3,7 @@
  * WHY IT IS THE ENGINE'S. CLAUDE.md §Attacker sources: "Active discovery is REQUIRED (lazy scripts + discovery
  * docs + Google API req2proto error-probes) — passive learning is too thin." It was `extension/lib/discovery.js`
  * (the candidate URL set) driven by `extension/lib/discovery-probe.js` (the fetch loop), and both were LOGIC in
- * the untrusted-adjacent host — `extension/jsaudit.mjs` step 1 names this file as what they become.
+ * the untrusted-adjacent host — `extension/jsaudit.mjs`'s row for them names this file as what they become.
  *
  * WHAT MADE THE MOVE POSSIBLE, AND WHY IT WAS BLOCKED UNTIL NOW. The engine's only fetch edge is the PER-FLOW
  * pending seam: a request is parked on the flow that made it, and `engine_provide` fills the register of the
@@ -37,7 +37,7 @@
  *
  * WHAT IS NOT HERE, BY NAME. The JS candidate set also carried API-KEY variants (`?key=…` and the
  * `X-Goog-Api-Key` header), because some documents only load for a caller that holds a key. The engine has no
- * key surface yet — keys are learned by `extension/lib/keys.js`, which is jsaudit step 3 (→ moat.c) — so those
+ * key surface yet — keys are learned by `extension/lib/keys.js`, still queued in jsaudit for moat.c — so those
  * candidates are not built here rather than being built from a key this file would have to invent. When keys.js
  * moves, the key-bearing candidates are minted from the engine's own learned keys, as more siblings.
  *

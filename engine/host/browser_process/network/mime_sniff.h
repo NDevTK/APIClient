@@ -16,9 +16,9 @@
  * and `_corbAllowsScript`, which asked THIS question about the same bytes on the wrong side of the boundary —
  * see network/corb.h. The paragraph here used to add that `discovery.js`'s classifier was "still on disk and
  * still called", because it answered a DIFFERENT question — is this reply a static asset to skip — "for which
- * this program serves no entry", and that it would leave with its caller at jsaudit step 2. THAT IS NO LONGER
- * TRUE AND THE SENTENCE IS DELETED RATHER THAN SOFTENED, which is the same rule the DFAIL below was removed
- * under. This program serves that entry now (network/resource_kind.c), the three JS functions are gone, and
+ * this program serves no entry", and that it would leave with its caller, `extension/lib/response-decode.js`.
+ * THAT IS NO LONGER TRUE AND THE SENTENCE IS DELETED RATHER THAN SOFTENED, which is the same rule the DFAIL
+ * below was removed under. This program serves that entry now (network/resource_kind.c), the three JS functions are gone, and
  * the reason the wait was unnecessary is worth recording: the objection was that there is no host→engine
  * COMPUTE edge for a JS caller to reach a moved callee through, and that is a fact about the RENDERER. The
  * browser process is a program the TRUSTED ZONE CALLS, so its caller awaits it and no edge is inverted.

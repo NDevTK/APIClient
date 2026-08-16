@@ -3,9 +3,15 @@
  *
  * WHY IT IS THE ENGINE'S. CLAUDE.md §Solver: "Learning from replies is the POINT, never suppressed... The
  * JS/JSON a server returns is the richest source of real example values." The host had that reading spread over
- * `extension/lib/response-decode.js`, `lib/protocol-parsers.js` and `lib/protobuf.js` — jsaudit step 2 names
- * THIS FILE as what all three become — and `extension/lib/discovery.js` (step 1) held two of their callees: the
- * magic-byte classifier and the React Flight parser. The classifier became its own standard
+ * `extension/lib/response-decode.js`, `lib/protocol-parsers.js` and `lib/protobuf.js`, and
+ * `extension/lib/discovery.js` held two of their callees: the
+ * magic-byte classifier and the React Flight parser. TWO OF THOSE FOUR NAME THIS FILE ON `extension/jsaudit.mjs`
+ * AND THE OTHER TWO DO NOT, which is a correction the gate made when it started deriving the queue from the
+ * call graph rather than from a hand-written step: `lib/protocol-parsers.js` and `lib/protobuf.js` are the
+ * codecs and they become this component; `lib/response-decode.js` is the LIVE-CAPTURE INTAKE — one
+ * `handleResponseBody` the offscreen's chrome.runtime router hands every body intercept.js caught — and this
+ * component has never been handed one of those. It reads a reply THE ENGINE FETCHED, so the intake's
+ * aggregation belongs to the moat and its relay to the bridge. The classifier became its own standard
  * (browser_process/network/mime_sniff.c, WHATWG MIME Sniffing) — and that standard is the NETWORK SERVICE'S,
  * which is now a program of its own rather than a directory of this one, so this file
  * does not call it: §7 sniffs bytes, CORB gates on the result, and a renderer that sniffs for itself can mine a

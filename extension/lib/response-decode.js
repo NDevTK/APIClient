@@ -382,7 +382,14 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     responseBase64: msg.base64Encoded || false,
     mimeType: msg.contentType || "",
     responseHeaders: msg.responseHeaders || {},
-    frameId: frameId ?? 0,
+    /* `frameId` IS NOT WRITTEN HERE, AND IT USED TO BE WRITTEN TWICE. This built it as `frameId ?? 0` and then
+       handed the same `frameId` to `_pushGlobalLog`, whose first act is `if (entry.frameId == null)
+       entry.frameId = frameId != null ? frameId : 0` — so the field had two writers with the same fallback,
+       the second one dead for this entry and live for every other entry in this file (the WebSocket,
+       postMessage and MessageChannel ones never set it). CLAUDE.md §Offensive-programming names the `??`
+       exactly: it turns "the sender carried no frameId" into a plausible 0, which is the top-level traversable
+       — a real value, indistinguishable from a measurement, and the popup's tab/frame filter reads it. One
+       field, one writer: the log pusher's, which is where the other five entry shapes already leave it. */
     // Bundle call-site stack captured at the network-API hook in intercept.js
     // (`new Error().stack`, wrapper frames stripped). For a [live]-only
     // endpoint (one the forced-execution engine didn't reach), this names the

@@ -56,8 +56,9 @@ static bool is_asset(const MimeType *m)
  * still ships its chunk list in the payload of the route they did.
  *
  * THE OTHER ROW KINDS ARE NOT READ HERE, and that is a statement about ownership rather than about difficulty.
- * A `json` row's SHAPE is schema inference (jsaudit step 3's moat_schema.c); an `E[` row's message is credential
- * extraction (step 3's keys.js → moat.c). Reading them here would put two components' work in a third. */
+ * A `json` row's SHAPE is schema inference (jsaudit's `lib/schema.js` row → moat_schema.c); an `E[` row's
+ * message is credential extraction (jsaudit's `lib/keys.js` row → moat.c). Reading them here would put two
+ * components' work in a third. */
 
 /* THE CHUNK'S ADDRESS, RESOLVED — and ONLY when the chunk is root-relative. React's client manifest writes a
    chunk either as an absolute path (`/_next/static/chunks/x.js`) or as a bare path relative to a build-time

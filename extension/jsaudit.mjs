@@ -20,44 +20,55 @@
  *   MIXED       both, in one file — `split` states the boundary; it is queued as LOGIC until split
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 
-/* THE MOVE QUEUE IS THE ORDER OF THIS TABLE'S `step` FIELD, and the order is a DEPENDENCY order, not a size
-   order: a producer whose consumers still live in JS is not first, because moving it makes every call it
-   serves cross the JS↔WASM boundary the architecture rule exists to delete. Callees before callers; leaf
-   producers (they consume only a host edge the engine already owns) before aggregators; the popup's own
-   offscreen-side compute last, because it is driven by a popup RPC the engine cannot answer until the moat
-   itself is in C.
-
-   STEP 0 IS DONE AND ITS ROW IS GONE, and what it turned out to be is worth keeping: `lib/analyze.js` was a
-   DELETION rather than a move, but not for the reason this comment used to give. It said step 0 came first
-   "because until it is gone the engine does not run at all on a revisit" — that was the content-hash seen-set,
-   which had ALREADY been deleted when the sentence was written, so the row was reading as authoritative about
-   work already done. What was actually left was per-script finding attribution over `sink.location`,
-   `taintPath` and `sanitizerReport` — three names the engine has never emitted — plus a concatenation of a
-   script array the CONTENT_HTML handler stopped filling when the engine started sourcing its own scripts. None
-   of it moved to result.c: a sink's location is a fact only the running engine holds, and the host's version
-   was filing every finding under the first script. The surviving ~40-line handoff sits beside the handler that
-   writes the buffer, in offscreen-brain.js, whose own row already queues it.
-
-   STEP 1 IS GONE THE SAME WAY, AND WHAT IT TAUGHT IS THE ORDERING RULE ABOVE, PAID FOR. `lib/discovery.js` sat
-   at step 1 holding three components, and its own `why` already said the opposite of its `step`: "what decides
-   the next move is the CONSUMER". Checked against the tree, all three had a LIVE JS consumer — the classifier
-   gates every learning call in response-decode.js through `_isAsset`/`_isBoringFetch`, the RSC parser fed
-   learn.js, and the schema half answers the Send panel — so a whole-file move could only have been completed
-   by inventing a host→engine COMPUTE call, which this architecture does not have and must not grow: the engine
-   is the driver and the bridge relays. What DID move is the part that needed no JS caller at all, because the
-   engine already holds the input: React Flight is now read at `engine_provide`, the one point every fetched
-   reply crosses exactly once, and the magic-byte classifier's ALGORITHM became the standard it was a
-   hand-rolled copy of (browser_process/network/mime_sniff.c, WHATWG MIME Sniffing §6/§7 — it was written under
-   core/mime and has since moved into the browser process's own source list, which is where §7 belongs and what
-   makes a renderer-side call to it an undefined symbol). The remainder is re-stepped to the
-   files that call it. A row's step is a claim about THIS tree, so a step that disagrees with its own reason is
-   the stale-DFAIL failure mode wearing a number. */
+/* THE MOVE ORDER IS DERIVED FROM THE TREE, NEVER DECLARED — that is the change this file exists in its
+   current shape for, and it is a correction rather than a refinement.
+ *
+ * WHAT WAS HERE. Every row carried a hand-written `step` number and the paragraph above them stated the
+ * ordering principle in two sentences that CONTRADICT EACH OTHER: "a producer whose consumers still live in
+ * JS is not first, because moving it makes every call it serves cross the JS↔WASM boundary the architecture
+ * rule exists to delete", and then "callees before callers". Those are opposite instructions. A callee IS a
+ * producer, and its callers ARE the consumers that still live in JS, so a queue built leaf-first is precisely
+ * the queue the first sentence forbids. The second one won, twice, and both times the head of the queue named
+ * a file nobody could move: `lib/discovery.js` sat at step 1 until 7adea69d re-stepped it to 7, and the
+ * codecs sat at step 2 with every one of their consumers — learn.js, send.js, encode.js, offscreen-brain.js,
+ * and five popup files — still in JS. The `step` field is DELETED. It is the field that has been wrong twice,
+ * and a hand-written number cannot be checked against anything.
+ *
+ * WHAT REPLACES IT is the same question asked of the tree. These are CLASSIC SCRIPTS sharing one global
+ * scope, so a call is a top-level declaration in one file named in another, and both halves of that are
+ * readable from disk: the declarations by their position (column zero), the uses by a word-boundary match
+ * over the source with COMMENTS REMOVED. The comment strip is not tidiness — it decided real edges. Twelve of
+ * the graph's edges before it were PROSE: `lib/learn.js` names `handleResponseBody` twice in comments and
+ * calls it never, `lib/grouping.js` names half of `lib/stats.js` in a paragraph about what it does not do.
+ * A ledger built on those edges would order the queue by what the files SAY about each other.
+ *
+ * A CYCLE IS ONE UNIT, NOT A CONTRADICTION. `offscreen-brain.js` calls `handleResponseBody`, which calls
+ * `_pushGlobalLog`, `notifyPopup` and `_docForLearning` straight back; `learn.js` and `merge.js` reach into
+ * each other the same way. Eleven of the queued files are one mutually-referencing component of the graph,
+ * and the honest thing to print is that they MOVE AS ONE — no ordering among them exists to discover, and an
+ * order invented for them would be the hand-written number again.
+ *
+ * THE ORDER IS THEN FORCED: a unit moves only after every unit that CALLS it, because until then the call it
+ * serves would cross the boundary this architecture deletes. That puts the DRIVERS first and the leaf codecs
+ * LAST — the exact inverse of what the deleted field claimed — and it is the same answer the three landed
+ * moves already gave when they were made one capability at a time rather than one file at a time:
+ * `multipart_batch.c` (an address, and `endpoint.c` already consumed addresses), `reply_decode.c`'s Flight
+ * reader (`engine_provide` already held the reply), `browser_process/network/resource_kind.c` (the trusted
+ * zone already called that program). Each moved because ITS CONSUMER WAS ALREADY IN C. That is what "takeable"
+ * means here, and the derived order says which unit to look inside for the next one.
+ *
+ * AND THE PRINTED NUMBER IS NOT A NAME — NOTHING OUTSIDE THIS FILE MAY CITE IT. It is a position in a
+ * derivation, so it moves whenever an edge does, and the deleted field proved what that costs: six C headers
+ * cited "jsaudit step 2" / "step 1" / "step 3", every one of them written true and every one made false by a
+ * renumber they could not see — the stale-DFAIL failure mode with a queue behind it instead of a crash. All
+ * six now name the FILE and its destination, which is the fact that does not move, and a comment that wants
+ * to point at this queue points at a row. */
 const LEDGER = [
   // ── BRIDGE — irreducible platform edge ───────────────────────────────────────────────────────────────
   { f: "bridge.js", zone: "BRIDGE:1,2",
@@ -148,65 +159,88 @@ const LEDGER = [
   { f: "lib/popup-security.js", zone: "BRIDGE:4", why: "@S finding cards + the sandboxed live-verify driver." },
   { f: "lib/popup-console.js", zone: "BRIDGE:4", why: "WS/postMessage console." },
 
-  // ── LOGIC / MIXED — the queue ────────────────────────────────────────────────────────────────────────
-  { f: "lib/discovery.js", zone: "LOGIC", step: 7, dest: "engine/host/solver/moat.c",
-    why: "ONE COMPONENT LEFT, and it belongs to step 7, which is why this row is no longer step 2: the Send " +
-         "panel's schema resolution (findDiscoveryMethod/findMethodById/resolveDiscoverySchema), whose " +
-         "consumers are lib/send.js and the popup. It is LOGIC and not a bridge because it is an ALGORITHM " +
-         "over a discovery document's schema graph — walk `$ref`, flatten a method's parameter list, resolve " +
-         "a request body's type — over state the moat owns, and the engine already reads that same graph in " +
-         "solver/discovery.c. It cannot go earlier for this ledger's own rule: a producer whose consumers " +
-         "still live in JS is not first, and there is no host→engine COMPUTE edge for a JS caller to reach a " +
-         "moved callee through, because the engine is the DRIVER and adding one would be the orchestration " +
-         "layer inverted. THE OTHER TWO COMPONENTS ARE GONE, and the second one is the reason that sentence " +
-         "needs its qualifier. The RSC parser went to the engine at engine_provide (`looksLikeRSC` was a " +
-         "body-shape guess §RUN, DON'T MATCH forbids and did not move). classifyResponseAsset — a hand-rolled " +
-         "magic-byte table beside WHATWG MIME Sniffing §6, a two-row markup test beside §7.1's nineteen, and " +
-         "SVG/CSS/WebVTT/HLS/DASH sniffs no standard has — went to the BROWSER PROCESS " +
-         "(browser_process/network/resource_kind.c), and the version of this row that kept it said it could " +
-         "not, for the compute-edge reason above. That reason is about the ENGINE and does not reach this " +
-         "destination: the browser process is a program the TRUSTED ZONE CALLS over a postMessage the " +
-         "offscreen already owns, so lib/response-decode.js awaits it and no edge is inverted. The ruling it " +
-         "was standing against is one sentence — type checking is safeFetch's job and safeFetch is the only " +
-         "source of sniffing — and a second implementation in this file was what that forbids." },
-  { f: "lib/protobuf.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
-    why: "a wire CODEC. §A JS-engine encoding builtin is modeled FAITHFULLY — the engine runs the real codec; a second one in JS is the redundant layer." },
-  { f: "lib/protocol-parsers.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
+  // ── LOGIC / MIXED — the queue. No row carries a step; the order under it is derived. ──────────────────
+  { f: "offscreen-brain.js", zone: "MIXED", dest: "engine/host/solver/moat.c + bridge.js",
+    split: "globalStore, the request log, _handleFormSubmit and buildExportRequest are LOGIC. buildLiveDelivery is BRIDGE: the delivery VOCABULARY moved into C (each source declares its mechanism beside its encode set in concolic_declare_source; the @S record carries `delivery`+`deliveryPrefix`), so what is left here is the MECHANISM — window.open, the sandboxed attacker page, the real user gesture — which is exactly what a bridge edge is. It replaced buildPocFromShape, which matched a host-side {hash}|{search}|{pm}|{reply} taxonomy against a `shape` field the engine has never emitted. The chrome.runtime.onMessage router + the sender.tab.url trust gate are BRIDGE:3 and fold into bridge.js. _dispatchDocument (what step 0 left of lib/analyze.js) is BRIDGE:3 with it: it reads the browser-stated facts off the document's own buffer, builds the AST_ANALYZE message and hands it to the ONE pool — every field it carries is asserted on arrival in bridge.js." },
+  { f: "lib/response-decode.js", zone: "MIXED", dest: "engine/host/solver/moat.c + bridge.js",
+    split: "THE ROW THAT WAS HERE WAS FALSE ABOUT THIS TREE IN BOTH FIELDS, and it is the reason a row is now " +
+         "checked against the graph. It read \"LOGIC → reply_decode.c: the protocol-chain unwrap that drives " +
+         "the two above\", and this file contains no protocol-chain unwrap: the isGrpcWeb/isSSE/isNDJSON/" +
+         "isMultipartBatch/isGraphQLUrl dispatch is `learnFromResponse` in lib/learn.js. What it actually " +
+         "holds is the LIVE-CAPTURE INTAKE — one `handleResponseBody` that the offscreen's chrome.runtime " +
+         "router hands every body intercept.js caught. reply_decode.c is the wrong destination for the same " +
+         "reason: that component reads a reply THE ENGINE FETCHED, at the one point every one of them crosses, " +
+         "and nothing here has ever been handed one. The LOGIC half is moat aggregation over a captured " +
+         "exchange — the request-body decode (protobuf / JSPB / f.req / structural JSON), the key extraction, " +
+         "the endpoint lastSeen and 403 `WWW-Authenticate` scope reads, the entry the learners are given. The " +
+         "BRIDGE half is the intake itself: `_pushGlobalLog`, `notifyPopup`, the WS/postMessage/MessageChannel " +
+         "log entries, and the one `await self.browserProcessClassify` that asks the browser process what a " +
+         "body is." },
+  { f: "lib/learn.js", zone: "LOGIC", dest: "engine/host/solver/moat.c",
+    why: "THE moat aggregation — CLAUDE.md §Architecture names moat aggregation as the engine's. It holds the " +
+         "protocol-chain unwrap the response-decode row used to claim: `learnFromResponse` is what dispatches " +
+         "a body to gRPC-Web / SSE / NDJSON / batchexecute / multipart / GraphQL and turns each into a SCHEMA." },
+  { f: "lib/merge.js", zone: "LOGIC", dest: "engine/host/solver/moat.c",
+    why: "@RESULT → doc-model merge. The engine already dedups its own @RESULT; this is the last host-side re-merge." },
+  { f: "lib/schema.js", zone: "LOGIC", dest: "engine/host/solver/moat_schema.c",
+    why: "schema inference over decoded JSON/JSPB — what every branch of learn.js's unwrap ends in." },
+  { f: "lib/grouping.js", zone: "LOGIC", dest: "engine/host/solver/endpoint.c",
+    why: "endpoint identity/service grouping — the component already exists in C and already owns dedup." },
+  { f: "lib/keys.js", zone: "LOGIC", dest: "engine/host/solver/moat.c", why: "credential/token extraction from decoded bodies." },
+  { f: "lib/serialize.js", zone: "LOGIC", dest: "engine/host/solver/result.c",
+    why: "the popup snapshot IS the engine's result view once the moat is in C." },
+  { f: "lib/send.js", zone: "LOGIC", dest: "engine/host/solver/moat.c",
+    why: "schema resolution + type coercion for the manual replay, driven by a popup RPC the engine cannot answer until the moat is in C." },
+  { f: "lib/encode.js", zone: "LOGIC", dest: "engine/host/solver/reply_decode.c", why: "the encode direction of the codec, driven by the same popup RPC." },
+  { f: "lib/popup-handlers.js", zone: "MIXED", dest: "bridge.js",
+    split: "runs in the OFFSCREEN, not the popup, so it cannot claim reason 4: it is the popup RPC surface. The dispatch is BRIDGE:3; every per-command backend it calls is LOGIC that moves with the unit it belongs to." },
+  { f: "lib/protobuf.js", zone: "LOGIC", dest: "engine/host/solver/reply_decode.c",
+    why: "a wire CODEC. §A JS-engine encoding builtin is modeled FAITHFULLY — the engine runs the real codec; " +
+         "a second one in JS is the redundant layer. IT IS A LEAF AND THEREFORE LAST, which is the correction " +
+         "the derived order makes: it calls nothing else in this queue and TWELVE files call it, so moving it " +
+         "first would put every one of those calls across the boundary. Two of the twelve are not even in the " +
+         "queue — content.js and intercept.js use `uint8ToBase64` to carry a captured binary body over " +
+         "chrome.runtime, which is a BRIDGE:3 transport concern and not this codec; that pair is what has to " +
+         "stop being answered from here before the rest can follow." },
+  { f: "lib/protocol-parsers.js", zone: "LOGIC", dest: "engine/host/solver/reply_decode.c",
     why: "batchExecute/gRPC-Web/SSE/NDJSON/GraphQL framing, and the RESPONSE half of multipart. The " +
          "multipart REQUEST half left: `parseMultipartBatchRequest` read `METHOD /path HTTP/1.1` out of the " +
-         "parts of a batch body, and that is the one capability in this step whose consumer was already in C " +
-         "— every other parser here turns a body into a SCHEMA (step 3's moat_schema.c), this one turned it " +
+         "parts of a batch body, and that is the one capability in this file whose consumer was already in C " +
+         "— every other parser here turns a body into a SCHEMA (moat_schema.c), this one turned it " +
          "into an ADDRESS, and solver/endpoint.c has taken addresses since before this queue existed. It is " +
          "now engine/host/solver/multipart_batch.c, read at the `fetch()` call site that already records the " +
          "outer request's endpoint, so a batch the FORCED EXECUTION composes surfaces all N of its " +
          "sub-endpoints instead of one. The JS body stayed because it is not the same input: this copy reads " +
          "bodies intercept.js CAPTURED off live traffic (lib/learn.js) and bodies the user EDITS in the " +
          "popup's multipart panel (lib/popup-mp.js), and deleting it would remove the editor with nothing " +
-         "replacing it. It goes out with those two callers at steps 4 and 6." },
-  { f: "lib/response-decode.js", zone: "LOGIC", step: 2, dest: "engine/host/solver/reply_decode.c",
-    why: "the protocol-chain unwrap that drives the two above. Must precede learn.js, which consumes its shapes." },
-  { f: "lib/schema.js", zone: "LOGIC", step: 3, dest: "engine/host/solver/moat_schema.c",
-    why: "schema inference over decoded JSON/JSPB. A CALLEE of learn.js — callees move before callers, or every call crosses the boundary." },
-  { f: "lib/stats.js", zone: "LOGIC", step: 3, dest: "engine/host/solver/moat_stats.c", why: "per-parameter observation model. Callee of learn.js." },
-  { f: "lib/grouping.js", zone: "LOGIC", step: 3, dest: "engine/host/solver/endpoint.c",
-    why: "endpoint identity/service grouping — the component already exists in C and already owns dedup." },
-  { f: "lib/chains.js", zone: "LOGIC", step: 3, dest: "engine/host/solver/moat.c", why: "response-value → request-param chaining. Callee of the merge." },
-  { f: "lib/keys.js", zone: "LOGIC", step: 3, dest: "engine/host/solver/moat.c", why: "credential/token extraction from decoded bodies. Callee of response-decode." },
-  { f: "lib/learn.js", zone: "LOGIC", step: 4, dest: "engine/host/solver/moat.c",
-    why: "THE moat aggregation — CLAUDE.md §Architecture names moat aggregation as the engine's. Moves after step 3 because every function it calls is in step 3." },
-  { f: "lib/merge.js", zone: "LOGIC", step: 4, dest: "engine/host/solver/moat.c",
-    why: "@RESULT → doc-model merge. The engine already dedups its own @RESULT; this is the last host-side re-merge." },
-  { f: "lib/serialize.js", zone: "LOGIC", step: 5, dest: "engine/host/solver/result.c",
-    why: "the popup snapshot IS the engine's result view once the moat is in C. Cannot precede step 4 — it serializes what step 4 owns." },
-  { f: "offscreen-brain.js", zone: "MIXED", step: 6, dest: "engine/host/solver/moat.c + bridge.js",
-    split: "globalStore, the request log, _handleFormSubmit and buildExportRequest are LOGIC. buildLiveDelivery is BRIDGE: the delivery VOCABULARY moved into C (each source declares its mechanism beside its encode set in concolic_declare_source; the @S record carries `delivery`+`deliveryPrefix`), so what is left here is the MECHANISM — window.open, the sandboxed attacker page, the real user gesture — which is exactly what a bridge edge is. It replaced buildPocFromShape, which matched a host-side {hash}|{search}|{pm}|{reply} taxonomy against a `shape` field the engine has never emitted. The chrome.runtime.onMessage router + the sender.tab.url trust gate are BRIDGE:3 and fold into bridge.js. _dispatchDocument (what step 0 left of lib/analyze.js) is BRIDGE:3 with it: it reads the browser-stated facts off the document's own buffer, builds the AST_ANALYZE message and hands it to the ONE pool — every field it carries is asserted on arrival in bridge.js." },
-  { f: "lib/popup-handlers.js", zone: "MIXED", step: 6, dest: "bridge.js",
-    split: "runs in the OFFSCREEN, not the popup, so it cannot claim reason 4: it is the popup RPC surface. The dispatch is BRIDGE:3; every per-command backend it calls is LOGIC that moves with its own step." },
-  { f: "lib/send.js", zone: "LOGIC", step: 7, dest: "engine/host/solver/moat.c",
-    why: "schema resolution + type coercion for the manual replay. LAST: it is driven by a popup RPC the engine cannot answer until the moat is in C." },
-  { f: "lib/encode.js", zone: "LOGIC", step: 7, dest: "engine/host/solver/reply_decode.c", why: "the encode direction of the step-2 codec, driven by the same popup RPC." },
-  { f: "lib/openapi-import.js", zone: "LOGIC", step: 7, dest: "engine/host/solver/discovery.c", why: "OpenAPI → discovery conversion; the import half of step 1's component." },
-  { f: "lib/openapi-export.js", zone: "LOGIC", step: 7, dest: "engine/host/solver/result.c", why: "discovery → OpenAPI, a projection of the engine's result." },
+         "replacing it. THAT SENTENCE IS ALSO WHY THIS FILE IS LAST rather than second: it is a leaf, every " +
+         "one of its eight consumers is still JS, and the four popup ones must first read a decoded body off " +
+         "the engine's result instead of decoding one themselves." },
+  { f: "lib/stats.js", zone: "LOGIC", dest: "engine/host/solver/moat_stats.c", why: "per-parameter observation model. A leaf: lib/learn.js is its only caller." },
+  { f: "lib/chains.js", zone: "LOGIC", dest: "engine/host/solver/moat.c", why: "response-value → request-param chaining. A leaf of the moat unit." },
+  { f: "lib/discovery.js", zone: "LOGIC", dest: "engine/host/solver/moat.c",
+    why: "ONE COMPONENT LEFT: the Send panel's schema resolution (findDiscoveryMethod/findMethodById/" +
+         "resolveDiscoverySchema), whose consumers are lib/send.js, lib/popup-handlers.js and two popup " +
+         "renderers. It is LOGIC and not " +
+         "a bridge because it is an ALGORITHM over a discovery document's schema graph — walk `$ref`, flatten " +
+         "a method's parameter list, resolve a request body's type — over state the moat owns, and the engine " +
+         "already reads that same graph in solver/discovery.c. It cannot go earlier for this ledger's own " +
+         "rule: a producer whose consumers still live in JS is not first, and there is no host→engine COMPUTE " +
+         "edge for a JS caller to reach a moved callee through, because the engine is the DRIVER and adding " +
+         "one would be the orchestration layer inverted. THE OTHER TWO COMPONENTS ARE GONE, and the second " +
+         "one is the reason that sentence needs its qualifier. The RSC parser went to the engine at " +
+         "engine_provide (`looksLikeRSC` was a body-shape guess §RUN, DON'T MATCH forbids and did not move). " +
+         "classifyResponseAsset — a hand-rolled magic-byte table beside WHATWG MIME Sniffing §6, a two-row " +
+         "markup test beside §7.1's nineteen, and SVG/CSS/WebVTT/HLS/DASH sniffs no standard has — went to " +
+         "the BROWSER PROCESS (browser_process/network/resource_kind.c), and the version of this row that " +
+         "kept it said it could not, for the compute-edge reason above. That reason is about the ENGINE and " +
+         "does not reach this destination: the browser process is a program the TRUSTED ZONE CALLS over a " +
+         "postMessage the offscreen already owns, so lib/response-decode.js awaits it and no edge is " +
+         "inverted. The ruling it was standing against is one sentence — type checking is safeFetch's job and " +
+         "safeFetch is the only source of sniffing — and a second implementation in this file was what that " +
+         "forbids." },
+  { f: "lib/openapi-import.js", zone: "LOGIC", dest: "engine/host/solver/discovery.c", why: "OpenAPI → discovery conversion; the import half of the discovery component." },
+  { f: "lib/openapi-export.js", zone: "LOGIC", dest: "engine/host/solver/result.c", why: "discovery → OpenAPI, a projection of the engine's result." },
 ];
 
 const files = [];
@@ -227,7 +261,8 @@ const files = [];
   }
 })(ROOT);
 
-const lines = (f) => readFileSync(join(ROOT, f), "utf8").split("\n").length;
+const text = new Map(files.map((f) => [f, readFileSync(join(ROOT, f), "utf8")]));
+const lines = (f) => text.get(f).split("\n").length;
 const byFile = new Map(LEDGER.map((r) => [r.f, r]));
 const fail = [];
 
@@ -240,25 +275,160 @@ for (const r of LEDGER)
     fail.push(`STALE ROW     ${r.f} — the ledger names a file that is not on disk. A row that outlives its file\n` +
               `              reads as authoritative and sends the next reader to move something already gone.`);
 
-const queue = LEDGER.filter((r) => r.zone !== "BRIDGE" && !r.zone.startsWith("BRIDGE:") && files.includes(r.f))
-                    .sort((a, b) => (a.step - b.step) || a.f.localeCompare(b.f));
+/* ── THE CALL GRAPH, READ OFF THE TREE ──────────────────────────────────────────────────────────────────
+ *
+ * COMMENTS ARE NOT CALLS, so they come out first. A file that says `handleResponseBody` in a paragraph is
+ * describing the surface, not using it, and twelve of the graph's edges were exactly that before this ran.
+ * Strings STAY: `popup-reqlog.js` calls `isGrpcWeb` from inside a template literal, and a strip that took
+ * template substitutions with it would delete a real edge to remove a hypothetical one. An escape is copied
+ * whole in both modes — a regex literal spelling `\/\/` would otherwise open a line comment that swallows the
+ * rest of the line. */
+function codeOnly(src) {
+  let out = "";
+  for (let i = 0; i < src.length; ) {
+    const c = src[i];
+    if (c === "\\") { out += src.slice(i, i + 2); i += 2; continue; }
+    if (c === "/" && src[i + 1] === "/") { while (i < src.length && src[i] !== "\n") i++; continue; }
+    if (c === "/" && src[i + 1] === "*") {
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      out += c; i++;
+      while (i < src.length) {
+        if (src[i] === "\\") { out += src.slice(i, i + 2); i += 2; continue; }
+        out += src[i];
+        if (src[i] === c) { i++; break; }
+        i++;
+      }
+      continue;
+    }
+    out += c; i++;
+  }
+  return out;
+}
+
+const code = new Map(files.map((f) => [f, codeOnly(text.get(f))]));
+/* A TOP-LEVEL declaration is one at COLUMN ZERO. These files are classic scripts in one shared global scope,
+   so that position is exactly what makes a name reachable from another file; an indented one is a local and
+   carries no edge. */
+const DECL = /^(?:async\s+)?(?:function\s+|const\s+|let\s+|var\s+|class\s+)([A-Za-z_$][\w$]*)/gm;
+const declares = new Map();
+for (const f of files) {
+  const s = new Set();
+  let m;
+  DECL.lastIndex = 0;
+  while ((m = DECL.exec(code.get(f)))) s.add(m[1]);
+  declares.set(f, s);
+}
+const owners = new Map();
+for (const f of files) for (const n of declares.get(f)) {
+  if (!owners.has(n)) owners.set(n, []);
+  owners.get(n).push(f);
+}
+
+/* A NAME TWO FILES DECLARE CARRIES NO EDGE — there is no way to tell from a use which one it reached, and
+   guessing would invent an ordering constraint. It is not necessarily a defect (`ensureOffscreen` is declared
+   once in the service worker and once in the offscreen, two realms that never see each other), so it is
+   REPORTED rather than failed: a hole in the graph the reader must know about is not the same as a hole the
+   reader cannot see. */
+const ambiguous = [...owners].filter(([, fs]) => fs.length > 1).map(([n]) => n).sort();
+
+const queued = LEDGER.filter((r) => !r.zone.startsWith("BRIDGE") && files.includes(r.f)).map((r) => r.f);
+const consumers = new Map();   // queued file -> every surface file that names one of its top-level declarations
+for (const callee of queued) {
+  const names = [...declares.get(callee)].filter((n) => owners.get(n).length === 1)
+                                         .map((n) => n.replace(/[$]/g, "\\$"));
+  const re = names.length ? new RegExp("\\b(?:" + names.join("|") + ")\\b") : null;
+  consumers.set(callee, files.filter((g) => g !== callee && re && re.test(code.get(g))).sort());
+}
+
+/* ── UNITS, AND THE ORDER THEY MOVE IN ──────────────────────────────────────────────────────────────────
+   Tarjan over the queued-only subgraph: a strongly-connected component is a set of files that reach each
+   other, which for classic scripts means they are ONE component of the program and there is no order among
+   them to find. Then a unit's position is one past the deepest unit that CALLS it, so every caller moves
+   first and no call is left crossing the boundary. */
+const calls = new Map(queued.map((f) => [f, new Set()]));
+for (const callee of queued)
+  for (const c of consumers.get(callee)) if (calls.has(c)) calls.get(c).add(callee);
+
+const index = new Map(), low = new Map(), onStack = new Set(), stack = [], units = [];
+let counter = 0;
+(function tarjan() {
+  const visit = (v) => {
+    index.set(v, counter); low.set(v, counter); counter++;
+    stack.push(v); onStack.add(v);
+    for (const w of calls.get(v)) {
+      if (!index.has(w)) { visit(w); low.set(v, Math.min(low.get(v), low.get(w))); }
+      else if (onStack.has(w)) low.set(v, Math.min(low.get(v), index.get(w)));
+    }
+    if (low.get(v) === index.get(v)) {
+      const u = [];
+      let w;
+      do { w = stack.pop(); onStack.delete(w); u.push(w); } while (w !== v);
+      units.push(u.sort());
+    }
+  };
+  for (const v of queued) if (!index.has(v)) visit(v);
+})();
+
+const unitOf = new Map();
+units.forEach((u, i) => u.forEach((f) => unitOf.set(f, i)));
+const callersOf = new Map(units.map((_, i) => [i, new Set()]));
+for (const [a, bs] of calls)
+  for (const b of bs) if (unitOf.get(a) !== unitOf.get(b)) callersOf.get(unitOf.get(b)).add(unitOf.get(a));
+const depth = new Map();
+const depthOf = (i) => {
+  if (depth.has(i)) return depth.get(i);
+  depth.set(i, 0);
+  let d = 0;
+  for (const c of callersOf.get(i)) d = Math.max(d, depthOf(c) + 1);
+  depth.set(i, d);
+  return d;
+};
+units.forEach((_, i) => depthOf(i));
+const order = [...units.keys()].sort((a, b) => depthOf(a) - depthOf(b) || units[a][0].localeCompare(units[b][0]));
+
 const bridge = LEDGER.filter((r) => r.zone.startsWith("BRIDGE") && files.includes(r.f));
-const tot = (rs) => rs.reduce((n, r) => n + lines(r.f), 0);
+const tot = (fs) => fs.reduce((n, f) => n + lines(f), 0);
 
 console.log(`\nextension/ JS surface: ${files.length} files, ${files.reduce((n, f) => n + lines(f), 0)} lines`);
-console.log(`  BRIDGE (irreducible): ${bridge.length} files, ${tot(bridge)} lines`);
-console.log(`  LOGIC/MIXED (queued): ${queue.length} files, ${tot(queue)} lines\n`);
-let step = -1;
-for (const r of queue) {
-  if (r.step !== step) { step = r.step; console.log(`--- step ${step} ---`); }
-  console.log(`  ${String(lines(r.f)).padStart(5)}  ${r.f.padEnd(28)} → ${r.dest}`);
-  console.log(`         ${r.why || r.split}`);
+console.log(`  BRIDGE (irreducible): ${bridge.length} files, ${tot(bridge.map((r) => r.f))} lines`);
+console.log(`  LOGIC/MIXED (queued): ${queued.length} files, ${tot(queued)} lines`);
+if (ambiguous.length)
+  console.log(`  no edge (declared in more than one file): ${ambiguous.join(", ")}`);
+console.log("");
+
+let shown = 0;
+for (const i of order) {
+  shown++;
+  const u = units[i];
+  console.log(`--- step ${shown} --- ${u.length > 1
+      ? `${u.length} files, ONE unit: they name each other's globals, so no order among them exists`
+      : "one file"}`);
+  for (const f of u) {
+    const r = byFile.get(f);
+    console.log(`  ${String(lines(f)).padStart(5)}  ${f.padEnd(28)} → ${r.dest}`);
+    console.log(`         ${r.why || r.split}`);
+    const outside = consumers.get(f).filter((c) => unitOf.get(c) !== i);
+    console.log(`         called from: ${outside.length ? outside.join(" ") : "nothing outside this unit"}`);
+  }
 }
-if (queue.length)
-  fail.push(`QUEUE NON-EMPTY  ${queue.length} file(s), ${tot(queue)} lines of semantics still in JS. CLAUDE.md\n` +
+
+if (queued.length) {
+  const head = units[order[0]];
+  fail.push(`QUEUE NON-EMPTY  ${queued.length} file(s), ${tot(queued)} lines of semantics still in JS. CLAUDE.md\n` +
             `                 §Architecture: "A JS orchestration layer is unwanted context-switching across the\n` +
-            `                 JS↔WASM boundary; DELETE it." Take step ${queue[0].step}. When the queue empties,\n` +
-            `                 this gate goes green and is deleted with the last row.`);
+            `                 JS↔WASM boundary; DELETE it."\n` +
+            `                 Take step 1 — ${head.length > 1 ? `${head.length} files, one unit` : head[0]}.` +
+            ` Nothing may precede it: every file below it is called\n` +
+            `                 by something inside it, so moving one of those first only lengthens the boundary.\n` +
+            `                 Inside the unit, what moves is a CAPABILITY whose consumer is ALREADY IN C — the\n` +
+            `                 test the three landed moves passed. When the queue empties, this gate goes green\n` +
+            `                 and is deleted with the last row.`);
+}
 
 if (fail.length) { console.error("\n" + fail.join("\n") + "\n"); process.exit(1); }
 console.log("\nJS surface is bridge-only. Delete extension/jsaudit.mjs.\n");
