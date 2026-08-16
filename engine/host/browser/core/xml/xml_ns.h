@@ -51,10 +51,12 @@
  *     static entry whose `prefix_id` is `LXB_NS_XML`, so the two become one prefix and a LEGAL document gets
  *     reported for a constraint it does not violate.
  * So this component does not intern at all. It stores BYTES and returns BORROWED SLICES, and the interning
- * happens where it already happens — `lxb_dom_element_create`, which takes the namespace name and the prefix as
- * byte runs and does its own hash insert. Whether THAT insert must stop case-folding for an XML document is a
- * real defect and it is the tree builder's to answer, at the one call site that has it; it is not something to
- * pre-empt here by building a second interning table beside lexbor's.
+ * happens where it already happens. THAT QUESTION IS NOW ANSWERED and this paragraph used to leave it open:
+ * it said the insert is `lxb_dom_element_create`'s and that "whether THAT insert must stop case-folding for an
+ * XML document is a real defect ... the tree builder's to answer". It is not an XML-only defect and it is no
+ * longer open — core/dom/name_intern.h stores every one of these names AS GIVEN for the DOM as a whole, for the
+ * three standards sentences above and for the DOM's own, and both `element_create_ns` and `dom_attr_create` go
+ * through it. What this component still does not do is intern, for the reason it always gave.
  *
  * THE ARENA'S LIFETIME IS THE WHOLE PARSE, NOT THE FRAME'S, AND THAT IS THE POINT. Popping a scope does not
  * free the bytes its bindings copied. A slice this hands back is the namespace name of an element, and the

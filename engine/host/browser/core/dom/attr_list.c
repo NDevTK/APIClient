@@ -23,14 +23,8 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/dom/attr_list.h"
+#include "core/dom/name_intern.h"   /* §4.9.2's storage step stores the three names AS GIVEN */
 #include "core/dom/node.h"   /* node_wrap_forget — a destroyed Attr hands back its wrapper */
-
-/* lexbor's own, exported but absent from its headers: it appends the namespace, splits `prefix:local`, and sets
-   local name, qualified name and prefix together — which is exactly the shape §4.9 stores after "validate and
-   extract" has run. Declared here rather than reimplemented, so there is one place that builds an attribute's
-   name and it is the one lexbor's parser uses. */
-lxb_status_t lxb_dom_attr_set_name_ns(lxb_dom_attr_t *attr, const lxb_char_t *link, size_t link_length,
-                                      const lxb_char_t *name, size_t name_length, bool to_lowercase);
 
 const lxb_char_t *dom_attr_ns(const lxb_dom_attr_t *a, size_t *len)
 {
@@ -45,7 +39,11 @@ const lxb_char_t *dom_attr_prefix(const lxb_dom_attr_t *a, size_t *len)
 
     *len = 0;
     if (!a || a->node.prefix == LXB_NS__UNDEF) return NULL;
-    d = lxb_ns_prefix_data_by_id(a->node.owner_document->ns, a->node.prefix);
+    /* The document's PREFIX hash, which is where dom_attr_create stores one. Lexbor's own attribute name
+       builder put an attribute's prefix in the NAMESPACE hash instead, and the only reason that read back at
+       all is that lxb_ns_prefix_data_by_id ignores the hash it is handed and resolves a non-static id as its
+       own address — so both spellings work today and exactly one of them says what it means. */
+    d = lxb_ns_prefix_data_by_id(a->node.owner_document->prefix, a->node.prefix);
     if (!d) return NULL;
     *len = d->entry.length;
     return lexbor_hash_entry_str(&d->entry);
@@ -235,32 +233,58 @@ lxb_dom_attr_t *dom_attr_get_qname(lxb_dom_element_t *el, const char *qname)
     return NULL;
 }
 
+/* DOM §4.9.2 "CREATE AN ATTRIBUTE", THE STORAGE STEP — "set attribute's namespace to namespace, namespace
+ * prefix to prefix, local name to localName", the strings §1.4's validate-and-extract handed back.
+ *
+ * NOT lxb_dom_attr_set_name_ns, WHICH IS THE SAME DEFECT 0962568a MEASURED ON THE ELEMENT SIDE. That entry
+ * interned the namespace with lxb_ns_append, the local name with lxb_dom_attr_local_name_append and the prefix
+ * with lxb_ns_prefix_append, and all three of those probe the static tables with
+ * lexbor_shs_entry_get_lower_static and insert with lexbor_hash_insert_lower. core/dom/name_intern.h states
+ * which standard says each of the three is a different name; what it cost HERE was:
+ *   - `setAttributeNS("http://www.Example.org/wine", "a", v)` stored a lower-cased namespace, so
+ *     `getAttributeNS("http://www.Example.org/wine", "a")` — whose key is §4.9's (namespace, local name),
+ *     compared byte for byte by ns_eq above — could not find the attribute that call had just created;
+ *   - `svg.setAttributeNS(null, "viewBox", v)` stored `viewbox`. §4.9 lowercases a qualified name in exactly
+ *     ONE place, setAttribute's step 2 "if this is in the HTML namespace and its node document is an HTML
+ *     document", which core/dom/element.c performs itself and setAttributeNS does not perform at all — so the
+ *     local name here is the one the standard says to store, and folding it made every non-HTML attribute name
+ *     a name the page cannot read back;
+ *   - a prefix spelled `XML` became the reserved LXB_NS_XML, and went into the document's NAMESPACE hash.
+ * lexbor's hashes are still the storage and its readers still read them; only the insert is this engine's.
+ *
+ * THE THREE WRITES ARE THE WHOLE OF IT, so they are made here rather than through a lexbor entry that also
+ * splits the qualified name: this file already HAS the prefix and the local name apart — that is what §1.4
+ * handed its caller — and re-joining them so lexbor can re-split them is what made the qualified name the only
+ * thing the prefix was carried in. */
 lxb_dom_attr_t *dom_attr_create(lxb_dom_document_t *doc, const char *ns, const char *prefix, const char *local)
 {
     lxb_dom_attr_t *a;
-    lxb_status_t st;
+    size_t pl = prefix ? strlen(prefix) : 0, ll = strlen(local ? local : "");
 
     DCHECK(doc && local, "an attribute was created with no document or no local name");
     DCHECK(!prefix || ns, "an attribute was given a PREFIX and the null namespace — §4.9's \"validate and "
                           "extract\" throws NamespaceError for that pair, so it must never reach the tree");
     a = lxb_dom_attr_interface_create(doc);
     CHECK(a != NULL, "dom-attr-oom: an attribute could not be created");
-    if (ns) {
-        /* The qualified name is what lexbor's name builder takes, and it is the only thing the prefix is
-           carried in — so it is assembled here and nowhere else. */
-        size_t pl = prefix ? strlen(prefix) : 0, ll = strlen(local);
-        char *q = malloc(pl + (pl ? 1 : 0) + ll + 1);
+    a->node.local_name = dom_intern_attribute_local_name(doc, local, ll);
+    a->node.ns         = dom_intern_namespace(doc, ns, ns ? strlen(ns) : 0);
+    a->node.prefix     = dom_intern_prefix(doc, prefix, pl);
+    /* THE QUALIFIED NAME IS STORED AND NOT DERIVED, because §4.9's setAttribute matches "the first attribute
+       whose qualified name is qualifiedName" and the step-2 loop above reads exactly this field. It is
+       `prefix:local` when there is a prefix and the local name otherwise, which is the one place the two
+       halves are put back together. */
+    if (pl) {
+        char *q = malloc(pl + 1 + ll + 1);
         CHECK(q != NULL, "dom-attr-oom: an attribute's qualified name could not be assembled");
-        if (pl) { memcpy(q, prefix, pl); q[pl] = ':'; }
-        memcpy(q + pl + (pl ? 1 : 0), local, ll);
-        q[pl + (pl ? 1 : 0) + ll] = 0;
-        st = lxb_dom_attr_set_name_ns(a, (const lxb_char_t *)ns, strlen(ns),
-                                      (const lxb_char_t *)q, pl + (pl ? 1 : 0) + ll, false);
+        memcpy(q, prefix, pl);
+        q[pl] = ':';
+        memcpy(q + pl + 1, local, ll);
+        q[pl + 1 + ll] = 0;
+        a->qualified_name = dom_intern_attribute_qualified_name(doc, q, pl + 1 + ll);
         free(q);
     } else {
-        st = lxb_dom_attr_set_name(a, (const lxb_char_t *)local, strlen(local), false);
+        a->qualified_name = dom_intern_attribute_qualified_name(doc, local, ll);
     }
-    CHECK(st == LXB_STATUS_OK, "dom-attr-oom: an attribute's name could not be interned");
     /* §4.9.2 "create an attribute" step 2 sets the VALUE, and its default is THE EMPTY STRING. §9.1 lists an
        attribute's value as "a string", so a value-less attribute is a state the model does not have — lexbor
        leaves the field NULL until something writes it, and every reader would then have to carry that case. */

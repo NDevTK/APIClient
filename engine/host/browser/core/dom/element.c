@@ -27,6 +27,7 @@
 #include "solver/engine.h"
 #include "solver/solve.h"
 #include "core/dom/element.h"
+#include "core/dom/name_intern.h"   /* §4.5's storage step stores the three names AS GIVEN — see that header */
 #include "core/dom/element_view.h"
 #include "core/dom/node_iterator.h"
 #include "core/dom/tree_walker.h"
@@ -221,97 +222,26 @@ const char *element_prefix(lxb_dom_element_t *el, size_t *len)
  *
  * "Set element's namespace to namespace, namespace prefix to prefix, local name to localName" — three strings
  * the algorithm was GIVEN, stored byte for byte. This engine stores each as an id into one of the document's
- * hashes, and those ids are what the reader above turns back into bytes, so "stored as given" is a property of
- * the INTERNING and of nothing else.
+ * hashes, and those ids are what the two readers above turn back into bytes, so "stored as given" is a
+ * property of THE INTERNING and of nothing else. core/dom/name_intern.h owns that interning and states which
+ * standard says each of the three is a different name; the three sentences that stood here were moved there
+ * whole when core/dom/attr_list.c turned out to need every one of them about the same hashes.
  *
- * WHY THIS IS NOT lxb_dom_element_create, MEASURED RATHER THAN ASSUMED. That function interns all THREE
- * through lexbor's CASE-FOLDING entries: lxb_ns_append, lxb_tag_append_lower and lxb_ns_prefix_append probe
- * the static tables with lexbor_shs_entry_get_lower_static and insert with lexbor_hash_insert_lower, whose
- * copy is `to[i] = lexbor_str_res_map_lowercase[key[i]]`. So the bytes stored were not the bytes given, and
- * the standards say that is a different name:
- *   - Namespaces in XML 1.0 (Third Edition) §2.3 states it with its own example — "http://www.example.org/wine",
- *     "http://www.Example.org/wine" and "http://www.example.org/Wine" are "all different for the purposes of
- *     identifying namespaces, since they differ in case" — and createElementNS("http://www.Example.org/wine",
- *     "a").namespaceURI came back lowercased.
- *   - DOM §4.5 lowercases a local name in exactly ONE place, createElement's step 2 "If this is an HTML
- *     document, then set localName to localName in ASCII lowercase", which the internal createElementNS steps
- *     do not perform — so createElementNS(SVG_NS, "linearGradient").localName came back "lineargradient", and
- *     getElementsByTagNameNS, which §4.5 matches on the local name EXACTLY, could not find the element the
- *     page had just created.
- *   - Namespaces in XML §3 RESERVES the prefixes matching "xml" case-insensitively and says a processor "MUST
- *     NOT treat them as fatal errors", while binding the "xml" prefix to anything else IS illegal — two
- *     different rules that lxb_ns_prefix_append(hash, "XML", 3) collapses by answering LXB_NS_XML.
- * The folding also chose the wrong INTERFACE: a lower-cased static probe answered LXB_NS_HTML for
- * "HTTP://WWW.W3.ORG/1999/XHTML", so lxb_html_interface_create built an HTML element struct for a namespace
- * that is not the HTML namespace. That is why the exact id is computed BEFORE the interface is created and not
- * repaired onto the node afterwards — an element whose struct disagrees with its namespace is a state this
- * engine must not be able to reach.
+ * WHAT REMAINS HERE IS §4.5's ORDER, and it is the reason this is a function rather than three calls at the
+ * member: the ids are computed BEFORE the interface exists. lxb_dom_element_create interns and creates in one
+ * breath, and the folded id had already CHOSEN THE INTERFACE — a lower-cased static probe answers LXB_NS_HTML
+ * for "HTTP://WWW.W3.ORG/1999/XHTML", so lxb_html_interface_create built an HTML element struct for a namespace
+ * that is not the HTML namespace. An element whose struct disagrees with its namespace is a state this engine
+ * must not be able to reach, so the namespace is decided first and the interface is created from it. Repairing
+ * node->ns afterwards would leave the wrong struct in place, and a side table of unfolded names beside the tree
+ * would answer `namespaceURI` and leave `isEqualNode`, which compares the IDS, calling two namespaces one.
  *
- * THE BYTES ARE THE ONLY PLACE TO FIX IT. A side table of unfolded names beside the tree would answer
- * `namespaceURI` and leave `isEqualNode`, which compares the ids, calling two namespaces one. So the interning
- * is what changes: the ids lexbor already has are matched EXACTLY (their canonical spellings are what
- * lxb_ns_by_id answers, so the table is asked about itself rather than through a second copy of its strings),
- * and anything else is inserted raw. lexbor's own hash is still the storage — only its insert function is
- * this engine's choice, which is the smallest bypass that makes the stored bytes right.
- *
- * The two lexbor entries below are exported and not declared in any lexbor header. Its own
- * dom/interfaces/element.c declares lxb_tag_append, lxb_tag_append_lower and lxb_ns_append at the call site in
- * exactly this form, which is why the declarations are copied rather than invented. */
-const lxb_tag_data_t *
-lxb_tag_append(lexbor_hash_t *hash, lxb_tag_id_t tag_id, const lxb_char_t *name, size_t length);
+ * lexbor's, exported and declared in no lexbor header — its own dom/interfaces/element.c declares its
+ * neighbours at the call site in exactly this form, which is why the declaration is copied rather than
+ * invented. */
 lxb_status_t
 lxb_dom_element_qualified_name_set(lxb_dom_element_t *element, const lxb_char_t *prefix, size_t prefix_len,
                                    const lxb_char_t *lname, size_t lname_len);
-
-static lxb_ns_id_t element_intern_namespace(lxb_dom_document_t *doc, const char *ns, size_t ns_len)
-{
-    lxb_ns_id_t id;
-    lxb_ns_data_t *data;
-
-    if (ns == NULL || ns_len == 0) return LXB_NS__UNDEF;   /* §1.4 step 1 already made "" the null namespace */
-    /* From __ANY + 1: the two ids below it are SENTINELS ("no namespace" and "any namespace"), not names a
-       document can hold, and asking the table about them would let a page's own string claim one of them. */
-    for (id = LXB_NS__ANY + 1; id < LXB_NS__LAST_ENTRY; id++) {
-        size_t klen = 0;
-        const lxb_char_t *k = lxb_ns_by_id(doc->ns, id, &klen);
-        if (k != NULL && klen == ns_len && memcmp(k, ns, ns_len) == 0) return id;
-    }
-    data = lexbor_hash_insert(doc->ns, lexbor_hash_insert_raw, (const lxb_char_t *)ns, ns_len);
-    CHECK(data != NULL, "a namespace name could not be interned — the document's namespace hash is out of "
-                        "memory, and an element with no namespace is a different element");
-    /* An id at or below the last static entry is a small integer, and every id above one IS the entry's own
-       address — which is what makes lxb_ns_data_by_id a cast. lexbor states the same invariant as a NULL
-       return; here it is the assertion it always was. */
-    DCHECK((lxb_ns_id_t)data > LXB_NS__LAST_ENTRY,
-           "an interned namespace landed at an address a static namespace id already names");
-    data->ns_id = (lxb_ns_id_t)data;
-    return data->ns_id;
-}
-
-/* The PREFIX hash, which folds the same way and for the same reason: `lxb_ns_prefix_append(hash, "XML", 3)`
-   answers LXB_NS_XML, so a document using a prefix Namespaces in XML §3 merely RESERVES ("processors MUST NOT
-   treat them as fatal errors") was recorded as using the reserved one itself. Same two halves as above — the
-   sentinel ids are skipped because "#undef" and "#any" are spellings a page's prefix is allowed to have and
-   answering one of them would say "this element has no prefix". */
-static lxb_ns_prefix_id_t element_intern_prefix(lxb_dom_document_t *doc, const char *prefix, size_t len)
-{
-    lxb_ns_prefix_id_t id;
-    lxb_ns_prefix_data_t *data;
-
-    if (prefix == NULL || len == 0) return LXB_NS__UNDEF;
-    for (id = LXB_NS__ANY + 1; id < LXB_NS__LAST_ENTRY; id++) {
-        const lxb_ns_prefix_data_t *d = lxb_ns_prefix_data_by_id(doc->prefix, id);
-        if (d != NULL && d->entry.length == len &&
-            memcmp(lexbor_hash_entry_str(&d->entry), prefix, len) == 0) return id;
-    }
-    data = lexbor_hash_insert(doc->prefix, lexbor_hash_insert_raw, (const lxb_char_t *)prefix, len);
-    CHECK(data != NULL, "a namespace prefix could not be interned — the document's prefix hash is out of "
-                        "memory, and an element with the wrong prefix serializes as a different element");
-    DCHECK((lxb_ns_prefix_id_t)data > LXB_NS__LAST_ENTRY,
-           "an interned namespace prefix landed at an address a static prefix id already names");
-    data->prefix_id = (lxb_ns_prefix_id_t)data;
-    return data->prefix_id;
-}
 
 /* `ns` and `prefix` are NULL when there is none, which is §1.4's null and not the empty string. The three
    slices are BORROWED and none of them is NUL-terminated — they are the halves of the caller's qualifiedName
@@ -320,17 +250,16 @@ lxb_dom_element_t *element_create_ns(lxb_dom_document_t *doc, const char *ns, si
                                      const char *local, size_t local_len,
                                      const char *prefix, size_t prefix_len)
 {
-    const lxb_tag_data_t *tag;
+    lxb_tag_id_t tag_id;
     lxb_ns_id_t ns_id;
     lxb_dom_element_t *el;
 
     DCHECK(!(prefix != NULL && prefix_len != 0) || (ns != NULL && ns_len != 0),
            "an element was created with a namespace prefix and no namespace — DOM §1.4 step 8 throws a "
            "NamespaceError for that pair, so validate-and-extract cannot have produced it");
-    tag = lxb_tag_append(doc->tags, LXB_TAG__UNDEF, (const lxb_char_t *)local, local_len);
-    CHECK(tag != NULL, "an element's local name could not be interned");
-    ns_id = element_intern_namespace(doc, ns, ns_len);
-    el = lxb_dom_interface_element(lxb_dom_document_create_interface(doc, tag->tag_id, ns_id));
+    tag_id = dom_intern_element_local_name(doc, local, local_len);
+    ns_id = dom_intern_namespace(doc, ns, ns_len);
+    el = lxb_dom_interface_element(lxb_dom_document_create_interface(doc, tag_id, ns_id));
     CHECK(el != NULL, "an element interface could not be created");
     if (prefix != NULL && prefix_len != 0) {
         /* BEFORE local_name is set, which is lexbor's own order and is load-bearing: the qualified name is
@@ -338,10 +267,10 @@ lxb_dom_element_t *element_create_ns(lxb_dom_document_t *doc, const char *ns, si
            here, so the qualified name gets an id of its own rather than aliasing the local name's. */
         lxb_status_t st = lxb_dom_element_qualified_name_set(el, (const lxb_char_t *)prefix, prefix_len,
                                                              (const lxb_char_t *)local, local_len);
-        el->node.prefix = element_intern_prefix(doc, prefix, prefix_len);
+        el->node.prefix = dom_intern_prefix(doc, prefix, prefix_len);
         CHECK(st == LXB_STATUS_OK, "an element's qualified name could not be stored");
     }
-    el->node.local_name = tag->tag_id;
+    el->node.local_name = tag_id;
     el->node.ns = ns_id;
     el->custom_state = LXB_DOM_ELEMENT_CUSTOM_STATE_UNCUSTOMIZED;
     return el;
