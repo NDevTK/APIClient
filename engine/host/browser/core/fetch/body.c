@@ -227,9 +227,28 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mim
         size_t off = 0, n = 0, whole = 0;
         JSValue buf = JS_GetArrayBufferView(ctx, init, &off, &n);
         uint8_t *base;
+        /* THE CLAIM THIS ASSERT USED TO MAKE IS FALSE FOR THE PATH THAT REACHES IT, and a message that names
+           the wrong file is worse than no message: it sends the next reader to audit a conversion that is
+           correct. It said "the declaration converts the USVString arm", which is true of every caller that
+           HAS a declaration — `new Request(url, init)` and `new Response(body, init)` both take
+           IDL_BODYINIT_NULLABLE, whose union rule (idl_args.c) brand-tests the seven arms and sends everything
+           else to IDL_DOMSTRING before this function is ever reached.
+           `fetch(url, init)` HAS NO SUCH DECLARATION FOR THIS MEMBER. It reads `init["body"]` with a raw
+           property get in its FETCH_INIT_BODY stage and hands the value straight here, so a plain object —
+           `fetch(u, {body: {toString(){ return "hi" }}})`, which WPT's request-init-002 checks — arrives
+           unconverted, falls into the BufferSource arm above because that arm tests `JS_IsObject`, and lands
+           on this line. It is the RequestInfo defect one stage down and in the same function: a union resolved
+           by SHAPE where the spec resolves it by BRAND, with the USVString arm unreachable for objects.
+           THE FIX IS NOT HERE AND IT IS NOT A SECOND COPY OF THE UNION. fetch()'s body member has to go
+           through the same rule the declaration states — one exported brand predicate, called from both — and
+           the USVString arm's ToString has to be a STAGE in js_fetch_step, because it runs the page's code
+           (FETCH_INPUT_URL_STR is the shape it takes). Re-stating the arm list in fetch.c would make three
+           copies of one union, which is the thing this assert exists to keep honest. */
         DCHECK(!JS_IsException(buf),
-               "the BodyInit union let through an object that is none of its arms — the declaration converts "
-               "the USVString arm, and the four interface arms are brand-tested above");
+               "the BodyInit union let through an object that is none of its arms — every caller with a "
+               "DECLARATION converts the USVString arm before this point, so the caller that reached here has "
+               "none: fetch(input, init) reads init[\"body\"] with a raw property get and never runs the "
+               "union's rule");
         base = JS_GetArrayBuffer(ctx, &whole, buf);
         if (!base) { JS_FreeValue(ctx, buf); return -1; }
         r = body_state_set(ctx, b, (const char *)base + off, n);
