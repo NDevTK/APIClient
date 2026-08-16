@@ -1,0 +1,87 @@
+/* CSS 2.1 §10 — VISUAL FORMATTING MODEL DETAILS, which is where a box's USED VALUES come from, and the first
+ * real box geometry in this engine.
+ *
+ * THE USED VALUE IS A THIRD ANSWER AND THE CASCADE PRODUCES NEITHER OF THE FIRST TWO. css_computed_value.h
+ * states the split it owns — the cascade's SPECIFIED value, and the COMPUTED value a spec algorithm reads. CSS
+ * Cascade's third stage is the USED value: "the values used are the same as the computed values, with 'auto'
+ * replaced by some suitable value, and percentages calculated based on the containing block, but there are
+ * exceptions" (§10.3's own opening). That sentence is this component's whole contract, and the exceptions are
+ * §10.3.1 through §10.3.10 and §10.6.1 through §10.6.7, one per BOX TYPE.
+ *
+ * WHY THE BOX TYPE COMES FIRST AND IS NOT A DETAIL. §10.3 does not give `width` one algorithm; it gives ten,
+ * selected by whether the box is inline or block-level, replaced or not, floating, absolutely positioned or in
+ * normal flow. A used value computed without asking is not approximately right, it is an answer from the wrong
+ * algorithm: a floated box's `width: auto` is a SHRINK-TO-FIT (§10.3.5) and a block-level one's follows from a
+ * constraint equation (§10.3.3), and the two are not close. So `uv_box_kind` is the first thing every entry
+ * below does, and a box type whose section is unbuilt CRASHES naming that section rather than borrowing the
+ * neighbouring one's answer.
+ *
+ * WHAT THIS COMPONENT COMPUTES TODAY, AND WHY THAT SET AND NOT A LARGER ONE. Two of §10's arms need NO layout
+ * at all, and they are not the small cases:
+ *   - A MARGIN OR PADDING whose computed value is an absolute length. Nothing in CSS 2.1 alters it. §10.3.3's
+ *     constraint equation solves for `auto` values and, when the box is OVER-CONSTRAINED, for one horizontal
+ *     margin; it never touches a vertical margin, and §10.6.3 gives the vertical pair exactly one rule (`auto`
+ *     becomes 0). Padding has no `auto` and appears in no equation as an unknown. So the used value IS the
+ *     computed length, and saying so is a derivation rather than a shrug.
+ *   - A `width` or `height` whose computed value is an absolute length, for every box type but a table box and
+ *     a flex or grid item. §10.3.3's equation solves for `width` only when `width` is `auto`; §10.3.5,
+ *     §10.3.7 and §10.3.9 each say the same for their own box type. A TABLE may be widened past it (§17.5.2)
+ *     and a FLEX ITEM's size is its container's algorithm and not §10's at all, so both crash. Two further
+ *     conjuncts are ASSERTED rather than assumed, because each is a case in which the declared length is not
+ *     the used one and neither is visible as a crash otherwise: §10.4/§10.7's clamp by a declared
+ *     `min-`/`max-` limit, and css-sizing §5's `box-sizing: border-box`, which makes the declared value the
+ *     BORDER box's while §10.2 and CSSOM §9 both mean the content box's.
+ *
+ * AND WHY THE ROOT ELEMENT'S `width: auto` IS NOT AMONG THEM, WHICH IS THE ONE THING TO READ BEFORE ADDING IT.
+ * css_computed_value.c's crash named §10.3.3 from the ICB as where a layout starts, and the ICB is real —
+ * core/frame/viewport.c models it. The blocker is one layer down and it is not the ICB: §10.3.3's constraint
+ * equation has SEVEN terms,
+ *     margin-left + border-left-width + padding-left + width + padding-right + border-right-width +
+ *     margin-right = width of containing block
+ * and TWO of them cannot be read by this engine at all. Lexbor's property registry carries no
+ * `border-left-width` longhand — it has the `border`, `border-left` and `border-width` SHORTHANDS and the four
+ * `border-*-color` longhands, and nothing else of the border — so `border: 1px solid red` sets a width that no
+ * cascade read can see, and `border-left-width: 1px` reaches the cascade as an unknown declaration with raw
+ * tokens and no grammar. Solving the equation with those two terms taken as zero would not be an approximate
+ * used width: it would be a number computed from a value the producer never produced, which is the defect
+ * CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS is about, and it would be silent for every page that puts a border on
+ * anything. core/dom/element_view.c's `clientTop`/`clientLeft` DFAIL already states the build order for those
+ * four shorthand expansions and two longhands, because that member IS the border width. It is the subproblem,
+ * and it comes first.
+ *
+ * THE GEOMETRY IS CONCRETE, AND A GEOMETRY DERIVED FROM THE VIEWPORT IS NOT. c35f1fed decided the first half
+ * and it is right: viewport.h's test is whether the model PICKED one point out of a range the environment
+ * leaves free or DERIVED the only value the model permits, and a box's size is neither — it is what a LAYOUT
+ * determines from this tree and this cascade, so it is a computed number and a concolic there would invent an
+ * example nothing computed. Every value this component returns today is that: an absolute length the author
+ * wrote, or a zero §10.6.3 states. But the half that decision did not have to face is that the ICB's width is
+ * a PICKED environment fact (viewport.h says so, and `viewport_env_value` is the seam that mints it), so a
+ * used width DERIVED from it inherits its domain — `parseInt(getComputedStyle(el).width) < 768` is the same
+ * responsive gate as `innerWidth < 768`, and answering it with a bare 1280 deletes the mobile arm exactly as
+ * viewport.h warns. That is PROPAGATION and not a second policy: geometry stays concrete, and a value computed
+ * FROM a concolic operand stays concolic because every operand's domain rides its result. It is also why the
+ * viewport-unit arm of css_length.c crashes rather than resolving `50vw` — see its message: the resolved-value
+ * path is a `char *`, and it stops being one on the day the first viewport-derived used value lands.
+ *
+ * NOTHING HERE IS STORED, SO NOTHING HERE TIME-TRAVELS — and that is a decision with a reason, not an omission.
+ * A layout is per-flow state: two flows with different DOMs have different boxes, and a box tree cached across
+ * a context switch would be exactly the shared state the COW delta does not swap. So there is no box tree.
+ * Every used value is DERIVED PER READ from the running flow's own tree and its own cascade — the identical
+ * decision css_style_declaration.c made for the cascade itself and for the identical reason — which makes it
+ * per-flow by construction, with no capture to write and no entry to unapply. The day a box tree exists for a
+ * reason a derivation cannot serve (an inline formatting context's line boxes cannot be re-derived per read
+ * without re-running the whole flow's layout), it is per-flow state and it needs solver/dom_cow.h's capture at
+ * its accessor, exactly as a browser component's own C record does. */
+#ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_USED_VALUE_H
+#define ENGINE_HOST_BROWSER_CORE_LAYOUT_USED_VALUE_H
+
+#include <lexbor/dom/dom.h>
+
+/* THE USED VALUE of `name` on `el`, in CSS pixels. `name` is one of the physical box-model lengths CSSOM §9
+   routes here — the four margins, the four paddings, `width` and `height` — and the caller has ALREADY
+   established §9's two conjuncts (the property applies to the element, and the element generates a box), which
+   is why nothing here re-asks them. A case CSS 2.1 §10 defines and this component does not compute crashes
+   naming its own section; there is no fallback answer. */
+double used_value_px(lxb_dom_element_t *el, const char *name);
+
+#endif

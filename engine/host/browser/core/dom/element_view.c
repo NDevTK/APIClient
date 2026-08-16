@@ -370,10 +370,14 @@ static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical
     }
     /* step 3 */
     DFAIL("CSSOM VIEW §6's clientWidth/clientHeight step 3 returns THE UNSCALED WIDTH OF THE PADDING EDGE of "
-          "the element's box. This engine gives geometry to exactly one box, the initial containing block "
-          "(element_view.h), so an element that is neither the root element outside quirks mode nor the body "
-          "inside it has no padding edge to measure. BUILD A LAYOUT — CSS 2.1 §10.3.3 resolves the root "
-          "element's used width from the ICB viewport.c already models, which is where one starts");
+          "the element's box — the used `width` plus `padding-left` plus `padding-right` — for an element that "
+          "is neither the root element outside quirks mode nor the body inside it. THE LAYOUT THIS USED TO ASK "
+          "FOR NOW EXISTS AND IS core/layout/used_value.h, and it already answers two of those three terms "
+          "whenever they are absolute lengths, so this is no longer `BUILD A LAYOUT`: what is missing is the "
+          "used `width` for the ordinary `width: auto` box, which is CSS 2.1 §10.3.3's constraint equation, "
+          "which is blocked on the `border-*-width` longhands lexbor's property registry does not carry — the "
+          "same ones clientTop/clientLeft below is waiting on, and its DFAIL states the build order. BUILD "
+          "those, then §10.3.3, and this step becomes three reads of used_value_px");
     return ev_long(ctx, 0.0);
 }
 

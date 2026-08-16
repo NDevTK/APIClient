@@ -13,8 +13,16 @@
  *   no box. §15.3.1's UA-stylesheet rule for the `hidden` content attribute is one input to that value and is
  *   applied where every other UA rule is, in the cascade, rather than a second time here.
  *
- *   NO BOX HAS GEOMETRY except the INITIAL CONTAINING BLOCK, which viewport.c models. There is no layout, so a
- *   box's padding edge, its border widths, its scrolling area and its fragments do not exist to be read.
+ *   NO BOX HAS AN EDGE except the INITIAL CONTAINING BLOCK, which viewport.c models — so a box's padding edge,
+ *   its scrolling area, its position and its fragments do not exist to be read, and every §6 member below that
+ *   reaches for one still crashes.
+ *   WHAT HAS CHANGED, AND WHY THIS LINE IS NOT THE ONE IT WAS. It used to say "there is no layout", and there
+ *   is one: core/layout/used_value.h is CSS 2.1 §10, and it computes the USED VALUE of a box-model length
+ *   wherever §10 defines one without a containing block — every absolute-length margin and padding, and a
+ *   `width` or `height` that is an absolute length. That is not an EDGE (an edge is a position, and a position
+ *   needs the containing block chain), which is why none of the members here can be answered from it yet, but
+ *   it does mean the next step is named: §10.3.3's constraint equation, blocked on the `border-*-width`
+ *   longhands lexbor has no property for, which `clientTop`/`clientLeft` below states the build order for.
  *
  * THOSE ARE TWO DIFFERENT ANSWERS AND THE SPEC ASKS THEM SEPARATELY, which is the whole reason this component
  * can answer anything at all. §6's algorithms use box EXISTENCE as a gate and then, in several branches, route

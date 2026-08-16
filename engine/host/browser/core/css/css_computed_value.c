@@ -8,8 +8,11 @@
 
 #include "check.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_length.h"
+#include "core/css/css_property_applies.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
+#include "core/layout/used_value.h"
 
 static char *css_cv_strdup(const char *s)
 {
@@ -139,7 +142,7 @@ static char *blockified(char *spec)
    walk reads SPECIFIED values on purpose: blockification never makes a box a flex or grid container and never
    stops one being one, so the question this walk asks has the same answer either way, and asking for the
    computed value would recurse up the whole ancestor chain to answer it. OWNED, or NULL at the root. */
-static char *box_parent_display(const lxb_dom_node_t *n)
+char *css_box_parent_display(const lxb_dom_node_t *n)
 {
     const lxb_dom_node_t *p;
 
@@ -188,11 +191,47 @@ static char *computed_display(lxb_dom_element_t *el, char *spec)
         free(p);
     }
     if (!blockify) {
-        char *pd = box_parent_display(n);
+        char *pd = css_box_parent_display(n);
         blockify = display_is_flex_or_grid_container(pd);
         free(pd);
     }
     return blockify ? blockified(spec) : spec;
+}
+
+/* ---- the BOX-MODEL LENGTHS' computed value ---------------------------------------------------------------- */
+
+/* ONE `Computed value:` LINE, WRITTEN THE SAME WAY IN TEN PROPERTY DEFINITIONS. CSS 2.1 §8.3 and §8.4 give the
+   margins and the paddings "the percentage as specified or THE ABSOLUTE LENGTH"; §10.2 and §10.5 give `width`
+   and `height` "the percentage or 'auto' as specified or the absolute length"; css-sizing says the same for the
+   four min/max limits. So the whole rule is: ABSOLUTIZE a length and leave everything else alone — a percentage
+   cannot be resolved here because it refers to the containing block, which is a USED value and belongs to
+   core/layout/used_value.h, and `auto` is a keyword no cascade step turns into a number.
+   THE ABSOLUTIZATION IS WHERE THE FONT AND THE VIEWPORT WOULD ENTER, and core/css/css_length.h is the one
+   component that knows it — `2em` and `50vw` crash there, each naming its own missing piece, rather than being
+   waved through as text that merely LOOKS like a computed value. */
+static char *computed_length(char *spec)
+{
+    CssLength len = css_length_parse(spec);
+
+    if (len.kind != CSS_LENGTH_ABSOLUTE) return spec;   /* the percentage or the keyword, AS SPECIFIED */
+    free(spec);
+    return css_length_serialize_px(len.px);
+}
+
+/* The ten physical box-model lengths plus the four sizing limits — one list, because every one of them takes
+   the same computed-value rule above and because used_value.c reads the limits to decide §10.4's clamp. */
+static bool css_models_length(const char *name)
+{
+    static const char *const LENGTHS[] = {
+        "margin-top", "margin-right", "margin-bottom", "margin-left",
+        "padding-top", "padding-right", "padding-bottom", "padding-left",
+        "width", "height", "min-width", "max-width", "min-height", "max-height",
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(LENGTHS) / sizeof(LENGTHS[0]); i++)
+        if (strcmp(LENGTHS[i], name) == 0) return true;
+    return false;
 }
 
 /* ---- the computed value ----------------------------------------------------------------------------------- */
@@ -201,7 +240,8 @@ bool css_computed_models(const char *name)
 {
     DCHECK(name != NULL, "the computed-value model question was asked about a NULL property name");
     return strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0 ||
-           strcmp(name, "display") == 0 || strcmp(name, "float") == 0 || strcmp(name, "position") == 0;
+           strcmp(name, "display") == 0 || strcmp(name, "float") == 0 || strcmp(name, "position") == 0 ||
+           strcmp(name, "box-sizing") == 0 || css_models_length(name);
 }
 
 char *css_computed_value(lxb_dom_element_t *el, const char *name)
@@ -238,10 +278,12 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
         return computed_overflow(el, name, spec);
     if (strcmp(name, "display") == 0)
         return computed_display(el, spec);
-    /* `float` (CSS2 §9.5.1) and `position` (css-position §2) both state "Computed value: as specified", and a
-       keyword has no absolutization to do — so the specified value IS the answer here rather than a stand-in
-       for one. */
-    DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0,
+    if (css_models_length(name))
+        return computed_length(spec);
+    /* `float` (CSS2 §9.5.1), `position` (css-position §2) and `box-sizing` (css-sizing §5) all state "Computed
+       value: as specified" (`box-sizing`'s line is "specified keyword"), and a keyword has no absolutization to
+       do — so the specified value IS the answer here rather than a stand-in for one. */
+    DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0,
            "a property this component claims to model reached the as-specified arm without a `Computed value: "
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "
            "apart");
@@ -314,36 +356,33 @@ char *css_resolved_value(lxb_dom_element_t *el, const char *name)
     case CSS_RESOLVED_USED_IF_RENDERED:
         /* "If the property applies to the element and the resolved value of the display property is not none
            or contents, then the resolved value is the used value. Otherwise the resolved value is the computed
-           value." The second half is a real answer and is given. */
-        if (!resolved_display_generates_a_box(el)) break;
-        DFAIL("CSSOM §9 makes this property's resolved value the USED value — the number a LAYOUT produced for "
-              "this element's box — whenever the element generates one, and this element does. This engine "
-              "gives geometry to exactly one box, the initial containing block (core/dom/element_view.h), so "
-              "there is no used width, height, margin or padding to report; answering the cascade's specified "
-              "value here is what getComputedStyle used to do, and it is a WRONG answer rather than a missing "
-              "one. BUILD A LAYOUT — CSS 2.1 §10.3.3 resolves the root element's used width from the ICB "
-              "core/frame/viewport.c already models, which is where one starts — and decide §9's other "
-              "conjunct with it (whether the property APPLIES to this element, which for `width` on a "
-              "non-replaced inline box it does not)");
-        break;
-    case CSS_RESOLVED_USED_IF_POSITIONED: {
+           value." BOTH conjuncts are real branches and both are taken. The first is the property's own
+           `Applies to:` line (core/css/css_property_applies.h) and it is what answers `width` on a
+           non-replaced inline element — `auto`, in every user agent, and not a used value that does not exist.
+           The second is `display: none`. Past them, the used value is CSS 2.1 §10's, and
+           core/layout/used_value.h computes the arms of §10 that need no containing block and crashes naming
+           the section for the arms that do. */
+        if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) break;
+        return css_length_serialize_px(used_value_px(el, name));
+    case CSS_RESOLVED_USED_IF_POSITIONED:
         /* "If the property applies to a positioned element and the resolved value of the display property is
            not none or contents, and the property is not over-constrained, then the resolved value is the used
-           value. Otherwise the resolved value is the computed value." A STATICALLY positioned element is not a
-           positioned element, which is the common case and is answered. */
-        char *pos = css_computed_value(el, "position");
-        bool positioned = !css_cv_is(pos, "static");
-
-        free(pos);
-        if (!positioned || !resolved_display_generates_a_box(el)) break;
+           value. Otherwise the resolved value is the computed value." The first conjunct IS "positioned" —
+           CSS 2.1 §9.3.2's `Applies to:` line for the insets is "positioned elements" — so it is asked
+           through the same entry as every other applies-to line rather than re-derived here from `position`,
+           which is what this branch used to do. A STATICALLY positioned element is the common case and is
+           answered. */
+        if (!css_property_applies(el, name) || !resolved_display_generates_a_box(el)) break;
         DFAIL("CSSOM §9 makes an inset property's resolved value the USED value for a POSITIONED element that "
-              "generates a box, and this element is one. The used inset is where a LAYOUT placed the box "
-              "relative to its containing block, and this engine has no box geometry beyond the initial "
-              "containing block (core/dom/element_view.h). BUILD A LAYOUT, and with it §9's third conjunct — "
-              "an OVER-CONSTRAINED pair (`left` and `right` both set on a non-auto width) resolves to the "
-              "computed value rather than the used one");
+              "generates a box, and this element is one. CSS 2.1 §9.4.3 gives a RELATIVELY positioned box's "
+              "used `left`/`right` from the containing block's WIDTH (a percentage) and from each other (the "
+              "`left = -right` rule when one is `auto`), and §10.3.7 solves an ABSOLUTELY positioned box's "
+              "from the same constraint equation as its width — so both need the containing block, and both "
+              "are waiting on the subproblem core/layout/used_value.h names: §10.3.3's equation, and under it "
+              "the `border-*-width` longhands lexbor's property registry does not carry. BUILD those, then "
+              "§9's THIRD conjunct, which is stated in terms of the same equation — an OVER-CONSTRAINED pair "
+              "(`left` and `right` both non-auto on a non-auto width) resolves to the computed value");
         break;
-    }
     case CSS_RESOLVED_USED:
         DFAIL("CSSOM §9 makes this property's resolved value the USED value unconditionally — it is one of the "
               "COLOR properties, whose used value is the computed value with `currentcolor` resolved against "

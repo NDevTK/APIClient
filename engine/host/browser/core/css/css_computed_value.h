@@ -15,13 +15,16 @@
  *   getComputedStyle() wants the RESOLVED VALUE, which CSSOM §9 defines as the computed value for MOST
  *   properties and the USED value for a named set — the box-model lengths (`width`, `height`, the margins and
  *   paddings), the insets of a positioned box, the colors, `line-height`, and the special cases other specs
- *   declare (`transform` resolves to a matrix). A used value is what a LAYOUT produced. This engine gives
- *   geometry to exactly one box, the initial containing block (core/dom/element_view.h), so those properties
- *   have no resolved value here and `css_resolved_value` says so at the read instead of returning the cascade's
- *   text, which is a WRONG answer rather than a missing one and was what this file's absence used to produce.
- *   §9's two escapes are real branches and are taken: a `display: none` element's box-model lengths resolve to
- *   their COMPUTED values, and a statically positioned element's insets do too — so the common reads still
- *   answer.
+ *   declare (`transform` resolves to a matrix). A used value is what a LAYOUT produced, and CSS 2.1 §10 is
+ *   that layout: core/layout/used_value.h owns it and computes the arms of §10 that need no containing block
+ *   (a margin or padding whose computed value is an absolute length; a `width` or `height` that is one),
+ *   crashing by SECTION for the arms that do. What is NOT a layout question is §9's OTHER conjunct — whether
+ *   the property APPLIES to the element at all — and core/css/css_property_applies.h answers it from the
+ *   property's own `Applies to:` line, which is why `getComputedStyle(span).width` reports the computed `auto`
+ *   that every user agent reports rather than reaching for a box.
+ *   §9's escapes are real branches and are taken: a `display: none` element's box-model lengths resolve to
+ *   their COMPUTED values, a statically positioned element's insets do too, and so does every property that
+ *   does not apply to the element.
  *
  * WHAT IS STILL SPECIFIED-VALUE-SHAPED, AND THE MECHANISM THAT ENDS IT. A property this file does not model
  * takes its computed value to BE its specified value, which is what the majority of CSS properties' "Computed
@@ -43,6 +46,14 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name);
 
 /* Does this component DERIVE `name`'s computed value from the cascade's specified value? */
 bool css_computed_models(const char *name);
+
+/* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, which is not the
+   parent element when a `display: contents` ancestor sits between them. OWNED, or NULL at the root. Exported
+   because it is the question "is this box a flex or grid ITEM", and TWO algorithms ask it: CSS Display §2.7's
+   blockification here, and CSS 2.1 §10.3's box-type split in core/layout/used_value.c — a flex item's size is
+   its container's algorithm and not §10's, so a used value derived from §10 for one would be an answer from
+   the wrong section. `n` must be an element's node. */
+char *css_box_parent_display(const lxb_dom_node_t *n);
 
 /* CSSOM §9's own split, per property. */
 typedef enum {
