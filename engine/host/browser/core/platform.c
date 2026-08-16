@@ -233,12 +233,15 @@ static void r_broadcast_channel(JSRuntime *rt) { broadcast_channel_free(rt); }
 static void r_xhr(JSRuntime *rt) { xhr_free(rt); }
 /* §7.2.6.10.3's NavigationDestination, AND IT IS THE ROW THE AUDIT FOUND RATHER THAN THE LEAK WALK. Its release
    was written, exported from its header, and CALLED BY NOBODY — not by a host, not by another component — so
-   the private Symbol its internal slots hang off has been leaked by every run this engine has ever made. The
-   walk could not report it and never will: a private Symbol is a JSAtomStruct, which is not on gc_obj_list, so
-   `JS_FreeRuntime`'s object walk does not see it, and the atom walk beside it is behind ENABLE_DUMPS +
-   JS_DUMP_ATOM_LEAKS, which no host in this tree sets. A component released by nobody is what a THIRD copy of
-   a hand-written list produces; here there was no copy at all, which is the same defect with the report
-   removed. */
+   the private Symbol its internal slots hang off had been leaked by every run this engine had made up to that
+   commit. The walk could not report it: a private Symbol is a JSAtomStruct, which is not on gc_obj_list, so
+   `JS_FreeRuntime`'s object walk does not see it, and the atom walk beside it was behind ENABLE_DUMPS +
+   JS_DUMP_ATOM_LEAKS, a bit no host in this tree ever set. THAT SECOND HALF IS NO LONGER TRUE and the sentence
+   is not left standing: `JS_FreeRuntime`'s atom walk is unconditional now and carries a DCHECK that names the
+   surviving atom by kind and description, so a release this column forgets aborts at the report instead of
+   going unseen. What stays true is the first half — the audit found this row, not a detector — and the reason
+   is the general one: a component released by nobody is what a THIRD copy of a hand-written list produces, and
+   here there was no copy at all. */
 static void r_nav_destination(JSRuntime *rt) { navigation_destination_free(rt); }
 /* THE DOM GROUP, WHOSE ROOT IS THE LARGEST CASCADE IN THIS BROWSER. element_free reaches forty-two further
    releases — node.c's WRAPPER IDENTITY TABLE (a counted reference to every node wrapper ever minted, and a
