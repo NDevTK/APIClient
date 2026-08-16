@@ -65,7 +65,13 @@
 
   /* THE ENGINE'S OUTPUT BELONGS TO THE TRUSTED ZONE, so it rides every reply rather than being kept here.
      bridge.js parses @RESULT/@E/@WHY out of exactly these lines and a crash's ROOT line is the last @WHY
-     printed before abort() — if they stayed in the frame a crashed renderer would take its own cause with it. */
+     printed before abort() — if they stayed in the frame a crashed renderer would take its own cause with it.
+     EACH LINE CARRIES THE STREAM IT CAME FROM, `[fd, text]`, and that is the same rule as everything else that
+     crosses here: a record of primitives carrying its TYPE. The two streams are ONE ordered list because the
+     order across them is what the reader uses — engineCrash scans backwards for the LAST @WHY (stderr) printed
+     before the abort, and @RESULT (stdout) may sit either side of it — so splitting them into two arrays would
+     destroy exactly the fact being read. The fd is what lets the trusted zone tee stderr to its console live
+     (the harness `diag` capture, and an ASan report's alloc/free stacks) without teeing every @H line with it. */
   function drain() { var o = out; out = []; return o; }
 
   function cstr(s) {
@@ -164,8 +170,8 @@
        and a fetch this document cannot make; `instantiateWasm` is read off Module and short-circuits BEFORE
        any URL is computed, so no address is ever derived from this frame's blob: base. */
     M = await mod.default({
-      print: function (s) { out.push(String(s)); },
-      printErr: function (s) { out.push(String(s)); },
+      print: function (s) { out.push([1, String(s)]); },
+      printErr: function (s) { out.push([2, String(s)]); },
       noInitialRun: true,
       instantiateWasm: function (imports, ok) {
         WebAssembly.instantiate(m.wasm, imports).then(function (r) { ok(r.instance, r.module); });
@@ -175,6 +181,16 @@
     port.onmessage = function (e) { serve(e.data, port); };
     return null;
   }
+
+  /* THE WORKING SET, WHICH IS THIS FRAME'S TO STATE AND NOBODY ELSE'S. `HEAPU8.length` is the view over the
+     ENTIRE linear memory of this instance, and the offscreen's RAM floor is the sum of that number across the
+     pool — a number it used to read straight off the Module it held. There is no Module on that side any more,
+     so the fact rides every SUCCESSFUL reply: a call is the only thing that can grow this memory, so the moment
+     a call answers is exactly the moment the number changed, and no extra round trip can be fresher. It is read
+     AFTER the call returns for that reason. A FAILED reply carries none, and that is a positive statement
+     rather than a hole: a failure here is the WASM abort or an assert about the module, so the instance whose
+     memory this describes is the thing that broke and any number for it would be a claim about a dead heap. */
+  function heapBytes() { return M.HEAPU8.length; }
 
   function serve(m, port) {
     var rec;
@@ -187,7 +203,9 @@
            offscreen on an answer that is never coming, which is the one outcome with no symptom anywhere. */
         rec = { v: 1, id: m.id, ok: false, err: "unserved renderer op: " + m.op, out: drain() };
       } else {
-        rec = { v: 1, id: m.id, ok: true, ret: docall(m), out: drain() };
+        /* PROPERTY ORDER IS LOAD-BEARING: `ret` runs the call, and `heapBytes` is read after it because the
+           call is what may have grown the memory the number describes. */
+        rec = { v: 1, id: m.id, ok: true, ret: docall(m), heapBytes: heapBytes(), out: drain() };
       }
     } catch (e) {
       /* EVERY FAILURE IN HERE IS THE RENDERER'S — a WASM abort (the engine's own CHECK/DCHECK reaching abort()),
@@ -213,7 +231,10 @@
     var port = e.ports[0];
     if (!port) throw new Error("@E a renderer's boot record carried no port — every call after boot rides it");
     boot(e.data, port).then(
-      function () { port.postMessage({ v: 1, id: e.data.id, ok: true, ret: null, out: drain() }); },
+      /* THE BOOT REPLY IS A REPLY, so it carries the working set too — and it is the FIRST one, which is what
+         makes "this renderer has never reported its memory" a state that cannot occur on the other side rather
+         than a case to default: rendererCreate does not return until this record has landed. */
+      function () { port.postMessage({ v: 1, id: e.data.id, ok: true, ret: null, heapBytes: heapBytes(), out: drain() }); },
       function (err) { port.postMessage({ v: 1, id: e.data.id, ok: false,
                                           err: String((err && err.stack) || err), out: drain() }); });
   }

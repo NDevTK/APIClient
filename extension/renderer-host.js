@@ -25,13 +25,20 @@
  * theirs: JSON (and every text form) can say none of the 256 values a byte has without an algorithm run over
  * them, and the algorithm this zone must never run is a decode. `postMessage` carries both natively — structured
  * clone reproduces a number as a number (so `otherW.length === 0` still distinguishes one from the string "0")
- * and a `Uint8Array` as bytes — so nothing is encoded in transit.
+ * and a `Uint8Array` as bytes — so nothing is encoded in transit. A REPLY carries three things beside its call
+ * id: what the ABI answered, the engine output drained since the last one (each line tagged with the STREAM it
+ * came from, so stderr can be teed live without teeing @H traffic with it), and the instance's WORKING SET,
+ * which is the one fact bridge.js's admission needs and cannot read off a Module it no longer holds.
  *
  * TRANSFERABLES ARE NOT USED, and that is a decision rather than an omission. Transferring detaches the sender's
  * buffer, which is only sound where this zone provably holds the last reference: the engine PROGRAM is cached
  * here and handed to every renderer, so transferring it would detach it out from under the second one. The
  * place transfer becomes correct is a fetched reply body, whose only consumer is the renderer parked on it —
  * that is a change to make at that call site, with the ownership argument stated there, not a default here.
+ * IT IS NOT UNIFORMLY CORRECT EVEN FOR BYTES THIS ZONE FETCHED, which is why it stays a per-site decision:
+ * §7.4 step 14's document bytes go to `qjs_init` AND are retained by bridge.js as `eng.html`, the cold recipe
+ * it writes to IndexedDB on finalize, so transferring those would empty the cross-session frontier's copy of
+ * the document — a detached buffer reads as a zero-length one, which is a page that parsed to nothing.
  *
  * THE ORIGIN STAMP STAYS THIS ZONE'S. A record arriving from a frame may not state who it is: the frame's
  * `event.origin` is the literal "null" (it is opaque) and everything in the payload is written by the untrusted
@@ -83,7 +90,19 @@
     DCHECK(m && m.v === 1 && typeof m.id === "number" && Array.isArray(m.out),
            "a renderer answered with something that is not this transport's reply — a reply is a version, the " +
            "call id it answers, and the engine output drained with it");
-    for (var i = 0; i < m.out.length; i++) r.lines.push(String(m.out[i]));
+    for (var i = 0; i < m.out.length; i++) {
+      var ln = m.out[i];
+      DCHECK(Array.isArray(ln) && (ln[0] === 1 || ln[0] === 2) && typeof ln[1] === "string",
+             "a renderer's output line did not carry the stream it came from — a line crosses as `[fd, text]` " +
+             "so the two streams stay in ONE order (the last @WHY before an abort is what names the cause, and " +
+             "@RESULT may sit either side of it) while stderr alone is teed live");
+      r.lines.push(ln[1]);
+      /* STDERR, TEE'D LIVE TO THIS ZONE'S CONSOLE. It is the same tee bridge.js's `errsink` performed while it
+         held the Module: @E/@WHY abort lines, ASan's alloc/free stacks and native diagnostics are CAPTURABLE
+         while the run is happening (`harness diag`) instead of only in a crash record whose findings are about
+         to be discarded. stdout is NOT teed — a hot engine's @H traffic would bury it. */
+      if (ln[0] === 2) console.debug(ln[1]);
+    }
     var w = r._await.get(m.id);
     DCHECK(w !== undefined,
            "a renderer answered a call id this zone never made — the id is the whole routing table for an " +
@@ -91,7 +110,21 @@
            "call that is actually outstanding will never be resolved");
     if (!w) return;
     r._await.delete(m.id);
-    if (m.ok) { w.resolve(m.ret); return; }
+    if (m.ok) {
+      /* THE INSTANCE'S WORKING SET, RECORDED WHERE IT ARRIVES. bridge.js's Level-1 admission is the sum of this
+         number over the pool and it used to read `M.HEAPU8.length` off the Module it held; there is no Module
+         on this side any more, so the renderer states it on every reply and the last one is what the pool
+         holds. Asserted rather than defaulted: an absent one is renderer.html having stopped writing it, and
+         the shape that hides is "this instance occupies no memory", which admits another engine against RAM
+         that is already spent. */
+      DCHECK(typeof m.heapBytes === "number",
+             "a renderer answered a call without stating its working set — every successful reply carries " +
+             "HEAPU8.length because a call is the only thing that can grow it, and the trusted zone's RAM " +
+             "floor is the sum of that number across the pool");
+      r.heapBytes = m.heapBytes;
+      w.resolve(m.ret);
+      return;
+    }
     /* A FAILED CALL IS A REJECTION, because that is the shape the seam it replaces already has: `M.ccall`
        THROWS when the WASM aborts, and bridge.js's engineCrash is written against that throw. The renderer is
        dead after one — its linear memory is what aborted — so every later call into it is a bug here, not a
@@ -123,6 +156,16 @@
     return p;
   }
 
+  /* THE LIVE RENDERERS OF THIS ZONE, AND THE TWO TOTALS THAT MAKE A CLEAN TEARDOWN DISTINGUISHABLE FROM NOTHING
+     EVER HAVING RUN. "no frames and no engines" is what a pool that finalized every instance looks like AND
+     what an extension that never provisioned one looks like, which is precisely the shape CLAUDE.md names —
+     a number that reads the same whether the mechanism worked or was never reached. So the counters are kept:
+     `provisioned` rises where a frame is created and `destroyed` where one is removed, and `rendererStats`
+     CHECKS the set against the DOM, so a renderer whose element outlived its record (or the reverse) is caught
+     here rather than as a slow leak of frames under a document that never reloads. */
+  var _live = new Set();
+  var _provisioned = 0, _destroyed = 0;
+
   /* THE RENDERER GOES WITH ITS FRAME. There is no free list on the other side and none is wanted: a pointer a
      call RETAINED lives as long as the module does and the module dies with the document, so removing the
      element is the whole teardown. `qjs_teardown` is a separate ABI call the OWNER makes first — it is the
@@ -134,7 +177,23 @@
     if (r.port) r.port.close();
     if (r.frame.parentNode) r.frame.parentNode.removeChild(r.frame);
     r._dead = true;
+    if (_live.delete(r)) _destroyed++;
   }
+
+  /* WHAT THIS ZONE IS HOLDING, ASKED FROM OUTSIDE. The DOM is the second opinion and the assert is what makes
+     it one: `_live` is this file's record of the renderers it provisioned and the frames are what the browser
+     actually has, so the two disagreeing means a destroy removed a record without its element or an element
+     without its record. */
+  function rendererStats() {
+    var frames = document.querySelectorAll('iframe[title^="renderer "]').length;
+    DCHECK(frames === _live.size,
+           "this zone holds " + _live.size + " renderer(s) but the document carries " + frames + " renderer " +
+           "frame(s) — a frame that outlives its record is a WASM instance nothing can reach and nothing will " +
+           "ever tear down, and a record that outlives its frame is a caller about to post into a dead window");
+    return { provisioned: _provisioned, destroyed: _destroyed, live: _live.size, frames: frames,
+             names: Array.from(_live).map(function (r) { return r.name; }) };
+  }
+  self.rendererStats = rendererStats;
 
   /* PROVISION ONE RENDERER. The frame is created here, by the offscreen, because SECURITY.md makes this the
      only zone that knows which instance holds which document — the same reason it owns the routing and stamps
@@ -159,7 +218,13 @@
     f.setAttribute("title", "renderer " + name);
     f.setAttribute("src", RENDERER_URL);
     f.style.cssText = "position:absolute;left:0;top:0;width:1px;height:1px;border:0;visibility:hidden";
+    /* `heapBytes` IS NOT IN THIS LITERAL AND MUST NOT BE. There is no number that means "this instance has not
+       said yet" which a consumer would not then have to branch on, and there is no window in which one is
+       needed: the boot reply is the first record to arrive on this port and carries it, and this function does
+       not return until that record has landed. onReply is its only writer. */
     var r = { name: name, frame: f, port: null, lines: [], _next: 1, _await: new Map(), _dead: false };
+    _live.add(r);
+    _provisioned++;
     var booted = new Promise(function (resolve, reject) {
       function onHello(e) {
         /* THE BROWSER-SET IDENTITY, AND THE ONLY ONE THERE IS. The frame's origin is opaque so `event.origin`
@@ -225,6 +290,9 @@
          { t: "cstr", v: ADDR }],      /* §8.1.3.1's top-level creation URL — a root document is its own */
         [new TextEncoder().encode(doc)]);
       rec.bundleId = ((await r.call("qjs_bundle_id", "number", [], [])) >>> 0).toString(36);
+      /* THE WORKING SET THE FRAME STATED, which is the fact bridge.js's RAM floor is summed out of. A probe
+         that never looked at it would leave the pool's one non-ABI input unexercised. */
+      rec.heapBytes = r.heapBytes;
       /* AND THE TEARDOWN, because it is the call that makes the runtime walk gc_obj_list and report a leaked
          GC object as a failure. A probe that provisioned an instance and walked away from it would be
          measuring the transport with the one check that judges the instance switched off. */

@@ -2,20 +2,33 @@
  *
  * Extracted OUT of offscreen-brain.js so the bridge and the (to-be-deleted) analysis logic are no
  * longer in one file. This is the platform edge the lexbor+quickjs engine CANNOT be, because the engine
- * is the UNTRUSTED WASM: it loads the engine WASM (dynamic import), drives the qjs_step protocol,
- * safe-fetches replies/chunks (the safeFetch chokepoint the untrusted bundle must never bypass),
- * persists the cross-session frontier to IndexedDB, and JSON.parses the engine's ONE @RESULT. It
- * installs self.astDispatch (+ self.kickHostPool) for the offscreen to call. NO analysis LOGIC here —
- * the C engine owns identity/dedup/detection; this is only the network/IDB/WASM edges.
- */
-/* The engine WASM factory is an ES module; this bridge lives in the CLASSIC offscreen-brain.js, so load
-   it via dynamic import() (cached), NOT a static top-level import. Same-origin under the offscreen CSP. */
-let _createQJSp = null;
+ * is the UNTRUSTED WASM: it drives the qjs_step protocol, safe-fetches replies/chunks (the safeFetch
+ * chokepoint the untrusted bundle must never bypass), persists the cross-session frontier to IndexedDB,
+ * and JSON.parses the engine's ONE @RESULT. It installs self.astDispatch (+ self.kickHostPool) for the
+ * offscreen to call. NO analysis LOGIC here — the C engine owns identity/dedup/detection; this is only
+ * the network/IDB/renderer edges.
+ *
+ * NO ENGINE LIVES IN THIS REALM. This file used to `import("./lib/qjs/qjs.mjs")` and build every instance
+ * with `createQJS()` right here, which made SECURITY.md's "confined to the WASM sandbox + a fixed set of host
+ * edges" a convention rather than a boundary: the offscreen held the `Module` handle, `M.HEAPU8` was an
+ * exported view of an untrusted instance's whole linear memory, and two instances in one realm were a
+ * NAMESPACE. Every instance is now a RENDERER — renderer-host.js provisions it in an
+ * `<iframe sandbox="allow-scripts">` whose unique opaque origin is cross-origin to the extension origin, which
+ * is what lets Site Isolation put it in its own renderer process — and every qjs_* call is an `await`ed
+ * `rendererCall` over a MessagePort. The in-realm path is DELETED rather than kept beside it: while both
+ * existed the sandboxed one served nothing and the boundary was a claim about a path production did not take.
+ * The consequence to hold on to is that EVERY ABI call is now a suspension point at which another engine's
+ * round can interleave, so anything that was atomic because it was two ccalls in a row is atomic here only if
+ * it is written to be. */
 // The ROOT DOCUMENT NAME for each engine this offscreen owns — see the qjs_init call below. Only the roots are
 // named here: a document an engine CREATES (an iframe's child navigable, a popup) names itself "<parent>.<n>",
 // which is what lets HTML 4.8.5 create a child navigable inside the insertion steps without asking this zone.
 let nextDocumentId = 0;
-function getCreateQJS() { return (_createQJSp || (_createQJSp = import("./lib/qjs/qjs.mjs").then((m) => m.default))); }
+/* THE RUN LOG AND THE CRASH COUNT, DECLARED HERE SO THEIR ABSENCE IS THIS FILE NOT BEING LOADED and their
+   emptiness is no engine having finalized / no engine having aborted. linesToAnalysis appends one record per
+   finalized session, crashBanner counts every abort path, and rendererPoolProbe reads both. */
+self._engineLog = [];
+self._engineCrashOccurred = 0;
 
 /* A URL with an opaque HOLE ("{}"/"{tag}") is not concretely fetchable (used to gate reply/chunk fetch).
    Endpoint IDENTITY (hole-normalization, shape/concrete collapse) is the ENGINE's now — the host's
@@ -126,6 +139,13 @@ function linesToAnalysis(lines, msg, expectResult) {
         jobsQueued: result._jobsQueued, jobsRun: result._jobsRun,
         worldSegmentsHeld: result._worldSegmentsHeld, worldSegmentsMade: result._worldSegmentsMade,
         worldSegmentsForked: result._worldSegmentsForked,
+        /* WHAT THE RUN ACTUALLY LEARNED, beside what it cost. The counters above say the BFS switched, forked
+           and pumped jobs; these two say it produced something, which is the only question a probe watching an
+           engine that now lives behind a frame boundary can ask without reaching into the moat. Both arrays are
+           asserted field-for-field above, so there is nothing to default; the crash arm carries neither,
+           because a run with no result document has no surface to have found and a zero there would read as a
+           page that was analysed and was clean. */
+        endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
         park: result._park.length, resumed: resumed, url: (msg && msg.sourceUrl) || "" }
     /* A CRASH RECORD HAS NO DOCUMENT BY CONSTRUCTION, and the honest report of that is the ABSENCE, not seven
        zeroes. Zeroes here read as "the engine ran and did nothing" — indistinguishable in the log from a real
@@ -137,7 +157,10 @@ function linesToAnalysis(lines, msg, expectResult) {
   self._engineMeta = m;
   // A per-run LOG (not a single overwritten global): concurrent cold-kick engines each report here, so the
   // full park->persist->rehydrate->resume SEQUENCE across all engines is observable, not just the last one.
-  (self._engineLog = self._engineLog || []).push(m);
+  /* THE ARRAY IS DECLARED AT LOAD (top of this file), not created on first use: `self._engineLog = self._engineLog || []`
+     is the defaulting shape, and here it defaulted the one thing a reader wants to distinguish — an empty log
+     because nothing has run from an absent log because this file never loaded. */
+  self._engineLog.push(m);
   if (self._engineLog.length > 200) self._engineLog.shift();
   /* THE HOST-SIDE EMPTIES A CRASH RECORD IS MADE OF, named once. `chunkUrls` below already draws this exact
      distinction in this file — an empty the HOST owns is not the same object as an engine field defaulted to
@@ -396,30 +419,42 @@ function responseFieldLines(h) {
    decision on the navigable.create notice. It is a separate argument from the address because one WASM
    instance is one DOCUMENT regardless of origin — this document may be NESTED in a document of another
    instance, and §8.1.3.5 decides secure-context from the TOP of that chain. */
+/* PROVISION THE INSTANCE, THEN ROOT IT. Two operations with two failure modes, and separating them is what
+   makes the cleanup a line instead of a rule someone follows: the renderer is a FRAME in this document, so
+   anything that throws after it exists — the init return code, the bundle id, the frontier key's origin, an
+   IndexedDB read, the engine's own abort — leaves an untearable WASM instance parked under a document that
+   never reloads unless the throw takes the frame with it. The old path leaked a Module that the collector
+   eventually took; a frame is not collected.
+   THE RENDERER'S NAME IS THIS INSTANCE'S AGENT CLUSTER. renderer-host.js takes a name and nothing else — it
+   does not compute the key, does not admit and does not rank — and this is the zone that owns that question,
+   so the name it passes in IS the answer (SECURITY.md's `(browsing-context group, origin)`), which is also
+   what makes a frame in the offscreen's DOM identifiable as the instance the pool is talking about. */
 async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
-  const lines = [];
-  const createQJS = await getCreateQJS();
-  // @DBG is the ONLY dev-trace channel: routed to console.debug, NEVER into `lines` — so it is never parsed
-  // as @E/@RESULT and never pollutes resolverErrors. @E/@WHY stays STRICTLY for fatal should-never-happen
-  // states (they abort); a diagnostic must never masquerade as one. (CLAUDE.md: @WHY is fatal, not a log.)
-  const sink = (s) => { try { if(typeof s==="string" && s.indexOf("securitySinks")>=0){var m=s.match(/"poc":"([^"]{0,40})"/);console.debug("XR poc="+(m?m[1]:"NONE"));} } catch(_){} lines.push(s); };
-  // Engine STDERR (printErr) — @E/@WHY aborts, AddressSanitizer reports, native diagnostics — is TEE'd to
-  // console.debug so it is CAPTURABLE live (harness `diag`) and never silently lost when the crashed engine's
-  // `lines` are discarded; it still lands in `lines` for the crash record. This is what makes the `asan` build
-  // usable: ASan prints its UAF/double-free report (alloc + free stacks) to stderr, which surfaces here.
-  const errsink = (s) => { try { console.debug(s); } catch (_) {} lines.push(s); };
-  const M = await createQJS({ print: sink, printErr: errsink, noInitialRun: true });
-  const ptrs = [];
-  const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
-  /* THE SAME PLACEMENT FOR BYTES, and it is not a second kind of argument — `stringToUTF8` is an ENCODE, so
-     both spellings put UTF-8 bytes at an address and neither DECODES anything. A document reaches qjs_init
-     one of two ways and they differ in what the browser already did: content.js ships a SERIALIZED DOM (the
-     renderer parsed the response and this is its characters, so they are encoded here), while a child
-     navigable's document is the response's own BYTES off safeFetch (so they are placed unchanged). Decoding
-     the second into a string on the way would be this zone running HTML §13.2.3.2's encoding sniffing —
-     badly, as UTF-8 — which is the defect this whole change removes from the fetch path. */
-  const cbytes = (b) => { const p = M._malloc(b.length + 1); M.HEAPU8.set(b, p); M.HEAPU8[p + b.length] = 0; return p; };
-  const arg = (s) => { const p = (s instanceof Uint8Array) ? cbytes(s) : cstr(s); ptrs.push(p); return p; };
+  /* THE ONE WAY TO BUILD AN INSTANCE, ASSERTED RATHER THAN DISCOVERED AS A TypeError. Without this the failure
+     of a load-order change (renderer-host.js is a <script> before this one in ast-worker.html) arrives as
+     "self.rendererCreate is not a function" inside admit's catch, which reports it as a BOOT ABORT of the
+     engine — a crash record blaming an instance that was never built, for a document that would then be
+     reported as analysed and empty. */
+  DCHECK(typeof self.rendererCreate === "function",
+         "renderer-host.js is not loaded in this zone — it is the only thing that can build an engine now " +
+         "that no Module is instantiated in this realm, so every document would be reported as a crashed " +
+         "instance rather than as a bridge that is missing half of itself");
+  const r = await self.rendererCreate(clusterKeyOf(msg));
+  try { return await engineRoot(r, code, html, msg, persist, docName, topLevelUrl); }
+  catch (e) { r.destroy(); throw e; }
+}
+/* THE PARAMETER IS `rend` AND THE FIELD IS `eng.r`, which is not an inconsistency: the three fetch closures
+   below each bind `const r = await self.safeFetch(...)` — Fetch's reply record — and a renderer named `r` in
+   this scope would be SHADOWED by it inside exactly the functions that deliver bytes into that renderer. The
+   shadow would be silent, because none of them needs the renderer today; the next one that does would reach
+   for `r` and get a Response. */
+async function engineRoot(rend, code, html, msg, persist, docName, topLevelUrl) {
+  /* THE ENGINE'S OUTPUT, WHICH IS THE RENDERER'S LINE BUFFER AND NOT A SECOND COPY OF IT. renderer-host.js
+     appends every drained line to this array as each reply lands, so `eng.lines` and `r.lines` are one array:
+     engineCrash's backwards scan for the ROOT @WHY, streamPartial's scan for the last @RESULT and
+     linesToAnalysis all read exactly what the frame printed, in order, with nothing in this realm deciding
+     what to keep. */
+  const lines = rend.lines;
   // PHASE 1 — parse + boot; the engine computes the stable bundle IDENTITY from its Lexbor <script> scan.
   /* THE WHOLE RESPONSE HEADER LIST CROSSES, not one header out of it. This used to pull
      `content-security-policy` out of the map and hand the engine that single string, and three things HTML
@@ -483,14 +518,29 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
          "would stop there and the rest of the document would be absent with nothing to say so. Give qjs_init " +
          "a LENGTH beside the pointer (qjs_provide now carries one) and run HTML §13.2.3.2's encoding " +
          "sniffing over those bytes in the engine");
-  const _initrc = M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number"],
-    [arg(html || ""), arg((msg && msg.sourceUrl) || ""), arg(_docId), arg(_headers), arg(_tlu)]);
+  /* THE DOCUMENT CROSSES AS WHAT IT ALREADY IS, and the two shapes differ in what the browser already did:
+     content.js ships a SERIALIZED DOM (the renderer parsed the response and this is its characters, so the
+     `cstr` shape encodes them to UTF-8 in the frame), while a child navigable's document is the response's own
+     BYTES off safeFetch and the `cbytes` shape places them unchanged. Decoding the second into a string on the
+     way would be this zone running HTML §13.2.3.2's encoding sniffing — badly, as UTF-8.
+     NOT TRANSFERRED, and the ownership argument is the reason rather than caution: these bytes are ALSO
+     retained by this zone as `eng.html`, which finish() writes to IndexedDB as the cold recipe's copy of the
+     document, so detaching the buffer here would leave the cross-session frontier holding a page that parses
+     to nothing. The reply bodies in engineProvide are the site where the argument comes out the other way. */
+  const _docBytes = html instanceof Uint8Array;
+  const _initrc = await rend.call("qjs_init", "number",
+    [_docBytes ? { t: "cbytes", i: 0 } : { t: "cstr", v: html || "" },
+     { t: "cstr", v: (msg && msg.sourceUrl) || "" },
+     { t: "cstr", v: _docId },
+     { t: "cstr", v: _headers },
+     { t: "cstr", v: _tlu }],
+    _docBytes ? [html] : []);
   DCHECK(_initrc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
                         "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
   /* NEVER 0 — document_bundle_id folds an empty scan to 1 precisely so that a 0 cannot mean two things. A 0
      here would key every unidentifiable document to the SAME frontier entry, so one page's parked residue
      would resume in another's engine. */
-  const _bidRaw = M.ccall("qjs_bundle_id", "number", [], []) >>> 0;
+  const _bidRaw = (await rend.call("qjs_bundle_id", "number", [], [])) >>> 0;
   DCHECK(_bidRaw !== 0, "the engine answered a bundle id of 0 — document_bundle_id never returns one, and a 0 " +
                         "collides every document's frontier key with every other's");
   const _bid = _bidRaw.toString(36);
@@ -504,7 +554,7 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   const prior = persist ? await frontierGet(fkey) : null;
   // PHASE 2 — seed the frontier (fresh, or resume parked recipes). The host sets a VALUE yield-floor per
   // step (the runner-up engine's weight), so this engine yields when it's outranked — no fixed slice.
-  M.ccall("qjs_begin", "void", ["string"], [(prior && prior.recipes) ? prior.recipes : ""]);
+  await rend.call("qjs_begin", null, [{ t: "string", v: (prior && prior.recipes) ? prior.recipes : "" }], []);
   // DEV-ONLY verification hook (a real page never carries this query param): force the RAM-pressure park so
   // the cross-session round trip (park recipes -> IDB -> restart-keep -> resume) is VERIFIABLE without a 512MB
   // working set. Keyed off the URL (flows reliably through msg.sourceUrl to here, unlike a cross-context
@@ -712,24 +762,28 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
      it answers is "has THIS instance's request already been asked", and an unanswered request is re-reported by
      qjs_host_requests on every single step; asking again would perform the peer's operation — a program, with
      the page's own side effects — once per step. */
-  const eng = { M, ptrs, lines, fkey, prior, msg, persist, fetched, fetchedDocument, fetchedXhr, code, html, state: "hot",
-                docId: _docId, cluster: clusterKeyOf(msg), groupId: msg && msg.groupId,
+  /* `r` IS THE INSTANCE. It replaces the `M` handle and the `ptrs` free list together: a pointer an ABI call
+     RETAINED (qjs_init's five arguments) lives as long as the module does, the module dies with the frame, and
+     the frame is removed at finalize — so there is nothing left in this realm to free, and nothing in this
+     realm that can read an untrusted instance's memory. */
+  const eng = { r: rend, lines, fkey, prior, msg, persist, fetched, fetchedDocument, fetchedXhr, code, html, state: "hot",
+                docId: _docId, cluster: rend.name, groupId: msg && msg.groupId,
                 origin: (msg && msg.origin) || "", _resolvers: [], _forceparkSteps, _remoteAsked: new Set() };
   /* THE FIRST ROUND'S RECORD, TAKEN BEFORE THIS INSTANCE IS RANKABLE. `qjs_begin` above is what seeded the
      frontier, so this line is the earliest moment a top-flow weight exists at all — and it is earlier than the
      pool, which is what makes "an engine the ranking has never heard from" a state that cannot occur rather
      than a case to default. */
-  engineRecordFacts(eng);
+  await engineRecordFacts(eng);
   return eng;
 }
 /* THE LEVEL-1 RANKING'S TWO FACTS, RECORDED WHERE THE INSTANCE ANSWERS THEM RATHER THAN READ WHERE THE RANKING
    NEEDS THEM. Both were SYNCHRONOUS reaches into the module on every ranking pass — a `qjs_top_weight` ccall
    per comparison, and an `M.HEAPU8.length` per engine per admission check — and neither survives the boundary
-   renderer-host.js now puts between this zone and an instance: a sandboxed opaque-origin frame answers by
+   renderer-host.js puts between this zone and an instance: a sandboxed opaque-origin frame answers by
    postMessage, so on the line that ranks there is no value to read and no way to ask for one. So the host
    RECORDS. Every round this zone has with an instance ends here, and the ranking reads a number it already
-   holds; when the pool's engines become renderers, this function's two reads become two fields on the reply
-   record and every caller of it stays exactly where it is.
+   holds. That prediction has now been paid: the pool's engines ARE renderers, this function's two reads are
+   an awaited ABI call and a field off the reply record it answered on, and not one of its callers moved.
    THE NUMBERS ARE AS OF THE LAST ROUND, AND hostSchedule IS BUILT SO THAT IS THE RIGHT TIME. It ranks, advances
    the winner, and re-ranks — so the engine that just did work is the one whose numbers are freshest, and an
    engine that did none has numbers that cannot have moved, because nothing but a round with this zone changes
@@ -741,16 +795,19 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
    qjs_top_weight reports it. Level-1 therefore INHERITS level-2's optimism instead of restating it, which is
    what "ONE WFQ policy at both levels" means — and restating it here would additionally be a branch on a state
    the producer cannot be in, since qjs_top_weight DCHECKs `g_begun` (main.c) and qjs_begin is what sets it. */
-function engineRecordFacts(eng) {
-  const w = +eng.M.ccall("qjs_top_weight", "number", [], []);
+async function engineRecordFacts(eng) {
+  const w = +(await eng.r.call("qjs_top_weight", "number", [], []));
   DCHECK(Number.isFinite(w), "the engine answered a top-flow weight that is not a finite number — every " +
                              "Level-1 ranking comparison against it is false, so the pool would pick by " +
                              "array order and call it value-of-information");
   eng.topWeight = w;
-  /* THE WORKING SET IS RE-READ, NEVER REMEMBERED: emscripten REPLACES HEAPU8 when the linear memory grows, so a
-     view captured once would report the size the instance started at for the rest of its life. WASM memory is a
-     whole number of 64 KiB pages by definition, so anything else is not the view over this instance's memory. */
-  const b = eng.M.HEAPU8.length;
+  /* THE WORKING SET AS THE FRAME LAST STATED IT, WHICH IS AS OF THE CALL ABOVE. There is no HEAPU8 in this
+     realm to read — that is the whole point of the boundary — so renderer.html reports `HEAPU8.length` on every
+     successful reply and renderer-host.js records the newest on the renderer. The reply just awaited is
+     therefore the freshest statement that exists, and no extra round trip could improve on it: a call is the
+     only thing that can grow that memory. WASM memory is a whole number of 64 KiB pages by definition, so
+     anything else is not the view over this instance's memory. */
+  const b = eng.r.heapBytes;
   DCHECK(Number.isInteger(b) && b > 0 && b % 65536 === 0,
          "an instance reported a working set that is not a whole number of WASM pages (" + b + ") — HEAPU8 is " +
          "the view over the entire linear memory, which is allocated and grown in 64 KiB pages, so a length " +
@@ -770,61 +827,52 @@ function engineWeight(eng) {
          "an absent one is a round that stopped recording rather than an engine with nothing to do");
   return eng.topWeight;
 }
-/* A BODY INTO THE ENGINE'S OWN LINEAR MEMORY, which is the only place a WASM instance can read bytes from.
-   `null` is "this answer carries no body at all" — a network error, a load that did not load — and it is a
-   POSITIVE statement the C entry reads as one rather than a hole: `qjs_provide`/`qjs_host_answer` assert that
-   a null pointer arrives with a zero length, and `fetch_reply_set_body` asserts the JSON did not also carry a
-   decoded body. Answers [ptr, len]; the caller FREES the pointer, because the engine copies the bytes onto its
-   own heap (an ArrayBuffer the flow's Response, script decode or XHR reads) and does not adopt this block.
-   The one extra byte is so a zero-length body still has an address of its own: `_malloc(0)` may answer 0, and 0
-   is what the C entry reads as "no body at all", which a 204 is not. */
-function engineBodyBytes(M, bytes) {
-  if (bytes === null || bytes === undefined) return [0, 0];
-  DCHECK(bytes instanceof Uint8Array,
-         "a reply body reached the engine edge as something other than a byte sequence — §2.2.5 makes a body " +
-         "one, safeFetch answers one, and anything else here is a zone that ran a decode the engine owns");
-  const p = M._malloc(bytes.length + 1);
-  /* CHECK AND NOT DCHECK: an allocation failure is CLAUDE.md's named always-fatal case, and the work item
-     dropped here is the reply a suspended flow is waiting on — in release as much as in dev. */
-  CHECK(p !== 0, "OOM copying a fetched body into the engine's linear memory — the flow parked on this reply " +
-                 "would resume reading a successful response with nothing in it");
-  M.HEAPU8.set(bytes, p);
-  return [p, bytes.length];
-}
-/* ONE DELIVERY, both channels, so no call site can carry the record and forget the bytes. `r` is what
+/* ONE DELIVERY, both channels, so no call site can carry the record and forget the bytes. `rep` is what
    `fetched` answered: `null` for §5.6's network error (the JSON `null` the engine rejects with a TypeError),
-   or `{meta, bytes}`. */
-function engineProvide(M, url, r) {
-  DCHECK(r === null || (r && typeof r === "object" && r.meta && r.bytes instanceof Uint8Array),
+   or `{meta, bytes}`.
+   THE PLACEMENT MOVED INTO THE FRAME AND `engineBodyBytes` IS DELETED WITH IT. It malloc'd into `M.HEAPU8`,
+   handed qjs_provide a [ptr, len] pair and freed the block afterwards — the exact algorithm renderer.html's
+   `body` argument shape now performs, on the only side of the boundary that can address that memory, with the
+   same "one extra byte so a zero-length body still has an address of its own" and the same `null` meaning THIS
+   ANSWER CARRIES NO BODY AT ALL. Keeping a copy here would have been a second placement over a heap this realm
+   no longer has a view of.
+   TRANSFERABLE, AND DELIBERATELY NOT TRANSFERRED YET. renderer-host.js names this as the site where detaching
+   is sound — safeFetch mints these bytes per call and this delivery is their only consumer, so nothing in this
+   realm holds a second reference the way `eng.html` does for a document load. What stops it being taken here
+   is that `bodies` is one list shared by every argument shape, so `rendererCall` would have to carry a transfer
+   list that names WHICH entries are owned; that is a change to the transport's contract and it belongs in the
+   diff that measures the copy, not smuggled into this one. */
+async function engineProvide(eng, url, rep) {
+  DCHECK(rep === null || (rep && typeof rep === "object" && rep.meta && rep.bytes instanceof Uint8Array),
          "`fetched` answered neither §5.6's network error (null) nor a reply — a reply is its JSON metadata " +
          "and its BYTES together, and a record arriving without one of the two is half a response");
-  const [p, n] = engineBodyBytes(M, r && r.bytes);
-  try { M.ccall("qjs_provide", "void", ["string", "string", "number", "number"],
-                [url, JSON.stringify(r === null ? null : r.meta), p, n]); }
-  finally { if (p) M._free(p); }
+  await eng.r.call("qjs_provide", null,
+    [{ t: "string", v: url },
+     { t: "string", v: JSON.stringify(rep === null ? null : rep.meta) },
+     { t: "body", i: 0 }],
+    [rep === null ? null : rep.bytes]);
 }
 async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
-  const M = eng.M;
   /* THE REPLY'S METADATA CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer
      does. A bare string could not say `null` for a network error without it being the four characters "null",
      and could not carry the URL list, the status or the headers at all. Its BODY crosses as BYTES beside it,
      because JSON can say none of the 256 values a byte has without first running an algorithm over them, and
      the algorithm this zone used to run (Fetch §5.2's `text()`, a UTF-8 decode) destroyed exactly the evidence
      HTML §8.1.4.2's classic-script decode exists to read. */
-  const replies = engineOwedList(M, "qjs_pending");
+  const replies = await engineOwedList(eng, "qjs_pending");
   for (const u of replies)
-    engineProvide(M, u, await eng.fetched(u, false));
-  const chunks = engineOwedList(M, "qjs_chunks");
+    await engineProvide(eng, u, await eng.fetched(u, false));
+  const chunks = await engineOwedList(eng, "qjs_chunks");
   for (const u of chunks)
-    engineProvide(M, u, await eng.fetched(u, true));
+    await engineProvide(eng, u, await eng.fetched(u, true));
   await engineServiceHostRequests(eng);
 }
 /* EVERY OWED LIST CROSSES THE SAME WAY — newline-joined records, or "" for none — so it is read in one place
    that says so. `String(x)` on its own would turn a NULL pointer (an entry answering before its list exists)
    into the four characters "null" and then into one bogus record: a URL nothing is parked on, which the
    engine's own qjs_provide DFAILs on one call later, naming the wrong side. */
-function engineOwedList(M, entry) {
-  const s = M.ccall(entry, "string", [], []);
+async function engineOwedList(eng, entry) {
+  const s = await eng.r.call(entry, "string", [], []);
   DCHECK(typeof s === "string", entry + " answered with something that is not text — every owed list crosses " +
                                 "as newline-joined records and an empty list is the empty string");
   return String(s == null ? "" : s).split("\n").filter(Boolean);
@@ -969,7 +1017,8 @@ async function hostNotice(eng, line) {
     CHECK(!!eng.origin, "a cross-document message was posted by an instance with no recorded principal — only " +
                         "the trusted zone may state a sender's origin, and this one has none to state; carry " +
                         "the document's browser-stated origin into the cold recipe so a resumed instance keeps it");
-    target.M.ccall("qjs_route", "void", ["string", "string"], [line, stampOrigin(eng.origin)]);
+    await target.r.call("qjs_route", null,
+      [{ t: "string", v: line }, { t: "string", v: stampOrigin(eng.origin) }], []);
     return;
   }
   /* `remoteop.answer <token> <completion>` — a COMPLETION this instance produced for an operation it was asked
@@ -997,7 +1046,8 @@ async function hostNotice(eng, line) {
                     "`undefined`, it is a relay that lost the peer's completion, and the engine's own decoder " +
                     "says so at the other end");
     if (!to || _t2 < 0) return;
-    to.asker.M.ccall("qjs_host_answer_remote", "void", ["number", "string"], [to.req, line.slice(_t2 + 1)]);
+    await to.asker.r.call("qjs_host_answer_remote", null,
+      [{ t: "number", v: to.req }, { t: "string", v: line.slice(_t2 + 1) }], []);
     return;
   }
   DFAIL("an engine emitted a notice with an op this zone does not act on — the engine's half is built, so the " +
@@ -1010,12 +1060,11 @@ async function hostNotice(eng, line) {
 // this is pumped every round alongside the fetch replies; leaving one unanswered parks that flow indefinitely
 // (its siblings keep running, which is the point of suspending rather than blocking).
 async function engineServiceHostRequests(eng) {
-  const M = eng.M;
   // ONE-WAY NOTICES, and this zone OWES each of them an action — a notice it reads and discards is a document
   // nothing runs and a message nothing delivers, with every later read through them parked forever. They were
   // being read and discarded. Handled IN ORDER and one at a time: a page opens a window and posts to it in the
   // same turn, so the create must have finished provisioning before the post that names it is routed.
-  for (const line of engineOwedList(M, "qjs_host_notices"))
+  for (const line of await engineOwedList(eng, "qjs_host_notices"))
     await hostNotice(eng, line);
   // ONE BRANCH, AND ONLY BECAUSE THIS ZONE CAN GENUINELY ANSWER IT. The rule that deleted every other branch
   // stands: a loop that walks the owed requests is a place to be tempted into GUESSING an answer, which is what
@@ -1027,7 +1076,7 @@ async function engineServiceHostRequests(eng) {
   // AND IT HAS TO BE ANSWERED, not merely answerable. A flow parked on a request this host never satisfies
   // leaves the engine stalled forever, and the step loop above has no other reason to stop — the same shape the
   // WPT pump was spinning on. Answering is what lets a navigation finish.
-  const reqs = engineOwedList(M, "qjs_host_requests");
+  const reqs = await engineOwedList(eng, "qjs_host_requests");
   for (const line of reqs) {
     /* `id<TAB>op`, which engine_host_requests writes with a snprintf of a counter it CHECKs against wrapping.
        `if (tab < 0) continue` dropped a record that did not have that shape — and dropping it is the one
@@ -1076,7 +1125,13 @@ async function engineServiceHostRequests(eng) {
       const token = "op" + (_nextRemoteToken++);
       _remoteOps.set(token, { asker: eng, req: id });
       eng._remoteAsked.add(id);
-      holder.M.ccall("qjs_perform", "void", ["string", "string"], [token, op]);
+      /* THE ASK IS RECORDED BEFORE IT IS MADE, and with an await under it that is no longer a matter of style.
+         `_remoteAsked` and `_remoteOps` are both written above this line because the call below suspends: an
+         unanswered request is re-reported by qjs_host_requests on every step, so a round that started the ask
+         and recorded it afterwards would let the next round see the same id unrecorded and perform the peer's
+         operation — a program, with the page's own side effects — a second time. */
+      await holder.r.call("qjs_perform", null,
+        [{ t: "string", v: token }, { t: "string", v: op }], []);
       continue;
     }
     // XHR §3.5.6's fetch is the SECOND thing this zone can genuinely answer, and for the identical reason: it
@@ -1090,15 +1145,15 @@ async function engineServiceHostRequests(eng) {
       // zone fetched bytes rather than running another instance's program, so it has nothing to have thrown
       // in. A relayed cross-agent operation answers with 1 and the thrown value, which is what lets the
       // asking page's `try`/`catch` around it run.
-      engineAnswer(M, id, r.meta, r.bytes);
+      await engineAnswer(eng, id, r.meta, r.bytes);
       continue;
     }
     if (!op.startsWith("document.fetch\t")) continue;
     const r = await eng.fetchedDocument(op.slice("document.fetch\t".length));
     // JSON, because the answer carries its TYPE across this seam: a null body is a load that did not load, and
     // the string "null" is a one-word document. The BODY is not in that JSON — a Document is parsed from a
-    // BYTE SEQUENCE, and this seam carries one (see engineBodyBytes).
-    engineAnswer(M, id, { csp: r.csp }, r.bytes);
+    // BYTE SEQUENCE, and this seam carries one (renderer.html's `body` argument shape).
+    await engineAnswer(eng, id, { csp: r.csp }, r.bytes);
   }
 }
 /* THE SAME TWO CHANNELS FOR A SYNCHRONOUS ANSWER. Two of the requests this zone can genuinely answer carry a
@@ -1107,13 +1162,13 @@ async function engineServiceHostRequests(eng) {
    is: an answer that is a number or a document NAME has no bytes beside it. The trailing 0 is ECMA-262 6.2.4's
    NORMAL completion — this zone fetched bytes rather than running another instance's program, so it has
    nothing to have thrown in. */
-function engineAnswer(M, id, meta, bytes) {
-  const [p, n] = engineBodyBytes(M, bytes);
-  try { M.ccall("qjs_host_answer", "void", ["number", "string", "number", "number", "number"],
-                [id, JSON.stringify(meta), 0, p, n]); }
-  finally { if (p) M._free(p); }
+async function engineAnswer(eng, id, meta, bytes) {
+  await eng.r.call("qjs_host_answer", null,
+    [{ t: "number", v: id }, { t: "string", v: JSON.stringify(meta) }, { t: "number", v: 0 },
+     { t: "body", i: 0 }],
+    [bytes]);
 }
-function engineFinalize(eng) {
+async function engineFinalize(eng) {
   /* ASK THE ENGINE FOR ITS RESULT — the ABI entry that exists for exactly this and had NO CALLER anywhere in
      the extension. The only place the production engine ever printed an @RESULT was qjs_emit_partial, and
      streamPartial CONSUMES that line as it merges it, so a session's findings reached this function only when
@@ -1125,8 +1180,14 @@ function engineFinalize(eng) {
      re-entering it would only produce a second abort. */
   if (!eng._crashed) {
     let json = null;
-    try { json = eng.M.ccall("qjs_result", "string", [], []); }
-    catch (e) { engineCrash(eng, "result", e); }
+    /* AN ENGINE ABORT IS A RECORDED OUTCOME AND A HOST INVARIANT FAILURE IS NOT, which every catch around an
+       ABI call now has to say out loud: a rendererCall rejects for BOTH — the frame's own abort travels as the
+       rejection engineCrash is written against, and renderer-host.js's asserts (a call into a renderer that
+       already died, a reply naming a call id this zone never made) travel as apiclientFatal. Reporting the
+       second as the engine's crash would blame the instance for this zone's broken contract, and would discard
+       a page's findings for it. */
+    try { json = await eng.r.call("qjs_result", "string", [], []); }
+    catch (e) { RETHROW_FATAL(e); engineCrash(eng, "result", e); }
     if (!eng._crashed) {
       DCHECK(typeof json === "string" && json.length > 0,
              "qjs_result answered with no document — result_json returns nothing only when the composition " +
@@ -1135,13 +1196,25 @@ function engineFinalize(eng) {
     }
   }
   /* THE OUTSTANDING RENDEZVOUS GO WITH THE INSTANCE THAT ASKED, and this is the line that makes the map's
-     never-delete-on-answer rule safe: a completion relayed into a torn-down instance is a ccall into freed
-     memory. Dropping them here is not dropping the ANSWER — the engine's own engine_host_answer already treats
+     never-delete-on-answer rule safe: a completion relayed into a torn-down instance is a call into a renderer
+     that no longer exists — a frame this function has already removed, which renderer-host.js refuses at the
+     seam rather than posting into a closed port. Dropping them here is not dropping the ANSWER — the engine's own engine_host_answer already treats
      a request whose flow is gone as an answer nobody is waiting on. */
   for (const [token, to] of _remoteOps) if (to.asker === eng) _remoteOps.delete(token);
-  try { eng.M.ccall("qjs_teardown", "void", [], []); }
-  catch (e) { engineCrash(eng, "teardown", e); }
-  for (const p of eng.ptrs) { try { eng.M._free(p); } catch (_) {} }
+  /* A CRASHED INSTANCE IS NOT TORN DOWN, and this used to try. `qjs_teardown` is the engine walking its own
+     gc_obj_list to report leaks — a FINDING about a runtime that ran — and an instance whose linear memory is
+     the thing that aborted has no such finding to give. Across this boundary it is worse than pointless: the
+     renderer is dead after one failed call (renderer.html cannot serve another), so the attempt would abort in
+     THIS zone on renderer-host's own assert and be reported as a second engine crash on top of the first.
+     THE FRAME GOES REGARDLESS, and that is the whole cleanup: the retained qjs_init arguments, the module and
+     its linear memory die with the document, so there is no free list on either side of this seam. It is also
+     the only thing that reclaims an instance — a Module was collected once nothing referenced it, an iframe
+     left in this document is not. */
+  if (!eng._crashed) {
+    try { await eng.r.call("qjs_teardown", null, [], []); }
+    catch (e) { RETHROW_FATAL(e); engineCrash(eng, "teardown", e); }
+  }
+  eng.r.destroy();
   const result = linesToAnalysis(eng.lines, eng.msg, !eng._crashed);
   result._fkey = eng.fkey; result._prior = eng.prior;   // engine-computed key + parked entry -> persisted below
   if (eng._crashed) {
@@ -1163,8 +1236,14 @@ function engineFinalize(eng) {
    engine's findings (engineFinalize). NOT a quiet @E buried in resolverErrors — that is how the g_optaint
    teardown leak hid for so long. Experimental stage: a crash halts trust in that engine, never softened. */
 function crashBanner(stage, m) {   // LOUD + a persistent batch flag; EVERY abort path (create/step/teardown) routes here — no crash is ever quiet
-  try { self._engineCrashOccurred = (self._engineCrashOccurred || 0) + 1; } catch (_) {}
-  try { console.error("\n==== ENGINE CRASH (" + stage + ") — WASM ABORTED, findings DISCARDED, NOT swallowed ====\n" + m + "\n"); } catch (_) {}
+  /* TWO SWALLOWING CATCHES ARE GONE FROM THESE TWO LINES, and with them the `|| 0` that made the counter
+     create itself. Neither operation can throw — an increment of a declared number and a console write — so
+     each `catch (_) {}` could only ever have hidden the ONE thing that matters here: that this is the crash
+     path, and a crash that fails to announce itself is exactly the outcome this function exists to prevent.
+     The counter is declared at load beside _engineLog, so a reader can tell "no engine has crashed" from
+     "bridge.js is not in this zone". */
+  self._engineCrashOccurred++;
+  console.error("\n==== ENGINE CRASH (" + stage + ") — WASM ABORTED, findings DISCARDED, NOT swallowed ====\n" + m + "\n");
 }
 function engineCrash(eng, stage, e) {
   const m = String((e && e.message) || e);
@@ -1242,7 +1321,14 @@ async function hostSchedule(pool, ops) {
       if (w > bestW) { runner = bestW; best = e; bestW = w; }
       else if (w > runner) runner = w;
     }
-    if (ops.setFloor) ops.setFloor(best, hot.length > 1 ? runner : -1e300);   // outranked-by-runner-up => yield; lone engine => run on
+    /* THE RANKING ITSELF IS STILL SYNCHRONOUS, WHICH IS WHY IT IS STILL A RANKING. Every `ops.weight` above is
+       a number the last round with that instance RECORDED (8196a0e7), so the whole scan runs on one consistent
+       set of values with no suspension in it. The three calls below DO suspend — each is a message to a frame —
+       and the pick they act on is therefore as of the top of this iteration, which is exactly what the policy
+       says it is: rank, advance the winner, re-rank. Nothing between here and the step can change the set, because
+       the only thing that moves an engine between hot and fetching is this loop, and a detached service round
+       touches only the engine it belongs to (which is not in `hot`). */
+    if (ops.setFloor) await ops.setFloor(best, hot.length > 1 ? runner : -1e300);   // outranked-by-runner-up => yield; lone engine => run on
     // Normally step `best` (the highest-value engine). But under RAM pressure with >1 engine competing for the
     // working-set floor, step the LOWEST-value engine after flagging it to PARK — evicting it to the IDB cold
     // tier (residue -> replay recipes) frees RAM so the top engines keep running (Level-1: "the lowest-weight
@@ -1253,9 +1339,12 @@ async function hostSchedule(pool, ops) {
     if (ops.requestPark && ops.underPressure && hot.length > 1 && ops.underPressure()) {
       target = hot[0];
       for (const e of hot) if (ops.weight(e) < ops.weight(target)) target = e;
-      ops.requestPark(target);
+      await ops.requestPark(target);
     }
-    const st = ops.step(target);
+    /* THE PARK FLAG AND THE STEP THAT READS IT STAY ORDERED ACROSS THE BOUNDARY, and not by luck: both are
+       calls on ONE renderer's port, which is point-to-point and delivers in order, and this loop makes no other
+       call into that instance in between. The pair was atomic when it was two ccalls; it is sequenced now. */
+    const st = await ops.step(target);
     /* THE STEP CODE IS TWO VALUES, AND THIS SPOKE THREE. qjs_step answers ENGINE_STEP_DONE (0) or
        ENGINE_STEP_YIELD (2) and nothing else — it folds the scheduler's STALLED into a yield deliberately,
        "the bridge speaks two values". The third branch here tested for 1, a NEED_FETCH code no version of
@@ -1269,10 +1358,15 @@ async function hostSchedule(pool, ops) {
            "so a third value is an ABI that changed under a host still speaking the old one");
     // DEV __forcepark: request the park only after N dispatches, so it captures MID-EXPLORATION residue
     // (recipes with real decvecs + handler-driven async flows), mirroring a production RAM-pressure park.
-    if (target._forceparkSteps > 0 && --target._forceparkSteps === 0) ops.requestPark(target);
+    if (target._forceparkSteps > 0 && --target._forceparkSteps === 0) await ops.requestPark(target);
     // INCREMENTAL MERGE: a lone UNBOUNDED engine never reaches st===0, so without this its already-emitted
     // breadth surfaces only at finalize. Snapshot + merge on a coarse cadence on every non-final step.
-    if (st !== 0 && ops.streamPartial) ops.streamPartial(target);
+    /* AWAITED, AND THAT IS A CORRECTNESS REQUIREMENT RATHER THAN TIDINESS. streamPartial asks the engine to
+       PRINT a result document and then finds it by INDEX in the line buffer and splices it out. The print
+       arrives on that call's own reply, so the scan must not run until the call has answered — and the service
+       round started below appends to the same buffer, so an unawaited partial would splice by an index the
+       round had already moved. Fire-and-forget was sound only while the ccall was synchronous. */
+    if (st !== 0 && ops.streamPartial) await ops.streamPartial(target);
     if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
       await ops.finish(target);
     } else {   // ENGINE_STEP_YIELD — a cooperative quantum, or a STALL the engine reports as one.
@@ -1308,35 +1402,39 @@ let _engineFactory = engineCreate;   // injectable for tests
 const _hostOps = {
   weight: engineWeight,
   /* THE VALUE YIELD FLOOR — run until outranked by the runner-up. The `try {} catch (_) {}` around it is gone
-     with the two below it: a ccall into the engine either returns or ABORTS, and an abort is the WASM
-     instance crashing. Swallowing that leaves a dead engine in the pool being stepped, ranked and finalized
-     as if it were alive, which is the one outcome engineCrash exists to make impossible. */
-  setFloor: (eng, floor) => {
+     with the two below it: a call into the engine either answers or REJECTS, and a rejection is either the WASM
+     instance crashing or this zone's own transport contract breaking. Swallowing either leaves a dead engine in
+     the pool being stepped, ranked and finalized as if it were alive, which is the one outcome engineCrash
+     exists to make impossible. This one is not caught at all — an unranked, unsteppable engine is not a state
+     the pool has a handling for, so it travels to hostSchedule's own failure arm. */
+  setFloor: async (eng, floor) => {
     DCHECK(Number.isFinite(floor) || floor === -Infinity,
            "the pool set a yield floor that is not a number — the engine compares its top flow's weight " +
            "against it, and a NaN floor makes every comparison false so the flow never yields");
-    eng.M.ccall("qjs_set_yield_floor", "void", ["number"], [floor]);
+    await eng.r.call("qjs_set_yield_floor", null, [{ t: "number", v: floor }], []);
   },
   underPressure: () => _residentBytes() >= HOT_RAM_BUDGET,   // summed live wasm memory over the working-set floor
   /* THE COLD-TIER PARK, whose engine half is an unbuilt capability that says so: qjs_request_park is a bare
      DFAIL naming the serializer to write. The catch here swallowed exactly that — the abort a DFAIL exists to
      produce was turned into a no-op, so the host went on believing it had evicted an engine that never parked
      and the missing capability had no symptom at all. It is the forcing function; it is not caught. */
-  requestPark: (eng) => { eng.M.ccall("qjs_request_park", "void", [], []); },
+  requestPark: async (eng) => { await eng.r.call("qjs_request_park", null, [], []); },
   /* INCREMENTAL MERGE (coarse cadence): snapshot a HOT engine's current findings + merge to the cumulative
      moat WITHOUT waiting for a finalize that an unbounded engine never reaches. First sight starts the clock,
      so short analyses (finalize before PARTIAL_MS) never pay for it. qjs_emit_partial appends a fresh @RESULT
      to eng.lines (teardown-free); we parse just that snapshot, CONSUME the line (bound eng.lines growth — the
      final teardown re-emits its own @RESULT), and merge via onFrontierAdvance (globalStore, dedup-idempotent). */
-  streamPartial: (eng) => {
+  streamPartial: async (eng) => {
     const now = Date.now();
     if (!eng._lastPartial) { eng._lastPartial = now; return; }
     if (now - eng._lastPartial < PARTIAL_MS) return;
     eng._lastPartial = now;
-    /* A WASM ABORT IS THE ENGINE CRASHING — the only failure this ccall has. It was inside the same swallowing
-       catch as everything below it, so a crash mid-analysis left the engine in the pool to be stepped again. */
-    try { eng.M.ccall("qjs_emit_partial", "void", [], []); }
-    catch (e) { engineCrash(eng, "partial", e); return; }
+    /* A WASM ABORT IS THE ENGINE CRASHING — it was the only failure this call had while it was a ccall, and it
+       is now one of two: renderer-host's own asserts reject the same way and are this zone's contract, not the
+       instance's. The line scan below only runs once this has answered, because the @RESULT it prints rides
+       that reply. */
+    try { await eng.r.call("qjs_emit_partial", null, [], []); }
+    catch (e) { RETHROW_FATAL(e); engineCrash(eng, "partial", e); return; }
     let idx = -1;
     for (let i = eng.lines.length - 1; i >= 0; i--) if (String(eng.lines[i]).startsWith("@RESULT ")) { idx = i; break; }
     /* qjs_emit_partial PRINTS ONE, unconditionally. No line here means the print sink between the engine and
@@ -1358,14 +1456,14 @@ const _hostOps = {
            "finding this engine emits has nowhere to go");
     self.onFrontierAdvance(eng.msg.sourceUrl, partial);
   },
-  step: (eng) => {
+  step: async (eng) => {
     let st;
-    try { st = eng.M.ccall("qjs_step", "number", [], []); }
-    catch (e) { engineCrash(eng, "step", e); return 0; }   // crashed instance -> finalize (loud), don't keep stepping a dead engine
+    try { st = await eng.r.call("qjs_step", "number", [], []); }
+    catch (e) { RETHROW_FATAL(e); engineCrash(eng, "step", e); return 0; }   // crashed instance -> finalize (loud), don't keep stepping a dead engine
     /* THE ROUND ENDS HERE, so the re-rank that follows reads what THIS step left behind: the frontier it
        advanced and the linear memory it grew. A crashed instance is never asked — its memory is the thing that
        aborted, and the branch above hands it to finish() rather than back to the ranking. */
-    engineRecordFacts(eng);
+    await engineRecordFacts(eng);
     return st;
   },
   /* ONE SERVICE ROUND, and there is no second op beside it. `serviceHostRequests` was a separate injected op
@@ -1380,7 +1478,15 @@ const _hostOps = {
      the reply-gated work §Attacker-sources calls the point, and the ranking must see it before it picks again.
      A round that THREW recorded nothing, which is correct: hostSchedule's rejection arm owns that failure and
      the last round's numbers are still the last thing this instance actually reported. */
-  serviceFetch: async (eng) => { await engineServiceFetch(eng); engineRecordFacts(eng); },
+  /* AND IT IS THE ROUND THAT OWNS A CLEARED ENGINE'S FRAME. hostClear drops the whole pool, and an engine that
+     was mid-round when it did is the one case where the frame cannot go with it: renderer-host refuses to
+     destroy a renderer with a call outstanding, because the caller parked on that answer would never hear
+     anything again. A Clear therefore does not interrupt a round — it marks the engine and the round removes
+     the frame when it lands, on both arms, because a round that THREW has left the same iframe behind. */
+  serviceFetch: async (eng) => {
+    try { await engineServiceFetch(eng); await engineRecordFacts(eng); }
+    finally { if (eng._dropped) eng.r.destroy(); }
+  },
   admit: async () => {   // gate CREATION to the RAM budget: build an instance only under memory pressure headroom
     // 1) seat waiting LIVE documents (the user's open tabs) first
     /* AN INDEX WALK RATHER THAN A SHIFT, because one waiting document can be legitimately UNSEATABLE YET (the
@@ -1467,7 +1573,7 @@ const _hostOps = {
   },
   finish: async (eng) => {   // fully explored, or self-parked under RAM pressure -> persist residue to the cold tier + resolve/merge
     const i = _pool.indexOf(eng); if (i >= 0) _pool.splice(i, 1);
-    const result = engineFinalize(eng);
+    const result = await engineFinalize(eng);
     if (eng.persist && result._fkey) {   // persist into the GLOBAL frontier (cross-session cold tier)
       const prior = result._prior;
       await frontierPut(result._fkey, {
@@ -1532,6 +1638,40 @@ function _hostKick() {
    even when no new document arrives — the single ATTENTION keeps advancing across sessions. */
 self.kickHostPool = _hostKick;
 
+/* THE POOL, OBSERVED THROUGH THE BOUNDARY IT NOW RUNS BEHIND. renderer-host.js's `rendererProbe` proves the
+   TRANSPORT — one frame, one document handed across as bytes, one number computed inside it and returned. This
+   proves the PRODUCT: that the pool the extension actually analyses pages with builds its instances as
+   renderers, that a real page's findings came out of one, and that the frames leave when the engines do.
+   IT IS A READ, AND THAT IS DELIBERATE. A probe that started its own analysis would have to mint a
+   documentId, a groupId, an origin and a frameId — the four facts SECURITY.md insists are BROWSER-STATED — so
+   it would be exercising a message the browser never sent. The analysis it observes is the real one, driven
+   from outside by `harness goto`, which is also why this is not a self-test in the sense §SECURITY.md warns
+   about ("a host that cannot provision a second instance has not tested the transport").
+   IT REPORTS THE FINISHED AS WELL AS THE LIVE, because an empty pool with no frames is what a clean teardown
+   and an extension that never ran look like ALIKE — the counters are what tell them apart. */
+self.rendererPoolProbe = function rendererPoolProbe() {
+  DCHECK(typeof self.rendererStats === "function",
+         "renderer-host.js is not loaded in this zone — it is what provisions every engine, so without it the " +
+         "pool has no way to build an instance at all and this probe would be reporting on an empty document");
+  const pool = _pool.map((eng) => {
+    /* THE ASSERT THAT MAKES THIS PROBE WORTH RUNNING: not that a renderer exists, but that NOTHING ELSE does.
+       An engine carrying a Module handle is a WASM instance living in the trusted zone's own realm with
+       `HEAPU8` exported into it — the exact confinement-by-convention this conversion deleted — and it would
+       be invisible from outside, because such an engine analyses pages perfectly well. */
+    DCHECK(!("M" in eng),
+           "a pooled engine still carries a Module handle — the in-realm path is deleted, so an engine holding " +
+           "one is an untrusted instance built in this realm rather than in a sandboxed opaque-origin frame");
+    DCHECK(eng.r && typeof eng.r.heapBytes === "number" && typeof eng.r.name === "string",
+           "a pooled engine is not backed by a renderer that has reported itself — every instance is " +
+           "provisioned by rendererCreate, which does not return until the frame's boot record has landed");
+    return { name: eng.r.name, docId: eng.docId, state: eng.state, framed: !!eng.r.frame.parentNode,
+             heapBytes: eng.r.heapBytes, topWeight: eng.topWeight, cold: !!eng._cold };
+  });
+  return { renderers: self.rendererStats(), pool: pool, waiting: _waiting.length,
+           residentBytes: _residentBytes(), runs: self._engineLog.length, recent: self._engineLog.slice(-4),
+           crashes: self._engineCrashOccurred };
+};
+
 /* Endpoint IDENTITY (exact dedup by method+hole-normalized-url + shape/concrete collapse with path-param
    examples) is the ENGINE's job now — it emits an already-deduped fetchCallSites in @RESULT. The host
    mergeCallsites/dedupShapeConcrete/pathSegs were DELETED. */
@@ -1556,6 +1696,14 @@ async function hostClear() {
   const dropped = _pool.splice(0);
   for (const job of waiting) job.reject(new Error("cleared"));
   for (const eng of dropped) { for (const w of eng._resolvers) w.reject(new Error("cleared")); eng._resolvers.length = 0; }
+  /* AND THE FRAME GOES WITH THE ENGINE, which a dropped Module never needed: an engine that leaves the pool is
+     never stepped and never finalized, so nothing else will ever reach its renderer — and an iframe nobody
+     reaches is a whole WASM instance held resident under a document that does not reload until the browser
+     restarts. Two Clears with a heavy page open would have left two of them.
+     A ROUND IN FLIGHT KEEPS ITS FRAME UNTIL IT LANDS. `state === "fetching"` is exactly "this engine has a call
+     outstanding", and destroying then would break renderer-host's rule that a destroyed renderer has no caller
+     parked on an answer. `_dropped` is what the round reads on the way out (see serviceFetch). */
+  for (const eng of dropped) { eng._dropped = true; if (eng.state !== "fetching") eng.r.destroy(); }
   /* EVERY OUTSTANDING RENDEZVOUS BELONGED TO AN INSTANCE THAT IS NOW DROPPED — the whole pool went. Left
      behind, each entry holds its asking engine's wasm Module alive for the life of the offscreen, which is the
      one shape a map keyed on a live instance fails in. */
@@ -1634,7 +1782,7 @@ self.astDispatch = async function astDispatch(msg) {
   }
 };
 
-console.debug("[ast-worker v2] bridge ready (self.astDispatch installed)");
+console.debug("[ast-worker v2] bridge ready (self.astDispatch + self.rendererPoolProbe installed)");
 
 /* Node-only: expose the PURE host-WFQ policy (no wasm) for deterministic unit tests of ordering/
    eviction/non-blocking-fetch. Never runs in the worker (no `module`). */

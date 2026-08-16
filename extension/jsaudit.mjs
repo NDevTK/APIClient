@@ -60,8 +60,15 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
    the stale-DFAIL failure mode wearing a number. */
 const LEDGER = [
   // ── BRIDGE — irreducible platform edge ───────────────────────────────────────────────────────────────
-  { f: "bridge.js", zone: "BRIDGE:1,2,5",
-    why: "loads the engine WASM, drives qjs_step, relays every byte through safeFetch, persists the frontier to IDB, routes cross-instance notices. The Level-1 WFQ lives here because one WASM instance is one document and no instance can rank the others." },
+  { f: "bridge.js", zone: "BRIDGE:1,2",
+    why: "drives qjs_step, relays every byte through safeFetch, persists the frontier to IDB, routes " +
+         "cross-instance notices. The Level-1 WFQ lives here because one WASM instance is one agent cluster " +
+         "and no instance can rank the others. THE ROW NO LONGER CLAIMS REASON 5, and that is the whole point " +
+         "of the change that took it: this file used to `import(\"./lib/qjs/qjs.mjs\")` and build every " +
+         "instance with `createQJS()` in the offscreen's own realm, so it held a Module handle and `HEAPU8` " +
+         "over an UNTRUSTED engine. Loading is renderer-host.js's now, every qjs_* call is an awaited " +
+         "postMessage to a sandboxed opaque-origin frame, and nothing here can address an instance's memory — " +
+         "grep this file for HEAPU8 or createQJS and the only hits are the comments recording that." },
   { f: "renderer-host.js", zone: "BRIDGE:5",
     why: "LOADING THE WASM IS REASON 5, and this is where that reason stops being a figure of speech. While " +
          "`createQJS()` runs in the offscreen's OWN realm the untrusted engine is confined by convention — the " +
@@ -73,7 +80,13 @@ const LEDGER = [
          "and the wasm BYTES (an opaque-origin frame can load none of them itself — the manifest's " +
          "require-corp plus Chromium's CORP/ACAO-for-web-accessible-only rule sees to that), then carries the " +
          "qjs_* ABI across a MessagePort in `M.ccall`'s own shape. No analysis logic, no policy, no key: the " +
-         "pool that owns the agent-cluster question passes the name in." },
+         "pool that owns the agent-cluster question passes the name in. IT SERVES THE PRODUCT AND NOT A PROBE: " +
+         "bridge.js's engineCreate provisions here, and the sentence above about `createQJS()` running in the " +
+         "offscreen's realm is now history rather than a description of the tree — that path is deleted, so " +
+         "there is one way to build an instance and it is this one. A reply carries three things beside its " +
+         "call id: what the ABI answered, the engine output drained since the last one with the STREAM each " +
+         "line came from, and the instance's HEAPU8 length, which is the Level-1 RAM floor's one input and " +
+         "the one fact the pool cannot read for itself any more." },
   { f: "browser-process-host.js", zone: "BRIDGE:1,5",
     why: "THE TRUSTED SIDE OF THE BROWSER PROCESS — renderer-host.js's counterpart, facing the other way. It " +
          "provisions extension/browser-process.js as a dedicated module Worker (its own realm, its own module " +
