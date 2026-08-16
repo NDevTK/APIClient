@@ -80,6 +80,30 @@ void node_install_parent_mixin(JSContext *ctx, JSValueConst proto);
 enum { NODE_TREE_REMOVED = -1, NODE_TREE_REMOVING = 0, NODE_TREE_INSERTED = 1 };
 typedef void (*NodeTreeHook)(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
 void node_add_tree_hook(NodeTreeHook fn);
+
+/* §4.2.3's CHILDREN CHANGED STEPS — "specifications may define children changed steps for all or some nodes.
+ * The algorithm is passed no argument and is called from insert, remove, and replace data."
+ *
+ * A THIRD LIST, not a phase of the one above, because it is a different family asked a different question. The
+ * insertion and removing steps are about THE NODE that moved and run once per node; the children changed steps
+ * are about ITS PARENT and are how HTML §4.2.6's update a style block, §4.12.1's script element and §4.2.5's
+ * title element learn that their own contents were rewritten. Folding them into the tree hook would mean every
+ * registrant of that list re-deriving "whose children changed" from a phase, and would still miss the third
+ * caller entirely — `replace data` is not a tree mutation at all, so no tree hook can ever see
+ * `styleEl.firstChild.data = '...'`.
+ *
+ * IT RUNS ONCE PER NODE INSERTED OR REMOVED, WHERE §4.2.3 RUNS IT ONCE PER BATCH, and that is a statement about
+ * the DOM mutation chokepoint rather than a shortcut: `insert` reaches Lexbor one child at a time, so a
+ * fragment of N children is N chokepoint calls and N runs. Every children-changed-steps algorithm the standards
+ * define is a pure recomputation from the parent's CURRENT children — that is what "passed no argument" means —
+ * so N runs and one run compute the same answer, and a registrant for which they would not is a registrant that
+ * has misread which family it belongs to.
+ *
+ * `ctx` IS THE MUTATING REALM, exactly as it is for the tree hooks, and a registrant that builds an object
+ * resolves the PARENT'S document realm itself (document_realm_of) — two same-origin documents are one agent, so
+ * the flow performing the write is routinely not in the realm the parent belongs to. */
+typedef void (*NodeChildrenChangedHook)(JSContext *ctx, lxb_dom_node_t *parent);
+void node_add_children_changed_hook(NodeChildrenChangedHook fn);
 /* THE PRE-ORDER SUCCESSOR within `root`'s subtree, or NULL at the end — the one traversal primitive the spec's
    tree-order algorithms need. Exported for the same reason it exists: having it once is what keeps every
    algorithm that walks in tree order from growing its own walker that disagrees at the edges. */

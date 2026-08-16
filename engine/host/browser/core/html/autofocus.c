@@ -208,16 +208,26 @@ static bool an_ancestor_document_has_target_element(JSContext *docctx)
 }
 
 /* §6.6.7 flush step 5.5 — "if doc's SCRIPT-BLOCKING STYLE SHEET SET is not empty, then return", leaving this
-   candidate at the head of the list for the next rendering opportunity. HTML §4.2.4's set is filled by creating
-   a CSS style sheet that blocks scripts, and this engine creates no style sheet objects at all. */
+   candidate at the head of the list for the next rendering opportunity.
+   THE PRODUCER THIS NAMES IS NOT `CSSStyleSheet`, AND IT USED TO BE. A CSSStyleSheet exists in this build now
+   (core/css/css_style_sheet.c, created by §4.2.6's update a style block), and the set is still empty and
+   provably stays empty — so had this gone on probing that name it would have aborted every page carrying both
+   an `autofocus` and a `<style>`, on a claim §4.2.6 does not make. The set's real condition is the LAST clause
+   of "contributes a script-blocking style sheet": "the user agent hasn't given up on loading that particular
+   style sheet yet". An inline `<style>` has no critical subresources, so it is parsed and processed in the same
+   turn and is off the set before any flush can see it; what puts an element ON it is a sheet whose bytes are
+   still being FETCHED — §4.2.4's `<link rel=stylesheet>` (and an `@import` inside a sheet, which needs §6.4's
+   CSSImportRule). `sheet` on HTMLLinkElement is the member that arrives with the first of those. */
 static bool has_script_blocking_style_sheets(JSContext *docctx)
 {
-    realm_awaits(docctx, "CSSStyleSheet",
+    realm_awaits(docctx, "HTMLLinkElement.prototype.sheet",
                  "HTML §6.6.7 flush autofocus candidates step 5.5 RETURNS, leaving the head candidate in the "
                  "list for the next rendering opportunity, while doc's SCRIPT-BLOCKING STYLE SHEET SET (HTML "
                  "§4.2.4) is not empty — the candidate is the best one but its document is not ready to be "
-                 "focused. This build now has a CSSStyleSheet, so that set has a producer: give the Document "
-                 "the set, add each script-blocking sheet to it while it loads, and read it here");
+                 "focused. A `<link rel=stylesheet>` with a CSS style sheet is the element that can BE on that "
+                 "set, because it is the one whose sheet is still loading while scripts run: give the Document "
+                 "the set, append the link while its critical subresources are outstanding, remove it when they "
+                 "complete, and read it here");
     return false;
 }
 

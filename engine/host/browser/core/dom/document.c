@@ -32,6 +32,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/declarative_shadow.h"
 #include "core/html/media_element.h"
+#include "core/html/html_style_element.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/mutation_observer.h"
@@ -39,6 +40,7 @@
 #include "core/dom/attr_list.h"
 #include "core/dom/selector_match.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/css_style_sheet.h"
 #include "core/dom/document.h"
 #include "core/dom/document_domain.h"
 #include "core/dom/document_metadata.h"
@@ -2526,6 +2528,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     }
     html_element_install(ctx, global);   /* HTMLElement and every per-tag interface object */
     cssom_install(ctx, global);          /* CSSStyleDeclaration, and getComputedStyle on the Window */
+    css_style_sheet_install(ctx, global); /* CSSOM §6.1.1 StyleSheet and §6.1.2 CSSStyleSheet */
     custom_elements_install(ctx, global);   /* §4.13.4 window.customElements */
     element_internals_install(ctx, global);  /* §4.13.7 ElementInternals, CustomStateSet, ValidityState */
     dom_token_list_install(ctx, global);    /* §7.1 DOMTokenList */
@@ -2576,6 +2579,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        AFTER the declarative-shadow conversion, because the walk is shadow-including and a `<video src>` in a
        `<template shadowrootmode>` is in the shadow tree by now. */
     media_element_parsed(ctx, lxb_dom_interface_node(dom));
+    /* HTML §4.2.6 FOR THE TREE THE PARSER BUILT — "the element is popped off the stack of open elements of an
+       HTML parser" is update a style block's first trigger, and a Lexbor parse has no per-token seam, so the
+       markup's own `<style>` elements get their CSS style sheets here. AFTER the declarative-shadow conversion,
+       for the reason the media walk is: a `<style>` inside a `<template shadowrootmode>` is by now a style
+       element in a shadow tree, and its sheet is the shadow root's. */
+    html_style_element_parsed(ctx, lxb_dom_interface_node(dom));
     iframe_document_parsed(ctx);
     /* HTML §6.6.7 FOR THE TREE THE PARSER BUILT, for the reason the line above it exists: a browser runs the
        insertion steps during tree construction, so `<input autofocus>` in the page's own markup is a candidate

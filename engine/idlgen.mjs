@@ -249,6 +249,17 @@ const INTERFACES = {
   URL:                  "core/url/url.c",
   URLSearchParams:     ["core/url/url_search_params.c", "core/idl_iter.c"],
   CSSStyleDeclaration:  "core/css/css_style_declaration.c",
+  /* CSSOM §6.1's two. StyleSheet is a base nothing instantiates, so its six members live on their own
+     prototype and CSSStyleSheet.prototype CHAINS to it — both rows name the one component, and reporting
+     StyleSheet's members absent from CSSStyleSheet would be the audit lying by direction. What each row is
+     EXPECTED to report missing is real: `media` (§4.4's MediaList is not built), and CSSStyleSheet's
+     `cssRules`, `insertRule`, `deleteRule`, `replace`, `replaceSync`, `rules`, `addRule` and `removeRule`
+     (§6.4's CSSRule and CSSRuleList are not built either). */
+  StyleSheet:           "core/css/css_style_sheet.c",
+  CSSStyleSheet:        "core/css/css_style_sheet.c",
+  /* HTML §4.2.6's `disabled` and CSSOM §6.3.2's LinkStyle `sheet` are installed onto HTMLStyleElement's
+     prototype by their own component, for the same reason §4.10's rows name theirs. */
+  HTMLStyleElement:    ["core/html/html_style_element.c", "core/html/html_element.c"],
   /* The TREE. These were absent from the audit entirely — the interfaces a page touches most had no gap report
      at all, which is the audit lying by omission rather than by direction. They are auditable now because their
      members live on real prototypes rather than being copied onto each wrapper. */

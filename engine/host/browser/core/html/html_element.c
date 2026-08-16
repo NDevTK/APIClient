@@ -39,6 +39,7 @@
 #include "core/dom/dom_token_list.h"
 #include "core/html/hyperlink.h"
 #include "core/html/html_iframe.h"
+#include "core/html/html_style_element.h"
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
 #include "core/dom/slot.h"
@@ -177,7 +178,13 @@ static const ElReflect R_OBJECT[] = {
     { "name", "name", REFLECT_STRING },
 };
 static const ElReflect R_EMBED[]  = { { "src", "src", REFLECT_STRING }, { "type", "type", REFLECT_STRING } };
-static const ElReflect R_STYLE[]  = { { "media", "media", REFLECT_STRING }, { "disabled", "disabled", REFLECT_BOOL } };
+/* §4.2.6's `media` is the element's ONE plain reflection. `disabled` used to sit beside it as a
+   REFLECT_BOOL and it is not a reflection at all — HTML defines no `disabled` content attribute on a style
+   element, and the IDL attribute's getter and setter steps read and write the ASSOCIATED CSS STYLE SHEET's
+   disabled flag. The reflection honoured `<style disabled>` (markup no browser acts on) and ignored the flag
+   every page actually sets, in both directions and silently; core/html/html_style_element.c owns it now.
+   `blocking` is a `[SameObject] DOMTokenList` and is absent rather than mis-spelled as a string. */
+static const ElReflect R_STYLE[]  = { { "media", "media", REFLECT_STRING } };
 static const ElReflect R_OUTPUT[] = { { "name", "name", REFLECT_STRING }, { "htmlFor", "for", REFLECT_STRING } };
 static const ElReflect R_FIELDSET[] = { { "name", "name", REFLECT_STRING }, { "disabled", "disabled", REFLECT_BOOL } };
 static const ElReflect R_OPTGROUP[] = { { "label", "label", REFLECT_STRING }, { "disabled", "disabled", REFLECT_BOOL } };
@@ -523,6 +530,11 @@ void html_element_install_protos(JSContext *ctx)
         /* §4.8.5's `contentWindow` — the child navigable its insertion steps queued. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLIFrameElement"))
             iframe_install(ctx, p);
+        /* §4.2.6's `disabled` and CSSOM §6.3.2's LinkStyle `sheet`, which HTMLStyleElement includes. Handed the
+           prototype for the same reason §4.10's members are: this file owns the table of which interface a tag
+           wears, that one owns the algorithm that decides whether there is a sheet to answer with. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLStyleElement"))
+            html_style_element_install(ctx, p);
         /* THE `[SameObject] readonly attribute DOMTokenList` REFLECTIONS, each on the interface whose IDL
            declares it. They are not reflections in R_* above because those produce a STRING: `link.rel` is the
            attribute's value and `link.relList` is §7.1's token list over the same attribute, and a page uses

@@ -426,6 +426,33 @@ static const EventTargetTree NODE_EVENT_TREE = {
 static NodeTreeHook g_tree_hooks[NODE_TREE_HOOKS_MAX];
 static int g_tree_hook_n;
 
+/* §4.2.3's CHILDREN CHANGED STEPS — see node.h for why they are their own list. Fired from the three callers
+   the standard names: `insert` and `remove` below, and §4.10's `replace data` (node_cd_replace_data, and §4.4
+   normalize's step 4, which IS a replace data written out). */
+#define NODE_CHILDREN_CHANGED_HOOKS_MAX 4
+static NodeChildrenChangedHook g_cc_hooks[NODE_CHILDREN_CHANGED_HOOKS_MAX];
+static int g_cc_hook_n;
+
+static void node_children_changed(JSContext *ctx, lxb_dom_node_t *parent)
+{
+    int i;
+
+    /* "If node's parent is non-null" — `replace data` on a parentless text node changes nobody's children, and
+       a removal from a fragment root that is itself detached still has a parent to tell. */
+    if (!parent) return;
+    for (i = 0; i < g_cc_hook_n; i++)
+        g_cc_hooks[i](ctx, parent);
+}
+
+void node_add_children_changed_hook(NodeChildrenChangedHook fn)
+{
+    DCHECK(fn != NULL, "a children-changed-steps hook was registered as nothing");
+    CHECK(g_cc_hook_n < NODE_CHILDREN_CHANGED_HOOKS_MAX,
+          "more §4.2.3 children-changed-steps hooks were registered than the list holds — a dropped one is a "
+          "component that never learns its own contents were rewritten");
+    g_cc_hooks[g_cc_hook_n++] = fn;
+}
+
 static void node_tree_hooks_run(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase)
 {
     int i;
@@ -433,6 +460,12 @@ static void node_tree_hooks_run(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_
            "the tree-steps list was run at a phase §4.2.3 does not have");
     for (i = 0; i < g_tree_hook_n; i++)
         g_tree_hooks[i](ctx, n, parent, phase);
+    /* §4.2.3 numbers the children changed steps AFTER the insertion steps and after step 8's mutation record,
+       and after the detach on the removal side — which is exactly here, past the whole hook list, on the two
+       phases that leave the parent's child list changed. NODE_TREE_REMOVING is the pre-detach phase and the
+       children have not changed yet, so it is not one of them. */
+    if (phase == NODE_TREE_INSERTED || phase == NODE_TREE_REMOVED)
+        node_children_changed(ctx, parent);
 }
 
 void node_add_tree_hook(NodeTreeHook fn)
@@ -927,6 +960,10 @@ JSValue node_cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset,
     free(out);
     /* STEPS 8-11 — §5.5's, over the operands this algorithm settled on. */
     range_replace_data_steps(ctx, n, offset, count, cd_units((const lxb_char_t *)data, data_len));
+    /* THE LAST STEP — "if node's parent is non-null, then run the children changed steps for node's parent".
+       It is §4.2.3's third caller and the ONLY one no tree hook can stand in for: nothing moved in the tree, so
+       `styleEl.firstChild.data = '…'` is invisible to every mutation chokepoint and visible here. */
+    node_children_changed(ctx, n->parent);
     return JS_UNDEFINED;
 }
 
@@ -1608,6 +1645,10 @@ static int js_node_normalize(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             uint32_t before = node_length(s->n);
             dom_cow_set_text(s->n, buf, len);
             range_normalize_absorb_steps(ctx, s->n, sib, before);
+            /* §4.10 replace data's last step, for the replace data §4.4 step 4 writes out here. The removal
+               below fires it a second time through the chokepoint, which costs a recomputation and cannot
+               change an answer — see node.h on why every registrant of this family is idempotent. */
+            node_children_changed(ctx, s->n->parent);
         }
         dom_cow_remove_child(sib);
         free(buf);

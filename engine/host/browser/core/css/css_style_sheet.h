@@ -1,0 +1,60 @@
+/* CSSOM §6.1 — a CSS STYLE SHEET, its §6.1.1 StyleSheet base and its §6.1.2 CSSStyleSheet interface.
+ *
+ * WHAT THIS OWNS is the OBJECT and its state items, not where sheets come from: §6.1's state list ("type",
+ * "location", "parent CSS style sheet", "owner node", "owner CSS rule", "title", "disabled flag", ...) and the
+ * two interfaces that read them. WHO CREATES ONE is a different standard every time — HTML §4.2.6's update a
+ * style block for a `<style>`, §4.2.4's for a `<link>`, CSSOM's own `new CSSStyleSheet()` — so each of those
+ * calls `css_style_sheet_create` with the properties its own algorithm specifies rather than this file knowing
+ * about any of them.
+ *
+ * THE STATE ITEMS THIS MODELS ARE THE ONES SOMETHING READS. §6.1 lists thirteen; the origin-clean flag, the
+ * constructed flag, the disallow modification flag, the constructor document and the stylesheet base URL are
+ * every one of them read by `cssRules` / `insertRule` / `deleteRule` / `replace` / the constructor, and none of
+ * those exist yet — a field written by a creator and read by nobody is dead weight that reads as modelled. They
+ * arrive with the member that asks them.
+ *
+ * `media` IS ABSENT, not stubbed. §6.1.1 declares `[SameObject, PutForwards=mediaText] readonly attribute
+ * MediaList media`, and §4.4's MediaList is not built — a getter answering null or an empty object would be a
+ * WRONG answer where the spec computes a real one, so the member is honestly missing and the page's own
+ * TypeError names it. */
+#ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_SHEET_H
+#define ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_SHEET_H
+
+#include <stdbool.h>
+
+#include "quickjs.h"
+
+void css_style_sheet_init(JSContext *ctx);
+/* §6.1's two INTERFACE PROTOTYPE OBJECTS for ONE realm — declared into core/realm.h's list. */
+void css_style_sheet_install_proto(JSContext *ctx);
+/* `StyleSheet` and `CSSStyleSheet` as globals. */
+void css_style_sheet_install(JSContext *ctx, JSValueConst global);
+void css_style_sheet_free(JSContext *ctx);
+
+/* §6.1's "CREATE A CSS STYLE SHEET" — step 1, "create a new CSS style sheet object and set its properties as
+   specified". The arguments ARE §6.1's state items, spelled out one per parameter rather than gathered into a
+   struct on purpose: a state item this engine starts modelling must become a compile error at every creator,
+   and a zero-initialised struct field is the opposite of that.
+   `location` is a USVString or JS_NULL (null for an embedded sheet); the other three are the wrapper or rule
+   object, or JS_NULL. The disabled flag is not a parameter because §6.1 gives it no creator-specified value —
+   it is "either set or unset. Unset by default", and every creator leaves it there.
+   Step 2's "run the add a CSS style sheet steps" is NOT here: that adds the sheet to the document's list, which
+   belongs to the component that owns the list. OWNED: the caller frees. */
+JSValue css_style_sheet_create(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_style_sheet,
+                               JSValueConst owner_rule, JSValueConst location);
+
+/* §6.2's "REMOVE A CSS STYLE SHEET". Step 2 — "set the CSS style sheet's parent CSS style sheet, owner node and
+   owner CSS rule to null" — is the whole of what this engine can do today; step 1 removes it from the list of
+   document CSS style sheets, and there is no such list, which this asserts against rather than states. */
+void css_style_sheet_remove(JSContext *ctx, JSValueConst sheet);
+
+/* Is `v` a CSSStyleSheet? The class brand, for a caller holding something it took off a slot. */
+bool css_style_sheet_is(JSValueConst v);
+
+/* §6.1's DISABLED FLAG, reached by name because HTML §4.2.6's `HTMLStyleElement.disabled` is defined as a
+   forwarding to it and not as a content-attribute reflection. Both go through this component's capture
+   accessor, so the flag time-travels whichever member wrote it. */
+bool css_style_sheet_disabled(JSValueConst sheet);
+void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled);
+
+#endif

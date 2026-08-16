@@ -42,6 +42,7 @@
 #include "core/html/trusted_types.h"
 #include "core/html/declarative_shadow.h"
 #include "core/html/html_script.h"
+#include "core/html/html_style_element.h"
 #include "core/html/media_element.h"
 #include "core/html/fragment_serializer.h"
 #include "core/html/sanitizer.h"
@@ -52,6 +53,7 @@
 #include "core/dom/document_fragment.h"
 #include "core/idl_indexed.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/css_style_sheet.h"
 #include <lexbor/ns/ns.h>
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
@@ -1755,6 +1757,12 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
                    node's document, not the mutating one) and its position (insert step 7, before step 8's
                    mutation record). */
                 media_element_source_inserted(ctx, el);
+                /* HTML §4.2.6's SECOND TRIGGER — "the element is not on the stack of open elements ... and it
+                   becomes connected". `<style>` is the element whose insertion CREATES a CSS style sheet, and
+                   the algorithm decides for itself whether this element is one. It is here rather than on
+                   node.c's tree-hook list for the reason the three above it are: an HTML ELEMENT INSERTION
+                   STEPS entry needs this seam's realm (the inserted node's document, not the mutating one). */
+                html_style_element_update(el);
                 /* DOM §4.2.3's insertion steps: an element that ENTERS a document gets its connectedCallback if
                    it is already custom, and is otherwise tried for upgrade — the other half of "learned by
                    execution", beside the <script> preparation right above it. The upgrade is ENQUEUED, never
@@ -1809,6 +1817,11 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
                 iframe_destroy_navigable(ctx, w);
                 JS_FreeValue(ctx, w);
             }
+            /* §4.2.6's SAME TRIGGER, other side — "or disconnected". One algorithm for both, which is what
+               the standard writes: its step 2 removes the sheet and its step 3 returns because the element is
+               no longer connected, so a `<style>` taken out of the document stops having a style sheet and the
+               one it had is orphaned rather than left claiming an owner node it no longer has. */
+            html_style_element_update(el);
             custom_elements_disconnected(ctx, el);
         }
     } else {
@@ -2087,6 +2100,11 @@ void element_init(JSContext *ctx)
     custom_elements_init(ctx);
     html_script_init(ctx);    /* §4.12.1's `already started` slot, which the fragment parse below writes */
     cssom_init(ctx);          /* CSSStyleDeclaration, which HTMLElement's `style` attribute names */
+    css_style_sheet_init(ctx);   /* CSSOM §6.1's StyleSheet and CSSStyleSheet, which a `<style>` element creates */
+    /* HTML §4.2.6's association between the two. AFTER the sheet interface it creates, and after
+       node_add_tree_hook's list above, because its own registration is on §4.2.3's children-changed family and
+       the standard numbers that family after the mutation record the list's last entry queues. */
+    html_style_element_init(ctx);
     html_element_init(ctx);   /* the HTML half, which builds HTMLElement and the per-tag interfaces on this */
 }
 
@@ -2192,6 +2210,8 @@ void element_free(JSContext *ctx)
     g_ts_n = g_ts_cap = 0;
     element_view_free();
     html_element_free(ctx);
+    html_style_element_free(ctx);   /* before the sheet interface whose objects it holds */
+    css_style_sheet_free(ctx);
     cssom_free(ctx);
     selector_match_free();   /* after every component that can still match a selector */
     custom_elements_free(ctx);
