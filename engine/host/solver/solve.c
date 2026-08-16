@@ -225,8 +225,13 @@ void solve_init(JSContext *ctx) {
 /* THE ONE PLACE A SINK BECOMES PENDING — find-or-create, answering WHICH of the two it did. The distinction is
    load-bearing and used to be spelled as a `tried` test at the seeder: only a NEWLY detected sink opens a
    search (its class's written-down vectors, or its context probe), because a resumed parked candidate is
-   already ONE of that search's flows and re-opening it would seed the whole search a second time. */
-static Cand *pending_entry(const char *src, int sink, int *created) {
+   already ONE of that search's flows and re-opening it would seed the whole search a second time.
+   NAMED FOR WHAT IT ANSWERS AND NOT FOR THE ARRAY IT LIVES IN, because `pending_entry` is already a name:
+   pending.h's reply register owns it, and flow.h puts that declaration in front of this file. The compiler
+   caught the duplicate, but the collision was the smaller half of the problem — "pending" means the replies a
+   flow is waiting on in one component and a detected-but-unsolved sink in this one, and one word carrying two
+   meanings across two vocabularies is how a set of names goes wrong. What this returns is one sink's SEARCH. */
+static Cand *sink_search(const char *src, int sink, int *created) {
     Cand *e;
 
     DCHECK(src && created, "a sink was registered as pending with no source, or with nowhere to say whether "
@@ -269,7 +274,7 @@ static void push_breakout(Cand *e, const char *payload) {
    probe whose run the derivation reads its context from. */
 static void add_pending(const char *src, int sink) {
     int created = 0;
-    Cand *e = pending_entry(src, sink, &created);
+    Cand *e = sink_search(src, sink, &created);
     const SinkClass *sc;
 
     if (!created) return;
@@ -390,7 +395,7 @@ static void derive_html_context(const char *html) {
            "the @S HTML context locator reached the markup sink while the running candidate belongs to another "
            "sink class — one flow carries one substitution, so the breakouts derived here would be filed "
            "against a search that never asked for them");
-    e = pending_entry(f->cand_src, SINK_HTML, &created);
+    e = sink_search(f->cand_src, SINK_HTML, &created);
     DCHECK(!created,
            "the markup sink a context probe is running for was not on the pending list — the probe exists only "
            "because detection put it there, so an absent entry means this search was dropped and the "
@@ -463,7 +468,7 @@ const char *solve_resume_candidate(const char *src, const char *sink_name) {
        parked-search entry reports. */
     {
         int created = 0;
-        pending_entry(src, cls, &created)->tried++;
+        sink_search(src, cls, &created)->tried++;
     }
     /* IT COSTS WHAT A FRESH ONE COSTS, so it counts as one. This number is what says whether a run got slower
        because there were more searches or because each search grew, and a resumed candidate re-runs the whole
