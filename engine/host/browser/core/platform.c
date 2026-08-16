@@ -24,6 +24,7 @@
 #include "core/file/file_system_handle.h"
 #include "core/file/file_system_writable.h"
 #include "core/file/storage_manager.h"
+#include "core/frame/agent_cluster.h"
 #include "core/frame/history.h"
 #include "core/frame/navigate_event_fire.h"
 #include "core/frame/navigation.h"
@@ -511,6 +512,13 @@ void platform_agent_init(JSContext *ctx, const PlatformAgent *agent)
        also what gives an opaque principal its IDENTITY: the host states "null", and the nonce minted here is
        what every document of this agent then shares. */
     origin_agent_adopt(agent->origin);
+    /* AND THE AGENT'S CLUSTER, IN THE SAME BREATH AND FOR THE SAME REASON. §8.1.2.2's obtain-a-similar-origin-
+       window-agent is what ALLOCATES the agent this whole call is bringing up, and its key is derived from the
+       origin adopted on the line above — so it is not a row on the list either: it installs nothing, and it has
+       to exist before `originAgentCluster`, §7.1.1.2's `document.domain` setter or anything else can ask which
+       cluster this agent is in. Every host reaches it here, which is what stops one host answering a question
+       about a cluster that was never allocated. */
+    agent_cluster_obtain_window_agent(origin_agent(), agent->requests_oac);
     for (i = 0; i < PLATFORM_N; i++)
         if (PLATFORM[i].declare)
             PLATFORM[i].declare(ctx, agent);
@@ -535,6 +543,7 @@ void platform_agent_free(void)
     /* THE ORIGINS GO LAST, AFTER EVERY COMPONENT THAT NAMES ONE. They are the agent's, not a realm's — a
        WindowProxy holds one as a POD pointer inside the bytes its COW delta captures — so the whole table is
        released here, once, when nothing is left that could read it. */
+    agent_cluster_release();   /* the cluster names an origin, so it goes BEFORE the origins it named */
     origin_release();
     g_declared_in = NULL;
 }

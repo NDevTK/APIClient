@@ -628,7 +628,9 @@ int idl_freeze_array(JSContext *ctx, JSValueConst arr);
  * by WHICH global a component installs on and this engine has exactly one global kind (there is no
  * WorkerGlobalScope), so every member's exposure set is trivially satisfied. [CrossOriginIsolated] is decided
  * by HTML §7.2.2's cross-origin isolated capability, which core/frame/agent_cluster.h now ANSWERS — false for
- * every environment this build makes, because no COOP/COEP response header reaches a policy container. So the
+ * every environment this build makes, because §7.1.3.2's browsing context group switch is what would set the
+ * group's isolation mode to `concrete` and nothing performs it yet (the COOP and COEP headers themselves DO
+ * reach the engine, and a response that would need the switch crashes by name). So the
  * condition is absent from this enum because no member in this build carries the attribute, not because the
  * capability cannot be asked: the day one does, it is a value here calling that component, and the gate below
  * grows a case rather than a second gate somewhere else. */

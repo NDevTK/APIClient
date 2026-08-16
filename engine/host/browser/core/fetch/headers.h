@@ -48,9 +48,22 @@ void  header_list_append(HeaderList *l, const char *name, const char *value);
 /* §5.1 set: replace every entry with this name by one. */
 void  header_list_set(HeaderList *l, const char *name, const char *value);
 void  header_list_delete(HeaderList *l, const char *name);
-/* §2.2.4 "get a structured header value": the entries with this name, joined by ", " (malloc'd; NULL when the
-   list has none, which is what `get` returns null for). */
+/* Fetch §2.2.2 "get a header name from a header list": the values of EVERY header with this name, joined by
+   0x2C 0x20 in order (malloc'd; NULL when the list has none, which is what `get` returns null for). The join
+   is not a convenience — it is what makes two `Cross-Origin-Embedder-Policy: require-corp` headers a LIST that
+   an ITEM parse rejects, which is the row HTML §7.1.4.1 prints its table for. */
 char *header_list_get(const HeaderList *l, const char *name);
+
+/* A RESPONSE'S HEADER LIST, FROM THE ONE FORM IT CAN CROSS AN ABI IN — `name: value`, one per LF-separated
+ * line, exactly the HTTP field lines the response delivered.
+ *
+ * IT IS A LIST AND NOT A MAP, AND THE ABI SHAPE IS WHY THIS FUNCTION EXISTS AT ALL. A response's headers reach
+ * this engine from the trusted zone, and the obvious shape — a JS object keyed by name — is a MAP: it cannot
+ * express the repeat that §7.1.4.1's table turns on, and it silently answers `require-corp` for a response
+ * that a browser reads as `unsafe-none`. Lines can express it, so lines are what cross. `block` may be NULL or
+ * empty, which is a response that carried no headers; `l` must be an EMPTY list, because a response has one
+ * header list and building it twice would make `get` join two responses' values together. */
+void header_list_parse_field_lines(HeaderList *l, const char *block);
 
 /* §5.1 "fill", AS A SUB-SEQUENCE. Converting a `HeadersInit` is [[OwnPropertyKeys]] and then a [[Get]] and a
    ToString per key — every one of them the page's code on a Proxy or an accessor, so every one of them a

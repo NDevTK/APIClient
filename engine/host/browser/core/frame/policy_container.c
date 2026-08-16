@@ -3,10 +3,24 @@
  * WHY IT EXISTS, AND WHY IT IS THE ANSWER TO "how does an about:blank child get a policy". A navigable created
  * with no URL — `window.open()` with no argument, `<iframe>` with no src — gets its initial `about:blank`
  * Document SYNCHRONOUSLY, and that Document has no response to take a policy from. HTML's answer is not a
- * special case: every Document has a POLICY CONTAINER (a CSP list, a referrer policy, embedder policy and
- * sandboxing flags), and §7.4's create-a-new-browsing-context says that when there is a creator, the new
- * document's policy container is a CLONE OF THE CREATOR'S. So the child inherits the parent's CSP by the
- * ordinary rule, not by an inheritance rule written for CSP.
+ * special case: every Document has a POLICY CONTAINER, and §7.4's create-a-new-browsing-context says that when
+ * there is a creator, the new document's policy container is a CLONE OF THE CREATOR'S. So the child inherits
+ * the parent's CSP by the ordinary rule, not by an inheritance rule written for CSP.
+ *
+ * WHAT IS IN ONE IS §7.1.7'S FIVE ITEMS AND NO OTHERS — a CSP list, an EMBEDDER POLICY, a referrer policy, an
+ * integrity policy and a report-only integrity policy. This line said "and sandboxing flags", which is the
+ * claim five predicates in this tree were once written against and which the standard does not make: a
+ * Document's ACTIVE SANDBOXING FLAG SET is a row of §7.5.1's creation table BESIDE the container
+ * (core/frame/sandboxing.h), and so is its OPENER POLICY. What the container contributes to the flag set is one
+ * half of it, through the CSP `sandbox` directive alone — the function at the bottom of this file, and the only
+ * connection between the two.
+ *
+ * THE EMBEDDER POLICY IS THE ITEM THIS FILE STILL DOES NOT HOLD, AND THE REASON IS TRAVEL, NOT THE ITEM.
+ * §7.1.4's obtain is built (core/frame/embedder_policy.h) and a response's is obtained where a response is read
+ * (core/frame/navigation_params.c), which CRASHES BY NAME at any response whose policy this container would
+ * drop. Adding the field before a container can travel AS a container would put a value in it that vanishes at
+ * the two seams §7.4's clone crosses as CSP TEXT — window_proxy.c's `creator_csp`, for a lazily-materialized
+ * about:blank child, and navigable.c's `navigable.create` notice, for a peer instance.
  *
  * AND THE CLONE CROSSES INSTANCES. One WASM instance is one DOCUMENT regardless of origin, so the creator and
  * the child it clones from are not in the same heap. `iframe.contentWindow.document.body` still has to answer

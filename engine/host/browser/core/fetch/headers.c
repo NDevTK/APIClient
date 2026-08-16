@@ -94,6 +94,65 @@ void header_list_set(HeaderList *l, const char *name, const char *value)
     header_list_append(l, name, value);
 }
 
+void header_list_parse_field_lines(HeaderList *l, const char *block)
+{
+    const char *p = block;
+
+    DCHECK(l != NULL, "a field block was parsed into no header list");
+    DCHECK(l->n == 0, "a field block was parsed into a header list that already holds headers — a response has "
+                      "ONE header list and it is built once, so a second parse into the same list would make "
+                      "one response look like two and Fetch's `get` would join the pair");
+    if (!block) return;   /* a response with no headers at all — a real answer, and an empty list is it */
+    while (*p) {
+        const char *eol = strchr(p, '\n');
+        const char *end = eol ? eol : p + strlen(p);
+        const char *colon;
+        const char *vs;
+        char *name;
+
+        /* RFC 9112's field lines end CRLF, so a CR before the LF is the TERMINATOR and not part of the value.
+           Taking it as one is how a `Content-Security-Policy` acquires a trailing carriage return and stops
+           matching anything the parser below compares it against. */
+        if (end > p && end[-1] == '\r') end--;
+        colon = memchr(p, ':', (size_t)(end - p));
+
+        if (end == p) { p = eol ? eol + 1 : end; continue; }   /* a blank line separates nothing here */
+        /* THE ZONE THAT WROTE THIS BLOCK HAD A `Headers` OBJECT, so every line it wrote came from a real
+           response and has a name and a value. A line without a colon is that zone's bug, and it is one this
+           engine must not paper over: dropping it silently would make a `Content-Security-Policy` that the
+           server DID send disappear, and the sink it kills would be reported as a working exploit. */
+        CHECK(colon != NULL, "a response field block carries a line with no colon — the trusted zone builds "
+                             "this from a `Headers` object, where every entry is a (name, value) pair, so a "
+                             "line that is not one means the serialization and this parse disagree. ALWAYS "
+                             "fatal rather than dev-only: what follows this test is a read through the colon, "
+                             "and a release build that skipped the line would drop a policy the server sent");
+        vs = colon + 1;
+        while (vs < end && (*vs == ' ' || *vs == '\t')) vs++;   /* RFC 9112's OWS after the colon */
+        name = malloc((size_t)(colon - p) + 1);
+        CHECK(name != NULL, "headers: OOM reading a response field line");
+        memcpy(name, p, (size_t)(colon - p));
+        name[colon - p] = 0;
+        /* §5.1's grammar, asked of input that came from outside this engine. A name that is not a TOKEN could
+           not have come off a `Headers` object, so it is the same disagreement the colon check names. */
+        DCHECK(header_name_valid(name, strlen(name)),
+               "a response field block carries a line whose name is not an HTTP token — a header list stores "
+               "what a response delivered, and a name Fetch would have rejected never was one");
+        {
+            char *value = malloc((size_t)(end - vs) + 1);
+            CHECK(value != NULL, "headers: OOM reading a response field value");
+            memcpy(value, vs, (size_t)(end - vs));
+            value[end - vs] = 0;
+            /* APPEND, NEVER SET: §5.1 keeps repeats, and §7.1.4.1's own table turns on them — two
+               `Cross-Origin-Embedder-Policy: require-corp` headers must combine into a value that FAILS to
+               parse as an item, which a list that replaced would have quietly turned into one that succeeds. */
+            header_list_append(l, name, value);
+            free(value);
+        }
+        free(name);
+        p = eol ? eol + 1 : end;
+    }
+}
+
 char *header_list_get(const HeaderList *l, const char *name)
 {
     char *lo = header_lower(name), *out = NULL;

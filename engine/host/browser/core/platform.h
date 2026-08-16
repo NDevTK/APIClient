@@ -55,6 +55,15 @@ typedef struct {
        SECURE CONTEXT — and Web IDL §3.3.13's members exist or do not by that answer. It is the environment's,
        not the document's: an `https` iframe of an `http` page holds the `http` address here. */
     const char *top_level_url;
+    /* §7.5.1's `requestsOAC`, which §8.1.2.2's obtain-a-similar-origin-window-agent allocates this agent's
+       CLUSTER with — the `Origin-Agent-Cluster` response header, parsed as a structured-field boolean and
+       cleared for a non-secure context (core/frame/navigation_params.h).
+       IT IS AN AGENT FACT AND NOT A DOCUMENT ONE, which is why it is on this struct rather than beside the
+       policy on the document below: §8.1.2.2 allocates a cluster ONCE per agent, and §7.1.2's own note says a
+       later same-origin Document in the same group inherits that allocation through the historical agent
+       cluster key map even when it sends a different header. The document that roots the agent is the one
+       whose header decides it. */
+    bool requests_oac;
 } PlatformAgent;
 
 /* ONE DOCUMENT'S FACTS. `url` and `origin` ARE TWO DIFFERENT FACTS and this struct is why they can no longer

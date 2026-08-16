@@ -1885,6 +1885,12 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
 
     agent.origin = origin;
     agent.top_level_url = top_level_url;
+    /* §7.5.1's requestsOAC. This fixture's document comes from no response at all — it is a string of HTML
+       handed to the probe — so there is no `Origin-Agent-Cluster` header to have sent, and false is what
+       §8.1.2.2 allocates the cluster with. Stated rather than left to the struct's padding, because the field
+       decides an observable (`window.originAgentCluster`) and a fixture that read uninitialized memory for it
+       would be flaky in the one direction nobody looks at. */
+    agent.requests_oac = false;
     platform_agent_init(ctx, &agent);
 }
 

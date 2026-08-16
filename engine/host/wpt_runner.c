@@ -44,7 +44,8 @@
 #include "core/fetch/request.h"
 #include "core/fetch/fetch.h"
 #include "core/url/url.h"
-#include "core/frame/policy_container.h"
+#include "core/frame/navigation_params.h"
+#include "core/frame/secure_context.h"
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
@@ -680,7 +681,7 @@ static void wpt_children_free(void)
 
 /* Defined below, next to the other GETs against the corpus server — §7.4 step 14's fetch is answered here and
    it is the same request every other one is. */
-static char *wpt_get_csp(const char *url, size_t *plen, char **pcsp);
+static char *wpt_get_headers(const char *url, size_t *plen, HeaderList *pheaders);
 
 /* Returns whether it ANSWERED anything, because the step loop has to know: it is one of the two things this
    host can do at a slice boundary, and a STALL it answers nothing to is a frontier waiting on a reply that is
@@ -868,7 +869,8 @@ static bool wpt_answer_host_requests(JSContext *ctx)
            agent. `{body, csp}` is ONE answer because a policy is a property of THE RESPONSE; a body of null is
            a fetch that did not load, which is still a document the navigable gets. */
         else if (!strncmp(tab + 1, "document.fetch\t", 15)) {
-            char *csp = NULL, *body;
+            char *csp, *body;
+            HeaderList h;
             size_t len = 0;
             JSValue v = JS_NewObject(ctx);
 
@@ -876,7 +878,16 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                                   "would GET a different URL and skipping it parks the loading flow forever, "
                                   "so the buffer is what has to grow");
             memcpy(op, tab + 1, n); op[n] = 0;
-            body = wpt_get_csp(strchr(op, '\t') + 1, &len, &csp);
+            body = wpt_get_headers(strchr(op, '\t') + 1, &len, &h);
+            /* THE ANSWER IS STILL `{body, csp}` AND THAT IS THE NEXT THING TO WIDEN, not a choice made here.
+               A child navigable's Document is created from THIS response, so everything §7.5.1 reads off a
+               header list belongs in this answer — but the seam that carries it into the child (window_proxy's
+               `creator_csp`, then navigable_realm's `csp` argument) is a policy TEXT and not a container, so
+               the list is narrowed to the one field that fits. §7.1.4's embedder policy and §7.1.3's opener
+               policy stop at the same wall, and core/frame/navigation_params.c crashes by name where a
+               response needs them. */
+            csp = header_list_get(&h, "content-security-policy");
+            header_list_free(&h);
             JS_SetPropertyStr(ctx, v, "body",
                               body ? JS_NewStringLen(ctx, body, len) : JS_NULL);
             JS_SetPropertyStr(ctx, v, "csp", csp ? JS_NewString(ctx, csp) : JS_NULL);
@@ -1037,10 +1048,13 @@ static void wpt_program(char *body, const char *name, ScriptType type)
 
 
 /* ONE GET against the corpus server, resolved against the running document's address. */
-/* `pcsp`, when given, receives the response's `Content-Security-Policy` as a malloc'd string (NULL when the
-   response carried none). The header list was already parsed here and thrown away — which is how a corpus test
-   that declares a policy was measured against no policy at all. */
-static char *wpt_get_csp(const char *url, size_t *plen, char **pcsp)
+/* `pheaders`, when given, receives the RESPONSE'S WHOLE HEADER LIST rather than one header out of it — the
+   caller's to header_list_free. It used to hand back only the `Content-Security-Policy` string, and the rest of
+   the list was parsed here and thrown away one line later: a corpus test whose `.headers` sidecar or
+   `?pipe=header(...)` declares `Origin-Agent-Cluster`, `Cross-Origin-Opener-Policy` or
+   `Cross-Origin-Embedder-Policy` was measured against a Document that never saw it. A header list is what
+   §7.5.1 creates a Document from, so a header list is what leaves here. */
+static char *wpt_get_headers(const char *url, size_t *plen, HeaderList *pheaders)
 {
     FetchRequest req;
     HeaderList h;
@@ -1052,15 +1066,15 @@ static char *wpt_get_csp(const char *url, size_t *plen, char **pcsp)
     req.method = "GET";
     req.url = url;
     body = wpt_http(&req, plen, &status, &h);
-    if (pcsp) *pcsp = header_list_get(&h, "content-security-policy");   /* malloc'd or NULL */
-    header_list_free(&h);
+    if (pheaders) *pheaders = h;   /* MOVED, not copied — the caller frees it */
+    else header_list_free(&h);
     if (body && (status < 200 || status >= 300)) { free(body); body = NULL; }
     return body;
 }
 
 static char *wpt_get(const char *url, size_t *plen)
 {
-    return wpt_get_csp(url, plen, NULL);
+    return wpt_get_headers(url, plen, NULL);
 }
 
 static void wpt_derive_addresses(int argc, char **argv)
@@ -1124,7 +1138,7 @@ static JSRuntime *g_rt;
  * already cost this gate four standards. What stays in this function is this runner's own: the solver
  * bootstrap it needs to exercise real components, and its network edge. */
 static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *origin,
-                           const char *top_level_url)
+                           const char *top_level_url, bool requests_oac)
 {
     PlatformAgent agent;
 
@@ -1179,6 +1193,11 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
 
     agent.origin = origin;
     agent.top_level_url = top_level_url;
+    /* §7.5.1's requestsOAC, from the response the caller fetched — a WPT test document IS fetched from the
+       corpus's own wptserver, so it has a response, and `html/browsers/origin/origin-keyed-agent-clusters/`
+       delivers this header through `?pipe=header(...)` and `.headers` sidecars and nothing else. This host
+       reads no header itself: the list goes through §7.4.6's navigation params like the product host's. */
+    agent.requests_oac = requests_oac;
     platform_agent_init(ctx, &agent);
 }
 
@@ -1277,32 +1296,50 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                                      const char *html, size_t html_n)
 {
     static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
-    char *fetched = NULL, *root_csp = NULL;   /* the response's policy — §7.2.6's header half */
+    char *fetched = NULL;
+    HeaderList response_headers;
+    NavigationParams np;
     const char *src = html;
     JSRuntime *rt;
     JSContext *ctx;
 
+    /* THE RESPONSE IS READ BEFORE THE AGENT EXISTS, and that ORDER is the spec's rather than this runner's
+       convenience. §7.5.1 reads `Origin-Agent-Cluster` off the response and hands the answer to §8.1.2.2's
+       obtain-a-similar-origin-window-agent, which is what ALLOCATES the agent — so a runner that brought the
+       agent up first would have allocated the cluster before it knew which key the response asked for. The
+       standard's own ordering says the same thing by calling the environment the read happens in RESERVED.
+       THE BYTES COME WITH THE HEADERS. A corpus file is served by wptserve, whose `.headers` sidecars and
+       `?pipe=header(...)` substitutions are the whole delivery mechanism for the areas this route exists for —
+       `html/browsers/origin/origin-keyed-agent-clusters/` sends nothing else. */
+    memset(&response_headers, 0, sizeof response_headers);
+    if (!src) {
+        src = DOC;
+        html_n = sizeof DOC - 1;
+        if (g_html_mode) {
+            fetched = wpt_get_headers(g_test_url, &html_n, &response_headers);
+            CHECK(fetched != NULL, "wpt: the corpus server did not serve the HTML test file");
+            src = fetched;
+        }
+    }
+    /* ZERO IS THE ROOT NAVIGABLE'S TARGET SNAPSHOT SANDBOXING FLAGS: a top-level traversable has no embedder
+       element, so §7.1.5 answers its creation flags from the POPUP sandboxing flag set, which begins empty and
+       which only §7.1's rules for choosing a navigable ever fill — nothing chose this one. The other half of
+       §7.4.5's union is this response's CSP-derived flags, which navigation_params computes.
+       §8.1.3.5's SECURE-CONTEXT ANSWER is over the environment's TOP-LEVEL CREATION URL, which is what decides
+       whether an `Origin-Agent-Cluster`, a COOP or a COEP is honoured at all. */
+    navigation_params_from_response(&np, &response_headers, 0,
+                                    secure_context_url_potentially_trustworthy(top_level_url));
+    header_list_free(&response_headers);
+
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);
     ctx = JS_NewContext(rt);
-    wpt_agent_init(ctx, doc_name, origin, top_level_url);
+    wpt_agent_init(ctx, doc_name, origin, top_level_url, np.requests_oac);
     /* §7.4 CALLS BACK HERE FOR A SAME-ORIGIN CHILD, because what a document of this build IS is this runner's
        answer and not the engine's — a child with a different platform surface would make every fidelity number
        measured in it a number about a different browser. */
     navigable_set_realm_builder(wpt_child_realm);
 
-    if (!src) {
-        src = DOC;
-        html_n = sizeof DOC - 1;
-        if (g_html_mode) {
-            /* THE POLICY COMES WITH THE BYTES. A corpus file served with a `.headers` sidecar declares its
-               Content-Security-Policy there, and reading only the body measured every such test against no
-               policy — the same half-a-container defect the product host had. */
-            fetched = wpt_get_csp(g_test_url, &html_n, &root_csp);
-            CHECK(fetched != NULL, "wpt: the corpus server did not serve the HTML test file");
-            src = fetched;
-        }
-    }
     g_wpt_dom = lxb_html_document_create();
     CHECK(g_wpt_dom != NULL, "the runner's document allocation failed");
     CHECK(lxb_html_document_parse(g_wpt_dom, (const lxb_char_t *)src, html_n) == LXB_STATUS_OK,
@@ -1316,19 +1353,15 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            nothing opened it under a name. Saying so is what keeps `window.name` a computed value here. */
         JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "");
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        /* §7.4.5's FINAL SANDBOXING FLAG SET FOR THE ROOT DOCUMENT, and the whole of it is the second
-           half. The first is this navigable's CREATION sandboxing flags, and for the navigable an instance
-           STARTED in those are empty: a top-level traversable has no embedder element, so §7.1.5 answers
-           from its POPUP sandboxing flag set, which begins empty and which only §7.1's rules for choosing a
-           navigable ever fill — nothing chose this one. What remains is §7.1.5's CSP-DERIVED SANDBOXING
-           FLAGS, the `sandbox` directive of the policy the response carried; without this the header would
-           parse and then do nothing. */
-        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, root_csp,
-                          policy_csp_derived_sandboxing_flags(root_csp, root_csp ? strlen(root_csp) : 0),
+        /* §7.5.1's Document, from the navigation params the response decided — §7.4.5's final sandboxing flag
+           set and §7.1.7 step 3's CSP list both come out of the one place a response is read
+           (core/frame/navigation_params.c), so this runner and the product host create a Document from the
+           identical computation over the identical input. */
+        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, np.csp, np.sandbox_flags,
                           world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }
-    free(root_csp);   /* document_install built its container from it and keeps no pointer */
+    navigation_params_free(&np);   /* document_install built its container from it and keeps no pointer */
     /* SEALED AFTER THE FIRST DOCUMENT, and only that one: a component DECLARES its IDL members in its init and
        INSTALLS from the cached id, so a second realm's install declares nothing. A declaration reached from the
        second install is therefore a component that mints per-global, and the seal says so at the first one. */

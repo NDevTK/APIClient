@@ -44,7 +44,7 @@
  * makes every timestamp a source of disagreement that no scheduling bug is needed to produce, so the gate would
  * report noise and stop meaning anything. Determinism here is not "no randomness in this file" — it is that a
  * coarsened moment is a pure function of the virtual clock and the resolution, and the resolution is itself a
- * pure function of this environment's cross-origin isolated capability, which has no writer.
+ * pure function of this environment's cross-origin isolated capability, which nothing in a run can change.
  *
  * WHICH RESOLUTION IS THE ENVIRONMENT'S ANSWER, NOT A CONSTANT. §4 makes it 100 microseconds, or 5 for an
  * environment with the CROSS-ORIGIN ISOLATED CAPABILITY — HTML §7.2.2's environment settings object field,
@@ -52,10 +52,14 @@
  * asks that component. It used to assert the capability's ABSENCE instead (`realm_awaits(ctx,
  * "crossOriginIsolated", ...)`), which was correct for exactly as long as no realm could answer the question
  * and became a crash on the first coarsen of every run the moment `window.crossOriginIsolated` landed. The
- * capability EXISTS now and answers false for every environment this build makes, because no COOP/COEP response
- * header reaches a policy container; what is still unbuilt is named where it is missing, by the DFAIL on
- * §7.2.2's permissions-policy conjunct in agent_cluster.c, which is unreachable until the mode can be
- * `concrete`. THE ASSERTION MOVED TO THE REAL ABSENCE; it was not deleted. */
+ * capability EXISTS now and answers false for every environment this build makes. THE REASON IS NO LONGER THAT
+ * THE HEADERS DO NOT ARRIVE — a navigation response's whole header list reaches the engine and §7.1.3's opener
+ * policy and §7.1.4's embedder policy are both obtained from it (core/frame/navigation_params.c). What is
+ * unbuilt is §7.1.3.2's BROWSING CONTEXT GROUP SWITCH, the one step that ever sets a group's isolation mode to
+ * `concrete`, so the 5µs arm is unreachable and a response that would need it CRASHES BY NAME rather than being
+ * silently coarsened on the 100µs grid. The rest of what is missing is named where it is missing, by the DFAIL
+ * on §7.2.2's permissions-policy conjunct in agent_cluster.c. THE ASSERTION MOVED TO THE REAL ABSENCE; it was
+ * not deleted. */
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_HR_TIME_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_HR_TIME_H
 

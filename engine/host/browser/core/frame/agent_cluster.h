@@ -17,18 +17,25 @@
  * mode is not `none`, then set key to origin; otherwise, if group's historical agent cluster key map[origin]
  * exists ...; otherwise: if requestsOAC is true, then set key to origin", and `is origin-keyed` is true only
  * when the key ended up being an ORIGIN. The three inputs are the browsing context group's cross-origin
- * isolation mode, the historical map, and the `Origin-Agent-Cluster` response header — and the only header this
- * engine hands a Document at its creation is `Content-Security-Policy`, so that one has never reached a
- * Document it built and the mode is "none". The key is therefore the SITE and the cluster is NOT origin-keyed.
- * Each of those is evaluated at the step that asks it, so the day a response's headers reach a Document this
- * is the one place they are read.
+ * isolation mode, the historical map, and the `Origin-Agent-Cluster` response header.
+ *
+ * THE HEADER NOW ARRIVES, so this is a real allocation and not a constant. A navigation response's HEADER LIST
+ * crosses the ABI (core/frame/navigation_params.c reads §7.5.1's `requestsOAC` out of it, boolean-true only and
+ * cleared for a non-secure context), and every host reaches the allocation below through the one call it goes
+ * through — so `originAgentCluster` and §7.1.1.2's `document.domain` setter step 5 answer for the header the
+ * server actually sent. An OPAQUE origin is unconditionally origin-keyed and always was: §7.1.1.1's
+ * obtain-a-site returns the origin itself for one, so the key is an origin with no header involved.
+ *
+ * THE MODE IS STILL `none`, AND WHAT IS MISSING IS NO LONGER A HEADER. §7.1.3's opener policy and §7.1.4's
+ * embedder policy are both obtained from that same header list now; what nothing performs is §7.1.3.2's
+ * BROWSING CONTEXT GROUP SWITCH, the one step in the standard that ever sets a group's mode, and §7.5.1's
+ * opener-policy row on the Document that it reads. navigation_params.c crashes by name at a response that
+ * would need either, so this file's `none` is the right answer for every response it is reached with rather
+ * than a conservative one.
  * §7.1.5's SANDBOXING FLAG SET IS NOT THE MISSING PIECE, and it is named because the two used to be described
  * as one absence. That set is carried now (core/frame/sandboxing.h) and it is a field of the DOCUMENT rather
  * than of the policy container, which is where §7.5.1's creation table puts it — and it says nothing about
- * agent-cluster keying. What is still absent is the `Origin-Agent-Cluster`, `Cross-Origin-Opener-Policy` and
- * `Cross-Origin-Embedder-Policy` RESPONSE HEADERS: the only header a Document is created with in this engine
- * is its `Content-Security-Policy` (core/dom/document.h's install), so §7.1.7's EMBEDDER POLICY has no writer
- * and neither does the OPENER POLICY §7.5.1 gives a Document beside its container.
+ * agent-cluster keying.
  *
  * ONE INSTANCE PER ORIGIN IS NOT ORIGIN-KEYING, and conflating the two would give the wrong answer here.
  * SECURITY.md partitions this engine by `(browsing context group, origin)` — a heap boundary — and an agent
@@ -43,8 +50,20 @@
 #include <stdbool.h>
 
 #include "quickjs.h"
+#include "core/url/origin.h"
 
-/* §7.1.2's IS ORIGIN-KEYED, which `originAgentCluster` returns and which §7.1.1.2's setter step 5 stops on. */
+/* §8.1.2.2's OBTAIN A SIMILAR-ORIGIN WINDOW AGENT, for the one agent cluster this instance is — SECURITY.md
+ * keys an instance on `(browsing context group, origin)`, which IS an agent cluster key, so this runs exactly
+ * once per agent and every realm of the instance is in the cluster it allocates.
+ *
+ * `requests_oac` is §7.5.1's `requestsOAC`: the response's `Origin-Agent-Cluster` header parsed as a
+ * structured-field ITEM whose bare item is the boolean TRUE, and false for a non-secure context. It is stated
+ * by the caller rather than read here, because a response is read in exactly one place (§7.4.6's navigation
+ * params) and an agent is not a thing that holds one. */
+void agent_cluster_obtain_window_agent(const Origin *origin, bool requests_oac);
+
+/* §7.1.2's IS ORIGIN-KEYED, which `originAgentCluster` returns and which §7.1.1.2's setter step 5 stops on.
+   Asked of a cluster that was never allocated, this CRASHES rather than answering false. */
 bool agent_cluster_is_origin_keyed(void);
 
 /* HTML §7.2.2's environment settings object field CROSS-ORIGIN ISOLATED CAPABILITY, for the environment `ctx`
@@ -66,5 +85,10 @@ bool agent_cluster_cross_origin_isolated(JSContext *ctx);
    cluster, installed by the component that owns it rather than by the Window they hang off, for the reason
    core/frame/navigation.c's row gives. */
 void agent_cluster_install(JSContext *ctx, JSValueConst global);
+
+/* The cluster goes with the AGENT. Nothing here is allocated — what is given up is the STATEMENT that an agent
+   was obtained, so a process that brings a second agent up (a native host re-executing itself as a peer) runs
+   §8.1.2.2 again rather than reading the previous one's key. */
+void agent_cluster_release(void);
 
 #endif

@@ -298,6 +298,37 @@ function frontierWeight(e) {
 const HOT_RAM_BUDGET = 512 * 1024 * 1024;   // bytes of summed live WASM memory before new engines wait
 function _residentBytes() { let b = 0; for (const e of _pool) { try { b += (e.M && e.M.HEAPU8) ? e.M.HEAPU8.length : 0; } catch (_) {} } return b; }
 
+/* THE NAVIGATION RESPONSE'S HEADER LIST, IN THE ONE FORM THAT CROSSES AN ABI — the HTTP field lines the
+   response delivered, `name: value`, one per line. This is a RELAY and not logic: it restates what the browser
+   already gave this zone, and every decision made from it (which policy container, which sandboxing flags,
+   which agent cluster key) is the engine's, in the browser components that own those standards.
+   NOTHING IS DEFAULTED HERE. `h` is written by both producers that reach engineCreate — a content script's
+   captured response headers, and the `{}` a child-document notice starts from — so an absent one is a contract
+   that changed rather than "a response with no headers", and the empty object already says the second thing.
+   A value carrying CR or LF would split into a line the engine cannot read; the browser's `Headers` forbids
+   both, so one here means the value did not come off a response and the engine's own CHECK would abort on the
+   fragment. It is asserted at the producer's edge instead, where the name of the offending header survives. */
+function responseFieldLines(h) {
+  DCHECK(h && typeof h === "object",
+         "an engine was started with no response header list — HTML §7.5.1 creates a Document from its " +
+         "response's headers, and a missing list is a producer that stopped writing one rather than a " +
+         "response that carried none, which is the empty object");
+  const out = [];
+  for (const name of Object.keys(h)) {
+    const value = h[name];
+    DCHECK(typeof value === "string",
+           "a response header value that is not a string reached the engine boundary (" + name + ") — a " +
+           "header list holds byte strings, and anything else is a producer writing a shape this relay " +
+           "would stringify into a header the server never sent");
+    DCHECK(value.indexOf("\n") < 0 && value.indexOf("\r") < 0,
+           "a response header value carries CR or LF (" + name + ") — the browser's own Headers forbids both, " +
+           "so this value did not come off a response, and splitting it into field lines would present the " +
+           "engine with headers nobody delivered");
+    out.push(name + ": " + value);
+  }
+  return out.join("\n");
+}
+
 // ---- Engine lifecycle over ONE wasm instance (one document) ----
 /* `docName` is set ONLY for a document another engine CREATED — its name arrived in that engine's
    navigable.create notice, minted there because HTML §4.8.5 creates a child navigable inside the insertion
@@ -324,10 +355,22 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
   const cstr = (s) => { const n = M.lengthBytesUTF8(s || "") + 1; const p = M._malloc(n); M.stringToUTF8(s || "", p, n); return p; };
   const arg = (s) => { const p = cstr(s); ptrs.push(p); return p; };
   // PHASE 1 — parse + boot; the engine computes the stable bundle IDENTITY from its Lexbor <script> scan.
-  // The real HTTP Content-Security-Policy RESPONSE HEADER (captured same-origin by content.js fetch(location.href),
-  // lowercased) is the PRIMARY policy the engine uses for policy-relative XSS verdicts — header-CSP overrides
-  // the <meta> scan, which alone missed the header entirely (a header-CSP-blocked sink was reported exploitable).
-  const _csp = (msg && msg.responseHeaders && msg.responseHeaders["content-security-policy"]) || "";
+  /* THE WHOLE RESPONSE HEADER LIST CROSSES, not one header out of it. This used to pull
+     `content-security-policy` out of the map and hand the engine that single string, and three things HTML
+     decides about a Document from its response were unreachable behind that shape: §7.1.7's policy container
+     has an EMBEDDER POLICY item (`Cross-Origin-Embedder-Policy`), §7.5.1's creation table gives a Document an
+     OPENER POLICY row (`Cross-Origin-Opener-Policy`), and §7.5.1 reads `Origin-Agent-Cluster` to decide
+     §8.1.2.2's agent cluster key — so `window.originAgentCluster` answered `false` for every document this
+     extension has ever analysed without the question ever being asked. Widening it one header at a time is the
+     wrong shape twice over: several algorithms read different names out of the SAME list, and Fetch's own
+     `get` is what decides what a REPEATED header means (HTML §7.1.4.1 prints a table whose point is that
+     `require-corp, require-corp` FAILS to parse and leaves the policy at `unsafe-none`).
+     SO IT CROSSES AS HTTP FIELD LINES, `name: value` per line, which is a LIST and can say that. The map this
+     zone holds cannot — a repeat has already been combined by the browser's own `Headers` iteration, which is
+     exactly Fetch's `get`, so what the engine receives is one line per name carrying the combined value and
+     its ITEM parse reaches the same verdict a browser's does. The engine parses it back into Fetch's header
+     list (core/fetch/headers.c) and reads it ONCE, into §7.4.6's navigation params. */
+  const _headers = responseFieldLines(msg && msg.responseHeaders);
   // THE DOCUMENT ID — the ROOT one, because an instance is an agent CLUSTER and holds one realm per same-origin
   // document. A flow that scripts a CROSS-ORIGIN iframe or popup writes state in a PEER instance (a same-origin
   // one is a realm in this same heap and needs no peer at all), and that peer keys its segment of the flow's
@@ -364,7 +407,7 @@ async function engineCreate(code, html, msg, persist, docName, topLevelUrl) {
      instance, so the only value it can return is 0 — which is exactly why reading it costs nothing and why a
      non-zero would be an entry that started reporting a failure this zone was not listening for. */
   const _initrc = M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number"],
-    [arg(html || ""), arg((msg && msg.sourceUrl) || ""), arg(_docId), arg(_csp), arg(_tlu)]);
+    [arg(html || ""), arg((msg && msg.sourceUrl) || ""), arg(_docId), arg(_headers), arg(_tlu)]);
   DCHECK(_initrc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
                         "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
   /* NEVER 0 — document_bundle_id folds an empty scan to 1 precisely so that a 0 cannot mean two things. A 0

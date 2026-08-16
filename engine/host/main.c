@@ -32,7 +32,8 @@
 #include "browser/core/frame/remote_object.h"
 #include "browser/core/html/html_iframe.h"
 #include "browser/core/frame/navigable.h"
-#include "browser/core/frame/policy_container.h"
+#include "browser/core/frame/navigation_params.h"
+#include "browser/core/frame/secure_context.h"
 #include "browser/core/url/url_search_params.h"
 #include "browser/core/html/form_data.h"
 #include "browser/core/file/blob.h"
@@ -127,7 +128,7 @@ static int                  g_done;
    UserActivation, and reported numbers for those areas as if it had run them). What is left in a host is only
    what is genuinely the host's: its EDGES — WHO answers the network, WHO evaluates a string handler — which
    are parameters rather than presence, and which each component asserts for itself at its first use. */
-static void engine_agent_init(JSContext *ctx, const char *origin, const char *top_level_url)
+static void engine_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac)
 {
     PlatformAgent agent;
 
@@ -139,6 +140,10 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
 
     agent.origin = origin;
     agent.top_level_url = top_level_url;
+    /* §7.5.1's requestsOAC, decided by the browser component that reads the response (§7.4.6's navigation
+       params) and merely CARRIED here — this host reads no header, which is the same split as the origin
+       beside it: the zone states bytes, the engine decides what they mean. */
+    agent.requests_oac = requests_oac;
     platform_agent_init(ctx, &agent);
 }
 
@@ -222,10 +227,36 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
  * close, and this engine cannot see its own embedder: the offscreen is the only zone that knows which instance
  * holds which document. For a top-level document the zone passes the address itself; for a document this
  * engine's peer created, it passes the field that peer put on its `navigable.create` notice. */
-QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, const char *csp,
+/* `headers` IS THE NAVIGATION RESPONSE'S HEADER LIST, and it replaces the single `csp` argument that used to
+ * stand here. That argument was the whole of what a Document in this engine could be created with, and three
+ * separate capabilities were stuck behind it: §7.1.7's policy container has an EMBEDDER POLICY item that had
+ * no writer, §7.5.1's creation table gives a Document an OPENER POLICY row that did not exist, and §7.5.1's
+ * own `Origin-Agent-Cluster` read never happened — so §8.1.2.2's agent cluster key was the SITE for every
+ * document this engine has ever built, and `originAgentCluster` answered `false` without ever having asked.
+ * One header cannot be widened into three by adding three arguments: the standard reads a HEADER LIST, several
+ * algorithms read different names out of the same one, and Fetch's own `get` is what decides what a REPEATED
+ * header means (§7.1.4.1's table turns on `require-corp, require-corp` failing to parse as an item). So the
+ * whole list crosses, as HTTP field lines — `name: value`, one per line — and core/fetch/headers.c parses it
+ * into the list Fetch defines. An empty or NULL block is a response that carried no headers.
+ *
+ * IT IS A LIST OF LINES AND NOT A MAP FOR THAT SAME REASON. The trusted zone holds a `Headers` object, whose
+ * iteration already combines repeats the way Fetch's `get` does; a map keyed by name would arrive here having
+ * silently made a two-header COEP look like a one-header COEP, which is the difference between a document a
+ * browser isolates and one it does not.
+ *
+ * THE ENGINE CANNOT FORGE THESE HEADERS, and that is structural rather than checked. There is no ABI entry
+ * that writes a response header and no page-reachable member that adds one — a `<meta>` element can carry a
+ * CSP (CSP §3.3, merged by core/dom/document.c) and nothing else, which is the standard's own answer for why
+ * COOP, COEP and `Origin-Agent-Cluster` are response headers only. The list is read ONCE, here, into the
+ * decisions §7.5.1 creates the Document from, and then freed: nothing the bundle runs can reach it afterwards.
+ * SECURITY.md's boundary is unchanged by this — the zone that captured the response states the bytes, exactly
+ * as it states the address, the origin and the top-level creation URL. */
+QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, const char *headers,
                         const char *top_level_url)
 {
     char *origin;
+    HeaderList response_headers;
+    NavigationParams np;
 
     /* THIS ENTRY ROOTS THE AGENT AT ONE DOCUMENT, which is not the same statement as "one instance is one
        document" — the sentence that used to stand here and the model the host was keyed on. An instance is an
@@ -252,6 +283,24 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
           "whether this document's realm is a secure context, and Web IDL §3.3.13's members exist or do not by "
           "that answer, so the platform surface this bundle runs against would be a guess. A top-level document "
           "passes its own address; a nested one passes its embedder's, which only the trusted zone knows");
+
+    /* THE RESPONSE, READ ONCE, BEFORE ANYTHING IS BUILT OUT OF IT. §7.4.6's navigation params are what §7.5.1
+       creates a Document from, and they are decided at the RESPONSE and carried — never read back off the
+       Document later, which is CLAUDE.md's rule about an operation taking its inputs with it and is why the
+       standard splits these into two algorithms.
+       THE SECURE-CONTEXT ANSWER IS §8.1.3.5's OVER THE TOP-LEVEL CREATION URL, asked here rather than of a
+       realm because §7.1.3's and §7.1.4's obtains and §7.5.1's `requestsOAC` all run BEFORE the realm whose
+       environment it is exists — the standard calls that environment the RESERVED one for exactly this reason.
+       ZERO IS THE ROOT NAVIGABLE'S TARGET SNAPSHOT SANDBOXING FLAGS, and it is the spec's answer rather than a
+       placeholder: this is the navigable the INSTANCE STARTED IN, a top-level traversable with no embedder
+       element, so §7.1.5 answers its creation flags from the POPUP sandboxing flag set — which begins empty and
+       which only §7.1's rules for choosing a navigable ever fill. Nothing chose this one. The other half of
+       §7.4.5's union, this response's CSP-derived flags, is what navigation_params computes. */
+    memset(&response_headers, 0, sizeof response_headers);
+    header_list_parse_field_lines(&response_headers, headers);
+    navigation_params_from_response(&np, &response_headers, 0,
+                                    secure_context_url_potentially_trustworthy(top_level_url));
+    header_list_free(&response_headers);
 
     g_rt = JS_NewRuntime();
     CHECK(g_rt != NULL, "the runtime allocation failed: a dropped engine loses the whole frontier");
@@ -295,7 +344,7 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
     /* The web-platform surface, installed on the BASELINE — before any flow runs, so these globals are
        pre-flow state and never land in a delta. Each is a real component under browser/; what is not built
        yet is absent, and the page's own throw on reading it names the next one to write. */
-    engine_agent_init(g_ctx, origin, top_level_url);
+    engine_agent_init(g_ctx, origin, top_level_url, np.requests_oac);
     /* §7.4 CALLS BACK HERE FOR A SAME-ORIGIN CHILD: a same-origin document is a second REALM in this heap
        (HTML's similar-origin window agent), and what the platform surface of a document of THIS build is, is
        this file's answer and nobody else's. */
@@ -308,15 +357,11 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
            window.name became an attacker source. The read is concolic until something states it. */
         JSValue root_proxy = window_proxy_new_self(g_ctx, world_local_doc(), NULL);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        /* §7.4.5's FINAL SANDBOXING FLAG SET FOR THE ROOT DOCUMENT, and the whole of it is the second
-           half. The first is this navigable's CREATION sandboxing flags, and for the navigable an instance
-           STARTED in those are empty: a top-level traversable has no embedder element, so §7.1.5 answers
-           from its POPUP sandboxing flag set, which begins empty and which only §7.1's rules for choosing a
-           navigable ever fill — nothing chose this one. What remains is §7.1.5's CSP-DERIVED SANDBOXING
-           FLAGS, the `sandbox` directive of the policy the response carried; without this the header would
-           parse and then do nothing. */
-        engine_realm_install(g_ctx, g_dom, url, origin, csp,
-                             policy_csp_derived_sandboxing_flags(csp, csp ? strlen(csp) : 0),
+        /* §7.5.1's Document, from the navigation params decided above and not from anything read back off the
+           response — which this host no longer holds. §7.4.5's final sandboxing flag set and §7.1.7 step 3's
+           CSP list are both `np`'s, computed where a response is read (core/frame/navigation_params.c); this
+           file's remaining job is to say WHICH navigable and WHICH realm, which is a host fact. */
+        engine_realm_install(g_ctx, g_dom, url, origin, np.csp, np.sandbox_flags,
                              world_local_doc(), root_proxy);
         JS_FreeValue(g_ctx, root_proxy);
     }
@@ -324,6 +369,9 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
        per-wrapper or per-flow mint, and that is what the pool asserts against. */
     idl_args_seal();
 
+    /* THE RESPONSE IS GONE NOW, and that is the point at which it stops being reachable at all. Its decisions
+       are on the Document and on the agent's cluster; nothing the bundle runs can ask for a header again. */
+    navigation_params_free(&np);
     free(origin);
     return 0;
 }

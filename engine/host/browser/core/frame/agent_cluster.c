@@ -3,21 +3,23 @@
 #include "check.h"
 #include "core/frame/agent_cluster.h"
 #include "core/idl_args.h"
+#include "core/url/origin.h"
 
 /* §7.1.4's CROSS-ORIGIN ISOLATION MODE for this browsing context group, and it is THREE-VALUED because its two
    readers read it differently. §7.1.4 gives `none`, `logical` and `concrete`; §8.1.2.2's key allocation asks
    whether it is NOT `none`, while §7.2.2's cross-origin isolated capability asks whether it IS `concrete`. A
    single boolean answered both, which is one fact collapsed into the WRONG shape rather than into one place:
    under `logical` a Document is origin-keyed and `crossOriginIsolated` is FALSE, and a boolean cannot say that.
-   The mode is set by ONE step of ONE algorithm: §7.1.3.2's obtain-a-browsing-context-to-use-for-a-navigation-
-   response, on a browsing context group SWAP — "if navigationCOOP's value is `same-origin-plus-COEP`, then set
-   newBrowsingContext's group's cross-origin isolation mode to either `logical` or `concrete`". So it takes a
-   COOP value on the navigation params, which takes a `Cross-Origin-Opener-Policy` response header, and no
-   route carries one into this engine: the only header a Document is created with is its
-   `Content-Security-Policy` (core/dom/document.h's install), §7.1.7's EMBEDDER POLICY has no writer, and the
-   OPENER POLICY §7.5.1 gives a Document beside its policy container is not a field this build has. The mode is
-   therefore the standard's initial value, `none`. Evaluated at the step that asks it rather than assumed away,
-   and the day a response's headers reach a Document this is the one line that reads them. */
+
+   THE MODE IS SET BY ONE STEP OF ONE ALGORITHM, AND IT IS NOT A MISSING HEADER ANY MORE. §7.1.3.2's
+   obtain-a-browsing-context-to-use-for-a-navigation-response, on a browsing context group SWAP: "if
+   navigationCOOP's value is `same-origin-plus-COEP`, then set newBrowsingContext's group's cross-origin
+   isolation mode to either `logical` or `concrete`". A navigation response's HEADER LIST now reaches this
+   engine (core/frame/navigation_params.c) and both policies are obtained from it — §7.1.3's opener policy,
+   including the `same-origin-plus-COEP` that only a COOP and a COEP together produce, and §7.1.4's embedder
+   policy. What is absent is the SWAP and the §7.5.1 Document row it reads, so no group of this build has ever
+   been given a mode and the standard's initial value stands. navigation_params.c CRASHES at the exact response
+   that would need one, rather than this file quietly answering `none` for a page that is isolated. */
 typedef enum {
     AC_ISOLATION_NONE = 0,
     AC_ISOLATION_LOGICAL,
@@ -29,20 +31,66 @@ static AcIsolationMode cross_origin_isolation_mode(void)
     return AC_ISOLATION_NONE;
 }
 
+/* §8.1.2.2's AGENT CLUSTER, for the ONE cluster this instance is. SECURITY.md keys a WASM instance on
+   `(browsing context group, origin)`, which is exactly an agent cluster key, so there is one of these per
+   agent and a module static is the right shape rather than the per-realm answer CLAUDE.md's §3.7 rule asks
+   for: `originAgentCluster` returns "the SURROUNDING AGENT's agent cluster's is origin-keyed", and every realm
+   of this instance is in the same agent. */
+static bool g_agent_obtained;
+static bool g_is_origin_keyed;
+
+void agent_cluster_obtain_window_agent(const Origin *origin, bool requests_oac)
+{
+    /* §8.1.2.2's "obtain a similar-origin window agent, given an origin, a browsing context group and a
+       boolean requestsOAC", to the depth that decides the one observable it produces:
+
+         1. Let site be the result of obtaining a site with origin.
+         2. Let key be site.
+         3. If group's cross-origin isolation mode is not "none", then set key to origin.
+         4. Otherwise, if group's historical agent cluster key map[origin] exists, then set key to it.
+         5. Otherwise: if requestsOAC is true, then set key to origin. Set the map entry to key.
+         6. ... if key is an ORIGIN: assert key is origin; set agentCluster's is origin-keyed to true.
+
+       WHAT IS COMPUTED IS "IS THE KEY AN ORIGIN", not the key itself, and that is the whole of step 6's test.
+       A key is an origin in exactly two ways: step 3 or step 5 made it `origin`, or step 1's SITE already was
+       one — §7.1.1.1's obtain-a-site returns the ORIGIN ITSELF for an opaque origin and a (scheme, host)
+       tuple otherwise, which is the standard's own reason §7.1.2 says "Documents with an opaque origin can be
+       considered unconditionally origin-keyed". The registrable-domain half of a site is never needed here:
+       §8.1.2.2 keys its maps by ORIGIN, and this instance holds exactly one. */
+    DCHECK(origin != NULL, "an agent was obtained for no origin — §8.1.2.2 takes one, and an agent cluster key "
+                           "is a site or a tuple origin, both of which are derived from it");
+    /* ONCE PER AGENT, because an instance IS one agent cluster. A second document of this cluster arriving —
+       the `qjs_join` SECURITY.md names, a same-origin frame this engine did not model, a navigation replacing
+       the root — must NOT recompute this: §8.1.2.2's historical agent cluster key map exists precisely so that
+       a later same-origin Document in the same group gets the FIRST one's key even when it sends a different
+       `Origin-Agent-Cluster` header, which is what §7.1.2 means by "the getter can return false, even if the
+       header is set". The answer below IS this cluster's map entry; whoever builds that join reads it. */
+    DCHECK(!g_agent_obtained,
+           "a similar-origin window agent was obtained twice in one instance — one WASM instance is one "
+           "`(browsing context group, origin)` agent cluster, so this runs once, and a second document of the "
+           "cluster inherits the recorded key through §8.1.2.2's historical agent cluster key map rather than "
+           "re-running the allocation with its own header");
+
+    /* Step 1-2, and step 6's test over them: an OPAQUE origin's site is that origin. */
+    g_is_origin_keyed = origin_is_opaque(origin);
+    if (cross_origin_isolation_mode() != AC_ISOLATION_NONE)
+        g_is_origin_keyed = true;            /* step 3 */
+    else if (requests_oac)
+        g_is_origin_keyed = true;            /* step 5 */
+    g_agent_obtained = true;
+}
+
 bool agent_cluster_is_origin_keyed(void)
 {
-    /* §8.1.2.2 step 3: "if group's cross-origin isolation mode is not `none`, then set key to origin" — the one
-       input this engine can currently be non-default in. §7.1.2 states the same thing from the other end:
-       "Documents whose agent cluster's cross-origin isolation mode is not `none` are automatically
-       origin-keyed", which is `logical` AS WELL AS `concrete` and is the half of the mode this reader wants. */
-    if (cross_origin_isolation_mode() != AC_ISOLATION_NONE) return true;
-    /* §8.1.2.2 steps 4-5: the historical agent cluster key map, and `requestsOAC` — which §7.5.1's create-and-
-       initialize sets from the `Origin-Agent-Cluster` response header ("let oacHeader be the result of getting
-       a structured field value given `Origin-Agent-Cluster` and `item` from navigationParams's response's
-       header list"). Neither reaches a Document here (see cross_origin_isolation_mode above for where a header
-       would arrive), so the key stays the SITE and step 6's "if key is an origin ... set agentCluster's is
-       origin-keyed to true" never runs. */
-    return false;
+    /* §7.1.2: "The originAgentCluster getter steps are to return the surrounding agent's agent cluster's is
+       origin-keyed." A read before the agent exists is not a `false` to default to — it is a question asked of
+       a cluster that was never allocated, and answering it would be the plausible datum CLAUDE.md's rule about
+       defaults is written against. */
+    DCHECK(g_agent_obtained,
+           "this agent's cluster was asked whether it is origin-keyed before §8.1.2.2's obtain-a-similar-"
+           "origin-window-agent allocated one — every host reaches that through platform_agent_init, so an "
+           "agent without it is one that was built past the one list every host goes through");
+    return g_is_origin_keyed;
 }
 
 bool agent_cluster_cross_origin_isolated(JSContext *ctx)
@@ -54,10 +102,10 @@ bool agent_cluster_cross_origin_isolated(JSContext *ctx)
        §7.1.4's `logical` mode is the one where a page IS origin-keyed and this capability is still false. */
     (void)ctx;   /* the SECOND conjunct is the Document's, and reads this environment — see the DFAIL below */
     if (cross_origin_isolation_mode() != AC_ISOLATION_CONCRETE) return false;
-    /* SECOND CONJUNCT. It is unreachable while no COOP/COEP header reaches a policy container, and it is a
-       crash rather than a `true` because assuming it would hand every cross-origin-isolated environment a
-       capability the Document's permissions policy may deny — and the first thing that reads the answer is
-       HR-TIME §4's clock resolution, which a page measures directly. */
+    /* SECOND CONJUNCT. It is unreachable while §7.1.3.2's browsing context group switch is unbuilt (see the
+       mode above), and it is a crash rather than a `true` because assuming it would hand every cross-origin-
+       isolated environment a capability the Document's permissions policy may deny — and the first thing that
+       reads the answer is HR-TIME §4's clock resolution, which a page measures directly. */
     DFAIL("HTML §7.2.2's CROSS-ORIGIN ISOLATED CAPABILITY has its first conjunct — this agent cluster's "
           "cross-origin isolation mode is now `concrete` — and its second conjunct is the PERMISSIONS POLICY "
           "question: is the Document allowed to use the `cross-origin-isolated` feature. This build has no "
@@ -88,4 +136,13 @@ void agent_cluster_install(JSContext *ctx, JSValueConst global)
 {
     idl_install_accessor(ctx, global, "originAgentCluster", js_agent_cluster, AC_ORIGIN_KEYED, -1);
     idl_install_accessor(ctx, global, "crossOriginIsolated", js_agent_cluster, AC_CROSS_ORIGIN_ISOLATED, -1);
+}
+
+void agent_cluster_release(void)
+{
+    /* The cluster goes with the AGENT — platform_agent_free. Nothing here is allocated; what is released is
+       the STATEMENT that an agent exists, so a second instance in one process (the native host re-executing
+       itself as a peer) allocates its own rather than reading the previous one's answer. */
+    g_agent_obtained = false;
+    g_is_origin_keyed = false;
 }
