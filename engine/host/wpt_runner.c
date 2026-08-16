@@ -1267,21 +1267,14 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
        the realm just built above rather than in the session's. They belong to the flow that CREATED the
        navigable because that is whose timeline this child exists in: a sibling arm that never navigated here
        has no such document, and a host-side queue could not have said so. */
-    {
-        DocScripts ds = document_exec_scripts(dom);
-        int i;
-        for (i = 0; i < ds.n; i++) {
-            if (ds.bodies[i]) engine_queue_script(doc_id, ds.bodies[i]);
-            else if (ds.srcs[i]) {
-                size_t sl = 0;
-                char *body = wpt_get(ds.srcs[i], &sl);
-                if (!body) continue;
-                engine_queue_script(doc_id, body);
-                free(body);
-            }
-        }
-        doc_scripts_free(&ds);
-    }
+    /* THE SEEDING IS THE DOCUMENT'S OWN AND NO LONGER THIS HOST'S. It used to be here, and here ONLY — of the
+       three hosts that build a child realm, this one wrote the line and `main.c` and `test_forced.c` did not,
+       so a same-origin child was inert in the shipped extension and alive in the corpus. That is the per-host
+       drift `core/realm.h` exists to abolish, recurring through the one seam still copied per host, and it is
+       why a same-origin iframe reported "the child is never analysed at all" on real Chrome while every WPT
+       row that depends on a child's scripts passed. `navigable_seed_scripts` (core/frame/navigable.c) is that
+       statement made once, for every host, and the copy that stood here queued each child program a SECOND
+       time the moment it landed. */
     return ctx;
 }
 
