@@ -4,6 +4,8 @@
 
 #include <stdbool.h>
 
+#include <lexbor/dom/dom.h>
+
 #include "quickjs.h"
 
 /* Declared ONCE PER AGENT, from html_element_init — the interfaces, the reflections §4.8.11 puts on
@@ -21,5 +23,18 @@ void media_element_install_proto(JSContext *ctx, JSValueConst html_proto);
 JSValue media_element_proto(JSContext *ctx);
 /* The interface objects — `HTMLMediaElement`, `MediaError`, `TimeRanges` — on this realm's global. */
 void media_element_install(JSContext *ctx, JSValueConst global);
+
+/* §4.8.11.2's SECOND sentence — "if a src attribute of a media element is set or changed, the user agent must
+   invoke the media element's media element load algorithm" — as one of §4.9's attribute change steps, which is
+   the chokepoint every spelling of that write reaches. `val` is the NEW value, NULL for a removal, which the
+   parenthetical after that sentence makes the whole question this asks of it. */
+void media_element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
+                                const char *val);
+/* §4.8.11.2's FIRST sentence — "if a media element is created with a src attribute, the user agent must
+   immediately invoke the media element's resource selection algorithm" — for the elements a PARSE created with
+   their attributes, which lexbor builds with no per-token hook to run it at. Called at the two seams this
+   engine already treats as a parse boundary: the document's, and every fragment's. Seeds one job per media
+   element that carries a `src`; costs a tag test per node and allocates for nothing else. */
+void media_element_parsed(JSContext *ctx, lxb_dom_node_t *root);
 
 #endif

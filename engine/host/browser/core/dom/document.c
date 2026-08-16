@@ -31,6 +31,7 @@
 #include "core/html/element_internals.h"
 #include "core/html/html_iframe.h"
 #include "core/html/declarative_shadow.h"
+#include "core/html/media_element.h"
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/mutation_observer.h"
@@ -2448,6 +2449,15 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        and never reach here, which is why they keep their `<template>` elements. */
     declarative_shadow_parsed(ctx, lxb_dom_interface_node(dom),
                               lxb_dom_interface_node(dom->dom_document.element), /*allow*/ true);
+    /* HTML §4.8.11.2 FOR THE TREE THE PARSER BUILT — "if a media element is created with a src attribute, the
+       user agent must immediately invoke the media element's resource selection algorithm". §13.2.6.1's
+       "create an element for a token" ends by appending the token's attributes to the element, so a parsed
+       `<video src=x>` IS created with one; a lexbor parse has no per-token hook, so the invocation happens
+       here, before the document's first script can read a networkState. It is NOT the insertion steps, which
+       HTML uses one element over for `<source>` and deliberately not for this — see media_element.c.
+       AFTER the declarative-shadow conversion, because the walk is shadow-including and a `<video src>` in a
+       `<template shadowrootmode>` is in the shadow tree by now. */
+    media_element_parsed(ctx, lxb_dom_interface_node(dom));
     iframe_document_parsed(ctx);
     /* HTML §6.6.7 FOR THE TREE THE PARSER BUILT, for the reason the line above it exists: a browser runs the
        insertion steps during tree construction, so `<input autofocus>` in the page's own markup is a candidate

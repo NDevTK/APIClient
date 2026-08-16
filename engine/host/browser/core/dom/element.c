@@ -42,6 +42,7 @@
 #include "core/html/trusted_types.h"
 #include "core/html/declarative_shadow.h"
 #include "core/html/html_script.h"
+#include "core/html/media_element.h"
 #include "core/html/fragment_serializer.h"
 #include "core/html/sanitizer.h"
 #include "core/dom/dom_token_list.h"
@@ -809,6 +810,16 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
            It runs BEFORE the placement, because a browser runs it during tree construction: the hosts it
            attaches to are still this parse's private nodes, so nothing else can see a half-converted tree. */
         declarative_shadow_parsed(ctx, s->frag, NULL, s->allow_declarative != 0);
+        /* HTML §4.8.11.2's "if a media element is created with a src attribute, the user agent must
+           immediately invoke the media element's resource selection algorithm", over the same fragment at the
+           same boundary and unobservable for the same reason the two statements above are: this parse runs no
+           page code, so nothing can look at a `<video src>` between the start tag that created it and here.
+           AFTER the declarative-shadow conversion, because a media element inside a `<template shadowrootmode>`
+           went with the contents that moved and the walk is shadow-including so that it still finds it.
+           §13.4's INERT scripting mode is not a reason to skip this: it marks `script` elements and says
+           nothing about media, and a media element is created with its attributes whether or not a script
+           would have run. */
+        media_element_parsed(ctx, s->frag);
         /* The reference child is fixed BEFORE anything moves: inserting changes `anchor->next`. The clear that
            may follow cannot move it either — it only ever empties an append target, which frag_begin asserts. */
         s->ref = (s->where == PLACE_AFTER) ? s->anchor->next
@@ -1917,6 +1928,12 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
     /* §4.2.2's two attribute change steps — a slottable's `slot` and a slot's `name`. They re-derive the name
        from the attribute that is NOW there, which is why the whole hook had to move after the write. */
     slot_attribute_changed(rctx, el, ns, local);
+    /* HTML §4.8.11.2's `src` change step: "if a src attribute of a media element is set or changed, the user
+       agent must invoke the media element's media element load algorithm". It is HERE, and not in the media
+       element's own reflection setter, because a content attribute has more than one spelling and the setter
+       answers for one of them — see core/html/media_element.c. The NEW value goes with it: "(Removing the src
+       attribute does not do this)" is a question about the change and not about the element. */
+    media_element_attr_changed(rctx, el, ns, local, val);
 }
 
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)

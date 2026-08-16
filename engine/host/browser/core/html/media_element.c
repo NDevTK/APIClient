@@ -63,11 +63,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <lexbor/dom/dom.h>
+#include <lexbor/html/html.h>
+
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/dom/element.h"
 #include "core/dom/node.h"
+#include "core/dom/shadow_root.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/html/media_element.h"
@@ -107,20 +111,26 @@ static int g_ready;
 
 /* ---- the element, and its state record --------------------------------------------------------------------- */
 
-/* WHICH ELEMENTS ARE MEDIA ELEMENTS — §4.8.11's first sentence, and the brand every member of this file
-   performs. It is asked of the LOCAL NAME rather than of a wrapper class, because that is what the spec says a
-   media element is and because `HTMLMediaElement.prototype.play.call(x)` is a call any page can write. */
+/* WHICH NODES ARE MEDIA ELEMENTS — §4.8.11's first sentence, over the INTERNED TAG ID and the namespace, which
+   is what core/html/html_script.c's script_is asks and for both of its reasons.
+   IT IS THE CORRECT FORM, not merely the cheap one. The name-only test it replaces answered TRUE for an SVG
+   `<video>`, which is not a media element and whose wrapper wears none of §4.8.11's members — and
+   `HTMLMediaElement.prototype.play.call(svgVideo)` is a call any page can write, so the brand is what stands
+   between that call and a state record on an element the interface does not describe.
+   AND IT IS THE CHEAP ONE, which is what §4.8.11.2's walk below needs: three integer compares, no allocation
+   and no wrapper, asked of every node of a parsed document. */
+static bool media_is_node(const lxb_dom_node_t *n)
+{
+    return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT &&
+           (lxb_html_tree_node_is(n, LXB_TAG_AUDIO) || lxb_html_tree_node_is(n, LXB_TAG_VIDEO));
+}
+
+/* The same question asked of a VALUE — the brand every member of this file performs. It is asked of the NODE
+   rather than of a wrapper class, because that is what the spec says a media element is. */
 static bool media_is(JSContext *ctx, JSValueConst v)
 {
-    lxb_dom_element_t *el = element_of_value(v);
-    const char *ns = NULL, *local = NULL;
-    char nsbuf[64], lobuf[64];
-
     (void)ctx;
-    if (!el) return false;
-    element_ns_and_local(el, &ns, &local, nsbuf, sizeof nsbuf, lobuf, sizeof lobuf);
-    if (!local) return false;
-    return !strcmp(local, "audio") || !strcmp(local, "video");
+    return media_is_node(lxb_dom_interface_node(element_of_value(v)));
 }
 
 /* THE STATE RECORD, created where a flow first REACHES the element — core/css/media_query_list.c's rule for a
@@ -787,13 +797,8 @@ static char *media_select_resource(JSContext *ctx, JSValueConst el, JSValueConst
        §4.8.11.5's pointer walk over later `source` children exists to try the NEXT candidate when one fails,
        and this engine has no failure to retry after: the outcome fork decides the resource, not the list. */
     for (child = lxb_dom_interface_node(element_of_value(el))->first_child; child; child = child->next) {
-        const char *ns = NULL, *local = NULL;
-        char nsbuf[64], lobuf[64];
-
-        if (child->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        element_ns_and_local(lxb_dom_interface_element(child), &ns, &local, nsbuf, sizeof nsbuf,
-                             lobuf, sizeof lobuf);
-        if (!local || strcmp(local, "source")) continue;
+        if (child->type != LXB_DOM_NODE_TYPE_ELEMENT || !lxb_html_tree_node_is(child, LXB_TAG_SOURCE))
+            continue;   /* the interned id and the namespace, for media_is_node's second reason */
         {
             JSValue wrapper = element_wrap(ctx, lxb_dom_interface_element(child));
             src = element_attr_get(ctx, wrapper, "src");
@@ -936,6 +941,106 @@ static void media_load_algorithm(JSContext *ctx, JSValueConst el, JSValueConst s
     st_set_bool(ctx, st, "canAutoplay", true);
     st_set_bool(ctx, st, "loadedData", false);
     media_invoke_selection(ctx, el);
+}
+
+/* ---- §4.8.11.2's TWO TRIGGERS, which are two ALGORITHMS at two MOMENTS ---------------------------------------
+ *
+ * "If a media element is created with a src attribute, the user agent must immediately invoke the media
+ * element's resource selection algorithm. If a src attribute of a media element is set or changed, the user
+ * agent must invoke the media element's media element load algorithm. (Removing the src attribute does not do
+ * this, even if there are source elements present.)"
+ *
+ * Those are two sentences and they are not interchangeable: the first runs the RESOURCE SELECTION algorithm at
+ * CREATION and the second runs the MEDIA ELEMENT LOAD algorithm on a CHANGE — the load algorithm aborts a
+ * running selection, fires `abort` and `emptied`, rejects the pending play promises and only then invokes
+ * selection, all of which is exactly wrong for an element that was created a moment ago and has none of it.
+ * Every SCRIPTED entry to this file was already built and none of these two were, so a media element that
+ * script never touched never loaded anything: `<video src=x>` with an `onerror` listener sat at NETWORK_EMPTY
+ * forever, and the outcome fork §4.8.11.5 holds — the whole reason this component exists to the solver — was
+ * reachable only from a bundle that assigned `.src` itself.
+ *
+ * INSERTION IS NOT THE MOMENT, AND THAT IS THE STANDARD'S OWN DISTINCTION RATHER THAN A READING OF IT. DOM
+ * §4.2.3 defines INSERTION STEPS as a named hook ("Specifications may define insertion steps for all or some
+ * nodes"), HTML uses it for exactly this family one element over — "The source HTML element insertion steps,
+ * given insertedNode, are: … if parent is a media element that has no src attribute and whose networkState has
+ * the value NETWORK_EMPTY, then invoke that media element's resource selection algorithm" — and for the media
+ * element itself it says CREATED instead. The difference is observable in both directions: a `<video src=x>`
+ * built by `createElement` + `setAttribute` and never inserted still loads, and a `<video>` created with no
+ * `src` that is later moved into a document does not. Hooking insertion would get both backwards.
+ *
+ * WHICH LEAVES ONE QUESTION FOR THIS ENGINE: WHERE AN ELEMENT IS CREATED WITH ITS ATTRIBUTES. Two places, and
+ * only two. A SCRIPT-created element is created bare and gains `src` through §4.9's attribute change steps,
+ * which is the chokepoint below. A PARSER-created one is created with its attributes inside lexbor — HTML
+ * §13.2.6.1's "create an element for a token" ends by appending "each attribute in the given token to element"
+ * — and lexbor's tree builder has no per-token hook, so this engine takes the parse BOUNDARY, which is the
+ * seam dom_attr_normalize_parsed, html_script_parsed_inert and declarative_shadow_parsed already stand at and
+ * is unobservable for their reason: no page code runs between the start tag that created the element and the
+ * end of the parse that produced it. */
+
+/* §4.9's ATTRIBUTE CHANGE STEPS for `src`, registered on element.c's element_attr_changed beside
+   custom_elements_attribute_changed and slot_attribute_changed — the chokepoint every attribute write reaches,
+   which is why the invocation is HERE and not in the reflection's setter: `v.src = url`, `v.setAttribute('src',
+   url)` and `v.attributes.src.value = url` are one write of one attribute, and a setter-side call answers for
+   the first spelling only.
+   `val` IS THE OPERATION'S INPUT AND NOTHING ELSE READS IT: the parenthetical is a rule about the CHANGE, so
+   presence of a new value is what decides whether an algorithm runs at all, while the address that algorithm
+   loads is read at its own step 6 off the element, which is where §4.8.11.5 puts that read. */
+void media_element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
+                                const char *val)
+{
+    JSValue wrap, st;
+
+    if (!media_is_node(lxb_dom_interface_node(el))) return;
+    if (ns != NULL || !local || strcmp(local, "src")) return;   /* the `src` CONTENT attribute, null namespace */
+    if (!val) return;                    /* "(Removing the src attribute does not do this …)" */
+    DCHECK(g_ready, "a media element's `src` changed before §4.8.11 was declared — the load algorithm it must "
+                    "invoke lives on a state record this agent has no key for");
+    wrap = node_wrap(ctx, lxb_dom_interface_node(el));
+    st = media_state(ctx, wrap);
+    media_load_algorithm(ctx, wrap, st);
+    JS_FreeValue(ctx, st);
+    JS_FreeValue(ctx, wrap);
+}
+
+/* §4.8.11.2's "CREATED WITH A SRC ATTRIBUTE", for the elements a PARSE created — the document's, from
+ * document_install, and every fragment's, from element.c's markup machine.
+ *
+ * WHAT IT COSTS PER ELEMENT, WHICH IS THE REASON IT IS A WALK AND NOT A CREATION HOOK. This engine mints an
+ * element wrapper LAZILY, and that is load-bearing rather than incidental: a hook that handed every created
+ * element to C would put a wrapper in node.c's identity map for every node of every page, which is a per-node
+ * heap cost on documents whose DOM already outweighs their heap by an order of magnitude and therefore a
+ * paging cost on the cold tier. So the question is asked of the NODE: media_is_node is three integer compares
+ * against interned ids, and the `src` test is lexbor's own attribute lookup on the element — no allocation, no
+ * wrapper, and nothing retained. The walk is shadow-including, which adds one node_wrap_peek (a hash probe
+ * that never mints) per element to ask whether it hosts a shadow root; a `<video src>` written inside a
+ * `<template shadowrootmode>` is created by the parser exactly like any other, and this runs after
+ * declarative_shadow_parsed has moved it into the shadow tree where the plain child walk cannot see it.
+ * ONLY a media element that actually carries `src` allocates: one wrapper, one state record, one job.
+ *
+ * AND WHAT IT ENQUEUES IS A JOB, NOT A DRIVE. media_invoke_selection is "invoke the media element's resource
+ * selection algorithm" as the task §4.8.11.5's own first paragraph says it is ("This algorithm is always
+ * invoked as part of a task"), so a parsed document with fifty `<video src>` elements adds fifty work items to
+ * the one frontier and runs none of them here — each is a flow that forks at the media data processing steps
+ * on its own turn, and the walk that seeded them returns in O(nodes) with no page code having run.
+ *
+ * PRESENCE, NOT VALUE, is the condition: `<video src="">` IS created with a src attribute, and §4.8.11.5's
+ * attribute mode is where the empty string is answered. */
+void media_element_parsed(JSContext *ctx, lxb_dom_node_t *root)
+{
+    lxb_dom_node_t *n;
+
+    DCHECK(root != NULL, "§4.8.11.2's created-with-a-src walk was given no tree to walk");
+    DCHECK(g_ready, "a parsed tree reached §4.8.11.2 before media_element_declare ran");
+    for (n = root; n; n = shadow_root_next_in_shadow_including(ctx, n, root)) {
+        JSValue wrap;
+
+        if (!media_is_node(n)) continue;
+        if (!lxb_dom_element_has_attribute(lxb_dom_interface_element(n), (const lxb_char_t *)"src", 3))
+            continue;
+        wrap = node_wrap(ctx, n);
+        media_invoke_selection(ctx, wrap);
+        JS_FreeValue(ctx, wrap);
+    }
 }
 
 /* ---- the members ------------------------------------------------------------------------------------------- */
@@ -1116,9 +1221,12 @@ static JSValue js_media_ranges(JSContext *ctx, JSValueConst this_val, int magic)
     return out;
 }
 
-/* §4.8.11.2's `src`: the reflection, plus the rule the reflection alone cannot carry — "if a src attribute of
-   a media element is set or changed, the user agent must invoke the media element's media element load
-   algorithm". That invocation is what makes `v.src = url; v.onerror = f` reach `f`. */
+/* §4.8.11.2's `src`: the reflection, and ONLY the reflection. The rule the reflection alone cannot carry — "if
+   a src attribute of a media element is set or changed, the user agent must invoke the media element's media
+   element load algorithm" — used to be a call at the end of this setter, and that made `v.src = url` the one
+   spelling of the write that ran it: `v.setAttribute('src', url)` set the same attribute of the same element
+   and loaded nothing. It is media_element_attr_changed's now, on §4.9's chokepoint, which every spelling
+   reaches; a second copy here would run the load algorithm twice for this one. */
 static JSValue js_media_get_src(JSContext *ctx, JSValueConst this_val, int magic)
 {
     char *src;
@@ -1135,17 +1243,15 @@ static JSValue js_media_get_src(JSContext *ctx, JSValueConst this_val, int magic
 
 static JSValue js_media_set_src(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    JSValue st = media_state_of(ctx, this_val, "src");
     const char *s;
 
     (void)magic;
-    if (JS_IsException(st)) return st;
+    if (!media_is(ctx, this_val))
+        return JS_ThrowTypeError(ctx, "src set on something that is not a media element");
     s = JS_ToCString(ctx, val);   /* a real string by now: the declared USVString cannot reach the page here */
-    if (!s) { JS_FreeValue(ctx, st); return JS_EXCEPTION; }
-    element_attr_set(ctx, this_val, "src", s);
+    if (!s) return JS_EXCEPTION;
+    element_attr_set(ctx, this_val, "src", s);   /* §4.9's change steps invoke the load algorithm */
     JS_FreeCString(ctx, s);
-    media_load_algorithm(ctx, this_val, st);
-    JS_FreeValue(ctx, st);
     return JS_UNDEFINED;
 }
 
