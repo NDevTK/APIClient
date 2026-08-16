@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>dom isolate</title>
+<body>
+<div id="host"></div>
+<script>
+/* ONE PROBLEM: two flows write the SAME DOM node and each must read back its own write.
+ *
+ * CLAUDE.md §State-isolation: "The document is a time-travel entity, not a static DOM — its tree/attributes/
+ * inserted nodes are PER-FLOW; `querySelector` in flow A and B can see different documents", and the delta
+ * "captures MUTATIONS (restore old value on unapply) and CREATIONS (delete added slot/node on unapply) across
+ * the JS heap AND the Lexbor DOM."
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT, and why the other five cannot see this. Every existing
+ * corpus document exercises the HEAP half of the delta; not one of them writes the DOM, so `solver/dom_cow.c`
+ * — a whole second capture path with its own undo log and its own apply/unapply — has no document in this
+ * gate at all. Here the two arms differ ONLY in a `setAttribute` on a node they both reach through the
+ * document, and the endpoint each emits is read back out of the tree by `querySelector`. A DOM delta that
+ * fails to swap on a context switch does not corrupt anything visibly: it hands one flow the other's
+ * attribute, and the run emits the same endpoint twice and the other never. Under `preempt` the running flow
+ * is outranked after every flow step, so the switch happens BETWEEN the write and the read, which is exactly
+ * the window a per-flow DOM delta exists to close.
+ *
+ * The CREATION half is here too: `appendChild` of a node this flow made is an addition the unapply must
+ * remove, and the `data-tag` it carries is what says whose creation was read.
+ *
+ * WHY IT DRAINS: no loop, no recursion, one branch. Two arms, one fetch each, both URLs read from the tree. */
+const tag = document.createElement("meta");
+tag.id = "cfg";
+document.getElementById("host").appendChild(tag);
+if (__FLAGS.admin) {
+  tag.setAttribute("data-url", "/api/admin/list");
+} else {
+  tag.setAttribute("data-url", "/api/public/list");
+}
+/* READ IT BACK THROUGH THE DOCUMENT, not through `tag`. Reaching the node by query is what makes this a
+ * question about the flow's document rather than about a local variable the heap delta already isolates. */
+fetch(document.querySelector("#host #cfg").getAttribute("data-url"));
+</script>
+</body>

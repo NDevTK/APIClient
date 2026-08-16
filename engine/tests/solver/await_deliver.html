@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>await delivers</title>
+<script>
+/* ONE PROBLEM: an await's result must be DELIVERED into the continuation of the flow that awaited, in a
+ * document where two flows are awaiting at the same point at the same time.
+ *
+ * CLAUDE.md §scheduler: "Every enqueued job (async resume, `.then`/`.catch`/`.finally` reaction,
+ * `queueMicrotask`, `setTimeout`/rAF) is a first-class flow in the one WFQ", and "An await's result is
+ * DELIVERED (consumed): the continuation resumes WITH the settled value". §State-isolation says the same
+ * thing from the other side: "a pending promise, its resolve/reject capability, a suspended async frame, a
+ * queued `.then`/microtask continuation belong to the FLOW and ride its COW delta — flow A's promise settles
+ * with X while flow B's settles with Y."
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT, and why it is not `flag_fork` with an `async` keyword in
+ * front. `flag_fork`'s two flows each park on a reply and resume as themselves. Here each arm parks TWICE, at
+ * two different awaits, so at the moment the second reply lands there are two suspended async frames whose
+ * continuations differ only in the value each is owed. That is the state the `lastreply` schedule attacks
+ * directly: it answers replies one per step in REVERSE arrival order, so the frame that awaited first is
+ * resumed last. If a settled value is ever delivered to the wrong continuation — one shared job queue rather
+ * than a per-flow one, the failure §State-isolation names — the `region` read below comes from the sibling's
+ * reply and the third endpoint is emitted once instead of under both arms' paths.
+ *
+ * WHY IT DRAINS: no loop and no recursion. Each arm is exactly two awaits and three fetches, and the third
+ * URL is built from a field of the reply rather than from anything symbolic, so the fork tree is the two arms
+ * and nothing else. */
+async function load(kind) {
+  const cfg = await (await fetch("/api/" + kind + "/config")).json();
+  /* THE VALUE HAS TO SURVIVE THE SECOND AWAIT. `region` is read AFTER a further suspension, so a delivery
+   * that resumed the continuation without its settled value — or that resumed the sibling's — is visible
+   * here as a different URL rather than as a missing one, which is the failure that a comparison over a SET
+   * of findings can actually see. */
+  await fetch("/api/" + kind + "/session");
+  fetch("/api/" + cfg.region + "/apply");
+}
+if (__FLAGS.beta) { load("beta"); } else { load("stable"); }
+</script>
