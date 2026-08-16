@@ -1979,7 +1979,7 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
    The meta half is a REAL LEXBOR WALK, not a regex over the source: a `content` attribute is parsed markup by
    the time it is here, so entity decoding and quoting are the parser's answer rather than a second one — the
    same reason the bundle id is a `<script>` scan. */
-PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp)
+PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin)
 {
     lxb_dom_node_t *cur;
     char *acc = NULL;
@@ -2043,7 +2043,11 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp)
         if (cur) cur = cur->next;
     }
     {
-        PolicyContainer *p = policy_container_new(acc, NULL);
+        /* THE MERGED LIST TAKES ONE SELF-ORIGIN, and it is the created-with policy's rather than a second one
+           derived for the `<meta>` half. CSP §3.3 delivers a meta policy INSIDE the response this document
+           came from, so §2.2.2's "response's URL's origin" is the same origin for both halves; the two are one
+           list precisely because they belong to one response. */
+        PolicyContainer *p = policy_container_new(acc, self_origin, NULL);
         free(acc);
         return p;
     }
@@ -2423,7 +2427,8 @@ const char *document_content_type_of(const lxb_dom_document_t *dom)
 }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      const char *csp, SandboxFlags sandbox_flags, uint32_t doc_id, JSValueConst nav_proxy)
+                      const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags,
+                      uint32_t doc_id, JSValueConst nav_proxy)
 {
     Document *d;
     JSValue doc;
@@ -2443,7 +2448,15 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
            "the flow that navigated and the sibling that did not each read their own");
     d = doc_rec_new(ctx, dom, url, "text/html");
     d->doc = doc_id;
-    d->policy = document_policy_new(dom, csp);
+    /* CSP §2.2's SELF-ORIGIN BECOMES A RECORD HERE, at the one point a document's facts stop being the bytes a
+       host stated and start being the types the algorithms are written over. origin_parse is the transport
+       core/url/origin.h defines for exactly this — "null" states an OPAQUE origin and mints one, which is what
+       a sandboxed document's `'self'` must be measured against and is same origin with nothing. */
+    DCHECK(csp_self_origin != NULL && *csp_self_origin,
+           "a Document was installed with no CSP self-origin — CSP §2.2 gives every CSP list one and §2.2.2 "
+           "states it from the response's URL, so a document without one cannot resolve `'self'` and would "
+           "report every one of its own scripts as blocked by its own policy");
+    d->policy = document_policy_new(dom, csp, origin_parse(csp_self_origin));
     /* §7.1.5's ACTIVE SANDBOXING FLAG SET, as the creating operation decided it — §7.2's creation flags for
        the initial about:blank, §7.4.5's final flag set for a navigated Document. Beside the policy container
        because §7.5.1 hands the Document both in one breath, and NOT derived from it: the container's only

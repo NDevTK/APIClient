@@ -1524,30 +1524,218 @@ static void trusted_types_selftest(void)
     }
 }
 
+/* CSP §6.7.2 — URL MATCHING, ONE SOURCE EXPRESSION AT A TIME.
+ *
+ * IT IS ASSERTED AT THE EXPRESSION rather than only through a container, because §6.7.2.8's five arms and the
+ * four relations under them are where every real policy's answer is decided, and a container test can only
+ * ever exercise one arm per policy it builds. The container half is asserted below it, over §4.1.2, which is
+ * the composition and nothing more.
+ *
+ * EVERY PAIR OF LINES THAT MUST DISAGREE IS WRITTEN AS A PAIR. A matcher that answered "Matches" for
+ * everything passes a suite that only checks the matches — the same shape of self-agreeing test §Security
+ * names for the cross-origin filter — so each relation is stated in both directions. */
+static void csp_url_matching_selftest(void)
+{
+    /* THE SELF-ORIGIN OF EVERY LIST BELOW, and the reason the fixture states TWO: `'self'` and a schemeless
+       host-source are the two arms whose answer depends on it, and an http origin is what makes §6.7.2.9's
+       secure upgrade observable. */
+    const Origin *https_self = origin_parse("https://x.test");
+    const Origin *http_self = origin_parse("http://x.test");
+    /* An OPAQUE self-origin — §7.1.1's "no serialization it can be recreated from" — which §2.2's own note
+       says the field exists to carry. It matches nothing, and that must be a computed answer rather than a
+       crash on reading components it does not have. */
+    const Origin *opaque_self = origin_parse("null");
+    struct { const char *expr, *url; const Origin *self; CspMatch want; const char *why; } CASES[] = {
+        /* §6.7.2.8 step 1 — `*` is HTTP(S), or the self-origin's own scheme, and nothing else. */
+        { "*", "https://any.example/x", https_self, CSP_MATCHES, "`*` matches any HTTP(S) URL" },
+        { "*", "data:text/html,x", https_self, CSP_DOES_NOT_MATCH,
+          "`*` is not a licence for `data:` — that is what the note about explicit schemes says" },
+        /* §6.7.2.9 through a scheme-source, in BOTH directions: the relation is asymmetric. */
+        { "http:", "https://a.test/x", https_self, CSP_MATCHES, "http: upgrades to https" },
+        { "https:", "http://a.test/x", https_self, CSP_DOES_NOT_MATCH, "https: does NOT downgrade to http" },
+        { "ws:", "https://a.test/x", https_self, CSP_MATCHES, "§6.7.2.9 maps ws: onto http and https too" },
+        { "wss:", "http://a.test/x", https_self, CSP_DOES_NOT_MATCH, "wss: reaches https alone" },
+        /* §6.7.2.10 — the wildcard label, the exact host, and the asymmetry between them. */
+        { "*.example.com", "https://www.example.com/x", https_self, CSP_MATCHES, "*. matches a subdomain" },
+        { "*.example.com", "https://example.com/x", https_self, CSP_DOES_NOT_MATCH,
+          "the dot in `remaining` is what stops *.example.com matching the bare domain" },
+        { "*.example.com", "https://notexample.com/x", https_self, CSP_DOES_NOT_MATCH,
+          "a suffix test WITHOUT the dot would match this, which is the bug the dot exists to prevent" },
+        { "www.example.com", "https://www.example.com/x", https_self, CSP_MATCHES, "an exact host matches" },
+        { "WWW.Example.COM", "https://www.example.com/x", https_self, CSP_MATCHES,
+          "§6.7.2.10 step 4 is an ASCII case-insensitive match" },
+        { "www.example.com", "https://sub.www.example.com/x", https_self, CSP_DOES_NOT_MATCH,
+          "host-part matching is asymmetric — a host does not match a pattern naming its parent" },
+        /* §2.3.1's note, made structural by §6.7.2.10 step 1: an IP address is not a domain. */
+        { "127.0.0.1", "https://127.0.0.1/x", https_self, CSP_DOES_NOT_MATCH,
+          "`127.0.0.1` parses to an IPv4 NUMBER, which is not a domain, so no host-part can name it" },
+        /* §6.7.2.11 — null against null, an explicit port, a scheme default, and `*`. */
+        { "a.test", "http://a.test/x", http_self, CSP_MATCHES,
+          "a null port-part matches a URL whose port the parser dropped" },
+        { "a.test", "http://a.test:8080/x", http_self, CSP_DOES_NOT_MATCH,
+          "and refuses one that carries a port, which is the whole of what a portless expression means" },
+        { "http://a.test:8080", "http://a.test:8080/x", http_self, CSP_MATCHES, "an explicit port matches" },
+        { "https://a.test:443", "https://a.test/x", https_self, CSP_MATCHES,
+          "§6.7.2.11 step 5: a null URL port IS the scheme's default port" },
+        { "http://a.test:*", "http://a.test:9/x", http_self, CSP_MATCHES, "`*` is any port" },
+        /* §6.7.2.12 — the trailing solidus decides prefix versus exact, and both directions are asserted. */
+        { "https://a.test/a/", "https://a.test/a/b.js", https_self, CSP_MATCHES, "a trailing / is a PREFIX" },
+        { "https://a.test/a/b.js", "https://a.test/a/b.js", https_self, CSP_MATCHES, "an exact path matches" },
+        { "https://a.test/a/b.js", "https://a.test/a/b.js/c", https_self, CSP_DOES_NOT_MATCH,
+          "no trailing solidus means EXACT, so a longer path is not a match" },
+        { "https://a.test/a/", "https://a.test/b/c", https_self, CSP_DOES_NOT_MATCH, "a different prefix" },
+        /* Step 8 compares PERCENT-DECODED segments, and the two sides must be spelled DIFFERENTLY for that to
+           be what is under test: `~` is outside §4.4's path percent-encode set so the URL parser leaves it
+           literal, while the expression writes it encoded. A byte comparison answers "Does Not Match" here. */
+        { "https://a.test/a%7Eb", "https://a.test/a~b", https_self, CSP_MATCHES,
+          "§6.7.2.12 step 8 compares percent-DECODED segments, so `%7E` and `~` are one path segment" },
+        /* THE PATH IS NOT COMPARED ON A REDIRECTED REQUEST — asserted through the same expression, so the two
+           lines differ in the redirect count alone. That case is the loop below's second pass. */
+        /* §6.7.2.8 step 4 — `'self'`, both bullets and the opaque case. */
+        { "'self'", "https://x.test/y", https_self, CSP_MATCHES, "'self' is the self-origin outright" },
+        { "'self'", "https://other.test/y", https_self, CSP_DOES_NOT_MATCH, "and nothing else" },
+        { "'self'", "https://x.test/y", http_self, CSP_MATCHES,
+          "the second bullet: an http origin's 'self' UPGRADES to https on the same host at default ports" },
+        { "'self'", "http://x.test/y", https_self, CSP_DOES_NOT_MATCH,
+          "and never downgrades — an https origin's 'self' does not reach http" },
+        { "'self'", "https://x.test/y", opaque_self, CSP_DOES_NOT_MATCH,
+          "an OPAQUE self-origin is same origin with nothing and has no host to compare" },
+        { "a.test", "https://a.test/x", opaque_self, CSP_DOES_NOT_MATCH,
+          "and a SCHEMELESS host-source has no origin scheme to be measured against either" },
+        /* §6.7.2.8 step 5 — every keyword, nonce and hash names no URL. */
+        { "'unsafe-inline'", "https://x.test/y", https_self, CSP_DOES_NOT_MATCH,
+          "'unsafe-inline' permits no LOAD at all, which is the answer that surprises policy authors" },
+        { "'nonce-abc'", "https://x.test/y", https_self, CSP_DOES_NOT_MATCH, "nor does a nonce" },
+        /* Expressions the grammar refuses, which must fall to step 5 rather than be read loosely. */
+        { "*.", "https://x.test/y", https_self, CSP_DOES_NOT_MATCH,
+          "`*.` has no label after it, so §2.3.1's `1*host-char` refuses it" },
+        { "under_score.test", "https://under_score.test/y", https_self, CSP_DOES_NOT_MATCH,
+          "host-char admits no underscore — §2.3.1 requires Punycode for anything outside it" },
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof CASES / sizeof *CASES; i++) {
+        UrlRecord u;
+        CspToken e;
+
+        url_record_init(&u);
+        CHECK(url_parse(&u, CASES[i].url, strlen(CASES[i].url), NULL),
+              "the CSP matching fixture named a URL its own parser refuses");
+        e.p = CASES[i].expr;
+        e.n = strlen(CASES[i].expr);
+        CHECK(csp_source_match_url(e, &u, CASES[i].self, 0) == CASES[i].want, CASES[i].why);
+        url_record_free(&u);
+    }
+
+    /* §6.7.2.8's REDIRECT-COUNT CLAUSE, stated as one expression answered two ways: the path is compared on a
+       fresh request and DROPPED once a redirect has happened, because the path a redirect landed on is the
+       server's choice and not the policy author's. Two calls that differ in one argument and must disagree. */
+    {
+        UrlRecord u;
+        CspToken e;
+
+        url_record_init(&u);
+        CHECK(url_parse(&u, "https://a.test/other", 20, NULL), "the redirect fixture's URL would not parse");
+        e.p = "https://a.test/a/";
+        e.n = 17;
+        CHECK(csp_source_match_url(e, &u, https_self, 0) == CSP_DOES_NOT_MATCH,
+              "an unredirected request is measured against the expression's path");
+        CHECK(csp_source_match_url(e, &u, https_self, 1) == CSP_MATCHES,
+              "and a redirected one is not — §6.7.2.8 drops the path comparison once redirect count is not 0");
+        url_record_free(&u);
+    }
+
+    /* §6.7.2.7's THREE PRE-LOOP STEPS, over a real directive so the `'none'` rules are read off the parse. */
+    {
+        static const struct { const char *policy; const char *url; CspRequestVerdict want; const char *why; }
+        LISTS[] = {
+            { "connect-src", "https://x.test/a", CSP_REQUEST_BLOCKED,
+              "§6.7.2.7 step 2: an EMPTY source list matches no URL — `connect-src` with no value is 'none'" },
+            { "connect-src 'none'", "https://x.test/a", CSP_REQUEST_BLOCKED, "§6.7.2.7 step 3: 'none' alone" },
+            { "connect-src 'none' https://x.test", "https://x.test/a", CSP_REQUEST_ALLOWED,
+              "§6.7.2.7's second note: 'none' has NO effect when another expression is present" },
+            /* §6.8.3/§6.8.4 through §4.1.2: default-src governs a fetch, and a present connect-src REPLACES
+               it rather than adding to it. The two lines differ by the second directive alone. */
+            { "default-src 'self'", "https://x.test/a", CSP_REQUEST_ALLOWED,
+              "§6.8.3: connect-src falls back to default-src, and 'self' is this document's origin" },
+            { "default-src 'self'", "https://other.test/a", CSP_REQUEST_BLOCKED,
+              "and a cross-origin URL is not 'self'" },
+            { "default-src https://other.test; connect-src 'self'", "https://other.test/a",
+              CSP_REQUEST_BLOCKED,
+              "§6.8.4: a present connect-src REPLACES default-src for a fetch rather than inheriting it" },
+            /* A policy that governs nothing about this request says nothing about it. */
+            { "img-src 'none'; frame-ancestors 'none'", "https://other.test/a", CSP_REQUEST_ALLOWED,
+              "no directive of this policy is in connect-src's fallback list, so §6.8.4 answers No for all" },
+            /* §2.2: two POLICIES intersect, so the second can only narrow. */
+            { "connect-src *, connect-src 'self'", "https://other.test/a", CSP_REQUEST_BLOCKED,
+              "policies in a list are enforced independently — the second refuses what the first permits" },
+        };
+        size_t k;
+
+        for (k = 0; k < sizeof LISTS / sizeof *LISTS; k++) {
+            PolicyContainer *p = policy_container_new(LISTS[k].policy, https_self, NULL);
+            UrlRecord u;
+
+            url_record_init(&u);
+            CHECK(url_parse(&u, LISTS[k].url, strlen(LISTS[k].url), NULL),
+                  "the §4.1.2 fixture named a URL its own parser refuses");
+            CHECK(policy_should_block_request(p, &u, "", 0) == LISTS[k].want, LISTS[k].why);
+            url_record_free(&u);
+            policy_container_free(p);
+        }
+    }
+
+    /* A DOCUMENT WITH NO POLICY BLOCKS NOTHING, which is the overwhelmingly common page and the one a wrong
+       default would refuse every request on. */
+    {
+        PolicyContainer *none = policy_container_new(NULL, https_self, NULL);
+        UrlRecord u;
+
+        url_record_init(&u);
+        CHECK(url_parse(&u, "https://anywhere.test/a", 23, NULL), "the no-policy fixture's URL would not parse");
+        CHECK(policy_should_block_request(none, &u, "", 0) == CSP_REQUEST_ALLOWED,
+              "a document with no Content-Security-Policy must permit every request");
+        /* And §6.8.1's "report" destination is governed by no fetch directive even under `default-src 'none'`,
+           which is what stops a report to a blocked endpoint from being blocked and never sent. */
+        policy_container_free(none);
+        none = policy_container_new("default-src 'none'", https_self, NULL);
+        CHECK(policy_should_block_request(none, &u, "report", 0) == CSP_REQUEST_ALLOWED,
+              "§6.8.1 returns null for the report destination, so no fetch directive governs it");
+        CHECK(policy_should_block_request(none, &u, "", 0) == CSP_REQUEST_BLOCKED,
+              "while the same policy blocks an ordinary fetch — the two lines differ in the destination alone");
+        url_record_free(&u);
+        policy_container_free(none);
+    }
+}
+
 static void policy_container_selftest(void)
 {
     PolicyContainer *none, *self_only, *inline_ok, *nonced, *evals, *child;
+    /* CSP §2.2's SELF-ORIGIN for every list below. It is minted from a serialization rather than taken from
+       origin_agent(), because these algorithms are answerable with no agent at all — which is the point of
+       running them before the runtime exists. */
+    const Origin *self_origin = origin_parse("https://x.test");
 
-    none = policy_container_new(NULL, NULL);
+    none = policy_container_new(NULL, self_origin, NULL);
     /* No policy is not an empty policy: a document with no Content-Security-Policy permits everything, which
        is the overwhelmingly common case and the one a wrong default would mis-report on every page. */
     CHECK(policy_allows(none, POLICY_INLINE_HANDLER), "no policy must permit an inline handler");
     CHECK(policy_allows(none, POLICY_EVAL), "no policy must permit eval");
 
-    self_only = policy_container_new("script-src 'self'", NULL);
+    self_only = policy_container_new("script-src 'self'", self_origin, NULL);
     /* §S's own example: an inline onerror is DEAD under `script-src 'self'`, and so is a javascript: URL. A
        host source never permits inline execution — that is what 'unsafe-inline' is for. */
     CHECK(!policy_allows(self_only, POLICY_INLINE_HANDLER), "'self' must not permit an inline handler");
     CHECK(!policy_allows(self_only, POLICY_JAVASCRIPT_URL), "'self' must not permit a javascript: URL");
     CHECK(!policy_allows(self_only, POLICY_EVAL), "'self' must not permit eval");
 
-    inline_ok = policy_container_new("default-src 'none'; script-src 'unsafe-inline'", NULL);
+    inline_ok = policy_container_new("default-src 'none'; script-src 'unsafe-inline'", self_origin, NULL);
     CHECK(policy_allows(inline_ok, POLICY_INLINE_HANDLER), "'unsafe-inline' must permit an inline handler");
     CHECK(!policy_allows(inline_ok, POLICY_EVAL), "'unsafe-inline' must not permit eval");
 
     /* CSP §6.1: a nonce source makes 'unsafe-inline' be IGNORED — the rule that makes adding a nonce to a
        legacy policy actually tighten it rather than widen it. A handler can carry no nonce, so it stays dead. */
-    nonced = policy_container_new("script-src 'unsafe-inline' 'nonce-abc'", NULL);
+    nonced = policy_container_new("script-src 'unsafe-inline' 'nonce-abc'", self_origin, NULL);
     CHECK(!policy_allows(nonced, POLICY_INLINE_SCRIPT), "a nonce source must make 'unsafe-inline' ignored");
     CHECK(!policy_allows(nonced, POLICY_INLINE_HANDLER), "a handler carries no nonce, so it stays blocked");
 
@@ -1556,7 +1744,7 @@ static void policy_container_selftest(void)
        the case that exposes it — the handler came out ALLOWED because `default-src`'s 'unsafe-inline' survived
        a `script-src` that does not carry it. */
     {
-        PolicyContainer *overridden = policy_container_new("default-src 'unsafe-inline'; script-src 'self'", NULL);
+        PolicyContainer *overridden = policy_container_new("default-src 'unsafe-inline'; script-src 'self'", self_origin, NULL);
         CHECK(!policy_allows(overridden, POLICY_INLINE_HANDLER),
               "a present script-src must REPLACE default-src for scripts, not inherit its 'unsafe-inline'");
         policy_container_free(overridden);
@@ -1570,7 +1758,7 @@ static void policy_container_selftest(void)
        side. The two lines below now differ, which is the whole content of the fix. */
     {
         PolicyContainer *granular =
-            policy_container_new("script-src 'unsafe-inline' 'unsafe-eval'; script-src-attr 'none'", NULL);
+            policy_container_new("script-src 'unsafe-inline' 'unsafe-eval'; script-src-attr 'none'", self_origin, NULL);
         CHECK(!policy_allows(granular, POLICY_INLINE_HANDLER), "script-src-attr 'none' must kill a handler");
         CHECK(policy_allows(granular, POLICY_JAVASCRIPT_URL),
               "§6.8.2 maps a `navigation` inline check to script-src-elem, so script-src-attr must not touch it");
@@ -1583,7 +1771,7 @@ static void policy_container_selftest(void)
        makes the line above a statement about which directive rather than about which answer. */
     {
         PolicyContainer *elem =
-            policy_container_new("script-src 'unsafe-inline'; script-src-elem 'none'", NULL);
+            policy_container_new("script-src 'unsafe-inline'; script-src-elem 'none'", self_origin, NULL);
         CHECK(!policy_allows(elem, POLICY_JAVASCRIPT_URL), "script-src-elem 'none' must kill a javascript: URL");
         CHECK(!policy_allows(elem, POLICY_INLINE_SCRIPT), "script-src-elem 'none' must kill a script element");
         CHECK(policy_allows(elem, POLICY_INLINE_HANDLER), "script-src-elem must not govern an event handler");
@@ -1595,7 +1783,7 @@ static void policy_container_selftest(void)
        not model and then DCHECKed on it, which is most of the real web. */
     {
         PolicyContainer *hashed =
-            policy_container_new("script-src 'unsafe-inline' 'sha256-YWJj'", NULL);
+            policy_container_new("script-src 'unsafe-inline' 'sha256-YWJj'", self_origin, NULL);
         CHECK(!policy_allows(hashed, POLICY_INLINE_SCRIPT), "a hash source must make 'unsafe-inline' ignored");
         CHECK(!policy_allows(hashed, POLICY_INLINE_HANDLER),
               "a hash source overrides 'unsafe-inline' for the WHOLE directive, handlers included");
@@ -1605,13 +1793,13 @@ static void policy_container_selftest(void)
         /* `'sha1-…'` is not a hash-source: §2.3.1's hash-algorithm is exactly sha256/sha384/sha512, so this is
            an unrecognised expression, which §6.7.3.2 IGNORES rather than treats as an override. The two lines
            differ by the digest length alone and must not agree. */
-        PolicyContainer *not_a_hash = policy_container_new("script-src 'unsafe-inline' 'sha1-YWJj'", NULL);
+        PolicyContainer *not_a_hash = policy_container_new("script-src 'unsafe-inline' 'sha1-YWJj'", self_origin, NULL);
         CHECK(policy_allows(not_a_hash, POLICY_INLINE_SCRIPT),
               "an expression outside the grammar must be ignored by §6.7.3.2, not read as a hash source");
         policy_container_free(not_a_hash);
     }
     {
-        PolicyContainer *strict = policy_container_new("script-src 'unsafe-inline' 'strict-dynamic'", NULL);
+        PolicyContainer *strict = policy_container_new("script-src 'unsafe-inline' 'strict-dynamic'", self_origin, NULL);
         CHECK(!policy_allows(strict, POLICY_INLINE_SCRIPT), "'strict-dynamic' must override 'unsafe-inline'");
         CHECK(!policy_allows(strict, POLICY_JAVASCRIPT_URL),
               "'strict-dynamic' covers the navigation type as well as script and script attribute");
@@ -1622,7 +1810,7 @@ static void policy_container_selftest(void)
        and it is the one the old parser aborted on. */
     {
         PolicyContainer *hosts =
-            policy_container_new("script-src https: https://*.example.com:443/a/b 'unsafe-inline'", NULL);
+            policy_container_new("script-src https: https://*.example.com:443/a/b 'unsafe-inline'", self_origin, NULL);
         CHECK(policy_allows(hosts, POLICY_INLINE_HANDLER),
               "host and scheme sources are invisible to §6.7.3.2, so 'unsafe-inline' still allows all inline");
         CHECK(!policy_allows(hosts, POLICY_EVAL), "and none of them is 'unsafe-eval'");
@@ -1630,14 +1818,14 @@ static void policy_container_selftest(void)
     }
     /* §2.2.1: within ONE policy a repeated directive is IGNORED, so the first wins... */
     {
-        PolicyContainer *dup = policy_container_new("script-src 'unsafe-inline'; script-src 'self'", NULL);
+        PolicyContainer *dup = policy_container_new("script-src 'unsafe-inline'; script-src 'self'", self_origin, NULL);
         CHECK(policy_allows(dup, POLICY_INLINE_HANDLER), "a repeated directive in one policy must be ignored");
         policy_container_free(dup);
     }
     /* ...and §2.2.1 lowercases the name before that containment test, so the repeat is a repeat however it is
        spelled — `script-SRC 'none'` and `ScRiPt-sRc 'none'` are the standard's own example of equivalence. */
     {
-        PolicyContainer *cased = policy_container_new("SCRIPT-SRC 'unsafe-inline'; script-src 'none'", NULL);
+        PolicyContainer *cased = policy_container_new("SCRIPT-SRC 'unsafe-inline'; script-src 'none'", self_origin, NULL);
         CHECK(policy_allows(cased, POLICY_INLINE_HANDLER),
               "a directive name is matched ASCII case-insensitively, so the second one is the ignored repeat");
         policy_container_free(cased);
@@ -1645,20 +1833,20 @@ static void policy_container_selftest(void)
     /* ...but §2.2's policy LIST is comma-delimited and enforced INDEPENDENTLY, so the very same two directives
        as two POLICIES must intersect instead. These two lines differ by one character and must not agree. */
     {
-        PolicyContainer *list = policy_container_new("script-src 'unsafe-inline', script-src 'self'", NULL);
+        PolicyContainer *list = policy_container_new("script-src 'unsafe-inline', script-src 'self'", self_origin, NULL);
         CHECK(!policy_allows(list, POLICY_INLINE_HANDLER),
               "policies in a list are enforced independently — a second policy can only NARROW");
         policy_container_free(list);
     }
     /* A policy that governs no script directive forbids nothing about scripts. */
     {
-        PolicyContainer *unrelated = policy_container_new("img-src 'none'; frame-ancestors 'none'", NULL);
+        PolicyContainer *unrelated = policy_container_new("img-src 'none'; frame-ancestors 'none'", self_origin, NULL);
         CHECK(policy_allows(unrelated, POLICY_INLINE_HANDLER), "img-src must not block a handler");
         CHECK(policy_allows(unrelated, POLICY_EVAL), "frame-ancestors must not block eval");
         policy_container_free(unrelated);
     }
 
-    evals = policy_container_new("script-src 'unsafe-eval'", NULL);
+    evals = policy_container_new("script-src 'unsafe-eval'", self_origin, NULL);
     CHECK(policy_allows(evals, POLICY_EVAL), "'unsafe-eval' must permit eval");
     CHECK(!policy_allows(evals, POLICY_INLINE_HANDLER), "'unsafe-eval' must not permit an inline handler");
 
@@ -1697,9 +1885,10 @@ static void document_policy_selftest(void)
     lxb_html_document_t *dom = lxb_html_document_create();
     PolicyContainer *p, *empty;
     lxb_html_document_t *plain;
+    const Origin *self_origin = origin_parse("https://x.test");
 
     lxb_html_document_parse(dom, (const lxb_char_t *)SRC, strlen(SRC));
-    p = document_policy_new(dom, NULL);
+    p = document_policy_new(dom, NULL, self_origin);
     CHECK(policy_container_csp(p) != NULL, "the meta scan found no policy in a document that declares two");
     CHECK(!policy_allows(p, POLICY_INLINE_HANDLER),
           "two meta policies must INTERSECT — the second's 'self' forbids what the first's 'unsafe-inline' "
@@ -1710,7 +1899,7 @@ static void document_policy_selftest(void)
        it — an empty container that answered "blocked" would suppress every real finding on every such page. */
     plain = lxb_html_document_create();
     lxb_html_document_parse(plain, (const lxb_char_t *)"<html><body></body></html>", 26);
-    empty = document_policy_new(plain, NULL);
+    empty = document_policy_new(plain, NULL, self_origin);
     CHECK(policy_allows(empty, POLICY_INLINE_HANDLER), "a document with no meta CSP must permit everything");
 
     {
@@ -1718,8 +1907,8 @@ static void document_policy_selftest(void)
            it is enforced, so a header that forbids inline must still forbid it on a page whose meta permits it
            — which is exactly the page above. The engine's entry point used to drop the header, so this page
            reported a live inline handler that the real response kills. */
-        PolicyContainer *hdr = document_policy_new(plain, "script-src 'self'");
-        PolicyContainer *both = document_policy_new(dom, "default-src 'unsafe-inline'");
+        PolicyContainer *hdr = document_policy_new(plain, "script-src 'self'", self_origin);
+        PolicyContainer *both = document_policy_new(dom, "default-src 'unsafe-inline'", self_origin);
         CHECK(!policy_allows(hdr, POLICY_INLINE_HANDLER),
               "a header-borne policy must be enforced on a document whose tree declares none");
         CHECK(!policy_allows(both, POLICY_INLINE_HANDLER),
@@ -1966,8 +2155,8 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
    globals: a host ADDS to the one list and cannot subtract from it, and adding afterwards is also what lets
    the `eval` sink below stand where the language's own `eval` would. */
 static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                             const char *csp, SandboxFlags sandbox_flags, uint32_t doc_id,
-                             JSValueConst nav_proxy)
+                             const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags,
+                             uint32_t doc_id, JSValueConst nav_proxy)
 {
     PlatformDocument doc;
     JSValue g = JS_GetGlobalObject(ctx);
@@ -1976,6 +2165,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     doc.url = url;
     doc.origin = origin;
     doc.csp = csp;
+    doc.csp_self_origin = csp_self_origin;
     doc.sandbox_flags = sandbox_flags;
     doc.doc_id = doc_id;
     doc.nav_proxy = nav_proxy;
@@ -2006,7 +2196,8 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime. */
 static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                  const char *top_level_url, const char *origin, const char *csp,
-                                 SandboxFlags sandbox_flags, uint32_t doc_id, JSValueConst nav_proxy)
+                                 const char *csp_self_origin, SandboxFlags sandbox_flags, uint32_t doc_id,
+                                 JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -2018,7 +2209,7 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
        §7.4 decided this child's top-level creation URL and handed it over — using `url` would make an
        about:blank iframe of an http page a secure context. */
     realm_install_intrinsics(ctx, top_level_url);
-    tf_realm_install(ctx, dom, url, origin, csp, sandbox_flags, doc_id, nav_proxy);
+    tf_realm_install(ctx, dom, url, origin, csp, csp_self_origin, sandbox_flags, doc_id, nav_proxy);
     return ctx;
 }
 
@@ -2469,6 +2660,7 @@ int main(int argc, char **argv) {
     JSRuntime *rt;
     trusted_types_selftest();
     policy_container_selftest();
+    csp_url_matching_selftest();
     document_policy_selftest();
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
@@ -2523,8 +2715,12 @@ int main(int argc, char **argv) {
            traversable has no embedder element and its POPUP sandboxing flag set begins empty — and the
            CSP-derived flags of the policy above, which there is none of. Not a placeholder: an unsandboxed
            document's set IS empty, and this fixture's is. */
-        tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", NULL, 0, world_local_doc(),
-                         root_proxy);
+        /* CSP §2.2.2's SELF-ORIGIN, which this fixture's document has even though it has no policy: a CSP
+           list carries one whether or not it holds any policies, and `'self'` in a policy this fixture builds
+           later is measured against it. It is this document's own address's origin, because this document is
+           its own response. */
+        tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", NULL, "https://x.test", 0,
+                         world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }
 

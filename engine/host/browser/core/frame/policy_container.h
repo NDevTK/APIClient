@@ -29,8 +29,16 @@ typedef struct PolicyContainer PolicyContainer;
 /* From a document's own headers/meta. `csp_text` is a SERIALIZED CSP LIST — CSP §2.2, comma-delimited, which
    is how several policies travel in one header and how several `<meta>` elements compose. It is a list rather
    than a single policy because the policies are enforced INDEPENDENTLY: a resource must be allowed by every
-   one of them, so a second policy can only ever narrow. Both arguments are copied; either may be NULL. */
-PolicyContainer *policy_container_new(const char *csp_text, const char *referrer_policy);
+   one of them, so a second policy can only ever narrow. `csp_text` and `referrer_policy` are copied; either
+   may be NULL.
+   `self_origin` IS THE SECOND HALF OF THE CSP LIST AND NOT AN EXTRA. CSP §2.2 makes a list a struct of
+   policies AND a self-origin, and §2.2.2 states that origin from OUTSIDE the bytes — "self-origin is
+   response's URL's origin" — so it cannot be recovered from `csp_text` at either end of a clone and has to be
+   handed over with it. Every caller states it, because WHOSE origin it is belongs to the operation: a Document
+   built from a response takes its own, and §7.4's clone takes the CREATOR's along with the text. BORROWED —
+   an origin lives for the agent. */
+PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_origin,
+                                      const char *referrer_policy);
 
 /* §7.2.6's "clone a policy container" — §7.4 performs this for a navigable created with a creator, which is
    how an initial about:blank inherits its CSP. A DEEP copy: the child's policy is its own from the moment it
@@ -48,6 +56,10 @@ const char *policy_container_csp(const PolicyContainer *p);
    container that does not exist, which is the same answer as a list of zero policies and is the reason no
    caller needs a second branch for it. */
 const CspList *policy_container_csp_list(const PolicyContainer *p);
+/* §2.2's SELF-ORIGIN of that list — for the ONE caller that has to pass a container's own along rather than
+   ask it a question: §7.4's create, which clones the CREATOR's container into a navigable it is making. NULL
+   only for a container that does not exist. */
+const Origin *policy_container_self_origin(const PolicyContainer *p);
 
 /* WOULD THIS RUN? §S says a firing breakout in the model is not an exploit until it survives the page's actual
    policy — an inline `onerror` is dead under `script-src 'self'`, and the honest report is then "sink REAL,
@@ -69,6 +81,29 @@ typedef enum {
     POLICY_EVAL,                /* eval, new Function, setTimeout(string) — §4.4.1: no element, no type */
 } PolicyScriptKind;
 bool policy_allows(const PolicyContainer *p, PolicyScriptKind kind);
+
+/* CSP §4.1.2 "should request be blocked by Content Security Policy?" — Fetch's MAIN FETCH STEP 7, and the one
+ * question this container answers about a URL rather than about inline content.
+ *
+ * IT LIVES HERE BECAUSE THE WALK IS THE SAME WALK. §4.1.2 runs §6.7.2.1 over every policy of this container's
+ * list and blocks if ANY of them is violated, which is `policy_allows`'s quantifier with the two answers
+ * renamed — one file holding both is one statement of "a second policy can only narrow", and two files would
+ * hold two copies of it. What differs is only the question each policy is asked.
+ *
+ * TWO ANSWERS, NAMED AS §4.1.2 NAMES THEM, for the reason core/fetch/port_blocking.h names its two: the
+ * caller is a disjunction of blocking checks in ONE `if`, and a bool among them read the wrong way round is a
+ * request silently made or silently refused.
+ *
+ * `destination` IS FETCH §2.2.5's DESTINATION STRING, passed through to §6.8.1 — see
+ * csp_effective_directive_for_request for why it is that string and not an enum. `redirect_count` is the
+ * request's; a request that has not been redirected has 0 and is the only kind this engine makes.
+ * `url` is the request's CURRENT URL, parsed, because every relation §6.7.2 states reads a component of it. */
+typedef enum {
+    CSP_REQUEST_ALLOWED = 0,
+    CSP_REQUEST_BLOCKED = 1,
+} CspRequestVerdict;
+CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const UrlRecord *url,
+                                              const char *destination, int redirect_count);
 
 /* §7.1.5's CSP-DERIVED SANDBOXING FLAGS for a CSP list, which is the ONE thing a policy container contributes
  * to a Document's active sandboxing flag set. §7.4.5 builds navigationParams's final sandboxing flag set as

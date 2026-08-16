@@ -1192,8 +1192,8 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
 /* ONE DOCUMENT. Runs once per document INCLUDING the first, which is what makes it the one description of what
    a document of this build is — a same-origin child navigable gets exactly this and nothing else. */
 static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                              const char *csp, SandboxFlags sandbox_flags, uint32_t doc_id,
-                              JSValueConst nav_proxy)
+                              const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags,
+                              uint32_t doc_id, JSValueConst nav_proxy)
 {
     PlatformDocument doc;
     JSValue global = JS_GetGlobalObject(ctx);
@@ -1220,6 +1220,7 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
     doc.url = url;
     doc.origin = origin;
     doc.csp = csp;
+    doc.csp_self_origin = csp_self_origin;
     doc.sandbox_flags = sandbox_flags;
     doc.doc_id = doc_id;
     doc.nav_proxy = nav_proxy;
@@ -1233,7 +1234,8 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
    no smaller variant of it, because a child whose `window` is smaller is a different browser. */
 static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                   const char *top_level_url, const char *origin, const char *csp,
-                                  SandboxFlags sandbox_flags, uint32_t doc_id, JSValueConst nav_proxy)
+                                  const char *csp_self_origin, SandboxFlags sandbox_flags, uint32_t doc_id,
+                                  JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -1245,7 +1247,7 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
        §7.4 decided the CHILD's top-level creation URL and handed it over; a builder that used `url` here
        would make an about:blank iframe of an http page a secure context. */
     realm_install_intrinsics(ctx, top_level_url);
-    wpt_realm_install(ctx, dom, url, origin, csp, sandbox_flags, doc_id, nav_proxy);
+    wpt_realm_install(ctx, dom, url, origin, csp, csp_self_origin, sandbox_flags, doc_id, nav_proxy);
     /* THE CHILD'S SCRIPTS ARE THE CHILD'S, run in ITS realm — they are what make a popup a participant rather
        than an empty frame, since message-opener.html's whole body is one script that posts to its opener.
        THEY ARE QUEUED ONTO THE FRONTIER, NOT RUN HERE. A realm is built from inside §7.4 step 14's load job —
@@ -1345,7 +1347,11 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            set and §7.1.7 step 3's CSP list both come out of the one place a response is read
            (core/frame/navigation_params.c), so this runner and the product host create a Document from the
            identical computation over the identical input. */
-        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, np.csp, np.sandbox_flags,
+        /* CSP §2.2.2's SELF-ORIGIN — "response's URL's origin" — which for this root is the origin of the
+           address this runner fetched the document from. Stated separately from `origin` because they are two
+           facts that a sandboxed response makes disagree; they agree here because this document IS its own
+           response's. */
+        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, np.csp, origin, np.sandbox_flags,
                           world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }

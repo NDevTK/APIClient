@@ -1345,12 +1345,22 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
     parsed = fetch_parse_url(ctx, &rec, u, strlen(u)) && rec.scheme;
     DCHECK(parsed, "XMLHttpRequest: the URL §3.5.1 stored will not parse back — open() step 6 parses the URL "
                    "and step 11 stores its SERIALIZATION, and every item of that form is absolute");
-    /* §4.1 MAIN FETCH STEP 7: "If should request be blocked due to a bad port … returns blocked, then set
-       response to a network error." §3's response IS a network error already, so blocking is nothing written
-       and everything not done: the request is never placed, and the lifecycle machine's "handle errors" fires
-       the request error steps on the way out — which for §3.5.6 is an `error` event, or a NetworkError thrown
-       out of a synchronous send. */
-    if (parsed && fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED) {
+    /* §4.1 MAIN FETCH STEP 7: "If should request be blocked due to a bad port, should fetching request be
+       blocked as mixed content, or should request be blocked by Content Security Policy returns blocked, then
+       set response to a network error." §3's response IS a network error already, so blocking is nothing
+       written and everything not done: the request is never placed, and the lifecycle machine's "handle
+       errors" fires the request error steps on the way out — which for §3.5.6 is an `error` event, or a
+       NetworkError thrown out of a synchronous send.
+       BOTH CHECKS OR NEITHER. The step is one disjunction, and this component owns it for the same reason the
+       header note above gives — §3.5.6 step 4 is "Fetch req", the same algorithm `fetch()` performs — so
+       answering only the port half here would make `connect-src 'none'` block a `fetch()` and permit the
+       identical request written as an XMLHttpRequest: one policy answering differently depending on which
+       door the page used. §6.8.1 gives an XHR the EMPTY destination exactly as it gives `fetch()` one, so both
+       are governed by `connect-src`, and a request that has not been redirected has a redirect count of 0. */
+    if (parsed &&
+        (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
+         policy_should_block_request(document_policy(ctx), &rec, /*destination*/ "",
+                                     /*redirect count*/ 0) == CSP_REQUEST_BLOCKED)) {
         url_record_free(&rec);
         JS_FreeCString(ctx, u);
         return true;

@@ -39,8 +39,11 @@
  * and was not one; it was naming a question this file had invented. CSP's own §6.7.3.2 decides whether inline
  * content runs by classifying a source list with exactly three tests and IGNORING every other expression, so
  * the real algorithm is total over every policy the web sends. The model those questions are now asked of is
- * core/frame/csp_directive_list.h (§2.2/§2.3) and core/frame/csp_source_list.h (§2.3.1/§6.7.3.2), and what is
- * left here is HTML's container and the four questions §S asks of it. */
+ * core/frame/csp_directive_list.h (§2.2/§2.3) and core/frame/csp_source_list.h (§2.3.1/§6.7.3.2/§6.7.2), and
+ * what is left here is HTML's container and the questions asked OF a container: §S's four about inline content
+ * and `eval`, and CSP §4.1.2's about a URL — Fetch's main fetch step 7. The last one is here rather than in a
+ * file of its own because it is the SAME walk over the same list with a different question per policy, and
+ * because §2.2's "a second policy can only narrow" is then stated once. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -61,7 +64,8 @@ struct PolicyContainer {
     char    *referrer_policy;    /* §7.2.6's referrer policy (owned) */
 };
 
-PolicyContainer *policy_container_new(const char *csp_text, const char *referrer_policy)
+PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_origin,
+                                      const char *referrer_policy)
 {
     PolicyContainer *p = calloc(1, sizeof *p);
 
@@ -69,8 +73,12 @@ PolicyContainer *policy_container_new(const char *csp_text, const char *referrer
     if (csp_text && *csp_text) {
         p->csp_text = strdup(csp_text);
         CHECK(p->csp_text != NULL, "policy container: OOM copying a policy");
-        csp_list_parse(&p->csp, p->csp_text, strlen(p->csp_text));
     }
+    /* THE PARSE RUNS WHETHER OR NOT THERE IS TEXT, because §2.2.2's last step does: a container with no
+       policy still holds a CSP LIST, and every list has a self-origin. Running it unconditionally is what
+       keeps ONE writer for that field — a container built with no text and one built with text are the same
+       shape, so no reader has to ask which of the two it is holding. */
+    csp_list_parse(&p->csp, p->csp_text, p->csp_text ? strlen(p->csp_text) : 0, self_origin);
     if (referrer_policy) {
         p->referrer_policy = strdup(referrer_policy);
         CHECK(p->referrer_policy != NULL, "policy container: OOM copying a referrer policy");
@@ -88,7 +96,13 @@ PolicyContainer *policy_container_clone(const PolicyContainer *src)
        cross-instance and cross-session clones must perform anyway. */
     DCHECK(src != NULL, "a policy container was cloned from nothing — every document has one, including the "
                         "initial about:blank, which is the whole reason this operation exists");
-    return policy_container_new(src->csp_text, src->referrer_policy);
+    /* THE CLONE KEEPS THE SOURCE'S SELF-ORIGIN, WHICH IS THE POINT OF THE FIELD. §2.2's own note says it
+       exists so that a document with an OPAQUE origin which inherited its policy still resolves `'self'`
+       against the origin the policy came FROM — so re-deriving one here from the child would be the
+       inheritance failing in exactly the case the field was added for. The RECORD travels, so the two
+       containers share an identity as well as a tuple; where this clone crosses an instance instead, the
+       origin crosses as its serialization like every other cross-boundary fact. */
+    return policy_container_new(src->csp_text, src->csp.self_origin, src->referrer_policy);
 }
 
 void policy_container_free(PolicyContainer *p)
@@ -103,6 +117,8 @@ void policy_container_free(PolicyContainer *p)
 const char *policy_container_csp(const PolicyContainer *p) { return p ? p->csp_text : NULL; }
 
 const CspList *policy_container_csp_list(const PolicyContainer *p) { return p ? &p->csp : NULL; }
+
+const Origin *policy_container_self_origin(const PolicyContainer *p) { return p ? p->csp.self_origin : NULL; }
 
 SandboxFlags policy_csp_derived_sandboxing_flags(const char *serialized_csp_list, size_t len)
 {
@@ -122,7 +138,10 @@ SandboxFlags policy_csp_derived_sandboxing_flags(const char *serialized_csp_list
     size_t i;
 
     memset(&list, 0, sizeof list);
-    csp_list_parse(&list, serialized_csp_list, len);
+    /* NO SELF-ORIGIN, and that is a statement rather than an omission: this list is read for ONE directive's
+       raw value and is never asked to match a URL, so there is no `'self'` here to resolve. §6.7.2.7 asserts
+       the origin is present, which is what makes this the only shape of list allowed to lack one. */
+    csp_list_parse(&list, serialized_csp_list, len, NULL);
     for (i = 0; i < list.n_policies; i++) {
         const CspDirective *d = csp_policy_directive(&list.policies[i], "sandbox");
         if (d)
@@ -205,4 +224,80 @@ bool policy_allows(const PolicyContainer *p, PolicyScriptKind kind)
             return false;
     }
     return true;
+}
+
+/* §6.7.2.1 "does request violate policy?" for ONE policy, over the FETCH DIRECTIVES — which is every directive
+ * whose pre-request check can answer "Blocked".
+ *
+ * WHY THE SPEC'S LOOP OVER EVERY DIRECTIVE COLLAPSES TO ONE LOOKUP, and it is an identity rather than a
+ * shortcut. §6.7.2.1 runs each directive's pre-request check; the fourteen directives that HAVE one (§6.1.1-
+ * §6.1.15's fetch directives, plus §6.2.2's worker-src) each open with the SAME two lines — take §6.8.1's
+ * effective directive name for the request, and return "Allowed" immediately unless §6.8.4 says THIS directive
+ * is the one that executes for that name. §6.8.4 answers Yes for at most one directive of a policy, and
+ * csp_policy_governing_directive is that walk. Every other directive of a policy — base-uri, form-action,
+ * frame-ancestors, sandbox, webrtc, report-to, and the two *-attr forms — defines no pre-request check at all,
+ * so §6.7.2.1 leaves `violates` untouched for them.
+ *
+ * WHAT IS NOT COLLAPSED, and crashes instead of being approximated: §6.7.1.1's SCRIPT-DIRECTIVE pre-request
+ * check. script-src, script-src-elem, style-src and style-src-elem do not end in §6.7.2.5 directly — for a
+ * SCRIPT-LIKE destination they first honour the request's nonce, its integrity metadata and 'strict-dynamic',
+ * any of which allows a URL the source list refuses. Reaching one of them here would mean a request whose
+ * destination is script-like, and this engine makes none: `fetch()` and XMLHttpRequest both carry §6.8.1's
+ * empty destination. The assert names the three arms rather than the file. */
+static bool policy_blocks_request(const CspPolicy *policy, const UrlRecord *url, const char *effective,
+                                  const Origin *self_origin, int redirect_count)
+{
+    const CspDirective *d = csp_policy_governing_directive(policy, effective);
+
+    /* A policy carrying none of §6.8.3's fallback chain says NOTHING about this request — §6.8.4 answers No
+       for every directive of it, so §6.7.2.1 returns "Does Not Violate" and §4.1.2 leaves its result
+       "Allowed". `img-src 'none'` blocks no `fetch()`. */
+    if (!d)
+        return false;
+    DCHECK(!csp_token_is(d->name, "script-src") && !csp_token_is(d->name, "script-src-elem") &&
+           !csp_token_is(d->name, "style-src") && !csp_token_is(d->name, "style-src-elem"),
+           "§6.7.1.1's SCRIPT-DIRECTIVE pre-request check governs this request and it is not implemented — "
+           "before the source list is consulted it must return Allowed when §6.7.2.3 matches the request's "
+           "cryptographic nonce metadata, when §6.7.2.4 matches its integrity metadata, and (unless the "
+           "request is parser-inserted) when the list carries 'strict-dynamic'. Build those three against "
+           "Fetch's request record; matching the source list alone reports a script a browser LOADS as blocked");
+    if (csp_source_list_match_url(d, url, self_origin, redirect_count) == CSP_MATCHES)
+        return false;
+    /* §4.1.2 STEP 3.3.1 — "execute §5.5 Report a violation on the result of executing §2.4.2 Create a
+       violation object for request, and policy" — WHICH THIS ENGINE DOES NOT PERFORM, and here is where that
+       becomes visible rather than merely absent. A violation has exactly two observables: a
+       `securitypolicyviolation` event at the Document, and a report POSTed to the endpoints a policy names.
+       The second is DECLARED IN THE POLICY ITSELF, so it is a gap this function can see coming and refuse. */
+    DCHECK(!csp_policy_directive(policy, "report-uri") && !csp_policy_directive(policy, "report-to"),
+           "a request was BLOCKED by a policy that declares a reporting endpoint, and §4.1.2 step 3.3.1's "
+           "report is not built — the page's server is owed a report it will never receive, and a test that "
+           "waits for one waits forever. Build CSP §2.4.2's violation object and §5.5's report a violation, "
+           "whose two observables are the `securitypolicyviolation` event fired at the Document and the POST "
+           "to the endpoints named by `report-to`/`report-uri`");
+    return true;
+}
+
+CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const UrlRecord *url,
+                                              const char *destination, int redirect_count)
+{
+    const char *effective;
+    size_t i;
+
+    /* §4.1.2 step 1 reads the request's policy container's CSP list, and a document with no container has no
+       policies — the overwhelmingly common case, and §4.1.2's own "let result be Allowed" for it. */
+    if (!p)
+        return CSP_REQUEST_ALLOWED;
+    effective = csp_effective_directive_for_request(destination);
+    /* §6.8.1's "report" row: a violation report upload is governed by no fetch directive, so every policy's
+       pre-request check returns Allowed and there is nothing to walk. */
+    if (!effective)
+        return CSP_REQUEST_ALLOWED;
+    /* §4.1.2 step 3: for each policy. This build parses only ENFORCE policies (see csp_directive_list.h), so
+       the step's "if policy's disposition is report, skip" is vacuous rather than skipped.
+       THE QUANTIFIER IS THE SAME ONE `policy_allows` RUNS, from the other end: §4.1.2 sets result to Blocked
+       if ANY policy is violated, which is "allowed only if EVERY policy permits it". */
+    for (i = 0; i < p->csp.n_policies; i++)
+        if (policy_blocks_request(&p->csp.policies[i], url, effective, p->csp.self_origin, redirect_count))
+            return CSP_REQUEST_BLOCKED;
+    return CSP_REQUEST_ALLOWED;
 }

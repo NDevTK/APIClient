@@ -32,6 +32,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "core/url/origin.h"
+
 /* A SLICE of the serialized policy: a directive name, or one of §2.3's value strings. Never NUL-terminated —
    the bytes belong to the caller's buffer and a token ends where the next one begins. */
 typedef struct {
@@ -65,13 +67,23 @@ typedef struct {
 /* §2.2's CSP LIST. A list, not a policy: several policies arrive comma-delimited in one header or as several
    `<meta>` elements, and they are enforced INDEPENDENTLY — which is why the quantifier over this list differs
    per question and every caller has to state its own (content runs only if EVERY policy permits it; trusted
-   types are required as soon as ANY policy requires them).
-   §2.2 also gives a CSP list a SELF-ORIGIN, for matching the 'self' keyword. It is absent here for the same
-   reason the disposition is: the only questions asked of this model so far are about INLINE content and about
-   `eval`, and neither ever compares a URL. It arrives with §6.7.2's URL matching, which is what needs it. */
+   types are required as soon as ANY policy requires them). */
 typedef struct {
     CspPolicy *policies;
     size_t     n_policies;
+    /* §2.2's SELF-ORIGIN: "an origin which is used when matching the 'self' keyword". It is a member of the
+       LIST and not of a policy, and it CANNOT come from the serialized text — §2.2.2 states it from OUTSIDE
+       the bytes ("return a CSP list whose policies is policies and self-origin is response's URL's origin"),
+       which is why csp_list_parse takes it as an argument rather than deriving one.
+       IT IS A RECORD AND NOT A URL, and §2.2's own note says why: it exists so that a document with an OPAQUE
+       origin which INHERITED its policy still resolves `'self'` against the origin the policy came from. A
+       document whose address is `about:blank` or `data:` has no such origin anywhere in its URL, so a
+       self-origin carried as a URL would answer `'self'` with a fresh opaque origin in exactly the case the
+       field was added for. §6.7.2.8 also READS its scheme, host and port, which only the record has.
+       BORROWED — an origin lives for the agent (core/url/origin.h). NULL is a positive statement and not a
+       hole: it says this list will never be asked to match a URL, which §7.1.5's CSP-derived sandboxing flags
+       parse is (it reads one directive's raw value and no source list at all). §6.7.2.7 asserts it. */
+    const Origin *self_origin;
 } CspList;
 
 /* §4.2.3's `type` and §4.2.4's "navigation" — the five strings the standard's inline checks are written in
@@ -85,11 +97,16 @@ typedef enum {
     CSP_INLINE_STYLE_ATTRIBUTE,   /* "style attribute" */
 } CspInlineType;
 
-/* §2.2.1 "parse a serialized CSP", run over each comma-delimited policy of a serialized CSP LIST.
+/* §2.2.1 "parse a serialized CSP", run over each comma-delimited policy of a serialized CSP LIST, and §2.2.2's
+   final step, which is the only place the list's SELF-ORIGIN can come from.
    `out` must be zeroed; `serialized` is BORROWED and must outlive `out`. A policy whose directive set comes
    out EMPTY is not appended (§2.2.2), so an empty string, a stray comma and a policy of nothing but
-   whitespace all produce a list of zero policies rather than a policy that says nothing. */
-void csp_list_parse(CspList *out, const char *serialized, size_t len);
+   whitespace all produce a list of zero policies rather than a policy that says nothing.
+   `self_origin` is §2.2.2's "response's URL's origin", stated by the caller because the bytes do not contain
+   it and because WHOSE origin it is belongs to the operation: a Document created from a response takes its
+   own, and one created by §7.4's clone takes the CREATOR's along with the text. NULL only for a list that
+   will never match a URL — see the field. */
+void csp_list_parse(CspList *out, const char *serialized, size_t len, const Origin *self_origin);
 
 /* Frees exactly what csp_list_parse allocated — the directive and value arrays — and never the text. */
 void csp_list_free(CspList *list);
@@ -102,6 +119,19 @@ bool csp_token_is(CspToken token, const char *ascii_lowercase);
 /* "policy contains a directive whose name is `name`", the containment test §2.2.1, §4.4.1 and §6.8.4 all use.
    Returns the directive or NULL. `name` must be ASCII lowercase. */
 const CspDirective *csp_policy_directive(const CspPolicy *policy, const char *name);
+
+/* §6.8.1 "get the effective directive for request" — the fetch-directive name that controls a request, chosen
+   by that request's DESTINATION.
+   THE DESTINATION IS FETCH'S OWN STRING, not an enum of this file's invention. Fetch §2.2.5 defines a
+   request's destination as the empty string or one of a fixed list of literals, §6.8.1 switches on exactly
+   those literals, and an enum would be a second spelling of one vocabulary — with one live member today
+   (`fetch()` and XMLHttpRequest both make a request whose destination is the EMPTY STRING, which is §6.8.1's
+   first row and answers `connect-src`).
+   §6.8.1 CAN RETURN NULL, for the "report" destination alone, and that null means the request is governed by
+   no fetch directive at all. It is spelled as NULL here rather than folded into `connect-src`, because
+   §6.8.1's own trailing default IS `connect-src` and collapsing the two would make a report upload subject to
+   a directive the standard exempts it from. */
+const char *csp_effective_directive_for_request(const char *destination);
 
 /* §6.8.2 "get the effective directive for inline checks". Never returns NULL for the five types above — the
    standard's trailing "return null" covers types it does not define, which this enum does not have. */

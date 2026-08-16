@@ -51,10 +51,16 @@ void window_proxy_free(JSContext *ctx);
    A CREATION FACT, like `is_popup`: no flow can change it, so unlike `url` there is nothing here for the delta
    to capture, and the per-flow answer comes from the INPUTS — an `<iframe sandbox>`'s attribute is a DOM read
    in the creating flow's own delta, and the navigable that read produced belongs to that flow. */
+/* `creator_csp_self_origin` is CSP §2.2's SELF-ORIGIN of that cloned policy list, SERIALIZED, and it rides
+   here because §2.2 makes a CSP list a struct of policies AND an origin — carrying only the text would hand
+   the initial about:blank a policy with no `'self'` to resolve. It is the CREATOR's and not this navigable's:
+   §2.2's own note says the field exists so that a document which inherited its policy resolves `'self'`
+   against the origin that policy came FROM, and the initial about:blank is exactly such a document. NULL only
+   where `creator_csp` is — the self proxy, whose realm the host already built. */
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
                          bool is_popup, SandboxFlags creation_sandbox_flags, const char *creator_csp,
-                         const char *top_level_url, const Origin *top_level_origin, JSValueConst parent,
-                         JSValueConst opener);
+                         const char *creator_csp_self_origin, const char *top_level_url,
+                         const Origin *top_level_origin, JSValueConst parent, JSValueConst opener);
 
 /* §7.1.5's creation sandboxing flags for this navigable — see window_proxy_new. Asked only of a LOCAL proxy:
    a remote navigable's Documents are a peer instance's to create, so the set that would answer for them lives

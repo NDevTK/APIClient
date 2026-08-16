@@ -154,7 +154,7 @@ static void csp_policy_parse(CspPolicy *out, const char *text, size_t len)
     }
 }
 
-void csp_list_parse(CspList *out, const char *serialized, size_t len)
+void csp_list_parse(CspList *out, const char *serialized, size_t len, const Origin *self_origin)
 {
     size_t pos = 0;
 
@@ -162,6 +162,10 @@ void csp_list_parse(CspList *out, const char *serialized, size_t len)
     DCHECK(out->policies == NULL && out->n_policies == 0,
            "a CSP list was parsed over one that already holds policies — csp_list_free frees exactly what ONE "
            "parse allocated, so the earlier parse's directive arrays would be unreachable and unfreed");
+    /* §2.2.2's LAST STEP, and it is performed before the parse rather than after it so that a list which comes
+       out with zero policies still carries the origin: `csp_list_free` zeroes only what it allocated, and a
+       caller that later merges into this list must not find the origin missing because the text was empty. */
+    out->self_origin = self_origin;
     if (!serialized || !len) {
         DCHECK(len == 0 || serialized != NULL, "a CSP list parse was given a length with no bytes");
         return;
@@ -219,6 +223,56 @@ const CspDirective *csp_policy_directive(const CspPolicy *policy, const char *na
         if (csp_token_is(policy->directives[i].name, name))
             return &policy->directives[i];
     return NULL;
+}
+
+const char *csp_effective_directive_for_request(const char *destination)
+{
+    /* §6.8.1's switch, in the standard's own row order. The rows are Fetch §2.2.5's destination literals; the
+       comparison is exact rather than case-insensitive because a destination is set by Fetch and by the HTML
+       elements that make requests, never parsed out of a header, so a mixed-case one would be a caller
+       inventing a value the platform does not produce — which the assert below says. */
+    static const struct { const char *destination, *directive; } ROWS[] = {
+        { "",              "connect-src" },       /* fetch(), XMLHttpRequest, EventSource, WebSocket */
+        { "manifest",      "manifest-src" },
+        { "object",        "object-src" },
+        { "embed",         "object-src" },
+        { "frame",         "frame-src" },
+        { "iframe",        "frame-src" },
+        { "audio",         "media-src" },
+        { "track",         "media-src" },
+        { "video",         "media-src" },
+        { "font",          "font-src" },
+        { "image",         "img-src" },
+        { "style",         "style-src-elem" },
+        { "script",        "script-src-elem" },
+        { "xslt",          "script-src-elem" },
+        { "audioworklet",  "script-src-elem" },
+        { "paintworklet",  "script-src-elem" },
+        { "serviceworker", "worker-src" },
+        { "sharedworker",  "worker-src" },
+        { "worker",        "worker-src" },
+        { "json",          "connect-src" },
+        { "text",          "connect-src" },
+        { "webidentity",   "connect-src" },
+    };
+    size_t i;
+
+    DCHECK(destination != NULL,
+           "§6.8.1 was asked for the effective directive of a request with NO destination — Fetch §2.2.5 gives "
+           "every request one, and the EMPTY STRING is a destination (it is §6.8.1's first row and the one a "
+           "`fetch()` has), never the absence of one");
+    /* §6.8.1's "report" row returns NULL: a violation report upload is governed by no fetch directive, which
+       is what stops a report to a blocked endpoint from being blocked and never sent. */
+    if (!strcmp(destination, "report"))
+        return NULL;
+    for (i = 0; i < sizeof ROWS / sizeof *ROWS; i++)
+        if (!strcmp(destination, ROWS[i].destination))
+            return ROWS[i].directive;
+    /* §6.8.1's trailing "Return connect-src", whose own note says it is "intended for new fetch destinations
+       that are added and which don't explicitly fall into one of the other categories". It is the standard's
+       default and not this file's guess, so a destination Fetch adds tomorrow is governed rather than free —
+       and it is the reason this function has no DFAIL for an unknown row. */
+    return "connect-src";
 }
 
 const char *csp_effective_directive_for_inline_checks(CspInlineType type)

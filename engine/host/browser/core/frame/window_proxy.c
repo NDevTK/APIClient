@@ -103,6 +103,12 @@ typedef struct {
        document happened to touch it first. A creation fact, so like `is_popup` no flow can change it.
        NULL for a navigable with an address (its policy comes with its response) and for the root. Owned. */
     char   *creator_csp;
+    /* CSP §2.2's SELF-ORIGIN of that cloned list, SERIALIZED — the other half of one CSP list, and the half
+       the text does not contain. It is the CREATOR's origin and not this navigable's: §2.2's note says the
+       field exists precisely so that a document which INHERITED its policy resolves `'self'` against the
+       origin the policy came from, and the initial about:blank is that document. A creation fact like the
+       policy beside it, so like `is_popup` there is nothing here for the delta to capture. Owned. */
+    char   *creator_csp_self_origin;
     /* §7.1.5's DETERMINE THE CREATION SANDBOXING FLAGS for this navigable, taken at CREATION for exactly the
        reason `creator_csp` above is: §7.2 hands this set to the initial about:blank Document as its ACTIVE
        SANDBOXING FLAG SET, that Document's realm is materialized LAZILY, and the realm that materializes it
@@ -372,7 +378,7 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
            popup that keyword exists to free. The union belongs to §7.4.5's NAVIGATION (core/frame/navigable.c),
            which is the other place a Document of this navigable is created. */
         p->realm = navigable_realm(ctx, p->doc, p->url, p->top_level_url, p->origin, proxy, NULL, 0,
-                                   p->creator_csp, p->creation_sandbox_flags);
+                                   p->creator_csp, p->creator_csp_self_origin, p->creation_sandbox_flags);
         p->window = JS_GetGlobalObject(p->realm);
     }
     return p->realm;
@@ -463,8 +469,8 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
 
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
                          bool is_popup, SandboxFlags creation_sandbox_flags, const char *creator_csp,
-                         const char *top_level_url, const Origin *top_level_origin, JSValueConst parent,
-                         JSValueConst opener)
+                         const char *creator_csp_self_origin, const char *top_level_url,
+                         const Origin *top_level_origin, JSValueConst parent, JSValueConst opener)
 {
     JSValue obj;
     ProxyData *p;
@@ -498,6 +504,14 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
     p->name_known = 1;
     p->is_popup = is_popup ? 1 : 0;
     p->creator_csp = creator_csp && *creator_csp ? proxy_strdup(creator_csp) : NULL;
+    /* THE SELF-ORIGIN IS REQUIRED EVEN WHERE THE POLICY IS ABSENT, because §2.2 gives a CSP list an origin
+       whether or not it holds any policies — and because this navigable's initial Document will be installed
+       with it either way. A creator with no CSP still states the origin its (empty) list belongs to. */
+    DCHECK(creator_csp_self_origin != NULL && *creator_csp_self_origin,
+           "§7.4 created a navigable without the CSP self-origin of the policy container it cloned — the "
+           "initial about:blank Document would then resolve `'self'` against nothing, which for an inherited "
+           "policy is the one case CSP §2.2's self-origin exists to answer");
+    p->creator_csp_self_origin = proxy_strdup(creator_csp_self_origin);
     /* §7.1.5's creation sandboxing flags, decided by §7.4's create — see the field. An EMPTY set is the
        ordinary answer (no `<iframe sandbox>`, no propagating opener) and is not a "not yet known": §7.1.5
        says a browsing context's popup sandboxing flag set starts empty and an absent `sandbox` attribute is
@@ -581,8 +595,15 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
        empty when a browsing context is created and which only §7.1's rules for choosing a navigable ever
        populate. Nothing chose this one. What the ROOT document's own `Content-Security-Policy: sandbox` adds
        is the other half of §7.4.5's union, and it is added where a Document is created rather than here. */
-    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, 0, NULL, tlus, tlo,
-                           JS_UNDEFINED, JS_NULL);
+    /* NO CREATOR POLICY — this navigable is the one §7.4 did NOT create, so there is nothing to clone — but
+       CSP §2.2's SELF-ORIGIN of its document's list is still a real value and is this agent's own: the root
+       Document is created from the response at this instance's address, which is §2.2.2's answer. Nothing
+       reads it through this proxy (its realm exists from the moment it is adopted, so proxy_realm's lazy
+       materialization is unreachable for it), and it is stated all the same because the field is what makes
+       "every navigable carries the self-origin of the policy its Document runs under" an invariant rather
+       than a case analysis at each reader. */
+    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, 0, NULL,
+                           origin_serialized(origin_agent()), tlus, tlo, JS_UNDEFINED, JS_NULL);
     JS_FreeCString(ctx, tlus);
     JS_FreeValue(ctx, tlu);
 

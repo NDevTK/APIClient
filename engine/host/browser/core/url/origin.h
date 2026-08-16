@@ -79,6 +79,31 @@ bool origin_same_origin_domain(const Origin *a, const Origin *b);
    record's own host or the agent's parsed domain, both of which live for the agent. */
 const UrlHost *origin_effective_domain(const Origin *o);
 
+/* §7.1.1's THREE TUPLE COMPONENTS, for the algorithms that READ an origin rather than compare two of them.
+   CSP §6.7.2.8 is the caller and it reads all three: its schemeless-`host-source` arm asks whether the CSP
+   list's SELF-ORIGIN's scheme §6.7.2.9 scheme-part matches the URL's, and the second bullet of its `'self'`
+   arm compares the origin's host and port against the URL's for the secure-upgrade case where the two origins
+   are not same origin.
+   THESE ARE NOT origin_effective_domain, and the difference is exactly the one §7.1.1 draws: the effective
+   domain answers the DOMAIN a `document.domain` write relaxed an origin to, while §6.7.2.8 says "origin's
+   host" — a relaxed origin still has its own host, and matching a policy against the relaxed value would let a
+   page widen its own `'self'` by assigning to `document.domain`.
+   AN OPAQUE ORIGIN HAS NONE OF THEM. §7.1.1 gives it no scheme, no host and no port — "the only meaningful
+   operation is testing for equality" — so each of these ASSERTS that the caller asked origin_is_opaque first
+   and answered that case itself, rather than handing back a hole the caller would fill with a default. */
+const char    *origin_scheme(const Origin *o);
+const UrlHost *origin_host(const Origin *o);
+int            origin_port(const Origin *o);   /* §4.1's null port is -1, exactly as in a UrlRecord */
+
+/* §7.1.1's SAME ORIGIN WITH A URL ON ONE SIDE — "origin and url's origin are same origin", which is the first
+   bullet of CSP §6.7.2.8's `'self'` arm and the only shape in which that comparison is ever made there.
+   IT IS THE ONE READING OF §7.1.1 (origin_same decides it) AND IT MINTS NOTHING. URL §4.7 gives a URL with no
+   tuple origin — `data:`, `file:`, an unknown scheme — a NEW OPAQUE ORIGIN, which is same origin with nothing
+   including itself, so §7.1.1 step 1 answers false against every record and the mint is skipped rather than
+   performed and thrown away. origin_of_url would keep an agent-lifetime record per question asked, and this
+   question is asked of every source expression of every policy of every fetch. */
+bool origin_same_as_url(const Origin *o, const UrlRecord *u);
+
 /* §7.1.1.2's SETTER STEP 6, "set this's origin's domain to the result of parsing the given value" — and the ONE
    place an origin is ever mutated. §7.1.1: origins "are generally immutable. Only the domain of a tuple origin
    can be changed, and only through the document.domain API", which is why this takes a `const Origin *` like

@@ -155,8 +155,8 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
    `https://site/app/api/users`. They are two FIELDS of the one document record now, which is what makes that
    substitution unspellable rather than merely fixed. */
 static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                                 const char *csp, SandboxFlags sandbox_flags, uint32_t doc_id,
-                                 JSValueConst nav_proxy)
+                                 const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags,
+                                 uint32_t doc_id, JSValueConst nav_proxy)
 {
     PlatformDocument doc;
     JSValue g = JS_GetGlobalObject(ctx);
@@ -165,6 +165,7 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     doc.url = url;
     doc.origin = origin;
     doc.csp = csp;
+    doc.csp_self_origin = csp_self_origin;
     doc.sandbox_flags = sandbox_flags;
     doc.doc_id = doc_id;
     doc.nav_proxy = nav_proxy;
@@ -184,7 +185,8 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
    distinguished it from a page that had none. */
 static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                      const char *top_level_url, const char *origin, const char *csp,
-                                     SandboxFlags sandbox_flags, uint32_t doc_id, JSValueConst nav_proxy)
+                                     const char *csp_self_origin, SandboxFlags sandbox_flags, uint32_t doc_id,
+                                     JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -198,7 +200,7 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
        navigable, the navigable's own address for an auxiliary one — so this passes it rather than `url`,
        which would make an about:blank iframe of an http page a secure context. */
     realm_install_intrinsics(ctx, top_level_url);
-    engine_realm_install(ctx, dom, url, origin, csp, sandbox_flags, doc_id, nav_proxy);
+    engine_realm_install(ctx, dom, url, origin, csp, csp_self_origin, sandbox_flags, doc_id, nav_proxy);
     return ctx;
 }
 
@@ -361,7 +363,12 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
            response — which this host no longer holds. §7.4.5's final sandboxing flag set and §7.1.7 step 3's
            CSP list are both `np`'s, computed where a response is read (core/frame/navigation_params.c); this
            file's remaining job is to say WHICH navigable and WHICH realm, which is a host fact. */
-        engine_realm_install(g_ctx, g_dom, url, origin, np.csp, np.sandbox_flags,
+        /* CSP §2.2.2's SELF-ORIGIN — "response's URL's origin" — which for this entry is the origin of the
+           address the response was fetched from, serialized above. It is stated as its own argument rather
+           than taken from `origin` beside it because the two are different facts (a Document's principal and
+           the origin its policy resolves `'self'` against), and they agree here for a reason this entry can
+           name: this document IS the response's, loaded from `url`. */
+        engine_realm_install(g_ctx, g_dom, url, origin, np.csp, origin, np.sandbox_flags,
                              world_local_doc(), root_proxy);
         JS_FreeValue(g_ctx, root_proxy);
     }

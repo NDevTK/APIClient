@@ -199,7 +199,7 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
    `<meta>` policies alone. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
-                           const char *csp, SandboxFlags sandbox_flags)
+                           const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags)
 {
     lxb_html_document_t *dom;
     JSContext *cctx;
@@ -233,8 +233,15 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "origin browsing context flag — §7.1.5 forces such a Document into a fresh OPAQUE origin, which is "
            "same origin with nothing, so it is a second INSTANCE the host provisions and never a second realm "
            "in this heap; the origin this call was handed was determined from a different flag set");
+    /* AND CSP §2.2's SELF-ORIGIN OF THAT POLICY, which crosses as bytes for the same reason the principal
+       above does — see RealmBuilder. It is REQUIRED rather than derivable here: the two callers of this
+       function differ in exactly this field, because whose `'self'` a document's policy names belongs to the
+       operation (§2.2.2's response for a load, §7.4's creator for a materialized about:blank). */
+    DCHECK(csp_self_origin != NULL && *csp_self_origin,
+           "a realm was built with no CSP self-origin — CSP §2.2 gives every CSP list one, so the Document "
+           "would resolve `'self'` against nothing and report its own scripts as blocked by its own policy");
     cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, top_level_url, origin_serialized(origin), csp,
-                           sandbox_flags, doc, nav_proxy);
+                           csp_self_origin, sandbox_flags, doc, nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
@@ -322,6 +329,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     const char *addr, *csp = NULL, *body = NULL, *tlu;
     const Origin *origin, *tlo;
     JSValue bodyv = JS_UNDEFINED, cspv = JS_UNDEFINED;
+    const char *self_origin = NULL;
+    bool inherited = false;
     size_t body_len = 0;
     JSContext *cctx;
     SandboxFlags final_flags, csp_flags;
@@ -375,7 +384,19 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        from no response has only the second, which is the whole of why an `about:blank` child runs its scripts
        under its creator's CSP. */
     if (!JS_IsUndefined(cspv) && !JS_IsNull(cspv)) csp = JS_ToCString(ctx, cspv);
-    else if (!JS_IsNull(step_arg(&s->hdr, 3))) csp = JS_ToCString(ctx, step_arg(&s->hdr, 3));
+    else if (!JS_IsNull(step_arg(&s->hdr, 3))) { csp = JS_ToCString(ctx, step_arg(&s->hdr, 3)); inherited = true; }
+    /* AND CSP §2.2's SELF-ORIGIN OF THAT LIST, which follows from WHICH of the two policies was taken and
+       from nothing else. §2.2.2 sets it to the RESPONSE's URL's origin, which for this load is the origin the
+       operation determined for the destination — asserted to be that by the sandbox DCHECK below, which is
+       the one header that could make the two disagree. An INHERITED clone keeps the CREATOR's, carried on the
+       job beside the text for the reason the text is carried: whose clone it is belongs to the operation. */
+    if (inherited) {
+        self_origin = JS_ToCString(ctx, step_arg(&s->hdr, 4));
+        DCHECK(self_origin != NULL && *self_origin,
+               "a document load carried an INHERITED policy with no self-origin beside it — §2.2 makes a CSP "
+               "list a struct of policies AND an origin, so the two travel together or the clone arrives "
+               "unable to resolve `'self'`");
+    }
     if (window_proxy_materialized(proxy)) {
         doc = world_mint_doc(window_proxy_doc(proxy));
         world_doc_adopt(doc);
@@ -420,8 +441,10 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "engine determined that origin when the navigation was enqueued, before the response existed. Move "
            "§7.3.1's determine-the-origin for a navigation to the point the response arrives (here), keeping "
            "the enqueue-time answer only for the `about:` destinations that have no response");
-    cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, body, body_len, csp, final_flags);
+    cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, body, body_len, csp,
+                           inherited ? self_origin : origin_serialized(origin), final_flags);
     window_proxy_navigate(ctx, proxy, cctx, doc, addr, tlu, tlo, origin);
+    JS_FreeCString(ctx, self_origin);
     JS_FreeCString(ctx, csp);
     JS_FreeCString(ctx, body);
     JS_FreeValue(ctx, cspv);
@@ -442,7 +465,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     return JS_STEP_DONE;
 }
 
-/* WHAT THIS MACHINE OWNS: nothing that is a JSValue. Its four arguments are the header's and the flow owns
+/* WHAT THIS MACHINE OWNS: nothing that is a JSValue. Its five arguments are the header's and the flow owns
    those, the response is the host register's until it is taken, and the load leaves its results on the
    navigable rather than in this state. The declaration is still REQUIRED and is not a formality — a machine
    with no visit cannot be FORKED, so a concolic branch reached from inside the load would abort the fork
@@ -465,14 +488,14 @@ static int g_nav_load_stepid = -1;
    same sentence as the address travelling: everything about where this load is going belongs to the operation
    that started it, and nothing about it can be read back off the navigable being loaded. */
 static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const char *addr, const Origin *origin,
-                                   const char *inherit_csp)
+                                   const char *inherit_csp, const Origin *inherit_csp_self_origin)
 {
-    JSValueConst argv[4];
-    JSValue fn, url, org, csp;
+    JSValueConst argv[5];
+    JSValue fn, url, org, csp, self;
 
     if (g_nav_load_stepid < 0)
         g_nav_load_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_nav_load_def);
-    fn = JS_NewCFunction2(ctx, NULL, "load", 4, JS_CFUNC_step, g_nav_load_stepid);
+    fn = JS_NewCFunction2(ctx, NULL, "load", 5, JS_CFUNC_step, g_nav_load_stepid);
     CHECK(!JS_IsException(fn), "the document-load job's callee could not be allocated");
     url = JS_NewString(ctx, addr);
     CHECK(!JS_IsException(url), "the document-load job's address could not be allocated");
@@ -483,11 +506,24 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     CHECK(!JS_IsException(org), "the document-load job's origin could not be allocated");
     csp = inherit_csp ? JS_NewString(ctx, inherit_csp) : JS_NULL;
     CHECK(!JS_IsException(csp), "the document-load job's inherited policy could not be allocated");
+    /* CSP §2.2's SELF-ORIGIN OF THAT INHERITED LIST, travelling as its SERIALIZATION and not as a handle. The
+       origin beside it travels as a handle because §7.3.1's answer for the destination is an IDENTITY that a
+       re-derivation would lose; this one is measured only against a URL's origin (§6.7.2.8's `'self'` arm is
+       its sole reader), and both bullets of that arm read components an OPAQUE origin has none of — so the
+       identity a serialization drops decides nothing here, and the bytes are what the realm boundary below
+       takes anyway. */
+    DCHECK(!inherit_csp || inherit_csp_self_origin != NULL,
+           "a document load was enqueued with an inherited policy and no self-origin for it — §2.2 makes a CSP "
+           "list a struct of policies AND an origin, and the clone that travels is the whole list");
+    self = inherit_csp ? JS_NewString(ctx, origin_serialized(inherit_csp_self_origin)) : JS_NULL;
+    CHECK(!JS_IsException(self), "the document-load job's inherited self-origin could not be allocated");
     argv[0] = proxy;
     argv[1] = url;
     argv[2] = org;
     argv[3] = csp;
-    JS_EnqueueCallJob(ctx, fn, 4, argv);
+    argv[4] = self;
+    JS_EnqueueCallJob(ctx, fn, 5, argv);
+    JS_FreeValue(ctx, self);
     JS_FreeValue(ctx, csp);
     JS_FreeValue(ctx, org);
     JS_FreeValue(ctx, url);
@@ -543,8 +579,10 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
     DCHECK(child_in_this_agent(origin),
            "a navigable was navigated CROSS-ORIGIN — its active document then lives in a peer instance, which "
            "is a host-routed provisioning like §7.4's create notice and not a realm this agent can build");
-    /* §7.2.6: a destination with no response inherits the INITIATOR's policy — this document's. */
-    navigable_load_enqueue(ctx, proxy, addr, origin, policy_container_csp(document_policy(ctx)));
+    /* §7.2.6: a destination with no response inherits the INITIATOR's policy — this document's — and CSP
+       §2.2 makes that clone the whole LIST, so the origin its `'self'` resolves against goes with it. */
+    navigable_load_enqueue(ctx, proxy, addr, origin, policy_container_csp(document_policy(ctx)),
+                           policy_container_self_origin(document_policy(ctx)));
     free(addr);
     return JS_DupValue(ctx, proxy);
 }
@@ -737,7 +775,13 @@ static JSValue navigable_choose_keyword(JSContext *ctx, const char *target)
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
                          const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags)
 {
-    const char *csp = policy_container_csp(document_policy(ctx));
+    const PolicyContainer *creator_policy = document_policy(ctx);
+    const char *csp = policy_container_csp(creator_policy);
+    /* CSP §2.2's SELF-ORIGIN of the list §7.4 is about to clone, SERIALIZED. It is a SECOND field beside the
+       text everywhere the text goes, because §2.2 makes a CSP list a struct of policies AND an origin and the
+       bytes contain only the first half — and it is the CREATOR's, which is the whole content of §2.2's note:
+       a document that INHERITED its policy resolves `'self'` against the origin the policy came FROM. */
+    const char *csp_self;
     char *addr = NULL;
     const Origin *origin = NULL;
     /* §7.1.5's DETERMINE THE CREATION SANDBOXING FLAGS, and the two arms are §7.4's two shapes of navigable.
@@ -775,6 +819,11 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     const Origin *creator_tlo = window_proxy_top_level_origin(document_window_proxy(ctx));
     const Origin *tlo;
 
+    DCHECK(creator_policy != NULL,
+           "§7.4 was asked to clone a policy container from a document that has none — document_install builds "
+           "one for every Document, including the initial about:blank, which is why the clone is an ordinary "
+           "rule rather than an inheritance rule written for CSP");
+    csp_self = origin_serialized(policy_container_self_origin(creator_policy));
     CHECK(creator_tlu_s != NULL, "navigable: this realm's top-level creation URL would not convert");
     tlu = is_child ? creator_tlu_s : "about:blank";
     tlo = is_child ? creator_tlo : origin_agent();
@@ -842,6 +891,11 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                                     realm is built later and by whichever same-origin document reads through
                                     it first, which need not be its creator. */
                                  csp,
+                                 /* AND THE OTHER HALF OF THAT ONE CSP LIST — see window_proxy.h. It is the
+                                    creator's origin and never the child's: the initial about:blank has no
+                                    origin of its own that a policy could name, which is precisely the case
+                                    CSP §2.2's self-origin exists for. */
+                                 csp_self,
                                  /* HTML §8.1.3.1's TOP-LEVEL CREATION URL, and §7.4 states it from both ends.
                                     A CHILD navigable is NESTED, so its documents' environments inherit their
                                     creator's — this document's, read off its own realm — and an `about:blank`
@@ -889,7 +943,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            the same test the RealmBuilder applies to decide whether to fetch, and it is stated in both places
            because it is one spec fact about the scheme rather than a protocol between them. */
         if (strncmp(addr, "about:", 6) != 0)
-            navigable_load_enqueue(ctx, proxy, addr, origin, csp);   /* §7.2.6: the CREATOR's, for §7.4's create */
+            /* §7.2.6: the CREATOR's, for §7.4's create — the whole list, text and self-origin together. */
+            navigable_load_enqueue(ctx, proxy, addr, origin, csp,
+                                   policy_container_self_origin(creator_policy));
     } else {
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
@@ -916,6 +972,20 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            then create that Document with an EMPTY active sandboxing flag set and run scripts, submit forms and
            relax document.domain that the `sandbox` attribute forbids — a sandbox that exists in the markup and
            nowhere in the model. */
+        /* THE CLONE THAT CROSSES AN INSTANCE CARRIES ONLY HALF OF ITS CSP LIST, and that is a capability gap
+           rather than a field to add here alone: the peer is handed the creator's policy TEXT as though the
+           child's own response had carried it, so §2.2.2 makes the peer resolve `'self'` against the CHILD's
+           address instead of the creator's origin. Both halves of that are the same missing piece — an
+           inherited container is not a response header — and it is stated where it is reachable rather than
+           where it would be read. */
+        DCHECK(csp == NULL || !*csp,
+               "a CROSS-INSTANCE child navigable is inheriting its creator's CSP, and the `navigable.create` "
+               "notice carries the policy TEXT without CSP §2.2's SELF-ORIGIN of that list — the peer will "
+               "read the clone as its OWN response's policy (§2.2.2) and resolve `'self'` against the child's "
+               "address, so `script-src 'self'` on the creator would permit the child's origin and refuse the "
+               "creator's. Carry the inherited container as a container: a self-origin field on this notice "
+               "before the policy (the policy is the record's remainder), and an argument beside qjs_init's "
+               "`headers` that says this policy was INHERITED rather than delivered by a response");
         DCHECK(creation_flags == 0,
                "a CROSS-INSTANCE child navigable was created with a non-empty §7.1.5 CREATION SANDBOXING FLAG "
                "SET, and the `navigable.create` notice carries the creator's policy but not the flag set — so "

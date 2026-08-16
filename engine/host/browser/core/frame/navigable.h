@@ -100,10 +100,15 @@
    two algorithms produced the set depends on WHICH ALGORITHM IS CREATING THE DOCUMENT — §7.2's create hands
    the initial about:blank the creation flags alone, §7.5.1's create-and-initialize hands a navigated Document
    §7.4.5's union — so the caller states the whole set and the builder never re-derives it. */
+/* `csp_self_origin` is CSP §2.2's SELF-ORIGIN of that policy list, serialized — it rides beside `csp` because
+   it is the other half of one CSP list (§2.2 makes the list a struct of policies AND an origin) and because it
+   is the half the bytes do not contain: §2.2.2 states it from the RESPONSE's URL, and §7.4's clone hands the
+   CREATOR's to a document that came from no response. A builder that answered it from `origin` would be right
+   for an unsandboxed document loaded from its own address and wrong for both of those. */
 typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                    const char *top_level_url, const char *origin,
-                                   const char *csp, SandboxFlags sandbox_flags, uint32_t doc_id,
-                                   JSValueConst nav_proxy);
+                                   const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags,
+                                   uint32_t doc_id, JSValueConst nav_proxy);
 void navigable_set_realm_builder(RealmBuilder b);
 
 /* BUILD THE REALM OF A SAME-ORIGIN NAVIGABLE THIS AGENT HOLDS. The answer is BORROWED, and that is a statement
@@ -152,7 +157,7 @@ void navigable_set_realm_builder(RealmBuilder b);
    of those and the response policy's CSP-derived flags. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
-                           const char *csp, SandboxFlags sandbox_flags);
+                           const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags);
 
 /* THE AGENT'S HALF: §7.4's `open` member, declared once. */
 void navigable_init(JSContext *ctx);

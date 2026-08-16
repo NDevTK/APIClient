@@ -79,7 +79,10 @@ bool trusted_types_required_by(const char *csp_text, TrustedTypeKind expected)
 
     if (!csp_text) return false;
     memset(&list, 0, sizeof list);
-    csp_list_parse(&list, csp_text, strlen(csp_text));
+    /* NO SELF-ORIGIN: `require-trusted-types-for` names SINK GROUPS, not URLs, so this list is never asked to
+       match one and there is no `'self'` here to resolve. §6.7.2.7 asserts the origin is present, which is
+       what keeps that absence a statement rather than a hole. */
+    csp_list_parse(&list, csp_text, strlen(csp_text), NULL);
     required = tt_list_requires(&list, tt_sink_group(expected));
     csp_list_free(&list);
     return required;

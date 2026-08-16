@@ -382,16 +382,26 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
         bool url_is_real = scheme && !concolic_is(url);
 
         /* §4.1 MAIN FETCH STEP 7, and it runs HERE — before §4.3's scheme fetch, which is step 12 — because
-           that is the order the two steps are in. "If should request be blocked due to a bad port … returns
-           blocked, then set response to a network error", and §5.6 step 12's processResponse step 3 makes a
-           network error a rejected TypeError. It is the same settle §4.3's two local schemes reject through,
-           and it returns before the host is owed anything: a blocked request must never become a pending
-           entry, or the flow parks forever on a reply the trusted zone was never asked for.
+           that is the order the two steps are in. "If should request be blocked due to a bad port, should
+           fetching request be blocked as mixed content, or should request be blocked by Content Security
+           Policy returns blocked, then set response to a network error", and §5.6 step 12's processResponse
+           step 3 makes a network error a rejected TypeError. It is the same settle §4.3's two local schemes
+           reject through, and it returns before the host is owed anything: a blocked request must never
+           become a pending entry, or the flow parks forever on a reply the trusted zone was never asked for.
+           THE STEP IS ONE DISJUNCTION AND IS WRITTEN AS ONE. CSP §4.1.2 is the second of its three checks
+           (core/frame/policy_container.h), asked of THIS document's policy container with Fetch §2.2.5's
+           DESTINATION for a `fetch()`, which is the EMPTY STRING — §6.8.1's first row, and the reason
+           `connect-src` is the directive that governs this call. A fresh request has a REDIRECT COUNT of 0,
+           which is what makes a `script-src https://cdn/a/` path-part mean the path it says.
            A CONCOLIC IS ALLOWED, and soundly so rather than by omission: §2.9 asks whether the port is one of
            83 numbers, an unknown value answers neither yes nor no, and the solver's rule for an undecided
            predicate is that uncertainty KEEPS the arm. Blocking on the accident that a shape's text carried
-           `:25` would delete a real endpoint from the surface. */
-        if (url_is_real && fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED) {
+           `:25` would delete a real endpoint from the surface. The same sentence covers §4.1.2: a policy is
+           matched against a URL, and a shape is not the URL the request will go to. */
+        if (url_is_real &&
+            (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
+             policy_should_block_request(document_policy(ctx), &rec, /*destination*/ "",
+                                         /*redirect count*/ 0) == CSP_REQUEST_BLOCKED)) {
             JSValue value;
 
             JS_ThrowTypeError(ctx, "Failed to fetch");

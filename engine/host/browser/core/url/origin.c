@@ -173,6 +173,64 @@ const UrlHost *origin_effective_domain(const Origin *o)
     return &o->host;                                                        /* step 3 */
 }
 
+/* §7.1.1's TUPLE COMPONENTS — see origin.h for why they are not the effective domain and why an opaque origin
+   asserts instead of answering. The three are spelled separately rather than as one "give me the tuple"
+   accessor because the caller that reads them (CSP §6.7.2.8) reads them in three different comparisons, one of
+   which is a scheme relation and not an equality. */
+const char *origin_scheme(const Origin *o)
+{
+    DCHECK(o != NULL, "§7.1.1's scheme was asked of no origin");
+    DCHECK(!o->nonce, "the SCHEME of an OPAQUE origin was read — §7.1.1 gives an opaque origin no components "
+                      "at all, so a caller that needs one asks origin_is_opaque first and answers that case "
+                      "itself; an origin reaching here with a nonce means that question was never asked");
+    return o->scheme;
+}
+
+const UrlHost *origin_host(const Origin *o)
+{
+    DCHECK(o != NULL, "§7.1.1's host was asked of no origin");
+    DCHECK(!o->nonce, "the HOST of an OPAQUE origin was read — §7.1.1 gives an opaque origin no components at "
+                      "all, so a caller that needs one asks origin_is_opaque first");
+    return &o->host;
+}
+
+int origin_port(const Origin *o)
+{
+    DCHECK(o != NULL, "§7.1.1's port was asked of no origin");
+    DCHECK(!o->nonce, "the PORT of an OPAQUE origin was read — §7.1.1 gives an opaque origin no components at "
+                      "all, so a caller that needs one asks origin_is_opaque first");
+    return o->port;
+}
+
+bool origin_same_as_url(const Origin *o, const UrlRecord *u)
+{
+    UrlRecord scratch;
+    const UrlRecord *t;
+    Origin probe;
+    bool same;
+
+    DCHECK(o != NULL && u != NULL, "§7.1.1's same origin was asked with no origin, or about no URL");
+    t = origin_tuple_url(u, &scratch);
+    /* §4.7's every-other-scheme case is "return a NEW OPAQUE ORIGIN", and §7.1.1 step 1 compares IDENTITY — a
+       nonce minted here is same origin with nothing that already exists, so the answer is false and the record
+       never needs to be made. This is where the "cannot be same origin with themselves" note is cashed in. */
+    if (!t) {
+        url_record_free(&scratch);
+        return false;
+    }
+    /* THE PROBE IS NOT A MINT. It is never handed out, never appended to g_origins and never serialized, so it
+       needs neither an identity nor a lifetime; what it is, is §4.7's tuple origin for `u` — nonce zero, and
+       the three components url_record_free below still owns — so that §7.1.1 is decided by the ONE
+       implementation of it rather than by a second comparison written out here. */
+    memset(&probe, 0, sizeof probe);
+    probe.scheme = (char *)t->scheme;
+    probe.host = t->host;          /* BORROWED: url_host_equal reads it and origin_same keeps nothing */
+    probe.port = t->port;
+    same = origin_same(o, &probe);
+    url_record_free(&scratch);
+    return same;
+}
+
 void origin_set_domain(JSContext *ctx, JSValueConst owner, const Origin *o, const UrlHost *domain)
 {
     Origin *m = (Origin *)o;   /* §7.1.1's one mutable component — see origin.h */

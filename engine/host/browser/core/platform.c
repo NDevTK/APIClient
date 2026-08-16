@@ -244,7 +244,8 @@ static void i_dom_rect(JSContext *c, JSValueConst g, const PlatformDocument *d) 
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
 static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
-    document_install(c, g, d->dom, d->url, d->csp, d->sandbox_flags, d->doc_id, d->nav_proxy);
+    document_install(c, g, d->dom, d->url, d->csp, d->csp_self_origin, d->sandbox_flags, d->doc_id,
+                     d->nav_proxy);
 }
 static void i_domparser(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; domparser_install(c, g); }
 
