@@ -424,13 +424,23 @@ static int header_is_cors_unsafe_byte(unsigned char c)
     return (c < 0x20 && c != 0x09) || c == 0x7f || !!strchr("\"():<>?@[\\]{}", (char)c);
 }
 
-/* §5.1's "CORS-safelisted request-header". The four names each have their OWN value rule — this is not a name
+/* §5.1's "CORS-safelisted request-header". The names each have their OWN value rule — this is not a name
    list with a length cap bolted on, and treating it as one would let `Content-Type: application/json` through
    as safelisted, which is the whole difference between a preflighted request and one that is not. */
 static int header_is_cors_safelisted(const char *lower_name, const char *value)
 {
     size_t i, n = strlen(value);
 
+    /* §5.1 HAS A FIFTH ARM THIS COMPONENT HAS NOT BUILT: "`range`: Let rangeValue be the result of parsing a
+       single range header value given value and false. If rangeValue is failure, then return false. If
+       rangeValue[0] is null, then return false." — a suffix range like `bytes=-500` is deliberately NOT
+       safelisted. Every caller today reaches this through the no-CORS safelist, whose four names do not
+       include `range`, so the arm is unreachable; this is what makes it CRASH the day the CORS-unsafe
+       request-header names (the preflight computation) asks the question for real, rather than quietly
+       answering false and preflighting a request Chrome sends directly. */
+    DCHECK(strcmp(lower_name, "range") != 0,
+           "§5.1's CORS-safelisted request-header was asked about `range`, whose arm parses a single range "
+           "header value and is not built — build it here rather than letting this answer false");
     if (n > 128) return 0;
     if (!strcmp(lower_name, "accept")) {
         for (i = 0; i < n; i++) if (header_is_cors_unsafe_byte((unsigned char)value[i])) return 0;
@@ -465,24 +475,51 @@ static int header_is_cors_safelisted(const char *lower_name, const char *value)
     return 0;
 }
 
-/* §5.1's "no-CORS-safelisted request-header": one of FOUR names, and then the CORS rule for its value. */
+/* §5.1's "no-CORS-safelisted request-header NAME": one of four. It is its own predicate because `delete` asks
+   the NAME question on its own — with no value to ask the value question about. */
+static int header_is_no_cors_safelisted_name(const char *lower_name)
+{
+    return !strcmp(lower_name, "accept") || !strcmp(lower_name, "accept-language") ||
+           !strcmp(lower_name, "content-language") || !strcmp(lower_name, "content-type");
+}
+
+/* §5.1's "no-CORS-safelisted request-header": one of those four names, and then the CORS rule for its value. */
 static int header_is_no_cors_safelisted(const char *lower_name, const char *value)
 {
-    if (strcmp(lower_name, "accept") && strcmp(lower_name, "accept-language") &&
-        strcmp(lower_name, "content-language") && strcmp(lower_name, "content-type"))
-        return 0;
-    return header_is_cors_safelisted(lower_name, value);
+    return header_is_no_cors_safelisted_name(lower_name) && header_is_cors_safelisted(lower_name, value);
 }
 
-/* §5.1's "privileged no-CORS request-header name" — the one header a no-cors Headers may not even DELETE,
-   because the browser owns it outright. */
+/* §5.1's "privileged no-CORS request-header names" — stated ONCE, because two things read it: `delete`, which
+   lets one THROUGH (the browser's header is exactly what unprivileged code is allowed to drop), and "remove
+   privileged no-CORS request-headers", which strips every one of them after any unprivileged write. */
+static const char *const HEADER_PRIVILEGED_NO_CORS[] = { "range" };
+
 static int header_is_privileged_no_cors(const char *lower_name)
 {
-    return !strcmp(lower_name, "range");
+    size_t i;
+    for (i = 0; i < sizeof(HEADER_PRIVILEGED_NO_CORS) / sizeof(HEADER_PRIVILEGED_NO_CORS[0]); i++)
+        if (!strcmp(lower_name, HEADER_PRIVILEGED_NO_CORS[i])) return 1;
+    return 0;
 }
 
-/* §5.1 "validating (name, value) for headers", AFTER header_check has done the name/value syntax half.
-   Returns 1 to write, 0 to silently do nothing, -1 with a TypeError live. */
+/* §5.1 "remove privileged no-CORS request-headers": every append, set and delete under the "request-no-cors"
+   guard ends with it — "This is called when headers are modified by unprivileged code", and the spec's own
+   note beside the privileged list says such a header is "preserved if their associated request object is
+   copied, but will be removed if the request is modified by unprivileged APIs". */
+static void header_remove_privileged_no_cors(HeaderList *l)
+{
+    size_t i;
+    for (i = 0; i < sizeof(HEADER_PRIVILEGED_NO_CORS) / sizeof(HEADER_PRIVILEGED_NO_CORS[0]); i++)
+        header_list_delete(l, HEADER_PRIVILEGED_NO_CORS[i]);
+}
+
+/* §5.1 "validating (name, value) for headers", AFTER header_check has done step 1's name/value syntax half.
+   Returns 1 to write, 0 to silently do nothing, -1 with a TypeError live.
+   STEP 3 IS "request" AND NOT "request-no-cors". The spec says so twice — the step names one guard, and the
+   note under it says "Steps for 'request-no-cors' are not shared as you cannot have a fake value (for
+   delete()) that always succeeds in CORS-safelisted request-header". This asked the forbidden question for
+   both, which made `delete` under "request-no-cors" answer out of the forbidden list instead of out of that
+   guard's own step. */
 static int headers_guard_allows(JSContext *ctx, uint8_t guard, const char *name, const char *value)
 {
     char *lower = header_lower(name);
@@ -490,14 +527,55 @@ static int headers_guard_allows(JSContext *ctx, uint8_t guard, const char *name,
     if (guard == HEADERS_GUARD_IMMUTABLE) {
         JS_ThrowTypeError(ctx, "the headers are immutable");
         r = -1;
-    } else if ((guard == HEADERS_GUARD_REQUEST || guard == HEADERS_GUARD_REQUEST_NO_CORS) &&
-               header_is_forbidden_request(lower, value)) {
+    } else if (guard == HEADERS_GUARD_REQUEST && header_is_forbidden_request(lower, value)) {
         r = 0;
     } else if (guard == HEADERS_GUARD_RESPONSE && header_is_forbidden_response(lower)) {
         r = 0;
     }
     free(lower);
     return r;
+}
+
+/* §5.1 "APPEND A HEADER (name, value) TO A HEADERS OBJECT", steps 2-5, over the LIST and the GUARD — which is
+   all the algorithm reads. ONE function because the standard states it once and TWO callers run it: the
+   `append` member, and the FILL, which the standard defines as "append (key, value) to headers" for every
+   entry of the init and NOT as a list write of its own. The fill ran step 2 and then wrote the list itself,
+   so it skipped step 3 — `new Request(u, {mode:"no-cors", headers:{"X-Custom":"1"}})` kept a header every
+   browser drops — and its record arm REPLACED a same-named entry, so `new Headers({a:"1", A:"2"}).get("a")`
+   answered "2" where appending twice and combining gives "1, 2".
+   `norm` is the already-normalized value (step 1). Returns 0 for written OR silently refused — two outcomes
+   the spec does not let a caller distinguish — and -1 with a TypeError live. */
+static int headers_append_one(JSContext *ctx, HeaderList *l, uint8_t guard, const char *name, const char *norm)
+{
+    char *lower = header_lower(name);
+    int allow = headers_guard_allows(ctx, guard, name, norm);   /* step 2 */
+
+    /* step 3: under "request-no-cors" the header must be no-CORS-safelisted with the value it would END UP
+       with — appending a second 127-byte `accept` makes 255 bytes, which is not safelisted, so the append
+       does nothing. That is why this joins and `set` below does not. */
+    if (allow > 0 && guard == HEADERS_GUARD_REQUEST_NO_CORS) {
+        char *existing = header_list_get(l, lower), *combined = NULL;
+        const char *test = norm;
+        if (existing) {
+            size_t a = strlen(existing), b = strlen(norm);
+            combined = malloc(a + b + 3);
+            CHECK(combined, "headers: OOM joining a no-cors value");
+            memcpy(combined, existing, a);
+            combined[a] = ','; combined[a + 1] = ' ';
+            memcpy(combined + a + 2, norm, b);
+            combined[a + b + 2] = 0;
+            test = combined;
+        }
+        free(existing);
+        if (!header_is_no_cors_safelisted(lower, test)) allow = 0;
+        free(combined);
+    }
+    if (allow > 0) {
+        header_list_append(l, name, norm);                                          /* step 4 */
+        if (guard == HEADERS_GUARD_REQUEST_NO_CORS) header_remove_privileged_no_cors(l);   /* step 5 */
+    }
+    free(lower);
+    return allow < 0 ? -1 : 0;
 }
 
 enum { HDR_APPEND = 0, HDR_SET, HDR_DELETE, HDR_GET, HDR_HAS, HDR_GETSETCOOKIE, HDR_MEMBER_N };
@@ -542,59 +620,63 @@ static JSValue js_headers_member(JSContext *ctx, JSValueConst this_val, int argc
         if (value) JS_FreeCString(ctx, value);
         return JS_EXCEPTION;
     }
-    /* §5.1's guard decides which of the three WRITES may proceed. A read is not guarded at all: the page can
-       already see every one of these headers, so refusing to answer would hide state rather than protect it. */
-    if (magic == HDR_APPEND || magic == HDR_SET || magic == HDR_DELETE) {
-        char *lower = header_lower(name);
-        int allow;
-        /* §5.1's delete step 2: a PRIVILEGED no-CORS header is refused before validating even runs — a no-cors
-           Headers may not remove `Range`, because the browser owns it outright. */
-        if (magic == HDR_DELETE && h->guard == HEADERS_GUARD_REQUEST_NO_CORS &&
-            header_is_privileged_no_cors(lower)) {
-            free(lower);
+    /* §5.2's three WRITES each run their own steps; a read is not guarded at all, because the page can
+       already see every one of these headers and refusing to answer would hide state rather than protect it. */
+    switch (magic) {
+    case HDR_APPEND:
+        if (headers_append_one(ctx, l, h->guard, name, norm) < 0) {
             JS_FreeCString(ctx, name);
-            if (value) JS_FreeCString(ctx, value);
+            JS_FreeCString(ctx, value);
             free(norm);
-            return JS_UNDEFINED;
+            return JS_EXCEPTION;
         }
-        allow = headers_guard_allows(ctx, h->guard, name, norm);
-        /* §5.1's append step 3 and set step 3: under "request-no-cors" the header must still be NO-CORS
-           SAFELISTED once written. append tests the COMBINED value it would produce — appending a second
-           127-byte `accept` makes 255 bytes, which is not safelisted, so the append does nothing — while set
-           tests the value on its own, because set replaces rather than joins. */
+        break;
+    case HDR_SET: {
+        /* §5.2 set steps 2-5. Step 3 tests the value ON ITS OWN, because set REPLACES rather than joins. */
+        char *lower = header_lower(name);
+        int allow = headers_guard_allows(ctx, h->guard, name, norm);
         if (allow > 0 && h->guard == HEADERS_GUARD_REQUEST_NO_CORS &&
-            (magic == HDR_APPEND || magic == HDR_SET)) {
-            char *combined = NULL;
-            const char *test = norm;
-            if (magic == HDR_APPEND) {
-                char *existing = header_list_get(l, name);
-                if (existing) {
-                    size_t a = strlen(existing), b = strlen(norm);
-                    combined = malloc(a + b + 3);
-                    CHECK(combined, "headers: OOM joining a no-cors value");
-                    memcpy(combined, existing, a);
-                    combined[a] = ','; combined[a + 1] = ' ';
-                    memcpy(combined + a + 2, norm, b);
-                    combined[a + b + 2] = 0;
-                    test = combined;
-                }
-                free(existing);
-            }
-            if (!header_is_no_cors_safelisted(lower, test)) allow = 0;
-            free(combined);
+            !header_is_no_cors_safelisted(lower, norm))
+            allow = 0;
+        if (allow > 0) {
+            header_list_set(l, name, norm);
+            if (h->guard == HEADERS_GUARD_REQUEST_NO_CORS) header_remove_privileged_no_cors(l);
         }
         free(lower);
-        if (allow <= 0) {
+        if (allow < 0) {
             JS_FreeCString(ctx, name);
-            if (value) JS_FreeCString(ctx, value);
+            JS_FreeCString(ctx, value);
             free(norm);
-            return allow < 0 ? JS_EXCEPTION : JS_UNDEFINED;   /* 0 is the spec's SILENT no-op */
+            return JS_EXCEPTION;
         }
+        break;
     }
-    switch (magic) {
-    case HDR_APPEND: header_list_append(l, name, norm); break;
-    case HDR_SET:    header_list_set(l, name, norm); break;
-    case HDR_DELETE: header_list_delete(l, name); break;
+    case HDR_DELETE: {
+        /* §5.2 delete steps 1-5, and step 2 IS NOT WHAT STOOD HERE. It reads: "If this's guard is
+           'request-no-cors', name is not a no-CORS-safelisted request-header name, AND name is not a
+           privileged no-CORS request-header name, then return." A privileged name is one of the two that get
+           THROUGH — the note beside the privileged list says such a header "will be removed if the request is
+           modified by unprivileged APIs", so `delete("Range")` is exactly the call that must succeed. This
+           refused that one call and let every OTHER unsafelisted name through, which is both halves inverted.
+           Step 1 validates with the DUMMY value ``, which is why the method-override names are deletable. */
+        char *lower = header_lower(name);
+        int allow = headers_guard_allows(ctx, h->guard, name, "");
+        if (allow > 0 && h->guard == HEADERS_GUARD_REQUEST_NO_CORS &&
+            !header_is_no_cors_safelisted_name(lower) && !header_is_privileged_no_cors(lower))
+            allow = 0;
+        if (allow > 0) {
+            header_list_delete(l, name);
+            if (h->guard == HEADERS_GUARD_REQUEST_NO_CORS) header_remove_privileged_no_cors(l);
+        }
+        free(lower);
+        if (allow < 0) {
+            JS_FreeCString(ctx, name);
+            JS_FreeCString(ctx, value);
+            free(norm);
+            return JS_EXCEPTION;
+        }
+        break;
+    }
     case HDR_HAS: {
         char *v = header_list_get(l, name);
         r = JS_NewBool(ctx, v != NULL);
@@ -842,13 +924,10 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                 return -1;
             }
             bad = header_check(ctx, kn, kn_len, kv, kv_len, &norm) < 0;
-            if (!bad) {
-                /* §5.1 fill appends THROUGH the append algorithm, so the guard applies here too: a Request
-                   built with {headers:{Host:"x"}} silently drops it rather than sending it. */
-                int allow = headers_guard_allows(ctx, guard, kn, norm);
-                if (allow < 0) bad = 1;
-                else if (allow > 0) header_list_append(out, kn, norm);
-            }
+            /* §5.1 fill appends THROUGH the append algorithm — every step of it, not just the guard: a
+               Request built with {headers:{Host:"x"}} silently drops it, and a no-cors one drops every
+               header that is not no-CORS-safelisted. */
+            if (!bad) bad = headers_append_one(ctx, out, guard, kn, norm) < 0;
             free(norm);
             JS_FreeCString(ctx, kn);
             JS_FreeCString(ctx, kv);
@@ -918,29 +997,16 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                 JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
                 return -1;   /* §5.1's guard already threw */
             }
-            {
-                int allow = headers_guard_allows(ctx, guard, kname, knorm);
-                if (allow < 0) {
-                    free(knorm);
-                    JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
-                    return -1;
-                }
-                /* §3.2.21's MAP semantics: a record's keys are converted BEFORE they are stored, so two ES
-                   keys that convert to the same ByteString are ONE entry — the first's position, the last's
-                   value. The fill sees an already-deduped record, so at most one entry can match. */
-                if (allow > 0) {
-                    char *lo = header_lower(kname);
-                    int i, replaced = 0;
-                    for (i = 0; i < out->n; i++) {
-                        if (strcmp(out->e[i].name, lo)) continue;
-                        free(out->e[i].value);
-                        out->e[i].value = header_dup(knorm);
-                        replaced = 1;
-                        break;
-                    }
-                    free(lo);
-                    if (!replaced) header_list_append(out, kname, knorm);
-                }
+            /* §5.1: "Otherwise, object is a record, then for each key → value of object, APPEND (key, value)
+               to headers." §3.2.21's map semantics have ALREADY deduped the record — by its ByteString KEY,
+               which is case-SENSITIVE — so the two entries of `{a:"1", A:"2"}` both arrive and both append,
+               and `get("a")` combines them into "1, 2". A replace loop stood here matching on the LOWERCASED
+               header name, which is a different equivalence than the record's and belongs to no step: it
+               answered "2", and it is deleted rather than kept for the one shape it looked right on. */
+            if (headers_append_one(ctx, out, guard, kname, knorm) < 0) {
+                free(knorm);
+                JS_FreeCString(ctx, kname); JS_FreeCString(ctx, kval);
+                return -1;
             }
             free(knorm);
         }
