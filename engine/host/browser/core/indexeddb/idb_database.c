@@ -920,6 +920,14 @@ void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx)
         }
         JS_FreeValue(ctx, change);
     }
+    /* AND THE LIST ITSELF, which idb_transaction_changes hands over OWNED. Dropping it here was worth a whole
+       browser: the list is emptied when the transaction reaches finished, so what survived was an EMPTY Array
+       — and an Array holds Array.prototype, which holds the realm's function objects, each of which holds the
+       REALM. Three reverts in one fixture therefore kept 2612 Functions, 408 shapes and a JSContext at
+       refcount 3108 alive, reported by the runtime's leak walk as three anonymous `Array [ ] { length: 0 }`
+       with nothing naming an owner. idb_transaction_set_state now asserts that nobody is still holding one at
+       the moment the transaction finishes, which is where the next dropped reference will be named. */
+    JS_FreeValue(ctx, changes);
 }
 
 /* "ANY OBJECT STORES ... WHICH WERE CREATED DURING THE TRANSACTION" — one store, asked of the list the revert
