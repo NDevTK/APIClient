@@ -1178,6 +1178,28 @@ static const char *HTML =
       " var bad = 'no'; try { new Headers([['only-one']]); } catch (e) { bad = 'threw'; }"
       " var nul = 'no'; try { new Headers(null); } catch (e) { nul = 'threw'; }"
       " fetch('/api/hdrseq?g=' + a + '&m=' + b + '&a=' + c + '&bad=' + bad + '&nul=' + nul); })();"
+    /* THE RECORD'S DEDUP IS A DIFFERENT EQUIVALENCE THAN THE HEADER LIST'S, and that is the whole statement.
+       Web IDL §3.2.23 converts `record<ByteString, ByteString>` with "Let typedKey be key converted to an IDL
+       value of type K … Set result[typedKey] to typedValue" — K is ByteString, which does not case-fold, so
+       `X-Rec` and `x-rec` are TWO entries of the record and the fill sees both. §5.1's fill then "append(key,
+       value) to headers" for each, and §2.2.4's get returns "the values of all headers … separated from each
+       other by 0x2C 0x20": "r1, r2", over ONE name in the list. A replace loop matching the LOWERCASED name
+       stood in the fill and answered "r2" — one pair silently discarded, which for this tool is a header the
+       report would not carry. */
+    "(function(){ var h = new Headers({'X-Rec': 'r1', 'x-rec': 'r2'});"
+      " fetch('/api/hdrrec?v=' + h.get('x-rec') + '&k=' + Array.from(h.keys()).join('|')); })();"
+    /* HTML §4.10.22.8's ESCAPE, on the one input that shows it: a field name is written INSIDE QUOTES in the
+       part's Content-Disposition, so "the result of the encoding … must be escaped by replacing any 0x0A (LF)
+       bytes with the byte sequence `%0A`, 0x0D (CR) with `%0D` and 0x22 (") with `%22`. The user agent must
+       not perform any other escapes." Unescaped, `a"\r\nb` closes the quoted name and opens a second header
+       line — the part boundary forged from inside the body — so BOTH halves are asserted: the escaped spelling
+       is present AND the raw `a"` is absent, because a serializer that wrote the name twice would satisfy the
+       first alone. The name already carries a CRLF pair, which is exactly what step 1's newline normalization
+       leaves alone, so this statement is about the escape and nothing else. */
+    "(function(){ var fd = new FormData(); fd.append('a\"\\r\\nb', 'v');"
+      " new Response(fd).text().then(function(t){"
+      "   fetch('/api/mpesc?esc=' + (t.indexOf('name=\"a%22%0D%0Ab\"') >= 0)"
+      "     + '&raw=' + (t.indexOf('a\"') >= 0)); }); })();"
     /* THE TRANSPORT REQUIREMENT REACHES THE SURFACE. `init.headers` is read and converted, and the endpoint
        carries what the request needs — which is the half of "usable" the @H surface never had. The
        Authorization value is built out of `state`, so it is a CONCOLIC and reports its SHAPE: the `{hole}` is
@@ -3312,6 +3334,16 @@ int main(int argc, char **argv) {
                   strstr(js, "\"a1\"") &&
                   strstr(js, "\"bad\",\"validValues\":[\"threw\"]") &&
                   strstr(js, "\"nul\",\"validValues\":[\"threw\"]"));
+    /* §3.2.23's record dedup is by ByteString KEY and case-SENSITIVE, so both pairs of {'X-Rec','x-rec'} reach
+       the fill and both APPEND — `get` combines them into "r1, r2" over the one name the list holds. The fill's
+       old replace loop matched the lowercased HEADER name instead and answered "r2". */
+    int hdrrec = (strstr(js, "\"/api/hdrrec\"") && strstr(js, "\"v\",\"validValues\":[\"r1, r2\"]") &&
+                  strstr(js, "\"k\",\"validValues\":[\"x-rec\"]"));
+    /* §4.10.22.8's escape over a field name written inside quotes: `a"\r\nb` is `a%22%0D%0Ab`, and the RAW
+       quote must be gone — a body that carried it would let a page's own field name close the quoted name and
+       forge a part header. */
+    int mpesc = (strstr(js, "\"/api/mpesc\"") && strstr(js, "\"esc\",\"validValues\":[\"true\"]") &&
+                 strstr(js, "\"raw\",\"validValues\":[\"false\"]"));
     /* THE ENDPOINT CARRIES ITS HEADERS: the two literals as the strings the code computed, and the
        Authorization as a SHAPE, because a value built out of unknown input is not one this engine may invent.
        The method comes from the same init, so a POST recorded as a GET would fail here too. */
@@ -3710,6 +3742,7 @@ int main(int argc, char **argv) {
         { "body-iso", body_iso, 0 },       { "hdrs", hdrs, 0 },
         { "hdr-proxy", hdrproxy, 0 },      { "needs-auth", needsauth, 0 },
         { "hdr-iter", hdriter, 0 },        { "hdr-seq", hdrseq, 0 },
+        { "hdr-record", hdrrec, 0 },       { "mp-escape", mpesc, 0 },
         { "pending", pending_await, 0 },   { "promise-state", promise_state, 0 },
         { "delete-iso", delete_iso, 0 },   { "floc-iso", floc_iso, 0 },
         { "ua", uafork_tt, 0 },            { "touch", touchfork_tt, 0 },
