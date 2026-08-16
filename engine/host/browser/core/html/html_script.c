@@ -15,6 +15,7 @@
 #include "solver/engine.h"
 #include "core/dom/node.h"
 #include "core/dom/document.h"   /* which DOCUMENT this program belongs to: the realm it is compiled in */
+#include "core/loader/document_scripts.h"   /* §4.12.1's type-string steps, asked ONCE for both halves */
 #include "core/html/html_script.h"
 
 /* §4.12.1's `already started`, on the element's wrapper under a Symbol this file minted and never published —
@@ -177,6 +178,28 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el)
     /* STEP 1: "If el's already started is true, then return." This is the whole of what makes §13.4's fragment
        parse inert — the parsed script is in the tree, is queryable, serialises back out, and does not run. */
     if (script_already_started(ctx, n)) return;
+    /* THE TYPE-STRING STEPS, WHICH THIS HALF NEVER ASKED — so an injected `<script type="application/json">`
+       was handed to the compiler and RAN, as did an import map, while the document-scan half had recognised
+       both since it was written. One element, one question: `script_block_type` is that question, and the two
+       halves of §4.12.1 must not disagree about what a `type` attribute means. */
+    {
+        ScriptType st = script_block_type(el);
+        /* HTML's null and the two data types: "No script is executed." An import map and a set of speculation
+           rules are REGISTERED on the relevant global rather than evaluated, which is a capability this engine
+           does not have — and their absence is honest, because neither runs code. */
+        if (!script_type_executes(st)) return;
+        /* A MODULE cannot travel this route yet, and running it as a classic script is the exact defect the
+           document-scan half was just fixed for — it would come back a SyntaxError on the page's own `import`.
+           The route is engine_queue_script, whose entries the scheduler reads as DYN_PAGE_SCRIPT and compiles
+           with §8.1.3.3's CLASSIC entry; carrying MODULE means the flow's dynamic sequence carries a ScriptType
+           beside each body the way the document's sequence now does (solver/engine.h's `types`), and the
+           compile in flow_step then routes it to JS_FlowEvalModule exactly as it routes a document module. */
+        DCHECK(st != SCRIPT_TYPE_MODULE,
+               "a `<script type=module>` was inserted into the tree and this half can only queue a CLASSIC "
+               "program — give the flow's dynamic script sequence a ScriptType per entry (engine_queue_script "
+               "and solver/flow.h's dyn arrays), the way the document's sequence carries one, so flow_step "
+               "routes it to §8.1.3.3's module entry instead of compiling the page's `import` as a script");
+    }
     /* An UNKNOWN src is a URL this engine cannot fetch, but it is still a request the page makes — recorded so
        it reaches the @H surface as the shape it is, rather than disappearing. */
     t = dom_cow_attr_taint(el, "src");

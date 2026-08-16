@@ -1006,22 +1006,30 @@ static void wpt_page_error(const char *msg)
    body and its own JS_FlowNew: classic scripts do not share a top-level scope, and concatenating them would
    leak per-<script> let/const bindings between two files the page kept apart. The scheduler BORROWS the arrays
    for the life of the session, so they outlive every statement that builds them and are freed with the run;
-   `body` is taken (owned here from this point), `name` is copied. */
+   `body` is taken (owned here from this point), `name` is copied, and `type` is HTML §4.12.1's script type —
+   which of §8.1.3.3's two algorithms the scheduler runs this body through. A DOCUMENT test takes it from the
+   <script> element it came from; everything this runner supplies itself (the prologue, the epilogue, the
+   driver's META scripts and a `.any.js` test) is a CLASSIC script, which is a statement about those programs
+   rather than a default. */
 static char **g_prog_bodies, **g_prog_srcs;
+static ScriptType *g_prog_types;
 static int    g_prog_n, g_prog_cap;
 
-static void wpt_program(char *body, const char *name)
+static void wpt_program(char *body, const char *name, ScriptType type)
 {
     if (g_prog_n == g_prog_cap) {
         int cap = g_prog_cap ? g_prog_cap * 2 : 8;
         char **b = realloc(g_prog_bodies, (size_t)cap * sizeof *b);
         char **u = realloc(g_prog_srcs, (size_t)cap * sizeof *u);
-        CHECK(b != NULL && u != NULL, "wpt: OOM building this document's program sequence — a dropped program "
-                                      "is a document that runs something other than what it was served");
-        g_prog_bodies = b; g_prog_srcs = u; g_prog_cap = cap;
+        ScriptType *t = realloc(g_prog_types, (size_t)cap * sizeof *t);
+        CHECK(b != NULL && u != NULL && t != NULL,
+              "wpt: OOM building this document's program sequence — a dropped program "
+              "is a document that runs something other than what it was served");
+        g_prog_bodies = b; g_prog_srcs = u; g_prog_types = t; g_prog_cap = cap;
     }
     g_prog_bodies[g_prog_n] = body;
     g_prog_srcs[g_prog_n] = strdup(name);
+    g_prog_types[g_prog_n] = type;
     CHECK(body != NULL && g_prog_srcs[g_prog_n] != NULL, "wpt: OOM naming a program");
     g_prog_n++;
 }
@@ -1494,7 +1502,7 @@ static int wpt_child_main(int argc, char **argv)
             }
         }
     }
-    engine_sched_begin(ctx, ds.bodies, ds.srcs, ds.n, /*forking*/0, NULL);
+    engine_sched_begin(ctx, ds.bodies, ds.srcs, ds.types, ds.n, /*forking*/0, NULL);
     /* THE DOCUMENT RUNS BEFORE THE FIRST QUESTION ARRIVES, which is what makes a child a participant rather
        than an empty frame — message-opener.html's whole body is one script that posts to its opener, and that
        post has to be on this channel before the parent asks anything. */
@@ -1637,7 +1645,7 @@ int main(int argc, char **argv)
                cannot say which POST body a corpus handler is being asked to echo.) */
             DocScripts ds = document_exec_scripts(g_wpt_dom);
             for (i = 0; i < ds.n; i++) {
-                if (ds.bodies[i]) { wpt_program(strdup(ds.bodies[i]), g_test_url); continue; }
+                if (ds.bodies[i]) { wpt_program(strdup(ds.bodies[i]), g_test_url, ds.types[i]); continue; }
                 if (!ds.srcs[i]) continue;
                 {
                     size_t len = 0;
@@ -1650,12 +1658,12 @@ int main(int argc, char **argv)
                                 g_test_url, ds.srcs[i]);
                         continue;
                     }
-                    wpt_program(body, ds.srcs[i]);
+                    wpt_program(body, ds.srcs[i], ds.types[i]);
                 }
             }
             doc_scripts_free(&ds);
         } else {
-            wpt_program(strdup(WPT_PROLOGUE), "<wpt-prologue>");
+            wpt_program(strdup(WPT_PROLOGUE), "<wpt-prologue>", SCRIPT_TYPE_CLASSIC);
             /* THE HARNESS AND THE META SCRIPTS ARE PROGRAM INPUTS THE DRIVER RESOLVED, so they come from the
                paths it named; a `.sub.js` among them was fetched and substituted by the driver before it
                handed the path over. The TEST is not one of those — it is the run's ADDRESS — so it comes from
@@ -1664,7 +1672,7 @@ int main(int argc, char **argv)
                 size_t len = 0;
                 char *src = read_file(argv[i], &len);
                 if (!src) { fprintf(report_out(), "@WPTERR %s: cannot read\n", argv[i]); failed = 1; break; }
-                wpt_program(src, argv[i]);
+                wpt_program(src, argv[i], SCRIPT_TYPE_CLASSIC);
             }
             /* AND THE TEST ITSELF IS FETCHED, exactly as a document test is, because the reason is the same
                and it is not a reason about markup: a `.sub.` file is a TEMPLATE, and wptserve substitutes
@@ -1677,12 +1685,12 @@ int main(int argc, char **argv)
                 size_t len = 0;
                 char *src = wpt_get(g_test_url, &len);
                 CHECK(src != NULL, "wpt: the corpus server did not serve the test file");
-                wpt_program(src, g_test_url);
+                wpt_program(src, g_test_url, SCRIPT_TYPE_CLASSIC);
             }
         }
         /* THE EPILOGUE IS A PROGRAM OF THIS DOCUMENT LIKE THE REST — testharness.js hands its results to a
            completion callback and, outside a browser, has to be TOLD the page is done. */
-        if (!failed) wpt_program(strdup(WPT_EPILOGUE), "<wpt-epilogue>");
+        if (!failed) wpt_program(strdup(WPT_EPILOGUE), "<wpt-epilogue>", SCRIPT_TYPE_CLASSIC);
     }
 
     /* THE ONE SCHEDULER, over this document's programs. What stood here was a fabricated flow — one member
@@ -1697,7 +1705,7 @@ int main(int argc, char **argv)
        FORKING IS OFF: this gate measures the browser half against a spec oracle, so a concolic branch must not
        explore both arms — the same choice the child half makes, and the same one the @S candidate re-fire
        makes for its own reason. */
-    engine_sched_begin(ctx, g_prog_bodies, g_prog_srcs, g_prog_n, /*forking*/0, NULL);
+    engine_sched_begin(ctx, g_prog_bodies, g_prog_srcs, g_prog_types, g_prog_n, /*forking*/0, NULL);
     for (;;) {
         int r = engine_sched_step();
         int did;
@@ -1732,6 +1740,7 @@ int main(int argc, char **argv)
         for (k = 0; k < g_prog_n; k++) { free(g_prog_bodies[k]); free(g_prog_srcs[k]); }
         free(g_prog_bodies);
         free(g_prog_srcs);
+        free(g_prog_types);
         while (g_owed_n) wpt_owed_forget(g_owed_n - 1);
     }
 

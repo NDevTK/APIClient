@@ -199,6 +199,13 @@ static JSContext *g_sess_ctx;
 static uint32_t g_sess_doc;
 static char **g_sess_bodies;
 static char **g_sess_srcs;
+/* …AND WHICH OF §8.1.3.3'S TWO ALGORITHMS EACH ENTRY IS. It travels with the sequence rather than being asked
+   of the body because the body cannot answer: `await` at the top level parses in a module and is a SyntaxError
+   in a classic script, so a scheduler that guessed would report the page's own module as a broken program.
+   Read by flow_step at the compile, and only for `script_i < g_sess_n` — every DYNAMIC entry a flow adds is a
+   classic script by construction (§7.4.2.3.2's `javascript:` URL, a lazy chunk body, a `setTimeout` string, a
+   cross-agent operation's program), which is a positive statement about those rows and not a default. */
+static const ScriptType *g_sess_types;
 static int g_sess_n;
 static Flow *g_sess_cur;
 static int g_sess_live;
@@ -1939,6 +1946,49 @@ static const char *g_step_unit = "(none)";
 static long g_finished;
 static int  g_deepest = -1;
 
+/* HTML §8.1.3.3 "run a module script", step 6: "If preventErrorReporting is false, then upon rejection of
+ * evaluationPromise with reason, report an exception given by reason for script's settings object's global
+ * object." A module completes as a PROMISE — that is the whole difference between running a module script and
+ * running a classic one, and it is why a top-level `await` is observable — so its failure is not a completion
+ * the compile site can read the way it reads a classic script's throw. The reaction below is that step, and it
+ * ends in the same place a thrown script does: a page error naming the capability the page needed.
+ *
+ * IT IS ATTACHED WITH PerformPromiseThen AND NOT WITH `.then`, which is what the spec's "upon rejection of"
+ * means and matters twice over. Reading `then` off the promise runs whatever the page put on
+ * Promise.prototype, and it constructs through @@species; and the attach MARKS THE PROMISE HANDLED, which is
+ * observable — a page's `unhandledrejection` handler must NOT see a module that threw, because HTML has
+ * already claimed that rejection for the error report. Dropping the promise instead would have delivered every
+ * module's top-level throw as an unhandled rejection, which is a different event with a different name. */
+static JSValue module_eval_rejected(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    DCHECK(argc == 1, "the rejection reaction of a module script's evaluation promise ran without a reason — "
+                      "a promise reaction job calls its handler with exactly the settled value, so an argc "
+                      "other than 1 means this function was reached from something that is not one");
+    result_page_error_value(ctx, argv[0]);
+    return JS_UNDEFINED;
+}
+
+/* Attach that reaction. `ctx` is the PROGRAM's realm — the module's settings object's global is the document
+   the module belongs to, and a reaction function is a runtime-lifetime object that carries the realm it was
+   minted in, so it is minted here per evaluation rather than held in a static that would answer every
+   document's rejection with the first document's ctx. */
+static void module_report_rejection(JSContext *ctx, JSValueConst eval_promise) {
+    JSValue on_rejected = JS_NewCFunction(ctx, module_eval_rejected, "reportModuleScriptError", 1);
+    JSValue derived;
+    CHECK(!JS_IsException(on_rejected),
+          "the reaction that reports a module script's evaluation error could not be allocated — without it a "
+          "module that threw is silently delivered as an unhandled rejection instead of a page error");
+    derived = JS_PerformPromiseThen(ctx, eval_promise, JS_UNDEFINED, on_rejected);
+    CHECK(!JS_IsException(derived),
+          "HTML §8.1.3.3 step 6's rejection reaction could not be attached to a module script's evaluation "
+          "promise — the module's own failure would then have no reader at all");
+    /* The derived promise has no reader BY CONSTRUCTION: the handler returns undefined, so it fulfils, and a
+       fulfilled promise nobody reads is not an event. It is freed rather than kept because §8.1.3.3 returns
+       evaluationPromise to its caller and this one is only the capability PerformPromiseThen must produce. */
+    JS_FreeValue(ctx, derived);
+    JS_FreeValue(ctx, on_rejected);
+}
+
 static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
     /* A FLOW IS ABOUT TO RUN, SO THE TWO MARKS THAT SAY SO MUST BE ON. This is the ONE point a flow is driven
        (every JS_FlowNew / JS_FlowResume in this engine is below this line), which is why the claim is made
@@ -1972,6 +2022,13 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             const char *body;
             /* WHICH KIND the program about to be compiled is — only a page <script> must parse. */
             DynKind kind = DYN_PAGE_SCRIPT;
+            /* AND WHICH OF §8.1.3.3'S TWO ALGORITHMS RUNS IT. CLASSIC is the answer for every entry a FLOW
+               added, and that is a statement about those entries rather than a default waiting to be
+               overridden: §7.4.2.3.2's `javascript:` URL evaluates a classic script, a lazy chunk and a
+               `setTimeout` string are classic scripts, and a cross-agent operation's program is this engine's
+               own classic text. Only the DOCUMENT's own sequence has an element behind it, so only it can say
+               MODULE — which is why the row below is the one place this is read. */
+            ScriptType stype = SCRIPT_TYPE_CLASSIC;
             /* THE ROUTED DELIVERY THIS FLOW EXISTS TO MAKE, and it is first because it is the flow's reason to
                exist: the task it enqueues is what every branch below then finds on the queue. Consumed once —
                the record is freed and cleared — so a resumed delivery flow falls through to its jobs. */
@@ -2008,6 +2065,15 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             }
             if (f->script_i < n) {
                 body = bodies[f->script_i];
+                stype = g_sess_types[f->script_i];
+                /* THE SEQUENCE HOLDS ONLY EXECUTABLE SCRIPTS. document_exec_scripts drops an import map and a
+                   data block before either becomes a row, so a row whose type is neither of the two that
+                   execute is a producer that filled the array with something it never scanned — and the
+                   compile below would then pick an algorithm for a program that has none. */
+                DCHECK(script_type_executes(stype),
+                       "a row of the document's script sequence carries a type that does not execute — the "
+                       "sequence is built from the <script> elements that run, so every row is CLASSIC or "
+                       "MODULE and a third answer means the types array was never written for this row");
                 if (!body) {
                     /* AN EXTERNAL DOCUMENT SCRIPT whose text has not arrived. Classic scripts run in document
                        order, so the flow WAITS here rather than skipping ahead — running what comes after a
@@ -2094,9 +2160,6 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 if (g_referenced) return FLOW_STEP_OWED;
                 return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             }
-            /* NULL ScriptOrModule name: an inline page script's name is the DOCUMENT's URL, which this host does
-               not model yet — nothing here has one to give. It is what a relative `import('./chunk.js')` resolves
-               against, so the moat's lazy-chunk surface needs the document URL plumbed to this call. */
             g_step_unit = "compile-program";
             /* NO REPLAY, asserted at the only place a program can start. A flow compiles each entry of its
                sequence once and thereafter RESUMES the suspended frame; reaching this line again for an index
@@ -2120,9 +2183,48 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                than by a `? :` per kind: the kinds that used to need one are exactly the kinds whose document is
                not the session's, and there is no upper limit on those (a same-origin agent cluster holds a
                realm per document). */
-            f->frame = JS_FlowNew(doc_realm(flow_dyn_doc(f, n)),
-                                  body, strlen(body), NULL, 0);   /* page <script>/chunk: classic non-strict global */
-            if (f->frame == NULL) {
+            JSContext *prog_ctx = doc_realm(flow_dyn_doc(f, n));
+            /* THE PROGRAM'S NAME IS ITS DOCUMENT'S ADDRESS, which is HTML §4.12.1's "let base URL be el's node
+               document's document base URL" for an inline script and is what a relative `import('./chunk.js')`
+               resolves against — the moat's whole lazy-chunk surface. This used to be NULL under a comment
+               saying the document URL was something "this host does not model yet", and that claim had stopped
+               being true: document_base_url is in a header this file already includes, and it is the ONE
+               component that owns what a document's address is. A name that is not the document's is also not a
+               name two documents can differ by, and the compile above is explicitly per-document. */
+            const char *prog_name = document_base_url(prog_ctx);
+            /* A MODULE IS A DIFFERENT ALGORITHM, NOT A FLAG — §8.1.3.3 has two entries and this is where they
+               part. A CLASSIC script is a program: JS_FlowNew wraps it in a preemptible frame the scheduler
+               resumes, and it completes with a VALUE. A MODULE is a graph: it is linked and evaluated, its body
+               is an async function on the flow machinery's own seam (so a top-level `await` and a loop
+               back-edge PARK it into the slot JS_ResumeParkedFlow drains at the top of this loop), and Evaluate
+               completes with a PROMISE — which is exactly why `await` at a module's top level is observable and
+               is a SyntaxError in the classic entry. Compiling every entry with JS_EVAL_TYPE_GLOBAL is how
+               `<script type=module>` reached this line indistinguishable from a classic one and came back a
+               SyntaxError from a parser that is fine. */
+            int started;   /* did the program START? — a classic gets a frame, a module has already evaluated */
+            if (stype == SCRIPT_TYPE_MODULE) {
+                JSValue ev;
+                /* AN EXTERNAL MODULE'S NAME IS ITS OWN URL, NOT ITS DOCUMENT'S, and unlike a classic script's
+                   name that difference decides answers: the name is the module map KEY and the base every
+                   nested specifier resolves against, so two `<script type=module src>` in one document keyed by
+                   the document's address are ONE module — the second one's graph would find the first one's
+                   record and evaluate nothing. The URL to key it by is §4.12.1's "encoding-parsing a URL given
+                   src, relative to el's node document", which is core/url's `url_parse` against the document's
+                   record; the sequence carries `src` as the raw ATTRIBUTE and nothing has resolved it. */
+                DCHECK(!(f->script_i < n && g_sess_srcs[f->script_i]),
+                       "an EXTERNAL module script reached the compile with only its document's address to be "
+                       "named by — its own URL is its module map key and its import resolution base, so build "
+                       "§4.12.1's encoding-parse of the src attribute against the document (core/url's "
+                       "url_parse with the document's record as base) and carry the resolved URL here");
+                ev = JS_FlowEvalModule(prog_ctx, body, strlen(body), prog_name, 0);
+                started = !JS_IsException(ev);
+                if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.3.3 step 6 */
+                JS_FreeValue(prog_ctx, ev);
+            } else {
+                f->frame = JS_FlowNew(prog_ctx, body, strlen(body), prog_name, 0);   /* classic non-strict global */
+                started = (f->frame != NULL);
+            }
+            if (!started) {
                 /* WHAT ACTUALLY FAILED, read before anything is decided from it. A compile can fail two ways
                    and they are not the same event: a SyntaxError is the program's, and OUT OF MEMORY is the
                    physical floor — the frontier could not hold another flow. Reporting the second as the first
@@ -2156,7 +2258,10 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    URL that does not parse is HTML §7.4.2.3.2's abrupt evaluation, which produces no Document and
                    no navigation — `<a href="javascript:{{{">` is a link that does nothing, not an engine bug. A
                    PAGE script that does not compile is a different thing entirely and still asserts. */
-                DCHECK(kind != DYN_PAGE_SCRIPT, "flow_step: a page <script>/chunk did not compile");
+                DCHECK(kind != DYN_PAGE_SCRIPT,
+                       "flow_step: a page <script>/chunk did not start — a classic script that did not COMPILE, "
+                       "or a module script whose graph did not LINK (the two ways §8.1.3.3's entries fail "
+                       "before they run)");
                 /* A CROSS-AGENT OPERATION'S PROGRAM IS THE ENGINE'S OWN TEXT (core/frame/remote_op.c), so it
                    parses or this engine wrote it wrong — and skipping it would leave the peer's flow parked on
                    an answer that is now never coming. */
@@ -2173,6 +2278,14 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 f->script_i++;
                 return 0;
             }
+            /* A MODULE HAS ALREADY RUN AS FAR AS IT GOES IN THIS UNIT, so this entry is finished here and the
+               flow leaves with no frame of its own. There is nothing for the resume below to hold: a module
+               body is an async activation the flow machinery owns, not a program handle — it parked itself into
+               the slot the top of this loop drains (a top-level `await`, or a loop back-edge under the forced
+               preempt), and the scheduler resumes it there like every other parked continuation. Its evaluation
+               promise settling is likewise a FLOW resuming and not a drain: the reaction is a job on THIS
+               flow's queue, run by the run-one-job branch above, which is why nothing here waits for it. */
+            if (stype == SCRIPT_TYPE_MODULE) { f->script_i++; return 0; }
         }
         {
             /* A <script>'s completion value is not observable to the page (only an eval API surfaces one), so it is
@@ -2554,7 +2667,8 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     return 1;
 }
 
-void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking, const char *recipes) {
+void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n,
+                        int forking, const char *recipes) {
     DCHECK(!g_sess_live, "engine_sched_begin while a session is already running — one scheduler, one session");
     /* A JOB THAT WAS ENQUEUED BEFORE THIS LINE IS A DROPPED WORK ITEM, and this is the one place it can be
        caught. The enqueue hook is installed BELOW, so anything queued earlier went to quickjs's own global
@@ -2575,7 +2689,14 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int f
            "never drains, so it is a work item the frontier will never run: the document was installed before "
            "the scheduler existed and §4.8.5's insertion steps enqueued §7.4's load for an <iframe src> in the "
            "initial markup");
-    g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_srcs = srcs; g_sess_n = n; g_sess_cur = NULL; g_sess_live = 1;
+    g_sess_ctx = ctx; g_sess_bodies = bodies; g_sess_srcs = srcs; g_sess_types = types; g_sess_n = n;
+    g_sess_cur = NULL; g_sess_live = 1;
+    /* THE THREE ARRAYS ARE ONE SEQUENCE, so a session opened with a length and only two of them is a sequence
+       whose third column the compile would read off the end. Asserted where the borrow is taken, because that
+       is the last moment the caller that built them is still on the stack. */
+    DCHECK(n == 0 || (bodies != NULL && srcs != NULL && types != NULL),
+           "a session was opened over a script sequence missing one of its three columns — bodies, srcs and "
+           "types are one table with one length, and the compile reads all three");
     /* THE DOCUMENT THIS SESSION IS OF. A session is opened over the instance's ROOT document, and its script
        sequence is that document's — asserted against the realm rather than assumed, because everything below
        compiles by asking the DOCUMENT for its realm and a session whose ctx is some other document's realm
@@ -3221,12 +3342,12 @@ static size_t engine_c_alloc_arena(void)
 static int (*g_provider)(JSContext *ctx);
 void engine_set_provider(int (*provide)(JSContext *ctx)) { g_provider = provide; }
 
-static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int forking) {
+static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n, int forking) {
     int next = ENGINE_PROGRESS_EVERY, last_cands = -1, r;
     /* NO PARKED RESIDUE: this driver is a host with nothing else to do and no store to have kept one in — it
        runs a document to exhaustion in one call. The cold tier's resume belongs to the host that has an
        IndexedDB to have written the residue to, which is the extension's. */
-    engine_sched_begin(ctx, bodies, srcs, n, forking, NULL);
+    engine_sched_begin(ctx, bodies, srcs, types, n, forking, NULL);
     for (;;) {
         r = engine_sched_step();
         if (r == ENGINE_STEP_DONE)
@@ -3492,5 +3613,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
 }
 
 /* EXPLORE: seed boot + drain the frontier, forking at every concolic branch. */
-void engine_run(JSContext *ctx, char **bodies, char **srcs, int n) { run_scheduler(ctx, bodies, srcs, n, 1); }
+void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n) {
+    run_scheduler(ctx, bodies, srcs, types, n, 1);
+}
 

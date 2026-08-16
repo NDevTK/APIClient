@@ -1948,7 +1948,7 @@ int main(int argc, char **argv) {
     engine_set_provider(fixture_provide);
 
     DocScripts scripts = document_exec_scripts(dom);   /* each <script> its own program body — no concat */
-    engine_run(ctx, scripts.bodies, scripts.srcs, scripts.n);         /* @H + @S detection */
+    engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.n);   /* @H + @S detection */
     /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */
     doc_scripts_free(&scripts);
     lxb_html_document_destroy(dom);

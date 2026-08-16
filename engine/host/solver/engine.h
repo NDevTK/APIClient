@@ -9,6 +9,7 @@
 #define ENGINE_HOST_SOLVER_ENGINE_H
 
 #include "core/fetch/fetch.h"
+#include "core/loader/script_type.h"   /* which of §8.1.3.3's two algorithms runs entry i — see `types` below */
 #include "quickjs.h"
 
 /* Run the page's scripts as one code flow: each script `bodies[i]` is its OWN program (JS_FlowNew — faithful
@@ -77,7 +78,7 @@ void engine_prepare_fork(void *dec_blob, void *pin_blob);
 
 /* Run the scripts to frontier exhaustion: seed the first flow, bracket each run with the decision state +
    per-flow COW delta, and drain the frontier by WFQ order. */
-void engine_run(JSContext *ctx, char **bodies, char **srcs, int n);
+void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n);
 
 /* THE SESSION — the same dispatch loop, stepped by its HOST instead of drained. The extension's host has other
    work between quanta (its message port, other documents' engines, streaming findings), and CLAUDE.md's
@@ -151,8 +152,15 @@ void engine_set_provider(int (*provide)(JSContext *ctx));
 /* `recipes` is the PARKED RESIDUE the host stored for this bundle (';'-joined records — see solver/cold.h), or
    NULL/"" for a document with none. It seeds the frontier INSTEAD of the boot flow, never beside it: a resumed
    flow re-runs the same document under its own recorded arms, so adding a fresh boot flow would explore the
-   un-forked path twice and re-fork every branch the residue already stands on. */
-void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, int n, int forking, const char *recipes);
+   un-forked path twice and re-fork every branch the residue already stands on.
+   `types[i]` is entry i's HTML §4.12.1 script type, and it is what the compile ASKS rather than assumes: a
+   classic script is wrapped in a preemptible program frame (JS_FlowNew) and completes with a value, while a
+   MODULE is linked and evaluated (JS_FlowEvalModule) and completes with a PROMISE. The scheduler cannot
+   recover the kind from the body — `await` at the top level is a SyntaxError in one and legal in the other,
+   which is exactly the difference that has to arrive from the element. The array is BORROWED for the life of
+   the session, like `bodies` and `srcs`. */
+void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n,
+                        int forking, const char *recipes);
 int  engine_sched_step(void);
 
 /* THE RAM→DISK FLOOR. The HOST sees the pressure (it is the only zone that knows the other documents' engines
