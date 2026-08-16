@@ -27,10 +27,19 @@
    box is CSS 2.1 §10.3.2's default for a replaced element with no intrinsic dimensions: 300 x 150. That is the
    spec's own number rather than a second UA choice, which is why it is stated here as a derivation and not as
    a preference.
-   AN AUTHOR STYLE THAT RESIZES THE FRAME IS NOT MODELLED, and that is a layout gap rather than a viewport one:
-   `iframe { width: 500px }` is a cascade this engine has no CSS parser for, so the used width it produces does
-   not exist to be read. The moment there is a layout, this size comes from the container element's used
-   content box and this constant goes with it. */
+   AN AUTHOR STYLE THAT RESIZES THE FRAME IS NOT MODELLED, and NAMING WHAT IS MISSING IS THE WHOLE POINT OF
+   THIS PARAGRAPH: it used to say `iframe { width: 500px }` "is a cascade this engine has no CSS parser for, so
+   the used width it produces does not exist to be read", and that stopped being true. There IS a cascade —
+   core/css/css_style_declaration.c resolves an author declaration out of the style sheet OBJECTS §6.2's list
+   holds — and there IS a used value over it: core/layout/used_value.h's `used_value_px(el, "width")`. A
+   sentence that keeps advertising an absent component sends the next reader to build one that is already here,
+   which is the failure mode CLAUDE.md §Disposition names for a stale DFAIL.
+   WHAT IS ACTUALLY MISSING IS THE REACH, and it is a fact about this file rather than about CSS: the container
+   ELEMENT is not obtainable from here. `viewport_width` is asked with a child realm's ctx, walks to its
+   WindowProxy, and neither core/frame/window_proxy.h nor core/frame/navigable.h exports the navigable's
+   container element — no member of either header names a `lxb_dom_element_t` at all. BUILD THAT: a navigable's
+   container element beside its parent, and this entry becomes `used_value_px(container, "width")` with the
+   300 x 150 below surviving only as §10.3.2's answer for a replaced element the cascade sized `auto`. */
 #define VIEWPORT_CHILD_WIDTH  300.0
 #define VIEWPORT_CHILD_HEIGHT 150.0
 
