@@ -693,27 +693,19 @@ static void cow_restore_base(JSContext *ctx, CowEntry *e) {
     }
     if (e->vref) { JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->base)); return; }
     uint32_t ai;
-    if (e->existed) {
-        /* THE BASELINE VALUE, PUT BACK — AND ASSERTED, because a restore that does not LAND is how the missing
-           half of an entry surfaces, and until this line it did not surface at all.
-           THE READ SIDE ALREADY DREW THIS LINE AND THE WRITE SIDE NEVER DID: JS_GetOwnSlot is "a SLOT's stored
-           value, never an operation", and asserts that neither a Proxy nor an accessor can reach it. This is a
-           [[Set]] — an operation THROUGH the slot — so it refuses whatever the flow left behind that a [[Set]]
-           cannot reach, and it refuses by THROWING (it carries JS_PROP_THROW) inside a context switch that has
-           no flow base to run an exception on. THREE shapes reach it today: a slot the flow narrowed with a
-           define (Object.freeze, `{writable:false}`), which this entry holds no ATTRIBUTES to widen back; a
-           slot the flow DELETED off a non-extensible object, which a [[Set]] may not re-create; and a capture
-           whose write then THREW, which is a spurious entry over a slot that was already read-only (`Math.PI =
-           1` in a flow captures, fails, and comes back here). Each one silently left a pending TypeError
-           belonging to no flow, which the next thing to check for an exception read as its own. */
-        int put = JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->base));
-        DCHECK(put > 0,
-               "a captured slot's baseline value could not be put back: the restore is a [[Set]] where it must "
-               "WRITE THE SLOT, so it refuses a slot this flow narrowed to non-writable or deleted off a "
-               "non-extensible object — build JS_GetOwnSlot's write twin, and give the entry the DESCRIPTOR "
-               "(the C/W/E flags, and the accessor pair JS_GetOwnSlot refuses on both sides of the round trip) "
-               "so there is something to put back");
-    }
+    if (e->existed)
+        /* THE BASELINE VALUE, PUT BACK — as a SLOT WRITE, which is the same thing the read side has always been.
+           This was a JS_SetProperty: a [[Set]], an operation THROUGH the slot, which walks the prototype chain,
+           calls a setter, and consults `writable` and `extensible` — and refuses by THROWING (it carries
+           JS_PROP_THROW) inside a context switch with no flow base to run the exception on. Three shapes reached
+           it and each left a pending TypeError belonging to no flow, which the next thing to check for an
+           exception read as its own: a slot the flow narrowed with a define (Object.freeze, `{writable:false}`);
+           a slot the flow DELETED off a non-extensible object; and a SPURIOUS capture whose write then threw
+           (`Math.PI = 1` in a flow captures, fails, and comes back here to put back a value the slot never
+           stopped holding). None of them can arise now: JS_SetOwnSlot asks none of those questions, so there is
+           no status here to check and nothing left for an assert to report. What the entry still cannot express
+           is the slot's ATTRIBUTES — the descriptor entry, which the asserts that name it still guard. */
+        JS_SetOwnSlot(ctx, e->obj, e->atom, JS_DupValue(ctx, e->base));
     else if (JS_IsArrayIndexSlot(e->obj, e->atom, &ai))
         /* flow-CREATED array append: TRUNCATE the array to this index (frees the tail), removing it. Entries
            are processed in reverse (highest index first), so a contiguous run of appends shrinks one-by-one
@@ -721,7 +713,16 @@ static void cow_restore_base(JSContext *ctx, CowEntry *e) {
            would convert the fast array to slow and leave the LENGTH standing, which nothing else would take
            back down — the array's length is derived from these entries rather than captured as the slot it is. */
         JS_ArraySetLength(ctx, e->obj, ai);
-    else JS_DeleteProperty(ctx, e->obj, e->atom, 0);
+    else {
+        /* THE FLOW'S OWN CREATION, REMOVED — and the removal is CHECKED, which is the same omission the value
+           restore above had: the result was dropped on the floor, so a slot this delta cannot take back out
+           stood in the baseline for every sibling with nothing to say so. The mirror of cow_apply_entries'
+           re-delete assert, and it names the same missing half. */
+        int deleted = JS_DeleteProperty(ctx, e->obj, e->atom, 0);
+        DCHECK(deleted > 0, "a slot this flow CREATED could not be removed from the baseline: a define made it "
+                            "non-configurable and an entry records a slot's VALUE and never its ATTRIBUTES, so "
+                            "build the descriptor entry beside the value");
+    }
 }
 
 /* A SAVE IS A READ OF THE SAME HEAP A RESTORE WRITES, so ALL of one segment's entries are read BEFORE ANY of
@@ -773,7 +774,13 @@ static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
                    "there is no deletion of one for apply to replay");
             JS_VarRefSetValue(ctx, e->vref, JS_DupValue(ctx, e->cur));
         } else if (e->cur_state == COW_CUR_PRESENT) {
-            JS_SetProperty(ctx, e->obj, e->atom, JS_DupValue(ctx, e->cur));
+            /* THE FLOW'S OWN VALUE, REPLAYED — the same slot write cow_restore_base makes, and for the same
+               reason, with one difference that made it worse here: it was a JS_SetProperty whose result nothing
+               looked at at all. An entry records a VALUE and never the ATTRIBUTES, so a slot narrowed to
+               non-writable — by this flow's own `Object.freeze` on shared state, which the unapply has no
+               descriptor to widen back, or by a sibling's — refused the replay by THROWING a TypeError into a
+               context switch that had no flow to own it, and the flow then resumed without the value it wrote. */
+            JS_SetOwnSlot(ctx, e->obj, e->atom, JS_DupValue(ctx, e->cur));
         } else {
             /* THE FLOW'S OWN DELETE, REPLAYED AS A DELETE. The chain below has just put the slot back (it is
                baseline state, which is the only kind that gets captured), and writing `cur` over it would put
