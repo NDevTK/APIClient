@@ -31,6 +31,7 @@
 #include "browser/core/frame/window_message.h"
 #include "browser/core/frame/remote_object.h"
 #include "browser/core/html/html_iframe.h"
+#include "browser/core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "browser/core/frame/navigable.h"
 #include "browser/core/frame/navigation_params.h"
 #include "browser/core/frame/secure_context.h"
@@ -335,8 +336,8 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
 
     g_dom = dom_document_create();
     CHECK(g_dom != NULL, "the document allocation failed");
-    if (lxb_html_document_parse(g_dom, (const lxb_char_t *)(html ? html : ""),
-                                html ? strlen(html) : 0) != LXB_STATUS_OK)
+    if (html_parse_document(g_dom, (const lxb_char_t *)(html ? html : ""),
+                            html ? strlen(html) : 0) != LXB_STATUS_OK)
         CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
 
     /* Identity and script inventory from the DOM's OWN executable scripts: a concatenation of them cannot

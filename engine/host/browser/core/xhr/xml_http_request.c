@@ -67,6 +67,7 @@
 #include "core/fetch/request.h"
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
+#include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/mime/mime_type.h"
 #include "core/url/url.h"
 #include "core/url/url_search_params.h"
@@ -931,7 +932,7 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
            the spec's "the XML parser failed" null would be a claim about a parse that never happened. */
         mime_type_free(&final_mime);
         DFAIL("XMLHttpRequest §3.6.6 'set a document response' reached its XML arm — build an XML parser "
-              "(lexbor has no xml module; the HTML arm is lxb_html_document_parse) and route this branch to it");
+              "(lexbor has no xml module; the HTML arm is html_parse_document) and route this branch to it");
         return;
     }
     /* Step 10's content type. DOM §4.5 gives a document a content type that is a STRING, and every other place
@@ -948,7 +949,7 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
        string boundary rather than by the prescan") described a boundary that no longer exists. What is still
        owed is the prescan itself: §3.6.6 step 5 runs the final encoding, then HTML §13.2.3.3's meta-charset
        prescan, then UTF-8, and this arm runs the third of those three. */
-    CHECK(lxb_html_document_parse(dom, (const lxb_char_t *)bytes, len) == LXB_STATUS_OK,
+    CHECK(html_parse_document(dom, (const lxb_char_t *)bytes, len) == LXB_STATUS_OK,
           "XMLHttpRequest: the response document could not be parsed");
     url = JS_ToCString(ctx, d->response_url);
     JS_FreeValue(ctx, d->response_object);

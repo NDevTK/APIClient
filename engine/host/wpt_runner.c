@@ -44,6 +44,7 @@
 #include "core/fetch/request.h"
 #include "core/fetch/fetch.h"
 #include "core/url/url.h"
+#include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/frame/navigation_params.h"
 #include "core/frame/secure_context.h"
 #include "core/url/url_search_params.h"
@@ -1337,7 +1338,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
 
     g_wpt_dom = dom_document_create();
     CHECK(g_wpt_dom != NULL, "the runner's document allocation failed");
-    CHECK(lxb_html_document_parse(g_wpt_dom, (const lxb_char_t *)src, html_n) == LXB_STATUS_OK,
+    CHECK(html_parse_document(g_wpt_dom, (const lxb_char_t *)src, html_n) == LXB_STATUS_OK,
           "the runner's document did not parse");
     free(fetched);
 

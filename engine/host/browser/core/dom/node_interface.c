@@ -13,6 +13,7 @@
 #include "core/dom/node.h"          /* node_template_content — the ONE spelling of where a template's markup is;
                                        node_wrap_forget / node_agent_runtime — the dying node hands its wrapper back */
 #include "core/dom/node_heap.h"
+#include "core/html/html_parse.h"   /* the ONE place a Document is parsed — the destroy asserts it was that one */
 #include "core/dom/node_interface.h"
 #include "solver/attr_shadow.h"     /* …and the taint slots keyed on the dying element go with it */
 
@@ -302,6 +303,16 @@ void dom_document_destroy(lxb_html_document_t *dom)
            "a document is being destroyed that does not destroy its nodes through this engine's dispatcher — "
            "it was not built by dom_document_create, so it never took the agent's heap and this entry would "
            "hand back arenas it does not hold");
+    /* AND ITS PARSE WENT THROUGH core/html/html_parse.h, asked here because this is the one line every
+       document reaches and because a list of parse call sites that must remember is how the next one comes to
+       be forgotten. `lxb_html_document_parse` CREATES the parser it uses, so a document that reached lexbor's
+       entry directly is holding a tokenizer this engine never took ownership of — and every DOCTYPE token
+       that parse produced left the bytes of its ids in the agent's text arena with nothing naming them, which
+       node_heap_detach then reports as a count with no cause. */
+    DCHECK(html_parse_owns_tokens_of(doc),
+           "a document is being destroyed whose parse did not go through core/html/html_parse.h — it holds an "
+           "HTML parser this engine did not build, so its tokens' attribute values had no owner and each "
+           "doctype id in that markup is one text allocation the agent's heap can never give back");
     /* `lxb_dom_node_destroy_deep` DETACHES each node before it frees it, so the document's child list drains
        as the loop runs; it is iterative, so the depth of the page's markup costs no C stack. */
     while ((child = doc->node.first_child) != NULL)

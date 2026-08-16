@@ -13,6 +13,7 @@
 #include "core/frame/window_features.h"
 #include "core/dom/document.h"
 #include "core/html/html_iframe.h"   /* §7.2.5's document-tree child navigables — §7.1's walk descends them */
+#include "core/html/html_parse.h"    /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
 #include "core/url/url.h"
 #include "core/encoding/encoding.h"   /* §6's UTF-8 decode, which §7.4.2.3.2 step 3 runs on a percent-decoding */
@@ -189,8 +190,8 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
           "CYCLE (its function objects hold their realm and its Window holds them), the collector breaks it, "
           "and the teardown that follows is split by phase in quickjs.c so the reference releases run inside "
           "the collection and the tables in the sweep after it");
-    CHECK(lxb_html_document_parse(dom, body ? (const lxb_char_t *)body : (const lxb_char_t *)EMPTY,
-                                  body ? body_len : sizeof EMPTY - 1) == LXB_STATUS_OK,
+    CHECK(html_parse_document(dom, body ? (const lxb_char_t *)body : (const lxb_char_t *)EMPTY,
+                              body ? body_len : sizeof EMPTY - 1) == LXB_STATUS_OK,
           "a child navigable's Document did not parse");
     return dom;
 }

@@ -83,10 +83,13 @@ void node_heap_detach(lxb_dom_document_t *doc);
  *   - Text, Comment, CDATASection, ProcessingInstruction:
  *                 `char_data.data.data`          (`lxb_dom_character_data_interface_destroy` → `doc->text`)
  *   - ProcessingInstruction, additionally: `target.data`                            → `doc->text`
- *   - DocumentType: `public_id.data`, `system_id.data`                              → `doc->mraw`
- *                 (NOT `doc->text`, though lexbor's own destroy frees them there — `lxb_html_token_doctype_parse`
- *                 allocates both from `mraw`. core/dom/document_type.h states why that mismatch is fatal here and
- *                 harmless upstream, and core/dom/document_type.c is the destroy that resolves it.)
+ *   - DocumentType: `public_id.data`, `system_id.data`                → EITHER arena, and the answer is ASKED
+ *                 (`node_heap_arena_of` below). §4.6 has three constructors and they disagree —
+ *                 `lxb_html_token_doctype_parse` allocates both from `mraw` while
+ *                 `lxb_dom_document_type_interface_clone` and `lxb_dom_document_type_create` use `text` — so
+ *                 there is no arena this list can name without being false for one of them. lexbor's own
+ *                 destroy names `text` for all three; core/dom/document_type.h states why that mismatch is
+ *                 fatal here and harmless upstream, and core/dom/document_type.c is the destroy that asks.
  *   - DocumentFragment, ShadowRoot: the struct and nothing else.
  * A kind with no arm CRASHES rather than answering true, because a silent skip IS the dangling pointer. */
 /* WHICH of the agent's two arenas a pointer came out of, asked EXACTLY rather than assumed.

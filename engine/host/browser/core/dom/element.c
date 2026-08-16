@@ -42,6 +42,7 @@
 #include "core/html/html_element.h"
 #include "core/html/custom_elements.h"
 #include "core/html/html_iframe.h"
+#include "core/html/html_parse.h"    /* the ONE place an HTML parser is made — that header owns the token bytes */
 #include "core/html/trusted_types.h"
 #include "core/html/declarative_shadow.h"
 #include "core/html/html_script.h"
@@ -837,9 +838,15 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
     case FRAG_FEED:
         if (!s->parser) {
             lxb_dom_node_t *cn = lxb_dom_interface_node(s->context);
-            s->parser = lxb_html_parser_create();
-            CHECK(s->parser != NULL && lxb_html_parser_init(s->parser) == LXB_STATUS_OK,
-                  "the fragment parser could not be created");
+            /* THROUGH core/html/html_parse.h, WHICH IS WHERE AN HTML PARSER IS MADE. A fragment parse
+               tokenises DOCTYPE tokens like any other (§13.2.6.4.7 ignores them, which is what makes their
+               attribute values unreferenced the instant the token is done), and their bytes come out of the
+               AGENT's text arena exactly as a document parse's do — `lxb_html_parse_fragment_chunk_begin`
+               points the tokenizer at `doc->text` of the temporary document, whose arenas are this
+               document's. A parser built here with `lxb_html_parser_create` directly would leak one
+               allocation per doctype id in every `innerHTML =` that carries one. */
+            s->parser = html_parse_new_parser();
+            CHECK(s->parser != NULL, "the fragment parser could not be created");
             /* EVERY ONE OF THESE STATUSES WAS DROPPED, and dropping them is not a missing report — it is a
                WRONG DOM. Each of the three entries responds to a failure by destroying the root, clearing
                parser->root and moving the parser to ERROR, from which every later chunk_process returns

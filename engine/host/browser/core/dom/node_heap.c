@@ -120,8 +120,10 @@ void node_heap_detach(lxb_dom_document_t *doc)
                least 1305 and `snprintf` truncated it mid-word — the ORDER arm, the last third and the one a
                large count needs, never reached the reader, and the build's own `-Wno-format-truncation` is why
                no gate said so. A diagnosis that is cut off is §Testing's report about nothing with the
-               explanation attached. */
-            char why[2560];
+               explanation attached. The literal below is a little under 3000 characters and each `%zu` can
+               expand to 20, so this holds it with the two counts at their widest and an arm's worth of room
+               for the next cause that has to be named here. */
+            char why[4096];
             snprintf(why, sizeof why,
                      "the agent's DOM heap still holds %zu node allocation(s) and %zu text allocation(s) after "
                      "the last document that could name them was destroyed. READ THE RATIO FIRST, because the "
@@ -145,7 +147,19 @@ void node_heap_detach(lxb_dom_document_t *doc)
                      "this arena never handed out into this arena's size-keyed free cache, so the two arenas "
                      "now ALIAS and the next allocation of that size gets memory the other one still owns. "
                      "core/dom/document_type.h is the worked example: lexbor allocates a doctype's two ids "
-                     "from `mraw` and frees them into `text`, which is exactly nodes at +2 and text at -2.",
+                     "from `mraw` and frees them into `text`, which is exactly nodes at +2 and text at -2. "
+                     "FINALLY, TEXT AT +N WITH NODES UNCHANGED IS AN ATTRIBUTE VALUE TREE CONSTRUCTION DID "
+                     "NOT ADOPT, and no other arm produces that shape. A token's attribute values come out of "
+                     "this arena and nothing frees them; `lxb_html_tree_append_attributes` gives each one to "
+                     "the DOM Attr with `lxb_dom_attr_set_value_wo_copy`, which is what makes the Attr its "
+                     "owner — but it SKIPS a token attribute whose name the element already carries, so a "
+                     "duplicate attribute (`<div a=1 a=2>`, kept in the token because `lxb_html_parser_init` "
+                     "sets ATTR_KEEP_DUPLICATE) and §13.2.6.4.7's re-attribution of `<html>`/`<body>` "
+                     "attributes onto an element that already exists each strand one allocation per name the "
+                     "element already carried. "
+                     "core/html/html_parse.h owns that statement, releases the DOCTYPE token's values (the "
+                     "one kind whose consumer copies rather than adopts) and names what has to be built for "
+                     "the rest.",
                      (size_t)g_nodes->ref_count, (size_t)g_text->ref_count);
             DCHECK(g_nodes->ref_count == 0 && g_text->ref_count == 0, why);
         }
@@ -177,6 +191,18 @@ static bool mraw_owns(const lexbor_mraw_t *mraw, const void *p)
 static bool str_owned(const lexbor_mraw_t *text, const lexbor_str_t *s)
 {
     return s->data == NULL || mraw_owns(text, s->data);
+}
+
+/* THE SAME QUESTION WITH NO ARENA NAMED, for the one shape whose ANSWER DIFFERS BY HOW IT WAS MADE. DOM §4.6's
+   doctype has three constructors and they disagree: `lxb_html_token_doctype_parse` allocates its two ids from
+   `mraw` while `lxb_dom_document_type_interface_clone` and `lxb_dom_document_type_create` both use `text`. So
+   naming either arena answers FALSE for whichever constructor did not use it — `text` was false for every
+   parsed doctype, and `mraw` (which replaced it) is false for every doctype `createDocumentType` or a §4.4
+   clone produced. Both arenas are the AGENT's, so what this predicate is actually asking is whether the bytes
+   are in the agent's heap at all, and core/dom/document_type.c's destroy asks the identical way. */
+static bool str_in_agent_heap(const lexbor_str_t *s)
+{
+    return s->data == NULL || node_heap_arena_of(s->data) != NODE_ARENA_NONE;
 }
 
 NodeArena node_heap_arena_of(const void *p)
@@ -240,12 +266,15 @@ bool dom_storage_owned_by(const lxb_dom_document_t *doc, const lxb_dom_node_t *n
         const lxb_dom_document_type_t *dt = (const lxb_dom_document_type_t *)n;
         /* §4.6's publicId and systemId are STRINGS here, not name ids — the doctype's `name` is the `attrs` id
            name_intern.h moves, and these two are the bytes this file moves nowhere because the arena is one.
-           THEY ARE IN `mraw`, NOT `text`, and this line said `text` because lexbor's own DESTROY says `text` —
-           while `lxb_html_token_doctype_parse` ALLOCATES them from `mraw`. Asking the wrong arena made this
-           predicate answer false for every doctype ever parsed, which is the shape of a check that cannot fail
-           usefully: it would have named the defect the first time it was asked. core/dom/document_type.h holds
-           the full statement, and core/dom/document_type.c is the destroy that now agrees with this line. */
-        return str_owned(doc->mraw, &dt->public_id) && str_owned(doc->mraw, &dt->system_id);
+           THEY ARE THE ONE SHAPE WITH NO ARENA TO NAME, and this line has now named the wrong one twice: it
+           said `text` because lexbor's own DESTROY says `text`, which is false for every PARSED doctype, and
+           then `mraw` because the parser allocates there, which is false for every doctype
+           `createDocumentType` or a §4.4 clone produced — so `document.implementation.createDocumentType(…)`
+           followed by an adopt fired this assertion on a document that was perfectly well formed. Three
+           constructors, two arenas, and the question this predicate is really asking is whether the bytes are
+           in the agent's heap at all. core/dom/document_type.h holds the full statement and
+           core/dom/document_type.c is the destroy that asks the same way. */
+        return str_in_agent_heap(&dt->public_id) && str_in_agent_heap(&dt->system_id);
     }
     case LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT:
     case LXB_DOM_NODE_TYPE_SHADOW_ROOT:

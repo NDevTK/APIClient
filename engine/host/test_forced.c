@@ -15,6 +15,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/frame/remote_object.h"
 #include "core/html/html_iframe.h"
+#include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "solver/engine.h"
 #include "solver/cow.h"
 #include "core/loader/document_scripts.h"
@@ -1962,7 +1963,7 @@ static void document_policy_selftest(void)
     lxb_html_document_t *plain;
     const Origin *self_origin = origin_parse("https://x.test");
 
-    lxb_html_document_parse(dom, (const lxb_char_t *)SRC, strlen(SRC));
+    html_parse_document(dom, (const lxb_char_t *)SRC, strlen(SRC));
     p = document_policy_new(dom, NULL, self_origin);
     CHECK(policy_container_csp(p) != NULL, "the meta scan found no policy in a document that declares two");
     CHECK(!policy_allows(p, POLICY_INLINE_HANDLER),
@@ -1973,7 +1974,7 @@ static void document_policy_selftest(void)
     /* A page with no CSP at all is the overwhelmingly common one, and the scan must not invent a policy for
        it — an empty container that answered "blocked" would suppress every real finding on every such page. */
     plain = dom_document_create();
-    lxb_html_document_parse(plain, (const lxb_char_t *)"<html><body></body></html>", 26);
+    html_parse_document(plain, (const lxb_char_t *)"<html><body></body></html>", 26);
     empty = document_policy_new(plain, NULL, self_origin);
     CHECK(policy_allows(empty, POLICY_INLINE_HANDLER), "a document with no meta CSP must permit everything");
 
@@ -3167,7 +3168,7 @@ int main(int argc, char **argv) {
            "cold_park naming the cross-instance park rather than measuring the tier");
     const char *doc = cold_doc ? HTML_COLD : (min_doc ? HTML_MIN : HTML);
     lxb_html_document_t *dom = dom_document_create();
-    lxb_html_document_parse(dom, (const lxb_char_t *)doc, strlen(doc));
+    html_parse_document(dom, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
     {
         /* The fixture built this document, so the navigable's name is the initial "" and is known. */

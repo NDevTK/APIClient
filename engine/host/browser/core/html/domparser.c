@@ -7,7 +7,7 @@
  * why both go through core/dom/document.h's `document_new` rather than each minting a record of its own.
  *
  * THE HTML ARM IS THE PARSE THE ENGINE ALREADY RUNS. §8.5.1's "parse HTML from a string" is
- * `lxb_html_document_parse` over a document created for it, exactly as `document_install` runs it for a
+ * `html_parse_document` over a document created for it, exactly as `document_install` runs it for a
  * navigation and `xhr_set_document_response` runs it for XHR §3.6.6's HTML arm. What differs is not the parse
  * but the four PARSE-BOUNDARY seams a lexbor tree needs afterwards, and WHICH of them §8.5.1 asks for is
  * decided by the standard rather than by symmetry — see the seams at the end of `parse_html_from_a_string`.
@@ -50,6 +50,7 @@
 #include "core/dom/document.h"
 #include "core/dom/node.h"
 #include "core/html/domparser.h"
+#include "core/html/html_parse.h"      /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/html/html_style_element.h"
 #include "core/html/media_element.h"
 #include "core/html/trusted_types.h"
@@ -176,7 +177,7 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
     CHECK(dom != NULL, "DOMParser: OOM building the parsed Document");
     /* HTML parsing has no failure mode over well-formedness — tag soup is a tree — so a non-OK status here is
        an allocation, exactly as it is at the engine's three other document parses. */
-    CHECK(lxb_html_document_parse(dom, (const lxb_char_t *)html, len) == LXB_STATUS_OK,
+    CHECK(html_parse_document(dom, (const lxb_char_t *)html, len) == LXB_STATUS_OK,
           "DOMParser: the markup handed to parseFromString could not be parsed");
     /* §8.5.1 step 2: the URL is the relevant global's associated Document's, and the content type is `type` —
        which for this arm is "text/html", the string that makes a Document an HTML document. */

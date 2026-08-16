@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
+#include "core/html/html_parse.h"      /* …and the ONE place one is parsed, which owns the tokens it produces */
 
 /* THE ELIDE TOKEN MUST BE THE LOCATOR'S LENGTH, because renaming the other occurrences is how each occurrence
    is measured in its own state and the rename must not move a single byte offset. Checked by the compiler
@@ -230,7 +231,7 @@ static int quote_ends_value(const char *witness, size_t at, char q) {
     w = splice(witness, at, ins, &wl);
     doc = dom_document_create();
     CHECK(doc != NULL, "solve_html: OOM creating an attribute-state discrimination parse");
-    if (lxb_html_document_parse(doc, (const lxb_char_t *)w, wl) == LXB_STATUS_OK) {
+    if (html_parse_document(doc, (const lxb_char_t *)w, wl) == LXB_STATUS_OK) {
         Locate lo;
         if (locate(doc, &lo) && lo.kind == LOC_ATTR_VALUE)
             ends = memchr(lo.val, q, lo.val_n) == NULL;
@@ -251,7 +252,7 @@ static int space_starts_attribute(const char *witness, size_t at) {
     int found = 0;
 
     CHECK(doc != NULL, "solve_html: OOM creating an attribute-state discrimination parse");
-    if (lxb_html_document_parse(doc, (const lxb_char_t *)w, wl) == LXB_STATUS_OK) {
+    if (html_parse_document(doc, (const lxb_char_t *)w, wl) == LXB_STATUS_OK) {
         Locate lo;
         if (locate(doc, &lo) && lo.kind == LOC_ATTR_VALUE && lo.el) {
             lxb_dom_attr_t *a;
@@ -348,7 +349,7 @@ static int breakouts_at(const char *witness, size_t after, SolveHtmlEmit emit, v
     int n = 0;
 
     CHECK(doc != NULL, "solve_html: OOM parsing a sink output for its breakout context");
-    if (lxb_html_document_parse(doc, (const lxb_char_t *)witness, strlen(witness)) != LXB_STATUS_OK) {
+    if (html_parse_document(doc, (const lxb_char_t *)witness, strlen(witness)) != LXB_STATUS_OK) {
         dom_document_destroy(doc);
         DFAIL("the real HTML parser refused a string an HTML sink was handed - HTML 13.2 makes every byte "
               "sequence a parseable document, so this is Lexbor reporting an allocation failure and the "
