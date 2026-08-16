@@ -212,6 +212,23 @@ static int g_sess_live;
  * two identical questions are two requests. */
 static uint32_t g_next_req = 1;
 
+/* HOW MANY SYNCHRONOUS REQUESTS THIS DOCUMENT HAS EVER ISSUED, AND HOW MANY THE HOST HAS EVER ANSWERED — the
+ * next two facts in `finished`/`deepest`'s family, and they exist for the same reason those two do: the
+ * question they answer had to be ARGUED from a census instead of read off one.
+ *
+ * `blocked` and `owed` are LEVELS. They say how much of the frontier is waiting right now, and no single
+ * reading of a level can tell a host that is paying promptly from a host that has never paid at all: a
+ * document whose flows are answered within a quantum and one whose flows are parked forever both report a
+ * frontier with thousands of members waiting, because in both of them the members keep arriving. Starvation is
+ * a RATE, and these two are the only numbers this engine holds that have one. `hostAnswered: 0` beside
+ * `blocked: 6583` ends that diagnosis in a glance — those flows are not mis-ranked, they are unpaid — and a gap
+ * between the two that only ever widens is a host that is not paying at the rate the document asks.
+ *
+ * They are CUMULATIVE and they are read by NOTHING but the census (§NO BOUNDS): no pick, no weight and no exit
+ * consults them, so there is no spelling of them that can truncate work. */
+static long g_host_asked;
+static long g_host_answered;
+
 uint32_t engine_host_request(JSContext *ctx, const char *op) {
     Flow *f = flow_running();
     JSValue e;
@@ -223,6 +240,7 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
     e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ);
     pending_set(e, PEND_OP, JS_NewString(ctx, op));
     id = g_next_req++;
+    g_host_asked++;   /* the ASK half of the rate above — every issue of a request passes through here */
     /* A REUSED ID ANSWERS THE WRONG QUESTION. The answer is routed by this number alone, so a wrapped counter
        delivers one flow's cross-document read into another flow's call site — in another world. */
     CHECK(g_next_req != 0, "the host-request id counter wrapped — an answer would be delivered to the wrong "
@@ -379,6 +397,7 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
                (flow.h). Without this line the answer would sit on the register while the pick kept skipping the
                flow that asked for it. */
             flow_clear_host_owed(f);
+            g_host_answered++;   /* the PAY half of the rate above — every delivery that reached a flow */
             return 1;
         }
     }
@@ -2708,20 +2727,54 @@ static int engine_sched_slice(void) {
                "cannot progress and its register is empty, so it was marked while it still had work to do and "
                "the exploration of that timeline stops here for no reason at all");
     }
+    /* STALLED, not exhausted: the run-queue is empty but flows are parked on something only the host can
+       supply. Ask the one seam BEFORE closing — the session and every parked snapshot stay live, and the host
+       steps again once it has provided. */
+    if (g_stall_hook && g_stall_hook())
+        return ENGINE_STEP_STALLED;
     /* The exploration found sinks; each breakout is a FLOW on this same frontier, seeded once the exploring
        flows are done so a candidate never re-fires against a half-explored page. Seeding adds members, so the
        loop above has more to do — hence before the exhausted answer, not after it.
        ASKED EVERY TIME THE FRONTIER DRAINS, not once. A sink inside a lazily-imported chunk or an injected
        <script src> is discovered AFTER the first drain, because the code holding it had not arrived yet; a
        one-shot latch left every such sink unsearched, which bounded verification by when a sink was found. The
-       seeding is per-sink and idempotent, so asking again costs a scan and adds only what is new. */
+       seeding is per-sink and idempotent, so asking again costs a scan and adds only what is new.
+       AND IT IS ASKED AFTER THE STALL IS REPORTED, WHICH IS THE CORRECTION. The sentence above says "seeded
+       once the exploring flows are done", and it stood ABOVE the stall report, where that sentence is FALSE:
+       reaching this line means the pick found no runnable member, so the exploring flows are not DONE, they are
+       PARKED ON THE HOST — every one of them mid-script with a suspended frame and an unanswered entry on its
+       register. Seeding there turned the one moment the whole frontier was waiting for a reply into a YIELD
+       carrying fresh from-baseline work, so the host was never told what it was holding up, and the flows it
+       was holding up went to the back of a queue that had just grown by a full re-exploration of the document
+       PER SINK.
+       MEASURED, and it is the entire shape of the smoke fixture's frontier: that run reports `candidates 27`,
+       and 27 is exactly the number of flows that took this seam. Its fork histogram's FIRST decision site is
+       entered by 28 flows — one boot flow and those 27 candidate sessions — and every later site doubles it
+       (28, 56, 112, 224, 414, 634, 1169, 2281, 4514). Nine decisions, 9432 flows, and 9404 of them exist
+       because a candidate was seeded instead of a reply being asked for. Not one flow ever finished, and the
+       flows that were parked at the instant of the seeding were still parked when the run was stopped.
+       A candidate re-firing against a page whose every timeline is suspended mid-script IS the half-explored
+       page the paragraph above forbids, arrived at from the other side: the page is not half-explored because
+       a chunk has not loaded, it is half-explored because the host has not been asked. */
+    /* AND THAT ORDER IS ASSERTED — asked of the FLOWS, which is what makes it a check rather than the `if`
+       above read out loud a second time. The stall report is the HOST's view (its two registers are empty);
+       this is the FRONTIER's (no member is parked on a synchronous request), and the two are only ever the same
+       answer if every blocked flow's entry really is on the register the host was shown. It fires on the tree
+       this replaces — where 500-odd members were suspended mid-script at exactly this line — and it fires again
+       on any future edit that puts engine-side work between a fully host-owed frontier and the one report that
+       tells the host so, which is a change nothing else can see: the run looks livelier afterwards, because a
+       YIELD always has something to run, and the parked flows simply never come back.
+       IT IS THE SYNCHRONOUS HALF SPECIFICALLY, because that is the half that suspends a flow MID-FRAME: a flow
+       waiting on a fetch reply has finished its script and is holding a promise, while a flow that is `blocked`
+       is stopped inside the call that asked, and re-firing a candidate against a document whose timelines are
+       stopped there is re-firing it against a page that never finished loading. */
+    for (int i = 0; i < flow_count(); i++)
+        DCHECK(!flow_blocked(flow_at(i)),
+               "a candidate is about to be seeded against a page whose timelines are PARKED ON THE HOST — this "
+               "member is suspended inside the read that asked, its answer is a work item nobody has been told "
+               "about, and the flow this seeds re-runs the document from the baseline in front of it");
     if (solve_seed_candidates(ctx) && flow_best())
         return ENGINE_STEP_YIELD;
-    /* STALLED, not exhausted: the run-queue is empty but flows are parked on something only the host can
-       supply. Ask the one seam BEFORE closing — the session and every parked snapshot stay live, and the host
-       steps again once it has provided. */
-    if (g_stall_hook && g_stall_hook())
-        return ENGINE_STEP_STALLED;
     /* AND THE OTHER REASON A FRONTIER IS NOT EXHAUSTED, which is not a reply the host owes but a QUESTION it
        has not yet been asked: a document another instance holds a reference into can be asked something at any
        moment, so its timelines are parked (flow_step returns OWED for them) rather than finished, and the
@@ -2851,20 +2904,49 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
        IndexedDB to have written the residue to, which is the extension's. */
     engine_sched_begin(ctx, bodies, srcs, n, forking, NULL);
     for (;;) {
+        int filled;
         r = engine_sched_step();
         if (r == ENGINE_STEP_DONE)
             break;
         /* THE HOST OWES A REPLY, so this is where it pays. Without this seam the loop had nowhere to answer a
            stall from and a request the trusted host must make simply ended the run: every flow that fetched
-           stopped at its fetch, and its continuation — the part that reads the reply — never ran at all. A
-           provider that fills nothing ends the run, which is the honest answer to "nobody can supply this". */
-        if (r == ENGINE_STEP_STALLED) {
-            /* NOBODY CAN SUPPLY IT, so this driver stops driving — and STOPPING IS NOT THE SAME AS THE SESSION
-               ENDING, which is why the close is below rather than here. The frontier that remains is real
-               (every flow parked on a reply that never came), and it is handed to the teardown as SNAPSHOTS. */
-            if (!g_provider || g_provider(ctx) == 0)
-                break;
-        }
+           stopped at its fetch, and its continuation — the part that reads the reply — never ran at all.
+           IT PAYS AT EVERY SLICE BOUNDARY, WHICH IS WHAT A SLICE BOUNDARY IS FOR, and paying only on STALLED —
+           which is what stood here — was a SECOND host policy beside the one this project ships. main.c folds
+           STALLED into YIELD deliberately ("the bridge speaks two values") and the extension's bridge pulls
+           qjs_pending and qjs_host_requests after EVERY return, so in the product a blocked flow is answered at
+           the next quantum. Here it was answered only once every OTHER flow in the document had also stopped:
+           the run-queue had to empty first, so flow A's reply was a function of flows B..Z's states, which is a
+           cross-flow coupling the scheduler forbids everywhere else. On a document that forks faster than its
+           flows block, that gate is not merely late — it is never reached. And "a host with nothing else to do
+           between quanta" is the whole reason this one may not defer: there is no other work for it to be
+           doing instead. */
+        filled = g_provider ? g_provider(ctx) : 0;
+        /* NOBODY CAN SUPPLY IT, so this driver stops driving — and STOPPING IS NOT THE SAME AS THE SESSION
+           ENDING, which is why the close is below rather than here. The frontier that remains is real (every
+           flow parked on a reply that never came), and it is handed to the teardown as SNAPSHOTS. The question
+           is unchanged and it is still asked only of a STALL: a slice that ended on its quantum still has
+           runnable flows, so a provider with nothing to fill THERE means nothing was outstanding, never that
+           nothing can be supplied. */
+        if (r == ENGINE_STEP_STALLED && filled == 0)
+            break;
+        /* AND THE PAYMENT WAS COMPLETE, asserted at the seam instead of inferred from a census line six minutes
+           later. This provider answers out of its OWN tables — a reply record it builds, a peer's answer it
+           stands in for — so unlike the extension's it has no asynchronous half and nothing it may legitimately
+           still owe once it has run. A record outstanding here is therefore one it was never handed or one it
+           walked past. `blocked` and `owed` cannot say which: they report the LEVEL of unanswered work, and a
+           frontier that keeps issuing requests reads identically whether the host is paying promptly or has
+           silently skipped a record. This says which, at the moment it happens, and it names the two registers
+           separately because they are two questions. */
+        DCHECK(!g_provider || *engine_host_requests() == '\0',
+               "the smoke host paid and a SYNCHRONOUS request is still outstanding — this provider answers "
+               "every record it is handed out of its own tables, so the flow blocked on this one is parked at "
+               "a call site nothing is going to resume, and its whole timeline is lost with nothing but a "
+               "`blocked` count to say which record it was");
+        DCHECK(!g_provider || *engine_pending_urls() == '\0',
+               "the smoke host paid and a reply is still owed — the same silence one register over: the flow "
+               "that issued this fetch keeps its snapshot and its continuation and is never handed the body, "
+               "so everything the page does behind that reply is missing from the run");
         /* Either enough work has happened to be worth a line, or the SEARCH grew — a new candidate is the event
            that changes what the rest of the run will cost, so it is worth saying when it happens. */
         if (engine_work_done() >= next || solve_candidate_count() != last_cands) {
@@ -2908,8 +2990,16 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                    document never reaches its second script" were both being read off numbers that cannot say
                    it: `live == flows` is the frontier's size against the number ever created, and `script` is
                    the CURRENT flow's cursor. Both are facts this engine holds — see g_finished/g_deepest. */
+                /* AND `hostAsked`/`hostAnswered` BESIDE THEM, for the question those four leave open: whether
+                   a waiting frontier is waiting because of the RANKING or because nobody has paid it. `blocked`
+                   and `owed` are LEVELS and cannot say (see g_host_asked); these two are the run's TOTALS, so
+                   the gap between them is the answer, and a run whose `hostAnswered` is 0 has never once been
+                   paid. THEY ARE NOT TWO NAMES FOR `blocked`, and the register one over is why: a flow parked
+                   on a DISCOVERY probe or on a fetch reply is host-OWED without being host-BLOCKED, so `owed`
+                   counts a superset of `blocked` — and neither counts what has already been settled, which is
+                   the only thing that distinguishes a paid frontier from a starved one. */
                 printf("@COLD {\"flows\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
-                       "\"finished\":%ld,\"deepest\":%d,"
+                       "\"finished\":%ld,\"deepest\":%d,\"hostAsked\":%ld,\"hostAnswered\":%ld,"
                        "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                        "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
                        "\"dynKiB\":%ld,\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
@@ -2917,7 +3007,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, int n, int
                        "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                        "\"sharedKiB\":%ld,\"stepMachines\":%d}\n",
                        c.flows, c.framed, c.blocked, flow_host_owed_count(),
-                       g_finished, g_deepest,
+                       g_finished, g_deepest, g_host_asked, g_host_answered,
                        c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                        c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
                        c.pend_bytes / 1024, c.dyn_bytes / 1024, c.misc_bytes / 1024,

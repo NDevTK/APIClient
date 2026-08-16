@@ -1728,6 +1728,18 @@ static int hostreq_answer_all(JSContext *ctx)
         const char *tab = strchr(p, '\t');
         const char *end = strchr(p, '\n');
         uint32_t id;
+        /* A RECORD THIS LOOP CANNOT PARSE IS NOT A REASON TO STOP ANSWERING THE REST OF THEM. This was a bare
+           `break`, and a `break` here abandons every record AFTER the malformed one — silently, and with
+           exactly the symptom that has no symptom: those flows stay blocked at the call site that asked, the
+           census reports them under `blocked` like any flow that is merely waiting, and nothing anywhere
+           distinguishes "the host has not answered yet" from "the host walked past this one and never will".
+           engine_host_requests writes `id<TAB>op<NL>` and nothing else, so a record without both is a join
+           this host cannot read — an op carrying a newline is how that happens — and it is a defect in the
+           record, not a condition to tolerate. */
+        DCHECK(tab != NULL && end != NULL,
+               "an outstanding host request did not arrive as `id<TAB>op<NL>` — every record after it in this "
+               "join goes unanswered, and each of those is a flow suspended mid-frame at the read that asked, "
+               "with nothing but a `blocked` count to say it is never coming back");
         if (!tab || !end) break;
         id = (uint32_t)strtoul(p, NULL, 10);
         {

@@ -126,8 +126,17 @@ void engine_set_referenced(int referenced);
    (engine_run). The stepping entry answers a stall by returning to its caller, which is what the extension's
    qjs_step does; a one-call driver has no such caller, so a stall with nobody to answer it ended the run — and
    a flow that had issued a request stopped at that request, its continuation never reaching the reply. The
-   provider fills what engine_pending_urls names and returns how many entries it filled; 0 ends the run, which
-   is the honest answer to "nobody can supply this". */
+   provider fills what engine_pending_urls and engine_host_requests name, and answers how many entries it
+   filled.
+   IT IS CALLED AT EVERY SLICE BOUNDARY, not only on ENGINE_STEP_STALLED, and that is the SAME protocol the
+   extension's bridge speaks: main.c folds STALLED into YIELD deliberately, and the bridge pulls both registers
+   after every return. Paying only at a stall makes one flow's reply conditional on every OTHER flow in the
+   document also becoming blocked — the run-queue has to empty before the seam is reached at all — which is a
+   cross-flow coupling the scheduler forbids everywhere else, and which a document that forks faster than its
+   flows block never satisfies.
+   A 0 FILL IS AN ANSWER ONLY TO A STALL. At a quantum boundary there are runnable flows, so nothing to fill
+   means nothing was outstanding; at a stall it means nobody can supply what the frontier is parked on, and
+   that ends the run — the honest answer, with the surviving flows handed to the teardown as snapshots. */
 void engine_set_provider(int (*provide)(JSContext *ctx));
 
 /* `recipes` is the PARKED RESIDUE the host stored for this bundle (';'-joined records — see solver/cold.h), or
