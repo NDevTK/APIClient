@@ -568,8 +568,8 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     idl_install_accessor(ctx, g, "isSecureContext", js_win_is_secure_context, 0, -1);
     /* §7.1.2's `originAgentCluster` and §8.1.7.1's `crossOriginIsolated` — two answers about THIS AGENT'S
        CLUSTER, installed by the component that computes it (core/frame/agent_cluster.c) rather than written out
-       here as two booleans, because §7.1.1.2's `document.domain` setter reads the same fact and one fact
-       answered from three places is three places for it to drift. */
+       here as two booleans, because §7.1.1.2's `document.domain` setter and HR-TIME §4's clock resolution read
+       the same §7.1.4 mode, and one fact answered from four places is four places for it to drift. */
     agent_cluster_install(ctx, g);
 
     JS_DefinePropertyGetSet(ctx, g, JS_NewAtom(ctx, "name"),

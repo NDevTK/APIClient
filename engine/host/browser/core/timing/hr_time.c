@@ -4,15 +4,19 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/frame/agent_cluster.h"
 #include "core/realm.h"
 #include "core/timing/event_loop.h"
 #include "core/timing/hr_time.h"
 
-/* §4's TIME RESOLUTION for an environment WITHOUT the cross-origin isolated capability: "let time resolution
-   be 100 microseconds, or a higher implementation-defined value". In the millisecond unit DOMHighResTimeStamp
-   is measured in, that is 0.1. The 5-microsecond branch belongs to the capability this build does not have,
-   and `hr_time_coarsen` asserts its absence rather than assuming it. */
-#define HR_TIME_RESOLUTION_MS 0.1
+/* §4's TIME RESOLUTION, in the millisecond unit DOMHighResTimeStamp is measured in. Step 1: "let time
+   resolution be 100 microseconds, or a higher implementation-defined value". Step 2: "if
+   crossOriginIsolatedCapability is true, set time resolution to be 5 microseconds, or a higher
+   implementation-defined value". Both steps permit a COARSER value and this engine takes neither offer: a
+   higher value is a worse answer to every question a page asks about its own timing, and the page can see the
+   difference. Which of the two applies is the ENVIRONMENT'S question and is asked below, not chosen here. */
+#define HR_TIME_RESOLUTION_MS          0.1
+#define HR_TIME_RESOLUTION_ISOLATED_MS 0.005
 
 static int g_origin_slot = -1;
 
@@ -46,22 +50,30 @@ double hr_time_origin(JSContext *ctx)
 
 double hr_time_coarsen(JSContext *ctx, double unsafe_moment)
 {
+    /* §4 steps 1-2, decided from THE ENVIRONMENT'S OWN cross-origin isolated capability. §4 does not name a
+       constant: it takes `crossOriginIsolatedCapability` as an argument, and every caller passes "global's
+       relevant settings object's cross-origin isolated capability" — HTML §7.2.2's field, computed by
+       core/frame/agent_cluster.h. `ctx` IS that global, which is why this is asked per call and per realm and
+       never once for the agent.
+     *
+     * IT IS A COMPONENT'S ANSWER AND NOT A PROBE OF THE GLOBAL. This asked `realm_awaits(ctx,
+     * "crossOriginIsolated", ...)` while the capability had no C answer, and the member's arrival made the
+     * probe fire on the first coarsen of every run — the stale-assertion failure, one turn after it was
+     * written. Asking the component instead also removes the ordering hazard the probe carried: the answer
+     * exists before any realm intrinsic is installed, so `hr_time_install` can coarsen the time origin itself. */
+    double resolution = agent_cluster_cross_origin_isolated(ctx) ? HR_TIME_RESOLUTION_ISOLATED_MS
+                                                                 : HR_TIME_RESOLUTION_MS;
+
     DCHECK(unsafe_moment >= 0.0,
            "HR-TIME §4's coarsen time was given a moment BEFORE the agent's clock started — the unsafe shared "
            "current time in this engine is the event loop's virtual clock, which begins at zero and never runs "
            "backwards (core/timing/event_loop.h asserts the second half at every move)");
-    /* THE CROSS-ORIGIN ISOLATED CAPABILITY, asked where §4 asks it. `crossOriginIsolated` is the member whose
-       arrival would mean an environment can answer true, and the resolution is then 5 microseconds instead of
-       100 — a page measuring its own timing sees the difference directly, so this is a behaviour change and not
-       a constant. The probe is HERE, at the one place the resolution is decided, rather than once per realm at
-       install: a realm's intrinsics are built in declaration order, so an install-time probe would run before
-       whichever component eventually installs the member and would be silent forever. */
-    realm_awaits(ctx, "crossOriginIsolated",
-                "HR-TIME §4's coarsen time makes the time resolution 5 microseconds instead of 100 when the "
-                "environment has the CROSS-ORIGIN ISOLATED CAPABILITY — this build now has a realm that can "
-                "answer that question, so the capability must become an environment settings object field and "
-                "this resolution must be decided from it");
-    return floor(unsafe_moment / HR_TIME_RESOLUTION_MS) * HR_TIME_RESOLUTION_MS;
+    /* §4 step 3: "in an implementation-defined manner, coarsen AND POTENTIALLY JITTER timestamp such that its
+       resolution will not exceed time resolution". This engine takes the coarsening and declines the jitter —
+       see hr_time.h for why that is a design constraint and not a shortcut. Flooring onto the grid is then the
+       whole of step 3, and it is MONOTONE (division, floor and multiplication all are), which is what makes
+       hr_time_relative's non-negative duration an invariant rather than a hope. */
+    return floor(unsafe_moment / resolution) * resolution;
 }
 
 double hr_time_relative(JSContext *ctx, double unsafe_moment)

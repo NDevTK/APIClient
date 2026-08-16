@@ -589,10 +589,12 @@ int idl_freeze_array(JSContext *ctx, JSValueConst arr);
  *
  * THE OTHER TWO §3.9 CONDITIONS ARE HONESTLY ABSENT, and their absence is not a default. [Exposed] is decided
  * by WHICH global a component installs on and this engine has exactly one global kind (there is no
- * WorkerGlobalScope), so every member's exposure set is trivially satisfied. [CrossOriginIsolated] needs
- * §8.1.3.2's cross-origin isolated capability, which needs COOP and COEP response headers that nothing here
- * reads yet — the day one arrives, it is a value in this enum and the gate below grows a case, rather than a
- * second gate somewhere else. */
+ * WorkerGlobalScope), so every member's exposure set is trivially satisfied. [CrossOriginIsolated] is decided
+ * by HTML §7.2.2's cross-origin isolated capability, which core/frame/agent_cluster.h now ANSWERS — false for
+ * every environment this build makes, because no COOP/COEP response header reaches a policy container. So the
+ * condition is absent from this enum because no member in this build carries the attribute, not because the
+ * capability cannot be asked: the day one does, it is a value here calling that component, and the gate below
+ * grows a case rather than a second gate somewhere else. */
 typedef enum {
     IDL_EXPOSED = 0,        /* the member's IDL carries no exposure condition — it is in every realm */
     IDL_SECURE_CONTEXT,     /* [SecureContext] — ABSENT, not throwing, in a non-secure realm */

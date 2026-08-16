@@ -36,13 +36,26 @@
  * this realm was built, and the clock is a function of which tasks this flow has run. Forking it would run a
  * page in a world where its own document was created at a moment the event loop never reached.
  *
- * COARSENING IS MODELLED AND NOT SKIPPED, and it is deliberately NOT jittered. §4's coarsen time makes the
- * resolution 100 microseconds (5 when the environment has the cross-origin isolated capability) and permits an
- * implementation to jitter as well. A jittered clock would make §Testing's solver differential meaningless —
- * that gate's whole content is that one build must agree with ITSELF about a document across several schedules
- * — so this engine coarsens deterministically. The capability itself is absent from this build and asserted
- * rather than assumed: `hr_time_coarsen` awaits `crossOriginIsolated`, so the day a realm gains it the DCHECK
- * fires at the one place the resolution is decided. */
+ * COARSENING IS MODELLED AND NOT SKIPPED, and it is deliberately NOT jittered. §4's coarsen time floors the
+ * moment onto a resolution grid and step 3 permits an implementation to JITTER it as well. This engine takes
+ * the floor and declines the jitter, and that is a design constraint of the whole project rather than a
+ * simplification: §Testing's solver differential is the only oracle the SOLVER's semantics have, and its whole
+ * content is that one build must agree with ITSELF about a document across several schedules. A jittered clock
+ * makes every timestamp a source of disagreement that no scheduling bug is needed to produce, so the gate would
+ * report noise and stop meaning anything. Determinism here is not "no randomness in this file" — it is that a
+ * coarsened moment is a pure function of the virtual clock and the resolution, and the resolution is itself a
+ * pure function of this environment's cross-origin isolated capability, which has no writer.
+ *
+ * WHICH RESOLUTION IS THE ENVIRONMENT'S ANSWER, NOT A CONSTANT. §4 makes it 100 microseconds, or 5 for an
+ * environment with the CROSS-ORIGIN ISOLATED CAPABILITY — HTML §7.2.2's environment settings object field,
+ * which core/frame/agent_cluster.h computes from this agent cluster's §7.1.4 isolation mode. `hr_time_coarsen`
+ * asks that component. It used to assert the capability's ABSENCE instead (`realm_awaits(ctx,
+ * "crossOriginIsolated", ...)`), which was correct for exactly as long as no realm could answer the question
+ * and became a crash on the first coarsen of every run the moment `window.crossOriginIsolated` landed. The
+ * capability EXISTS now and answers false for every environment this build makes, because no COOP/COEP response
+ * header reaches a policy container; what is still unbuilt is named where it is missing, by the DFAIL on
+ * §7.2.2's permissions-policy conjunct in agent_cluster.c, which is unreachable until the mode can be
+ * `concrete`. THE ASSERTION MOVED TO THE REAL ABSENCE; it was not deleted. */
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_HR_TIME_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_HR_TIME_H
 
@@ -57,9 +70,11 @@ void hr_time_free(void);
    because the day this engine has a `performance` object, `get time origin timestamp` is its second reader. */
 double hr_time_origin(JSContext *ctx);
 
-/* §4's COARSEN TIME, given an unsafe moment on the monotonic clock and THIS realm's cross-origin isolated
-   capability. Answers a moment, never a duration — the spec coarsens the ABSOLUTE moment and subtracts the
-   origin afterwards, and doing it the other way round would round a duration whose two ends are on the grid. */
+/* §4's COARSEN TIME, given an unsafe moment on the monotonic clock. §4's second argument is the environment's
+   cross-origin isolated capability, and `ctx` IS that environment — a caller passes the realm whose settings
+   object the moment is FOR, never the realm the algorithm happens to be driven from. Answers a moment, never a
+   duration — the spec coarsens the ABSOLUTE moment and subtracts the origin afterwards, and doing it the other
+   way round would round a duration whose two ends are on the grid. */
 double hr_time_coarsen(JSContext *ctx, double unsafe_moment);
 
 /* §4's RELATIVE HIGH RESOLUTION TIME given an unsafe moment and a global object — coarsen the moment with this
