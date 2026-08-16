@@ -428,8 +428,15 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
                    comes off HERE, on the flow the answer reached, and not on a slice boundary that means
                    nothing to it (flow.h). Without this line the answer would sit on the register while the pick
                    kept skipping the flow that asked for it.
-                   THE FIRST ANSWER STOPS AT THE FIRST FLOW because the RECORD is what it is written onto and a
-                   fork SHARES records (pending.h): every arm that inherited this request observes it already. */
+                   THE FIRST ANSWER STOPS AT THE FIRST FLOW because an unanswered SYNCHRONOUS request is the one
+                   record a fork does NOT share: engine_sibling_assemble calls pending_unshare on it and mints a
+                   fresh rendezvous id, because its answer is computed under the ASKING FLOW'S world. So exactly
+                   one flow's register can name this id and the return below reaches every flow there is.
+                   THIS PARAGRAPH USED TO SAY THE OPPOSITE — that stopping here is right BECAUSE a fork shares
+                   records and "every arm that inherited this request observes it already" — which is the exact
+                   reasoning that made engine_provide skip the mark of every arm but the first, and left those
+                   timelines out of the pick for good. Sharing is the reason a per-record fact may not decide a
+                   per-flow one; it is never the reason a per-flow clear may stop early. */
                 flow_clear_host_owed(f);
                 g_host_answered++;   /* the PAY half of the rate above — every delivery that reached a flow */
                 return 1;
@@ -951,10 +958,26 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
             JSValue p = pending_entry(f->pending, i);
             JSValue uv = pending_get(p, PEND_URL);
             const char *u = JS_IsString(uv) ? JS_ToCString(ctx, uv) : NULL;
-            int hit = u && !pending_get_int(p, PEND_HAVE_VALUE) && strcmp(u, url) == 0;
+            /* TWO QUESTIONS OF TWO DIFFERENT THINGS, and they were one predicate until a fork stopped copying
+               records. `waiting` is about the FLOW — its register names this address, so this delivery is an
+               event that can change the answer it gave the scheduler. `fill` is about the RECORD — it has no
+               answer on it yet, so this call is the one that writes one. A fork SHARES records (pending.h), so
+               ONE record is named by every arm that inherited it and `haveValue` is therefore a fact about the
+               record and not about any of them.
+               WHAT ASKING ONE QUESTION COST: the first arm reached filled the record and had its host-owed mark
+               taken off; every LATER arm naming that same record read `haveValue` as already set, fell out of
+               the `hit` branch, and was never un-marked. A marked flow is out of the pick until a host event
+               clears it (flow.h) — and no further host event is coming, because its register is fully answered
+               — so that timeline left the frontier for good with its whole exploration unrun. The stall assert
+               at the end of the slice reports the state one document later ("a member owed the host NOTHING")
+               and names the symptom rather than this line; `pin_and_shape.html` reaches it under three of the
+               solver gate's four schedules, its `/api/roles` record having been forked between the two arms of
+               the `limit > 5` branch that follows the fetch. */
+            int waiting = u && strcmp(u, url) == 0;
+            int fill = waiting && !pending_get_int(p, PEND_HAVE_VALUE);
             if (u) JS_FreeCString(ctx, u);
             JS_FreeValue(ctx, uv);
-            if (hit) {
+            if (fill) {
                 if (!method[0]) {
                     JSValue mv = pending_get(p, PEND_METHOD);
                     const char *ms = JS_IsString(mv) ? JS_ToCString(ctx, mv) : NULL;
@@ -990,13 +1013,21 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
 #endif
                 pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
                 pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
-                /* AND THIS FLOW IS ASKABLE AGAIN — the reply it parked on is on its register now, which is the
-                   event its host-owed mark was waiting for and the only kind of thing that can change the
-                   answer it gave the scheduler (flow.h). Cleared per flow, here, because this is where the
-                   host reached that flow. */
-                flow_clear_host_owed(f);
                 n++;
             }
+            /* AND EVERY FLOW WAITING ON THIS ADDRESS IS ASKABLE AGAIN — the reply it parked on is on its
+               register now, which is the event its host-owed mark was waiting for and the only kind of thing
+               that can change the answer it gave the scheduler (flow.h). Outside the fill, because the mark is
+               per FLOW and the fill is per RECORD: N arms share one record, one of them writes the answer, and
+               all N observe it.
+               A CLEAR THAT IS EARLY BY ONE STEP IS THE ONLY WAY THIS CAN BE WRONG, and it is the trade this
+               file already takes twice — engine_set_referenced clears the WHOLE frontier's marks on a fact that
+               names no flow, and the shared document-script slot inside flow_drain_pending does the same. A
+               flow re-marked for some other unanswered entry between two deliveries of this address is picked
+               once, reports host-owed again and is re-marked; nothing is dropped, skipped or reordered. A mark
+               kept after the fact it rested on has gone costs the flow its entire timeline, which is the
+               failure this line exists to make impossible. */
+            if (waiting) flow_clear_host_owed(f);
             JS_FreeValue(ctx, p);
         }
     }
