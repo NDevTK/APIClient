@@ -126,6 +126,41 @@ static lxb_dom_element_t *cssd_element(JSContext *ctx, JSValueConst v, int *pmod
 /* ---- the parser, and the declaration list of a chunk of CSS text ---------------------------------------- */
 static lxb_css_parser_t *g_parser;
 
+/* THE PARSER'S SELECTOR-PARSE STATE, AND WHY THIS ENGINE OWNS IT RATHER THAN LETTING LEXBOR PICK ONE.
+ *
+ * `lxb_css_stylesheet_parse` declares `lxb_css_selectors_t selectors;` ON ITS OWN STACK, installs it when the
+ * parser has none (`parser->selectors = &selectors`), and on the way out runs
+ * `parser->selectors = lxb_css_selectors_destroy(&selectors, false)` — which with `self_destroy == false`
+ * RETURNS ITS ARGUMENT. So a parser that arrives with no selector state leaves every stylesheet parse holding a
+ * pointer INTO A DEAD STACK FRAME, and the NEXT parse takes the other branch: it CLEANS that address (seven
+ * field writes) and then uses it as the live selector state for the whole parse.
+ *
+ * That is a write through a dangling pointer, and for a while it was invisible for the worst possible reason:
+ * `cssd_author_value` was reached from ONE call chain, so the stale address was re-materialised as the same
+ * slot of the same frame at the same depth every time — self-consistent by accident. The moment the computed
+ * value gained a second and a third caller at different depths (element_view.c's ancestor walk for `display`,
+ * and css_computed_value.c's own walk to the box parent), the stale address pointed at a LIVE frame instead,
+ * and the second element of a walk segfaulted inside `lxb_css_stylesheet_destroy` reading a `sst` that the
+ * clean had overwritten.
+ *
+ * `lxb_css_parser_init` does not initialise `selectors` (the field is NULL only because the parser is
+ * calloc'd), and `lxb_css_parser_destroy` does not free it — so lexbor's own pair for owning one,
+ * `lxb_css_parser_selectors_init` / `_destroy`, is what this uses. With a record of the AGENT's lifetime
+ * installed, the stack-local branch above is unreachable and there is nothing left to dangle. */
+static lxb_css_selectors_t *g_selectors;
+
+/* Asserted after every parse rather than trusted: the record is what keeps the branch unreachable, so a parse
+   that hands it back changed is the one thing that could put the stack local back. */
+static void cssd_selectors_intact(void)
+{
+    DCHECK(g_selectors != NULL && lxb_css_parser_selectors(g_parser) == g_selectors,
+           "the CSS parser came out of a parse holding selector state that is not this component's. Lexbor's "
+           "`lxb_css_stylesheet_parse` installs a STACK-LOCAL selectors record when the parser has none and "
+           "leaves the parser pointing at it after the frame is dead, so a parser with no record of its own "
+           "writes through a dangling pointer on its very next parse — cssom_init installs one for exactly "
+           "that reason, and it must survive every parse");
+}
+
 /* Parse `text` as a declaration BLOCK (the contents of a style="" attribute). The returned list owns a memory
    arena that the caller destroys — one arena per parse, so nothing outlives the read that asked for it, which
    is what keeps this free of state the flow machinery would have to swap. */
@@ -146,6 +181,7 @@ static lxb_css_rule_declaration_list_t *cssd_parse_block(const char *text, size_
     lxb_css_parser_memory_set(g_parser, mem);
     list = lxb_css_declaration_list_parse(g_parser, (const lxb_char_t *)text, len);
     lxb_css_parser_memory_set(g_parser, NULL);
+    cssd_selectors_intact();
     *pmem = mem;
     return list;
 }
@@ -272,6 +308,7 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
                 lxb_css_parser_memory_set(g_parser, smem);
                 if (sst && lxb_css_stylesheet_parse(sst, g_parser, text, tlen) != LXB_STATUS_OK) sst = NULL;
                 lxb_css_parser_memory_set(g_parser, NULL);
+                cssd_selectors_intact();
             }
             if (sst && sst->root && sst->root->type == LXB_CSS_RULE_LIST) {
                 lxb_css_rule_t *r;
@@ -306,8 +343,16 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
                     }
                 }
             }
-            if (sst) lxb_css_stylesheet_destroy(sst, true);   /* takes its arena with it */
-            else if (smem) lxb_css_memory_destroy(smem, true);
+            /* THE ARENA IS THE ONE OWNER, and it is freed outright. This used to read
+               `lxb_css_stylesheet_destroy(sst, true)` under a comment saying that "takes its arena with it",
+               and it does not: `lxb_css_stylesheet_create` REF-INCREMENTS the memory it is handed (to 2, since
+               `lxb_css_memory_init` starts it at 1) and that destroy only ref-DECREMENTS (back to 1), so the
+               arena — the stylesheet, every rule, every selector and every string in it — was never freed at
+               all. One leaked arena per `<style>` element per read, which the ancestor walks then multiplied by
+               the depth of the chain. The stylesheet, its rules and its selectors are all allocated FROM this
+               arena, so destroying the arena is what releases them; nothing here outlives it (every value this
+               function keeps is copied out with strdup). */
+            if (smem) lxb_css_memory_destroy(smem, true);
             lxb_dom_document_destroy_text(n->owner_document, text);
         }
         /* A pre-order walk over the flow's own tree, with an explicit cursor — the same reason every walk in
@@ -768,6 +813,13 @@ void cssom_init(JSContext *ctx)
     g_parser = lxb_css_parser_create();
     CHECK(g_parser != NULL && lxb_css_parser_init(g_parser, NULL) == LXB_STATUS_OK,
           "the CSS parser could not be created");
+    /* THE PARSER'S OWN SELECTOR STATE, installed here and never NULL again — see g_selectors above for the
+       dangling stack frame this exists to make unreachable. `lxb_css_parser_init` leaves the field alone (it is
+       NULL only because the parser is calloc'd), so this is the step that gives the parser one. */
+    CHECK(lxb_css_parser_selectors_init(g_parser) == LXB_STATUS_OK,
+          "the CSS parser's selector state could not be allocated");
+    g_selectors = lxb_css_parser_selectors(g_parser);
+    CHECK(g_selectors != NULL, "the CSS parser accepted its selector state and then reported none");
     g_key = JS_NewSymbol(ctx, "cssStyleDeclaration", false);
     CHECK(!JS_IsException(g_key), "the CSSStyleDeclaration key allocation failed");
     {
@@ -874,6 +926,14 @@ void cssom_free(JSContext *ctx)
     if (!g_ready) return;
     JS_FreeValue(ctx, g_key);   /* the prototypes are the REALMS' — released with their contexts */
     g_key = JS_UNDEFINED;
-    if (g_parser) { lxb_css_parser_destroy(g_parser, true); g_parser = NULL; }
+    /* The selector state is released BY NAME: `lxb_css_parser_destroy` frees the parser's stack, rules, string
+       buffer, log and tokenizer and does NOT touch `selectors`, so the record installed in cssom_init is this
+       component's to free — and freeing it after the parser would read a pointer out of freed memory. */
+    if (g_parser) {
+        lxb_css_parser_selectors_destroy(g_parser);
+        g_selectors = NULL;
+        lxb_css_parser_destroy(g_parser, true);
+        g_parser = NULL;
+    }
     g_ready = 0;
 }
