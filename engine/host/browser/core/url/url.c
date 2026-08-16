@@ -515,7 +515,20 @@ static bool parse_host(const char *s, size_t n, bool is_opaque, UrlHost *out)
     if (is_opaque)
         return parse_opaque_host(s, n, out);
 
-    decoded = url_percent_decode(s, n, &dn);
+    /* §3.5 step 5: "Let domain be the result of running UTF-8 decode without BOM on the percent-decoding of
+       input." The percent-decoding answers BYTES and the decode is what makes them a domain — and the standard
+       says what happens next in its own note: "UTF-8 decode without BOM or fail can be used, coupled with an
+       early return for failure, as the domain parser fails on U+FFFD". So a malformed sequence becomes a URL
+       that does not parse, which is what the replacement character reaching an IDNA_ERROR range does here.
+       Handing the raw bytes to domain-to-ASCII instead let an OVERLONG sequence be read as the character it is
+       not allowed to spell: `http://%C1%A1.com/` walked 0xC1 0xA1 as U+0061 and produced the host `a.com`,
+       where the standard has failure — a hostname smuggled past every check that compared one. */
+    {
+        size_t rawn = 0;
+        char *raw = url_percent_decode(s, n, &rawn);
+        decoded = encoding_utf8_decode_without_bom(raw, rawn, &dn);
+        free(raw);
+    }
     /* §4.2 step 4: DOMAIN TO ASCII. A non-ASCII domain is not lowercased and hoped for — `münchen.de` IS
        `xn--mnchen-3ya.de` in the record, and every comparison a page makes against `location.host` is against
        that A-label. The ASCII path stays here because UTS-46's answer for it is exactly this lowercase, and

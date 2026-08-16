@@ -167,9 +167,14 @@ static void *idna_realloc(void *opaque, void *ptr, size_t size)
     return realloc(ptr, size);
 }
 
-/* Decode UTF-8 into code points. The domain arrives as the percent-decoded bytes the host parser produced, and
-   those bytes are UTF-8 by §4.2's own step. Returns the count, or -1 on malformed input — which IS a failure,
-   because a domain that is not UTF-8 is not a domain. */
+/* EXPAND UTF-8 INTO CODE POINTS — which is not a DECODE, and the difference is why this is here rather than in
+   core/encoding. §3.5's host parser is what calls domain-to-ASCII, and its step 5 has already run UTF-8 decode
+   without BOM on the percent-decoding, so what arrives is a SCALAR VALUE STRING: well-formed UTF-8, with a
+   malformed sequence already turned into U+FFFD (which the mapping table then refuses, exactly as the
+   standard's own note says). This walk therefore has no error handling left to do. It used to answer -1 for a
+   malformed byte, and that answer is what let an OVERLONG form through as the character it spelled: 0xC1 0xA1
+   passed the `(c & 0xe0) == 0xc0` test and came out as U+0061. There is one caller and it can no longer hand
+   that over, so each impossible byte is a DFAIL at the byte rather than a return the caller must interpret. */
 static int utf8_to_cps(const char *s, size_t n, uint32_t **out)
 {
     uint32_t *cps = malloc(sizeof(uint32_t) * (n + 1));
@@ -185,13 +190,30 @@ static int utf8_to_cps(const char *s, size_t n, uint32_t **out)
         else if ((c & 0xe0) == 0xc0) { cp = c & 0x1f; extra = 1; }
         else if ((c & 0xf0) == 0xe0) { cp = c & 0x0f; extra = 2; }
         else if ((c & 0xf8) == 0xf0) { cp = c & 0x07; extra = 3; }
-        else { free(cps); return -1; }
+        else {
+            DFAIL("domain-to-ASCII was handed a byte that begins no UTF-8 sequence — §3.5 step 5's UTF-8 "
+                  "decode without BOM did not run on this domain, so the caller is not the host parser or "
+                  "the host parser skipped it");
+            free(cps);
+            return -1;
+        }
         i++;
         while (extra--) {
-            if (i >= n || ((unsigned char)s[i] & 0xc0) != 0x80) { free(cps); return -1; }
+            if (i >= n || ((unsigned char)s[i] & 0xc0) != 0x80) {
+                DFAIL("domain-to-ASCII was handed a UTF-8 sequence that ends early or continues with a byte "
+                      "that is not a continuation — the decode that guarantees a scalar value string did not "
+                      "run on this domain");
+                free(cps);
+                return -1;
+            }
             cp = (cp << 6) | ((unsigned char)s[i++] & 0x3f);
         }
-        if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) { free(cps); return -1; }
+        if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+            DFAIL("domain-to-ASCII was handed a surrogate or an out-of-range code point spelled in UTF-8 — "
+                  "the decoder rejects both, so these bytes never went through it");
+            free(cps);
+            return -1;
+        }
         cps[m++] = cp;
     }
     *out = cps;
