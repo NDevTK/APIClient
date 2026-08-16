@@ -21,7 +21,13 @@
  * THE CASCADE IS RESOLVED LIVE, per read, from the RUNNING FLOW'S TREE: inline, then the author rules in that
  * flow's own `<style>` elements matched with lxb_selectors_match_node, then the UA default, then the property's
  * initial value. Nothing is cached across a read, because a cache would be shared state that the flow machinery
- * does not swap — the same reason the storage is the attribute. */
+ * does not swap — the same reason the storage is the attribute.
+ *
+ * AND THE CASCADE IS WHERE THIS FILE STOPS. What it produces is the SPECIFIED value — the declaration that won
+ * — which is neither the computed value a spec algorithm reads nor the resolved value getComputedStyle
+ * returns; core/css/css_computed_value.h owns both of those steps and reads the cascade through the one entry
+ * below. On the way IN, a declaration reaches the cascade through core/css/css_shorthand.h, because a shorthand
+ * declaration sets its longhands and the cascade is over longhands only. */
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -37,6 +43,8 @@
 #include "core/dom/node.h"
 #include "core/dom/element.h"
 #include "core/dom/selector_match.h"
+#include "core/css/css_computed_value.h"
+#include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
 #include "solver/dom_cow.h"
 
@@ -143,15 +151,22 @@ static lxb_css_rule_declaration_list_t *cssd_parse_block(const char *text, size_
 }
 
 /* A declaration's PROPERTY NAME, serialized. Comparing by name rather than by the registry id is what makes a
-   CUSTOM property (`--brand`) work through exactly the same path as a known one — it has no id to compare. */
-static bool cssd_decl_named(const lxb_css_rule_declaration_t *d, const char *name)
+   CUSTOM property (`--brand`) work through exactly the same path as a known one — it has no id to compare, and
+   neither does a SHORTHAND lexbor's registry does not carry. OWNED. */
+static char *cssd_decl_name(const lxb_css_rule_declaration_t *d)
 {
     CssBuf b = { 0 };
-    bool same;
 
     lxb_css_property_serialize_name(d->u.user, d->type, css_buf_cb, &b);
-    same = b.s && strcmp(b.s, name) == 0;
-    css_buf_free(&b);
+    return b.s ? b.s : NULL;
+}
+
+static bool cssd_decl_named(const lxb_css_rule_declaration_t *d, const char *name)
+{
+    char *n = cssd_decl_name(d);
+    bool same = n && strcmp(n, name) == 0;
+
+    free(n);
     return same;
 }
 
@@ -160,6 +175,31 @@ static char *cssd_decl_value(const lxb_css_rule_declaration_t *d)
     CssBuf b = { 0 };
     lxb_css_property_serialize(d->u.user, d->type, css_buf_cb, &b);
     return b.s ? b.s : NULL;
+}
+
+/* THE VALUE THIS DECLARATION GIVES TO `name`, or NULL when it gives it none. A declaration sets a longhand
+   either by BEING it or by being a SHORTHAND of it — CSS Cascade §Shorthand Properties makes a shorthand
+   declaration set every longhand it names, and the cascade is over longhands only. Every layer below asks
+   through here, so `overflow: hidden` is read by `el.style.overflowX`, by the author cascade and by
+   getComputedStyle identically rather than by whichever of them remembered to expand it. OWNED. */
+static char *cssd_decl_value_for(const lxb_css_rule_declaration_t *d, const char *name)
+{
+    char *dname, *value, *out;
+
+    /* CSS Syntax's INVALID DECLARATION, dropped. Lexbor keeps one in the list as a `__UNDEF` holding the
+       property id and the RAW UNPARSED TOKENS, so that a serializer can round-trip the block it came from —
+       and the cascade that read it back without this line handed those tokens on as if they were a value:
+       `display: bogus` won the cascade and `getComputedStyle(el).display` answered "bogus", a string no
+       property's grammar admits. The one from `declarations_bad` does not even carry a name. */
+    if (d->type == LXB_CSS_PROPERTY__UNDEF) return NULL;
+    dname = cssd_decl_name(d);
+    if (!dname) return NULL;
+    if (strcmp(dname, name) == 0) { free(dname); return cssd_decl_value(d); }
+    value = cssd_decl_value(d);
+    out = value ? css_shorthand_component(dname, value, name) : NULL;
+    free(value);
+    free(dname);
+    return out;
 }
 
 /* The element's inline `style` attribute, as text. BORROWED from Lexbor's own storage. */
@@ -185,8 +225,12 @@ static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pi
     if (list) {
         for (r = list->first; r; r = r->next) {
             lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(r);
-            if (r->type != LXB_CSS_RULE_DECLARATION || !cssd_decl_named(d, name)) continue;
-            out = cssd_decl_value(d);
+            char *v;
+            if (r->type != LXB_CSS_RULE_DECLARATION) continue;
+            v = cssd_decl_value_for(d, name);
+            if (!v) continue;
+            free(out);
+            out = v;
             if (pimportant) *pimportant = d->important;
         }
     }
@@ -239,8 +283,11 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
                     if (!selector_match_node(self, st->selector, &spec)) continue;
                     for (dr = st->declarations->first; dr; dr = dr->next) {
                         lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(dr);
+                        char *v;
                         bool wins;
-                        if (dr->type != LXB_CSS_RULE_DECLARATION || !cssd_decl_named(d, name)) continue;
+                        if (dr->type != LXB_CSS_RULE_DECLARATION) continue;
+                        v = cssd_decl_value_for(d, name);
+                        if (!v) continue;
                         /* THE CASCADE, in the order §6.4 states it: IMPORTANCE first, then SPECIFICITY, then
                            document ORDER. Order alone is what this compared at first, which is wrong in the
                            most ordinary way there is — `#main { display:block }` written before
@@ -250,9 +297,9 @@ static char *cssd_author_value(lxb_dom_element_t *el, const char *name)
                         wins = !have
                             || (d->important && !best_important)
                             || (d->important == best_important && spec >= best_spec);
-                        if (!wins) continue;
+                        if (!wins) { free(v); continue; }
                         free(out);
-                        out = cssd_decl_value(d);
+                        out = v;
                         best_spec = spec;
                         best_important = d->important;
                         have = true;
@@ -289,11 +336,45 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "main", "display", "block" },  { "figure", "display", "block" },
     { "table", "display", "table" }, { "tr", "display", "table-row" },
     { "td", "display", "table-cell" }, { "th", "display", "table-cell" },
-    { "head", "display", "none" },   { "style", "display", "none" },
-    { "script", "display", "none" }, { "template", "display", "none" },
-    { "link", "display", "none" },   { "meta", "display", "none" },
+    /* §15.3.1's FIRST RULE, entire: `area, base, basefont, datalist, head, link, meta, noembed, noframes,
+       param, rp, script, style, template, title { display: none }`. Seven of the fourteen used to be here and
+       seven were not, which is not a smaller stylesheet — it is a `<datalist>` this engine says generates a
+       box, and every §6 geometry member and HTML's `being rendered` reading that answer. */
+    { "area", "display", "none" },   { "base", "display", "none" },
+    { "basefont", "display", "none" }, { "datalist", "display", "none" },
+    { "head", "display", "none" },   { "link", "display", "none" },
+    { "meta", "display", "none" },   { "noembed", "display", "none" },
+    { "noframes", "display", "none" }, { "param", "display", "none" },
+    { "rp", "display", "none" },     { "script", "display", "none" },
+    { "style", "display", "none" },  { "template", "display", "none" },
     { "title", "display", "none" },
 };
+
+/* §15.3.1's `hidden` RULES, which are ATTRIBUTE selectors and therefore outrank every type selector in the
+   table above — so they are asked first, and they are asked HERE rather than by each component that wants to
+   know whether an element generates a box. element_view.c walked the ancestor chain for the attribute itself,
+   which is the same rule implemented a second time and implemented WRONG in two ways this one is not: it read
+   `hidden="until-found"` (which §15.3.1 makes `content-visibility: hidden`, a rendered element) as a removed
+   box, and it ignored `embed[hidden]`; and being outside the cascade it could not be overridden by the author
+   rule that outranks it, so a page's own `[hidden] { display: block }` did nothing.
+     [hidden]:not([hidden=until-found i]):not(embed) { display: none }
+     embed[hidden] { display: inline; height: 0; width: 0 } */
+static const char *cssd_ua_hidden(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen)
+{
+    size_t vlen = 0;
+    const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"hidden", 6, &vlen);
+    static const char UNTIL_FOUND[] = "until-found";
+    size_t i;
+
+    if (!v) return NULL;
+    if (taglen == 5 && memcmp(tag, "embed", 5) == 0) return "inline";
+    if (vlen == sizeof(UNTIL_FOUND) - 1) {
+        for (i = 0; i < vlen; i++)
+            if ((char)tolower((unsigned char)v[i]) != UNTIL_FOUND[i]) break;
+        if (i == vlen) return NULL;   /* `until-found` sets content-visibility, and the box stays */
+    }
+    return "none";
+}
 
 static const char *cssd_ua_value(lxb_dom_element_t *el, const char *name)
 {
@@ -302,6 +383,10 @@ static const char *cssd_ua_value(lxb_dom_element_t *el, const char *name)
     unsigned i;
 
     if (!tag) return NULL;
+    if (strcmp(name, "display") == 0) {
+        const char *h = cssd_ua_hidden(el, tag, n);
+        if (h) return h;
+    }
     for (i = 0; i < sizeof(UA_DEFAULT) / sizeof(UA_DEFAULT[0]); i++)
         if (strlen(UA_DEFAULT[i].tag) == n && memcmp(UA_DEFAULT[i].tag, tag, n) == 0 &&
             strcmp(UA_DEFAULT[i].prop, name) == 0)
@@ -323,20 +408,43 @@ static char *cssd_initial_value(const char *name)
     return b.s;
 }
 
-/* THE CASCADE, in the order the spec resolves it. */
-static char *cssd_resolved(lxb_dom_element_t *el, const char *name, int mode)
+/* THE CASCADE, in the order the spec resolves it. What comes out is the SPECIFIED value — the declaration that
+   won — which is not yet the computed value and is not yet §9's resolved value; css_computed_value.c owns both
+   of those steps, and this is the one entry it reads the cascade through. */
+char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
 {
-    char *v = cssd_inline_value(el, name, NULL);
+    char *v;
 
-    if (v || mode == CSSD_INLINE)
-        return v;   /* `element.style` is the inline block ALONE — it is not a resolved value */
+    DCHECK(g_ready, "the cascade was resolved before cssom_init built the CSS parser it parses every layer "
+                    "with — the component is initialised with the DOM, so a caller reaching it first is a "
+                    "component ordered ahead of the browser's own setup");
+    DCHECK(el != NULL && name != NULL, "the cascade was asked to resolve with no element or no property name");
+    v = cssd_inline_value(el, name, NULL);
+    if (v) return v;
     v = cssd_author_value(el, name);
     if (v) return v;
     {
         const char *ua = cssd_ua_value(el, name);
-        if (ua) return strdup(ua);
+        if (ua) {
+            char *out = strdup(ua);
+            CHECK(out != NULL, "cssom: OOM copying a UA-stylesheet value — a dropped one reads as undeclared");
+            return out;
+        }
     }
     return cssd_initial_value(name);
+}
+
+/* WHAT A DECLARATION OBJECT'S READ ANSWERS, decided once by WHICH VIEW it is. `element.style` is the inline
+   declaration block ALONE — a property no inline declaration sets reads as the empty string there, not as the
+   value the page would see — and getComputedStyle's is CSSOM §9's RESOLVED value, which for most properties is
+   the computed value and for the box-model ones is the used value (css_computed_value.h). */
+static char *cssd_view_value(lxb_dom_element_t *el, const char *name, int mode)
+{
+    if (mode == CSSD_INLINE) return cssd_inline_value(el, name, NULL);
+    DCHECK(mode == CSSD_COMPUTED,
+           "a CSSStyleDeclaration was read through a view that is neither the inline block nor the computed "
+           "one — the mode is decided when the object is minted and there are exactly two");
+    return css_resolved_value(el, name);
 }
 
 /* ---- the interface ---------------------------------------------------------------------------------------- */
@@ -358,7 +466,11 @@ static void cssd_write_inline(JSContext *ctx, lxb_dom_element_t *el, const char 
         if (list) {
             for (r = list->first; r; r = r->next) {
                 lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(r);
-                if (r->type != LXB_CSS_RULE_DECLARATION) continue;
+                /* The invalid declaration is dropped on the way OUT as well as on the way in — CSSOM
+                   serializes a declaration block from the declarations it holds, and lexbor's `__UNDEF`
+                   placeholder is not one of them (the one a bad block produces carries no property record at
+                   all, so serializing it reads through a null). */
+                if (r->type != LXB_CSS_RULE_DECLARATION || d->type == LXB_CSS_PROPERTY__UNDEF) continue;
                 if (cssd_decl_named(d, name)) {
                     if (!value) continue;            /* removeProperty drops it */
                     if (wrote) continue;             /* one entry per property */
@@ -414,7 +526,7 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
         r = JS_NewString(ctx, (v && important) ? "important" : "");
         free(v);
     } else {
-        char *v = cssd_resolved(el, name, mode);
+        char *v = cssd_view_value(el, name, mode);
         r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
         free(v);
     }
@@ -459,7 +571,7 @@ static JSValue js_cssd_camel_get(JSContext *ctx, JSValueConst this_val, int magi
 
     DCHECK(e != NULL, "a CSS attribute was declared with a property id the registry does not have");
     if (!el || !e) return JS_NewStringLen(ctx, "", 0);
-    v = cssd_resolved(el, (const char *)e->name, mode);
+    v = cssd_view_value(el, (const char *)e->name, mode);
     r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
     free(v);
     return r;
@@ -533,7 +645,9 @@ static int cssd_names(lxb_dom_element_t *el, char **out, int max)
         for (r = list->first; r && n < max; r = r->next) {
             lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(r);
             CssBuf b = { 0 };
-            if (r->type != LXB_CSS_RULE_DECLARATION) continue;
+            /* An invalid declaration is not in the block, so `length` does not count it and `item(i)` does not
+               name it — the same drop the cascade and the rewrite make. */
+            if (r->type != LXB_CSS_RULE_DECLARATION || d->type == LXB_CSS_PROPERTY__UNDEF) continue;
             lxb_css_property_serialize_name(d->u.user, d->type, css_buf_cb, &b);
             if (b.s) out[n++] = b.s;
         }

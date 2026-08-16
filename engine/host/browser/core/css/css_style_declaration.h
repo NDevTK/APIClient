@@ -5,6 +5,12 @@
 #include "quickjs.h"
 
 void cssom_init(JSContext *ctx);
+/* THE CASCADE'S WINNER for `name` on `el` — inline, then this flow's author rules, then the UA sheet, then the
+   property's initial value — as text. It is the SPECIFIED value: the declaration that won, before the
+   property's own `Computed value:` line has been applied to it, which is core/css/css_computed_value.h's job
+   and is who this exists for. OWNED: the caller frees. NULL only for a property no layer declares and that has
+   no initial value in lexbor's registry (a custom property nobody set). */
+char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name);
 /* CSSOM §6.7's prototype for ONE realm — declared into core/realm.h's list, run once per realm. */
 void cssom_install_proto(JSContext *ctx);
 /* PER REALM. OWNED: the caller frees. */

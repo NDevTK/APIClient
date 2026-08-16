@@ -6,10 +6,12 @@
  *
  *   A BOX EXISTS wherever a user agent would generate one. HTML's "being rendered" is defined AS "has any
  *   associated CSS layout boxes", so §6's "associated box" and HTML's "being rendered" are ONE predicate under
- *   two names, and `element_view_has_box` below is that one predicate. It is decided from facts the TREE
- *   carries — the element is connected, its node document is some navigable's ACTIVE document and is being
- *   presented (viewport.h's `viewport_exists`), and neither it nor an ancestor carries the `hidden` content
- *   attribute, whose §15.3.1 UA-stylesheet rule is `display: none`.
+ *   two names, and `element_view_has_box` below is that one predicate. It is decided from the element's
+ *   connectedness, from whether its node document is some navigable's ACTIVE document and is being presented
+ *   (viewport.h's `viewport_exists`), and from the COMPUTED `display` of the element and of its ancestors
+ *   (core/css/css_computed_value.h) — `none` on any of them, or `contents` on the element itself, and there is
+ *   no box. §15.3.1's UA-stylesheet rule for the `hidden` content attribute is one input to that value and is
+ *   applied where every other UA rule is, in the cascade, rather than a second time here.
  *
  *   NO BOX HAS GEOMETRY except the INITIAL CONTAINING BLOCK, which viewport.c models. There is no layout, so a
  *   box's padding edge, its border widths, its scrolling area and its fragments do not exist to be read.
@@ -89,11 +91,11 @@ void element_view_install(JSContext *ctx, JSValueConst proto);
 void element_view_free(void);
 
 /* HTML'S "BEING RENDERED" AND CSSOM VIEW'S "HAS AN ASSOCIATED BOX" — one predicate, one answer, for every
-   standard in this engine that asks it. See the header above for what decides it and for what it deliberately
-   does NOT ask: a `display: none` written in author CSS or in an inline style is a computed value the CSSOM in
-   this build exposes to no C caller, so it does not participate. That is a NARROWER answer than a laying-out
-   browser's, never a wider one — an element this says is being rendered may not be, and one it says is not
-   never is. `n` must be an element. */
+   standard in this engine that asks it. See the header above for what decides it. It reads the COMPUTED
+   `display` of the element and of every ancestor, so an author rule, an inline style and the UA sheet all
+   participate through the one cascade; what it still cannot see is a box that a LAYOUT would decline to
+   generate for a reason other than `display` — which is the same narrowing this whole component states, never
+   a wider answer than a laying-out browser's. `n` must be an element. */
 bool element_view_has_box(const lxb_dom_node_t *n);
 
 #endif

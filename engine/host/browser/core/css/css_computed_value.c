@@ -1,0 +1,388 @@
+/* CSS Cascade §Computed Value + CSSOM §9's resolved value. See css_computed_value.h for the split. */
+#include <ctype.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <lexbor/dom/dom.h>
+
+#include "check.h"
+#include "core/css/css_computed_value.h"
+#include "core/css/css_shorthand.h"
+#include "core/css/css_style_declaration.h"
+
+static char *css_cv_strdup(const char *s)
+{
+    char *out = strdup(s);
+    CHECK(out != NULL, "cssom: OOM deriving a computed value — a dropped value would read as undeclared");
+    return out;
+}
+
+static bool css_cv_is(const char *v, const char *kw)
+{
+    return v != NULL && strcmp(v, kw) == 0;
+}
+
+/* CSS Cascade §7.3's CSS-WIDE KEYWORDS. Each is the ENTIRE value of the declaration when present, so the test
+   is an equality and not a search, and each of them makes the computed value a product of the DEFAULTING step
+   rather than of the declaration. */
+static bool css_wide_keyword(const char *v)
+{
+    static const char *const WIDE[] = { "inherit", "initial", "unset", "revert", "revert-layer" };
+    unsigned i;
+    size_t n;
+
+    while (*v && isspace((unsigned char)*v)) v++;
+    for (n = strlen(v); n > 0 && isspace((unsigned char)v[n - 1]); n--) { }
+    for (i = 0; i < sizeof(WIDE) / sizeof(WIDE[0]); i++) {
+        size_t k = strlen(WIDE[i]);
+        size_t j;
+        if (k != n) continue;
+        for (j = 0; j < k; j++)
+            if ((char)tolower((unsigned char)v[j]) != WIDE[i][j]) break;
+        if (j == k) return true;
+    }
+    return false;
+}
+
+/* "The ROOT ELEMENT" — the element whose parent is the Document itself. CSS Display §2.8 gives it its own
+   computed-value rules, and CSSOM VIEW §6 asks the same question of the same node. */
+static bool css_is_root_element(const lxb_dom_node_t *n)
+{
+    return n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT;
+}
+
+/* ---- css-overflow §3.1's computed value ------------------------------------------------------------------ */
+
+/* §3.1: "The scroll, auto, and hidden values are known as the scrollable values of overflow." */
+static bool overflow_scrollable(const char *v)
+{
+    return css_cv_is(v, "scroll") || css_cv_is(v, "auto") || css_cv_is(v, "hidden");
+}
+
+/* §3.1's legacy alias — `overlay` IS `auto`, so it aliases before every question is asked of it. */
+static const char *overflow_alias(const char *v)
+{
+    return css_cv_is(v, "overlay") ? "auto" : v;
+}
+
+static bool overflow_value(const char *v)
+{
+    return overflow_scrollable(v) || css_cv_is(v, "visible") || css_cv_is(v, "clip");
+}
+
+/* §3.1's one computed-value rule, which is why "usually specified value, but see text" is not "as specified":
+   "if the other axis specifies a scrollable value, a specified value of visible computes to auto, enabling
+   scrolling in its axis". It reads the other axis's SPECIFIED value, so there is no recursion between the two
+   and no order in which they must be asked. */
+static char *computed_overflow(lxb_dom_element_t *el, const char *name, char *spec)
+{
+    bool xaxis = strcmp(name, "overflow-x") == 0;
+    char *other = cssom_cascaded_value(el, xaxis ? "overflow-y" : "overflow-x");
+    const char *self_v, *other_v;
+    char *out;
+
+    DCHECK(other != NULL,
+           "the cascade produced no value for the other overflow axis — lexbor's property registry carries "
+           "`overflow-x` and `overflow-y` with an initial value of `visible`, so the cascade's last layer "
+           "always answers and a NULL here is a cascade that stopped early");
+    self_v = overflow_alias(spec);
+    other_v = overflow_alias(other);
+    DCHECK(overflow_value(self_v) && overflow_value(other_v),
+           "an overflow axis cascaded to a value outside css-overflow §3.1's grammar — lexbor validates the "
+           "longhand and css_shorthand.c validates the `overflow` shorthand, so a third writer has reached the "
+           "cascade without a grammar");
+    out = (css_cv_is(self_v, "visible") && overflow_scrollable(other_v)) ? css_cv_strdup("auto")
+                                                                        : css_cv_strdup(self_v);
+    free(other);
+    free(spec);
+    return out;
+}
+
+/* ---- CSS Display §2.7 and §2.8's computed value ----------------------------------------------------------- */
+
+/* §2.7's BLOCKIFICATION: "sets the box's computed outer display type to block". The values whose outer type is
+   already block are unchanged; a layout-internal box additionally has "its inner display type convert to flow
+   so that it becomes a block container", which is why every table-internal row below maps to plain `block`. */
+static char *blockified(char *spec)
+{
+    static const struct { const char *from, *to; } MAP[] = {
+        { "inline", "block" }, { "inline-block", "block" },   /* §2.7's legacy inline flow-root rule */
+        { "inline-table", "table" }, { "inline-flex", "flex" }, { "inline-grid", "grid" },
+        { "run-in", "block" },
+        { "table-row-group", "block" }, { "table-header-group", "block" }, { "table-footer-group", "block" },
+        { "table-row", "block" }, { "table-cell", "block" }, { "table-column-group", "block" },
+        { "table-column", "block" }, { "table-caption", "block" },
+        { "ruby-base", "block" }, { "ruby-text", "block" },
+        { "ruby-base-container", "block" }, { "ruby-text-container", "block" },
+    };
+    static const char *const BLOCK_OUTER[] = { "block", "flow", "flow-root", "flex", "grid", "table",
+                                               "list-item" };
+    unsigned i;
+
+    for (i = 0; i < sizeof(MAP) / sizeof(MAP[0]); i++)
+        if (strcmp(spec, MAP[i].from) == 0) { free(spec); return css_cv_strdup(MAP[i].to); }
+    for (i = 0; i < sizeof(BLOCK_OUTER) / sizeof(BLOCK_OUTER[0]); i++)
+        if (strcmp(spec, BLOCK_OUTER[i]) == 0) return spec;
+    DFAIL("CSS Display §2.7 blockifies a box whose computed `display` this file cannot map. The two forms it "
+          "does not carry are the TWO-VALUE `<display-outside> <display-inside>` syntax (`inline flow-root`, "
+          "`block flow list-item`), which lexbor parses into the three-slot value this file only ever sees "
+          "serialized, and `ruby`, whose blockified form is `block ruby` and NOT `block` (its inner type "
+          "survives — only a LAYOUT-INTERNAL box converts its inner type to flow). BUILD the outer/inner pair "
+          "as the value this file carries, so blockification sets the outer half and leaves the inner one "
+          "alone, instead of mapping whole keywords");
+    return spec;
+}
+
+/* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, because
+   `display: contents` generates none and a flex item's container is therefore the first ancestor past it. The
+   walk reads SPECIFIED values on purpose: blockification never makes a box a flex or grid container and never
+   stops one being one, so the question this walk asks has the same answer either way, and asking for the
+   computed value would recurse up the whole ancestor chain to answer it. OWNED, or NULL at the root. */
+static char *box_parent_display(const lxb_dom_node_t *n)
+{
+    const lxb_dom_node_t *p;
+
+    for (p = n->parent; p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT; p = p->parent) {
+        char *d = cssom_cascaded_value(lxb_dom_interface_element((lxb_dom_node_t *)p), "display");
+
+        DCHECK(d != NULL, "the cascade produced no `display` for an ancestor element — the UA layer answers "
+                          "`inline` for every element it does not name, so this cannot be unset");
+        if (strcmp(d, "contents") != 0) return d;
+        free(d);
+        /* §2.8: "a display of contents computes to block on the root element", so the root is a box parent
+           however it is declared. */
+        if (css_is_root_element(p)) return css_cv_strdup("block");
+    }
+    return NULL;
+}
+
+static bool display_is_flex_or_grid_container(const char *d)
+{
+    return css_cv_is(d, "flex") || css_cv_is(d, "inline-flex") ||
+           css_cv_is(d, "grid") || css_cv_is(d, "inline-grid");
+}
+
+static char *computed_display(lxb_dom_element_t *el, char *spec)
+{
+    const lxb_dom_node_t *n = lxb_dom_interface_node(el);
+    bool root = css_is_root_element(n), blockify;
+
+    /* §2.8: "Additionally, a display of contents computes to block on the root element." */
+    if (root && strcmp(spec, "contents") == 0) { free(spec); return css_cv_strdup("block"); }
+    /* §2.7: blockification "has no effect on display types that generate no box at all, such as none or
+       contents". */
+    if (strcmp(spec, "none") == 0 || strcmp(spec, "contents") == 0) return spec;
+    /* §2.8's root rule, and the three computed-value fixups §2.7 lists that the TREE decides: "Absolute
+       positioning or floating an element blockifies the box's display type" and "A parent with a grid or flex
+       display value blockifies the box's display type". */
+    blockify = root;
+    if (!blockify) {
+        char *f = css_computed_value(el, "float");
+        blockify = f != NULL && strcmp(f, "none") != 0;
+        free(f);
+    }
+    if (!blockify) {
+        char *p = css_computed_value(el, "position");
+        blockify = css_cv_is(p, "absolute") || css_cv_is(p, "fixed");
+        free(p);
+    }
+    if (!blockify) {
+        char *pd = box_parent_display(n);
+        blockify = display_is_flex_or_grid_container(pd);
+        free(pd);
+    }
+    return blockify ? blockified(spec) : spec;
+}
+
+/* ---- the computed value ----------------------------------------------------------------------------------- */
+
+bool css_computed_models(const char *name)
+{
+    DCHECK(name != NULL, "the computed-value model question was asked about a NULL property name");
+    return strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0 ||
+           strcmp(name, "display") == 0 || strcmp(name, "float") == 0 || strcmp(name, "position") == 0;
+}
+
+char *css_computed_value(lxb_dom_element_t *el, const char *name)
+{
+    char *spec;
+
+    DCHECK(el != NULL && name != NULL, "a computed value was asked for with no element or no property name");
+    DCHECK(css_computed_models(name),
+           "css_computed_value was asked for a property whose computed value this component does not derive. "
+           "It answers a NAMED set (css_computed_models) and crashes outside it rather than handing back a "
+           "specified value under the word `computed` — the two differ for every length-valued property, and "
+           "the caller asking is a spec algorithm that reads the computed one. BUILD the property's own "
+           "`Computed value:` line here, and record the shorthands that can set it in css_shorthand.c");
+    DCHECK(css_shorthand_complete_for(name),
+           "css_computed_value derives a property whose SHORTHANDS are not all expanded by css_shorthand.c, so "
+           "the cascade it reads may never have looked at the declaration that set it — a `margin: 0` two "
+           "lines above a `margin-top` read is invisible, and the answer is a real number with nothing to say "
+           "it is the initial value. Record the complete set in css_shorthand_complete_for");
+    spec = cssom_cascaded_value(el, name);
+    DCHECK(spec != NULL,
+           "the cascade produced nothing for a property this component models — every one of them is in "
+           "lexbor's registry with an initial value, so the cascade's last layer always answers");
+    if (!spec) return NULL;
+    DCHECK(!css_wide_keyword(spec),
+           "the cascade's winner is a CSS-WIDE KEYWORD (inherit / initial / unset / revert), and CSS Cascade "
+           "§7's DEFAULTING step is what turns one into a value: `inherit` takes the parent element's computed "
+           "value, `initial` the property's initial value, `unset` whichever of those the property's "
+           "inheritance says. css_style_declaration.c's cascade has NO inheritance step at all — not for the "
+           "keyword and not for an inherited property nobody declared — so there is nothing here to default "
+           "with. BUILD the defaulting step: the property's inherited-ness comes from its own spec "
+           "definition (@webref/css publishes it beside the `computedValue` line), and the parent's computed "
+           "value is this same entry one node up");
+    if (strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0)
+        return computed_overflow(el, name, spec);
+    if (strcmp(name, "display") == 0)
+        return computed_display(el, spec);
+    /* `float` (CSS2 §9.5.1) and `position` (css-position §2) both state "Computed value: as specified", and a
+       keyword has no absolutization to do — so the specified value IS the answer here rather than a stand-in
+       for one. */
+    DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0,
+           "a property this component claims to model reached the as-specified arm without a `Computed value: "
+           "as specified` line to justify it — css_computed_models and this switch are one list and have come "
+           "apart");
+    return spec;
+}
+
+/* ---- CSSOM §9's resolved value ---------------------------------------------------------------------------- */
+
+CssResolvedKind css_resolved_kind(const char *name)
+{
+    /* §9's own table, in its own order. Each list is the spec's, including the logical-property spellings —
+       a page reads `marginInlineStart` exactly as it reads `marginLeft`, and a list that carries one and not
+       the other answers the same question two ways. */
+    static const char *const USED[] = {
+        "background-color", "border-block-end-color", "border-block-start-color", "border-bottom-color",
+        "border-inline-end-color", "border-inline-start-color", "border-left-color", "border-right-color",
+        "border-top-color", "box-shadow", "caret-color", "color", "outline-color",
+    };
+    static const char *const USED_IF_RENDERED[] = {
+        "block-size", "height", "inline-size", "margin-block-end", "margin-block-start", "margin-bottom",
+        "margin-inline-end", "margin-inline-start", "margin-left", "margin-right", "margin-top",
+        "padding-block-end", "padding-block-start", "padding-bottom", "padding-inline-end",
+        "padding-inline-start", "padding-left", "padding-right", "padding-top", "width",
+        /* css-transforms §4: "The transform-origin property is a resolved value special case property like
+           height." */
+        "transform-origin",
+    };
+    static const char *const USED_IF_POSITIONED[] = {
+        "bottom", "left", "inset-block-end", "inset-block-start", "inset-inline-end", "inset-inline-start",
+        "right", "top",
+    };
+    unsigned i;
+
+    DCHECK(name != NULL, "CSSOM §9's classification was asked about a NULL property name");
+    for (i = 0; i < sizeof(USED) / sizeof(USED[0]); i++)
+        if (strcmp(USED[i], name) == 0) return CSS_RESOLVED_USED;
+    for (i = 0; i < sizeof(USED_IF_RENDERED) / sizeof(USED_IF_RENDERED[0]); i++)
+        if (strcmp(USED_IF_RENDERED[i], name) == 0) return CSS_RESOLVED_USED_IF_RENDERED;
+    for (i = 0; i < sizeof(USED_IF_POSITIONED) / sizeof(USED_IF_POSITIONED[0]); i++)
+        if (strcmp(USED_IF_POSITIONED[i], name) == 0) return CSS_RESOLVED_USED_IF_POSITIONED;
+    if (strcmp(name, "line-height") == 0) return CSS_RESOLVED_LINE_HEIGHT;
+    if (strcmp(name, "transform") == 0) return CSS_RESOLVED_TRANSFORM;
+    return CSS_RESOLVED_COMPUTED;
+}
+
+/* The computed value, for a property whose resolved value §9 says the computed value IS. */
+static char *css_resolved_computed(lxb_dom_element_t *el, const char *name)
+{
+    if (css_computed_models(name)) return css_computed_value(el, name);
+    return cssom_cascaded_value(el, name);
+}
+
+/* §9's two escapes read "the resolved value of the display property", which is the computed one — `display` is
+   in "any other property". */
+static bool resolved_display_generates_a_box(lxb_dom_element_t *el)
+{
+    char *d = css_computed_value(el, "display");
+    bool box = !css_cv_is(d, "none") && !css_cv_is(d, "contents");
+
+    free(d);
+    return box;
+}
+
+char *css_resolved_value(lxb_dom_element_t *el, const char *name)
+{
+    DCHECK(el != NULL && name != NULL, "a resolved value was asked for with no element or no property name");
+    switch (css_resolved_kind(name)) {
+    case CSS_RESOLVED_COMPUTED:
+        break;
+    case CSS_RESOLVED_USED_IF_RENDERED:
+        /* "If the property applies to the element and the resolved value of the display property is not none
+           or contents, then the resolved value is the used value. Otherwise the resolved value is the computed
+           value." The second half is a real answer and is given. */
+        if (!resolved_display_generates_a_box(el)) break;
+        DFAIL("CSSOM §9 makes this property's resolved value the USED value — the number a LAYOUT produced for "
+              "this element's box — whenever the element generates one, and this element does. This engine "
+              "gives geometry to exactly one box, the initial containing block (core/dom/element_view.h), so "
+              "there is no used width, height, margin or padding to report; answering the cascade's specified "
+              "value here is what getComputedStyle used to do, and it is a WRONG answer rather than a missing "
+              "one. BUILD A LAYOUT — CSS 2.1 §10.3.3 resolves the root element's used width from the ICB "
+              "core/frame/viewport.c already models, which is where one starts — and decide §9's other "
+              "conjunct with it (whether the property APPLIES to this element, which for `width` on a "
+              "non-replaced inline box it does not)");
+        break;
+    case CSS_RESOLVED_USED_IF_POSITIONED: {
+        /* "If the property applies to a positioned element and the resolved value of the display property is
+           not none or contents, and the property is not over-constrained, then the resolved value is the used
+           value. Otherwise the resolved value is the computed value." A STATICALLY positioned element is not a
+           positioned element, which is the common case and is answered. */
+        char *pos = css_computed_value(el, "position");
+        bool positioned = !css_cv_is(pos, "static");
+
+        free(pos);
+        if (!positioned || !resolved_display_generates_a_box(el)) break;
+        DFAIL("CSSOM §9 makes an inset property's resolved value the USED value for a POSITIONED element that "
+              "generates a box, and this element is one. The used inset is where a LAYOUT placed the box "
+              "relative to its containing block, and this engine has no box geometry beyond the initial "
+              "containing block (core/dom/element_view.h). BUILD A LAYOUT, and with it §9's third conjunct — "
+              "an OVER-CONSTRAINED pair (`left` and `right` both set on a non-auto width) resolves to the "
+              "computed value rather than the used one");
+        break;
+    }
+    case CSS_RESOLVED_USED:
+        DFAIL("CSSOM §9 makes this property's resolved value the USED value unconditionally — it is one of the "
+              "COLOR properties, whose used value is the computed value with `currentcolor` resolved against "
+              "the element's own computed `color`, serialized as an absolute color per CSS Color §serializing "
+              "(`red` resolves to `rgb(255, 0, 0)`, which is what a page comparing against getComputedStyle "
+              "expects). Neither half exists here: css_style_declaration.c's cascade has NO INHERITANCE, and "
+              "`color` is an inherited property, so an element that declares none has no computed color for "
+              "`currentcolor` to resolve against in the first place. BUILD the cascade's defaulting and "
+              "inheritance step, then the absolute-color serialization (core/css/css_color.c already parses "
+              "and converts the color spaces)");
+        break;
+    case CSS_RESOLVED_LINE_HEIGHT: {
+        /* "The resolved value is normal if the computed value is normal, or the used value otherwise." */
+        char *v = cssom_cascaded_value(el, name);
+
+        if (css_cv_is(v, "normal")) return v;
+        free(v);
+        DFAIL("CSSOM §9 makes `line-height`'s resolved value the USED value whenever the computed value is not "
+              "`normal` — the absolute length a LAYOUT laid the line boxes out with, which for a number or a "
+              "percentage is that factor times the used font size. This engine has no font size chain and no "
+              "line boxes. BUILD the font-size cascade (the computed value of a `<number>` line-height is the "
+              "number itself; the used value is the number times the element's computed font-size)");
+        break;
+    }
+    case CSS_RESOLVED_TRANSFORM: {
+        /* css-transforms §3.2: "When the computed value is a <transform-list>, the resolved value is one
+           matrix() function … For other computed values, the resolved value is the computed value." */
+        char *v = cssom_cascaded_value(el, name);
+
+        if (css_cv_is(v, "none")) return v;
+        free(v);
+        DFAIL("css-transforms §3.2 makes `transform` a resolved value special case: a <transform-list> resolves "
+              "to ONE matrix() function, post-multiplying every function in the list into a 4x4 matrix and "
+              "serializing that. Two pieces are missing — the transform-function grammar this file does not "
+              "parse, and the TRANSFORM REFERENCE BOX (css-transforms §5) a percentage translation resolves "
+              "against, which is the element's border box and therefore a layout. BUILD the function list and "
+              "its matrix reduction; a list with no percentage needs no box, so that half lands first");
+        break;
+    }
+    }
+    return css_resolved_computed(el, name);
+}

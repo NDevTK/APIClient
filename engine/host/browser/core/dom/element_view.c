@@ -4,11 +4,14 @@
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <lexbor/dom/dom.h>
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/css/css_computed_value.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
 #include "core/dom/element_view.h"
@@ -128,7 +131,6 @@ bool element_view_has_box(const lxb_dom_node_t *n)
 {
     const lxb_dom_node_t *a;
     JSContext *dctx;
-    size_t len = 0;
 
     DCHECK(n && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
            "the associated-box predicate was asked about a node that is not an element — only elements "
@@ -142,13 +144,74 @@ bool element_view_has_box(const lxb_dom_node_t *n)
     if (!n->owner_document) return false;
     dctx = document_active_realm_of(lxb_dom_interface_node(n->owner_document));
     if (!dctx || !viewport_exists(dctx)) return false;
-    /* §15.3.1's UA stylesheet rule for the `hidden` content attribute is `display: none`. */
-    for (a = n; a; a = a->parent)
-        if (a->type == LXB_DOM_NODE_TYPE_ELEMENT &&
-            lxb_dom_element_get_attribute(lxb_dom_interface_element((lxb_dom_node_t *)a),
-                                          (const lxb_char_t *)"hidden", 6, &len) != NULL)
-            return false;
+    /* AND THE COMPUTED `display`, which is the property this question was always about. This walk used to look
+       for the `hidden` CONTENT ATTRIBUTE, which is one UA-stylesheet rule for one of the values `display` can
+       take — so an author `display: none`, the rule for `<head>` and `<script>`, and a page's own
+       `[hidden] { display: block }` overriding the UA rule were all invisible to it. The attribute is now
+       decided where every other UA rule is (css_style_declaration.c's UA layer), and this asks the one
+       question: an element whose computed display is `none` generates no box, an element whose computed
+       display is `contents` generates none of its OWN (its children still do), and no descendant of a
+       `display: none` ancestor generates one either. */
+    for (a = n; a != NULL && a->type == LXB_DOM_NODE_TYPE_ELEMENT; a = a->parent) {
+        char *d = css_computed_value(lxb_dom_interface_element((lxb_dom_node_t *)a), "display");
+        bool boxless = d != NULL && (strcmp(d, "none") == 0 ||
+                                     (a == n && strcmp(d, "contents") == 0));
+
+        DCHECK(d != NULL, "the cascade produced no computed `display` for an element — the UA layer answers "
+                          "`inline` for every element it does not name, so this cannot be unset");
+        free(d);
+        if (boxless) return false;
+    }
     return true;
+}
+
+/* CSSOM VIEW's "POTENTIALLY SCROLLABLE IN AN AXIS" — the branch four of §6's steps take and none of them could
+   decide until a C caller could read a computed value. The definition's own three conditions, in its own order:
+   the body has an ASSOCIATED BOX; the body's PARENT ELEMENT's computed `overflow-x`/`overflow-y` (whichever is
+   in the given axis) is neither `visible` nor `clip`; and the body's OWN is neither. */
+static bool ev_axis_clips_or_scrolls(const lxb_dom_node_t *el, bool vertical)
+{
+    char *v = css_computed_value(lxb_dom_interface_element((lxb_dom_node_t *)el),
+                                 vertical ? "overflow-y" : "overflow-x");
+    bool yes = v != NULL && strcmp(v, "visible") != 0 && strcmp(v, "clip") != 0;
+
+    free(v);
+    return yes;
+}
+
+static bool ev_potentially_scrollable(const EvTarget *t, bool vertical)
+{
+    const lxb_dom_node_t *parent = t->node->parent;
+
+    DCHECK(t->is_body, "CSSOM VIEW states `potentially scrollable` for the BODY ELEMENT, and every step that "
+                       "branches on it has already established that this element is one");
+    if (!t->has_box) return false;
+    DCHECK(parent != NULL && parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "the body element has no parent element to read an overflow off — HTML makes the body element a "
+           "CHILD OF THE ROOT ELEMENT by definition, and an element with an associated box is connected, so "
+           "the two facts together leave no tree in which this holds");
+    return ev_axis_clips_or_scrolls(parent, vertical) && ev_axis_clips_or_scrolls(t->node, vertical);
+}
+
+/* "…is not potentially scrollable IN AT LEAST ONE AXIS" — the shape `scrollTop`/`scrollLeft` ask for. The
+   `scrollWidth`/`scrollHeight` step asks about ONE NAMED axis instead, which is why both spellings exist and
+   why neither is written in terms of the other. */
+static bool ev_not_potentially_scrollable_in_some_axis(const EvTarget *t)
+{
+    return !ev_potentially_scrollable(t, false) || !ev_potentially_scrollable(t, true);
+}
+
+/* CSSOM VIEW §6's step 1 for the four `client*` members is "if the element has no associated box OR IF THE BOX
+   IS INLINE, return zero". An INLINE box is CSS Display's `inline flow` — a computed `display` of `inline` —
+   and NOT `inline-block`, which has a padding edge and border widths and answers with them. Anything this
+   engine cannot place in one of those two reaches step 3's DFAIL rather than a zero. */
+static bool ev_box_is_inline(const EvTarget *t)
+{
+    char *d = css_computed_value(lxb_dom_interface_element(t->node), "display");
+    bool inl = d != NULL && strcmp(d, "inline") == 0;
+
+    free(d);
+    return inl;
 }
 
 /* ---- §6's `scrollTop` and `scrollLeft` ------------------------------------------------------------------- */
@@ -158,6 +221,9 @@ bool element_view_has_box(const lxb_dom_node_t *n)
      step 2 and step 3 are the spec's own zero for a document that is not being presented;
      step 5 hands the root element the WINDOW's scroll position, which viewport.h derives as the ICB origin —
        the viewport's scrolling area IS the ICB, so there is one valid scroll position;
+     step 6 hands a quirks-mode BODY the same window scroll position when it is not potentially scrollable in
+       at least one axis — a condition this file could not decide until there was a computed-value entry to
+       read the body's and its parent's `overflow-x`/`overflow-y` through;
      step 7 is the spec's own zero for an element with no associated box;
      step 8 is the element's OWN current scroll position, which is the origin because nothing has scrolled it:
        a scroll position moves only when §3.1's perform a scroll runs, and the setter below DFAILs rather than
@@ -170,21 +236,12 @@ static JSValue ev_scroll_position(JSContext *ctx, const EvTarget *t, bool vertic
     if (t->is_root && t->quirks) return JS_NewFloat64(ctx, 0.0);
     /* step 5 */
     if (t->is_root) return JS_NewFloat64(ctx, ev_window_scroll(t->dctx, vertical));
-    /* STEPS 6-8, AND WHY THE BRANCH BETWEEN THEM NEED NOT BE DECIDED. Step 6 hands the quirks-mode body the
-       WINDOW's scroll position when the body is "not potentially scrollable", and steps 7-8 hand every other
-       element its OWN — and this engine cannot decide the condition between them, because "potentially
-       scrollable" reads the computed `overflow-x`/`overflow-y` of the body AND of its parent, and the
-       `overflow` SHORTHAND a page actually writes is not in Lexbor's property registry for the cascade to
-       resolve. It does not have to be decided while both answers are the same number, and the assert is what
-       says so rather than a comment: the moment the viewport can be somewhere other than the ICB origin, the
-       two arms disagree and this fires. */
-    DCHECK(ev_window_scroll(t->dctx, vertical) == 0.0,
-           "CSSOM VIEW §6's scrollTop/scrollLeft steps 6-8 answer the same number only while the viewport sits "
-           "at the initial containing block origin: step 6 hands a quirks-mode body the WINDOW's scroll "
-           "position and step 8 hands an element its own, which is the origin because nothing has scrolled "
-           "one. The viewport can now be elsewhere, so `potentially scrollable` must be DECIDED here — build "
-           "the computed `overflow` it reads (css_style_declaration.c resolves the cascade for longhands; the "
-           "`overflow` shorthand is not a property Lexbor's registry carries)");
+    /* step 6 */
+    if (t->is_body && t->quirks && ev_not_potentially_scrollable_in_some_axis(t))
+        return JS_NewFloat64(ctx, ev_window_scroll(t->dctx, vertical));
+    /* step 7 */
+    if (!t->has_box) return JS_NewFloat64(ctx, 0.0);
+    /* step 8 */
     return JS_NewFloat64(ctx, 0.0);
 }
 
@@ -219,15 +276,16 @@ static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
         /* step 2 — §3.2's NORMALIZE NON-FINITE VALUES: Infinity, -Infinity and NaN all become 0. */
         if (!isfinite(v)) v = 0.0;
     }
-    /* steps 3-4 */
+    /* steps 3-6 */
     if (!t.dctx) return JS_UNDEFINED;
-    /* step 5 */
+    /* step 7 */
     if (t.is_root && t.quirks) return JS_UNDEFINED;
-    /* Steps 6 and 7 are the same operation — "invoke scroll() on window with scrollX as first argument and y
-       as second" — over two different elements, and step 7's own condition is the undecidable one the getter
-       states. Here the two arms DIFFER (step 7 scrolls the window, step 8 terminates), so for a quirks-mode
-       body that has a box it has to be decided, and it cannot be. */
-    if (t.is_root || (t.is_body && t.quirks && !t.has_box)) {
+    /* Steps 8 and 9 are the same operation — "invoke scroll() on window with scrollX as first argument and y
+       as second" — over two different elements: the root element unconditionally, and a quirks-mode BODY only
+       when it is "not potentially scrollable in at least one axis". The two arms genuinely differ (this one
+       scrolls the window, step 10 terminates), and the condition between them is now decided rather than
+       approximated by the body's box existence, which is only the first of the definition's three conditions. */
+    if (t.is_root || (t.is_body && t.quirks && ev_not_potentially_scrollable_in_some_axis(&t))) {
         double req = unknown ? ev_window_scroll(t.dctx, vertical) : v;
         double x = vertical ? ev_window_scroll(t.dctx, false) : req;
         double y = vertical ? req : ev_window_scroll(t.dctx, true);
@@ -235,20 +293,12 @@ static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
         viewport_scroll(t.dctx, x, y);
         return JS_UNDEFINED;
     }
-    if (t.is_body && t.quirks)
-        DFAIL("CSSOM VIEW §6's scrollTop/scrollLeft setter step 7 sends a quirks-mode BODY's scroll to the "
-              "WINDOW only when the body is \"not potentially scrollable in at least one axis\", and step 8 "
-              "otherwise scrolls the element itself — two different results. Deciding it needs the computed "
-              "`overflow-x`/`overflow-y` of the body AND of its parent (the definition's own three conditions); "
-              "css_style_declaration.c resolves the cascade but exposes it to no C caller, and the `overflow` "
-              "SHORTHAND a page writes is not a property in Lexbor's registry. BUILD the computed-value read "
-              "and the shorthand, then write both arms");
-    /* step 8 */
+    /* step 10 */
     if (!t.has_box) return JS_UNDEFINED;
-    /* step 9 */
-    DFAIL("CSSOM VIEW §6's scrollTop/scrollLeft setter step 9 SCROLLS THE ELEMENT, and step 8 first asks "
-          "whether it has a scrolling box and whether it has any overflow — all three need the element's own "
-          "geometry, which this engine has none of: the scrolling area §2 defines for an element is its "
+    /* step 11 */
+    DFAIL("CSSOM VIEW §6's scrollTop/scrollLeft setter's last step SCROLLS THE ELEMENT, and the step before it "
+          "asks whether it has a scrolling box and whether it has any overflow — all three need the element's "
+          "own geometry, which this engine has none of: the scrolling area §2 defines for an element is its "
           "padding edge extended by the margin edges of its descendants' boxes, and that is what a scroll "
           "position is clamped against. BUILD A LAYOUT that produces box geometry (viewport.c already models "
           "the initial containing block CSS 2.1 §10.3.3 resolves the root element's used width from), and make "
@@ -280,21 +330,12 @@ static JSValue ev_scroll_extent(JSContext *ctx, const EvTarget *t, bool vertical
     if (t->is_root && !t->quirks)
         return presented ? ev_env_long(ctx, t, vertical ? "scrollHeight" : "scrollWidth", fmax(area, vp))
                          : ev_long(ctx, 0.0);
-    if (t->is_body && t->quirks) {
-        /* Step 5's condition is "the element is not POTENTIALLY SCROLLABLE in the x axis", whose first
-           conjunct is "body has an associated box" — so a body with no box takes this branch decided, and one
-           WITH a box needs the computed overflow this engine cannot read. The two arms differ (this one is the
-           viewport, the other is the element's own scrolling area), so it has to be decided. */
-        if (!t->has_box)
-            return presented ? ev_env_long(ctx, t, vertical ? "scrollHeight" : "scrollWidth", fmax(area, vp))
-                             : ev_long(ctx, 0.0);
-        DFAIL("CSSOM VIEW §6's scrollWidth/scrollHeight step 5 answers a quirks-mode BODY with the VIEWPORT's "
-              "scrolling area only when the body is \"not potentially scrollable\" in that axis, and otherwise "
-              "with the body's OWN scrolling area. Deciding it needs the computed `overflow-x`/`overflow-y` of "
-              "the body and of its parent; css_style_declaration.c resolves the cascade but exposes it to no C "
-              "caller, and the `overflow` SHORTHAND is not a property in Lexbor's registry. BUILD the "
-              "computed-value read and the shorthand");
-    }
+    /* Step 5's condition is PER AXIS — "not potentially scrollable in the x axis" for `scrollWidth` and "in the
+       y axis" for `scrollHeight` — which is why it is asked with this member's own axis and not with the
+       at-least-one-axis form the scroll-position steps use. */
+    if (t->is_body && t->quirks && !ev_potentially_scrollable(t, vertical))
+        return presented ? ev_env_long(ctx, t, vertical ? "scrollHeight" : "scrollWidth", fmax(area, vp))
+                         : ev_long(ctx, 0.0);
     /* step 6 */
     if (!t->has_box) return ev_long(ctx, 0.0);
     /* step 7 */
@@ -310,13 +351,12 @@ static JSValue ev_scroll_extent(JSContext *ctx, const EvTarget *t, bool vertical
 
 static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical)
 {
-    /* Step 1: "If the element has no associated box OR IF THE BOX IS INLINE, return zero." The inline half is
-       decided for the two elements step 2 answers for and asked of nothing else: CSS Display §2.7 BLOCKIFIES
-       the root element's display type, so the root's box is never inline; and §15.3.1's UA stylesheet gives
-       `body` `display: block`, which this engine's UA sheet also carries (css_style_declaration.c). An author
-       rule making one of them inline is a computed value no C caller in this build can read — the same
-       narrowing element_view_has_box states, and narrower than a laying-out browser rather than wider. */
-    if (!t->has_box) return ev_long(ctx, 0.0);
+    /* Step 1: "If the element has no associated box OR IF THE BOX IS INLINE, return zero." Both halves are now
+       decided from the computed `display` — the second one used to be waved through on the grounds that the two
+       elements step 2 answers for can never be inline (CSS Display §2.7 blockifies the root, and §15.3.1 gives
+       `body` `display: block`), which said nothing about the elements step 3 reaches. `span.clientWidth` is 0
+       in every user agent and used to reach step 3's DFAIL here. */
+    if (!t->has_box || ev_box_is_inline(t)) return ev_long(ctx, 0.0);
     /* Step 2 — the ROOT ELEMENT outside quirks mode, and the BODY inside it, are answered with the VIEWPORT and
        never with their own box. `document.documentElement.clientWidth` is how most of the web asks how wide the
        viewport is. "Excluding the size of a rendered scroll bar (if any)" removes nothing: none is rendered. */
@@ -340,15 +380,22 @@ static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical
 static JSValue ev_client_edge(JSContext *ctx, const EvTarget *t)
 {
     /* step 1 */
-    if (!t->has_box) return ev_long(ctx, 0.0);
+    if (!t->has_box || ev_box_is_inline(t)) return ev_long(ctx, 0.0);
     /* step 2 */
     DFAIL("CSSOM VIEW §6's clientTop/clientLeft step 2 returns THE UNSCALED COMPUTED VALUE OF THE "
           "border-top-width / border-left-width PROPERTY plus the width of any scrollbar rendered between that "
-          "padding edge and that border edge. Neither term is available: a computed border width is 0 when "
-          "border-*-style is `none` or `hidden` and a resolved length otherwise, and css_style_declaration.c "
-          "resolves the cascade for the CSSOM's own reads while exposing it to no C caller. BUILD the "
-          "computed-value read (the border-style interaction, `medium`, and length resolution) — the scrollbar "
-          "term is 0 for as long as this user agent renders none");
+          "padding edge and that border edge. The scrollbar term is 0 for as long as this user agent renders "
+          "none, so the whole answer is that computed value, and css_computed_value.c is now the C entry that "
+          "would carry it — what is missing is BELOW it. Lexbor's property registry has no `border-top-width` "
+          "and no `border-top-style` (it carries the `border-top` SHORTHAND and `border-*-color`, and nothing "
+          "else of the border), so both longhands reach the cascade as unknown declarations with raw text and "
+          "no grammar, and `border-width: 1px 2px`, `border-style: solid`, `border-top: 1px solid red` and "
+          "`border: 1px solid red` all set them through shorthands css_shorthand.c does not expand. BUILD, in "
+          "this order: those four expansions (the four-side 1-to-4 rotation, and the any-order triple lexbor "
+          "already parses into a typed struct for `border` and `border-top`), then the two longhands' computed "
+          "value in css_computed_value.c — CSS Backgrounds §border-width makes it 0 when the matching "
+          "border-*-style computes to `none` or `hidden`, and an absolute length otherwise, with "
+          "thin/medium/thick the UA's own 1px/3px/5px");
     return ev_long(ctx, 0.0);
 }
 
@@ -362,8 +409,8 @@ static JSValue ev_client_edge(JSContext *ctx, const EvTarget *t)
    no associated box generates no fragments in ANY user agent, so the empty list is the whole domain of the
    answer rather than one point picked out of it. element_view.h's one predicate is what decides it, so this
    branch covers a disconnected element, an element of a document nothing is presenting (a DOMParser parse, a
-   `<template>`'s contents, the document of a destroyed navigable) and anything under a `hidden` attribute —
-   which is most of what a lazy-loading bundle measures before it inserts anything. */
+   `<template>`'s contents, the document of a destroyed navigable) and anything whose computed `display` is
+   `none` — which is most of what a lazy-loading bundle measures before it inserts anything. */
 static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
 {
     (void)ctx;
@@ -380,8 +427,10 @@ static JSValue ev_client_rects(JSContext *ctx, const EvTarget *t)
           "inline element spanning two lines cannot be two rectangles, and no answer for a single one is "
           "derivable from the viewport for an element that is not the root. BUILD A LAYOUT that produces box "
           "fragments — CSS 2.1 §10.3.3 resolves the root element's used width from the ICB viewport.c already "
-          "models, which is where one starts — and the computed `display` and `transform` the two constraints "
-          "read (css_style_declaration.c resolves the cascade for longhands and exposes it to no C caller)");
+          "models, which is where one starts. The two constraints' own inputs are half here already: the "
+          "computed `display` is css_computed_value.c's (CSS Display §2.7's blockification included), and the "
+          "computed `transform` is not — it needs the transform-function grammar and the reference box "
+          "css-transforms §3.2's matrix reduction resolves a percentage translation against");
     /* A RELEASE BUILD CANNOT BUILD THE LAYOUT, so it answers what every other §6 member here answers past its
        own DFAIL: the value for the case this engine does model. */
     return dom_rect_list_new(t->rctx, JS_NewArray(t->rctx));
