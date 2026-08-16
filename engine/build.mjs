@@ -386,7 +386,13 @@ const LDFLAGS_COMMON = [
 const LDFLAGS_SMOKE = ["-sEXIT_RUNTIME=1"];
 const LDFLAGS_ABI = [
   "-sEXPORTED_FUNCTIONS=" + JSON.stringify(QJS_ABI.map((f) => "_" + f).concat(["_malloc", "_free"])),
-  "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "lengthBytesUTF8", "stringToUTF8"]),
+  /* HEAPU8 IS AN EXPORT, and it is the one every byte that crosses this ABI travels through. Fetch §2.2.5's
+     body is a BYTE SEQUENCE, so the zone places it with `M.HEAPU8.set(bytes, p)` and hands `qjs_provide`
+     a (ptr, len) — text cannot carry one and every way of making it able to is an encode by a zone with
+     no business performing one. Emscripten does not export the heap views by default and answers a read
+     of an unexported one by ABORTING the module, so omitting it here is not a missing convenience, it is
+     the whole byte path failing at its first use. */
+  "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "lengthBytesUTF8", "stringToUTF8", "HEAPU8"]),
   "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createQJS", "-sINVOKE_RUN=0",
 ];
 /* THE BROWSER PROCESS IS DRIVEN THE SAME WAY THE RENDERER IS — the offscreen holds a Module and ccalls it — so
@@ -394,7 +400,13 @@ const LDFLAGS_ABI = [
    and must not run on load: an instance exists to be ASKED. */
 const LDFLAGS_BP = [
   "-sEXPORTED_FUNCTIONS=" + JSON.stringify(BP_ABI.map((f) => "_" + f).concat(["_malloc", "_free"])),
-  "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "lengthBytesUTF8", "stringToUTF8"]),
+  /* HEAPU8 IS AN EXPORT, and it is the one every byte that crosses this ABI travels through. Fetch §2.2.5's
+     body is a BYTE SEQUENCE, so the zone places it with `M.HEAPU8.set(bytes, p)` and hands `qjs_provide`
+     a (ptr, len) — text cannot carry one and every way of making it able to is an encode by a zone with
+     no business performing one. Emscripten does not export the heap views by default and answers a read
+     of an unexported one by ABORTING the module, so omitting it here is not a missing convenience, it is
+     the whole byte path failing at its first use. */
+  "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "lengthBytesUTF8", "stringToUTF8", "HEAPU8"]),
   "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createBrowserProcess", "-sINVOKE_RUN=0",
 ];
 
