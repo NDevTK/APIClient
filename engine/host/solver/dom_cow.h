@@ -198,8 +198,13 @@ void dom_base_load(void *base); /* install a parked flow's base chain (before do
    same one twice: `g_dom_installed` holds no reference, so a dying segment can be the one the document is
    showing, and here that is not a dangling pointer but the nodes the segment created being destroyed while
    they are still live tree. */
+/* A SEGMENT'S REFCOUNT IS EXACTLY the number of flows whose `dom_base` names it plus the number of segments
+   whose `base` names it, and there is deliberately no `dom_base_ref` to raise it from outside: dom_cow_fork is
+   the only place a reference is created (two of them, one per flow) and dom_base_release the only place one is
+   dropped. That equation is what makes the installed segment un-freeable during a sale — it is the running
+   flow's own base, so any other chain that reaches it puts its count above 1 — and dom_install_chain asserts
+   the consequence. A second way to take a reference would make it uncheckable. */
 void dom_base_release(void *base);
-void dom_base_ref(void *base);  /* add ONE ref (each orphan forks the document flow's shared DOM delta) */
 
 /* WHAT THE DOCUMENT'S CHAIN IS HOLDING RIGHT NOW — frozen segments still referenced, and the entries in them.
    The heap half reports the same pair (cow.h); they are read together because a delta nobody released looks the

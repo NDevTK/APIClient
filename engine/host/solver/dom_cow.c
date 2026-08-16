@@ -9,6 +9,8 @@
 #include "core/dom/document.h"   /* document_record_release — a destroyed document hands back its record */
 #include "core/dom/attr_list.h"   /* §4.9's attribute-list algorithms — what the delta restores an attribute THROUGH */
 #include "core/dom/name_intern.h"   /* a node's names are per-DOCUMENT state, so kind 8 moves them with the pointer */
+#include "core/dom/node_heap.h"     /* …and its BYTES are the agent's, which is why kind 8 asserts and moves nothing */
+#include "core/dom/node_interface.h"   /* dom_document_destroy — a document's nodes go back before its arenas do */
 #include "solver/attr_shadow.h"   /* the taint shadow rides the attribute delta (per-flow isolation of stashed taint) */
 #include <lexbor/dom/dom.h>
 
@@ -104,6 +106,73 @@ static DomSeg *g_dom_installed = NULL;
 static void dom_seg_unref(DomSeg *s);
 static void dom_note_created_attr(lxb_dom_attr_t *a);   /* fwd: the chokepoint is above the creation records */
 
+/* WHAT THIS FILE IS HOLDING WHEN IT ALLOCATES — the DOM twin of cow.c's capture scope, and the DIFFERENCE is
+ * the whole reason it is its own mechanism rather than the same pair of depths.
+ *
+ * THE HEAP'S GUARD ANSWERS TWO QUESTIONS AND THIS ONE ANSWERS ONLY THE SECOND. cow.c needs `g_swapping`
+ * because the heap's capture edge is a HOOK the runtime calls on every property write, so the engine's own
+ * apply/unapply — which writes the heap — would be re-captured into the delta it is restoring out of. This
+ * file has no such hook: its capture edge is the CHOKEPOINT (dom_cow.h), an explicit call a browser component
+ * makes, and dom_unapply_entry / dom_apply_entry reach lexbor, attr_list.c and attr_shadow.c directly and call
+ * no producer. That was read out of the callees rather than assumed — `g_dom_capture` is read at ten sites and
+ * every one is in this file, attr_list.c and name_intern.c never name dom_cow, and node_finalizer is empty —
+ * so a swap scope here would be a guard with nothing to guard, and dom_cow_fork's `g_dom_capture = 0` round
+ * trip, which admitted as much in its own comment ("defensive symmetry"), is DELETED rather than mirrored. It
+ * was the fallback shape: a re-capture it would have silently DROPPED now aborts at dom_undo_push.
+ *
+ * WHAT IS LEFT IS THE ONE FACT ONLY A CAPTURE CAN STATE: this file is holding a RAW POINTER INTO THE DOCUMENT
+ * — an element, an attribute node, an `lxb_dom_attr_value` byte pointer, a parent/next link — across an
+ * allocation that can SELL A FLOW (solver/reclaim.h). The ten entry producers do it, and so do the two copies
+ * that produce no entry (dupn's identity copy, attr_old_value's §9.4.6 old value), which is why the scope is
+ * defined over the READ and not over the delta: excluding the two that only copy would make them the sites the
+ * proof below does not cover, which is the hand-picked list exactly.
+ *
+ * THE SALE CANNOT INVALIDATE THAT READ, AND THAT IS TWO FACTS, EACH ALREADY A CONSTRUCTION:
+ *   - it never touches the RUNNING flow's document state. engine_reclaim_tail sells flow_worst(flow_running())
+ *     and asserts the flow it picked is not the running one, and a sold flow's created nodes were detached at
+ *     its switch-out — so every node the sale destroys is one per-flow isolation guarantees the running flow
+ *     cannot reach, and a node BOTH of them can reach lives in a segment with a second reference.
+ *   - it cannot move the APPLIED CHAIN. `g_dom_installed` is the running flow's own `g_dom_base` (dom_apply
+ *     installs it, dom_unapply asserts it); every flow holds ONE counted reference on its base and every
+ *     segment holds one on ITS base — dom_cow_fork hands out refcount 2, one for the running flow and one for
+ *     the sibling, and transfers the running flow's reference on the old base into `seg->base` — so a segment
+ *     the running flow stands on has a refcount of at least 2 the moment any other chain reaches it, and
+ *     dom_base_release's dying prefix stops at the first segment whose refcount is not 1. dom_install_chain is
+ *     therefore unreachable from inside a sale.
+ * The second is a proof about refcounts, which is exactly the kind of statement that stops being true without
+ * anyone noticing, so it is held by the DCHECK at dom_install_chain rather than restated at twelve read sites.
+ * AND IT IS THE DEREFERENCE THAT IS AT STAKE, NOT ONLY THE POINTER, which is what makes reordering these sites
+ * buy nothing: dom_attr_capture resolves the attribute and its value bytes BEFORE it allocates and then
+ * memcpy's out of them AFTER, and dom_cow_set_text takes the length before and the bytes after — so the
+ * allocation stands between the read and the use in every one of them by construction. The consequence here is
+ * worse than the heap's wrong value: a dying segment DESTROYS the nodes its entries created
+ * (dom_release_created_all), so a read that spans a chain move can copy out of freed tree, and the entry it
+ * writes names tree the next swap re-attaches.
+ *
+ * A DEPTH, AND IT MAY NOT NEST. cow.c's scopes nest because a swap legitimately runs inside a capture there;
+ * here a producer reached from inside another producer could only be the SALE re-entering this file, and that
+ * is not a hazard to argue away: dom_undo_push hands `g_dom_undo` to reclaim_realloc, so a nested push that
+ * grows the log first leaves the outer retry holding the pointer the nested one freed, and publishing the
+ * outer's stale capacity over it writes past the end of the array it just built. Asserted at the OPEN, which
+ * is the origin; the depth is what makes the balance checkable at the close. */
+static int g_dom_capturing;
+
+static void dom_capture_begin(void) {
+    DCHECK(g_dom_capturing == 0,
+           "a DOM capture opened inside another one — the only thing that can run between this file's read of "
+           "the document and the copy it makes of it is the allocator selling a flow, so this is the sale "
+           "re-entering this file, and the nested push grows g_dom_undo and leaves the outer reclaim_realloc "
+           "retrying on the pointer the nested one freed");
+    g_dom_capturing++;
+}
+static void dom_capture_end(void) {
+    DCHECK(g_dom_capturing > 0,
+           "a DOM capture scope was closed that was never opened — from here on this file's reads of the "
+           "document are invisible to dom_install_chain's check, so a chain move under one records freed tree "
+           "in an entry that every later swap replays");
+    g_dom_capturing--;
+}
+
 void dom_cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 
 /* §4.2.3's insertion/removing steps. Fired from the chokepoint so a tree write cannot reach the tree without
@@ -152,11 +221,15 @@ static char *attr_old_value(lxb_dom_element_t *el, const char *ns, const char *l
     if (!a) return NULL;
     v = lxb_dom_attr_value(a, &vl);
     if (!v) return NULL;
+    /* `v` POINTS INTO THE TREE and is held across an allocation that can sell a flow — the same read the
+       producers hold, made by the one function here that copies without writing an entry. */
+    dom_capture_begin();
     copy = reclaim_malloc(vl + 1);
     CHECK(copy != NULL, "dom-cow-oom: §9.4.6's old attribute value could not be copied — the change steps run "
                         "after the write and the element no longer holds it");
     memcpy(copy, v, vl);
     copy[vl] = 0;
+    dom_capture_end();
     *len = vl;
     return copy;
 }
@@ -201,6 +274,14 @@ static void attr_drop(const DomUndo *u) {
 }
 
 static void dom_undo_push(DomUndo u) {
+    /* THE ONE LINE EVERY PRODUCER GOES THROUGH, which is why the scope is asserted here and not at each of the
+       ten of them: an eleventh entry kind written tomorrow does not get to choose whether it declares the read
+       it is standing on, it aborts at its first push. */
+    DCHECK(g_dom_capturing > 0,
+           "a DOM delta entry was written outside a capture scope — this push's own realloc can SELL A FLOW, "
+           "and the entry it is about to store holds raw pointers into the document (an element, an attribute "
+           "node, a parent/next link), so nothing would catch the applied chain moving under the read they "
+           "came from");
     if (g_dom_undo_n >= g_dom_undo_cap) {
         int nc = g_dom_undo_cap ? g_dom_undo_cap * 2 : 64;
         /* Skipping a DOM capture silently breaks DOM isolation (this flow's DOM write never reverts -> leaks
@@ -237,6 +318,7 @@ static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *
     DomUndo u;
 
     if (!g_dom_capture) return;
+    dom_capture_begin();   /* `a`, `cur` and `prefix` are the tree's, held across four allocations that can sell */
     a = dom_attr_get_ns(el, ns, local);
     cur = a ? lxb_dom_attr_value(a, &vl) : NULL;
     prefix = a ? dom_attr_prefix(a, &pl) : NULL;
@@ -256,6 +338,7 @@ static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *
     u.sh_old = shadow_snapshot(el, ATTR_SLOT_ATTRIBUTE, ns, local, &u.sh_had);   /* baseline TAINT reverts with the value */
     u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
+    dom_capture_end();
 }
 
 /* The PROPERTY-slot twin of dom_attr_capture: a DOM property's taint, whose value half is already captured as
@@ -263,11 +346,13 @@ static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *
 static void dom_prop_taint_capture(lxb_dom_element_t *el, const char *name) {
     if (!g_dom_capture) return;
     DomUndo u; memset(&u, 0, sizeof u);
+    dom_capture_begin();
     u.kind = 0; u.slot = ATTR_SLOT_PROPERTY; u.el = el; u.sh_owner = el; u.name = strdup(name); u.had = 0;
     CHECK(u.name, "dom-cow-oom: property name strdup failed");
     u.sh_old = shadow_snapshot(el, ATTR_SLOT_PROPERTY, NULL, name, &u.sh_had);
     u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
+    dom_capture_end();
 }
 
 /* THE PROPERTY-TAINT CHOKEPOINT — capture-then-set, like every other DOM write. `opaque` JS_UNDEFINED clears. */
@@ -277,7 +362,10 @@ void dom_cow_set_prop_taint(JSContext *ctx, lxb_dom_element_t *el, const char *n
 }
 void dom_insert_capture(lxb_dom_node_t *node) {
     if (!g_dom_capture) return;
-    DomUndo u; memset(&u, 0, sizeof u); u.kind = 1; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED; dom_undo_push(u);
+    DomUndo u; memset(&u, 0, sizeof u); u.kind = 1; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;
+    dom_capture_begin();
+    dom_undo_push(u);
+    dom_capture_end();
 }
 /* §4.9 "get an attribute by name" RESOLVED TO AN IDENTITY: which attribute a qualified name means is a question
    about the element's current attribute list, so it is asked HERE, once, rather than by each caller inventing a
@@ -290,9 +378,15 @@ void dom_insert_capture(lxb_dom_node_t *node) {
 typedef struct { char *ns; char *prefix; char *local; } AttrIdent;
 
 static char *dupn(const lxb_char_t *s, size_t n) {
-    char *p = reclaim_malloc(n + 1);
+    char *p;
+    /* `s` IS THE INTERN TABLE'S OWN BYTES — the callers read a namespace, a prefix and a local name off a live
+       attribute and hand each one straight here, so the read is held across this allocation exactly as a
+       producer's is. One scope at the copy covers every identity read rather than one per caller. */
+    dom_capture_begin();
+    p = reclaim_malloc(n + 1);
     CHECK(p != NULL, "dom-cow-oom: an attribute identity could not be copied");
     memcpy(p, s, n); p[n] = 0;
+    dom_capture_end();
     return p;
 }
 
@@ -334,6 +428,7 @@ static void dom_attr_node_value_capture(lxb_dom_attr_t *a, const AttrIdent *id) 
 
     if (!g_dom_capture) return;
     memset(&u, 0, sizeof u);
+    dom_capture_begin();   /* `v` is the detached attribute's own storage, held across the copy below */
     u.kind = 7; u.node = lxb_dom_interface_node(a); u.sh_old = u.sh_cur = JS_UNDEFINED;
     v = lxb_dom_attr_value(a, &vl);
     if (v) {
@@ -351,6 +446,7 @@ static void dom_attr_node_value_capture(lxb_dom_attr_t *a, const AttrIdent *id) 
     CHECK(u.name, "dom-cow-oom: detached attr local-name strdup failed");
     u.sh_old = shadow_snapshot(a, ATTR_SLOT_ATTRIBUTE, id->ns, id->local, &u.sh_had);
     dom_undo_push(u);
+    dom_capture_end();
 }
 
 /* THE DOM-mutation CHOKEPOINT (see dom_cow.h): capture the baseline THEN mutate, so a write cannot bypass the
@@ -558,10 +654,12 @@ void dom_cow_remove_child(lxb_dom_node_t *node) {
     if (g_tree_hook) g_tree_hook(g_cow_ctx, node, node->parent, 0);
     if (g_dom_capture) {
         DomUndo u; memset(&u, 0, sizeof u);
+        dom_capture_begin();   /* the position is read off the live tree and written down by the push */
         u.kind = 2; u.node = node;
         u.parent = node->parent; u.next = node->next;
         u.sh_old = u.sh_cur = JS_UNDEFINED;
         dom_undo_push(u);
+        dom_capture_end();
     }
     {
         /* §4.2.3 remove step 3 detaches, and steps 4-7 run AFTER it — the slot steps recompute a slot's
@@ -888,8 +986,10 @@ static void dom_note_created_attr(lxb_dom_attr_t *a)
     if (!g_dom_capture || !a)
         return;
     memset(&u, 0, sizeof u);
+    dom_capture_begin();
     u.kind = 6; u.node = lxb_dom_interface_node(a); u.sh_old = u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
+    dom_capture_end();
 }
 
 void dom_cow_note_created(lxb_dom_node_t *node)
@@ -898,8 +998,10 @@ void dom_cow_note_created(lxb_dom_node_t *node)
     if (!g_dom_capture || !node)
         return;
     memset(&u, 0, sizeof u);
+    dom_capture_begin();
     u.kind = 4; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
+    dom_capture_end();
 }
 
 void dom_cow_destroy_document(lxb_html_document_t *dom)
@@ -912,16 +1014,16 @@ void dom_cow_destroy_document(lxb_html_document_t *dom)
        memory — which is the state a pool allocator turns into another node inheriting this one's wrapper. */
     if (g_cow_ctx)
         dom_forget_wrappers(g_cow_ctx, lxb_dom_interface_node(dom));
-    lxb_html_document_destroy(dom);
+    dom_document_destroy(dom);
 }
 
 /* THIS FLOW CREATED THIS DOCUMENT — the delta's fifth kind of record, and the reason it is a KIND rather than a
- * fourth-kind entry over the document's root node: a document is destroyed by lxb_html_document_destroy, which
- * frees the memory arena every node in it came out of, and kind 4's lxb_dom_node_destroy_deep would free the
- * root and leave the arena.
+ * fourth-kind entry over the document's root node: destroying a document is `dom_document_destroy`, which frees
+ * every node the document still owns and hands the agent's arenas back, and kind 4's lxb_dom_node_destroy_deep
+ * would free the root and leave the rest of the tree.
  * THAT ORDER IS ALSO WHY THE RELEASE IS TWO PASSES. A node this flow created INSIDE a document this flow
- * created has its own kind-4 entry, and its memory belongs to that document's arena — so every node goes back
- * before any document does, or the second free reads an arena that is already gone. */
+ * created is still a child of it, so the document's own destroy would free it a second time — every node goes
+ * back before any document does, and the document then finds nothing of the flow's left to free. */
 bool dom_cow_note_created_document(lxb_html_document_t *dom)
 {
     DomUndo u;
@@ -929,8 +1031,10 @@ bool dom_cow_note_created_document(lxb_html_document_t *dom)
     if (!g_dom_capture)
         return false;
     memset(&u, 0, sizeof u);
+    dom_capture_begin();
     u.kind = 5; u.doc = dom; u.sh_old = u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
+    dom_capture_end();
     return true;
 }
 
@@ -998,10 +1102,12 @@ void dom_cow_set_node_document(lxb_dom_node_t *node, lxb_dom_document_t *doc) {
                         "has one");
     if (g_dom_capture && node->owner_document != doc) {
         DomUndo u; memset(&u, 0, sizeof u);
+        dom_capture_begin();   /* the node's CURRENT document is read off the node and written down by the push */
         u.kind = 8; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;
         u.doc_old = node->owner_document;
         u.doc_cur = doc;
         dom_undo_push(u);
+        dom_capture_end();
     }
     node->owner_document = doc;
 }
@@ -1019,6 +1125,9 @@ void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
         g_cdata_hook(g_cow_ctx, node, (const char *)cd->data.data, cd->data.length);
     if (g_dom_capture) {
         DomUndo u; memset(&u, 0, sizeof u);
+        /* `cd->data` is the node's own storage: the LENGTH is read before the allocation and the BYTES are
+           copied out after it, so the sale stands between the two (see the scope's comment). */
+        dom_capture_begin();
         u.kind = 3; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;
         u.had = 1; u.old_len = cd->data.length;
         u.old = reclaim_malloc(u.old_len ? u.old_len : 1);
@@ -1026,6 +1135,7 @@ void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
                              "text the baseline had");
         memcpy(u.old, cd->data.data, u.old_len);
         dom_undo_push(u);
+        dom_capture_end();
     }
     lxb_dom_character_data_replace(cd, (const lxb_char_t *)val, val_len, 0, cd->data.length);
 }
@@ -1109,6 +1219,14 @@ static void dom_unapply_entry(DomUndo *u) {
            freed entries — the delta's revert would be what created the dangling id. Re-interning the bytes
            dedupes to the entries the baseline already held, so the restore is byte-identical. */
         dom_import_node_names(u->doc_old, u->doc_cur, u->node);
+        /* THE BYTES NEED NO MIRROR, and this is the assertion that states it rather than the silence that
+           would look identical. The names had to move because a name id is an address into ONE document's
+           hashes; a node's own storage does not, because every document in this agent allocates out of the
+           SAME arenas (core/dom/node_heap.h) — so the kind-5 destroy of `d` cannot free the bytes the baseline
+           element sits in, whichever document the pointer above names. */
+        DCHECK(dom_storage_owned_by(u->doc_old, u->node),
+               "the delta's revert put a node back in a document whose arenas are not the ones its bytes are "
+               "in — kind 5 then destroys the document the flow created, and this node would be freed with it");
     } else if (u->kind == 1 && !u->detached) {
         u->parent = lxb_dom_interface_node(u->node)->parent;              /* remember re-insert position */
         u->next = lxb_dom_interface_node(u->node)->next;
@@ -1139,6 +1257,8 @@ static void dom_apply_entry(DomUndo *u) {
     } else if (u->kind == 8) {
         u->node->owner_document = u->doc_cur;
         dom_import_node_names(u->doc_cur, u->doc_old, u->node);   /* the mirror — see the unapply arm */
+        DCHECK(dom_storage_owned_by(u->doc_cur, u->node),
+               "the delta's apply moved a node into a document whose arenas are not the ones its bytes are in");
     } else if (u->kind == 2 && u->reinserted) {
         /* resuming the flow: it had removed this node, so take it back out. */
         lxb_dom_node_remove(u->node); u->reinserted = 0;
@@ -1198,6 +1318,22 @@ static void dom_install_chain(DomSeg *want)
     DomSeg *common = dom_seg_common(g_dom_installed, want);
     DomSeg *s;
 
+    /* THE DOCUMENT MAY NOT MOVE UNDER A CAPTURE'S READ, AND THIS IS THE ONE PLACE IT COULD.
+       A producer reads an element, an attribute node or a byte pointer off the live tree and writes it into an
+       entry, and the ONE thing that can run between those two is a SALE: dom_undo_push and the copies around
+       it ask reclaim_malloc/realloc, which pages the frontier's tail out, and dom_base_release walks the chain
+       down to the deepest segment that survives it. Reaching here from inside one is impossible — the segment
+       the document is SHOWING is the running flow's own base, every flow holds one counted reference on its
+       base and every segment one on its base, so a segment two chains reach has a refcount of at least 2, and
+       a release's dying prefix stops at the first segment whose refcount is not 1. That is a proof about
+       refcounts, which is exactly the kind of statement that stops being true without anyone noticing, so it
+       is held here rather than restated at each read. If this fires, the entry that producer is about to write
+       names a node from a timeline the document no longer shows — and, because a dying segment DESTROYS the
+       nodes its entries created, quite possibly one that no longer exists, which the next swap re-attaches. */
+    DCHECK(g_dom_capturing == 0,
+           "the applied DOM chain moved while this file was standing on a read of the document — the entry "
+           "about to be written names tree from another flow's timeline, or tree the dying segment just "
+           "destroyed, and every context switch from then on replays it");
     for (s = g_dom_installed; s != common; s = s->base)      /* head-first, as unapply always is */
         for (int i = s->n - 1; i >= 0; i--) dom_unapply_entry(&s->e[i]);
     dom_apply_seg_until(want, common);
@@ -1242,6 +1378,15 @@ static void dom_seg_unref(DomSeg *s) {
 }
 /* UNAPPLY (flow -> parked): head reverse, then the shared base chain. Restores the baseline DOM+taint. */
 void dom_unapply(void) {
+    /* THE HEAD IS THE OTHER HALF OF dom_install_chain'S CHECK, and it needs its own because the head is taken
+       down WITHOUT going through the chain walk: a producer standing on a read while its own flow's writes are
+       reverted would record the baseline it is being restored to as the value it saw. Unreachable — a producer
+       is a straight line through this file with no scheduler entry in it — which is why it is asserted rather
+       than arranged. */
+    DCHECK(g_dom_capturing == 0,
+           "the running flow's DOM head was unapplied while this file was standing on a read of the document — "
+           "the entry about to be written records the baseline the unapply just restored as the value the flow "
+           "had, and the apply that resumes this flow writes it back as its own");
     /* ONLY THE HEAD. The base chain stays applied and `g_dom_installed` says so — the incoming flow's apply
        decides how much of it actually has to move, which for a sibling is none of it. */
     for (int i = g_dom_undo_n - 1; i >= 0; i--) dom_unapply_entry(&g_dom_undo[i]);
@@ -1257,9 +1402,13 @@ void dom_apply(void) {
 /* FORK the DOM delta: freeze the running flow's HEAD into a shared immutable base segment that BOTH the running
    flow and a snapshot-forked sibling reference (refcount 2) — the sibling SHARES the parent's O(N) DOM delta
    instead of copying it. Head is applied, so UNAPPLY it to parked state (values -> cur, DOM -> baseline), freeze
-   that, then RE-APPLY so the running flow continues byte-identically. Capture is suspended across the round-trip
-   (defensive symmetry with the heap fork — the internal set/remove goes straight to Lexbor, not the capturing
-   host-edge, so no re-capture, but the guard documents+enforces the invariant). Returns the shared base. */
+   that, then RE-APPLY so the running flow continues byte-identically.
+   CAPTURE IS NO LONGER SUSPENDED ACROSS THE ROUND TRIP, and the deletion is the point. It was `g_dom_capture =
+   0` restored at the end, justified as "defensive symmetry with the heap fork ... so no re-capture, but the
+   guard documents+enforces the invariant" — a guard for a hazard the same sentence says does not exist, and
+   one that ENFORCED nothing: had the round trip ever reached a producer, clearing the flag would have made the
+   entry silently vanish. The invariant is now the assert at dom_undo_push, which crashes there instead.
+   Returns the shared base. */
 void *dom_cow_fork(void) {
     /* ASKED BEFORE THE UNAPPLY, because this allocation can SELL A FLOW (solver/reclaim.h) and a sale walks
        the frozen document chain. Between the unapply below and the re-apply at the end, the running flow's
@@ -1268,7 +1417,6 @@ void *dom_cow_fork(void) {
        later position bought. */
     DomSeg *seg = reclaim_malloc(sizeof(DomSeg));
     CHECK(seg, "dom-cow-oom: fork segment alloc failed — a shared DOM delta would be corrupted");
-    int sv = g_dom_capture; g_dom_capture = 0;
     for (int i = g_dom_undo_n - 1; i >= 0; i--) dom_unapply_entry(&g_dom_undo[i]);
     seg->e = g_dom_undo; seg->n = g_dom_undo_n; seg->base = g_dom_base; seg->refcount = 2;   /* running flow + sibling */
     g_dom_seg_live++; g_dom_seg_entries_live += seg->n;
@@ -1276,7 +1424,6 @@ void *dom_cow_fork(void) {
     g_dom_base = seg;
     g_dom_installed = seg;   /* the frozen head belongs to the applied chain now, not to anyone's head */
     for (int i = 0; i < seg->n; i++) dom_apply_entry(&seg->e[i]);   /* re-apply head -> running flow continues */
-    g_dom_capture = sv;
     return seg;
 }
 /* Take / install the shared BASE chain alongside the head (a flow's full DOM delta is head + base chain). */
@@ -1296,7 +1443,14 @@ void dom_base_release(void *base) {
         if (s == g_dom_installed) { dom_install_chain(surv); break; }
     dom_seg_unref((DomSeg *)base);
 }
-void dom_base_ref(void *base) { if (base) ((DomSeg *)base)->refcount++; }   /* each orphan forks the document flow's shared DOM delta */
+/* dom_base_ref — "add ONE ref (each orphan forks the document flow's shared DOM delta)" — is DELETED, and it
+ * is deleted BECAUSE of the proof above rather than because it was unused. No orphan does that: an orphan flow
+ * is seeded with no base and takes one only by forking, which is dom_cow_fork, so the sentence was accurate
+ * about the design and wrong about this tree — and nothing in the engine has ever called it. What it left
+ * behind was a hole in the arithmetic dom_install_chain now asserts on: with it gone, a DomSeg's refcount is
+ * exactly the number of flows whose `dom_base` names it plus the number of segments whose `base` names it, and
+ * both of those are written in this file. An exported function that can raise a refcount from outside makes
+ * that equation something no reader can check. */
 /* Free a parked DOM delta buffer — and the nodes the flow CREATED go with it. The comment here used to read
    "its nodes stay detached, owned by the doc", which was the leak stated as if it were a design. */
 void dom_buf_free(void *buf, int n) {
