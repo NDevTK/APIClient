@@ -13,10 +13,14 @@
  * those exist yet — a field written by a creator and read by nobody is dead weight that reads as modelled. They
  * arrive with the member that asks them.
  *
- * `media` IS ABSENT, not stubbed. §6.1.1 declares `[SameObject, PutForwards=mediaText] readonly attribute
- * MediaList media`, and §4.4's MediaList is not built — a getter answering null or an empty object would be a
- * WRONG answer where the spec computes a real one, so the member is honestly missing and the page's own
- * TypeError names it. */
+ * `media` IS ABSENT, not stubbed, and the reason moved. §6.1.1 declares `[SameObject, PutForwards=mediaText]
+ * readonly attribute MediaList media`; §4.4's MediaList IS built now (core/css/media_list.h), so what is
+ * missing is no longer the object but §6.1's MEDIA state item itself and the specification of it — HTML
+ * §4.2.6 says a `<style>`-created sheet's media is "the media attribute of element", tracked the way the
+ * title is, and §6.1.2's `replace` and the constructor specify their own. A `[SameObject]` getter minting an
+ * empty MediaList per read would answer that every sheet applies to every medium AND hand back a different
+ * object each time, which is two wrong answers where the spec computes one. It arrives with the state item,
+ * exactly as the other eight §6.1 items do — see the paragraph above. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_SHEET_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_STYLE_SHEET_H
 

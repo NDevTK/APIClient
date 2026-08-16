@@ -284,6 +284,16 @@ const INTERFACES = {
   CSSStyleRule:         "core/css/css_rule.c",
   CSSConditionRule:     "core/css/css_rule.c",
   CSSMediaRule:         "core/css/css_rule.c",
+  /* §6.4.4, §6.4.9 and CSS Fonts §12.1's rule, same component and the same reason. CSSImportRule is EXPECTED
+     to report `styleSheet` missing, and that is the audit doing its job rather than a row to silence: this
+     engine fetches no CSS subresource, so the member has no answer that is not indistinguishable from the
+     spec's own null — css_rule.h states the whole case and names the sheet fetch to build. */
+  CSSImportRule:        "core/css/css_rule.c",
+  CSSNamespaceRule:     "core/css/css_rule.c",
+  CSSFontFaceRule:      "core/css/css_rule.c",
+  /* CSS Fonts §12.1's descriptor block. Its file is the DECLARATION-BLOCK component and not the rule's: the
+     fifteen descriptor attributes are installed beside §6.6.1's per-property ones, over the same record. */
+  CSSFontFaceDescriptors: "core/css/css_style_declaration.c",
   CSSRuleList:          "core/css/css_rule_list.c",
   /* HTML §4.2.6's `disabled` and CSSOM §6.3.2's LinkStyle `sheet` are installed onto HTMLStyleElement's
      prototype by their own component, for the same reason §4.10's rows name theirs. */

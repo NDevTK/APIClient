@@ -84,6 +84,11 @@ static JSValue g_decl_key = JS_UNDEFINED, g_inline_key = JS_UNDEFINED;
    which is the same shape §6.1.1's StyleSheet and §6.4.2's CSSRule take. */
 static JSClassID g_cssd_class;
 static int       g_declaration_proto_slot = -1;
+/* CSS Fonts §12.1's CSSFontFaceDescriptors.prototype, the same way and for the same reason. It is a THIRD
+   prototype over the SAME class and the same record: an `@font-face` block's declarations are kept where
+   §6.4.3's are (the rule's own text, through core/css/css_rule.h), so what differs is only which member names
+   the interface answers to. */
+static int       g_font_face_proto_slot = -1;
 /* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. The camel-cased
    attributes are GENERATED from Lexbor's property registry, so their setter ids are an array indexed the same
    way the registry is — one entry per property, declared once, installed into every realm. */
@@ -885,6 +890,27 @@ static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list)
     return out;
 }
 
+/* AN AT-RULE WHOSE BODY IS DECLARATIONS, serialized — `@font-face`'s descriptors, and nothing else this build
+   parses. Lexbor gives every at-rule block the same shape (a RULE LIST), and what distinguishes a descriptor
+   body from a nested-rule body is what is IN it: the parser lifts a run of declarations into one
+   DECLARATION_LIST child, so a body may hold several if an at-rule interrupts one run. They are ONE block —
+   §6.6 says a declaration block holds one declaration per property, whichever run declared it — so all of them
+   are collected before the collapse runs, rather than serialized separately and concatenated. OWNED, NULL for
+   a body that declares nothing. */
+static char *cssd_serialize_at_block(const lxb_css_rule_list_t *block)
+{
+    CssDecls d = { 0 };
+    const lxb_css_rule_t *r;
+    char *out;
+
+    for (r = block ? block->first : NULL; r; r = r->next)
+        if (r->type == LXB_CSS_RULE_DECLARATION_LIST)
+            cssd_decls_from_list(lxb_css_rule_declaration_list(r), &d);
+    out = cssd_serialize_decls(&d);
+    cssd_decls_free(&d);
+    return out;
+}
+
 /* The same, from the TEXT a backing keeps — which is what §6.6.1's `cssText` getter answers for both backings:
    "return the result of serializing the declarations", where the declarations are what parsing that text
    produced, NOT the bytes the page happened to write. `<div style="color:red">` therefore reads back as
@@ -993,6 +1019,17 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
                  : (at->type == LXB_CSS_AT_RULE_FONT_FACE) ? at->u.font_face->block
                  : (at->type == LXB_CSS_AT_RULE__CUSTOM) ? at->u.custom->block : NULL;
             out.has_block = kids != NULL;
+            /* AND `@font-face`'S BODY IS DECLARATIONS, NOT RULES. CSS Fonts §12.1 makes its contents a
+               DESCRIPTOR block, so the body is reported the way a style rule's is — as the serialized
+               declarations — and it is NOT walked as a child rule list, which would have handed the builder a
+               CSSNestedDeclarations that an `@font-face` cannot contain. This is the one at-rule this build
+               parses whose block is declarations; §6.4.7's `@page` is the next, and it arrives here as a
+               `_CUSTOM` whose block the walk below still descends. */
+            if (at->type == LXB_CSS_AT_RULE_FONT_FACE) {
+                block = cssd_serialize_at_block(kids);
+                out.block = block ? block : "";
+                kids = NULL;
+            }
             break;
         }
         /* A qualified rule whose PRELUDE is not a selector list, and a DECLARATION where a rule belongs: CSS
@@ -1655,6 +1692,76 @@ static JSValue js_cssd_camel_set(JSContext *ctx, JSValueConst this_val, JSValueC
     return JS_UNDEFINED;
 }
 
+/* ---- CSS Fonts §12.1's CSSFontFaceDescriptors -------------------------------------------------------------
+ *
+ * THE LIST IS TYPED OUT BECAUSE THERE IS NO REGISTRY TO GENERATE IT FROM, and that is the opposite of the
+ * camel-cased property attributes above, which are generated precisely because lexbor's property table IS the
+ * "supported CSS property" set §6.6.1 states them over. A DESCRIPTOR is not a property: `src` and
+ * `unicode-range` are accepted nowhere but inside an `@font-face` rule, lexbor's registry has no entry for
+ * either, and the set is closed by the IDL rather than by what this engine implements. So the spec's own
+ * fifteen names are the list, each carrying the two spellings the IDL declares (`fontFamily` and
+ * `font-family`) — `src` alone has one, because it is already a single word. */
+static const char *const FONT_FACE_DESCRIPTORS[] = {
+    "src", "font-family", "font-style", "font-weight", "font-stretch", "font-width", "unicode-range",
+    "font-feature-settings", "font-variation-settings", "font-named-instance", "font-display",
+    "font-language-override", "ascent-override", "descent-override", "line-gap-override",
+};
+#define FONT_FACE_DESCRIPTOR_N ((int)(sizeof(FONT_FACE_DESCRIPTORS) / sizeof(FONT_FACE_DESCRIPTORS[0])))
+static int g_ff_set_id[FONT_FACE_DESCRIPTOR_N];
+
+/* The descriptor `magic` names, asserted rather than clamped: the magic is written by the install loop below
+   and by nothing else, so one out of range is this file disagreeing with itself. */
+static const char *ff_descriptor(int magic)
+{
+    DCHECK(magic >= 0 && magic < FONT_FACE_DESCRIPTOR_N,
+           "a CSSFontFaceDescriptors attribute ran with a magic the descriptor table does not have");
+    return FONT_FACE_DESCRIPTORS[magic];
+}
+
+/* Both halves forward exactly as §6.6.1's do — the getter is getPropertyValue and the setter is setProperty
+   with no third argument — so a descriptor is read and written through the very paths a property is, and the
+   block's declarations have ONE builder. There is no computed arm: a descriptor block is never a computed
+   style (§7.2's creator makes a CSSStyleProperties), which the flag asserts from the other side. */
+static JSValue js_cssd_descriptor_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    const char *name = ff_descriptor(magic);
+    JSValue block = cssd_block(ctx, this_val), r;
+    size_t len = 0;
+    char *text, *v;
+
+    if (JS_IsException(block)) return block;
+    DCHECK(!cssd_flag(ctx, block, "computed"),
+           "a CSSFontFaceDescriptors attribute was read off a COMPUTED declaration block — §7.2's "
+           "getComputedStyle is the only creator that sets that flag and it mints a CSSStyleProperties, which "
+           "has no descriptor attribute for this member to have been reached through");
+    text = cssd_declarations_text(ctx, block, &len);
+    v = cssd_property_value(text, len, name);
+    free(text);
+    r = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
+    free(v);
+    JS_FreeValue(ctx, block);
+    return r;
+}
+
+static JSValue js_cssd_descriptor_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    const char *name = ff_descriptor(magic);
+    JSValue block = cssd_block(ctx, this_val);
+    const char *v;
+
+    if (JS_IsException(block)) return block;
+    if (cssd_flag(ctx, block, "readOnly")) {
+        JS_FreeValue(ctx, block);
+        return cssd_readonly_throw(ctx);
+    }
+    v = JS_ToCString(ctx, val);   /* a real string by now, and null is "" — the IDL says [LegacyNullToEmptyString] */
+    if (!v) { JS_FreeValue(ctx, block); return JS_EXCEPTION; }
+    cssd_write_declaration(ctx, block, name, *v ? v : NULL, false);
+    JS_FreeCString(ctx, v);
+    JS_FreeValue(ctx, block);
+    return JS_UNDEFINED;
+}
+
 /* §6.6.1's cssText. Getting it is two steps and the FIRST is the computed one: "if the computed flag is set,
    then return the empty string", and only then "return the result of serializing the declarations". This used
    to hand back the element's `style` attribute BYTES for both — which is a real string belonging to a different
@@ -1864,13 +1971,17 @@ static JSValue cssd_proto(JSContext *ctx)
    "where are the declarations kept" answerable — so it is asserted here, at the only place a block is made,
    rather than discovered by a read that finds neither. `owner_node` is an element WRAPPER, so the element
    cannot go away underneath the block and the identity table stays the one place a node is named. */
-static JSValue cssd_new(JSContext *ctx, JSValueConst owner_node, JSValueConst parent_rule,
+static JSValue cssd_new(JSContext *ctx, JSValueConst proto, JSValueConst owner_node, JSValueConst parent_rule,
                         bool computed, bool readonly)
 {
-    JSValue obj, slots, proto;
+    JSValue obj, slots;
     JSAtom k;
 
     DCHECK(g_ready, "a CSS declaration block was minted before cssom_init ran");
+    DCHECK(JS_IsObject(proto),
+           "a CSS declaration block was minted in a realm that never ran its prototype install — WHICH "
+           "interface the block is is the caller's to state, because §6.6's three creators and CSS Fonts "
+           "§12.1's fourth do not all make the same one");
     DCHECK(JS_IsNull(owner_node) != JS_IsNull(parent_rule),
            "§6.6's owner node and parent CSS rule are not two independent fields for this engine: one of them "
            "is where the declarations LIVE, so a block with both or with neither is a block whose declarations "
@@ -1879,9 +1990,7 @@ static JSValue cssd_new(JSContext *ctx, JSValueConst owner_node, JSValueConst pa
            "a COMPUTED declaration block was minted WRITABLE. §7.2 is the only creator that sets the computed "
            "flag and it sets the readonly flag in the same breath — a writable one would take §6.6.1's set-a-"
            "CSS-declaration path into a block whose declarations are computed per read and stored nowhere");
-    proto = cssd_proto(ctx);
     obj = JS_NewObjectProto(ctx, proto);
-    JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) return obj;
     slots = idl_slots_new(ctx);
     k = JS_ValueToAtom(ctx, g_decl_key);
@@ -1899,9 +2008,28 @@ static JSValue cssd_new(JSContext *ctx, JSValueConst owner_node, JSValueConst pa
    unset, readonly flag unset, declarations the rule's own, parent CSS rule THIS, owner node null. */
 JSValue cssom_style_properties_for_rule(JSContext *ctx, JSValueConst rule)
 {
+    JSValue proto = cssd_proto(ctx), out;
+
     DCHECK(css_rule_is(rule),
            "§6.4.3's `style` was asked to back a declaration block with something that is not a CSS rule");
-    return cssd_new(ctx, JS_NULL, rule, false, false);
+    out = cssd_new(ctx, proto, JS_NULL, rule, false, false);
+    JS_FreeValue(ctx, proto);
+    return out;
+}
+
+/* CSS Fonts §12.1's `style` — see the header. The block's PROPERTIES are §6.4.3's exactly (computed flag unset,
+   readonly flag unset, declarations the rule's own, parent CSS rule the rule, owner node null); only the
+   prototype differs, which is what makes the descriptors reachable and the properties not. */
+JSValue cssom_font_face_descriptors_for_rule(JSContext *ctx, JSValueConst rule)
+{
+    JSValue proto = realm_value_get(ctx, g_font_face_proto_slot), out;
+
+    DCHECK(css_rule_is(rule),
+           "CSS Fonts §12.1's `style` was asked to back a descriptor block with something that is not a CSS "
+           "rule");
+    out = cssd_new(ctx, proto, JS_NULL, rule, false, false);
+    JS_FreeValue(ctx, proto);
+    return out;
 }
 
 /* §7.1's ElementCSSInlineStyle: "The style attribute must return a CSSStyleProperties object whose readonly
@@ -1927,8 +2055,11 @@ static JSValue js_el_get_style(JSContext *ctx, JSValueConst this_val, int magic)
     if (JS_GetOwnSlot(ctx, &cur, this_val, k) <= 0)
         cur = JS_UNDEFINED;
     if (!JS_IsObject(cur)) {
+        JSValue proto = cssd_proto(ctx);
+
         JS_FreeValue(ctx, cur);
-        cur = cssd_new(ctx, this_val, JS_NULL, false, false);
+        cur = cssd_new(ctx, proto, this_val, JS_NULL, false, false);
+        JS_FreeValue(ctx, proto);
         JS_SetProperty(ctx, (JSValue)this_val, k, JS_DupValue(ctx, cur));
     }
     JS_FreeAtom(ctx, k);
@@ -1959,7 +2090,12 @@ static JSValue js_get_computed_style(JSContext *ctx, JSValueConst this_val, int 
                                         "no pseudo-element boxes, and answering the originating element's "
                                         "values would be a wrong answer rather than a missing one");
     }
-    return cssd_new(ctx, argv[0], JS_NULL, true, true);
+    {
+        JSValue proto = cssd_proto(ctx), out = cssd_new(ctx, proto, argv[0], JS_NULL, true, true);
+
+        JS_FreeValue(ctx, proto);
+        return out;
+    }
 }
 
 void cssom_init(JSContext *ctx)
@@ -1986,13 +2122,17 @@ void cssom_init(JSContext *ctx)
     CHECK(!JS_IsException(g_decl_key) && !JS_IsException(g_inline_key),
           "the CSS declaration block key allocations failed");
     {
-        /* EVERY block this engine builds is a §6.6.1 CSSStyleProperties — all three creators say so — so the
-           CLASS is that one, and §6.6.1's CSSStyleDeclaration base gets a per-realm value slot instead. */
+        /* THE CLASS IS A PER-REALM PROTOTYPE HOLDER AND NOTHING ELSE — no block is ever an instance of it
+           (`cssd_new` builds a plain object over the prototype it is handed), which is why a THIRD interface
+           over the same record costs a value slot and not a class. `[object …]` is §3.7.3's @@toStringTag on
+           the prototype, so CSSStyleProperties and CSS Fonts §12.1's CSSFontFaceDescriptors are told apart by
+           a page even though their records are identical. */
         JSClassDef d = { "CSSStyleProperties" };
         JS_NewClassID(JS_GetRuntime(ctx), &g_cssd_class);
         JS_NewClass(JS_GetRuntime(ctx), g_cssd_class, &d);
     }
     g_declaration_proto_slot = realm_value_declare(ctx, "CSSOM §6.6.1 CSSStyleDeclaration.prototype");
+    g_font_face_proto_slot = realm_value_declare(ctx, "CSS Fonts §12.1 CSSFontFaceDescriptors.prototype");
     g_ready = 1;
     {
         static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
@@ -2017,20 +2157,31 @@ void cssom_init(JSContext *ctx)
     }
     for (id = 1; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++)
         g_camel_set_id[id] = idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_camel_set, (int)id);
+    {
+        /* CSS Fonts §12.1 declares every descriptor attribute `[LegacyNullToEmptyString]`, so `null` reaches
+           the setter as "" and REMOVES the descriptor rather than declaring the string "null". */
+        int i;
+
+        for (i = 0; i < FONT_FACE_DESCRIPTOR_N; i++)
+            g_ff_set_id[i] = idl_setter_id(ctx, IDL_DOMSTRING, true, js_cssd_descriptor_set, i);
+    }
     realm_declare_intrinsic(cssom_install_proto);
 }
 
-/* CSSOM §6.6.1's TWO INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. They are two because the spec splits them:
+/* THREE INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, because three specs split them. §6.6.1's
    `interface CSSStyleProperties : CSSStyleDeclaration` carries `cssFloat` and the per-property camel-cased
-   attributes, and CSSStyleDeclaration carries the block's own eight members. Installing all of them on one
+   attributes; CSS Fonts §12.1's `interface CSSFontFaceDescriptors : CSSStyleDeclaration` carries the fifteen
+   `@font-face` DESCRIPTORS, which are a different set with a different source (see the table above); and
+   CSSStyleDeclaration carries the block's own eight members, which both inherit. Installing all of them on one
    object made `CSSStyleProperties` an absent global — an honest ReferenceError for an interface every one of
    this engine's blocks IS — and made `Object.getOwnPropertyNames(CSSStyleDeclaration.prototype)` report three
    hundred property attributes a browser does not have there. Nothing is an instance of the base, so it holds no
    class of its own, exactly as §6.1.1's StyleSheet and §6.4.2's CSSRule do. */
 void cssom_install_proto(JSContext *ctx)
 {
-    JSValue base, proto, prev;
+    JSValue base, proto, descriptors, prev;
     uintptr_t id;
+    int d;
 
     DCHECK(g_ready, "a realm asked for the declaration-block prototypes before the interfaces were declared");
     prev = JS_GetClassProto(ctx, g_cssd_class);
@@ -2073,8 +2224,36 @@ void cssom_install_proto(JSContext *ctx)
         if (strcmp(camel, "float") == 0) strcpy(camel, "cssFloat");
         idl_install_accessor(ctx, proto, camel, js_cssd_camel_get, (int)id, g_camel_set_id[id]);
     }
+
+    /* CSS Fonts §12.1's CSSFontFaceDescriptors.prototype. BOTH SPELLINGS ARE INSTALLED because the IDL
+       declares both — `fontFamily` and `font-family` are two attributes of the interface, not one attribute
+       and a convenience — and the dashed one is exactly what
+       css/cssom/cssstyledeclaration-cssfontrule.tentative.html reads (`"unicode-range" in style`). `src` is
+       one word, so its two spellings coincide and only one attribute is defined for it. */
+    descriptors = JS_NewObjectProto(ctx, base);
+    CHECK(!JS_IsException(descriptors), "CSSFontFaceDescriptors.prototype could not be allocated");
+    idl_interface_tag(ctx, descriptors, "CSSFontFaceDescriptors");
+    for (d = 0; d < FONT_FACE_DESCRIPTOR_N; d++) {
+        const char *name = FONT_FACE_DESCRIPTORS[d];
+        char camel[48];
+        size_t i, j = 0;
+        bool up = false;
+
+        idl_install_accessor(ctx, descriptors, name, js_cssd_descriptor_get, d, g_ff_set_id[d]);
+        for (i = 0; name[i]; i++) {
+            if (name[i] == '-') { up = true; continue; }
+            DCHECK(j + 1 < sizeof(camel), "a font-face descriptor's camel-cased spelling outgrew its buffer");
+            camel[j++] = up ? (char)toupper((unsigned char)name[i]) : name[i];
+            up = false;
+        }
+        camel[j] = 0;
+        if (strcmp(camel, name) != 0)
+            idl_install_accessor(ctx, descriptors, camel, js_cssd_descriptor_get, d, g_ff_set_id[d]);
+    }
+
     JS_SetClassProto(ctx, g_cssd_class, proto);
     realm_value_set(ctx, g_declaration_proto_slot, base);
+    realm_value_set(ctx, g_font_face_proto_slot, descriptors);
 }
 
 int cssom_put_forwards_setter(void)
@@ -2101,6 +2280,14 @@ void cssom_install(JSContext *ctx, JSValueConst global)
            "the declaration-block interfaces were installed in a realm that never ran their prototype install");
     node_install_interface(ctx, global, "CSSStyleDeclaration", base);
     node_install_interface(ctx, global, "CSSStyleProperties", proto);
+    {
+        JSValue descriptors = realm_value_get(ctx, g_font_face_proto_slot);
+
+        DCHECK(JS_IsObject(descriptors),
+               "CSSFontFaceDescriptors was installed in a realm that never ran its prototype install");
+        node_install_interface(ctx, global, "CSSFontFaceDescriptors", descriptors);
+        JS_FreeValue(ctx, descriptors);
+    }
     JS_FreeValue(ctx, base);
     JS_FreeValue(ctx, proto);
     idl_install_method(ctx, global, "getComputedStyle", 1, g_id_gcs);

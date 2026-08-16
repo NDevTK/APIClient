@@ -26,11 +26,12 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name);
    property with no initial value anywhere (a custom property nobody set), which §6.6.1 answers as the empty
    string. Exported for §7's defaulting step, which is the only thing that reaches for it. */
 char *cssom_initial_value(const char *name);
-/* CSSOM §6.6.1's two prototypes for ONE realm — declared into core/realm.h's list, run once per realm. */
+/* §6.6.1's two prototypes and CSS Fonts §12.1's third, for ONE realm — declared into core/realm.h's list, run
+   once per realm. */
 void cssom_install_proto(JSContext *ctx);
 void cssom_free(JSRuntime *rt);
-/* `CSSStyleDeclaration` and `CSSStyleProperties` as globals, and `getComputedStyle` on the one the Window IDL
-   puts it on. */
+/* `CSSStyleDeclaration`, `CSSStyleProperties` and `CSSFontFaceDescriptors` as globals, and `getComputedStyle`
+   on the one the Window IDL puts it on. */
 void cssom_install(JSContext *ctx, JSValueConst global);
 /* §7.1's ElementCSSInlineStyle `[SameObject, PutForwards=cssText] readonly attribute CSSStyleProperties style`
    — installed by the html layer, because the attribute is HTMLElement's and the object is this component's. */
@@ -49,6 +50,19 @@ char *cssom_serialize_declarations(const char *text, size_t len);
    record, so two flows disagree about `rule.style.color` exactly as they disagree about an inline style.
    OWNED: the caller frees. */
 JSValue cssom_style_properties_for_rule(JSContext *ctx, JSValueConst rule);
+
+/* CSS Fonts §12.1's `[SameObject, PutForwards=cssText] readonly attribute CSSFontFaceDescriptors style` on a
+ * CSSFontFaceRule — the SAME §6.6 declaration block over the same rule-backed text, behind a DIFFERENT
+ * interface, which is the whole of what makes it a different object.
+ *
+ * IT IS A SEPARATE INTERFACE AND NOT A CSSStyleProperties, because an `@font-face` block declares DESCRIPTORS
+ * and not properties: `src` and `unicode-range` are not CSS properties at all (nothing outside a font-face
+ * rule accepts them), `color` is not a descriptor, and the IDL says so by listing fifteen names rather than
+ * inheriting §6.6.1's per-property partial interface. `cssom-fontfacerule-constructors.html` reads the
+ * difference directly — `style.toString()` must be `[object CSSFontFaceDescriptors]` — and
+ * `cssstyledeclaration-cssfontrule.tentative.html` reads it the other way, asserting `"unicode-range" in style`
+ * on a block where CSSStyleProperties has no such attribute. OWNED: the caller frees. */
+JSValue cssom_font_face_descriptors_for_rule(JSContext *ctx, JSValueConst rule);
 
 /* Web IDL §3.4.4's [PutForwards=cssText] SETTER, declared once and shared by the two attributes that carry it
    — §7.1's `element.style` and §6.4.3's `rule.style`. It reads the attribute back by NAME through its own
@@ -80,8 +94,11 @@ typedef struct {
        list), with leading and trailing whitespace removed. Never NULL — `@media {}` has an EMPTY prelude, which
        is a media query list of no queries and not the absence of one. */
     const char *prelude;
-    /* A style rule's SERIALIZED DECLARATION BLOCK. NULL for an at-rule, whose body is RULES and not
-       declarations; the empty string for a style rule that declares nothing. */
+    /* A SERIALIZED DECLARATION BLOCK, for the rules whose body IS declarations — every style rule, and the
+       at-rules CSS defines as declaration bodies (`@font-face`'s descriptors). NULL for an at-rule whose body
+       is RULES (`@media`) and for a statement at-rule with no body at all; the empty string for a body that
+       declares nothing. A rule reported with a block is never ALSO walked for children, because those are the
+       two shapes a body can have and not two halves of one. */
     const char *block;
     /* Does this rule have a `{}` BLOCK at all? `@import url(x);` is a STATEMENT at-rule and has none, which is
        a different fact from having an empty one and is what tells the two kinds apart. */
