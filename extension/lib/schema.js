@@ -372,31 +372,27 @@ async function _sendPageFetch(tabId, url, opts, documentId) {
   );
 }
 
-/* THE PAGE-CONTEXT EDGE HAS TWO ENTRIES, AND WHICH ONE A CALLER CAN REACH IS THE RULE.
+/* THE PAGE-CONTEXT EDGE HAS THREE ENTRIES, AND WHICH VERB EACH ONE MAY NAME IS A PROPERTY OF ITS CALLER.
  *
- * SECURITY.md §Network and CLAUDE.md §Attacker sources say the same thing twice: "GET only — forced execution
- * explores many paths; it never replays a state-changing method", and "a state-mutating request (POST/PUT/
- * DELETE, or a side-effecting GET) is NEVER fired to learn." safeFetch enforces that for the analyzer's own
- * traffic. THIS edge had no such enforcement and could not have one written at the far end: `content.js`
- * `handlePageFetch` takes `msg.method` verbatim, and content.js is the UNTRUSTED zone, so a check there checks
- * nothing. The trusted sender is the only place the rule can live.
+ * THE SHAPE RULE IS DELETED, AND IT WAS THIS FILE'S. It said there were two entries and that the learning one
+ * had NO METHOD PARAMETER AT ALL — "there is no place to express a POST" — and SECURITY.md carried the same
+ * paragraph. Both are gone, because the rule was false about one of the two systems it constrained.
+ * `lib/req2proto.js` learns by sending a DELIBERATELY MALFORMED body to a Google API and reading the
+ * `google.rpc.Status` rejection, which describes the request the service wanted: the POST is the MECHANISM,
+ * and an endpoint that answers 4xx to a malformed body has not been mutated. A rule that makes that
+ * unexpressible does not prevent a state change, it prevents a measurement.
  *
- * A SINGLE FUNCTION TAKING `opts.method` COULD NOT CARRY IT, because the two callers are genuinely different
- * operations: discovery LEARNS (may never mutate) and the popup's Send REPLAYS A REQUEST THE USER TYPED (any
- * method, by definition). One entry with a method parameter serves both, so the rule degenerates into whatever
- * each caller happens to pass — and one of them passed `method:"POST"` with `X-Http-Method-Override: GET`, a
- * documented trick for getting a discovery document out of a service that 405s a GET, fired automatically by
- * passive learning with no user action. It was not a check that was missing; it was a PARAMETER that should
- * never have existed on the learning path.
- *
- * So there are two entries and the learning one has NO METHOD PARAMETER AT ALL — there is no field in which a
- * caller could express a POST, which is the same shape req2proto.c has (no entry that issues a request) rather
- * than a rule someone remembers. `pageContextSend` is the popup's, and it is a USER ACTION: the method is the
- * one the human chose in the Send panel. */
+ * WHAT IS TRUE AND STAYS: the far end cannot hold any rule. `content.js handlePageFetch` takes `msg.method`
+ * verbatim and content.js is the UNTRUSTED zone, so the trusted sender is the only place a verb is decided.
+ * That is why each entry is NAMED FOR ITS OPERATION rather than for a method — the operation is what a reader
+ * can check against, and every one of the three states its verb at the call site rather than inheriting one.
+ *   pageContextGet   LEARNING a published document. GET, with no parameter to say otherwise.
+ *   pageContextSend  the popup's MANUAL REPLAY. Any method — the human chose it in the Send panel.
+ *   pageContextFetch the ERROR PROBE (lib/req2proto.js). It names POST because the probe IS a POST. */
 
 /* LEARNING. A GET of a published URL as the page, credentialed by the page's own jar. */
 async function pageContextGet(tabId, url, headers, documentId) {
-  return _pageContextFetch(tabId, url, { method: "GET", headers: headers || {} }, documentId);
+  return pageContextFetch(tabId, url, { method: "GET", headers: headers || {} }, documentId);
 }
 
 /* THE POPUP'S MANUAL REPLAY — the user named the method, the URL and the body in the Send panel. */
@@ -404,7 +400,7 @@ async function pageContextSend(tabId, url, opts, documentId) {
   DCHECK(!!opts && typeof opts.method === "string" && opts.method !== "",
          "a manual page-context send named no method — this entry exists because the USER chose one, and an " +
          "absent one would silently become a GET of a URL the user meant to POST to");
-  return _pageContextFetch(tabId, url, opts, documentId);
+  return pageContextFetch(tabId, url, opts, documentId);
 }
 
 /**
@@ -413,10 +409,10 @@ async function pageContextSend(tabId, url, opts, documentId) {
  * frame is reused across navigations and could be a different origin.
  * @param {string} documentId — the target document (stable across the page's life)
  */
-async function _pageContextFetch(tabId, url, opts, documentId) {
+async function pageContextFetch(tabId, url, opts, documentId) {
   DCHECK(!!opts && typeof opts.method === "string" && opts.method !== "",
-         "a page-context fetch reached the relay with no method — the two entries above each state one, so an " +
-         "absent method is a third caller that went around them and whose rule nobody decided");
+         "a page-context fetch reached the relay with no method — every entry above states one at its call " +
+         "site, so an absent method is a caller that named no operation and whose verb nobody decided");
   // Validate URL
   try {
     const parsed = new URL(url);

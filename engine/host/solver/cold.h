@@ -102,10 +102,6 @@ void cold_census(ColdCensus *out);
  *
  *     s<id>,<base-id|->,<arms>    a frozen segment: its own arms as '0'/'1', over the segment `base-id`
  *     f<seg-id|->,<val>           a flow standing on that segment, carrying its WFQ reward
- *     d<val>,<url>                a DISCOVERY PROBE (solver/discovery.h) — the one flow whose identity is not a
- *                                 path through the page but an ADDRESS it has still to read, so the address is
- *                                 what crosses and the resumed flow re-issues the GET. It is the last field and
- *                                 runs to the end of the record, which is what lets a query carry a ','.
  *     c<seg-id|->,<val>,<sink>,<src-hex>,<payload-hex>
  *                                 an @S CANDIDATE SESSION: an 'f' record PLUS the substitution that makes it a
  *                                 candidate rather than an exploration flow. A candidate is an ordinary member
@@ -147,7 +143,7 @@ void cold_park(void);
    IT IS THE CANONICAL FORM AND THE JSON BELOW IS A TRANSPORT, which is a correction and not a preference: the
    buffer used to hold JSON while the reader parsed ';'-joined text, so the only producer of the reader's own
    language anywhere in the system was `extension/bridge.js` joining the array it had stored. No process held
-   both ends, and the entire read half — the 's'/'c'/'d' rebuilds, park_unhex, solve_resume_candidate — was
+   both ends, and the entire read half — the 's'/'c' rebuilds, park_unhex, solve_resume_candidate — was
    therefore unreachable from any host without an IndexedDB. A host that can store a string (the fixture stores
    a file) stores this and hands it back to engine_sched_begin unchanged. Borrowed; freed by cold_free. */
 const char *cold_park_recipes(void);
@@ -166,7 +162,6 @@ typedef struct {
     long segs;     /* 's': frozen decision segments, written once each however many flows stand on them */
     long flows;    /* 'f' */
     long cands;    /* 'c' */
-    long probes;   /* 'd' */
 } ColdParked;
 void cold_parked(ColdParked *out);
 
@@ -181,7 +176,7 @@ void cold_parked(ColdParked *out);
  * and the seam is consulted at exactly one point: the top of run_scheduler's loop, immediately after the
  * provider has been paid, where that same loop's two asserts state that BOTH host registers are empty. So the
  * second conjunct was FALSE BY CONSTRUCTION wherever the question is asked, the park was never once taken, and
- * the entire read half of this file — park_unhex, solve_resume_candidate, the 's'/'c'/'d' rebuilds — had still
+ * the entire read half of this file — park_unhex, solve_resume_candidate, the 's'/'c' rebuilds — had still
  * never executed in any process. A predicate whose answer is fixed reads exactly like one that is merely not
  * true yet, and nothing in the run says which: the @COLDPARK census reports zeroes either way.
  *
@@ -193,7 +188,7 @@ void cold_parked(ColdParked *out);
  * blob is NULL because it holds the thread, not because it stands on nothing). Pure measurement: it takes no
  * reference, mutates nothing, and assigns no ordinal. */
 typedef struct {
-    long flows, cands, probes;   /* the records a park taken now would write, per kind */
+    long flows, cands;           /* the records a park taken now would write, per kind */
     long deep;                   /* …of those, the ones standing on a frozen decision segment */
 } ColdPreview;
 void cold_park_preview(ColdPreview *out);
@@ -218,12 +213,17 @@ void cold_resume(JSContext *ctx, const char *recipes);
 /* WHAT THE LAST cold_resume REBUILT, PER RECORD KIND — the observable that says which ARMS of the grammar ran.
    `@RESUMED <n>` is printed for the extension because a line on stdout is the only channel that zone has, and
    a single total cannot distinguish a residue of nothing but plain flows from one that also carried an @S
-   candidate (park_unhex, solve_resume_candidate) or a discovery probe. A host that can call C asks here. */
+   candidate (park_unhex, solve_resume_candidate). A host that can call C asks here.
+   THERE WAS A FOURTH KIND AND ITS LETTER IS RETIRED, not reused: 'd' named an engine-seeded DISCOVERY PROBE,
+   one flow per candidate document address, and active discovery is the trusted zone's again
+   (extension/lib/discovery-probe.js). Both ends of the round trip lost it in the same change — a grammar that
+   can still EMIT a kind it can no longer PARSE fails only on a resume in a later session, which is the one
+   failure this document exists to make impossible. cold_resume names 'd' in its refusal so a residue written
+   by an older session says what wrote it. */
 typedef struct {
     long segs;     /* frozen decision segments rebuilt from 's' records — the shared prefixes every flow stands on */
     long flows;    /* 'f': exploration flows */
     long cands;    /* 'c': @S candidate sessions, each carrying a hex source and payload */
-    long probes;   /* 'd': discovery probes, each an address to re-issue */
 } ColdResumed;
 void cold_resumed(ColdResumed *out);
 

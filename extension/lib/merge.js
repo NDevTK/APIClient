@@ -21,19 +21,12 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
       });
     }
 
-    /* THE SCHEMAS THE ENGINE LEARNED FROM THE APIs' OWN REJECTIONS (engine/host/solver/req2proto.c), relayed
-       into the doc model. A PURE RELAY and deliberately nothing more: the engine keys each record by the
-       endpoint identity `<METHOD> <host><path>`, which is exactly the key `lib/send.js` resolves a request
-       body schema by, so re-keying here would be this zone deciding structure the engine already decided.
-       NOT DEFAULTED — bridge.js asserts the map's presence at the seam, and a `|| {}` here would turn an
-       engine that emitted nothing into an API that describes no fields. */
-    DCHECK(analysis.probeResults && typeof analysis.probeResults === "object",
-           "an engine analysis reached the merge with no probeResults map — bridge.js relays req2proto.c's " +
-           "learned schemas verbatim, so its absence here is that relay broken rather than a page whose " +
-           "APIs never described themselves");
-    for (var _pk in analysis.probeResults)
-      if (Object.prototype.hasOwnProperty.call(analysis.probeResults, _pk))
-        tab.probeResults.set(_pk, analysis.probeResults[_pk]);
+    /* NO probeResults RELAY OFF THE ENGINE RESULT. `tab.probeResults` is written by the two systems that
+       actually probe — lib/req2proto.js through lib/discovery-probe.js and lib/response-decode.js — and the
+       engine has no such record to relay: it never issues a request, so it never receives a rejection to read
+       a schema out of. The relay that stood here (and the DCHECK on the seam in bridge.js) asserted a field
+       the engine emitted, which made an engine that had learned nothing indistinguishable from a broken
+       bridge. */
 
     // Proto field/enum merge — requires a matching doc
     if (doc) {

@@ -75,7 +75,6 @@
 #include "core/indexeddb/idb_transaction.h"
 #include "core/indexeddb/idb_upgrade_abort.h"
 #include "solver/endpoint.h"
-#include "solver/req2proto.h"
 #include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/cold.h"      /* the cross-session tier: this host's residue, and what a resume rebuilt */
@@ -3139,7 +3138,6 @@ int main(int argc, char **argv) {
     flow_registry_init("fixture");   /* one document in this fixture; the world namespace is named by it */
     world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
     endpoint_init();
-    req2proto_init();
     solve_init(ctx);
 
     /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER.
@@ -3227,8 +3225,11 @@ int main(int argc, char **argv) {
     /* ─── THE COLD TIER'S TWO ENDS, EACH REPORTED PER RECORD KIND ────────────────────────────────────────────
        A total cannot say which ARMS ran, and the arms are the whole question: a residue of nothing but 'f'
        records reads back without touching the segment rebuild, park_unhex or the sink-class re-bind, and
-       reports the same count as one that touches all three. Both lines carry the same four fields for the same
-       reason, so the two ends of one round trip can be read against each other by eye. */
+       reports the same count as one that touches all three. Both lines carry the same three fields for the
+       same reason, so the two ends of one round trip can be read against each other by eye. A fourth,
+       `probes`, is gone with the record kind it counted ('d', an engine-seeded discovery probe): active
+       discovery is the trusted zone's again, so the arm cannot run and a field reporting 0 forever would say
+       it merely had not. */
     ColdParked cp;
     ColdResumed cr;
     memset(&cp, 0, sizeof cp);
@@ -3240,14 +3241,14 @@ int main(int argc, char **argv) {
            with the frontier it belongs to, so a store written after it would be written from freed memory —
            and the residue is the only remaining copy of every flow in it. */
         tf_park_store(cold_park_path, recipes);
-        printf("@COLDPARK {\"records\":%ld,\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"probes\":%ld,"
+        printf("@COLDPARK {\"records\":%ld,\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,"
                "\"bytes\":%zu,\"store\":\"%s\"}\n",
-               cold_park_records(), cp.segs, cp.flows, cp.cands, cp.probes, strlen(recipes), cold_park_path);
+               cold_park_records(), cp.segs, cp.flows, cp.cands, strlen(recipes), cold_park_path);
     }
     if (cold_resume_path) {
         cold_resumed(&cr);
-        printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"probes\":%ld}\n",
-               cr.segs, cr.flows, cr.cands, cr.probes);
+        printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld}\n",
+               cr.segs, cr.flows, cr.cands);
     }
 
     /* ONE result document — both surfaces and the scheduler's interleave count, serialized DIRECTLY from the
@@ -3706,7 +3707,7 @@ int main(int argc, char **argv) {
     int cold_park_wrote = cold_park_path && cold_park_records() > 0;
     int cold_park_deep  = cold_park_path && cp.segs > 0;
     int cold_park_cand  = cold_park_path && cp.cands > 0;
-    int cold_resumed_any   = cold_resume_path && (cr.flows + cr.cands + cr.probes) > 0;
+    int cold_resumed_any   = cold_resume_path && (cr.flows + cr.cands) > 0;
     int cold_resumed_segs  = cold_resume_path && cr.segs > 0;
     int cold_resumed_cand  = cold_resume_path && cr.cands > 0;
     /* AND THE REPLAY REACHED ITS SINK AGAIN — the strongest thing a resumed residue can be asked to say, and a

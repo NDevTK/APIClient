@@ -115,14 +115,12 @@ JSValue fetch_reply_body(JSContext *ctx, JSValueConst reply);
    the only thing to exercise. */
 const uint8_t *fetch_body_bytes(JSContext *ctx, JSValueConst body, size_t *out_n);
 
-/* A REPLY'S BODY AS JSON, which is Infra's "parse JSON from bytes" and therefore TWO steps: "let string be the
-   result of running UTF-8 decode on bytes", then parse JSON from string. It is here rather than at each asker
-   because the solver has two of them — an API's own rejection envelope (req2proto.c) and its published
-   description (discovery.c) — and both used to reach for the record's `body` as a STRING, which after this
-   change is a read that answers nothing at all: a body is a byte sequence. A reply that is not JSON (an HTML
-   error page, a script, an image) answers JS_EXCEPTION with the real SyntaxError live, which is an ordinary
-   fact about the web that each caller takes and drops. */
-JSValue fetch_reply_parse_json(JSContext *ctx, JSValueConst reply);
+/* `fetch_reply_parse_json` STOOD HERE AND ITS TWO CALLERS ARE GONE. It was Infra's "parse JSON from bytes"
+   over a reply RECORD, and the two askers were the solver's own readers of an API's rejection envelope and of
+   its published description — both of which are the trusted zone's again (extension/lib/req2proto.js,
+   extension/lib/discovery-probe.js). `Response.json()` never went through it: body.c reaches
+   `byte_reader_json` directly, which is the one implementation both were sharing. A wrapper with no caller
+   reads as a capability this surface offers, so it is deleted rather than kept for the next reader. */
 
 /* …AND THE READ OF IT, in the component that owns the WRITE. The record's `headers` field is an Array of
    [name, value] pairs — a LIST and not a map, because §5.1 never combines two entries and Fetch §2.2.2's "get"

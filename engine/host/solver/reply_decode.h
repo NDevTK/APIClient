@@ -5,9 +5,9 @@
  * JS/JSON a server returns is the richest source of real example values." The host had that reading spread over
  * `extension/lib/response-decode.js`, `lib/protocol-parsers.js` and `lib/protobuf.js`, and
  * `extension/lib/discovery.js` held two of their callees: the
- * magic-byte classifier and the React Flight parser. TWO OF THOSE FOUR NAME THIS FILE ON `extension/jsaudit.mjs`
- * AND THE OTHER TWO DO NOT, which is a correction the gate made when it started deriving the queue from the
- * call graph rather than from a hand-written step: `lib/protocol-parsers.js` and `lib/protobuf.js` are the
+ * magic-byte classifier and the React Flight parser. TWO OF THOSE FOUR BELONG HERE AND THE OTHER TWO DO NOT,
+ * and what separates them is the INPUT rather than the algorithm:
+ * `lib/protocol-parsers.js` and `lib/protobuf.js` are the
  * codecs and they become this component; `lib/response-decode.js` is the LIVE-CAPTURE INTAKE — one
  * `handleResponseBody` the offscreen's chrome.runtime router hands every body intercept.js caught — and this
  * component has never been handed one of those. It reads a reply THE ENGINE FETCHED, so the intake's
@@ -22,8 +22,8 @@
  * parser is here, because a wire protocol's framing is what this component is for.
  *
  * WHERE IT IS CALLED FROM, AND WHY THERE. `engine_provide` is the ONE point every fetched reply crosses exactly
- * once — a URL two flows parked on is answered there once — so a reply is read for its content beside
- * `req2proto_learn` and not in the per-flow drain, where it would run once per waiter. What is learned is a
+ * once — a URL two flows parked on is answered there once — so a reply is read for its content there and not
+ * in the per-flow drain, where it would run once per waiter. What is learned is a
  * fact about the SERVER and not about a flow's world, so it is not per-flow state and takes no COW capture,
  * exactly as the endpoint surface does not.
  *

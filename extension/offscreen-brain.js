@@ -276,12 +276,12 @@ const globalStore = {
      ever creating an engine — so a revisited page never resumed the flows it had parked. §NO BOUNDS bans a
      seen-set outright, and this one was keyed on document IDENTITY, which is exactly what may never stand in
      for emitted output as proof that a flow is finished. */
-  /* NO discoveryChanges. It was service → [{timestamp, fetchUrl, changes}], written in exactly one place —
-     the host-side discovery fetch, which diffed the document it had just pulled against the one it held. That
-     fetch is the engine's now (engine/host/solver/discovery.c), so the map has no writer, and a store field
-     nothing writes is a plausible datum: every reader of it would have reported "this API's surface has never
-     changed" forever. The diff belongs where the documents now arrive, and it is not carried here in the
-     meantime. */
+  /* service → [{timestamp, fetchUrl, changes}]. Its ONE writer is the discovery fetch
+     (lib/discovery-probe.js `fetchDiscoveryForService`), which diffs the document it has just pulled against
+     the one it held, so every entry records a real change in a published API's surface. It was deleted here
+     when that fetch left for the engine, on the correct ground that a store field nothing writes reads as
+     "this API's surface has never changed" forever — the writer is back, so the field is. */
+  discoveryChanges: new Map(),
 };
 
 // In-flight exploit-probe sessions, keyed by marker. The EXPLOIT_PROBE
@@ -445,6 +445,11 @@ async function clearGlobalStore() {
   globalStore.probeResults.clear();
   globalStore.scopes.clear();
   globalStore.securityFindings.clear();
+  /* `discoveryChanges` IS CLEARED HERE TOO, AND IT NEVER WAS BEFORE. It is serialized into the persisted
+     store beside the six above, so a Clear that left it behind would restore a service's recorded API-surface
+     history into a store the user had just emptied — the Clear button's whole contract is that no data
+     survives it. */
+  globalStore.discoveryChanges.clear();
   /* THE WORK ITSELF IS STOPPED BY AST_CLEAR, WHICH RUNS FIRST (popup-handlers.js CLEAR_TAB): it tears down
      every live engine in the host pool, drops the documents waiting for a slot, and empties the cross-session
      frontier's IndexedDB. There is nothing left on this side to empty — the queue that used to be drained
@@ -539,15 +544,25 @@ function _hexToBytes(hex) {
 // (VDD passive learning -- learnFromAstCallSite/learnFromRequest/learnFromResponse + stats + templated-
 // method matching -- extracted to lib/learn.js, loaded first. One problem per file.)
 
-/* THE LEARNING FETCH, BOUND TO ONE DOCUMENT. It binds the DOCUMENT (stable) so a page-context read hits the
-   exact document's own origin/credentials; routed by documentId only.
-   IT IS A GET FUNCTION AND CANNOT BE ANYTHING ELSE. It returned `(url, opts) => pageContextFetch(…opts…)`, so
-   `opts.method` decided the verb and discovery passed `POST` with `X-Http-Method-Override: GET` — a request
-   fired automatically by passive learning, which SECURITY.md §Network ("GET only") and CLAUDE.md §Attacker
-   sources ("a state-mutating request is NEVER fired to learn") both forbid. There is now no parameter in which
-   a caller could express a method: the second argument is HEADERS. */
+/* TWO DOCUMENT-BOUND RELAYS, ONE PER OPERATION. Both bind the DOCUMENT (stable) so a page-context read hits
+   the exact document's own origin/credentials, routed by documentId only — a page-context request is the
+   ANALYZER acting AS the page, so the page's own jar and origin are the whole point of the edge.
+
+   THE DOCUMENT FETCH names no method because the candidate it walks has no field for one: an API's published
+   description is read with a GET of a published address (lib/discovery-probe.js `fetchDiscoveryForService`
+   over lib/discovery.js `buildDiscoveryUrls`).
+
+   THE ERROR PROBE names POST because the probe IS a POST. lib/req2proto.js sends a deliberately malformed
+   body to a Google API and reads the `google.rpc.Status` rejection describing the request the service wanted;
+   `sendProbe` writes `method: "POST"` at the call site. A rejected malformed body mutates nothing, and there
+   was for a while a rule here saying no caller could express that verb at all — it is deleted, because it did
+   not stop a state change, it stopped a measurement. */
 function makePageGetFn(tabId, documentId = null) {
   return (url, headers) => pageContextGet(tabId, url, headers, documentId);
+}
+
+function makePageFetchFn(tabId, documentId = null) {
+  return (url, opts) => pageContextFetch(tabId, url, opts, documentId);
 }
 
 // ─── Discovery Document Fetching ─────────────────────────────────────────────
@@ -565,9 +580,7 @@ function collectKeysForService(tab, service, hostname) {
   return keys;
 }
 
-// (Discovery-doc probing is the ENGINE's: engine/host/solver/discovery.c seeds a probe FLOW per candidate
-//  address on the one frontier. lib/discovery-probe.js, which held the host-side fetch loop and the
-//  document diff, is deleted.)
+// (Discovery-doc probing -- diff/fetch/probe/virtual-doc build -- extracted to lib/discovery-probe.js.)
 
 // (Response-body protocol decoding -- handleResponseBody -- extracted to lib/response-decode.js, first.)
 

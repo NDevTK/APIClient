@@ -44,9 +44,9 @@ static bool is_asset(const MimeType *m)
  * still ships its chunk list in the payload of the route they did.
  *
  * THE OTHER ROW KINDS ARE NOT READ HERE, and that is a statement about ownership rather than about difficulty.
- * A `json` row's SHAPE is schema inference (jsaudit's `lib/schema.js` row → moat_schema.c); an `E[` row's
- * message is credential extraction (jsaudit's `lib/keys.js` row → moat.c). Reading them here would put two
- * components' work in a third. */
+ * A `json` row's SHAPE is schema inference, which `extension/lib/schema.js` does; an `E[` row's message is
+ * credential extraction, which `extension/lib/keys.js` does. Reading them here would put two components'
+ * work in a third. */
 
 /* THE CHUNK'S ADDRESS, RESOLVED — and ONLY when the chunk is root-relative. React's client manifest writes a
    chunk either as an absolute path (`/_next/static/chunks/x.js`) or as a bare path relative to a build-time
@@ -65,9 +65,9 @@ static void record_chunk(JSContext *ctx, const UrlRecord *base, const char *chun
     abs = url_serialize(&u, /*exclude_fragment*/ true);
     CHECK(abs, "reply_decode: OOM serializing a Flight chunk address");
     uv = JS_NewString(ctx, abs);
-    /* GET, because a chunk is a script the page LOADS. There is no method anywhere in this file for the same
-       structural reason discovery.c has none: §Attacker sources' "a state-mutating request is NEVER fired to
-       learn" is a property of the shape rather than a check someone remembers to write. */
+    /* GET, because a chunk is a script the page LOADS — the verb is a fact about what a Flight client
+       reference IS, not a default. There is no method parameter anywhere in this file because no caller has a
+       second answer to give it. */
     endpoint_record(ctx, "GET", uv, NULL, 0);
     JS_FreeValue(ctx, uv);
     free(abs);
@@ -162,7 +162,7 @@ void reply_decode_learn(JSContext *ctx, const char *url, JSValueConst reply)
            "resolves against the URL that was fetched, and a reply with none would resolve them against "
            "nothing and file the result under an endpoint nobody requested");
     /* A NETWORK ERROR IS AN ANSWER, and it carries no record at all. This is a shape test on what the host
-       delivered rather than an `if` past a broken invariant — the same reading discovery_reply takes. */
+       delivered rather than an `if` past a broken invariant. */
     if (!JS_IsObject(reply)) return;
 
     /* THE BYTES, AS BYTES. This read the record's `body` as a STRING, which §2.2.5 says a body is not; the

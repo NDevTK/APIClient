@@ -422,6 +422,9 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     !cookie &&
     !apiKey;
 
+  // Snapshot discovery status before learnFromRequest (which creates a virtual doc)
+  const preLearnDiscovery = tab.discoveryDocs.get(service);
+
   // Decode request body (protobuf/JSPB/JSON) — must happen BEFORE
   // learnFromRequest so entry.isJson / entry.decodedBody are set when
   // schema learning records body-field stats. Downstream code further
@@ -553,25 +556,88 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     }
   }
 
-  /* AUTOMATIC BACKGROUND DISCOVERY IS THE ENGINE'S — engine/host/solver/discovery.c, seeded by the event this
-     zone cannot see: a HOST arriving on the engine's endpoint surface. What stood here called
-     `fetchDiscoveryForService` off passive learning, which is the same defect the error-probe below was deleted
-     for, one layer over: it fired off what the page HAPPENED to send rather than off what forced execution
-     learned the bundle CAN send, and it drove its candidates in an `await` loop in this zone. The engine seeds
-     one FLOW per candidate address on the one BFS frontier — ranked, parkable to the cold tier, resumed in a
-     later session — and every method the document names lands in the same @H surface as the call sites forced
-     execution reached, so it arrives here through the result document like every other finding.
-     The `pending` / `not_found` statuses this block wrote went with it: they were a latch on a host-side search
-     that no longer exists, and `discoveryDocs` is now written by learn.js's virtual documents alone. */
+  // Protobuf probing trigger — skip for boring asset fetches.
+  if (!_isBoringFetch && isProtobuf && msg.method === "POST") {
+    const discoveryStatus = tab.discoveryDocs.get(service);
+    const doc = discoveryStatus?.doc;
+    const match = doc ? findDiscoveryMethod(doc, url.pathname, msg.method) : null;
+    const isLearnedOnly = match &&
+      discoveryStatus.doc.resources?.learned?.methods[match.method.id.split(".").pop()];
+    if (!match || isLearnedOnly) {
+      const keysForService = collectKeysForService(tab, service, url.hostname);
+      if (apiKey && !keysForService.includes(apiKey)) keysForService.push(apiKey);
+      performProbeAndPatch(documentId, service, msg.url, apiKey || keysForService[0] || null);
+    }
+  }
 
-  /* THE ERROR-BASED SERVICE-INFO PROBE IS THE ENGINE'S — engine/host/solver/req2proto.c.
-     What stood here fired an intentionally-malformed POST at every captured POST URL through the page-context
-     relay, kept a module-global seen-set of the ones it had already hit, and parsed the `google.rpc.Status`
-     envelope in this zone. Three things were wrong with it and only one was the layer: it FIRED a request to
-     learn (§Attacker sources forbids exactly that for a state-mutating method), the seen-set was a bound
-     (§NO BOUNDS — "never a seen-set"), and it was a sniffer trigger, firing off what the page HAPPENED to send
-     rather than off what forced execution learned the bundle CAN send. The engine now reads the same envelope
-     off the replies it already holds and emits the schema in `probeResults`. */
+  /* AUTOMATIC BACKGROUND DISCOVERY — skip for boring fetches (probing /.well-known/openapi.json on a CDN is
+     wasted traffic).
+
+     THE 300-SECOND COOLDOWN IS DELETED. `preLearnDiscovery._failedAt && Date.now() - _failedAt < 300000`
+     stood in this condition and suppressed every discovery attempt for five minutes after one came up empty.
+     §NO BOUNDS names the shape: "Never a depth/step/TIME/run/memory/recursion cap … Only EMITTED OUTPUT —
+     never identity — proves a flow is done." A clock deciding when a service may be asked again is a bound in
+     both directions — it suppresses an attempt that would now succeed (an API key learned two seconds later
+     unlocks documents the first sweep could not read) and it re-fires an identical sweep once the timer
+     expires. `_failedAt` went with it; nothing else read it.
+
+     WHAT REMAINS IS NOT A BOUND. `!preLearnDiscovery || status === "not_found"` is §Attacker sources'
+     "one-per-endpoint (no method is universally safe …), never a blind sweep": a service whose document is
+     already `found` has nothing to re-ask, and one that is `pending` has the same GETs in flight this instant.
+     A `not_found` service is asked AGAIN precisely because the second ask is a DIFFERENT request — the key set
+     below has grown since the first, and a candidate carrying a key the page had not yet used is a URL that
+     has never been fetched. */
+  if (!_isBoringFetch && (!preLearnDiscovery || preLearnDiscovery.status === "not_found")) {
+    const discoveryStatus = tab.discoveryDocs.get(service);
+    if (discoveryStatus) {
+      discoveryStatus.status = "pending";
+    } else {
+      tab.discoveryDocs.set(service, { status: "pending", seedUrl: msg.url });
+    }
+    const keysForService = collectKeysForService(tab, service, url.hostname);
+    if (apiKey && !keysForService.includes(apiKey)) keysForService.push(apiKey);
+    fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url);
+  }
+
+  // Error-based service-info probe (lib/req2proto.js; README "Error-Based Schema
+  // Probing"). An intentionally-malformed POST to the endpoint provokes a gapi
+  // error envelope, learning its CANONICAL service/method + OAuth scopes, merged
+  // into the discovery doc — EVEN when a real doc exists, since the probe can
+  // surface a HIDDEN service/method/scope the doc omits. This is the automatic
+  // form of the DISCOVER_SERVICE message (which is a user action over one
+  // endpoint, not a background step). POST endpoints only — the probe's own
+  // method, so it introduces no method the page did not already use.
+  if (!_isBoringFetch && msg.method === "POST") {
+    // Probe the POST request URL DIRECTLY. handleResponseBody sees EVERY captured
+    // POST; the request need NOT be a "learned" endpoint in globalStore.endpoints
+    // (Google batchexecute / $rpc calls are logged + classified into a service but
+    // are not endpoint-keyed).
+    const _siUrl = new URL(url.href);
+    _siUrl.searchParams.delete("key");
+    const _siKey = _siUrl.hostname + _siUrl.pathname;
+    if (!_svcInfoProbedUrls.has(_siKey)) {
+      _svcInfoProbedUrls.add(_siKey);
+      const _siHeaders = {};
+      if (apiKey) _siHeaders["X-Goog-Api-Key"] = apiKey;
+      const _siPath = _siUrl.pathname;
+      discoverServiceInfo(_siUrl.toString(), _siHeaders, { fetchFn: makePageFetchFn(tab.tabId, documentId) }).then((result) => {
+        if (!result) return;
+        let _merged = false;
+        const _scopes = Array.isArray(result.scopes) ? result.scopes.filter(Boolean) : [];
+        if (_scopes.length) { tab.scopes.set(service, _scopes); _merged = true; }
+        const _doc = globalStore.discoveryDocs.get(service)?.doc;
+        if (_doc) {
+          const _m = findDiscoveryMethod(_doc, _siPath, "POST")?.method;
+          if (_m) {
+            if (_scopes.length && (!Array.isArray(_m.scopes) || !_m.scopes.length)) { _m.scopes = _scopes; _merged = true; }
+            if (result.service && _m._probedService !== result.service) { _m._probedService = result.service; _merged = true; }
+            if (result.method && _m._probedMethod !== result.method) { _m._probedMethod = result.method; _merged = true; }
+          }
+        }
+        if (_merged) { tab.probeResults.set(`svcinfo:POST ${_siPath}`, result); mergeToGlobal(tab); notifyPopup(tab.tabId); }
+      }).catch((e) => { if (typeof console !== "undefined") console.debug("[brain] @WHY {phase:'svcinfo-probe',reason:'" + (e && e.message || e) + "'}"); });
+    }
+  }
 
   // Extract OAuth scopes from 403 www-authenticate response header
   if (msg.status === 403 && msg.responseHeaders) {

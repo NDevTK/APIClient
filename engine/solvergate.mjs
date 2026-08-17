@@ -220,8 +220,8 @@ async function child(docPath, schedName) {
     if (first._park.length === 0)
       gateFail("the park wrote an EMPTY residue over a frontier that had a seeded flow in it — an empty park " +
                "document tells the host this engine was fully explored, so the whole frontier would be deleted");
-    /* ASKED OF THE ONE SURFACE LIST, never of a second copy of it. This loop named three surfaces literally
-       while SURFACES named four, so a `probeResults` emitted before the first pick would have satisfied a
+    /* ASKED OF THE ONE SURFACE LIST, never of a second copy of it. This loop named its surfaces literally
+       while SURFACES named one more, so a surface emitted before the first pick would have satisfied a
        precondition that had never looked at it — the same field, unclassified in one place and invisible in
        the other. `surfaceSet` answers for either shape, so the emptiness question is asked once. */
     for (const surface of SURFACES.keys())
@@ -264,23 +264,20 @@ function canonStr(v, path) {
 }
 /* Per SURFACE, so a failure names WHICH one disagreed and by which elements. One canonical string for the
    whole document would say only that something differs, which is the report nobody can act on.
-   EACH SURFACE DECLARES ITS SHAPE, because assuming one is how this list went wrong. `probeResults` is a MAP
-   (req2proto.c's learned schemas, keyed by the `<METHOD> <host><path>` identity the Send panel resolves a
-   request body with) and every other surface is an ARRAY — and the first run of this gate reported
-   `probeResults` as an unclassified field on all five corpus documents, because the coverage check asked
-   `Array.isArray` of a surface that is not one. That is the check working: it is the same defect on both
-   sides at once, a finding surface nobody compared AND a shape nobody stated.
-   IT IS A FINDING, NOT A COST. What it holds is what an API's own rejection DESCRIBED — services, methods,
-   fields, OAuth scopes learned from a reply — so §Learning-from-replies' "the reply is the same reply whenever
-   it lands" applies to it exactly as it applies to an endpoint: the schedule decides WHEN the probe's reply is
-   consumed and nothing about what the server said. extension/bridge.js already DCHECKs it as a required map
-   for the same reason, and a schedule that loses one loses "every learned field, service, method and OAuth
-   scope" in that file's own words. */
+   EACH SURFACE DECLARES ITS SHAPE, because assuming one is how this list went wrong. THE ONLY SHAPE DECLARED
+   TODAY IS `array`, and the "map" half of `shapeOk`/`surfaceSet` below has no declarer — said plainly here
+   rather than left for a reader to discover, because a mechanism nobody exercises is one nobody knows is
+   broken. It was `probeResults`, error-derived request schemas keyed by the `<METHOD> <host><path>` identity
+   the Send panel resolves a request body with, and the first run of this gate reported it as an unclassified
+   field on all five corpus documents because the coverage check asked `Array.isArray` of a surface that is
+   not one. That surface is gone from result.c: an API's rejection is the answer to a DELIBERATELY MALFORMED
+   request, which this engine cannot issue, so it is read in the trusted zone (extension/lib/req2proto.js) and
+   never crosses the seam this gate compares. Its row is deleted with it rather than left asserting a field no
+   writer produces. */
 const SURFACES = new Map([
   ["fetchCallSites", "array"],
   ["securitySinks",  "array"],
   ["pageErrors",     "array"],
-  ["probeResults",   "map"],
 ]);
 const shapeOk = (v, kind) => kind === "array" ? Array.isArray(v)
                                               : (!!v && typeof v === "object" && !Array.isArray(v));

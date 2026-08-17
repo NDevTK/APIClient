@@ -5,13 +5,14 @@
 // Wire format reference: https://protobuf.dev/programming-guides/encoding/
 //
 // Used by:
+//  - lib/req2proto.js: binary protobuf probing for non-REST (gRPC/proto-only) endpoints
+//  - discoverServiceInfo: decoding binary error responses for service/method metadata
 //  - popup.js: inspecting intercepted protobuf traffic
 //
-// THE ERROR-PROBE HALF IS GONE WITH ITS CALLER. `pbEncodeProbePayload`, `pbEncodeNestedPayload` and
-// `pbDecodeRpcStatus` existed only for req2proto.js's binary probing, which fired a POST to learn — and
-// error-based schema learning is now the engine's (engine/host/solver/req2proto.c), which reads the
-// `google.rpc.Status` envelope off replies it already holds. Keeping three functions with no caller would
-// read as a live capability that has not run since that commit.
+// `pbEncodeProbePayload`, `pbEncodeNestedPayload` and `pbDecodeRpcStatus` LIVE HERE BECAUSE THEY ARE THE WIRE
+// FORMAT, not the probe. Encoding fields 1..N and decoding a `google.rpc.Status` envelope out of a rejection
+// are codec operations over protobuf's own encoding, which is what this file is; lib/req2proto.js decides
+// WHICH payload to send and what the rejection MEANS. The two halves of a probe are one file each.
 
 // ─── Wire Types ───────────────────────────────────────────────────────────────
 
@@ -191,14 +192,43 @@ function pbDecodeRaw(buf) {
   return fields;
 }
 
-// `pbGetFields` / `pbGetString` / `pbGetVarint` / `pbGetMessage` / `pbGetRepeatedMessages` STOOD HERE WITH NO
-// CALLER. They were the field accessors `pbDecodeRpcStatus` read a `google.rpc.Status` envelope with, and that
-// function left this file when error-based schema learning became the engine's
-// (engine/host/solver/req2proto.c) — the note at the head of this file records the three that went and missed
-// the five that served them. CLAUDE.md §Offensive-programming states the rule from the producer's end: a
-// function nobody consumes reads as a capability this surface has, and it is indistinguishable from one that
-// runs. Three of them also swallowed a decode failure into `null` / a filtered-out entry, so the surface they
-// pretended to offer was one that could not report a malformed body either.
+/**
+ * Helper: get first field value as string (wire type 2 → UTF-8).
+ */
+function pbGetString(fields, num) {
+  const f = fields.find((f) => f.field === num && f.wire === PB_LEN);
+  return f ? new TextDecoder().decode(f.data) : null;
+}
+
+/**
+ * Helper: get first field value as varint number.
+ */
+function pbGetVarint(fields, num) {
+  const f = fields.find((f) => f.field === num && f.wire === PB_VARINT);
+  return f ? f.data : null;
+}
+
+/**
+ * Helper: get all repeated embedded messages for a field number.
+ */
+function pbGetRepeatedMessages(fields, num) {
+  return fields
+    .filter((f) => f.field === num && f.wire === PB_LEN)
+    .map((f) => {
+      try {
+        return pbDecodeRaw(f.data);
+      } catch (_) {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+// `pbGetFields` AND `pbGetMessage` ARE NOT BACK, AND THEIR ABSENCE IS THE DIFFERENCE BETWEEN THE TWO
+// DELETIONS. The three accessors above have a caller again — `pbDecodeRpcStatus` below reads a
+// `google.rpc.Status` envelope with exactly those three — but those two had none even when it stood here, so
+// re-adding them would put back the thing the delete was right about (a function nobody consumes reads as a
+// capability this surface has) rather than the thing it was wrong about.
 
 // ─── Encoding ─────────────────────────────────────────────────────────────────
 
@@ -223,10 +253,157 @@ function pbEncodeLenField(fieldNum, data) {
   );
 }
 
-// `pbEncodeFixed32Field` / `pbEncodeFixed64Field` STOOD HERE WITH NO CALLER either, and for the same reason:
-// they encoded the probe payload req2proto.js used to fire. lib/encode.js writes the two fixed wire types it
-// needs from `pbTag` + `concatBytes` directly (its own fixed32/fixed64 arms), so these were not even the
-// spelling the one remaining encoder uses. PB_32BIT / PB_64BIT stay — encode.js reads both.
+// `pbEncodeFixed32Field` / `pbEncodeFixed64Field` ARE NOT BACK EITHER. The probe payloads below are varint
+// and length-delimited fields only, so these two had no caller then and have none now; lib/encode.js writes
+// the two fixed wire types it needs from `pbTag` + `concatBytes` directly (its own fixed32/fixed64 arms).
+// PB_32BIT / PB_64BIT stay — encode.js reads both.
+
+// ─── Google RPC Status Decoder ────────────────────────────────────────────────
+//
+// Decodes binary protobuf error responses from Google APIs.
+// Standard structure:
+//
+//   google.rpc.Status {
+//     int32 code = 1;
+//     string message = 2;
+//     repeated google.protobuf.Any details = 3;
+//   }
+//   google.protobuf.Any {
+//     string type_url = 1;
+//     bytes value = 2;
+//   }
+//   google.rpc.BadRequest {
+//     repeated FieldViolation field_violations = 1;
+//   }
+//   FieldViolation { string field = 1; string description = 2; }
+//   google.rpc.ErrorInfo { string reason = 1; string domain = 2; map<string,string> metadata = 3; }
+//
+
+/**
+ * Decode a google.rpc.Status binary protobuf into a JSON-like object
+ * matching the JSON error format, so it can be fed directly into parseJsonErrors.
+ *
+ * @param {Uint8Array|ArrayBuffer} buf
+ * @returns {{ error: { code, message, details: [] } }} — same shape as JSON API errors
+ */
+function pbDecodeRpcStatus(buf) {
+  if (!(buf instanceof Uint8Array)) buf = new Uint8Array(buf);
+
+  const result = { error: { code: 0, message: "", details: [] } };
+
+  try {
+    const status = pbDecodeRaw(buf);
+
+    result.error.code = pbGetVarint(status, 1) || 0;
+    result.error.message = pbGetString(status, 2) || "";
+
+    // Field 3: repeated google.protobuf.Any details
+    const anyMessages = pbGetRepeatedMessages(status, 3);
+
+    for (const anyFields of anyMessages) {
+      const typeUrl = pbGetString(anyFields, 1) || "";
+      const valueField = anyFields.find(
+        (f) => f.field === 2 && f.wire === PB_LEN,
+      );
+      if (!valueField) continue;
+
+      let innerFields;
+      try {
+        innerFields = pbDecodeRaw(valueField.data);
+      } catch (_) {
+        continue;
+      }
+
+      // google.rpc.BadRequest — has field_violations
+      if (typeUrl.includes("BadRequest")) {
+        const detail = { "@type": typeUrl, fieldViolations: [] };
+
+        // Field 1: repeated FieldViolation
+        const violations = pbGetRepeatedMessages(innerFields, 1);
+        for (const vFields of violations) {
+          detail.fieldViolations.push({
+            field: pbGetString(vFields, 1) || "",
+            description: pbGetString(vFields, 2) || "",
+          });
+        }
+
+        result.error.details.push(detail);
+      }
+
+      // google.rpc.ErrorInfo — has service/method metadata
+      else if (typeUrl.includes("ErrorInfo")) {
+        const detail = {
+          "@type": typeUrl,
+          reason: pbGetString(innerFields, 1) || "",
+          domain: pbGetString(innerFields, 2) || "",
+          metadata: {},
+        };
+
+        // Field 3: map<string,string> — encoded as repeated message { key(1), value(2) }
+        const mapEntries = pbGetRepeatedMessages(innerFields, 3);
+        for (const entry of mapEntries) {
+          const key = pbGetString(entry, 1);
+          const val = pbGetString(entry, 2);
+          if (key) detail.metadata[key] = val || "";
+        }
+
+        result.error.details.push(detail);
+      }
+
+      // Other detail types — decode generically
+      else {
+        const detail = { "@type": typeUrl, _raw: innerFields };
+        result.error.details.push(detail);
+      }
+    }
+  } catch (e) {
+    result.error._decodeError = e.message;
+  }
+
+  return result;
+}
+
+// ─── Probe Payload Encoding ──────────────────────────────────────────────────
+//
+// Binary equivalents of the JSON array payloads used by lib/req2proto.js.
+// For endpoints that only accept application/x-protobuf.
+
+/**
+ * Encode a binary protobuf probe payload with fields 1..size.
+ *
+ * @param {number} size - Number of fields (default 300)
+ * @param {"int"|"str"} type - "str" → string fields, "int" → varint fields
+ * @returns {Uint8Array}
+ */
+function pbEncodeProbePayload(size, type) {
+  if (size == null) size = 300;
+  const parts = [];
+  for (let i = 1; i <= size; i++) {
+    if (type === "int") {
+      parts.push(pbEncodeVarintField(i, i));
+    } else {
+      parts.push(pbEncodeLenField(i, "x" + i));
+    }
+  }
+  return concatBytes.apply(null, parts);
+}
+
+/**
+ * Encode a nested binary protobuf probe payload.
+ * Wraps the probe message inside embedded message fields at the given indices.
+ *
+ * @param {number[]} indices - Field number path for nesting
+ * @param {number} size
+ * @param {"int"|"str"} type
+ * @returns {Uint8Array}
+ */
+function pbEncodeNestedPayload(indices, size, type) {
+  let payload = pbEncodeProbePayload(size, type);
+  for (let i = indices.length - 1; i >= 0; i--) {
+    payload = pbEncodeLenField(indices[i], payload);
+  }
+  return payload;
+}
 
 // ─── Generic Protobuf Inspector ──────────────────────────────────────────────
 //

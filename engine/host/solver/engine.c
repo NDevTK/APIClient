@@ -22,8 +22,6 @@
 #include "solver/cold.h"      /* what the frontier's parked snapshots are made of — the cold tier's census */
 #include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what THIS host can measure */
 #include "solver/reclaim.h"   /* …and its RAM edge: which allocators can sell a flow rather than fail */
-#include "solver/req2proto.h" /* an API's own rejection is a description of the request it wanted — see engine_provide */
-#include "solver/discovery.h" /* …and an API's own PUBLISHED description: the flow this engine seeds to fetch one */
 #include "solver/reply_decode.h" /* …and what the reply BODY itself teaches — see engine_provide */
 #include "solver/endpoint.h"    /* the @H surface, and one of the three tables no leak walk in this runtime can see */
 #include "solver/attr_shadow.h" /* …and the taint shadow, whose entries ARE GC objects and are leaked by two hosts */
@@ -157,25 +155,6 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
     Flow *f = flow_running();
     DCHECK(f != NULL, "a <script src> was injected outside a running flow");
     pending_script_push(f, ctx, url);
-}
-
-/* PARK ON A PUBLISHED API DESCRIPTION — the engine's own probe (solver/discovery.h), and the reason a discovery
-   flow can exist at all: this engine's only network edge is this register, so a component that wants a document
-   fetched needs a FLOW to park. Same register, same dedup, same stall accounting as every other kind.
-   THERE IS NO METHOD PARAMETER AND THERE MUST NEVER BE ONE. The verb is stated here, once, as the constant it
-   is — §Attacker sources ("a state-mutating request is NEVER fired to learn") and SECURITY.md §Network ("GET
-   only") are then properties of this entry point's SHAPE, exactly as removing the method parameter from
-   `pageContextGet` made them properties of the JS relay's. A caller cannot express anything else, so there is
-   no check here to remember and none to get wrong. */
-void engine_pending_discovery_url(JSContext *ctx, const char *url) {
-    Flow *f = flow_running();
-    JSValue e;
-    DCHECK(f != NULL, "a discovery probe was issued outside a running flow");
-    DCHECK(url != NULL && *url, "a discovery probe parked with no URL for the host to fetch");
-    e = pending_push(&f->pending, FLOW_PENDING_DISCOVERY);
-    pending_set(e, PEND_URL, JS_NewString(ctx, url));
-    pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));
-    JS_FreeValue(ctx, e);
 }
 
 /* THE SESSION'S SCRIPT SEQUENCE — the document's own scripts in order. Entry i is inline (bodies[i] is its text)
@@ -1054,13 +1033,11 @@ int engine_host_owes(void) {
    a register beside it. Returns how many entries it filled. */
 int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
     int n = 0;
-    /* THE METHOD THE REPLY IS A REPLY TO, taken off the entry that parked on it rather than assumed. A schema
-       learned from an error envelope is filed under the endpoint identity `<METHOD> <host><path>`, and this is
-       the one place that holds both halves: the URL the host answered and the request record the flow kept.
-       A relative `char *` would dangle the moment the entry is freed, so it is copied — one small buffer, once
-       per reply, and the truncation is asserted rather than silently filing under a shortened verb. */
-    char method[16];
-    method[0] = 0;
+    /* NO METHOD IS READ OFF THE ENTRY HERE, and it used to be. It existed for ONE consumer: an error-derived
+       schema is filed under the endpoint identity `<METHOD> <host><path>`, and this is the one place holding
+       both halves — the URL the host answered and the request record the flow parked. That reader is gone from
+       this engine (extension/lib/req2proto.js issues the probe as the page and reads its own rejection), so
+       the copy went with it: a value collected for nobody is indistinguishable from one that is used. */
     DCHECK(url != NULL, "a body was provided for no URL");
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, m = pending_count(f->pending); i < m; i++) {
@@ -1087,18 +1064,6 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
             if (u) JS_FreeCString(ctx, u);
             JS_FreeValue(ctx, uv);
             if (fill) {
-                if (!method[0]) {
-                    JSValue mv = pending_get(p, PEND_METHOD);
-                    const char *ms = JS_IsString(mv) ? JS_ToCString(ctx, mv) : NULL;
-                    if (ms) {
-                        size_t ml = strlen(ms);
-                        DCHECK(ml < sizeof method, "a request parked with a method longer than any HTTP verb — "
-                               "the learned-schema key is built from it and a truncated verb files one endpoint's "
-                               "schema under another's identity");
-                        if (ml < sizeof method) memcpy(method, ms, ml + 1);
-                        JS_FreeCString(ctx, ms);
-                    }
-                }
                 /* THE PRODUCER'S HALF OF THE CONTRACT THE DRAIN CHECKS, asked HERE so the two together say
                    WHICH of two very different things went wrong. The drain asserts that a fetch entry carries a
                    §2.2.6 URL list at the moment it is delivered; this asserts that it carried one at the moment
@@ -1140,21 +1105,18 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
             JS_FreeValue(ctx, p);
         }
     }
-    /* LEARNING FROM REPLIES IS THE POINT (CLAUDE.md §Solver), and an API's own REJECTION is the richest reply
-       there is: `google.rpc.Status` names the endpoint's fields, their types, its canonical service and method
-       and the OAuth scopes it wants. This is the one point every fetched reply crosses exactly once — a URL two
-       flows parked on is answered here once — so the learning happens here rather than in the per-flow drain,
-       where it would run once per waiter. The schema is a fact about the SERVER, not about a flow's world, so
-       it is not per-flow state and takes no COW capture, exactly as the endpoint surface does not.
-       A method-less entry is a park with no request record at all (a docscript or an injected <script src>);
-       those are code, never an error envelope, and GET is what the host performed for them. */
-    if (n) req2proto_learn(ctx, method[0] ? method : "GET", url, value);
-    /* AND THE REPLY'S OWN CONTENT, at the same one point and for the same reason (solver/reply_decode.h). The
-       rejection envelope above is what the server says about the request it WANTED; this is what the body says
-       about the addresses the page will go on to fetch — a React Flight payload's client references name the
-       route chunks of routes nobody navigated to. Beside it rather than inside it: an error envelope and a
-       protocol body are two different readings of one record, and folding them would make a component that
-       learns nothing from a 200 the gatekeeper of one that learns most of what it knows from them. */
+    /* LEARNING FROM REPLIES IS THE POINT (CLAUDE.md §Solver), and this is the one point every fetched reply
+       crosses exactly once — a URL two flows parked on is answered here once — so the learning happens here
+       rather than in the per-flow drain, where it would run once per waiter. What the body says about the
+       addresses the page will go on to fetch (solver/reply_decode.h) is a fact about the SERVER, not about a
+       flow's world, so it is not per-flow state and takes no COW capture, exactly as the endpoint surface
+       does not.
+       AN API'S OWN REJECTION IS READ IN THE TRUSTED ZONE, NOT HERE. `google.rpc.Status` names the endpoint's
+       fields, its canonical service and method and the OAuth scopes it wants — but it is a reply to a
+       DELIBERATELY MALFORMED REQUEST, which is a request this engine cannot make: its only network edge is
+       this register and the host performs a GET through safeFetch. A reader on this side would file whatever
+       rejection a GET happened to provoke under the identity of an endpoint nobody probed. It is
+       extension/lib/req2proto.js, which issues the probe as the page. */
     if (n) reply_decode_learn(ctx, url, value);
     return n;
 }
@@ -1300,19 +1262,6 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             }
             JS_FreeValue(ctx, resolve);
             JS_FreeValue(ctx, sv);
-        } else if (kind == FLOW_PENDING_DISCOVERY) {
-            /* the reply is a DESCRIPTION of an API: it settles no promise and runs as no program, so it goes
-               straight to the component that reads it (solver/discovery.h) and what it names lands in the same
-               @H surface as everything forced execution reached. The WHOLE reply record is handed over — the
-               component decides what a network error and a non-JSON body mean, because those are answers about
-               the address rather than states of this drain. */
-            JSValue uv = pending_get(p, PEND_URL);
-            const char *u = JS_IsString(uv) ? JS_ToCString(ctx, uv) : NULL;
-            DCHECK(u != NULL,
-                   "a discovery probe's reply arrived on an entry carrying no URL — the address is what the "
-                   "document's own relative server URLs resolve against, and the park writes it at the push");
-            if (u) { discovery_reply(ctx, u, pv); JS_FreeCString(ctx, u); }
-            JS_FreeValue(ctx, uv);
         } else {
             /* A SYNCHRONOUS ANSWER IS TAKEN, NEVER DRAINED, and that is asserted here because this branch is
                where it would land if it were not. The machine that asked resumes through its park and consumes
@@ -1703,14 +1652,6 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     DCHECK(parent->perform == NULL, "a flow forked while still holding an unstarted cross-agent operation — the "
                                     "sibling would inherit the record and perform the peer's one operation a "
                                     "second time under the same token");
-    /* AND A DISCOVERY PROBE CANNOT BE AT A BRANCH AT ALL. Its whole step is a park and a read (flow_step) — it
-       compiles no program, so no branch hook can fire under it, and a fork arriving from one means it entered a
-       program it has no business in. The sibling would not inherit the candidate either, so the probe would be
-       silently duplicated as a flow with nothing to do. */
-    DCHECK(parent->disc_url == NULL,
-           "a DISCOVERY PROBE forked — a probe runs no program, so a branch under one means it entered the "
-           "document's script sequence, and the sibling this is about to build carries no candidate and would "
-           "sit in the frontier with no work at all");
     dec = g_fork_dec; g_fork_dec = NULL;
     pins = g_fork_pins; g_fork_pins = NULL;
     engine_sibling_assemble(ctx, parent, clone, dec, pins);
@@ -2358,32 +2299,6 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                delivery is: it is a work item another agent's flow is suspended at, and it becomes one of THIS
                flow's programs — after which the loop below runs it like any other. */
             if (f->perform) { g_step_unit = "cross-agent-operation"; flow_perform(ctx, f); return 0; }
-            /* A DISCOVERY PROBE — the flow the ENGINE seeded to read one published API description
-               (solver/discovery.h). It is before the document's script sequence because it HAS no script
-               sequence: the probe is the whole flow, so it must never enter a program, and its three states are
-               the ordinary ones every other flow already has. Not a driver and not a loop — one unit per step,
-               like every branch here:
-                 - nothing parked yet  -> park on the address and report OWED, so siblings get the thread;
-                 - parked, unanswered  -> OWED again, and the flow is out of the pick until the host provides;
-                 - answered            -> the ONE drain reads it (the DISCOVERY kind above) and the flow is
-                                          DONE, because a probe's whole work is the document it just read. */
-            if (f->disc_url) {
-                g_step_unit = "discovery-probe";
-                if (pending_count(f->pending) == 0) {
-                    engine_pending_discovery_url(ctx, f->disc_url);
-                    return FLOW_STEP_OWED;
-                }
-                if (!flow_pending_ready(f)) return FLOW_STEP_OWED;
-                flow_drain_pending(ctx, f);
-                /* AND IT FINISHES HOLDING NOTHING, asserted where "finished" is decided for it. The drain
-                   removes the entry it delivered, and reading a document runs no page code — so a probe that
-                   reaches here with a job queued or a reply outstanding has done something this branch does
-                   not describe, and flow_release would drop it as a work item nothing replays. */
-                DCHECK(pending_count(f->pending) == 0 && f->njob == 0,
-                       "a discovery probe finished holding work — its one reply is drained and it queues no "
-                       "job, so anything left here is a work item the ONE frontier is about to drop");
-                return FLOW_STEP_DONE;
-            }
             if (f->script_i < n) {
                 body = bodies[f->script_i];
                 stype = g_sess_types[f->script_i];
@@ -4211,7 +4126,6 @@ void solver_agent_free(JSContext *ctx)
     attr_shadow_free(ctx);
     solve_free();
     endpoint_free();
-    req2proto_free();
     /* THE CONCOLIC VALUE COMPONENT IS LAST, and the position is the argument. Its SOURCE REGISTRY is what a
        report asks for a source's browser delivery — the encode set, the address component, the reproduction
        mechanism — so every line above may still read it while it renders and releases what it holds. It is

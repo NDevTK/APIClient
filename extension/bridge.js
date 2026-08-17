@@ -65,12 +65,6 @@ function assertResultDocument(r) {
   DCHECK(Array.isArray(r.pageErrors),
          "the engine's result document carries no pageErrors array — it is the engine's own record of what " +
          "went wrong while running the page, and the analysis reports it as the run's resolverErrors");
-  DCHECK(r.probeResults && typeof r.probeResults === "object" && !Array.isArray(r.probeResults),
-         "the engine's result document carries no probeResults map — req2proto.c serializes the schemas the " +
-         "APIs' own rejections described into that field, keyed by the `<METHOD> <host><path>` identity the " +
-         "Send panel resolves a request body with. An absent one is every learned field, service, method and " +
-         "OAuth scope arriving as nothing, and the Send panel offering an empty body for an endpoint the " +
-         "server has already described");
   /* THE EIGHT COST COUNTERS ARE ONE FIELD, because result.c writes them in ONE snprintf — there is no arm in
      which five arrive and three do not. So the contract is all-of-them, and asserting a subset of a set that
      is emitted atomically is not a weaker check, it is a check on the wrong thing: it passes for exactly the
@@ -169,7 +163,7 @@ function linesToAnalysis(lines, msg, expectResult) {
      default, so every field is the host's own empty and the engine's `_park`/counters are absent rather than
      zero. The engine's own protocol errors still travel, because @E and @WHY are emitted on their own lines
      and do not ride the result document; that is the whole reason a crash record is worth returning at all. */
-  const engineDoc = result || { fetchCallSites: [], securitySinks: [], pageErrors: [], probeResults: {},
+  const engineDoc = result || { fetchCallSites: [], securitySinks: [], pageErrors: [],
                                 _switches: null, _park: [] };
   return {
     _switches: engineDoc._switches,
@@ -185,12 +179,10 @@ function linesToAnalysis(lines, msg, expectResult) {
        below and never a defaulted engine field. */
     chunkUrls: [],
     securitySinks: engineDoc.securitySinks,
-    /* THE SCHEMAS THE ENGINE LEARNED FROM THE APIs' OWN REJECTIONS — engine/host/solver/req2proto.c. Relayed
-       VERBATIM, keyed exactly as the engine keyed it, because the key IS the endpoint identity `lib/send.js`
-       looks a body schema up by: a host that re-keyed here would be the host owning structure again. NOT
-       defaulted — the field is asserted above, and `|| {}` here would turn "the engine emitted nothing" into
-       "this API describes no fields", which is a finding rather than a hole. */
-    probeResults: engineDoc.probeResults,
+    /* NO probeResults ON THIS SEAM. The engine issues no request, so it receives no rejection and has no
+       error-derived schema to relay; the record the Send panel reads is written by the two systems that DO
+       probe — lib/req2proto.js (driven by lib/discovery-probe.js and lib/response-decode.js) — straight into
+       `globalStore.probeResults`, which never crossed this boundary. */
     // sibling fields the brain reads unconditionally, present + empty so it never throws:
     protoEnums: [], protoFieldMaps: [], dangerousPatterns: [],
     esmImportUrls: [], inRunModuleUrls: [], domEndpoints: [],
@@ -1551,7 +1543,6 @@ async function engineFinalize(eng) {
     // popup, moat) ever consumes a crashed engine's output. Experimental stage: fail hard, then fix the ROOT.
     result._engineCrashed = true;
     result.fetchCallSites = []; result.securitySinks = []; result.chunkUrls = []; result.domEndpoints = [];
-    result.probeResults = {};
     result.esmImportUrls = []; result.inRunModuleUrls = []; result.protoEnums = []; result.protoFieldMaps = [];
     result.dangerousPatterns = []; result._park = []; result._prior = null;
   }
@@ -1611,7 +1602,6 @@ function crashRecord(stage, m, msg) {
   const r = linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, false);
   r._engineCrashed = true;
   r.fetchCallSites = []; r.securitySinks = []; r.chunkUrls = []; r.domEndpoints = [];
-  r.probeResults = {};
   r.esmImportUrls = []; r.inRunModuleUrls = []; r.protoEnums = []; r.protoFieldMaps = []; r.dangerousPatterns = []; r._park = []; r._prior = null;
   return r;
 }

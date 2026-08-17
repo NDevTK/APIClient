@@ -108,8 +108,8 @@ int quantum_slice_open(void) { return g_slice_open; }
    IT FIRED, AND WHAT IT CAUGHT WAS NOT A FOURTH HOST — it was the two hosts this comment used to certify. It
    said main.c and test_forced.c "reach the interpreter through engine_sched_step", which is true of how they
    run FLOWS and false of how they run BUILTINS: both parse a fetch reply with JS_ParseJSON between two steps
-   (main.c's qjs_provide on the trusted zone's reply record, and engine_provide's req2proto learning under
-   every host), the JSON step machine consulted the flow-control preempt policy at each completed value, and
+   (main.c's qjs_provide on the trusted zone's reply record), the JSON step machine consulted the flow-control
+   preempt policy at each completed value, and
    every reply either host has ever delivered aborted here. The parse now OFFERS the thread to whichever driver
    drove it and consults no policy (quickjs.c's json_parse_step), so this assertion is back to naming the case
    it was written for. wpt_runner.c is the one host that genuinely declines the edge — it drives JS_FlowNew/

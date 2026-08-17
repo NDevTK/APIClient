@@ -73,7 +73,6 @@ void cold_census(ColdCensus *out)
         out->misc_bytes += (long)sizeof(Flow);
         if (f->cand_src) out->misc_bytes += (long)strlen(f->cand_src) + 1;
         if (f->cand_payload) out->misc_bytes += (long)strlen(f->cand_payload) + 1;
-        if (f->disc_url) out->misc_bytes += (long)strlen(f->disc_url) + 1;
         if (f->deliver) out->misc_bytes += (long)strlen(f->deliver) + 1;
         if (f->deliver_origin) out->misc_bytes += (long)strlen(f->deliver_origin) + 1;
         if (f->jobs) out->misc_bytes += (long)f->jobcap * (long)sizeof(FlowJob);
@@ -106,7 +105,7 @@ void cold_census(ColdCensus *out)
  * (`["s0,-,01","f0,3"`, with the closing bracket rendered), while cold_resume parses a ';'-joined string; the
  * only producer of THAT language in the whole system was `extension/bridge.js`, which joins the stored array
  * on its way back to qjs_begin. So the engine WROTE one language and READ another, no process ever held both
- * ends, and every one of the resume arms below — the 's'/'c'/'d' rebuilds, park_unhex, solve_resume_candidate
+ * ends, and every one of the resume arms below — the 's'/'c' rebuilds, park_unhex, solve_resume_candidate
  * — was reachable only from a browser with an IndexedDB in it. A component whose input nothing in the program
  * can produce is not a component that has not been exercised yet; it is one that CANNOT be, and the fix is not
  * a second host, it is to make the writer speak the reader's language.
@@ -174,33 +173,9 @@ static void park_rec(const char *s)
     park_str(s);
 }
 
-/* THE ONE RECORD WHOSE LAST FIELD IS TEXT THIS FILE DID NOT COMPOSE OUT OF DIGITS — a discovery flow's whole
-   identity is the address it probes (solver/discovery.h), so the address has to cross. It gets its OWN charset
-   rather than widening park_rec's for every record, because the reason that assert is narrow is that a record
-   built from digits can never need JSON escaping and can never contain the ';' this file joins records with. A
-   URL can contain neither either — every candidate is minted by discovery.c out of an origin, a well-known path
-   and a query — and this states exactly that, so the day one carries a quote, a backslash, a ';' or a byte
-   outside printable ASCII the park says so instead of storing a document that splits in two on the way back. */
-static void park_rec_url(double val, const char *url)
-{
-    char head[64];
-    const char *p;
-
-    snprintf(head, sizeof head, "d%.17g,", val);
-    for (p = url; *p; p++) {
-        unsigned char c = (unsigned char)*p;
-        DCHECK(c > 0x20 && c < 0x7f && c != '"' && c != '\\' && c != ';',
-               "a parked discovery candidate holds a character the recipe grammar does not have — it would "
-               "need JSON escaping on the way out, or (a ';') would split into two records on the way back in");
-    }
-    park_open_rec();
-    park_str(head);
-    park_str(url);
-}
-
 /* ATTACKER TEXT CROSSES AS HEX, and it is the one thing in this document whose charset the grammar cannot
-   state. Every other field is composed of digits by this file and park_rec asserts exactly that; park_rec_url
-   widens it once by naming what an address cannot contain. A BREAKOUT can contain anything: `';X9()//` holds
+   state. Every other field is composed of digits by this file and park_rec asserts exactly that. A BREAKOUT
+   can contain anything: `';X9()//` holds
    the ';' this file joins records with, an HTML breakout holds the '"' the transport quotes each record with,
    and a payload that survives a filter may be any byte at all. So the choice is a charset PREDICATE that three
    separate consumers would have to be kept in step with — this grammar, the JSON render, and cold_resume's
@@ -382,19 +357,16 @@ static long park_emit_chain(const void *seg)
 }
 
 /* WHICH RECORD KIND A FLOW IS — asked in ONE place, because the park and the preview both have to answer it and
-   a second copy of a three-way choice is a third answer waiting to happen. The three identities are the whole of
-   what a flow can be to this file, and they are DISJOINT: that used to be asserted inside park_rec_cand, where
-   it was only ever asked of a flow that had already been selected as a candidate, so a probe carrying a
-   candidate's substitution would have been written as a probe with nothing to say so. Asked here it covers every
-   member of the frontier and every caller. */
-typedef enum { PARK_KIND_PROBE, PARK_KIND_CAND, PARK_KIND_FLOW } ParkKind;
+   a second copy of a two-way choice is a third answer waiting to happen. The two identities are the whole of
+   what a flow can be to this file. It was a THREE-way choice while an engine-seeded discovery probe was a
+   member of the frontier (PARK_KIND_PROBE, grammar letter 'd'); active discovery is the trusted zone's again
+   (extension/lib/discovery-probe.js), so there is no such flow to write and the letter is gone from BOTH ends
+   of the round trip — a grammar that can still emit a kind it can no longer parse fails only on a resume in a
+   later session. */
+typedef enum { PARK_KIND_CAND, PARK_KIND_FLOW } ParkKind;
 
 static ParkKind park_kind_of(const Flow *f)
 {
-    DCHECK(f->disc_url == NULL || f->cand_src == NULL,
-           "a flow is both an @S candidate and a discovery probe — those are two different identities seeded "
-           "by two different places, and whichever record kind is written would drop the other one");
-    if (f->disc_url) return PARK_KIND_PROBE;
     if (f->cand_src) return PARK_KIND_CAND;
     return PARK_KIND_FLOW;
 }
@@ -423,7 +395,6 @@ void cold_park_preview(ColdPreview *out)
     memset(out, 0, sizeof *out);
     for (i = 0; (f = flow_at(i)) != NULL; i++) {
         switch (park_kind_of(f)) {
-        case PARK_KIND_PROBE: out->probes++; break;
         case PARK_KIND_CAND:  out->cands++;  break;
         case PARK_KIND_FLOW:  out->flows++;  break;
         }
@@ -501,23 +472,10 @@ void cold_park_flow(Flow *f)
            "a flow was parked with a reward that is not a number the WFQ can order by — a NaN compares "
            "false in both directions, so the resumed frontier's order would depend on array position, and "
            "an infinity does not survive the round trip as a number at all");
-    /* A DISCOVERY PROBE PARKS AS ITS ADDRESS, and that is the whole recipe because that is the whole flow: it
-       stands on no decision, holds no delta worth the name and has one thing left to do — read the document at
-       that URL. A resumed one re-issues the GET, which is not a weaker resume than the replay every other
-       record gets: §Time-travel-resume says a resumed flow "re-derives example VALUES from CURRENT sources", and
-       for this flow the fetch IS the work, so the residue comes back reading TODAY's published surface. */
-    /* THE SAME THREE-WAY CHOICE THE PREVIEW MAKES, made by the same function — it was an if/else chain here and
+    /* THE SAME TWO-WAY CHOICE THE PREVIEW MAKES, made by the same function — it was an if/else chain here and
        the preview would have been a second copy of it, which is how the two ends of one round trip come to
        disagree about what a flow is. */
     switch (park_kind_of(f)) {
-    case PARK_KIND_PROBE:
-        DCHECK(!f->started && f->dec_blob == NULL,
-               "a discovery probe was parked carrying a decision path — a probe compiles no program and so can "
-               "reach no branch, which means this flow ran something it has no business running and its record "
-               "would resume it as a probe with a path nothing will replay");
-        park_rec_url(f->val, f->disc_url);
-        g_parked_census.probes++;
-        break;
     case PARK_KIND_CAND:
         /* AN @S CANDIDATE PARKS AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand. */
         park_rec_cand(f, id);
@@ -601,7 +559,6 @@ void cold_park(void)
        selection and not the other, and on a cold_park_flow that returned without writing. */
     DCHECK(after.flows - before.flows == would.flows &&
            after.cands - before.cands == would.cands &&
-           after.probes - before.probes == would.probes &&
            deep_written == would.deep,
            "the park wrote a different residue from the one its own preview described — the host evicted this "
            "engine on the strength of that description, so whatever it is storing is not what it was told it "
@@ -639,11 +596,11 @@ const char *cold_park_json(void)
     *o++ = '['; *o++ = '"';
     for (p = g_park; *p; p++) {
         if (*p == ';') { *o++ = '"'; *o++ = ','; *o++ = '"'; continue; }
-        /* THE ESCAPE CLAIM, ASSERTED WHERE THE JSON IS MADE. Four writers each state what their own fields may
-           hold (park_rec's digits, park_rec_url's address bytes, park_rec_cand's sink letters, park_hex's two
+        /* THE ESCAPE CLAIM, ASSERTED WHERE THE JSON IS MADE. Three writers each state what their own fields
+           may hold (park_rec's digits, park_rec_cand's sink letters, park_hex's two
            hex characters), and the property they exist to guarantee is this one: no record needs escaping, so
            no escape path is needed and a byte that would have needed one is a writer that got its charset
-           wrong. Said once, here, rather than trusted four times over. */
+           wrong. Said once, here, rather than trusted three times over. */
         DCHECK(*p != '"' && *p != '\\' && (unsigned char)*p >= 0x20 && (unsigned char)*p < 0x7f,
                "a park record holds a byte that would need JSON escaping — the recipe grammar exists so that "
                "cannot happen, so one of the record writers accepted a field it should have refused and the "
@@ -851,31 +808,17 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
             flows++; g_resumed.cands++;
-        } else if (kind == 'd') {
-            /* A DISCOVERY PROBE COMES BACK AS ITS ADDRESS. It is NOT `started`: it stands on no path, so there
-               is nothing to replay — its first step parks on the URL exactly as the session that seeded it did,
-               and the document it reads is today's. The candidate is the last field and runs to the record's
-               end, which is what lets an address carry the ',' a query legitimately can. */
-            double val;
-            Flow *fl;
-            size_t ul;
-
-            val = strtod(q, &ep); q = ep;
-            q = park_comma(q);
-            ul = (size_t)(end - q);
-            DCHECK(ul > 0,
-                   "a parked discovery probe names no candidate address — the address IS the flow, so this "
-                   "record would resume a member of the frontier with nothing whatever to do");
-            fl = park_flow_add(ctx, val, before, flows);
-            fl->disc_url = malloc(ul + 1);
-            CHECK(fl->disc_url, "the cold tier could not rebuild a parked discovery candidate");
-            memcpy(fl->disc_url, q, ul);
-            fl->disc_url[ul] = 0;
-            flows++; g_resumed.probes++;
         } else {
+            /* 'd' IS NOT AN ARM ANY MORE AND IS NOT SILENTLY IGNORED EITHER. It named an engine-seeded
+               DISCOVERY PROBE — one flow per candidate document address — and active discovery is the trusted
+               zone's again (extension/lib/discovery-probe.js), so no writer can produce one. A residue written
+               by a session that still could is a real document sitting in a real IndexedDB, and it lands here:
+               the letter is named in the abort so a reader is told which capability wrote it rather than being
+               told the document is corrupt. */
             DFAIL("a park record names a kind this grammar does not have — the recipe holds SEGMENTS ('s'), "
-                  "FLOWS ('f'), @S CANDIDATE SESSIONS ('c') and DISCOVERY PROBES ('d') and nothing else, so "
-                  "this document came from another writer or was truncated");
+                  "FLOWS ('f') and @S CANDIDATE SESSIONS ('c') and nothing else. A 'd' record is a DISCOVERY "
+                  "PROBE written by a session in which the engine seeded its own document fetches; that flow "
+                  "kind no longer exists, so this residue predates the change or came from another writer");
         }
         p = (*end == ';') ? end + 1 : end;
     }
@@ -909,7 +852,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
        count the merge itself kept, so an arm added to the grammar without a counter is caught here instead of
        silently reporting a kind that ran as one that did not. */
     g_resumed.segs = seg_n;
-    DCHECK(g_resumed.flows + g_resumed.cands + g_resumed.probes == flows,
+    DCHECK(g_resumed.flows + g_resumed.cands == flows,
            "the rebuild's per-kind census does not add up to the flows it landed — a record kind produced a "
            "flow without counting itself, so a host asking which arms of the grammar ran is told one did not");
     printf("@RESUMED %ld\n", flows);

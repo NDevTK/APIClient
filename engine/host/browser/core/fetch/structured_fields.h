@@ -38,9 +38,11 @@
  *
  * ONLY "item" IS SPELLABLE. Fetch's get-a-structured-field-value takes a type of "dictionary", "list" or
  * "item", and the three headers this engine reads are all items. There is no entry here that takes a type, so
- * a caller needing a list finds nothing to call rather than a parameter that silently accepts one — the same
- * shape SECURITY.md gives `pageContextGet`, where the rule is structural because a check is something someone
- * has to remember. */
+ * a caller needing a list finds nothing to call rather than a parameter that silently accepts one. A shape
+ * that cannot express the case is not a check someone has to remember — and this is a claim about a PARSER
+ * with two callers, which is the whole reason it holds: it is not a general rule about network verbs, and the
+ * one this line used to cite (SECURITY.md's "there is no place to express a POST") is deleted, because a
+ * Google API error-probe learns by sending a malformed POST and reading the rejection. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FETCH_STRUCTURED_FIELDS_H
 #define ENGINE_HOST_BROWSER_CORE_FETCH_STRUCTURED_FIELDS_H
 #include <stdbool.h>

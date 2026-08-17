@@ -5,7 +5,6 @@
 #include "check.h"
 #include "solver/result.h"
 #include "solver/endpoint.h"
-#include "solver/req2proto.h"
 #include "solver/solve.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
@@ -149,14 +148,16 @@ char *result_json(JSContext *ctx) {
     char *eps = endpoint_json_array();
     char *sinks = solve_json_array(ctx);
     char *errs = errs_json_array();
-    /* THE SCHEMAS THE APIs' OWN REJECTIONS DESCRIBED — keyed by the endpoint identity the Send panel resolves a
-       body schema with, so nothing between here and there re-keys anything. It composes exactly as the other
-       surfaces do: each serializes itself and this decides only that they are ONE document. */
-    char *schemas = req2proto_json_object();
+    /* NO `probeResults` SURFACE. It carried the schemas an API's own REJECTION described, and a rejection is
+       the answer to a DELIBERATELY MALFORMED REQUEST — one this engine cannot make, since its only network
+       edge is the pending register and the host performs a GET through safeFetch. The reader on this side was
+       filing whatever rejection a GET happened to provoke under the identity of an endpoint nobody probed.
+       It is extension/lib/req2proto.js, which issues the probe as the page and writes straight into
+       `globalStore.probeResults`; nothing about it crosses this seam. */
     size_t n;
     char *out;
 
-    if (!eps || !sinks || !errs || !schemas) { free(eps); free(sinks); free(errs); free(schemas); return NULL; }
+    if (!eps || !sinks || !errs) { free(eps); free(sinks); free(errs); return NULL; }
     /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur. Counted rather than estimated,
        and stated so the count can be re-done: the format's fixed bytes are 227 with its conversion specifiers
        and 208 without them, and the eight counters' full-width decimals are 115 (five ints at 11, three longs
@@ -168,7 +169,7 @@ char *result_json(JSContext *ctx) {
        a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
        case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
        entry instead of leaving a stale residue that would be resumed forever. */
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(schemas) + strlen(cold_park_json()) + 384;
+    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(cold_park_json()) + 384;
     out = malloc(n);
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
@@ -189,12 +190,11 @@ char *result_json(JSContext *ctx) {
         int m;
         world_segment_stats(&made, &segf);
         m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
-                             "\"probeResults\":%s,"
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
                              "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,"
                              "\"_worldSegmentsHeld\":%d,\"_worldSegmentsMade\":%d,"
                              "\"_worldSegmentsForked\":%d,\"_park\":%s}",
-                     eps, sinks, errs, schemas, engine_switch_count(), flow_created_count(), solve_candidate_count(),
+                     eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), held, made, segf, cold_park_json());
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED. It was 192 bytes for three counters and is now carrying
            eight, whose widest form is 115 digits beside 208 bytes of literal — inside the slack only because
@@ -207,6 +207,5 @@ char *result_json(JSContext *ctx) {
     free(eps);
     free(sinks);
     free(errs);
-    free(schemas);
     return out;
 }

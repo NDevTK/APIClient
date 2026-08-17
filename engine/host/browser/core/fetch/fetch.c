@@ -352,18 +352,6 @@ const uint8_t *fetch_body_bytes(JSContext *ctx, JSValueConst body, size_t *out_n
     return p ? p : EMPTY;
 }
 
-JSValue fetch_reply_parse_json(JSContext *ctx, JSValueConst reply)
-{
-    JSValue bv = fetch_reply_body(ctx, reply);
-    size_t n = 0;
-    const uint8_t *b = fetch_body_bytes(ctx, bv, &n);
-    /* THE ONE IMPLEMENTATION of Infra's parse JSON from bytes — the same one `Response.json()` runs, because a
-       second copy of "UTF-8 decode, then JSON.parse" is a second place the decode can be forgotten. */
-    JSValue out = byte_reader_json(ctx, JS_UNDEFINED, (const char *)b, n);
-    JS_FreeValue(ctx, bv);
-    return out;
-}
-
 /* THE REPLY, as one engine-built object every host delivers. It is engine-built, so the reads on the other
    side run none of the page's code — which is why this is an object and not a second provider callback.
    `url_list` is §2.2.6's URL list, and it is a PARAMETER rather than a field this function invents: a host

@@ -1,32 +1,109 @@
-// What is LEFT of this file is TWO components with two different consumers, and neither of them is the
-// discovery FETCH any more:
-//   * schema resolution for the Send panel   (findDiscoveryMethod / findMethodById / resolveDiscoverySchema)
-//   * response-asset classification          (classifyResponseAsset — lib/response-decode.js)
+// THREE components with three different consumers:
+//   * the discovery-document CANDIDATE SET     (buildDiscoveryUrls — lib/discovery-probe.js)
+//   * schema resolution for the Send panel     (findDiscoveryMethod / findMethodById / resolveDiscoverySchema)
+//   * response-asset classification            (classifyResponseAsset — lib/response-decode.js)
 //
-// The React Server Components parser was the third and is gone — see the note at the foot of this file. What
-// keeps the other two here is their CONSUMERS, which is the ordering jsaudit.mjs's own ledger header states:
-// "a producer whose consumers still live in JS is not first, because moving it makes every call it serves
-// cross the JS↔WASM boundary the architecture rule exists to delete." There is no host→engine compute edge in
-// this architecture and there must not be one — the engine is the driver, the bridge relays. So the schema
-// half leaves with lib/send.js (→ moat.c), which is what the Send panel actually asks.
+// The React Server Components parser was a fourth and is gone — see the note at the foot of this file.
 //
-// THE CLASSIFIER IS NOT QUEUED AT ALL, AND THAT IS THE CORRECTION THIS HEADER CARRIES. It was moved into the
-// browser process on the argument that "type checking is safeFetch's job and safeFetch is the only source of
-// sniffing" — which is TRUE and is not an argument for moving this: safeFetch sniffs the bytes IT fetched, and
-// this reads bodies intercept.js captured off the live page, which safeFetch has never seen and cannot state a
-// type for. Two different inputs are not one duplicated algorithm. CLAUDE.md §Architecture now names the test
-// outright — the engine gets what a FLOW needs mid-execution, whose answer must fork and park with the flow —
-// and a question the trusted zone asks once about a captured reply is the other kind.
+// WHAT KEEPS EACH OF THE THREE HERE IS ITS INPUT AND ITS CALLER, stated as facts about this code rather than
+// as a position in any queue. The CANDIDATE SET is walked by lib/discovery-probe.js, which fetches with the
+// PAGE's credentials and the API keys this zone collected — neither of which the sandboxed engine holds. The
+// SCHEMA HALF is asked by lib/send.js and lib/popup-handlers.js, both here, and there is no host→engine
+// COMPUTE edge for a JS caller to reach a moved callee through: the engine is the DRIVER and the bridge
+// relays, so adding one would invert that.
 //
-// THE CANDIDATE SET AND ITS FETCH LOOP ARE GONE TO engine/host/solver/discovery.c. `buildDiscoveryUrls` stood
-// here and `fetchDiscoveryForService` (lib/discovery-probe.js, deleted with it) walked its candidates in a
-// `for` loop, awaiting each in turn — a drive-to-completion in the host, driven by what the page HAPPENED to
-// send (response-decode.js called it off passive learning). CLAUDE.md §Attacker sources calls active discovery
-// REQUIRED and §Architecture calls it the engine's; the engine now seeds ONE FLOW PER CANDIDATE ADDRESS on the
-// one BFS frontier, so the probes are ranked, preempted, parked to the IDB cold tier and resumed in a later
-// session like every other flow, and what they learn lands in the same @H endpoint surface as forced
-// execution's own findings. It is also GET-only structurally there: the park takes a URL and has no method
-// parameter, which is the same shape `pageContextGet` was given here for the same rule.
+// AND THE CLASSIFIER READS A DIFFERENT INPUT, which is the correction this header carries. It was moved into
+// the browser process on the argument that "type checking is safeFetch's job and safeFetch is the only source
+// of sniffing" — TRUE, and not an argument that reaches this function: safeFetch sniffs the bytes IT fetched
+// and stamps the answer on the reply record it hands the renderer, and this reads bodies intercept.js
+// captured off the LIVE page, which safeFetch has never seen and holds no reply record for. Two different
+// inputs are not one duplicated algorithm. CLAUDE.md §Architecture names the test outright — the engine gets
+// what a FLOW needs mid-execution, whose answer must fork and park with the flow — and a question the trusted
+// zone asks once about an already-captured reply is the other kind.
+//
+// THE CANDIDATE SET IS BACK, AND THE REASON IS THE SECOND HALF OF THE SAME TEST. `buildDiscoveryUrls` names
+// the well-known addresses at which an API publishes its own description. It was deleted into
+// engine/host/solver/discovery.c, which minted one FLOW per candidate address on the BFS frontier. A
+// DISCOVERY DOCUMENT IS A PUBLIC SCHEMA AT A PUBLISHED ADDRESS: nothing about which candidate answers depends
+// on the decision path of the flow that asked, nothing forks on it, and the reply is the same bytes for every
+// arm — so there is no per-flow world for it to ride, which is exactly what a flow is for.
+//
+// EVERY CANDIDATE IS A GET, AND A CANDIDATE HAS NO FIELD IN WHICH TO SAY OTHERWISE. One of them used to be
+// `{method:"POST", headers:{"X-Http-Method-Override":"GET"}}` — the documented trick for prising a discovery
+// document out of a service that 405s a plain GET — and it is not back with the rest: a service that answers
+// 405 to a GET of its description has answered, and re-asking with a different verb is a request the fetch
+// was not asked to make. The record is `{url, headers}`, which is exactly what `pageContextGet` takes.
+
+/**
+ * Build candidate discovery URLs for a given hostname.
+ * @param {string} hostname - e.g. "people-pa.googleapis.com"
+ * @param {string|null} apiKey
+ * @returns {Array<{url: string, headers: object}>}
+ */
+function buildDiscoveryUrls(hostname, apiKey) {
+  const candidates = [];
+
+  // 1. Generic Universal Patterns (OpenAPI / Swagger)
+  // These work on almost any modern API domain
+  const genericPaths = [
+    "/.well-known/openapi.json",
+    "/.well-known/swagger.json",
+    "/openapi.json",
+    "/swagger.json",
+    "/swagger/v1/swagger.json",
+    "/api/docs",
+    "/api/v1/docs",
+    "/api-docs",
+    "/v1/api-docs",
+  ];
+
+  for (const path of genericPaths) {
+    candidates.push({ url: `https://${hostname}${path}#_internal_probe`, headers: {} });
+  }
+
+  // 2. Google-Specific Patterns
+  // Normalize: if it's a clients6 host, also try the googleapis.com equivalent
+  const hosts = [hostname];
+  const clients6Suffix = ".clients6.google.com";
+  const googleapisSuffix = ".googleapis.com";
+  const isClients6Host =
+    hostname === clients6Suffix ||
+    hostname.endsWith(clients6Suffix);
+  const isGoogleapisHost =
+    hostname === googleapisSuffix ||
+    hostname.endsWith(googleapisSuffix);
+  if (isClients6Host) {
+    hosts.push(hostname.replace(clients6Suffix, googleapisSuffix));
+  } else if (isGoogleapisHost && !hostname.includes("sandbox")) {
+    hosts.push(hostname.replace(googleapisSuffix, clients6Suffix));
+  }
+
+  // Common version strings to try — some services require explicit ?version=
+  const versions = ["v1", "v2", "v1beta1", "v1alpha1"];
+
+  for (const host of hosts) {
+    const base = `https://${host}/$discovery/rest`;
+
+    // Plain
+    candidates.push({ url: `${base}#_internal_probe`, headers: {} });
+
+    // Visibility label expansion
+    candidates.push({ url: `${base}?labels=PANTHEON#_internal_probe`, headers: {} });
+
+    // Versions
+    for (const ver of versions) {
+      candidates.push({ url: `${base}?version=${ver}#_internal_probe`, headers: {} });
+    }
+
+    // With API key
+    if (apiKey) {
+      candidates.push({ url: `${base}?key=${apiKey}#_internal_probe`, headers: {} });
+      candidates.push({ url: `${base}#_internal_probe`, headers: { "X-Goog-Api-Key": apiKey } });
+    }
+  }
+
+  return candidates;
+}
 
 // ─── Schema Resolution (for Send Request form) ─────────────────────────────
 
@@ -588,5 +665,7 @@ if (typeof self !== "undefined") {
 // `looksLikeRSC` did not move at all: it
 // guessed the protocol from a body whose first two lines matched `^[0-9a-f]+:`, which is also the shape of a
 // JSON object keyed by digits, and CLAUDE.md §RUN, DON'T MATCH names that ("no regex/name/identifier
-// matching, scoring, heuristics"). The schema half went with learn.js's branch, into the moat the engine is
-// taking over at jsaudit step 4 rather than being re-hosted twice.
+// matching, scoring, heuristics"). The schema half went with learn.js's branch rather than being re-hosted
+// twice: that code turns a body intercept.js captured off the LIVE page into a schema, and the engine never
+// fetched that body and holds no reply record for it, so the two are a different INPUT and not one algorithm
+// written down in two places.

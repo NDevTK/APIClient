@@ -2,7 +2,6 @@
 #include "solver/endpoint.h"
 #include "core/json_buf.h"
 #include "solver/concolic.h"
-#include "solver/discovery.h"   /* a host arriving on this surface is the event that seeds its probe flows */
 #include "solver/flow.h"
 #include "check.h"
 #include <stdlib.h>
@@ -95,40 +94,12 @@ static void param_add_val(Param *p, const char *v) {   /* merge a validValue (de
     p->vals[p->nvals++] = strdup(v);
 }
 
-/* THE ORIGIN THIS ENDPOINT LIVES ON — scheme + host + optional port, malloc'd, or NULL when the URL names none.
-   Three things are NOT an origin and each is refused on its own terms rather than by one catch-all: a RELATIVE
-   URL (the page's own path, whose origin is the document's and is already on this surface), a scheme that is
-   not http(s) (`blob:https://…` contains "://" and is not an address a document is published at; nor is `ws:`),
-   and a SHAPE — a host carrying a `{hole}` is a host the code did not compute, so §RUN-DON'T-MATCH says there
-   is nothing there to fetch. */
-static char *origin_of_path(const char *path) {
-    const char *h, *e;
-    char *r;
-    if (strncmp(path, "http://", 7) && strncmp(path, "https://", 8)) return NULL;
-    h = strstr(path, "://") + 3;
-    e = h + strcspn(h, "/");
-    if (e == h) return NULL;
-    if (memchr(path, '{', (size_t)(e - path))) return NULL;
-    r = malloc((size_t)(e - path) + 1);
-    CHECK(r, "endpoint: OOM reading an endpoint's origin");
-    memcpy(r, path, (size_t)(e - path));
-    r[e - path] = 0;
-    return r;
-}
-
-/* IS THIS ORIGIN ALREADY ON THE SURFACE? Asked of the surface itself, which is the point: active discovery is
-   seeded by the EVENT of a host arriving here for the first time, and this file already holds that fact because
-   an endpoint's identity dedups on the way in. A separate "origins already probed" set beside it would be a
-   memo the engine keeps for itself — a seen-set in §NO-BOUNDS' own list — and it would drift from the surface
-   the moment an endpoint was recorded through any other path. */
-static int origin_on_surface(const char *origin) {
-    size_t n = strlen(origin);
-    for (int i = 0; i < g_eps_n; i++) {
-        const char *p = g_eps[i].path;
-        if (!strncmp(p, origin, n) && (p[n] == 0 || p[n] == '/')) return 1;
-    }
-    return 0;
-}
+/* `origin_of_path` AND `origin_on_surface` STOOD HERE AND THEIR ONE CONSUMER IS GONE. Between them they
+   answered "is this the FIRST endpoint this surface has held on that host", which was the event that seeded
+   the engine's own discovery probes — one flow per candidate document address. Active discovery is the trusted
+   zone's again (extension/lib/discovery-probe.js), which asks the same question of the API keys and page
+   credentials it holds and this engine does not, so nothing here asks it. They are deleted rather than kept:
+   a pair of functions computing an answer nobody reads is indistinguishable from a live capability. */
 
 /* an endpoint's IDENTITY is (method, path, param-name-set) — same identity merges param values. */
 static int same_identity(Endpoint *e, const char *method, const char *path, KV *kv, int n) {
@@ -142,10 +113,6 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     if (g_suppress) return;   /* candidate/verify run -> not a real @H endpoint */
     char *disp = url_display(ctx, url);
     char *path; KV *kv; int n;
-    /* DECLARED HERE AND FILLED BELOW, because the merge path leaves this function by `goto done` — a pointer
-       introduced after that jump would be uninitialised at the label that frees it. */
-    char *origin = NULL;
-    int origin_new = 0;
     parse_url(disp, &path, &kv, &n);
     free(disp);
 
@@ -172,13 +139,6 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
             goto done;
         }
     }
-    /* ACTIVE DISCOVERY IS REQUIRED (§Attacker sources), AND THIS IS THE EVENT THAT STARTS IT: a host arriving on
-       this surface for the first time. Read BEFORE the insert below, so the surface it is asked about is the one
-       that does not yet contain this endpoint — after it, every endpoint's origin is trivially known and the
-       probe would never be seeded at all. The seeding itself happens once the endpoint is in, at the end of this
-       function, because a probe is a FLOW and a flow is allowed to be born only where nothing is half-built. */
-    origin = origin_of_path(path);
-    origin_new = origin && !origin_on_surface(origin);
     if (g_eps_n >= g_eps_cap) { g_eps_cap = g_eps_cap ? g_eps_cap * 2 : 16; g_eps = realloc(g_eps, (size_t)g_eps_cap * sizeof(Endpoint)); CHECK(g_eps, "endpoint: OOM surface"); }
     Endpoint *e = &g_eps[g_eps_n++];
     memset(e, 0, sizeof *e);
@@ -190,13 +150,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        it happened to carry, which makes a request's header count part of the ranking. */
     (void)endpoint_merge_headers(e, hdrs, nhdrs);
     flow_credit_emit(1.0);   /* a NEW endpoint: this flow just emitted value-of-information -> WFQ reward */
-    /* …AND THE PROBE FLOWS FOR A HOST THIS SURFACE HAD NEVER SEEN. Seeded after the endpoint is in, so a
-       document that names endpoints on its OWN origin (every discovery document does) finds the origin known
-       and seeds nothing further; a document naming a host this run has never reached seeds that host's probes,
-       which is the surface expanding by what it learned rather than by a sweep. */
-    if (origin_new) discovery_seed_origin(ctx, origin);
 done:
-    free(origin);
     free(path);
     for (int j = 0; j < n; j++) { free(kv[j].name); free(kv[j].val); }
     free(kv);

@@ -479,7 +479,7 @@ static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, Heade
  * the request. That is the whole reason the park is the product's park.
  *
  * A URL WITH NO RECORD IS A GET THE ENGINE ISSUED FOR CODE, not a default filled in for a missing one: an
- * external document script, a dynamic `import()` and a discovery probe park on the same register and each is a
+ * external document script and a dynamic `import()` park on the same register and each is a
  * GET by construction (engine.h says so at each entry point), so the absence of a request record is a positive
  * statement about which kind of park this is. */
 static int wpt_provide_pending(JSContext *ctx)

@@ -41,19 +41,77 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       return;
     }
 
-    /* `PROBE_ENDPOINT` AND `DISCOVER_SERVICE` ARE GONE, AND NEITHER HAD A SENDER. Nothing in the popup has
-       ever posted either message — response-decode.js's own comment recorded that ("the bug was that it was a
-       message, never sent") — so these two cases were RPC backends for a UI that does not exist, wired to the
-       req2proto probe this zone is no longer allowed to fire. Error-based schema learning is the engine's
-       (engine/host/solver/req2proto.c) and reaches the popup through the result document's `probeResults`,
-       which `globalStore.probeResults` already feeds to the Send panel. */
+    /* THE THREE ON-DEMAND LEARNING COMMANDS. Each is a USER ACTION over one endpoint or service — the popup
+       asks, this zone performs the request as the page, and the answer merges into the store. They were
+       deleted on the ground that nothing in the popup posts them, which is true and is a missing BUTTON: a
+       backend with no caller is a UI gap, and deleting the backend closes the gap by removing the capability.
+       The backends are lib/req2proto.js (`probeEndpoint`, `discoverServiceInfo`) and lib/discovery-probe.js
+       (`fetchDiscoveryForService`). */
 
-    /* `FETCH_DISCOVERY` IS GONE THE SAME WAY, AND IT HAD NO SENDER EITHER. Its backend was
-       lib/discovery-probe.js's `fetchDiscoveryForService`, which is now the engine's active discovery
-       (engine/host/solver/discovery.c): the engine seeds a probe FLOW per candidate address the moment a host
-       first reaches its endpoint surface, so there is no search here for a command to kick off — and it also
-       invented the hostname it would probe (`${msg.service}.googleapis.com`) when the caller named none, which
-       is a host no code computed. */
+    case "PROBE_ENDPOINT": {
+      const _pdoc = _docFromMsg(msg);
+      if (!_pdoc) { sendResponse(null); return; }
+      probeEndpoint(_pdoc.documentId, msg.endpointKey).then((result) => {
+        sendResponse(result);
+      });
+      return true;
+    }
+
+    case "DISCOVER_SERVICE": {
+      const tab = _docFromMsg(msg);
+      if (!tab) { sendResponse(null); return; }
+      const ep = tab.endpoints.get(msg.endpointKey);
+      if (!ep) {
+        sendResponse(null);
+        return;
+      }
+
+      const headers = {};
+      const discoverUrl = new URL(ep.url);
+      discoverUrl.searchParams.delete("key");
+      if (ep.apiKey) {
+        if (ep.apiKeySource === "url") {
+          discoverUrl.searchParams.set("key", ep.apiKey);
+        } else {
+          headers["X-Goog-Api-Key"] = ep.apiKey;
+        }
+      }
+      const fetchFn = makePageFetchFn(tab.tabId, tab.documentId);
+      discoverServiceInfo(discoverUrl.toString(), headers, { fetchFn }).then(
+        (result) => {
+          tab.probeResults.set(`svc:${msg.endpointKey}`, result);
+          if (result.scopes?.length) {
+            const svc = ep.service || extractInterfaceName(new URL(ep.url));
+            tab.scopes.set(svc, result.scopes);
+          }
+          mergeToGlobal(tab);
+          notifyPopup(tab.tabId);
+          sendResponse(result);
+        },
+      );
+      return true;
+    }
+
+    case "FETCH_DISCOVERY": {
+      const tab = _docFromMsg(msg);
+      if (!tab) { sendResponse(null); return; }
+      /* THE HOSTNAME IS ONE THE PAGE ACTUALLY REACHED, NEVER `${service}.googleapis.com`. That fallback was
+         here and it invented an address no code computed — §RUN, DON'T MATCH — so a service with no learned
+         endpoint would have sent this zone probing a host the bundle never named. A caller that names neither
+         a hostname nor an endpoint has nothing to discover. */
+      const ep = tab.endpoints.values().next().value;
+      const hostname = msg.hostname || ep?.host || null;
+      if (!hostname) { sendResponse(null); return; }
+      const apiKeys = collectKeysForService(tab, msg.service, hostname);
+      if (msg.apiKey && !apiKeys.includes(msg.apiKey)) apiKeys.push(msg.apiKey);
+      if (ep?.apiKey && !apiKeys.includes(ep.apiKey)) apiKeys.push(ep.apiKey);
+      fetchDiscoveryForService(tab.documentId, msg.service, hostname, apiKeys).then(
+        () => {
+          sendResponse(serializeTabData(tab));
+        },
+      );
+      return true;
+    }
 
     case "CLEAR_TAB": {
       // The main Clear button: delete ALL extension data and stop ALL work.
@@ -156,11 +214,10 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       return;
     }
 
-    /* `GET_DISCOVERY_CHANGES` IS GONE WITH THE MAP IT READ. `globalStore.discoveryChanges` had exactly one
-       writer — the host-side discovery fetch, which diffed the document it had just pulled against the one it
-       held — and that fetch is the engine's now. A reader kept over a map nothing writes is the defect
-       CLAUDE.md §Architecture names: it answers `{}` forever and reads as "this API's surface has never
-       changed". Nothing in the popup posted this either. */
+    case "GET_DISCOVERY_CHANGES": {
+      sendResponse(Object.fromEntries(globalStore.discoveryChanges));
+      return;
+    }
 
     case "GET_ENDPOINT_SCHEMA": {
       // GLOBAL — keyed by endpointKey/service against the cumulative store,

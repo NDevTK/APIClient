@@ -33,6 +33,11 @@
 <script src="lib/discovery.js"></script>
 <script src="lib/openapi-import.js"></script>
 <script src="lib/openapi-export.js"></script>
+<!-- ERROR-BASED SCHEMA LEARNING: the payloads a Google API rejects, and the schema its rejection describes.
+     It reads the `google.rpc.Status` envelope with lib/protobuf.js's codec (loaded above) and issues its
+     probes through the page-context relay its caller injects, so it is loaded before lib/discovery-probe.js,
+     which is the caller. -->
+<script src="lib/req2proto.js"></script>
 <script src="lib/stats.js"></script>
 <script src="lib/chains.js"></script>
 <!-- THE RENDERER REGISTRY (Chromium's RenderProcessHost): which agent clusters have a renderer, what routing id
@@ -52,8 +57,11 @@
 <script src="lib/keys.js"></script>
 <script src="lib/persistence.js"></script>
 <script src="lib/grouping.js"></script>
-<!-- lib/discovery-probe.js is GONE: fetching an API's published description is the ENGINE's active discovery
-     (engine/host/solver/discovery.c), which seeds a FLOW per candidate address on the one frontier. -->
+<!-- ACTIVE DISCOVERY: fetch an API's PUBLISHED description at the well-known addresses lib/discovery.js
+     names, diff it against the one already held, and — where a service publishes none — fall back to
+     lib/req2proto.js's error probe and build a virtual document out of what the rejection described. Loaded
+     before lib/response-decode.js, which triggers both halves off a captured exchange. -->
+<script src="lib/discovery-probe.js"></script>
 <script src="lib/learn.js"></script>
 <script src="lib/response-decode.js"></script>
 <script src="lib/encode.js"></script>
