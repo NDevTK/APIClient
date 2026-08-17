@@ -7,9 +7,26 @@
 
 /* A LOCALLY MINTED WORLD and the fork edge that produced it. Kept as a flat array indexed by serial-1, because
    serials are dense and monotonic: a world's parent is one load, and the ancestry walk is a pointer chase over
-   contiguous memory on the hottest path in the engine. */
+   contiguous memory on the hottest path in the engine.
+ *
+ * `forked` AND `sent` ARE TWO FACTS ABOUT A WORLD'S LIFE, and each of them is what makes one of this file's
+ * answers correct rather than nearly correct.
+ *   - `forked` — a child was minted from it, so NO FLOW HOLDS IT any more (world.h, world_mint_child): a fork
+ *     retires the fork point and mints a child for EACH arm. It is what makes an ancestry a chain of DEAD
+ *     worlds, which is the whole reason a peer may fork an ancestor's segment: a segment nothing will write to
+ *     again cannot leak one arm's later writes into the other's.
+ *   - `sent` — this world has itself crossed the seam as the HEAD of a vector, which is the only way a peer can
+ *     come to hold a segment keyed by it. An ancestor that never crossed is therefore an ancestor no peer can
+ *     be holding, and naming it in a vector is a field every reader scans past. Retiring the fork point makes a
+ *     flow's world change at EVERY branch it takes, so the unfiltered chain would grow with the number of
+ *     branches rather than with the fork depth at birth — thousands of fields on a page whose boot flow forks
+ *     freely, past the 512-byte record every sender writes into. Filtering is not a size optimisation: it is
+ *     what keeps the chain O(this flow's cross-instance history), which is the only part of it that carries
+ *     information. */
 typedef struct {
     WorldId parent;   /* WORLD_NONE for a root */
+    bool    sent;     /* has crossed the seam as the head of a vector, so a peer may hold a segment for it */
+    bool    forked;   /* a child was minted from it: it is a retired fork point and names no flow */
 } MintedWorld;
 
 /* A SEGMENT this instance holds for a world minted somewhere ELSE. Sparse — only worlds that actually reached
@@ -138,6 +155,14 @@ static uint32_t     g_minted_n, g_minted_cap;
 static ForeignSegment *g_segs;
 static int             g_segs_n, g_segs_cap;
 
+/* THE TWO GROWABLE BUFFERS THIS FILE OWNS — one per DIRECTION of the wire form, and neither has a capacity a
+   caller states. A fixed cap on either is a bound §scheduler forbids and it is not the harmless kind: the write
+   side truncates a chain (the peer forks a more distant ancestor and silently loses every write in between) and
+   the read side used to DFAIL, which is a crash on a page whose flow simply branched more times than a stack
+   array had room for. They grow and are freed with the registry. */
+static WorldId *g_anc;      static int g_anc_n, g_anc_cap;
+static WorldId *g_parsed;   static int g_parsed_cap;
+
 void world_registry_init(const char *doc_name)
 {
     uint32_t doc;
@@ -165,6 +190,10 @@ void world_registry_free(JSContext *ctx)
     free(g_minted);
     g_minted = NULL;
     g_minted_n = g_minted_cap = 0;
+    /* AND THE TWO WIRE-FORM BUFFERS, which belong to the registry for the reason the counts below do: a host
+       that runs several documents in one process would otherwise carry one instance's scratch into the next. */
+    free(g_anc);    g_anc = NULL;    g_anc_n = g_anc_cap = 0;
+    free(g_parsed); g_parsed = NULL; g_parsed_cap = 0;
     for (i = 0; i < (int)g_docs_n; i++) free(g_docs[i].name);
     free(g_docs);
     g_docs = NULL;
@@ -189,8 +218,13 @@ static WorldId mint(WorldId parent)
         g_minted = g;
         g_minted_cap = cap;
     }
+    memset(&g_minted[g_minted_n], 0, sizeof g_minted[g_minted_n]);
     g_minted[g_minted_n].parent = parent;
     g_minted_n++;
+    /* THE PARENT IS RETIRED BY ITS FIRST CHILD. Said here rather than in world_mint_child because this is the
+       one place a fork edge is recorded, and the fact is about the EDGE: a world with a child is a world some
+       flow branched at, and both arms of that branch are children of it (world.h). A root has no parent. */
+    if (!world_is_none(parent)) g_minted[parent.serial - 1].forked = true;
 
     w.doc = g_doc;
     w.serial = g_next_serial++;
@@ -221,30 +255,68 @@ WorldId world_mint_child(WorldId parent)
     return mint(parent);
 }
 
-/* THE ANCESTRY OF A LOCALLY-MINTED WORLD, nearest first, written into `out` (at most `cap`); returns how many
-   were written. Asserts the world was minted here — a world minted elsewhere has an ancestry only its own
-   instance can answer for. INTERNAL: world_serialize is the one writer of the wire form (world.h), so this is
-   its input and never a second way to produce one. */
-static int world_ancestry(WorldId w, WorldId *out, int cap)
+static WorldId *world_buf_room(WorldId **buf, int *cap, int n)
 {
-    int n = 0;
+    if (n == *cap) {
+        int c = *cap ? *cap * 2 : 16;
+        WorldId *g = realloc(*buf, (size_t)c * sizeof *g);
+        CHECK(g != NULL, "world registry: OOM growing a world vector — a vector that loses an ancestor makes "
+                         "the peer fork a more distant one and silently drops every write in between");
+        *buf = g;
+        *cap = c;
+    }
+    return *buf;
+}
 
+/* THE ANCESTRY OF A LOCALLY-MINTED WORLD, nearest first, borrowed into `*out` and valid until the next call;
+   returns how many were written. Asserts the world was minted here — a world minted elsewhere has an ancestry
+   only its own instance can answer for. INTERNAL: world_serialize is the one writer of the wire form (world.h),
+   so this is its input and never a second way to produce one.
+ *
+ * TWO INVARIANTS ARE STATED HERE BECAUSE THIS IS WHERE THE CHAIN IS WALKED, and each of them was silently false
+ * for as long as a fork left the primary arm holding the fork point's name:
+ *   - THE HEAD NAMES A LIVE FLOW. A retired fork point is a world no flow holds, so serializing one means a
+ *     flow's world was never re-minted at its branch and a peer is about to be handed the name of a timeline
+ *     that ended at the branch.
+ *   - EVERY ANCESTOR IS RETIRED. A world becomes a parent only by being forked, so this holds by construction —
+ *     and it is the whole reason world_segment may FORK an ancestor's segment. A live ancestor would keep
+ *     receiving writes after the peer forked it, and whether those writes reached the other arm would depend on
+ *     the order the two arms happened to arrive: two timelines wearing one name, which is exactly what this
+ *     registry exists to prevent. */
+static int world_ancestry(WorldId w, WorldId **out)
+{
     DCHECK(w.doc == g_doc, "the ancestry of a world minted in another document was asked for here — only the "
                            "minting instance holds its fork edges, so the request must carry it");
     DCHECK(w.serial != 0 && w.serial <= g_minted_n, "the ancestry of a world never minted here was asked for");
+    DCHECK(!g_minted[w.serial - 1].forked,
+           "a RETIRED FORK POINT was serialized as a flow's world — a fork mints a child for BOTH arms and "
+           "leaves this name naming neither, so whatever holds it stopped existing at that branch, and the peer "
+           "would key a segment on a timeline that ended");
+    /* AND THIS WORLD HAS NOW CROSSED, which is the fact the filter below reads. Recorded at the one point a
+       vector is produced, so a world can only be called `sent` by having been sent. */
+    g_minted[w.serial - 1].sent = true;
+    g_anc_n = 0;
     /* NEAREST FIRST, which is the order world_segment's scan depends on: the parent, then the grandparent, so
        a peer holding both forks the parent and keeps its writes. */
     for (w = g_minted[w.serial - 1].parent; !world_is_none(w); w = g_minted[w.serial - 1].parent) {
         DCHECK(w.doc == g_doc && w.serial <= g_minted_n, "a fork edge names a world outside this document's "
                                                          "minted table — the chain is corrupt");
-        if (n < cap) out[n] = w;
-        n++;
-        /* The caller's buffer being too small would TRUNCATE the chain, and a truncated chain makes the peer
-           fork a further ancestor than it should — dropping the nearer one's writes with no symptom. */
-        DCHECK(n <= cap, "the ancestry buffer is too small for this world's fork chain — a truncated chain makes "
-                         "a peer fork a more distant ancestor and silently lose the nearer one's writes");
+        DCHECK(g_minted[w.serial - 1].forked,
+               "an ANCESTOR of a world is not a retired fork point — a world becomes a parent only by being "
+               "forked, so this chain was built by something that is not mint()");
+        /* A WORLD THAT NEVER CROSSED CANNOT BE HELD BY ANY PEER, so naming it would put a field in the vector
+           that every reader scans past. Dropping it loses nothing: world_segment keys its table on the HEAD of
+           a vector it received, and a head is a world this instance called `sent`. */
+        if (!g_minted[w.serial - 1].sent) continue;
+        /* THE ROOM AND THE STORE ARE TWO STATEMENTS, because `room(&b,&c,n)[n++] = w` leaves the read of `n`
+           inside the call unsequenced against the increment beside it. */
+        {
+            WorldId *buf = world_buf_room(&g_anc, &g_anc_cap, g_anc_n);
+            buf[g_anc_n++] = w;
+        }
     }
-    return n;
+    *out = g_anc;
+    return g_anc_n;
 }
 
 /* See world.h. The DOCUMENT is named rather than numbered because a `uint32_t doc` is this instance's handle
@@ -252,11 +324,11 @@ static int world_ancestry(WorldId w, WorldId *out, int cap)
    carries world_doc_name. */
 int world_serialize(WorldId w, char *dst, size_t cap)
 {
-    WorldId anc[16];
+    WorldId *anc;
     int n_anc, k, n;
 
     DCHECK(dst != NULL && cap > 0, "a world was serialized into no buffer");
-    n_anc = world_ancestry(w, anc, (int)(sizeof anc / sizeof anc[0]));
+    n_anc = world_ancestry(w, &anc);
     n = snprintf(dst, cap, "%s:%u", world_doc_name(w.doc), w.serial);
     CHECK(n > 0 && (size_t)n < cap, "the world vector did not fit its buffer — a truncated vector makes the "
                                     "peer fork a more distant ancestor and silently lose the nearer writes");
@@ -277,13 +349,13 @@ int world_serialize(WorldId w, char *dst, size_t cap)
    nearest-first ORDER is load-bearing: the reader forks the first ancestor it holds, so an order this function
    got wrong would silently fork a more distant one and lose the nearer writes. Destructive on a copy of its own
    making, so the caller's record is untouched. */
-int world_parse(const char *s, WorldId *out, WorldId *ancestry, int cap)
+int world_parse(const char *s, WorldId *out, const WorldId **ancestry)
 {
     char *dup, *q;
     int n_anc = 0;
 
     DCHECK(s != NULL && *s, "a world vector was parsed from nothing — the answer would be true in no timeline");
-    DCHECK(out != NULL && (cap == 0 || ancestry != NULL), "a world vector was parsed into no world");
+    DCHECK(out != NULL && ancestry != NULL, "a world vector was parsed into no world");
     *out = WORLD_NONE;
     dup = strdup(s);
     CHECK(dup != NULL, "world: OOM parsing a world vector");
@@ -295,7 +367,7 @@ int world_parse(const char *s, WorldId *out, WorldId *ancestry, int cap)
            so only the serial's separator is known to be final. */
         colon = strrchr(q, ':');
         /* EVERY FIELD THE WRITER WROTE IS A WORLD, so a field with no serial is not one to skip — skipping it
-           drops an ancestor, which is the same silent loss the truncation below crashes on: the reader forks
+           drops an ancestor, which is the same silent loss a truncated vector causes: the reader forks
            the next ancestor it holds and every write in between goes with it. world_serialize emits
            "<doc>:<serial>" for the head and for each ancestor, so there is no field this can legitimately be. */
         DCHECK(colon != NULL, "a world vector field carried no serial — world_serialize writes <doc>:<serial> "
@@ -306,14 +378,19 @@ int world_parse(const char *s, WorldId *out, WorldId *ancestry, int cap)
             *colon = 0;
             id.doc = world_doc_intern(q);
             id.serial = (uint32_t)strtoul(colon + 1, NULL, 10);
-            if (world_is_none(*out)) *out = id;
-            else if (n_anc < cap) ancestry[n_anc++] = id;
-            else DFAIL("a world vector's ancestry outran the buffer the reader gave it — the reader would fork "
-                       "a more distant ancestor than the sender named and lose every write in between");
+            if (world_is_none(*out)) {
+                *out = id;
+            } else {
+                WorldId *buf = world_buf_room(&g_parsed, &g_parsed_cap, n_anc);
+                buf[n_anc++] = id;
+            }
         }
         q = comma ? comma + 1 : NULL;
     }
     free(dup);
+    /* PUBLISHED AFTER THE WALK, because the buffer MOVES: every push may realloc, so a pointer handed out
+       before the last field names freed memory. */
+    *ancestry = g_parsed;
     /* A VECTOR THAT NAMES NO WORLD IS TRUE IN NO TIMELINE — asserted where the name arrives rather than where
        the answer is used, because by then it is indistinguishable from whatever was last installed. */
     DCHECK(!world_is_none(*out), "a world vector named no world — its segment would come from whatever this "
@@ -321,7 +398,7 @@ int world_parse(const char *s, WorldId *out, WorldId *ancestry, int cap)
     {
         int k;
         for (k = 0; k < n_anc; k++)
-            DCHECK(ancestry[k].doc == out->doc,
+            DCHECK((*ancestry)[k].doc == out->doc,
                    "a world vector's ancestry names a world from another document than its own — world_ancestry "
                    "walks only the edges the minting instance holds, so a mixed chain means the vector was "
                    "mis-parsed and this instance would fork the wrong segment");

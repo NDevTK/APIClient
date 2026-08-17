@@ -351,9 +351,13 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
 }
 
 Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
-    /* THE WORLD IS MINTED HERE so no flow can exist without one. A fork passes its parent's world and the
+    /* THE WORLD IS MINTED HERE so no flow can exist without one. A fork passes the world it BRANCHED AT and the
        child records the edge, which is what lets another instance materialize this flow's segment by forking
-       the nearest ancestor it already holds. A from-baseline flow passes WORLD_NONE and gets a root. */
+       the nearest ancestor it already holds. A from-baseline flow passes WORLD_NONE and gets a root.
+       `parent` IS THE FORK POINT AND NOT THE OTHER ARM'S WORLD: the arm that keeps running is re-minted as a
+       child of the same name (engine_sibling_assemble), so the branch retires its own world and the two arms
+       are siblings rather than ancestor-and-descendant — which is what makes "do these two senders contradict?"
+       answerable at a peer. */
     return flow_new(ctx, fn, world_is_none(parent) ? world_mint() : world_mint_child(parent));
 }
 

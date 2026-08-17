@@ -679,8 +679,9 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
            "a record was routed to an instance that does not hold the document it names — the offscreen is the "
            "only zone that knows which instance holds which document, and it sent this one to the wrong place");
     {
-        WorldId w, anc[16];
-        int n_anc = world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
+        WorldId w;
+        const WorldId *anc;
+        int n_anc = world_parse(worlds, &w, &anc);
         /* AGAINST EVERY DOCUMENT THIS AGENT HOLDS, not against its root: an agent is an origin-keyed CLUSTER,
            so a message from a SAME-ORIGIN child is delivered in this heap and never reaches a transport. */
         DCHECK(!world_doc_hosted(w.doc), "a record was routed back to the instance whose flow sent it — a "
@@ -740,22 +741,25 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
            the WRONG mechanism for them — it would turn one sender's two messages into two timelines that each
            saw one. Only senders whose worlds CONTRADICT (two arms that took opposite branches) may not be
            merged, and those must fork.
-           AND THE WORLD GRAPH CANNOT YET TELL THE TWO APART, which is the real unbuilt thing and is why this
-           still crashes instead of choosing. A fork mints a CHILD world for the sibling and leaves the PRIMARY
-           holding the parent's, so the two arms of one branch are related as ancestor-and-descendant — exactly
-           the relation that otherwise means "compatible, one is a continuation of the other". Both arms must
-           get a child world (or the branch must be recorded on the edge) before "do these two senders
-           contradict?" has an answer at all. Build THAT first; the queue-or-fork decision is one line once it
-           can be asked. Driven by engine/route.mjs, whose three posts are exactly this: two from one world and
-           one from the other arm. */
+           THE WORLD GRAPH NOW ANSWERS THAT, and what is missing is no longer a fact but a MECHANISM. A fork
+           retires the fork point and mints a child for BOTH arms (engine_sibling_assemble), so one sender's
+           world is a continuation of another's exactly when it IS it or names it as an ancestor — and every
+           arrival carries its own vector, so the relation is decidable here from what already crossed. What
+           this file cannot yet DO with the answer is the pair of mechanisms: a per-flow record QUEUE for the
+           compatible case (this field holds one, and a second overwriting it is a message the page never sees),
+           and a FORK for the contradictory one — which cannot be taken here, because this runs between
+           scheduler steps with no flow switched in and a sibling may only be assembled with its parent applied
+           (flow_answer_fork says why). Both belong at the delivery, where the receiving flow is running.
+           Driven by engine/route.mjs, whose posts are exactly this: two arms of one branch, each with a world
+           that now names the branch rather than one of the arms. */
         DCHECK(f->deliver == NULL,
                "a second record was routed to a flow that has not yet made its first. It is NOT automatically a "
                "merge to prevent: two messages from ONE sending world are sequential tasks the page must see in "
                "order, and forking a sibling per arrival would be wrong for them. It is only senders whose "
-               "worlds CONTRADICT that may not share a timeline — and the world graph cannot answer that yet, "
-               "because a fork leaves the primary arm holding the parent world, so two contradictory arms look "
-               "like ancestor and descendant. Give both arms a child world, then queue compatible arrivals and "
-               "fork contradictory ones");
+               "worlds CONTRADICT that may not share a timeline, and the vectors both records carry now answer "
+               "that (a fork retires the fork point, so neither arm is an ancestor of the other). Build the two "
+               "mechanisms the answer needs, at the DELIVERY where the receiving flow is switched in: a per-flow "
+               "record queue for compatible arrivals, and a sibling fork for contradictory ones");
         f->deliver = strdup(record);
         f->deliver_origin = strdup(sender_origin);
         CHECK(f->deliver && f->deliver_origin, "engine: OOM attaching a routed record to a flow");
@@ -802,7 +806,8 @@ static JSContext *doc_realm(uint32_t doc)
 static void flow_deliver(JSContext *ctx, Flow *f)
 {
     char *dup = f->deliver, *doc, *worlds, *tail;
-    WorldId w, anc[16];
+    WorldId w;
+    const WorldId *anc;
     int n_anc;
     CowDelta *seg;
     JSContext *rctx;
@@ -820,7 +825,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
     rctx = doc_realm(world_doc_intern(doc));
     /* THE SENDING DOCUMENT IS THE HEAD OF THE WORLD VECTOR — a world is minted by a flow of exactly one
        document, so the vector already names the sender and a second field for it could disagree with it. */
-    n_anc = world_parse(worlds, &w, anc, (int)(sizeof anc / sizeof anc[0]));
+    n_anc = world_parse(worlds, &w, &anc);
     /* THE OTHER HALF OF THIS DELIVERY'S WORLD, asked where it is CONSUMED. engine_route asked the same question
        when the record arrived; this asks it at the moment the delivery actually runs, because the scheduler has
        run other flows in between and the answer is a property of the run, not of the record. What is installed
@@ -890,8 +895,9 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
            "offscreen is the only zone that knows which instance holds which document, and it sent this one to "
            "the wrong place");
     {
-        WorldId w, anc[16];
-        int n_anc = world_parse(remote_op_worlds(op), &w, anc, (int)(sizeof anc / sizeof anc[0]));
+        WorldId w;
+        const WorldId *anc;
+        int n_anc = world_parse(remote_op_worlds(op), &w, &anc);
         /* THE ASKING WORLD BELONGS TO A PEER — asserted against every document THIS AGENT HOLDS rather than
            against its root, because an agent is an origin-keyed CLUSTER: an operation on an object of a
            SAME-ORIGIN child is performed in this heap at its call site and never reaches a transport. */
@@ -1488,10 +1494,26 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        free `sib` and every line after it would write through a dangling pointer. Same primitive, same reason
        and same shape as the job-drop walk: the engine is holding a position in its own frontier. */
     int prev_reclaim = engine_reclaim_set(0);
-    /* THE SIBLING'S WORLD IS A CHILD OF THE PARENT'S, and the edge is recorded so another instance that
-   already holds a segment for the parent can materialize the sibling's by forking it — the same O(1)
-   shared-base-segment fork this line performs locally, performed there. */
-    Flow *sib = flow_add(ctx, parent->fn, parent->world);
+    /* BOTH ARMS GET A CHILD WORLD AND THE FORK POINT IS RETIRED — the sibling's by flow_add, the parent's on
+     * the line after it, from the SAME parent name captured before either. The edge is recorded so another
+     * instance that already holds a segment for the fork point can materialize each arm's by forking it — the
+     * same O(1) shared-base-segment fork this function performs locally, performed there.
+     *
+     * THE PARENT ARM USED TO KEEP THE FORK POINT'S NAME, and that is what made this a fork in the flow graph
+     * and not in the world graph. Two consequences, and the second one is silent data loss:
+     *   - a peer asked "do these two senders contradict?" saw the two arms as ancestor-and-descendant, which is
+     *     the same relation a flow's two SEQUENTIAL posts have — §9.4.4 tasks it must deliver in order. One
+     *     question, two opposite answers, no way to tell which;
+     *   - a peer materializes an arm's segment by forking the nearest ancestor it holds, and cow_delta_fork
+     *     FREEZES that ancestor's head at that instant. The primary went on writing into the fork point's
+     *     segment, so whether the sibling inherited the primary's post-branch writes depended on which arm
+     *     reached that peer first. Retired, every ancestor is a world no flow holds, and what a peer forks
+     *     cannot change under it — which is the invariant world_ancestry now asserts on every field it writes.
+     * ONE EXTRA MINTED ROW PER FORK is the whole cost; the vector does not grow with it, because world_ancestry
+     * names only ancestors that have themselves crossed the seam. */
+    WorldId fork_point = parent->world;
+    Flow *sib = flow_add(ctx, parent->fn, fork_point);
+    parent->world = world_mint_child(fork_point);
     /* AND ITS ACCOUNT IS A CHILD OF THE PARENT'S TOO — the WFQ's two terms, taken over at the branch like every
        other field of the parent's history copied below. It is FIRST because it is what decides where this flow
        enters the queue, and everything after this line is the construction of a flow that is already ranked. */
@@ -1894,7 +1916,8 @@ void engine_queue_javascript_url(uint32_t doc, const char *body) { engine_queue(
 static void flow_perform(JSContext *ctx, Flow *f)
 {
     RemoteOp *op = remote_op_parse(f->perform);
-    WorldId w, anc[16];
+    WorldId w;
+    const WorldId *anc;
     int n_anc;
     CowDelta *seg;
     JSContext *rctx;
@@ -1908,7 +1931,7 @@ static void flow_perform(JSContext *ctx, Flow *f)
            "out of the other's document");
     f->perform_doc = world_doc_intern(remote_op_doc(op));
     rctx = doc_realm(f->perform_doc);
-    n_anc = world_parse(remote_op_worlds(op), &w, anc, (int)(sizeof anc / sizeof anc[0]));
+    n_anc = world_parse(remote_op_worlds(op), &w, &anc);
     /* ASKED AGAIN AT THE MOMENT IT RUNS, for the reason flow_deliver asks it again: the scheduler has run other
        flows since the record arrived, and which world holds writes here is a property of the run. */
     seg = world_segment(ctx, w, anc, n_anc);

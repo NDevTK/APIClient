@@ -40,7 +40,11 @@ typedef struct Flow {
     /* THIS FLOW'S WORLD — its name in the ONE timeline it owns, valid in every document it touches. `delta`
        below is only this instance's SEGMENT of that world; a flow that scripts an iframe or a popup writes in
        another WASM instance, and that instance keys ITS segment by this id. A delta cannot travel (it names
-       its targets by live heap pointers), so the name is what crosses — see solver/world.h. */
+       its targets by live heap pointers), so the name is what crosses — see solver/world.h.
+       IT CHANGES AT EVERY BRANCH THIS FLOW TAKES, and that is the point rather than an oversight: a fork
+       RETIRES the world it branched at and mints a child for BOTH arms, so the name a peer holds a segment for
+       is always a world no flow will write from again. A flow that kept its name across a branch would be
+       indistinguishable, at a peer, from the arm that diverged from it. */
     WorldId world;
     JSValue fn;            /* the function this flow re-drives (JS_UNDEFINED for a boot/session flow) */
     /* THE DECISION VECTOR IS NOT A FIELD HERE, and the flat `signed char *dec` + `dec_n` that used to be is

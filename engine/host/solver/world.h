@@ -30,6 +30,15 @@
  * the parent's writes. The ancestry is therefore ordered nearest-first and the scan stops at the first hit —
  * asserted, because a wrong answer here is invisible: the flow just sees an older document than it wrote.
  *
+ * AND EVERY ANCESTOR IS A DEAD WORLD, which is what makes forking one sound at all. A fork RETIRES the world it
+ * branched at and mints a child for BOTH arms (world_mint_child), so a name that appears in an ancestry names
+ * a timeline that ended at that branch. The alternative — the arm that keeps running keeps the fork point's
+ * name — makes the peer's fork race the sender: cow_delta_fork freezes the ancestor's head at the instant it
+ * runs, so whether the OTHER arm inherited the running arm's post-branch writes depended on which of them
+ * reached that peer first. It also makes the two arms look like ancestor-and-descendant, which is the relation
+ * that otherwise means "one is a continuation of the other" — so a peer could not tell a contradictory pair
+ * from a sequential one. Both are asserted where the chain is walked.
+ *
  * WHAT IS NOT HERE YET. The transport (which instance holds which document, and the suspend/resume edge a
  * cross-document read rides) is the host's, because only the trusted zone knows the routing — the same reason
  * authorization keys on sender.tab.url. This component is the half that has to be right BEFORE a transport can
@@ -121,7 +130,25 @@ uint32_t world_mint_doc(uint32_t parent);
 WorldId world_mint(void);
 
 /* MINT a child of `parent` and RECORD the edge, so this instance can later hand a peer the ancestry it needs to
-   materialize the child. Called at the one place a sibling flow is created from a parent. */
+ * materialize the child.
+ *
+ * A FORK MINTS TWO OF THESE AND RETIRES THE FORK POINT — both arms get a child, and the world the flow branched
+ * at names neither of them afterwards. Keeping the primary arm on the parent's name was the shape this had, and
+ * it is wrong twice over:
+ *   - IT MAKES THE ARMS UNCOMPARABLE. A peer's question about two arrivals is "do these two senders CONTRADICT,
+ *     or is one a continuation of the other?" — sequential messages from one world are §9.4.4 tasks the page
+ *     must see in order, and two arms of one branch are timelines that may not share one. With the primary on
+ *     the parent's name the two arms are related as ancestor-and-descendant, which is exactly the relation that
+ *     otherwise means "compatible". With both retired, divergence is decidable from the vectors alone: one
+ *     world is a continuation of another exactly when it IS it or names it as an ancestor.
+ *   - IT LETS ONE ARM'S LATER WRITES REACH THE OTHER. A peer materializes an arm's segment by FORKING the
+ *     nearest ancestor it holds, and forking freezes that ancestor's head at the moment of the fork. While the
+ *     primary kept writing into the fork point's segment, whether the sibling inherited those post-branch
+ *     writes depended on the ORDER the two arms happened to reach that peer — the sibling arriving second forks
+ *     a segment the primary has since written to. Retiring the fork point makes every ancestor a DEAD world, so
+ *     what a peer forks can no longer change under it.
+ * The cost is one extra minted row per fork and a world that changes at every branch a flow takes; the ancestry
+ * a vector carries does not grow with it, because only worlds that have themselves crossed are named. */
 WorldId world_mint_child(WorldId parent);
 
 /* THE WIRE FORM OF A WORLD AND ITS ANCESTRY — `doc:serial,anc:serial,...`, nearest ancestor first. Every
@@ -133,14 +160,26 @@ WorldId world_mint_child(WorldId parent);
    advisory. It was, and `core/html/html_iframe.c` used it to write the vector a second way — head by hand,
    then its own loop — which had both failure modes this function's CHECK exists for: a `size_t` underflow past
    the end of the record's buffer, and a silently TRUNCATED chain that makes the peer fork a more distant
-   ancestor and lose every write in between. With the walk internal there is no second way to spell it. */
+   ancestor and lose every write in between. With the walk internal there is no second way to spell it.
+   ONLY ANCESTORS THAT HAVE THEMSELVES CROSSED ARE NAMED. A peer keys a segment on the HEAD of a vector it
+   received, so a world that has never been a head is one no peer can be holding and naming it puts a field in
+   the record that every reader scans past. That is not a size optimisation: a fork retires the fork point, so a
+   flow's world changes at every branch it takes, and the unfiltered chain would grow with the number of
+   branches rather than with the fork depth — past this record's buffer on any page whose boot flow forks
+   freely. Filtered, the chain is the flow's cross-instance HISTORY, which is the only part of it a peer can act
+   on. */
 int world_serialize(WorldId w, char *dst, size_t cap);
 
-/* READ that wire form back: the world into `*out` and its ancestry (nearest first) into `ancestry`, returning
-   how many ancestors were written. The inverse of world_serialize and deliberately its neighbour — a grammar
+/* READ that wire form back: the world into `*out` and its ancestry (nearest first) into `*ancestry`, returning
+   how many ancestors were read. The inverse of world_serialize and deliberately its neighbour — a grammar
    with two readers is two grammars, and the writers of the second one are the hosts, where nothing can check it
-   against this. Interning the document NAMES is part of reading, because a handle means nothing to a peer. */
-int world_parse(const char *s, WorldId *out, WorldId *ancestry, int cap);
+   against this. Interning the document NAMES is part of reading, because a handle means nothing to a peer.
+   THE ANCESTRY IS BORROWED FROM THE REGISTRY and is valid until the next world_parse — a caller-sized array is
+   a bound on how many times a sending flow may have branched, which is a page-shaped number and not a design
+   one, and the version of this that took one CRASHED on a vector that outran it. Every caller reads it into
+   world_segment on the line after the parse, which is what makes the borrow window a statement rather than a
+   hope. */
+int world_parse(const char *s, WorldId *out, const WorldId **ancestry);
 
 /* THIS INSTANCE'S SEGMENT for a world minted ELSEWHERE, materialized on first use by forking the nearest
    ancestor present in `ancestry` (nearest first, as world_ancestry writes it), or empty if none is. Borrowed:
