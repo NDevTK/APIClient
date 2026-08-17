@@ -27,15 +27,32 @@ import { stampArtifact } from "./gate_revision.mjs";
    the two can never collapse into one verdict. Declared here because the native targets run ~300 lines before
    the wasm ones and a `const` below them would be a TDZ throw. */
 const RUN_BACKSTOP_MS = 15 * 60 * 1000;
-function exitHung(label, signal) {
-  let load = "unknown";
-  try { load = readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).join(" "); } catch { /* not linux */ }
-  console.error(`[build] ${label} DID NOT FINISH within ${RUN_BACKSTOP_MS / 60000} min — killed by the harness ` +
-                `backstop (${signal}), NOT a failing run and NOT a passing one.\n` +
-                `[build]   load average at kill: ${load} (on ${cpus().length} cores)\n` +
-                `[build]   Either the machine is saturated, or the fixture's frontier does not drain and the\n` +
-                `[build]   program has no completion condition — a defect in the fixture, not the engine.`);
-  process.exit(2);                    /* distinct from a failing run's exit, on purpose */
+/* `.signal` IS NOT THE HANG TEST, AND USING IT AS ONE MADE THIS REPORTER LIE. `spawnSync` sets `signal` for a
+   child killed by ANY signal, so an ABORT — a DCHECK doing its job, arriving as SIGABRT — was reported as
+   "DID NOT FINISH within 15 min", with a load average beside it inviting the reader to blame the machine. That
+   is exactly the conflation this backstop exists to prevent, committed inside the backstop: measured, a run
+   that reached its completion moment and then aborted at `idl_args.c:2148` was filed as a hang.
+   The discriminator is node's own: a timeout kill sets `error.code === "ETIMEDOUT"`, and nothing else does. A
+   signal without it is a CRASH, and a crash's `@WHY` is the result — it must not be dressed as a timing
+   artifact. Three outcomes, three reports, three exit codes. */
+function runOutcome(label, t) {
+  if (t.error && t.error.code === "ETIMEDOUT") {
+    let load = "unknown";
+    try { load = readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).join(" "); } catch { /* not linux */ }
+    console.error(`[build] ${label} DID NOT FINISH within ${RUN_BACKSTOP_MS / 60000} min — killed by the harness ` +
+                  `backstop, NOT a failing run and NOT a passing one.\n` +
+                  `[build]   load average at kill: ${load} (on ${cpus().length} cores)\n` +
+                  `[build]   Either the machine is saturated, or the fixture's frontier does not drain and the\n` +
+                  `[build]   program has no completion condition — a defect in the fixture, not the engine.`);
+    process.exit(2);
+  }
+  if (t.signal) {
+    console.error(`[build] ${label} DIED ON ${t.signal} — read the @WHY above it; an abort is a DCHECK naming ` +
+                  `either an invariant to fix at its root or a capability to build, and it is the RESULT of this ` +
+                  `run rather than an interruption of it.`);
+    process.exit(3);
+  }
+  if (t.status !== 0) { console.error(`[build] ${label} FAILED rc=${t.status}`); process.exit(t.status); }
 }
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
@@ -314,7 +331,7 @@ if (NATIVE) {
        flows standing on segments this build never wrote — and it would look like a pass. */
     rmSync(store, { force: true });
     const one = spawnSync(bin, ["--cold-park", store], { stdio: "inherit", timeout: RUN_BACKSTOP_MS });
-    if (one.signal) exitHung("session ONE (--cold-park)", one.signal);
+    runOutcome("session ONE (--cold-park)", one);
     if (one.status !== 0) {
       console.error("[build] session ONE (--cold-park) reported rc=" + (one.status ?? "signal") +
                     " — read its `@H park-*` rows and the @COLDPARK census: a 0 there names which record kind " +
@@ -323,7 +340,7 @@ if (NATIVE) {
       process.exit(one.status || 1);
     }
     const two = spawnSync(bin, ["--cold-resume", store], { stdio: "inherit", timeout: RUN_BACKSTOP_MS });
-    if (two.signal) exitHung("session TWO (--cold-resume)", two.signal);
+    runOutcome("session TWO (--cold-resume)", two);
     if (two.status !== 0) {
       console.error("[build] session TWO (--cold-resume) reported rc=" + (two.status ?? "signal") +
                     " — `@RESUMED <n>` and the @COLDRESUME census say what it rebuilt out of the residue; a " +
@@ -336,7 +353,7 @@ if (NATIVE) {
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
      the stream it prints and the report it ends with, and nothing else in the tree produces either. */
   const t = spawnSync(bin, MIN ? ["--min"] : [], { stdio: "inherit", timeout: RUN_BACKSTOP_MS });
-  if (t.signal) exitHung("the native run", t.signal);
+  runOutcome("the native run", t);
   if (t.status !== 0) {
     console.error("[build] the native run reported rc=" + (t.status ?? "signal") +
                   " — a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault");
@@ -597,8 +614,7 @@ stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
    it has never had anything to say about a harness refusing to wait forever for a process it launched. */
 function runProgram(label, argv) {
   const t = spawnSync(process.execPath, argv, { stdio: "inherit", shell: false, timeout: RUN_BACKSTOP_MS });
-  if (t.signal) exitHung(label, t.signal);
-  if (t.status !== 0) { console.error(`[build] ${label} FAILED rc=` + (t.status ?? "signal")); process.exit(t.status || 1); }
+  runOutcome(label, t);
 }
 
 /* The trailing arguments reach main()'s argv — the channel getenv could not be, since emscripten's ENV never
