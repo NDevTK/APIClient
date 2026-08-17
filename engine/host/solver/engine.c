@@ -293,6 +293,53 @@ static uint32_t g_next_req = 1;
  * consults them, so there is no spelling of them that can truncate work. */
 static long g_host_asked;
 static long g_host_answered;
+/* …AND HOW MANY ARRIVED WHEN THERE WAS NOTHING LEFT TO CONSUME THEM. A peer answers BY RUNNING A PROGRAM, so
+ * its completion is produced on ITS timeline and relayed by a zone that cannot know what became of the asker in
+ * the meantime — and §Time-travel's Level-1 eviction makes "the peer outlives the asking instance's park" the
+ * ORDINARY case rather than the exotic one. So an answer arriving after this session closed is not a bug in
+ * anybody's routing: the flow that asked is written down as a recipe, and the replay RE-ISSUES the request and
+ * is answered with today's value. It is REFUSED rather than written (see engine_host_answer) and counted here,
+ * because a refusal nobody can see is a drop: `hostAnswersLate` climbing while `hostAnswered` does not is a
+ * host paying an instance that has already stopped listening. */
+static long g_host_answers_late;
+
+/* WHAT A SOLD FLOW TOOK WITH IT — the same family as the three above and sitting with them, because every one
+ * of these is a fact about a debt the host is carrying and what became of the flow that was owed it; the pager
+ * far below is only where the number is WRITTEN. Two counts and not one, because a paged flow owes TWO
+ * different debts settled through different doors: a fetch reply is paired by URL against the host's own
+ * pending list, and a synchronous request is routed BY ID to a call site. One count for both was a real defect
+ * and a silent one — a sold HOSTREQ entry inflated the fetch side, so the very next reply the host genuinely
+ * mispaired spent that credit and the assert written to catch it (main.c's provide pairing) said nothing.
+ * Split at the sale, by kind, so each door consumes only its own.
+ *
+ * A flow BLOCKED on the host is the cheapest member to page — its recipe re-issues the request in the session
+ * that resumes it and gets today's answer, which is §Time-travel's whole point — so the tail is very often a
+ * flow the host is mid-fetch for. The reply then arrives for a URL nobody is parked on any more, and that is
+ * not the host mispairing its list: it is a park that happened between the ask and the answer. Counted rather
+ * than assumed, so the pairing assert stays armed for the case it was written for and is answered exactly once
+ * per reply the sale made unnecessary. */
+static long g_paged_owed;
+/* …AND THE REQUEST SIDE, WHICH IS REPORTED RATHER THAN SPENT. It is not a credit: one request may still be
+ * owed N answers by N peer timelines, so a per-entry credit is a number that runs out and then aborts under
+ * the message written for a DIFFERENT door — the exact "right crash for the wrong reason" this file is being
+ * corrected for. It is stated in the abort that cannot tell those doors apart (engine_host_answer) and on the
+ * @COLD census line, and it decides nothing. */
+static long g_paged_reqs;
+
+/* HOW MANY FLOWS THIS SESSION ACTUALLY SOLD. The pager's whole claim is that `live` stops tracking `flows`
+   under pressure, and until this counter existed that claim had no WRITER: `live < flows` is equally the
+   signature of flows FINISHING, and `_park`'s record count is two record kinds (segments and flows) added
+   together, so neither of the two numbers a run already printed can answer "did it page". CLAUDE.md's rule is
+   that a consumer never defaults a producer's field; the same rule read forwards is that a measurement gets a
+   producer before it gets quoted. */
+static long g_flows_sold;
+
+int engine_take_paged_owed(void) {
+    if (g_paged_owed <= 0)
+        return 0;
+    g_paged_owed--;
+    return 1;
+}
 
 uint32_t engine_host_request(JSContext *ctx, const char *op) {
     Flow *f = flow_running();
@@ -429,9 +476,17 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
  * the cold tier already carry; flow_answer_fork then builds the arm with that flow switched in.
  *
  * A HOST-COMPUTED ANSWER GENUINELY HAS ONE ANSWER — a fetch this zone performed — and answering one of those
- * twice is the zone's bug, which is what `source` is for and why it is not sniffed from the request's text. */
+ * twice is the zone's bug, which is what `source` is for and why it is not sniffed from the request's text.
+ *
+ * THE RETURN VALUE IS A STATEMENT ABOUT DELIVERY, AND IT USED TO BE A LIE. 1 means the answer was written onto
+ * a register entry of a flow that CAN STILL CONSUME IT; 0 means it was not delivered. Those are not the same as
+ * "an entry naming this id was found", which is what this used to answer: after a park closes the session the
+ * flows are still allocated — cold_park writes their recipes and the instance teardown frees them — so the walk
+ * below found the entry, wrote the value, cleared the flow's host-owed mark and reported success onto a flow
+ * whose scheduler no longer exists (qjs_step latches g_done). The host was told its answer landed; nothing
+ * would ever read it. */
 int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int completion, int source) {
-    int extra = 0;
+    int extra = 0, fixed = 0;
 
     DCHECK(req != 0, "the host answered a request with no id");
     DCHECK(completion == ENGINE_COMPLETION_NORMAL || completion == ENGINE_COMPLETION_THROW,
@@ -439,6 +494,20 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
     DCHECK(source == ENGINE_ANSWER_HOST || source == ENGINE_ANSWER_PEER,
            "an answer arrived without saying who computed it — a value this zone computed has exactly one "
            "answer and a peer's has one per timeline, and only the deliverer knows which this is");
+    /* THE SESSION IS OVER, SO THERE IS NOTHING HERE THAT CAN CONSUME AN ANSWER — and this is a HANDLED state,
+       not an asserted one, which is the whole difference between it and the two aborts at the bottom. The
+       registers below still exist (a park writes recipes and leaves the flows for the teardown to free), so the
+       walk would find the entry and write onto it; what does not exist is a scheduler to run the flow that
+       would read it. Refusing BEFORE the walk is what makes the return value true — the entry is not touched,
+       the flow's host-owed mark is not cleared, and `hostAnswered` is not credited for a delivery that did not
+       happen. It is not a drop either: the parked flow's recipe RE-ISSUES the request in the session that
+       resumes it and is answered with today's value (§Time-travel-resume), which is why the peer outliving the
+       asker's park is the ordinary shape of Level-1 eviction rather than a failure of it. Counted so the
+       refusal is visible — see g_host_answers_late and the @COLD census. */
+    if (!g_sess_live) {
+        g_host_answers_late++;
+        return 0;
+    }
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue p = pending_entry(f->pending, i);
@@ -479,7 +548,7 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
                answer: the arm holds the SAME request id (the id lives in the step state inside the frame it is
                a clone of), so without this a third answer would fork from the arm as well as from the issuer,
                producing a timeline that answered B and then C at one call site. */
-            if (pending_get_int(p, PEND_ANSWER_FIXED)) { JS_FreeValue(ctx, p); continue; }
+            if (pending_get_int(p, PEND_ANSWER_FIXED)) { fixed++; JS_FreeValue(ctx, p); continue; }
             /* …AND AN ANSWER BEYOND THE FIRST DOES NOT STOP AT THE FIRST FLOW, because it may not be written
                onto a SHARED record. Every issuing timeline still holding this request — the flow that asked and
                each of its BRANCH siblings, all of which observed the first answer — must fork over this peer
@@ -497,21 +566,51 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
         }
     }
     if (extra) return 1;
-    /* NOTHING ON ANY REGISTER NAMES THIS REQUEST, and the two readings of that are not equally innocent.
-       For a value this zone computed it means the asking flow is GONE, which is not an error: nobody is
-       waiting on the answer.
-       For a PEER's it means the asking flow already TOOK its first answer — engine_host_take removes the entry
-       — and this timeline's answer has nowhere to land. That is a peer timeline the asking flow will never fork
-       an arm for, dropped silently, and it is the next thing to build: the register entry has to outlive the
-       take for as long as the peer holds timelines that may still answer, so that flow_answer_fork can still
-       find it. (The zone does not drop a live asker's rendezvous — bridge.js keeps the token until the
-       instance is finalized precisely so every completion is relayed — so this is not a stale relay.) */
-    DCHECK(source == ENGINE_ANSWER_HOST,
-           "a PEER's answer arrived for a request no ISSUING register holds — the asking flow took its first "
-           "answer and the entry left the register with it (or every entry left naming it is an ARM, whose "
-           "answer is fixed), so this timeline of the answering document has nowhere to land "
-           "and the arm it would have forked is silently missing. Keep the entry alive past the take while the "
-           "peer still holds timelines that may answer, and fork from it as flow_answer_fork already does");
+    /* THE SESSION IS LIVE AND NO LIVE REGISTER TOOK THIS ANSWER. Three distinct states reach here and they had
+       ONE message between them, which is the failure this file is otherwise built to prevent: a reader sent to
+       the wrong door by a `(or …)` in an abort. They are separated below because they are observed differently,
+       even where two of them name one thing to build. */
+
+    /* (1) EVERY ENTRY NAMING IT IS AN ARM. The request IS on a register — it was deliberately skipped, because
+       an arm's answer is FIXED (it is the timeline that took answer k) — so what is missing is the ISSUER's
+       entry, and only the issuer's. It left at the take while the arms it forked live on, which is exactly the
+       shape that says the arms are being built correctly and the record they were forked from is not being
+       kept. Reachable for a PEER alone: a HOST answering an already-answered entry aborts one loop above. */
+    if (fixed)
+        DFAIL("a PEER's answer arrived for a request whose only live entries are ARMS — each of those was "
+              "forked over an earlier answer and its answer is FIXED, so the entry that could still take one is "
+              "the ISSUER's, and that one left the register when the issuing flow took its first answer. This "
+              "peer timeline has nowhere to land and the arm it would have forked is silently missing. Keep the "
+              "issuer's entry alive past the take while the peer still holds timelines that may answer, and "
+              "fork from it as flow_answer_fork already does");
+
+    /* (2) NOTHING NAMES IT AT ALL, and for a value THIS ZONE computed that is innocent: the asking flow is gone
+       and nobody is waiting on the answer. */
+    if (source == ENGINE_ANSWER_HOST)
+        return 0;
+
+    /* (3) …and for a PEER's it is the one gap, reached through THREE doors: the asking flow TOOK its first
+       answer (engine_host_take removes the entry), or it FINISHED, or it was SOLD to the cold tier while the
+       request was outstanding. The fix is the same one in all three — the entry has to outlive the departure of
+       the flow that held it, for as long as the peer holds timelines that may still answer — but the reader
+       standing here cannot tell which door it was, and the sale is the one this engine can say something about,
+       so it says it in the abort rather than leaving the reader to guess. (The zone does not drop a live
+       asker's rendezvous — bridge.js keeps the token until the instance is finalized precisely so every
+       completion is relayed — so this is not a stale relay.) */
+#if APICLIENT_DEV
+    {
+        char why[512];
+        snprintf(why, sizeof why,
+                 "a PEER's answer arrived for a request NO register holds — the asking flow left and took the "
+                 "entry with it (it took its first answer, it finished, or it was paged out), so this timeline "
+                 "of the answering document has nowhere to land and the arm it would have forked is silently "
+                 "missing. Keep the entry alive past the flow's departure while the peer still holds timelines "
+                 "that may answer, and fork from it as flow_answer_fork already does. This session sold %ld "
+                 "flow(s) owing %ld synchronous request(s), which is the only one of the three doors this "
+                 "engine can still see from here", g_flows_sold, g_paged_reqs);
+        DFAIL(why);
+    }
+#endif
     return 0;
 }
 
@@ -621,8 +720,32 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
     DCHECK(sender_origin != NULL && *sender_origin,
            "a routed record arrived without the sender's origin — only the trusted zone can stamp one, and a "
            "delivery without it would have to invent the one field a page's check is written against");
-    DCHECK(g_sess_live, "a record was routed into an instance with no live session — the flow it would be "
-                        "delivered on has no scheduler to run it, so the delivery would be dropped");
+    /* TWO WAYS A SESSION ENDS AND THEY ARE TWO DIFFERENT FAILURES, so they are two asserts. One message for
+       both is how a reader is sent to the wrong file: the states are told apart by whether the frontier was
+       WRITTEN OUT, which this engine knows, and the fix is in a different place for each.
+       PARKED — the frontier is a set of recipes and this delivery is a work item that is not in any of them.
+       It cannot be re-derived by a replay the way an owed REQUEST can (the asking code re-issues that; nothing
+       in this document re-sends someone else's message), so it must either park as what it is or be refused
+       while one is in flight — which is exactly the pair cold.c's per-flow park already asserts for a delivery
+       a flow is HOLDING, arriving here from the other side. */
+    DCHECK(g_sess_live || !engine_frontier_paged(),
+           "a record was routed into an instance whose frontier was PARKED — the session is closed and its "
+           "flows are recipes, so there is nothing to seed the delivery on and no replay that re-derives it: a "
+           "message is not re-sent by the document that receives it. Build the inbound half of the cross-"
+           "instance park — the record and the sender origin the trusted zone stamped are both TEXT and cross "
+           "as text — or have the trusted zone hold the record until the instance it names is resumed");
+    /* DRAINED — every timeline of this document finished, which is a document that can no longer receive at
+       all. That is the state engine_set_referenced exists to prevent: a document a peer still holds a
+       WindowProxy for keeps its last timeline waiting instead of finishing, so a delivery has somewhere to
+       arrive. Reaching here means nothing told this instance it was still referenced. */
+    DCHECK(g_sess_live,
+           "a record was routed into an instance whose frontier had DRAINED — every timeline of the document "
+           "finished, so there is no flow to seed the delivery on and no scheduler to run it. A document a peer "
+           "can still post to is a REFERENCED document and engine_set_referenced holds its last timeline open "
+           "for exactly this, but nothing outside wpt_runner.c sets it: there is no `qjs_set_referenced` in "
+           "main.c's ABI at all, so the trusted zone — the only zone that knows a peer still holds a "
+           "WindowProxy for this document — has no way to say so. Add the entry and set it from the create "
+           "notice the zone already acts on");
 
     /* EVERY ROUTED RECORD'S FIRST TWO FIELDS ARE THE TRANSPORT'S: the target DOCUMENT (which instance) and the
        sending flow's WORLD (whose timeline). Everything after them belongs to the component named by the op,
@@ -2909,31 +3032,6 @@ static int g_reclaim_allowed;
 
 static int engine_reclaim_set(int v) { int prev = g_reclaim_allowed; g_reclaim_allowed = v; return prev; }
 
-/* THE REPLIES THAT DIED WITH A PAGED FLOW. A flow BLOCKED on the host is the cheapest member to page — its
-   recipe re-issues the request in the session that resumes it and gets today's answer, which is §Time-travel's
-   whole point — so the tail is very often a flow the host is still fetching for. The reply then arrives for a
-   URL nobody is parked on any more, and that is not the host mispairing its list: it is a park that happened
-   between the ask and the answer. Counted rather than assumed, so the pairing assert stays armed for the case
-   it was written for (a host that names a URL no flow ever parked on) and is answered exactly once per reply
-   the sale made unnecessary. It is the same event engine_host_answer already drops for a vanished asker; this
-   is the fetch side of it, with the difference that the fetch side had an assert to keep honest. */
-static long g_paged_owed;
-
-/* HOW MANY FLOWS THIS SESSION ACTUALLY SOLD. The pager's whole claim is that `live` stops tracking `flows`
-   under pressure, and until this counter existed that claim had no WRITER: `live < flows` is equally the
-   signature of flows FINISHING, and `_park`'s record count is two record kinds (segments and flows) added
-   together, so neither of the two numbers a run already printed can answer "did it page". CLAUDE.md's rule is
-   that a consumer never defaults a producer's field; the same rule read forwards is that a measurement gets a
-   producer before it gets quoted. */
-static long g_flows_sold;
-
-int engine_take_paged_owed(void) {
-    if (g_paged_owed <= 0)
-        return 0;
-    g_paged_owed--;
-    return 1;
-}
-
 static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     Flow *tail;
 
@@ -2980,7 +3078,15 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        the last reference on. A tail flow's dying prefix cannot be a segment the RUNNING flow stands on — a
        shared segment has a second reference by definition — so at this size the release moves nothing in the
        live heap or document and is pure free. */
-    g_paged_owed += pending_count(tail->pending);
+    /* THE DEBT LEAVES WITH THE FLOW, AND IT IS TWO DEBTS. Counted by KIND rather than whole (see g_paged_owed):
+       a synchronous request is answered by ID at a call site and a fetch reply is paired by URL, so a register
+       counted whole hands the fetch side a credit that belongs to the request side, and the next reply the host
+       genuinely mispairs is excused by it. */
+    {
+        int reqs = pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
+        g_paged_reqs  += reqs;
+        g_paged_owed  += pending_count(tail->pending) - reqs;
+    }
     cold_park_flow(tail);
     flow_release(g_sess_ctx, tail);
     g_flows_sold++;
@@ -3027,7 +3133,10 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            "document's programs, so they would be compiled in one realm and belong to another");
     g_parked = 0;
     g_paged_owed = 0;   /* replies owed to flows this session paged out — see engine_take_paged_owed */
+    g_paged_reqs = 0;   /* …and the SYNCHRONOUS requests they owed, which the fetch side must not spend */
     g_flows_sold = 0;   /* …and how many flows that was, which is what @PROGRESS's `sold` reports */
+    /* NOT RESET: g_host_asked/g_host_answered/g_host_answers_late are the INSTANCE's totals, not a session's —
+       an instance opens one session, and a rate that restarted would be a level again (see g_host_asked). */
     /* WHAT AN UNCANCELLED REJECTION MEANS is this half's answer: the browser half fires the event and honours
        preventDefault, and a reason that survives that is a page error exactly like a script that threw. */
     unhandled_rejection_set_report_hook(result_page_error_value);
@@ -3967,9 +4076,15 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                 /* AND `completed` BESIDE `deepest`, because one number was carrying two facts and the readings
                    of it disagreed — see g_completed. `deepest` is the highest program STARTED; this is the
                    highest program this document has ever run to its END. */
+                /* AND `hostAnswersLate`/`pagedReqs` BESIDE THEM, because a REFUSAL nobody can see is a drop.
+                   The first counts the answers that arrived after this session closed and were refused rather
+                   than written onto a flow that can never run again; the second is how many synchronous
+                   requests this session's sales took with them. Both are what a reader standing at
+                   engine_host_answer's remaining abort needs in order to tell which door the asking flow left
+                   by, and neither decides anything. */
                 printf("@COLD {\"flows\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
                        "\"finished\":%ld,\"deepest\":%d,\"completed\":%d,"
-                       "\"hostAsked\":%ld,\"hostAnswered\":%ld,"
+                       "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersLate\":%ld,\"pagedReqs\":%ld,"
                        "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                        "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
                        "\"dynKiB\":%ld,\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
@@ -3978,6 +4093,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                        "\"sharedKiB\":%ld,\"stepMachines\":%d}\n",
                        c.flows, c.framed, c.blocked, flow_host_owed_count(),
                        g_finished, g_deepest, g_completed, g_host_asked, g_host_answered,
+                       g_host_answers_late, g_paged_reqs,
                        c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                        c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
                        c.pend_bytes / 1024, c.dyn_bytes / 1024, c.misc_bytes / 1024,

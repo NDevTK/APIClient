@@ -91,6 +91,21 @@ static int pend_len(JSValueConst arr)
 
 int pending_count(JSValueConst reg) { return pend_len(reg); }
 
+/* …AND HOW MANY OF ONE KIND — see pending.h. Written here beside the whole count so the two are read together:
+   a caller that wants "what does this register owe" almost always wants it per kind, because the two debts are
+   settled through different doors. */
+int pending_count_kind(JSValueConst reg, int kind)
+{
+    int n = pend_len(reg), i, c = 0;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i);
+        if (pending_get_int(e, PEND_KIND) == kind) c++;
+        JS_FreeValue(pend_ctx(), e);
+    }
+    return c;
+}
+
 JSValue pending_entry(JSValueConst reg, int i)
 {
     JSValue e;
