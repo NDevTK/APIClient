@@ -201,6 +201,13 @@ static const char WPT_PROLOGUE[] =
  * cursor-overloads, value, abort-in-initial-upgradeneeded and close-in-upgradeneeded — every IDB file whose
  * open succeeded far enough for support.js to record a `db` on the test. Those files RAN, their subtests had
  * real results naming real gaps, the harness COMPLETED, and the last statement of the run threw the answer away.
+ * AND THE THROW ITSELF WAS INVISIBLE, which is why the file exited clean with no @WPTERR either: the completion
+ * runs inside an event listener, and DOM §2.9 "Dispatching events" step 2.11 of inner invoke REPORTS a
+ * listener's exception rather than propagating it (core/events/event_target.c hands it to report_exception_run,
+ * which fires an ErrorEvent), while HTML §8.1.4.6 "Runtime script errors" step 7.3 — report it to a developer
+ * console — has no console in this build. So nothing this driver reads ever saw it. The gate now reports the
+ * harness's own status, which catches the case where that ErrorEvent lands BEFORE completion; a reported
+ * exception reaching this host at all is step 7.3's, and belongs to that component.
  *
  * SO THE REPORT GOES WHERE WPT PUTS IT. Every testharness document loads `/resources/testharnessreport.js`
  * immediately after `/resources/testharness.js`, and that file exists for exactly this — "vendors to implement
