@@ -145,4 +145,17 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name);
    component does not compute crashes through `used_value_px` naming its own section. */
 CssPx used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical);
 
+/* THE USED EXTENT OF THE BORDER EDGE on one axis, in CSS pixels — CSS 2.1 §8.1's "Box dimensions", whose
+   "border edge surrounds the box's border" and whose "four border edges define the box's border box". It is
+   the padding edge plus the two border widths on the axis, and it is an ENTRY beside the padding edge rather
+   than arithmetic at a caller for the same reason that one is: which box `used_value_px` handed back is
+   css-sizing §5's question, and a caller holding only the number cannot answer it. Both go through the one
+   four-term surround, so the two edges cannot come to describe different boxes.
+   ITS CALLER IS CSSOM VIEW §6's `getClientRects()` STEP 3 — a box fragment's BORDER AREA — and CSSOM VIEW §7's
+   `offsetWidth`/`offsetHeight` are the second, which is why it is stated here once rather than in either.
+   IT IS AN EXTENT AND NOT AN AREA. A border AREA is this extent on both axes AND the box's POSITION;
+   core/layout/flow_position.h owns that half, and it answers for the root element and crashes for every other
+   box naming CSS 2.1 §9.4.1's own missing piece. */
+CssPx used_value_border_edge_px(lxb_dom_element_t *el, bool vertical);
+
 #endif

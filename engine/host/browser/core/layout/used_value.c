@@ -728,13 +728,17 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
    rounding artifact — it is the two derivations having stopped describing the same box: a used size that did
    not come through §5's floor, or a surround computed from different terms than the one that produced it.
    Under `content-box` the same assert says something simpler and just as necessary — CSS 2.1 §10.2's `width`
-   is a non-negative <length>, so a negative used size is a derivation that lost an operand. */
-CssPx used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical)
+   is a non-negative <length>, so a negative used size is a derivation that lost an operand.
+   AND THE TWO EDGES ARE ONE DERIVATION, which is why §8.1's border edge is a `with_border` here and not a
+   second function that adds the border widths to what this one returned. §8.1 states the box model as one
+   nesting — content, then padding, then border — so the border edge is the padding edge plus the same two
+   border widths `uv_surround` already computed for it, and reading them a second time from a second surround
+   is the one way the two edges could come to describe different boxes. */
+static CssPx uv_edge_px(lxb_dom_element_t *el, bool vertical, bool with_border)
 {
     UvSurround s;
     CssPx content;
 
-    DCHECK(el != NULL, "a padding edge's extent was asked for with no element");
     s = uv_surround(el, vertical);
     content = uv_content_size(el, vertical, s);
     DCHECK(content.px >= 0.0,
@@ -745,5 +749,17 @@ CssPx used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical)
            "different terms and no longer describe the same box. Under `content-box` the used size IS the "
            "content box, and CSS 2.1 §10.2's `width` is a non-negative <length>, so a negative one is a "
            "derivation that lost an operand");
-    return css_px_add(content, s.padding);
+    return css_px_add(content, with_border ? uv_surround_total(s) : s.padding);
+}
+
+CssPx used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical)
+{
+    DCHECK(el != NULL, "a padding edge's extent was asked for with no element");
+    return uv_edge_px(el, vertical, false);
+}
+
+CssPx used_value_border_edge_px(lxb_dom_element_t *el, bool vertical)
+{
+    DCHECK(el != NULL, "a border edge's extent was asked for with no element");
+    return uv_edge_px(el, vertical, true);
 }

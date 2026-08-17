@@ -13,21 +13,27 @@
  *   no box. §15.3.1's UA-stylesheet rule for the `hidden` content attribute is one input to that value and is
  *   applied where every other UA rule is, in the cascade, rather than a second time here.
  *
- *   A BOX HAS AN EXTENT AND IT HAS NO POSITION, and that split is what decides which §6 member below answers
- *   and which one crashes. It is not this component's distinction; it is the spec's own. An EXTENT is a
- *   distance between two parallel edges of ONE box, and core/layout/used_value.h computes those: CSS 2.1 §10's
- *   used value of every box-model length, over §10.1's containing block, and over them css-sizing §5's border
- *   box and CSS 2.1 §8's PADDING EDGE. A POSITION is a coordinate in some other box's space, so it needs §9.4's
- *   flow layout to PLACE a box inside the containing block §10.1 gives it — the chain answers the rectangle's
- *   width and says nothing about where anything sits in it — and NOTHING has a position here except the
- *   INITIAL CONTAINING BLOCK that viewport.c models.
+ *   AN EXTENT AND A POSITION ARE TWO ANSWERS AND THEY COME FROM TWO COMPONENTS, and that split is what decides
+ *   which §6 member below answers and which one crashes. It is not this component's distinction; it is the
+ *   spec's own. An EXTENT is a distance between two parallel edges of ONE box, and core/layout/used_value.h
+ *   computes those: CSS 2 §10's used value of every box-model length, over §10.1's containing block, and over
+ *   them css-sizing §5's border box and CSS 2 §8.1's PADDING and BORDER EDGES. A POSITION is a coordinate in
+ *   another box's space, so it needs §9.4.1's flow layout to PLACE a box inside the containing block §10.1
+ *   gives it — the extent chain answers a rectangle's width and says nothing about where anything sits — and
+ *   core/layout/flow_position.h is the component that owns it. That component answers exactly ONE box today,
+ *   the ROOT ELEMENT, which is §10.1's own first case (its containing block is the initial containing block,
+ *   "anchored at the canvas origin") reduced by §9.4.1's two placement rules and §8.3.1's "margins of the root
+ *   element's box do not collapse" to the root's own two used margins. Every other box crashes there naming
+ *   its own section, and the non-root block-level one names the SAME in-flow child walk §10.6.3's
+ *   content-based height is waiting on — one subproblem, two members.
  *   SO §6 SPLITS EXACTLY THERE, and each member's own text says which side it is on. `clientTop`/`clientLeft`
  *   are neither — §6 defines them as a COMPUTED VALUE, core/css/css_computed_value.h's `border-*-width`, and
  *   not as a geometry at all. `clientWidth`/`clientHeight` ask for "the unscaled width of the PADDING EDGE",
- *   which is an extent, and are answered. `scrollWidth`/`scrollHeight`, the `scrollTop`/`scrollLeft` setter and
- *   `getClientRects()` all reach for the element's SCROLLING AREA or its border AREA — §2 defines the first by
- *   its four edges and the second is a rectangle, so both are positions over this box AND every descendant's —
- *   and all three still crash, naming §9.4's FLOW LAYOUT rather than the extent. An extent cannot stand in for
+ *   which is an extent, and are answered. `scrollWidth`/`scrollHeight` and the `scrollTop`/`scrollLeft` setter
+ *   reach for the element's SCROLLING AREA, which §2 defines by four edges over this box AND every
+ *   descendant's, so they are positions over a whole subtree and still crash. `getClientRects()` asks for a
+ *   BORDER AREA, which is one box's extent at one box's position, and is now written as exactly that: both
+ *   operands are asked for, in that order, and whichever is unbuilt is the crash. An extent cannot stand in for
  *   a position, which is the one way this component could go wrong now that it has one.
  *   THE EXTENTS ARE NO LONGER BLOCKED ON THE SAME THING THE POSITIONS ARE, and that is what separated the two
  *   queues: a `width: auto` box is CSS 2.1 §10.3.3's constraint equation, which used_value.c now solves against
@@ -51,8 +57,19 @@
  * for the root element of a document it is presenting, and this engine presents every document it holds
  * (page_visibility.c and focus.c both already commit to that) — so it is the one that survives, and it is now
  * ONE function rather than a private static in the focus model. What survives of the first is the part that was
- * really about GEOMETRY and not about existence: no box in this model has a margin edge, so nothing extends the
- * ICB, and viewport.c's scrolling area is still exactly the ICB.
+ * really about GEOMETRY and not about existence: no box in this model had a margin edge, so nothing extended the
+ * ICB, and viewport.c's scrolling area was exactly the ICB.
+ * THAT SECOND HALF IS NOW NARROWER THAN IT READS, AND THE NARROWING IS NAMED HERE RATHER THAN ASSUMED AWAY.
+ * core/layout/flow_position.h places the ROOT ELEMENT's border box, and core/layout/used_value.h measures it,
+ * so ONE box in this model now has a margin edge — and `html { height: 2000px }` puts that edge below the ICB's
+ * bottom, which is exactly CSSOM VIEW §2's condition for the viewport's SCROLLING AREA to be taller than the
+ * ICB ("the bottom-most edge of the bottom edge of the initial containing block and the bottom margin edge of
+ * all of the viewport's descendants' boxes"). viewport.c still derives the two as equal, and with them the
+ * viewport's one valid scroll position that every scroll member here reads. It is not wrong today, because
+ * nothing else in this engine can measure the box either — `scrollHeight` on the root reaches viewport.h before
+ * it reaches a layout — but it is a fact with a NEW writer, and the place to fix it is viewport.c's derivation,
+ * over this component's predicate and that one's placement, the moment the root's used height is computable
+ * for a page that did not declare one.
  *
  * SO THE VIEWPORT HAS ONE VALID SCROLL POSITION AND SO DOES EVERY ELEMENT. viewport.h derives the first: the
  * viewport's scrolling area is the ICB, and a scrolling box whose scrolling area is its own size can only sit
@@ -78,8 +95,19 @@
  * then answers an empty list with "a DOMRect whose x, y, width and height members are zero". That is a value
  * the SPEC computes, identically in every user agent, for every element that generates no box; it is not a zero
  * standing in for a number this engine does not have, and it is CONCRETE for viewport.h's reason — a domain of
- * one point has no arm to explore. The branch that reaches a real box's FRAGMENTS has no answer here and
- * DFAILs, naming the layout, exactly as every other §6 member's does.
+ * one point has no arm to explore. That branch is most of what a lazy-loading bundle measures before it
+ * inserts anything.
+ * STEP 3 IS WRITTEN AS ITS OWN THREE OPERANDS AND CRASHES ON WHICHEVER IS UNBUILT, which is the difference
+ * between naming a missing capability and shrugging at "there is no layout". The fragment COUNT is decided
+ * first (an inline box is one fragment per line box, a `table` is step 3's own table-plus-caption pair, and
+ * nothing else in this model is more than one); then the border area's two EXTENTS, which crash inside
+ * used_value.h for a `height: auto` box naming §10.6.3; then its POSITION, which crashes inside
+ * flow_position.h for every box but the root naming §9.4.1; then step 3's FIRST CONSTRAINT, "apply the
+ * transforms that apply to the element and its ancestors", which has no computed `transform` to apply and
+ * crashes naming the computed-value rule css_computed_value.c's own transform crash already asks for. A
+ * rectangle reported without that last one would be a WRONG rectangle rather than an absent one — an author's
+ * declaration silently dropped — which is why it is a crash and not the zero-scroll-bar reading every other
+ * member here makes: no scroll bar is a UA CHOICE this model makes, a dropped `transform` is not.
  *
  * A BOX'S GEOMETRY IS NOT A UA CHOICE, so it is not the kind of thing a concolic answers, and the padding edge
  * is now the case that DEMONSTRATES that rather than the case that postponed it. viewport.h states the test: a
@@ -128,5 +156,15 @@ void element_view_free(void);
    generate for a reason other than `display` — which is the same narrowing this whole component states, never
    a wider answer than a laying-out browser's. `n` must be an element. */
 bool element_view_has_box(const lxb_dom_node_t *n);
+
+/* §6's `getClientRects()` AS THE INTERNAL ALGORITHM, which §2 is explicit is what a caller "said to call
+   another method" invokes: "the method or attribute must be invoked, and not the algorithm the specification
+   defines for it" is what it is NOT — the algorithm runs, so a page that overwrites
+   `Element.prototype.getClientRects` cannot change what its callers measure. §6's own get-the-bounding-box
+   step 1 is one caller and §9's Range members are the other, which is why this is exported rather than static.
+   The DOMRectList and the rectangles in it are minted in the ELEMENT's relevant realm — Web IDL creates a
+   `[NewObject]` in the relevant realm of `this`, which for an element is the realm of its node document, so a
+   child navigable's rectangles are instances of the CHILD's DOMRect however the call was written. */
+JSValue element_view_client_rects(lxb_dom_element_t *el);
 
 #endif

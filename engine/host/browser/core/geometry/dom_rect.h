@@ -33,11 +33,20 @@ void dom_rect_free(void);
    variables, return rect". The rectangle is minted in `ctx`, which must be the RELEVANT REALM of whatever the
    member was invoked on: Web IDL creates a [NewObject] there, so `iframe.contentDocument.body`'s rectangle is
    an instance of the CHILD's DOMRect and not of the realm whose prototype the call was written through.
-   IT TAKES DOUBLES because every value a browser algorithm puts in a rectangle is one it COMPUTED. A rectangle
-   whose numbers came from the page can hold unknown external input and the record is built for that (see
-   dom_rect.c), but that route is the page's own constructor and not this one — a browser algorithm handing a
-   concolic here would be handing on an unknown it should have forked on. */
+   IT TAKES DOUBLES because the value it is for is a DETERMINED one — CSSOM VIEW §6's own zero rectangle for an
+   element that generates no box, which every user agent computes identically. Unknown external input never
+   arrives here (that is the page's own constructor, and dom_rect.c's record is built for it); a viewport-
+   DERIVED number does, and it takes the entry below instead. */
 JSValue dom_rect_new(JSContext *ctx, double x, double y, double width, double height);
+
+/* §3's SAME CONSTRUCTOR STEPS with the four members ALREADY MINTED — the entry a browser algorithm uses when
+   its numbers are a function of an ENVIRONMENT FACT rather than determined. A box sized by CSS 2 §10.3.3's
+   constraint equation is derived from the initial containing block, whose dimensions core/frame/viewport.h
+   models as a PICKED choice, so `rect.width < 768` is the same responsive gate `innerWidth < 768` is — and a
+   `double` could carry the example and not the domain, deleting the mobile arm with nothing to say so. The
+   caller mints each value through viewport.h's one seam, which is the only place a used length crosses to a
+   page. CONSUMES the four values; each must be a Number or unknown external input. */
+JSValue dom_rect_new_values(JSContext *ctx, JSValue x, JSValue y, JSValue width, JSValue height);
 
 /* Is `v` a DOMRect or a DOMRectReadOnly — §4's DOMRectList asserts what it was handed, since its indexed getter
    and its `item` both declare `DOMRect?` as the type they answer. */

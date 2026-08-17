@@ -30,8 +30,11 @@
 #include "quickjs-step.h"
 #include "core/dom/abstract_range.h"
 #include "core/dom/document.h"
+#include "core/dom/element_view.h"
 #include "core/dom/node.h"
 #include "core/dom/range.h"
+#include "core/geometry/dom_rect.h"
+#include "core/geometry/dom_rect_list.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/cow.h"
@@ -1461,6 +1464,149 @@ static int rs_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
 static const IdlStepDecl RANGE_SURROUND = { rs_step, sizeof(RsState), rs_visit, NULL,
                                             "DOM §5.5 Range.surroundContents(newParent)", RS_STEPS };
 
+/* ---- CSSOM VIEW §9 "Extensions to the Range Interface" ---------------------------------------------------
+ * `partial interface Range { DOMRectList getClientRects(); [NewObject] DOMRect getBoundingClientRect(); }`.
+ *
+ * IT IS A SELECTION ALGORITHM OVER §6's, NOT A SECOND GEOMETRY. §9 states its list as two inclusion rules and
+ * computes no rectangle of its own for an element: "for each element selected by the range, whose parent is
+ * NOT selected by the range, include the border areas returned by invoking getClientRects() on the element."
+ * That invocation is §2's INTERNAL algorithm (core/dom/element_view.h), so a page that overwrites
+ * `Element.prototype.getClientRects` cannot change what a Range measures — and every box this engine cannot
+ * place crashes THERE, in the one component that owns a border area, rather than a second time here.
+ *
+ * THE PARENT CLAUSE IS WHAT MAKES THE LIST A COVER RATHER THAN A PILE: an element whose parent is also
+ * selected is already inside its parent's border area, so including it again would double-count it. "Selected
+ * by the range" is DOM §5.5's CONTAINED IN, which `range_contains` above already decides.
+ *
+ * THE TEXT RULE IS THE ONE THIS ENGINE CANNOT RUN, and §9 says exactly why in its own words: the bounds "are
+ * computed using FONT METRICS; thus, for horizontal writing, the vertical dimension of each box is determined
+ * by the font ascent and descent, and the horizontal dimension by the text advance width", over whole
+ * TYPOGRAPHIC CHARACTER UNITS. That is the same capability CSS 2 §9.4.2's line boxes need, so it is named as
+ * one thing in both places rather than as two gaps.
+ *
+ * THE COORDINATE SPACE IS THE ELEMENT MEMBER'S, because the rectangles ARE the element member's. */
+
+/* §9's "the range is not in the document" — DOM §5.5 makes a live range's root "the root of its start node",
+   so a range whose nodes hang off a DocumentFragment or a detached subtree has a root that is not a Document
+   and every user agent answers it with an empty list. The per-ELEMENT questions (is it being rendered, does it
+   generate a box) are §6 step 1's and are asked there, once per element. */
+static bool range_in_document(const RangeBounds *b)
+{
+    return range_root(b)->type == LXB_DOM_NODE_TYPE_DOCUMENT;
+}
+
+/* §9's TEXT rule's own condition — "for each Text node SELECTED OR PARTIALLY SELECTED by the range (INCLUDING
+   WHEN THE BOUNDARY-POINTS ARE IDENTICAL)". The parenthesis is a third case and not a restatement: a collapsed
+   range inside a Text node contains it under neither of DOM §5.5's two predicates (a node is not contained in a
+   range whose boundary points are both inside it, and it is not partially contained either, since it is an
+   inclusive ancestor of BOTH boundary nodes), and §9 still says a rectangle is included for it — which is what
+   makes a collapsed range's `getBoundingClientRect` a caret position in every user agent. */
+static bool range_selects_text(const RangeBounds *b, lxb_dom_node_t *n)
+{
+    lxb_dom_node_t *sn = bounds_start(b), *en = bounds_end(b);
+
+    if (!node_is_text(n)) return false;
+    return n == sn || n == en || range_contains(b, n) || bp_partially_contains(sn, en, n);
+}
+
+/* §9's getClientRects(), in the spec's own order — ONE tree walk in CONTENT ORDER, which is what the standard
+   asks the merged list to be in ("a list of DOMRect objects IN CONTENT ORDER that matches the following
+   constraints"). Two separate passes would produce the two constraints' lists concatenated and not
+   interleaved, which is a different list whenever a range covers both. */
+static JSValue range_client_rects(JSContext *ctx, const RangeBounds *b)
+{
+    lxb_dom_node_t *root, *n;
+    JSValue out = JS_NewArray(ctx);
+    uint32_t k = 0;
+
+    CHECK(!JS_IsException(out), "the range client-rect list could not be allocated");
+    if (!range_in_document(b)) return dom_rect_list_new(ctx, out);
+    /* THE WALK IS OVER THE COMMON ANCESTOR AND NOT THE DOCUMENT, and that is a statement about the range and
+       not a saving: DOM §5.5's "contained in" places both of a contained node's boundary points inside the
+       range, so no node outside `commonAncestorContainer` can be contained or partially contained, and a walk
+       from the document root would visit them only to answer no. Starting here is the same list. */
+    root = common_ancestor(bounds_start(b), bounds_end(b));
+    for (n = root; n != NULL; n = node_next_in(n, root)) {
+        if (range_selects_text(b, n))
+            DFAIL("CSSOM VIEW §9's getClientRects() includes a rectangle for every TEXT NODE the range selects "
+                  "or partially selects, and states what computes it: 'the bounds of these DOMRect objects are "
+                  "computed using FONT METRICS; thus, for horizontal writing, the vertical dimension of each "
+                  "box is determined by the font ascent and descent, and the horizontal dimension by the text "
+                  "advance width', with a partially covered TYPOGRAPHIC CHARACTER UNIT (half a surrogate pair, "
+                  "part of a grapheme cluster) rounded out to the whole unit. This engine measures no text: "
+                  "there is no font, no ascent or descent, and no advance width, which is the SAME missing "
+                  "capability CSS 2 §9.4.2's line boxes need for an inline box's fragments and §10.6.3's "
+                  "line-box arm needs for a content-based height. BUILD the font metrics and css-text-3's "
+                  "typographic character unit segmentation; this rule and those two are then one component's "
+                  "three consumers");
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && range_contains(b, n) &&
+            !(n->parent != NULL && range_contains(b, n->parent))) {
+            JSValue list = element_view_client_rects(lxb_dom_interface_element(n)), len;
+            uint32_t i, m = 0;
+
+            DCHECK(JS_IsObject(list), "§9 invoked §6's getClientRects() on a selected element and got no list "
+                                      "back — that algorithm answers a DOMRectList on every path it has");
+            len = JS_GetPropertyStr(ctx, list, "length");
+            JS_ToUint32(ctx, &m, len);
+            JS_FreeValue(ctx, len);
+            for (i = 0; i < m; i++)
+                JS_SetPropertyUint32(ctx, out, k++, JS_GetPropertyUint32(ctx, list, i));
+            JS_FreeValue(ctx, list);
+        }
+    }
+    return dom_rect_list_new(ctx, out);
+}
+
+/* §9's getBoundingClientRect(), which is its OWN four steps and not §6's get-the-bounding-box — the standard
+   writes them out again for the Range, so they are written out again here. Steps 3 and 4 reduce a list of one
+   to that one rectangle under either, for the reason ev_bounding_rect states in element_view.c, and the choice
+   between them for a longer list is the same unwritten comparison over a possibly-concolic number. */
+static JSValue range_bounding_rect(JSContext *ctx, const RangeBounds *b)
+{
+    JSValue list = range_client_rects(ctx, b), len;
+    uint32_t n = 0;
+
+    len = JS_GetPropertyStr(ctx, list, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    /* step 2 */
+    if (n == 0) {
+        JS_FreeValue(ctx, list);
+        return dom_rect_new(ctx, 0.0, 0.0, 0.0, 0.0);
+    }
+    /* steps 3 and 4, which agree for a one-rectangle list */
+    if (n == 1) {
+        JSValue only = JS_GetPropertyUint32(ctx, list, 0);
+
+        DCHECK(dom_rect_is(only), "§9's getBoundingClientRect read a list whose one member is not a DOMRect");
+        JS_FreeValue(ctx, list);
+        return only;
+    }
+    JS_FreeValue(ctx, list);
+    DFAIL("CSSOM VIEW §9's getBoundingClientRect() steps 3 and 4 must CHOOSE for a list of more than one "
+          "rectangle — the first one when every rectangle has a zero width or height, the smallest enclosing "
+          "rectangle otherwise — and both are COMPARISONS over numbers a border area derived from the initial "
+          "containing block carries a viewport domain on. core/dom/element_view.c's own reduction names the "
+          "primitive to write them over (Geometry Interfaces §3's NaN-safe edges, which already state the rule "
+          "for an unknown operand: yield the concolic, run the derivation on the examples, never fork). WRITE "
+          "BOTH there and reach them from here, so the two members share one reduction rather than two");
+    return dom_rect_new(ctx, 0.0, 0.0, 0.0, 0.0);
+}
+
+enum { R_CLIENT_RECTS = 0, R_BOUNDING_RECT };
+
+static JSValue js_range_rects(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    RangeBounds *b = range_here(ctx, this_val);
+
+    (void)argc; (void)argv;
+    if (!b) return JS_EXCEPTION;
+    if (magic == R_CLIENT_RECTS) return range_client_rects(ctx, b);
+    DCHECK(magic == R_BOUNDING_RECT, "a CSSOM VIEW §9 Range member was declared with a magic neither of the two "
+                                     "members the partial interface declares carries");
+    return range_bounding_rect(ctx, b);
+}
+
 /* ---- DECLARATION AND INSTALL ---------------------------------------------------------------------------- */
 
 /* §5.5's four comparison constants, on both the interface object and the prototype — which is where Web IDL
@@ -1473,7 +1619,7 @@ static const JSCFunctionListEntry js_range_consts[] = {
 };
 
 static int g_id[R_MEMBER_N], g_id_to_string = -1, g_id_delete = -1, g_id_extract = -1,
-           g_id_clone_contents = -1, g_id_surround = -1;
+           g_id_clone_contents = -1, g_id_surround = -1, g_id_client_rects = -1, g_id_bounding_rect = -1;
 
 void range_init(JSContext *ctx)
 {
@@ -1527,6 +1673,9 @@ void range_init(JSContext *ctx)
     g_id_clone_contents = idl_method_id_step(ctx, NULL, 0, NULL, 0, &RANGE_EXTRACT, RX_CLONE_CONTENTS);
     g_id_surround = idl_method_id_step(ctx, ONE_NODE, 1, NULL, 0, &RANGE_SURROUND, 0);
     idl_iface_brand(node_class_id());
+    /* CSSOM VIEW §9's `partial interface Range` — neither member takes an argument. */
+    g_id_client_rects = idl_method_id(ctx, NULL, 0, js_range_rects, R_CLIENT_RECTS);
+    g_id_bounding_rect = idl_method_id(ctx, NULL, 0, js_range_rects, R_BOUNDING_RECT);
 
     realm_declare_intrinsic(range_install_proto);
 }
@@ -1569,6 +1718,8 @@ void range_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "insertNode", 1, g_id[R_INSERT_NODE]);
     idl_install_method(ctx, proto, "surroundContents", 1, g_id_surround);
     idl_install_method(ctx, proto, "toString", 0, g_id_to_string);
+    idl_install_method(ctx, proto, "getClientRects", 0, g_id_client_rects);
+    idl_install_method(ctx, proto, "getBoundingClientRect", 0, g_id_bounding_rect);
     JS_SetClassProto(ctx, g_range_class, proto);
 }
 
