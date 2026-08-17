@@ -103,7 +103,7 @@ static int g_complete_stepid = -1, g_abort_stepid = -1, g_start_stepid = -1;
 static void tx_release_blocked(JSContext *ctx);
 /* §5.7 step 10's rendezvous — see the header. NULL until §5.1's component registers, which it does in its own
    declaration, so an upgrade transaction cannot finish before there is something to tell. */
-static void (*g_upgrade_finished)(JSContext *ctx, JSValueConst tx);
+static void (*g_upgrade_finished)(JSContext *ctx, JSValueConst tx, bool aborted);
 
 /* ---- the record ---------------------------------------------------------------------------------------- */
 
@@ -349,7 +349,8 @@ void idb_transaction_handle_add(JSContext *ctx, JSValueConst tx, JSValueConst ha
     JS_FreeValue(ctx, handles);
 }
 
-void idb_transaction_set_upgrade_finished_hook(void (*on_finished)(JSContext *ctx, JSValueConst tx))
+void idb_transaction_set_upgrade_finished_hook(void (*on_finished)(JSContext *ctx, JSValueConst tx,
+                                                                   bool aborted))
 {
     DCHECK(g_upgrade_finished == NULL || on_finished == NULL,
            "§5.7 step 10's rendezvous was registered twice — one component performs §5.1, and a second "
@@ -520,20 +521,6 @@ void idb_transaction_remove_request(JSContext *ctx, JSValueConst tx, JSValueCons
     JS_FreeValue(ctx, slots);
 }
 
-JSValue idb_transaction_pending_requests(JSContext *ctx, JSValueConst tx, uint32_t *from, uint32_t *count)
-{
-    JSValue slots = tx_slots(ctx, tx), list;
-
-    DCHECK(JS_IsObject(slots), "a request list was asked of a value that is not a transaction");
-    list = JS_GetPropertyStr(ctx, slots, TX_REQUESTS);
-    DCHECK(JS_IsArray(list), "a transaction carried no request list");
-    *from = (uint32_t)tx_int(ctx, tx, TX_HEAD);
-    *count = tx_array_len(ctx, list);
-    DCHECK(*from <= *count, "a transaction's request-list head cursor is past the end of the list");
-    JS_FreeValue(ctx, slots);
-    return list;
-}
-
 bool idb_transaction_requests_empty(JSContext *ctx, JSValueConst tx)
 {
     JSValue slots = tx_slots(ctx, tx), list;
@@ -647,7 +634,7 @@ static void tx_release_open_request(JSContext *ctx, JSValueConst tx, bool aborte
            "transaction to finish\" and §5.1 continues there — so the component that performs §5.1 registers "
            "this rendezvous in its own declaration, and an upgrade transaction can only have been created by "
            "that same component");
-    g_upgrade_finished(ctx, tx);
+    g_upgrade_finished(ctx, tx, aborted);
 }
 
 /* ---- §5.4's COMMIT: the database task that finishes the transaction and fires `complete` ------------------ */

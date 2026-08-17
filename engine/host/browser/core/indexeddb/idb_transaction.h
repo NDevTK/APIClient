@@ -85,14 +85,6 @@ void idb_transaction_add_request(JSContext *ctx, JSValueConst tx, JSValueConst r
 void idb_transaction_remove_request(JSContext *ctx, JSValueConst tx, JSValueConst request);
 bool idb_transaction_requests_empty(JSContext *ctx, JSValueConst tx);
 
-/* §2.7's REQUEST LIST, WALKED — the entries from the head cursor to the end, which are exactly the requests
-   that have not been removed yet. §4.5's `createIndex` is the caller and its question is not "is the list
-   empty" but "is any request still to run placed against THIS store", which is a different and much narrower
-   thing: a pending `put` into another object store cannot be observed by an index on this one. `*from` is the
-   head cursor and `*count` the list's length, so the caller walks [from, count) without a second reader of
-   either. The list is OWNED. */
-JSValue idb_transaction_pending_requests(JSContext *ctx, JSValueConst tx, uint32_t *from, uint32_t *count);
-
 /* §5.5 step 2's "ALL THE CHANGES MADE TO THE DATABASE BY THE TRANSACTION" — the list of them, in the order they
    were made. It is the TRANSACTION's state because that is whose changes they are, and it is a JS Array on the
    transaction's slot record for the reason every other list in this component is one (§State-isolation): a
@@ -156,8 +148,12 @@ JSValue idb_transaction_request(JSContext *ctx, JSValueConst tx);
    connection closing can discharge, because what satisfies it is the upgrade transaction reaching FINISHED
    inside §5.4's commit task or §5.5's abort task. §5.1's component registers here, and this file calls it for
    an upgrade transaction and for no other, so the narrowness is what keeps one hook from serving two questions.
-   Registered once, by the component that performs §5.1. */
-void idb_transaction_set_upgrade_finished_hook(void (*on_finished)(JSContext *ctx, JSValueConst tx));
+   Registered once, by the component that performs §5.1. `aborted` is WHICH of §2.7.1's two endings the
+   transaction reached: §5.1 step 10.8 is stated over an upgrade that aborted, and neither the state (both
+   endings are FINISHED) nor the error (§2.7's own note: "the value null is considered an error, as it is set
+   from abort()") can tell them apart afterwards. */
+void idb_transaction_set_upgrade_finished_hook(void (*on_finished)(JSContext *ctx, JSValueConst tx,
+                                                                  bool aborted));
 
 /* §5.2 step 3's "wait for all transactions created using connection to complete". Asked of this component
    because "live" is §2.7's own word for the set this file keeps, and the answer is what makes a close-pending

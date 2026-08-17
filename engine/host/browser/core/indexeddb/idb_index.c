@@ -37,6 +37,13 @@
 #define IDB_INDEX_STORE     "store"        /* §2.6's referenced object store */
 #define IDB_INDEX_RECORDS   "records"      /* §2.6's list of records */
 #define IDB_INDEX_DELETED   "deleted"      /* §4.5's deleteIndex step 9, "Destroy index" */
+/* THE ONE FIELD §2.6 DOES NOT NAME, and §4.5's note is what puts it here: "the index creation itself is
+   processed as an ASYNCHRONOUS REQUEST within the upgrade transaction". §4.5's steps create the index
+   synchronously, so between step 11 and the moment that request runs there is an index which references the
+   store and which the store's records have not been walked into — and §6.1 step 5 must not see it, or the two
+   `put`s §4.5's own worked example queues BEFORE the createIndex would file records in it and the SECOND put
+   would fail with the ConstraintError the note says belongs to the index creation. */
+#define IDB_INDEX_UNPOPULATED "unpopulated"
 
 /* ONE INDEX RECORD: the index key it is filed under, and the referenced object store key it points at. */
 #define IDB_IREC_KEY        "key"
@@ -183,6 +190,24 @@ static JSValue idb_store_index_at(JSContext *ctx, JSValueConst set, uint32_t i)
     return index;
 }
 
+JSValue idb_store_populated_index_set(JSContext *ctx, JSValueConst store)
+{
+    JSValue set = idb_store_index_set(ctx, store), out = JS_NewArray(ctx);
+    uint32_t i, n = idb_index_list_len(ctx, set), k = 0;
+
+    CHECK(!JS_IsException(out), "IndexedDB: §6.1 step 5's list of indexes could not be allocated");
+    for (i = 0; i < n; i++) {
+        JSValue index = idb_store_index_at(ctx, set, i);
+
+        if (idb_index_is_unpopulated(ctx, index))
+            JS_FreeValue(ctx, index);
+        else
+            JS_DefinePropertyValueUint32(ctx, out, k++, index, JS_PROP_C_W_E);
+    }
+    JS_FreeValue(ctx, set);
+    return out;
+}
+
 /* A store's set JOINED and LEFT — the two writes every change to it is made of, factored for the reason
    idb_database.c factors the object store set's: a destroy is a leave, its revert is a join, and a second copy
    of either would be a second place the set is written from. */
@@ -252,6 +277,10 @@ JSValue idb_index_create(JSContext *ctx, JSValueConst tx, JSValueConst store, co
     JS_SetPropertyStr(ctx, index, IDB_INDEX_STORE, JS_DupValue(ctx, store));
     JS_SetPropertyStr(ctx, index, IDB_INDEX_RECORDS, records);
     JS_SetPropertyStr(ctx, index, IDB_INDEX_DELETED, JS_FALSE);
+    /* UNPOPULATED until the request §4.5's note describes has walked the store's records into it. The flag
+       needs no inverse in §5.5 step 2's ledger: the only thing that can clear it is that request, and an abort
+       that reaches this index at all also reverts its CREATION (idb_index_revert_creation), which destroys it. */
+    JS_SetPropertyStr(ctx, index, IDB_INDEX_UNPOPULATED, JS_TRUE);
     /* NAMED BEFORE IT JOINS, which is the order every other write here has: the uniqueness assert walks the
        set and asks each member its name, so an index in the set without one yet would be asked a question it
        has no answer to. */
@@ -314,6 +343,26 @@ bool idb_index_is_deleted(JSContext *ctx, JSValueConst index)
     b = JS_ToBool(ctx, v);
     JS_FreeValue(ctx, v);
     return b;
+}
+
+bool idb_index_is_unpopulated(JSContext *ctx, JSValueConst index)
+{
+    JSValue v = JS_GetPropertyStr(ctx, index, IDB_INDEX_UNPOPULATED);
+    bool b;
+
+    DCHECK(JS_IsBool(v), "an index carried no unpopulated flag — idb_index_create gives every index one");
+    b = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    return b;
+}
+
+void idb_index_set_populated(JSContext *ctx, JSValueConst index)
+{
+    DCHECK(idb_index_is_unpopulated(ctx, index),
+           "an index was populated TWICE. §4.5's createIndex places exactly one population request per index "
+           "and that request's operation is what clears this flag, so a second clearing means either two "
+           "requests were placed for one index or one operation ran twice");
+    JS_SetPropertyStr(ctx, (JSValue)index, IDB_INDEX_UNPOPULATED, JS_FALSE);
 }
 
 JSValue idb_index_name(JSContext *ctx, JSValueConst index)
@@ -555,11 +604,28 @@ static int idb_index_first_in_range(JSContext *ctx, JSValueConst records, JSValu
     return -1;
 }
 
+/* EVERY READ OF AN INDEX RUNS AFTER ITS POPULATION, and the QUEUE is what makes that true rather than anything
+   the three readers below could test: §4.5's createIndex places the population request at the line that creates
+   the index, and no index handle exists before that line — so every §6.3 or §6.5 request over this index was
+   placed later and §5.6 step 5.1 executes them in that order. An unpopulated index reached here would answer
+   with an EMPTY list where the store holds matching records, which is a WRONG ANSWER rather than an error. */
+static void idb_index_assert_populated(JSContext *ctx, JSValueConst index)
+{
+    DCHECK(!idb_index_is_unpopulated(ctx, index),
+           "§6.3 or §6.5 read an index whose POPULATION REQUEST has not run. §4.5's note makes the index "
+           "creation an asynchronous request within the upgrade transaction, and this read was placed against "
+           "the same transaction after it — so §5.6 step 5.1's ordering has been broken, and the answer about "
+           "to be given is an empty index rather than the store's records");
+}
+
 JSValue idb_index_retrieve_referenced_value(JSContext *ctx, JSValueConst index, JSValueConst range)
 {
-    JSValue records = idb_index_records(ctx, index), primary, store, only, out;
-    int i = idb_index_first_in_range(ctx, records, range);
+    JSValue records, primary, store, only, out;
+    int i;
 
+    idb_index_assert_populated(ctx, index);
+    records = idb_index_records(ctx, index);
+    i = idb_index_first_in_range(ctx, records, range);
     if (i < 0) {                                   /* "If record was not found, return undefined." */
         JS_FreeValue(ctx, records);
         return JS_UNDEFINED;
@@ -586,9 +652,12 @@ JSValue idb_index_retrieve_referenced_value(JSContext *ctx, JSValueConst index, 
 
 JSValue idb_index_retrieve_value(JSContext *ctx, JSValueConst index, JSValueConst range)
 {
-    JSValue records = idb_index_records(ctx, index), value, out;
-    int i = idb_index_first_in_range(ctx, records, range);
+    JSValue records, value, out;
+    int i;
 
+    idb_index_assert_populated(ctx, index);
+    records = idb_index_records(ctx, index);
+    i = idb_index_first_in_range(ctx, records, range);
     if (i < 0) {
         JS_FreeValue(ctx, records);
         return JS_UNDEFINED;
@@ -604,8 +673,12 @@ JSValue idb_index_retrieve_value(JSContext *ctx, JSValueConst index, JSValueCons
 
 uint32_t idb_index_count_records(JSContext *ctx, JSValueConst index, JSValueConst range)
 {
-    JSValue records = idb_index_records(ctx, index);
-    uint32_t i, n = idb_index_list_len(ctx, records), count = 0;
+    JSValue records;
+    uint32_t i, n, count = 0;
+
+    idb_index_assert_populated(ctx, index);
+    records = idb_index_records(ctx, index);
+    n = idb_index_list_len(ctx, records);
 
     for (i = 0; i < n; i++) {
         JSValue key = idb_irec_field(ctx, records, i, IDB_IREC_KEY);

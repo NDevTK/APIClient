@@ -771,17 +771,62 @@ void idb_store_record_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *s
     hdr->stage = (uint16_t)(base + IDB_SR_GENERATE);
 }
 
+void idb_store_record_walk_start_index(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, JSValueConst tx,
+                                       JSValueConst store, JSValueConst index, JSValueConst value,
+                                       JSValueConst key, int base, int after)
+{
+    JSValue one, referenced;
+
+    DCHECK(idb_transaction_is(tx), "§6.1 step 5 was begun with something that is not a §2.7 transaction");
+    DCHECK(JS_IsObject(store), "§6.1 step 5 was begun over something that is not a §2.2 object store");
+    DCHECK(JS_IsObject(key) && JS_IsObject(index), "§6.1 step 5 was begun with no record key or no index");
+    referenced = idb_index_store(ctx, index);
+    DCHECK(JS_VALUE_GET_PTR(referenced) == JS_VALUE_GET_PTR(store),
+           "§6.1 step 5 was begun for an index that does not REFERENCE the store whose record it is being run "
+           "over — the step is stated over \"each index which references store\"");
+    JS_FreeValue(ctx, referenced);
+    one = JS_NewArray(ctx);
+    CHECK(!JS_IsException(one), "IndexedDB: §6.1 step 5's one-index list could not be allocated");
+    JS_DefinePropertyValueUint32(ctx, one, 0, JS_DupValue(ctx, index), JS_PROP_C_W_E);
+    /* A WALK ALREADY USED IS RELEASED FIRST, which idb_key_array.c's own entry states for the same reason: the
+       population operation runs this block ONCE PER RECORD through one record, so the previous record's
+       operands are still held here. On the first record they are the js_mallocz'd integer 0, which frees as the
+       no-op it is — and everything below then PLACES a slot, because a zeroed JSValue is not JS_UNDEFINED.
+       §7.1's own record (`sw->w`) is NOT released here: idb_key_path_walk_start releases it at every step 5.1,
+       and a second release would be this file deciding when that algorithm's stack is dead. */
+    JS_FreeValue(ctx, sw->tx);
+    JS_FreeValue(ctx, sw->store);
+    JS_FreeValue(ctx, sw->value);
+    JS_FreeValue(ctx, sw->key);
+    JS_FreeValue(ctx, sw->generated);
+    JS_FreeValue(ctx, sw->indexes);
+    JS_FreeValue(ctx, sw->index_key);
+    sw->kpres = IDB_KEY_PATH_KEY;
+    sw->tx = JS_DupValue(ctx, tx);
+    sw->store = JS_DupValue(ctx, store);
+    sw->value = JS_DupValue(ctx, value);
+    sw->key = JS_DupValue(ctx, key);
+    sw->generated = JS_UNDEFINED;
+    sw->indexes = one;
+    sw->index_key = JS_UNDEFINED;
+    sw->idx = 0;
+    sw->no_overwrite = 0;
+    sw->generator_raised = 0;
+    sw->after = after;
+    hdr->stage = (uint16_t)(base + IDB_SR_INDEX);
+}
+
 JSValue idb_store_record_walk_take(JSContext *ctx, IdbStoreWalk *sw)
 {
     DCHECK(JS_IsObject(sw->key), "§6.1's last step, \"Return key\", has no key to return");
     return JS_DupValue(ctx, sw->key);   /* STEP 6 */
 }
 
-/* §6.1 STEP 5's CURRENT INDEX. The set is the store's LIVE record and not a copy of it, which is exact rather
-   than convenient: an operation is one task, and §4.5's createIndex and deleteIndex are synchronous members of
-   a task of their own, so nothing can change this set between two stages of one operation. That is asserted
-   here — at the index rather than at the set, because what a change would produce is precisely an entry that is
-   deleted or that references another store. */
+/* §6.1 STEP 5's CURRENT INDEX. The list is the one the CALLER built and handed the walk: §6.1's own step 5
+   takes the store's populated indexes (idb_index.h), and §4.5's population operation takes the one index it is
+   filling. Either way it is fixed for the operation — an operation is one task, and §4.5's createIndex and
+   deleteIndex are synchronous members of a task of their own — which is what the two asserts here are about:
+   what a change would produce is precisely an entry that is deleted or that references another store. */
 static JSValue sr_index_at(JSContext *ctx, IdbStoreWalk *sw)
 {
     JSValue index = JS_GetPropertyUint32(ctx, sw->indexes, sw->idx), referenced;
@@ -910,7 +955,10 @@ static int sr_store(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, int base)
            "record after the one just written has a key that is not greater than it");
     JS_FreeValue(ctx, records);
 
-    sw->indexes = idb_store_index_set(ctx, sw->store);   /* STEP 5's "each index which references store" */
+    /* STEP 5's "each index which references store" — the POPULATED ones. An index whose creation request has
+       not run yet is one this write must not see, which is what makes §4.5's worked example come out the way
+       the standard says it does (idb_index.h's unpopulated flag). */
+    sw->indexes = idb_store_populated_index_set(ctx, sw->store);
     sw->idx = 0;
     IDB_SR_GOTO(hdr, base + IDB_SR_INDEX);
     return JS_STEP_YIELD;
@@ -1281,6 +1329,21 @@ uint32_t idb_store_record_count(JSContext *ctx, JSValueConst store)
 
     JS_FreeValue(ctx, records);
     return n;
+}
+
+void idb_store_record_at(JSContext *ctx, JSValueConst store, uint32_t i, JSValue *key, JSValue *value)
+{
+    JSValue records = idb_store_records(ctx, store), rec;
+
+    DCHECK(i < idb_list_len(ctx, records), "a position outside an object store's list of records was read — "
+                                           "§4.5's population walk reads [0, idb_store_record_count)");
+    rec = JS_GetPropertyUint32(ctx, records, i);
+    DCHECK(JS_IsObject(rec), "an object store's list of records had a hole in it");
+    *key = JS_GetPropertyStr(ctx, rec, IDB_RECORD_KEY);
+    *value = JS_GetPropertyStr(ctx, rec, IDB_RECORD_VALUE);
+    DCHECK(JS_IsObject(*key), "a record in an object store carried no key");
+    JS_FreeValue(ctx, rec);
+    JS_FreeValue(ctx, records);
 }
 
 uint32_t idb_count_records(JSContext *ctx, JSValueConst store, JSValueConst range)

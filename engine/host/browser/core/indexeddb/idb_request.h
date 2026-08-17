@@ -70,12 +70,6 @@ void idb_request_set_processed(JSContext *ctx, JSValueConst req, bool processed)
 /* §5.1 step 10.9's "If request's error is set" — the value, OWNED, JS_NULL when no error occurred. */
 JSValue idb_request_error(JSContext *ctx, JSValueConst req);
 
-/* §2.8's SOURCE OBJECT, as §4.5's `createIndex` reads it: that member may only create an index into a store
-   whose content is SETTLED, and "settled" is a question about which PENDING REQUESTS of this transaction are
-   placed against THIS store — so the pending requests have to be able to say what they are against. OWNED,
-   JS_NULL for an open request ("the source of an open request is always null"). */
-JSValue idb_request_source(JSContext *ctx, JSValueConst req);
-
 /* §2.8's TRANSACTION, as the algorithms outside this component read it: §5.4 step 2.5.4 and §5.5 step 7.3 each
    reach the open request FROM the upgrade transaction and back. OWNED, JS_NULL when there is none. */
 JSValue idb_request_transaction(JSContext *ctx, JSValueConst req);

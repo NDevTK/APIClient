@@ -154,6 +154,23 @@ void idb_store_record_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *s
                                  JSValueConst store, JSValueConst value, JSValueConst key, bool no_overwrite,
                                  int base, int after);
 
+/* §6.1 STEP 5 ALONE, over ONE index and one record the store ALREADY HOLDS — the same block entered at step 5
+ * instead of at step 1, which is what §4.5's population operation performs per record
+ * (core/indexeddb/idb_index_populate.h). Steps 1-4 are skipped because there is nothing to generate, nothing to
+ * refuse and nothing to write: the record is in the list, and what is missing is its entry in this one index.
+ *
+ * IT IS THE SAME IMPLEMENTATION AND NOT A SECOND ONE, which is the whole reason this is an entry point rather
+ * than a walk in that file: step 5.1's extraction is §7.1 and therefore §7.4's array arm, step 5.2's three
+ * discard arms, steps 5.3-5.4's unique refusal and steps 5.5-5.6's two write arms are exactly the sub-steps a
+ * `put` runs, and a copy of them would be a second answer to §2.6's multiEntry flag. The abrupt it produces is
+ * the same "ConstraintError", which is what §4.5's note turns into an aborted transaction.
+ *
+ * `value` is the record's STORED value, read in place: step 5 only EXTRACTS from it (step 1's inject is the
+ * one step that writes, and this entry does not run it). Every operand is BORROWED. */
+void idb_store_record_walk_start_index(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, JSValueConst tx,
+                                       JSValueConst store, JSValueConst index, JSValueConst value,
+                                       JSValueConst key, int base, int after);
+
 /* ONE STAGE of it. Returns a step code the caller must return, or JS_STEP_ABRUPT with the DOMException §6.1
    names live ("ConstraintError") — the only abrupt this algorithm produces, because step 5.2 catches §7.1's.
    `in` is CONSUMED. */
@@ -200,10 +217,13 @@ void idb_clear_store(JSContext *ctx, JSValueConst tx, JSValueConst store);
    the list it counts. */
 uint32_t idb_count_records(JSContext *ctx, JSValueConst store, JSValueConst range);
 
-/* HOW MANY RECORDS A STORE HOLDS AT ALL — not §6.5, which is stated over a range, but the question §4.5's
-   `createIndex` asks: an index may be created faithfully only into a store whose content is settled, because
-   §4.5's note makes the population an ASYNCHRONOUS REQUEST this engine does not yet place. */
+/* HOW MANY RECORDS A STORE HOLDS AT ALL — not §6.5, which is stated over a range — and the RECORD at one
+   position of §2.2's list, which §2.2 keeps in §2.4's key order. The two are what §4.5's population operation
+   walks: it runs §6.1 step 5 for its one index over every record the store already holds, one record per
+   stage. Positional rather than a handed-out list, because the list is this component's own record and a
+   caller holding it would be a second writer of §2.2's invariants. Both answers are OWNED. */
 uint32_t idb_store_record_count(JSContext *ctx, JSValueConst store);
+void     idb_store_record_at(JSContext *ctx, JSValueConst store, uint32_t i, JSValue *key, JSValue *value);
 
 /* §2.2's THREE FIELDS a store handle reports and §4.5's members branch on. The name is the STORE's, which
    §4.5's `name` getter note distinguishes from the HANDLE's copy of it; the key path is JS_NULL for a store

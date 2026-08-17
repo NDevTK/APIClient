@@ -3402,8 +3402,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* §2.6's INDEX end to end: §4.5's createIndex (both arms of §2.6's multiEntry flag), §4.6's attributes and
        its one-handle-per-index note, §6.1 step 5's two write arms, §6.3's two retrievals and §6.5 over an
        index source. `multi2` is the multiEntry key doing the thing it exists for — one record per subkey, so
-       both records answer for tag 'b' — which was dead code until §6.1 step 5 was built. */
-    int idbidx_tt = strstr(js, "by_name:name:nu:me:own:same:refbob:pk2:multi2") != NULL;
+       both records answer for tag 'b' — which was dead code until §6.1 step 5 was built.
+       `popben` and `back2` are §4.5's NOTE: an index created over a store that ALREADY HOLDS RECORDS, whose
+       entries exist only because the population request §4.5 calls "an asynchronous request within the upgrade
+       transaction" walked them. Both would read empty if createIndex populated nothing. */
+    int idbidx_tt = strstr(js, "by_name:name:nu:me:own:same:refbob:pk2:popben:back2:multi2") != NULL;
+
+    /* THE OTHER HALF OF THAT NOTE — §4.5's worked example, where the population's ConstraintError aborts the
+       whole UPGRADE TRANSACTION rather than failing one `put`. Two errors, from two objects, and neither is
+       derivable from the other: the transaction's is why it died, the open request's is §5.1 step 10.8's. */
+    int idbuniq_tt = (strstr(js, "\"/api/idbuniq\"") && strstr(js, "ConstraintError:AbortError"));
 
     int idbrec_tt = (strstr(js, "ConstraintError:first1:over21:made77gone:undoneAD") &&
                      param_value_has(js, "/api/idbrec", "t", "{hash}"));
@@ -3728,6 +3736,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE },
         { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
         { "idb-index", idbidx_tt, "/api/idbidx", SESS_EXPLORE },
+        { "idb-index-uniq", idbuniq_tt, "/api/idbuniq", SESS_EXPLORE },
         { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE },
         { "s-eval", s_eval, "state.code", SESS_EXPLORE },
         { "s-evalc", s_evalc, "state.note", SESS_EXPLORE },

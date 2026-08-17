@@ -53,6 +53,7 @@
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_index.h"
 #include "core/indexeddb/idb_index_handle.h"
+#include "core/indexeddb/idb_index_populate.h"
 #include "core/indexeddb/idb_key.h"
 #include "core/indexeddb/idb_key_array.h"
 #include "core/indexeddb/idb_key_path.h"
@@ -1309,44 +1310,6 @@ fail:
     return -1;
 }
 
-/* IS ANY REQUEST THIS TRANSACTION HAS STILL TO RUN PLACED AGAINST `store` — §4.5's `createIndex` question, and
- * NOT "does the transaction have pending requests", which is what this first asked and which is WRONG in the
- * ordinary direction. §5.7's upgrade transaction is ONE transaction for every store an `upgradeneeded` handler
- * touches, so `s1.put(...)` followed by `db.createObjectStore('s2').createIndex(...)` — the shape every bundle
- * that migrates a schema writes — leaves a pending request the whole time, and the broad question would refuse
- * it. What §4.5's note is actually about is a request that will run §6.1 STEP 5 over THIS store after the index
- * exists, so the source of each pending request is what decides it.
- *
- * §2.8's source is an object store handle, an index handle, or null for an open request; an index handle counts
- * because §6.3's retrievals read the same store's records through it. */
-static bool os_pending_for_store(JSContext *ctx, JSValueConst tx, JSValueConst store)
-{
-    uint32_t i, from = 0, n = 0;
-    JSValue list = idb_transaction_pending_requests(ctx, tx, &from, &n);
-    bool hit = false;
-
-    for (i = from; i < n && !hit; i++) {
-        JSValue req = JS_GetPropertyUint32(ctx, list, i), src, held = JS_UNDEFINED;
-
-        DCHECK(JS_IsObject(req), "a transaction's request list had a hole in it");
-        src = idb_request_source(ctx, req);
-        if (idb_object_store_is(src))
-            held = idb_object_store_handle_store(ctx, src);
-        else if (idb_index_handle_is(src)) {
-            JSValue index = idb_index_handle_index(ctx, src);
-
-            held = idb_index_store(ctx, index);
-            JS_FreeValue(ctx, index);
-        }
-        hit = JS_IsObject(held) && JS_VALUE_GET_PTR(held) == JS_VALUE_GET_PTR(store);
-        JS_FreeValue(ctx, held);
-        JS_FreeValue(ctx, src);
-        JS_FreeValue(ctx, req);
-    }
-    JS_FreeValue(ctx, list);
-    return hit;
-}
-
 /* "The createIndex(name, keyPath, options) method steps are: [the five above] ... If an index named name
    already exists in store, throw a ConstraintError. If keyPath is not a valid key path, throw a SyntaxError.
    Let unique be options's unique member. Let multiEntry be options's multiEntry member. If keyPath is a
@@ -1397,29 +1360,20 @@ static JSValue js_os_create_index(JSContext *ctx, JSValueConst this_val, int arg
                              "a multiEntry index cannot have a sequence key path");
         goto fail_name;
     }
-    /* §4.5's NOTE IS A WHOLE ALGORITHM AND IT IS NOT BUILT: "although this method does not return an
-       IDBRequest object, the INDEX CREATION ITSELF IS PROCESSED AS AN ASYNCHRONOUS REQUEST within the upgrade
-       transaction", and a constraint failure then aborts the TRANSACTION rather than the request. Its worked
-       example is two `put`s queued BEFORE the createIndex, which must NOT see the index — so the index needs
-       an unpopulated state, or the population request has to order ahead of the pending puts. Neither exists,
-       so what this file can do faithfully is create an index into a store whose content is SETTLED: no
-       records, and no request of this transaction still to run. Anything else would silently give the wrong
-       answer — a ConstraintError on the page's second `put` where a browser aborts the transaction. */
-    DCHECK(idb_store_record_count(ctx, store) == 0 && !os_pending_for_store(ctx, tx, store),
-           "§4.5's createIndex was called over an object store whose content is NOT SETTLED — the store already "
-           "holds records, or a request of this transaction that is still to run is placed against it. §4.5 "
-           "processes the index creation as an ASYNCHRONOUS REQUEST within the upgrade transaction, which is "
-           "what makes the index invisible to requests queued BEFORE it and what makes a uniqueness failure "
-           "abort the TRANSACTION rather than one request; created eagerly, as here, those requests see the "
-           "index and §6.1 step 5 reports a ConstraintError on one put where a browser aborts the whole "
-           "upgrade. Build that: an UNPOPULATED state on §2.6's index, and a population operation placed "
-           "through §5.6 that walks the store's existing records through §6.1 step 5");
     index = idb_index_create(ctx, tx, store, name, JS_DupValue(ctx, argv[1]), unique, multi_entry); /* STEP 11 */
     /* "Add index to THIS's index set" — the handle's, which is what `indexNames` and `index()` read and what
        §5.8 step 5.2 restores from the store's. */
     set = idb_object_store_handle_index_set(ctx, this_val);                         /* STEP 12 */
     JS_DefinePropertyValueUint32(ctx, set, os_list_len(ctx, set), JS_DupValue(ctx, index), JS_PROP_C_W_E);
     JS_FreeValue(ctx, set);
+    /* §4.5's NOTE, AS THE REQUEST IT SAYS IT IS: "although this method does not return an IDBRequest object,
+       the INDEX CREATION ITSELF IS PROCESSED AS AN ASYNCHRONOUS REQUEST within the upgrade transaction."
+       Placed HERE — after the index has joined both sets and before the handle is returned — so it queues
+       behind every request already placed against this transaction, which is what makes §4.5's worked example
+       come out right: the two `put`s run first, neither sees the index (it is UNPOPULATED, and §6.1 step 5
+       walks only the populated ones), and the constraint fails where the standard says it does, aborting the
+       transaction. See core/indexeddb/idb_index_populate.h for the whole chain. */
+    idb_index_populate_request(ctx, this_val, tx, store, index);
     handle = os_index_handle_for(ctx, this_val, index);                             /* STEP 13 */
     JS_FreeValue(ctx, index);
     JS_FreeCString(ctx, name);

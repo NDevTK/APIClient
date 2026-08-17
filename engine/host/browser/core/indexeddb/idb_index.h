@@ -15,6 +15,13 @@
 JSValue  idb_store_index_set(JSContext *ctx, JSValueConst store);
 uint32_t idb_store_index_count(JSContext *ctx, JSValueConst store);
 
+/* §6.1 STEP 5's OWN LIST — "each index which references store", MINUS the indexes whose population request has
+   not run. A COPY and not the store's record, because that is what the filter makes it; the entries are the
+   live indexes, so §6.1's asserts about them are unchanged. OWNED.
+   §6.4 step 2 and §6.6 step 2 keep asking for the WHOLE set above: an unpopulated index holds no records, so a
+   removal over it is a no-op either way, and filtering there would be a second statement of the same fact. */
+JSValue idb_store_populated_index_set(JSContext *ctx, JSValueConst store);
+
 /* §4.5's `createIndex` step 11, "let index be a new index in store", with the four fields step 11 sets. The
    store is the index's REFERENCED OBJECT STORE (§2.6) and the index joins that store's set here. `key_path` is
    CONSUMED; the answer is the §2.6 index record, OWNED. §2.6's "at any one time, the name is unique within
@@ -37,6 +44,16 @@ JSValue idb_index_find_in(JSContext *ctx, JSValueConst set, const char *name);
 void idb_index_destroy(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst index);
 void idb_index_rename(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst index, const char *name);
 bool idb_index_is_deleted(JSContext *ctx, JSValueConst index);
+
+/* THE STATE §4.5's NOTE REQUIRES: "although this method does not return an IDBRequest object, the INDEX
+   CREATION ITSELF IS PROCESSED AS AN ASYNCHRONOUS REQUEST within the upgrade transaction." §4.5's steps create
+   the index synchronously, so an index exists and references the store before that request has walked the
+   store's records into it — and while it does, §6.1 step 5 must not see it. That is exactly §4.5's worked
+   example (two `put`s queued, then a unique index): with the index visible, the second put fails with a
+   ConstraintError, and the standard says the TRANSACTION aborts when the index creation's constraint fails.
+   The flag is cleared by the population operation and by nothing else (core/indexeddb/idb_index_populate.h). */
+bool idb_index_is_unpopulated(JSContext *ctx, JSValueConst index);
+void idb_index_set_populated(JSContext *ctx, JSValueConst index);
 
 /* §2.6's FIELDS. The name and key path are OWNED; `idb_index_key_path_value` is §4.6's keyPath getter's Web IDL
    §3.2.24 conversion, minted per call for the reason idb_database.h states for the store's. */

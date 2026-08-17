@@ -230,12 +230,6 @@ JSValue idb_request_error(JSContext *ctx, JSValueConst req)
     return e;
 }
 
-JSValue idb_request_source(JSContext *ctx, JSValueConst req)
-{
-    DCHECK(idb_request_is(req), "a request source was read off something that is not a request");
-    return rq_get(ctx, req, RQ_SOURCE);
-}
-
 JSValue idb_request_transaction(JSContext *ctx, JSValueConst req)
 {
     DCHECK(idb_request_is(req), "a request transaction was read off something that is not a request");

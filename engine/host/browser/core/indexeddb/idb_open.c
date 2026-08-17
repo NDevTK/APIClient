@@ -70,6 +70,10 @@
 #define E_TARGET       "versionChangeTarget"
 #define E_OLD_VERSION  "oldVersion"       /* §5.7 step 7's `old version`, fired at step 9.5 */
 #define E_BLOCKED      "blockedFired"     /* whether step 10.4 has already fired `blocked` */
+/* §5.1 step 10.8's condition. §5.7 step 10 waits for the upgrade transaction to FINISH, and which of the two
+   endings it reached is the whole of what that step asks — see idb_open_upgrade_finished. FALSE for an open
+   that never ran an upgrade at all, which is the same answer. */
+#define E_ABORTED      "upgradeAborted"
 
 static JSValue g_queues = JS_UNDEFINED;   /* §2.8.2: name -> Array of entries, in arrival order */
 /* THE ENTRIES PARKED AT STEP 10.5. A list rather than a walk over every queue's head, because what wakes them
@@ -753,8 +757,9 @@ static const JSTrampStepDef js_idb_upgrade_def = {
 };
 
 /* §5.7 step 10's rendezvous. The transaction names its own open request; the ENTRY is the head of that
-   database's connection queue, which §2.8.2 guarantees is this request's. */
-static void idb_open_upgrade_finished(JSContext *ctx, JSValueConst tx)
+   database's connection queue, which §2.8.2 guarantees is this request's. `aborted` is WHICH of §2.7.1's two
+   endings it reached, which is what §5.1 step 10.8 is about and what nothing else here can re-derive. */
+static void idb_open_upgrade_finished(JSContext *ctx, JSValueConst tx, bool aborted)
 {
     JSValue conn = idb_transaction_connection(ctx, tx), db = idb_connection_database(ctx, conn);
     JSValue name = idb_database_name(ctx, db), req = idb_transaction_request(ctx, tx);
@@ -773,6 +778,18 @@ static void idb_open_upgrade_finished(JSContext *ctx, JSValueConst tx)
            "§2.8.2 says each request runs to completion before the next is processed, so the two disagreeing "
            "means an entry left the queue early");
     JS_FreeValue(ctx, entry_req);
+    /* §5.1 STEP 10.8's CONDITION, RECORDED WHERE THE ANSWER IS KNOWN. That step reads "if request's error is
+       set", and NOTHING in §5.5 or §5.7 writes one on an open request: §5.5 step 6 sets an AbortError on each
+       request of the transaction's REQUEST LIST, and an open request is never placed against a transaction by
+       §5.6, so it is in no list; §5.5 step 7.3 then walks the open request's other four fields back and
+       pointedly leaves `error` alone. What the observable is is not in doubt — an upgrade that aborted fires
+       ONE `error` at the open request carrying step 10.8's own newly created "AbortError", and `success` with
+       the connection would be the WRONG answer rather than a missing one — so what the condition is really
+       asking is whether this upgrade transaction ABORTED, which is what the rendezvous now says. It cannot be
+       re-derived from the transaction's error either: §2.7's own note is that "the value null is considered an
+       error, as it is set from abort()", so a null error means committed OR explicitly aborted. §4.10's
+       `error` getter goes on reporting the transaction's — the ConstraintError of §4.5's worked example. */
+    entry_set(ctx, entry, E_ABORTED, JS_NewBool(ctx, aborted));
     /* §5.1 steps 10.7-10.8 and §4.3's completion task, in the one machine that performs them. */
     entry_enqueue(ctx, g_result_stepid, entry);
     JS_FreeValue(ctx, entry);
@@ -820,17 +837,21 @@ static int js_idb_result_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
         req = entry_get(ctx, entry, E_REQUEST);
         conn = entry_get(ctx, entry, E_CONNECTION);
         err = idb_request_error(ctx, req);
-        if (JS_IsNull(err) && idb_connection_is(conn)) {
+        if (JS_IsNull(err) && !entry_flag(ctx, entry, E_ABORTED) && idb_connection_is(conn)) {
             /* Step 10.7: "If connection was closed, return a newly created AbortError DOMException." A
                `versionchange` or `upgradeneeded` handler that closed the connection it was handed gets this. */
             if (idb_connection_is_closed(ctx, conn))
                 idb_request_set_error(ctx, req, open_dom_exception(ctx, "AbortError",
                                                                    "the connection was closed during the "
                                                                    "upgrade"));
-        } else if (!JS_IsNull(err) && idb_connection_is(conn)) {
+        } else if (idb_connection_is(conn)) {
             /* Step 10.8: "If request's error is set, run the steps to close a database connection with
                connection, return a newly created AbortError DOMException." The connection is closed FIRST —
-               an aborted upgrade must not leave one open, or the next open of that name is blocked forever. */
+               an aborted upgrade must not leave one open, or the next open of that name is blocked forever.
+               THE UPGRADE-ABORTED FLAG IS THAT CONDITION and the request's own error is not, because nothing
+               in §5.5 or §5.7 sets one on an OPEN request — idb_open_upgrade_finished states the whole of
+               that argument. The `err` arm stays beside it for the one thing that DOES set a request error
+               here: §5.1's own earlier steps, whose VersionError §4.3 delivers through this same task. */
             idb_connection_close(ctx, conn);
             idb_request_set_error(ctx, req, open_dom_exception(ctx, "AbortError",
                                                                "the upgrade transaction was aborted"));
@@ -942,6 +963,7 @@ JSValue idb_open_request(JSContext *ctx, const char *name, double version, bool 
     entry_set(ctx, entry, E_TARGET, JS_NULL);
     entry_set(ctx, entry, E_OLD_VERSION, JS_NewFloat64(ctx, 0));
     entry_set(ctx, entry, E_BLOCKED, JS_FALSE);
+    entry_set(ctx, entry, E_ABORTED, JS_FALSE);
 
     /* §5.1 steps 1-2: "let queue be the connection queue for storageKey and name. Add request to queue." */
     q = open_queue(ctx, name, /*create*/ true);

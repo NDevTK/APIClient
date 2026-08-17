@@ -53,6 +53,7 @@
 #include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_index_handle.h"
+#include "core/indexeddb/idb_index_populate.h"
 #include "core/indexeddb/idb_key_range.h"
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_open.h"
@@ -128,6 +129,7 @@ static void d_idb_request(JSContext *c, const PlatformAgent *a) { (void)a; idb_r
 static void d_idb_connection(JSContext *c, const PlatformAgent *a) { (void)a; idb_connection_init(c); }
 static void d_idb_object_store(JSContext *c, const PlatformAgent *a) { (void)a; idb_object_store_init(c); }
 static void d_idb_index_handle(JSContext *c, const PlatformAgent *a) { (void)a; idb_index_handle_init(c); }
+static void d_idb_index_populate(JSContext *c, const PlatformAgent *a) { (void)a; idb_index_populate_init(c); }
 static void d_idb_vce(JSContext *c, const PlatformAgent *a) { (void)a; idb_version_change_event_init(c); }
 static void d_idb_open(JSContext *c, const PlatformAgent *a) { (void)a; idb_open_init(c); }
 static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
@@ -208,6 +210,7 @@ static void r_idb_request(JSRuntime *rt) { idb_request_free(rt); }
 static void r_idb_connection(JSRuntime *rt) { idb_connection_free(rt); }
 static void r_idb_object_store(JSRuntime *rt) { idb_object_store_free(rt); }
 static void r_idb_index_handle(JSRuntime *rt) { idb_index_handle_free(rt); }
+static void r_idb_index_populate(JSRuntime *rt) { idb_index_populate_free(rt); }
 static void r_idb_vce(JSRuntime *rt) { idb_version_change_event_free(rt); }
 static void r_idb_open(JSRuntime *rt) { idb_open_free(rt); }
 /* THE ONE VIRTUAL FILESYSTEM AND THE STANDARDS OVER IT, and this is the row whose absence was measured rather
@@ -464,6 +467,12 @@ static const PlatformComponent PLATFORM[] = {
        and §4.5's `createIndex` returns one — and because core/realm.h runs the per-realm installs in
        DECLARATION order. It holds one agent-lifetime value, the private Symbol its slots hang off. */
     { "idb_index_handle",    d_idb_index_handle,    NULL,        r_idb_index_handle },
+    /* §4.5's createIndex NOTE, as the request it says it is — "the index creation itself is processed as an
+       asynchronous request within the upgrade transaction". It holds no interface and installs into no realm:
+       what it declares is ONE step machine, which is agent-lifetime state and is what the release gives back.
+       It is placed after the two rows above because it is reached from §4.5's member and it places its request
+       through §5.6's, both of which are declared by then. */
+    { "idb_index_populate",  d_idb_index_populate,  NULL,        r_idb_index_populate },
     { "event",               d_event,               i_event },
     /* §4.2's IDBVersionChangeEvent, and it is HERE rather than beside the other Indexed Database rows for the
        one reason that decides every position in this list: its prototype chains to Event.prototype, which the
