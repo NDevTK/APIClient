@@ -360,7 +360,40 @@ void flow_registry_free(JSContext *ctx) {
        the SAME operation as evicting one and as finishing one — which is why it is one call and not a fourteen-
        field list restated here. It used to be that list, it released four of the fields and left the rest, and
        the drift was invisible until a leak walk named a Window nobody owned. */
-    while (g_flows_n) flow_release(ctx, g_flows[0]);
+    /* WHO LEFT THEM, RECORDED AT THE RELEASE, because by the assert below every owner is gone. That census is
+       a GATE and says only that frames survived — the reader stands at the wreckage with nothing naming the
+       flow that made it, which is the same failure as an OOM that does not say what it was allocating. A flow's
+       heap chain is its own (JS_FlowClone deep-copies rather than shares), so the count NOT dropping when a
+       suspended flow is released is a fact about THAT flow, and this loop is the last moment it exists to be
+       named.
+       IT RECORDS RATHER THAN ASSERTS, and it calls nothing. "A released flow must drop a frame" is not
+       something this file can claim today — flow_step's JS_FLOW_DETACHED arm hands a base to an awaited promise
+       and leaves `frame` NULL on purpose — and a probe that reached for a serializer here could abort the
+       teardown of every session over a question only this drive asks. So it reads four fields it already owns
+       and carries them into the abort that already exists. */
+#if APICLIENT_DEV
+    int rel_i = 0, culprit = -1, culprit_frame = 0, culprit_park = 0, culprit_paged = 0, culprit_started = 0;
+    JSRuntime *rrt = JS_GetRuntime(ctx);
+#endif
+    while (g_flows_n) {
+#if APICLIENT_DEV
+        Flow *rf = g_flows[0];
+        int had_frame = rf->frame != NULL, had_park = rf->park_fn != NULL;
+        int paged = rf->paged, started = rf->started;
+        int before = JS_TrampFrameCount(rrt);
+
+        flow_release(ctx, rf);
+        /* THE LAST SUSPENDED FLOW WHOSE RELEASE FREED NO FRAME — the newest candidate wins, because a chain
+           that outlives the frontier was left by the last release that failed to take one. */
+        if ((had_frame || had_park) && JS_TrampFrameCount(rrt) == before) {
+            culprit = rel_i; culprit_frame = had_frame; culprit_park = had_park;
+            culprit_paged = paged; culprit_started = started;
+        }
+        rel_i++;
+#else
+        flow_release(ctx, g_flows[0]);
+#endif
+    }
     free(g_flows); g_flows = NULL; g_flows_cap = 0;
     /* AND THE WORLD NAMESPACE GOES DOWN AFTER THEM, WHICH IS THE ORDER RATHER THAN A DETAIL. It came up with
        the frontier and it outlives it by exactly one step, because releasing a flow ANNOUNCES the death of the
@@ -379,9 +412,19 @@ void flow_registry_free(JSContext *ctx) {
        it here is what turns it into a gate rather than a number in a progress line. */
     {
         JSRuntime *rt = JS_GetRuntime(ctx);
-        DCHECK(JS_TrampFrameCount(rt) == 0,
-               "the frontier is gone and heap CALL FRAMES are still live — a suspended chain that no flow owns "
-               "is unreachable memory, and every frame of it holds its locals, its closed cells and its callee");
+#if APICLIENT_DEV
+        char why[640];
+        snprintf(why, sizeof why,
+                 "the frontier is gone and %d heap CALL FRAME(S) are still live — a suspended chain that no "
+                 "flow owns is unreachable memory, and every frame of it holds its locals, its closed cells "
+                 "and its callee. %d flow(s) were released; the last SUSPENDED one whose release freed no "
+                 "frame was #%d (frame=%d park=%d paged=%d started=%d). A -1 there means every suspended flow "
+                 "did drop its chain, so these frames were never owned by one and the leak is upstream of the "
+                 "frontier",
+                 JS_TrampFrameCount(rt), rel_i, culprit, culprit_frame, culprit_park, culprit_paged,
+                 culprit_started);
+        DCHECK(JS_TrampFrameCount(rt) == 0, why);
+#endif
         DCHECK(JS_StepMachineCount(rt) == 0,
                "the frontier is gone and STEP MACHINES are still live — a continuation-holding builtin's state "
                "outlived the flow that was suspended inside it, along with every argument it captured");
