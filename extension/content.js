@@ -261,18 +261,24 @@
     var docUrl = location.href;
     try { var _nav = performance.getEntriesByType("navigation")[0]; if (_nav && _nav.name) docUrl = _nav.name; } catch (_e) {}
     fetch(docUrl, { credentials: "same-origin" }).then(function (r) {
-      if (!r.ok) throw new Error("page fetch " + r.status + " for " + docUrl + " — refusing to analyse a non-OK response as the bundle");
+      if (!r.ok) throw new Error("page fetch (" + why + ") " + r.status + " for " + docUrl + " — refusing to analyse a non-OK response as the bundle");
       var headers = {};
       r.headers.forEach(function (v, k) { headers[k.toLowerCase()] = v; });
       return r.text().then(function (html) {
-        if (!html) throw new Error("empty page body for " + docUrl + " — no bundle to analyse");
+        if (!html) throw new Error("empty page body (" + why + ") for " + docUrl + " — no bundle to analyse");
+        /* THIS MESSAGE CARRIES MATERIAL, NEVER A PRINCIPAL. `origin: location.origin` and `pageUrl: docUrl`
+           stood here and NOTHING has ever read either one — the offscreen mints every browser fact from the
+           MessageSender (`_browserFacts`) and asserts the brand on it (`_statedFacts`). They were worse than
+           dead: they are the two fields SECURITY.md's removed hole was spelled in, sitting on the wire under
+           exactly the names a future consumer would reach for, and offscreen-brain.js already carries a
+           standing warning that the one value in the trusted zone ever spelled `pageUrl` is this one. An
+           UNTRUSTED zone does not get to state an origin or an address, so it does not get to send a field
+           shaped like one — the trap is deleted rather than documented. `reason` went with them (a writer
+           with no reader); the diagnostic it carried is in the two throws above, which do have a reader. */
         _sendChunked({
           type: "CONTENT_HTML",
           html: html,
           responseHeaders: headers,
-          origin: location.origin,
-          pageUrl: docUrl,
-          reason: why,
         }, "html");
       });
     });
@@ -521,14 +527,16 @@
         url = getUrl.href;
       }
 
+      /* Same rule as CONTENT_HTML above: `origin` and `pageUrl` are deleted. `_handleFormSubmit` never read
+         either, and a form submission is an OBSERVATION this document makes about its own traffic — `url` is
+         the address the page is posting TO (data, and legitimately this side's to state), while an origin or
+         a page address would be this zone stating its own identity, which is the MessageSender's job. */
       chrome.runtime.sendMessage({
         type: "CONTENT_FORM_SUBMIT",
         url: url,
         method: method,
         enctype: enctype,
         fields: fields,
-        origin: location.origin,
-        pageUrl: location.href,
       });
     } catch (_) {}
   }, true);
