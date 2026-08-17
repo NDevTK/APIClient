@@ -91,4 +91,29 @@ void idb_key_path_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbK
    answers, with *pkey OWNED on IDB_KEY_PATH_KEY — the same three the C entry returns, from the same two lines. */
 IdbKeyPathResult idb_key_path_walk_take(JSContext *ctx, IdbKeyWalk *w, IdbKeyPathResult res, JSValue *pkey);
 
+/* §7.2's CHECK THAT A KEY COULD BE INJECTED INTO A VALUE — "the result of these steps is either true or false".
+ *
+ * §4.5's `add or put` step 11.4.2 is the caller and a false is its "DataError": a store with a key generator and
+ * the key path "id" cannot store `123`, because a number has nowhere to put an `id`. It runs on the arm where
+ * §7.1's extract answered FAILURE, which is the arm §6.1 then generates and INJECTS on — so this is the
+ * question "will the injection below have somewhere to write", asked before anything is written.
+ *
+ * `value` must be the output of StructuredDeserialize (§4.5 step 10's clone), for §7.1's reason and asserted the
+ * same way: every read is an own-slot read. `key_path` is a §2.5-valid NON-EMPTY STRING — §7.2's own note is why
+ * a sequence cannot arrive, and §4.4's createObjectStore is what makes the note true. */
+bool idb_key_path_can_inject(JSContext *ctx, JSValueConst value, JSValueConst key_path);
+
+/* §7.2's INJECT A KEY INTO A VALUE USING A KEY PATH — §6.1's step 1.1.3, "if store also uses in-line keys, then
+ * run inject a key into a value using a key path with value, key and store's key path".
+ *
+ * IT MUTATES `value`, which is the whole of what the algorithm is: a store with in-line keys and a key generator
+ * files the generated key INTO the record's value, which is how `store.put({name:'n'})` comes back out of §6.2
+ * carrying `id: 1`. The value is §4.5 step 10's CLONE and never the page's own object, so the write is on
+ * something no page holds a reference to and there is nothing for §5.5 step 2 to revert — what the abort undoes
+ * is the record, and the record's value is a copy of this one.
+ *
+ * `key` is a key record (core/indexeddb/idb_key.h); §7.3 converts it on the way in. There is no answer: every
+ * step of these is an assertion, because §4.5 step 11.4.2 ran the check above over this same pair first. */
+void idb_key_path_inject(JSContext *ctx, JSValueConst value, JSValueConst key, JSValueConst key_path);
+
 #endif

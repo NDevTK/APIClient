@@ -3,6 +3,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_INDEXEDDB_IDB_KEY_H
 #define ENGINE_HOST_BROWSER_CORE_INDEXEDDB_IDB_KEY_H
 
+#include <stdbool.h>
+
 #include "quickjs.h"
 
 /* §7.4's CONVERT A VALUE TO A KEY — its own three answers, before any caller's next step. "The result of these
@@ -30,6 +32,22 @@ IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *p
    which this engine holds as a plain Array of key records. `keys` is CONSUMED. It is here rather than in the
    walk because a key record is this file's own shape and there is one constructor for one. */
 JSValue idb_key_new_array(JSContext *ctx, JSValue keys);
+
+/* §2.4's NUMBER KEY, minted from a number the ENGINE computed rather than converted from a page value. §2.11's
+   "generate a key" is the one caller and is the whole reason this entry exists beside §7.4: that algorithm
+   answers with its generator's current number, and §6.1 files a record under it — there is no page value for
+   §7.4 to convert, so reaching this through it would mean minting one to convert back. */
+JSValue idb_key_new_number(JSContext *ctx, double value);
+
+/* §2.11 STEPS 1-2's ONE QUESTION ABOUT A KEY — "if the TYPE of key is not number, abort these steps. Let value
+ * be the VALUE of key." They are one call because the value is only ever read on the arm the type answered for,
+ * and a caller that read the value first would have to know what a date or binary key's value is.
+ *
+ * False for every other type, with *pvalue untouched. Where the key's value is a CONCOLIC standing in for the
+ * number, the EXAMPLE comes back — the same seam idb_key_compare reads through and for the same reason: a key
+ * generator's current number is engine state that needs an actual number, while the taint stays on the key that
+ * is filed. */
+bool idb_key_is_number(JSContext *ctx, JSValueConst key, double *pvalue);
 
 /* §7.4 FOR A CALLER WITH NO FLOW UNDER IT — an in-C fixture, every §4 member having its own flow and driving the
    walk. It answers the arms above and CRASHES on an Array, naming the walk to route through: there is no second

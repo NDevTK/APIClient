@@ -267,7 +267,7 @@ static void os_active_across_suspension(JSContext *ctx, JSValueConst tx)
 static JSValue js_idb_store_operation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                       int magic, JSValueConst *func_data)
 {
-    JSValue key = JS_UNDEFINED;
+    JSValue key = JS_UNDEFINED, out;
 
     (void)this_val; (void)argc; (void)argv;
     /* §6.1's own contract: 0 with the key it filed the record under, or -1 with the DOMException it names
@@ -275,7 +275,16 @@ static JSValue js_idb_store_operation(JSContext *ctx, JSValueConst this_val, int
     if (idb_store_record(ctx, func_data[OP_STORE_TX], func_data[OP_STORE_STORE], func_data[OP_STORE_VALUE],
                          func_data[OP_STORE_KEY], magic == OS_ADD, &key) < 0)
         return JS_EXCEPTION;
-    return key;   /* "If successful, request's result will be the record's key." */
+    /* "If successful, request's result will be the record's key" — and §7.3 IS THAT WORD "key" CROSSING TO
+       SCRIPT. §5.6 step 5.6.4 sets request's result to what this operation answered and nothing converts on
+       the way, while §4.1 declares `result` as Web IDL's `any`; a §2.4 key is not one, it is a (type, value)
+       record this engine holds internally, so handing it over would put a slot record on `request.result`
+       where a page reads `e.target.result === 1`. §6.2's retrieve-a-key spells the conversion out as its own
+       last step and §6.1 does not, which is editorial: both answers reach the page through the one attribute,
+       and there is exactly one algorithm in this standard that turns a key into an ECMAScript value. */
+    out = idb_key_to_value(ctx, key);
+    JS_FreeValue(ctx, key);
+    return out;
 }
 
 #define OP_GET_STORE 0
@@ -370,9 +379,11 @@ static JSValue js_idb_count_operation(JSContext *ctx, JSValueConst this_val, int
     IDB_KEY_PATH_EXTRACT_ALGO_STAGES(X, OSP_KP, "Indexed Database §4.5 add or put step 11.1 (let kpk be the " \
                                                 "result of extracting a key from a value using a key path with " \
                                                 "clone and store's key path)") \
-    X(OSP_TOOK_KPK, "Indexed Database §4.5 add or put steps 11.2-11.4.1 — ONE O(1) engine action: an invalid " \
-                    "kpk is a DataError, a kpk that is not failure becomes key, and a failure at a store with " \
-                    "no key generator is a DataError") \
+    X(OSP_TOOK_KPK, "Indexed Database §4.5 add or put steps 11.2-11.4.2 — ONE engine action over data this " \
+                    "engine owns: an invalid kpk is a DataError, a kpk that is not failure becomes key, a " \
+                    "failure at a store with no key generator is a DataError, and so is one whose clone could " \
+                    "not have the generated key injected into it (§7.2, over the STORE's key path and the " \
+                    "clone's own slots — the page's code is not reached, so this rests nowhere)") \
     X(OSP_OPERATION, "Indexed Database §4.5 add or put steps 12-13 — ONE O(1) engine action: the operation is " \
                      "an algorithm to run store a record into an object store with store, clone, key and the " \
                      "no-overwrite flag, and the request is the result of asynchronously executing it")
@@ -521,16 +532,27 @@ static int js_os_put(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
             return JS_STEP_ABRUPT;
         /* "Otherwise (kpk is FAILURE): if store does not have a key generator, throw a DataError." The value
            has nothing at the key path at all, and without a generator there is no key for this record to be
-           filed under. WITH one there is: §6.1 generates it and §7.2 injects it into the value at that same
-           key path — which is the arm §4.5's step 11.4.2 ("if check that a key could be injected into a value
-           with clone and store's key path returns false, throw a DataError") guards, and it lands with §2.11
-           and §7.2 where idb_database.c's crash names them. Reaching that crash is what a store with a key
-           generator does on every `put`, in-line or not. */
+           filed under. WITH one there is: §6.1 step 1.1.1 generates it and §6.1 step 1.1.3 injects it into the
+           value at that same key path — and step 11.4.2 below is what makes that injection an algorithm of
+           assertions rather than of refusals, because it is asked HERE, where the member can still report a
+           DataError to the page synchronously. */
         case IDB_KEY_PATH_FAILURE:                                               /* STEP 11.4 */
             if (!idb_object_store_uses_key_generator(ctx, s->store)) {            /* STEP 11.4.1 */
                 JS_ThrowDOMException(ctx, "DataError",
                                      "the value has no value at the object store's key path, and the store "
                                      "has no key generator");
+                return JS_STEP_ABRUPT;
+            }
+            /* "If CHECK THAT A KEY COULD BE INJECTED INTO A VALUE with clone and store's key path returns
+               false, throw a DataError." `store.put(123)` into a store keyed on "id" is the case: a number has
+               nowhere to put one. The check runs on the CLONE, which is what WPT's clone-before-keypath-eval
+               asserts by counting the page's getter calls — the page's object is read exactly once, by step
+               10's clone, and never again by this step or the injection it guards. */
+            if (!idb_key_path_can_inject(ctx, s->clone, s->key_path)) {           /* STEP 11.4.2 */
+                JS_ThrowDOMException(ctx, "DataError",
+                                     "the object store's key generator has no place to put the key it would "
+                                     "generate: the value has nothing at the key path and nothing that could "
+                                     "hold it there");
                 return JS_STEP_ABRUPT;
             }
             break;

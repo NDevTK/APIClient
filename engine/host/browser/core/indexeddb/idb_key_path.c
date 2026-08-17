@@ -7,7 +7,7 @@
  * walk cannot address, or a walk that addressed one the validity refuses, would be a silent disagreement
  * between two files. In one file it is a disagreement between two functions that sit twelve lines apart. The
  * key path's whole surface is here: §2.5's validity, §7.1's evaluate and §7.1's extract, and §7.2's inject and
- * its injectability check when the key generator that is their only caller exists.
+ * its injectability check — the two the key generator drives.
  *
  * WHAT §7.1 IS FOR. It is the algorithm behind IN-LINE KEYS: a store created with a key path files each record
  * under a key read OUT of the value itself, so `store.put({id: 7, ...})` is a `put` with no key argument at all.
@@ -432,4 +432,189 @@ IdbKeyPathResult idb_key_path_walk_take(JSContext *ctx, IdbKeyWalk *w, IdbKeyPat
        argument beside the call that WRITES it can be the stale undefined — which loses the key and leaks it. */
     k = idb_key_walk_result(ctx, w, &key);
     return idb_key_path_answer(k, key, pkey);
+}
+
+/* ---- §7.2's INJECT A KEY INTO A VALUE -----------------------------------------------------------------------
+ *
+ * §7.2's OWN NOTE IS WHY BOTH ALGORITHMS BELOW TAKE A STRING and not §2.5's union: "the key paths used in this
+ * section are always strings and never sequences, since it is not possible to create a object store which has a
+ * key generator and also has a key path that is a sequence." §4.4's `createObjectStore` is what makes that true
+ * — it reports an "InvalidAccessError" for `autoIncrement` with a sequence OR with the empty string — so it is
+ * ASSERTED here rather than tested, and the empty string is asserted with it because these steps remove the LAST
+ * identifier and the empty path has none to remove.
+ *
+ * NEITHER RUNS THE PAGE'S CODE, which is why both are plain C entries where §7.1's extract has a walk beside it.
+ * §7.1's step 3 is §7.4, whose array arm is the page's own index accessors; §7.2 converts no page value at all —
+ * it reads OWN SLOTS of a StructuredDeserialize output, and the key it injects goes through §7.3, which is a C
+ * walk over key records this engine built.
+ *
+ * THE READS AND THE WRITES BOTH BYPASS THE PROTOTYPE CHAIN, and that is the behaviour rather than an
+ * optimisation. WPT's bindings-inject-values-bypass puts `a` on Object.prototype and a SETTER on `id`, and
+ * asserts the stored value ends up with OWN properties and that the setter never fires: the standard says
+ * `! HasOwnProperty` and `CreateDataProperty`, which are an own-slot read and a [[DefineOwnProperty]], so both
+ * hold by construction here and there is nothing for a page to intercept. */
+
+/* §7.2's SPLIT AND ITS NEXT STEP AT ONCE — "let identifiers be the result of strictly splitting keyPath on
+   U+002E FULL STOP", then "remove the last item of identifiers" / "let last be the last item of identifiers and
+   remove it from the list". This cursor IS that pair: it answers each identifier BUT THE LAST, in order, so a
+   caller's loop is the standard's "for each remaining identifier", and it leaves `*pi` ON the last one, which is
+   `last`. The split is in place over §2.5's own segments, exactly as §7.1's walk splits them. */
+static bool idb_path_next_before_last(const char *path, size_t len, size_t *pi, const char **pseg, size_t *pn)
+{
+    const char *seg = path + *pi;
+    size_t n = 0;
+
+    while (*pi + n < len && seg[n] != '.')
+        n++;
+    if (*pi + n >= len)
+        return false;   /* this identifier is `last`: removed from the list, never walked */
+    DCHECK(n > 0, "§7.2 split a key path into an EMPTY identifier — §2.5's validity refuses a leading period, a "
+                  "trailing period and an empty segment, and idb_key_path_precondition asserts that every path "
+                  "reaching these steps passed it");
+    *pseg = seg;
+    *pn = n;
+    *pi += n + 1;   /* past the separator */
+    return true;
+}
+
+/* §7.2's NOTE, ASSERTED, AND THE STRING READ BACK WITH IT — one function because the note is what makes reading
+   the key path as a plain string legitimate at all. */
+static const char *idb_inject_path(JSContext *ctx, JSValueConst key_path, size_t *plen)
+{
+    const char *path;
+
+    DCHECK(JS_IsString(key_path),
+           "§7.2 was given a SEQUENCE key path. Its own note is that this cannot happen — \"it is not possible "
+           "to create a object store which has a key generator and also has a key path that is a sequence\" — "
+           "and §4.4's createObjectStore is what makes it true, reporting an \"InvalidAccessError\" for "
+           "autoIncrement with one before the store exists");
+    idb_key_path_precondition(ctx, key_path);
+    path = JS_ToCStringLen(ctx, plen, key_path);
+    CHECK(path != NULL, "IndexedDB: §7.2 could not read a key path back as a string");
+    DCHECK(*plen > 0, "§7.2 was given the EMPTY key path, which names the value ITSELF and therefore has no "
+                      "last identifier to remove — §4.4's createObjectStore reports autoIncrement with one as "
+                      "an \"InvalidAccessError\", for exactly this reason");
+    return path;
+}
+
+/* THE ONE VALUE THESE STEPS CANNOT MEET, asserted at every level of both walks. §7.1's concolic arm never
+   answers `failure` — an unknown HAS any own property and reading one mints a derived unknown — so a walk that
+   met a concolic ran to the end and produced a key, and neither of these algorithms is reached: the check is
+   §4.5 step 11.4.2, which sits under "otherwise (kpk is FAILURE)", and the inject is §6.1 step 1.1.3, which runs
+   only where that check passed. A concolic here means §7.1's arm changed or a third caller arrived, and the
+   honest answer for it — whether a generated key can be written into an unknown — is a FORK rather than either
+   of these two answers. */
+static void idb_inject_not_concolic(JSContext *ctx, JSValueConst value)
+{
+    DCHECK(!concolic_is(value),
+           "Indexed Database §7.2 reached a CONCOLIC on the way to the identifier it writes. It cannot: §7.1's "
+           "concolic arm answers HasOwnProperty with true and Get with a derived concolic, so a key path that "
+           "meets one never answers `failure` — and `failure` is the only arm from which §4.5 step 11.4.2's "
+           "check and §6.1 step 1.1.3's inject are reached. Building the fork this needs comes before routing "
+           "an unknown here");
+    (void)ctx; (void)value;
+}
+
+bool idb_key_path_can_inject(JSContext *ctx, JSValueConst value, JSValueConst key_path)
+{
+    size_t len = 0, i = 0, n = 0;
+    const char *path = idb_inject_path(ctx, key_path, &len), *seg = NULL;
+    JSValue cur = JS_DupValue(ctx, value);
+    bool answer;
+
+    /* STEPS 1-3 are the cursor: split, assert non-empty, remove the last item. */
+    while (idb_path_next_before_last(path, len, &i, &seg, &n)) {   /* STEP 4 */
+        JSValue next;
+        JSAtom atom;
+        int has;
+
+        /* "If value is not an Object or an Array, return false." */
+        if (!JS_IsObject(cur)) {                                   /* STEP 4.1 */
+            answer = false;
+            goto out;
+        }
+        idb_inject_not_concolic(ctx, cur);
+        /* "Let hop be ! HasOwnProperty(value, identifier)" and "let value be ! Get(value, identifier)" — ONE
+           slot read answers both, for §7.1's reason: this algorithm runs only on the output of
+           StructuredDeserialize and accesses only own properties, which JS_GetOwnSlot asserts at the read. */
+        atom = JS_NewAtomLen(ctx, seg, n);
+        has = JS_GetOwnSlot(ctx, &next, cur, atom);                /* STEPS 4.2, 4.4 */
+        JS_FreeAtom(ctx, atom);
+        CHECK(has >= 0, "IndexedDB: §7.2's own-property read threw — the value is the output of "
+                        "StructuredDeserialize and holds nothing that can run");
+        JS_FreeValue(ctx, cur);
+        cur = next;                                                /* JS_UNDEFINED when hop is false */
+        if (has == 0) {                                            /* STEP 4.3 — "if hop is false, return true" */
+            answer = true;
+            goto out;
+        }
+    }
+    /* "Return true if value is an Object or an Array, or false otherwise." A single-identifier key path removes
+       its only item at step 3 and walks nothing, so THIS is the whole of the answer for `store.put(123)` with
+       the key path "id": 123 is not an Object, and §4.5 step 11.4.2 reports the "DataError". */
+    answer = JS_IsObject(cur);                                     /* STEP 5 */
+out:
+    JS_FreeValue(ctx, cur);
+    JS_FreeCString(ctx, path);
+    return answer;
+}
+
+void idb_key_path_inject(JSContext *ctx, JSValueConst value, JSValueConst key, JSValueConst key_path)
+{
+    size_t len = 0, i = 0, n = 0;
+    const char *path = idb_inject_path(ctx, key_path, &len), *seg = NULL;
+    JSValue cur = JS_DupValue(ctx, value), key_value;
+    JSAtom atom;
+    int status;
+
+    while (idb_path_next_before_last(path, len, &i, &seg, &n)) {   /* STEP 4 */
+        JSValue next;
+        int has;
+
+        /* "Assert: value is an Object or an Array." It is an ASSERTION and not a refusal because §4.5 step
+           11.4.2 has already run the check above over this same value and this same key path and it answered
+           true — which is the standard's own note here, and is why the two algorithms are one file. */
+        DCHECK(JS_IsObject(cur),                                   /* STEP 4.1 */
+               "§7.2's inject reached a value that is not an Object at an identifier of the key path. \"Check "
+               "that a key could be injected into a value\" answered TRUE for this pair at §4.5 step 11.4.2, "
+               "so either it was never run or it was run against a DIFFERENT value than the one §6.1 step "
+               "1.1.3 handed this — and §4.5 step 10's clone is the only value either may see");
+        idb_inject_not_concolic(ctx, cur);
+        atom = JS_NewAtomLen(ctx, seg, n);
+        has = JS_GetOwnSlot(ctx, &next, cur, atom);                /* STEPS 4.2, 4.4 */
+        CHECK(has >= 0, "IndexedDB: §7.2's own-property read threw — the value is the output of "
+                        "StructuredDeserialize and holds nothing that can run");
+        if (has == 0) {                                            /* STEP 4.3 */
+            /* "Let o be a new Object created as if by the expression ({}). Let status be
+               CreateDataProperty(value, identifier, o). Assert: status is true." A DEFINE, so the `a` a page
+               left on Object.prototype is neither read nor written — WPT's bindings-inject-values-bypass. */
+            next = JS_NewObject(ctx);
+            CHECK(!JS_IsException(next),
+                  "IndexedDB: §7.2 could not allocate the object it inserts on the way to the last identifier");
+            status = JS_DefinePropertyValue(ctx, cur, atom, JS_DupValue(ctx, next), JS_PROP_C_W_E);
+            DCHECK(status == 1, "§7.2's CreateDataProperty was refused on the way to the key path's last "
+                                "identifier — the value is §4.5 step 10's clone, which this engine built and "
+                                "no page has reached, so nothing can have made it non-extensible");
+            (void)status;
+        }
+        JS_FreeAtom(ctx, atom);
+        JS_FreeValue(ctx, cur);
+        cur = next;
+    }
+    DCHECK(JS_IsObject(cur), "§7.2's inject has no Object to write the key into at the key path's last "
+                             "identifier — see the assertion inside the walk, which is the same fact");
+    DCHECK(i < len, "§7.2's key path ended in a separator, so the `last` its steps remove is the empty string "
+                    "— §2.5's validity refuses a trailing period and idb_key_path_precondition asserts it");
+    /* "Let keyValue be the result of converting a key to a value with key. Let status be
+       CreateDataProperty(value, last, keyValue). Assert: status is true." */
+    key_value = idb_key_to_value(ctx, key);                        /* STEP 5 */
+    atom = JS_NewAtomLen(ctx, path + i, len - i);
+    status = JS_DefinePropertyValue(ctx, cur, atom, key_value, JS_PROP_C_W_E);   /* STEP 6 */
+    JS_FreeAtom(ctx, atom);
+    DCHECK(status == 1, "§7.2's CreateDataProperty of the generated key was refused — the value is §4.5 step "
+                        "10's clone and the identifier is one the check above proved is either absent or an "
+                        "own data property");
+    (void)status;
+    JS_FreeValue(ctx, cur);
+    JS_FreeCString(ctx, path);
 }

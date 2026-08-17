@@ -173,6 +173,33 @@ JSValue idb_key_new_array(JSContext *ctx, JSValue keys)
     return idb_key_new(ctx, IDB_RANK_ARRAY, keys);
 }
 
+JSValue idb_key_new_number(JSContext *ctx, double value)
+{
+    DCHECK(!isnan(value), "§2.4's NUMBER key was minted carrying NaN. §7.4's number arm answers \"invalid "
+                          "value\" for one, so no key of that type can hold it and §2.4's compare over it "
+                          "would answer neither -1, 0 nor 1");
+    return idb_key_new(ctx, IDB_RANK_NUMBER, JS_NewFloat64(ctx, value));
+}
+
+bool idb_key_is_number(JSContext *ctx, JSValueConst key, double *pvalue)
+{
+    JSValue v, c;
+    int r;
+
+    if (idb_key_rank(ctx, key) != IDB_RANK_NUMBER)   /* §2.11 STEP 1 */
+        return false;
+    v = idb_key_value(ctx, key);                     /* §2.11 STEP 2 */
+    c = idb_concrete(ctx, v);
+    r = JS_ToFloat64(ctx, pvalue, c);
+    DCHECK(r >= 0, "a key of type NUMBER carries a value that is not a number — §7.4's number arm is the only "
+                   "thing that builds one, and where it stores the concolic instead it does so only after the "
+                   "EXAMPLE answered that same arm");
+    (void)r;
+    JS_FreeValue(ctx, c);
+    JS_FreeValue(ctx, v);
+    return true;
+}
+
 /* §7.4's ARMS THAT ARE NOT THE ARRAY ONE, over a value that is not a concolic. Each is decided by asking what
    the value IS and answers in one O(1) engine action, which is exactly why they are a call and the array arm is
    a walk. */

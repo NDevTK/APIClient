@@ -62,8 +62,8 @@ JSValue idb_database_connections(JSContext *ctx, JSValueConst db);
    copy, for the reason idb_connection.c states. OWNED. */
 JSValue idb_database_store_set(JSContext *ctx, JSValueConst db);
 
-/* EVERY CHANGE TO §2.1's AND §2.2's STATE NAMES THE TRANSACTION MAKING IT — the five declarations below and no
-   others, because those five are every write this component performs on a database. §2.7's first sentence is
+/* EVERY CHANGE TO §2.1's AND §2.2's STATE NAMES THE TRANSACTION MAKING IT — the six declarations below and no
+   others, because those six are every write this component performs on a database. §2.7's first sentence is
    why ("whenever data is read or written to the database it is done by using a transaction"), and §5.5 step 2
    is what needs it: the transaction records the INVERSE of each change as it is made, so an abort has something
    to write back. A mutation that took no transaction would be a change nothing could undo, and the abort would
@@ -84,6 +84,11 @@ JSValue idb_object_store_find(JSContext *ctx, JSValueConst db, const char *name)
  * `key` is a KEY RECORD (core/indexeddb/idb_key.h) — the caller has already run §7.4 on whatever the page
  * passed, because §4.5's `put` reports that conversion's "DataError" before it reaches this algorithm. It may
  * be JS_UNDEFINED only for a store with a key generator, which is §6.1's own first step.
+ *
+ * THAT FIRST STEP MUTATES `value`, and only there: a store with a key generator AND in-line keys has the
+ * generated key INJECTED into the value at its key path (§6.1 step 1.1.3, §7.2), which is how a record put with
+ * no key comes back out of §6.2 carrying one. The value is §4.5 step 10's clone, so the write is on a value no
+ * page holds — which is also the precondition §7.2 asserts rather than tests.
  *
  * The record's value is a COPY THIS ALGORITHM MAKES, so §2.3's "later changes to a value have no effect on the
  * record stored in the database" is a fact about this component rather than a precondition on its caller.
@@ -130,6 +135,22 @@ uint32_t idb_count_records(JSContext *ctx, JSValueConst store, JSValueConst rang
 JSValue idb_object_store_name(JSContext *ctx, JSValueConst store);
 JSValue idb_object_store_key_path(JSContext *ctx, JSValueConst store);
 bool    idb_object_store_uses_key_generator(JSContext *ctx, JSValueConst store);
+
+/* §2.11's KEY GENERATOR ITSELF, which is the record §2.11's two algorithms are stated over
+   (core/indexeddb/idb_key_generator.h). §2.2 makes it OPTIONAL and the question above is how that is asked, so
+   this asserts the store has one rather than answering null for a store that does not — a caller holding "the
+   generator of a store with no generator" has nothing it could correctly do with it. OWNED. */
+JSValue idb_object_store_key_generator(JSContext *ctx, JSValueConst store);
+
+/* §2.11's CHANGE, recorded like the five above and by the algorithm that makes it. "Modifying a key generator's
+   current number is considered part of a database operation ... likewise, if a transaction is aborted, the
+   current number of the key generator for each object store in the transaction's scope is reverted to the value
+   it had before the transaction was started."
+   THE MUTATION IS §2.11's AND THE RECORD IS THIS COMPONENT'S, which is why this is the one write of the six that
+   is exported: §5.5 step 2's list is this file's, and a second place that appended to it would be a second
+   vocabulary of changes for one revert to understand. `prior` is the current number the generator held BEFORE
+   the write about to be made, and it is the caller's obligation to record it first. */
+void idb_object_store_record_generator_change(JSContext *ctx, JSValueConst tx, JSValueConst store, int64_t prior);
 
 /* §4.5's `keyPath` GETTER'S CONVERSION: "return this's object store's key path, or null if none. The key path
  * is converted as a DOMString (if a string) or a sequence<DOMString> (if a list of strings), per [WEBIDL]."

@@ -49,10 +49,11 @@
  *
  * EVERY CHANGE NAMES THE TRANSACTION MAKING IT, which is §2.7's first sentence ("whenever data is read or
  * written to the database it is done by using a transaction") and is what makes §5.5 step 2's revert possible
- * at all: a change whose transaction is unknown is a change nothing can undo. So each of the five mutations
+ * at all: a change whose transaction is unknown is a change nothing can undo. So each of the six mutations
  * below takes the transaction ahead of the state it changes, asserts what §2.7 says that transaction may do,
- * and records the INVERSE of what it is about to write. The revert is at the bottom of this file, beside the
- * writes it runs backwards. */
+ * and records the INVERSE of what it is about to write. The sixth is §2.11's key generator, whose algorithms
+ * live in core/indexeddb/idb_key_generator.c and reach this list through the one recorder exported for them.
+ * The revert is at the bottom of this file, beside the writes it runs backwards. */
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -62,6 +63,8 @@
 #include "core/idl_slots.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key.h"
+#include "core/indexeddb/idb_key_generator.h"
+#include "core/indexeddb/idb_key_path.h"
 #include "core/indexeddb/idb_key_range.h"
 #include "core/indexeddb/idb_transaction.h"
 #include "core/structured_clone.h"
@@ -75,7 +78,11 @@
 
 #define IDB_STORE_NAME          "name"
 #define IDB_STORE_KEY_PATH      "keyPath"       /* §2.2's optional key path — JS_NULL for out-of-line keys */
-#define IDB_STORE_KEY_GENERATOR "keyGenerator"  /* §2.2's optional key generator */
+/* §2.2's OPTIONAL KEY GENERATOR, which is §2.11's record (core/indexeddb/idb_key_generator.h) or JS_NULL. It
+   holds the GENERATOR and not a flag saying there is one, because the two would be two answers to one question:
+   a true with no current number, or a number on a store §4.5's `autoIncrement` reports false for, are both
+   states this makes unrepresentable. "Uses a key generator" is then the same fact as "this field is not null". */
+#define IDB_STORE_KEY_GENERATOR "keyGenerator"
 #define IDB_STORE_RECORDS       "records"       /* §2.2's "list of records ... sorted according to key" */
 #define IDB_STORE_DELETED       "deleted"       /* §4.4's "Destroy store" — see idb_object_store_destroy */
 /* §2.6's SET OF INDEXES, WHICH NO STORE IN THIS ENGINE HAS. The name is spelled here so the removal below can
@@ -88,7 +95,7 @@
 #define IDB_RECORD_KEY          "key"
 #define IDB_RECORD_VALUE        "value"
 
-/* §5.5 step 2's ONE CHANGE, and the five kinds this engine can make. Each names the state it is about to write
+/* §5.5 step 2's ONE CHANGE, and the six kinds this engine can make. Each names the state it is about to write
    and what that state held BEFORE — which is the whole of the change, because the revert is the same write with
    the remembered operand. A kind is added when a mutation is, and the revert's last arm ASSERTS which kind it
    is rather than accepting whatever is left: a kind nobody wrote a revert for has to abort at the revert, not
@@ -101,12 +108,16 @@
 #define IDB_CHANGE_NAME         "name"     /* the name the store was filed under before */
 #define IDB_CHANGE_VERSION      "version"  /* the version the database held before */
 #define IDB_CHANGE_REMOVED      "removed"  /* the records the store held before, in key order */
+/* §2.11's current number the store's key generator held before, as a BigInt — the exact integer type, for the
+   reason idb_key_generator.c is built around: 2^53+1 is a current number and is not an ECMAScript Number. */
+#define IDB_CHANGE_NUMBER       "number"
 
 /* §6.4's delete and §6.6's clear share ONE KIND because they make ONE change: a set of records left a store,
    and the inverse is filing those same records back. A second kind would be a second name for one revert, and
    the revert is what a kind is for. */
 enum { IDB_CHANGE_RECORD_STORED, IDB_CHANGE_RECORDS_REMOVED, IDB_CHANGE_STORE_CREATED,
-       IDB_CHANGE_STORE_DESTROYED, IDB_CHANGE_STORE_RENAMED, IDB_CHANGE_VERSION_SET };
+       IDB_CHANGE_STORE_DESTROYED, IDB_CHANGE_STORE_RENAMED, IDB_CHANGE_VERSION_SET,
+       IDB_CHANGE_KEY_GENERATOR };
 
 /* §2.1's SET OF DATABASES for this agent's storage key. See the header for why it is the AGENT's. */
 static JSValue g_databases = JS_UNDEFINED;
@@ -485,7 +496,11 @@ JSValue idb_object_store_create(JSContext *ctx, JSValueConst tx, JSValueConst db
     records = JS_NewArray(ctx);
     CHECK(!JS_IsException(records), "IndexedDB: an object store's list of records could not be allocated");
     JS_SetPropertyStr(ctx, store, IDB_STORE_KEY_PATH, key_path);
-    JS_SetPropertyStr(ctx, store, IDB_STORE_KEY_GENERATOR, JS_NewBool(ctx, key_generator));
+    /* §2.11: "when a object store is created it can be specified to use a key generator", and the generator's
+       current number is "set when the associated object store is created" — so the record is built HERE and
+       there is no later moment at which a store acquires one. */
+    JS_SetPropertyStr(ctx, store, IDB_STORE_KEY_GENERATOR,
+                      key_generator ? idb_key_generator_new(ctx) : JS_NULL);
     JS_SetPropertyStr(ctx, store, IDB_STORE_RECORDS, records);
     JS_SetPropertyStr(ctx, store, IDB_STORE_DELETED, JS_FALSE);
     /* The name and the set are one write — see idb_store_set_file, which is also what asserts §2.2's uniqueness
@@ -541,12 +556,37 @@ JSValue idb_object_store_key_path_value(JSContext *ctx, JSValueConst store)
 bool idb_object_store_uses_key_generator(JSContext *ctx, JSValueConst store)
 {
     JSValue v = JS_GetPropertyStr(ctx, store, IDB_STORE_KEY_GENERATOR);
-    bool b;
+    bool has;
 
-    DCHECK(JS_IsBool(v), "an object store carried no key-generator field");
-    b = JS_ToBool(ctx, v);
+    DCHECK(JS_IsNull(v) || JS_IsObject(v),
+           "an object store carried no key-generator field — §2.2 gives every store one, JS_NULL for a store "
+           "that has no generator, and the ABSENCE of the field is a different statement from the null it "
+           "should hold");
+    has = !JS_IsNull(v);
     JS_FreeValue(ctx, v);
-    return b;
+    return has;
+}
+
+JSValue idb_object_store_key_generator(JSContext *ctx, JSValueConst store)
+{
+    JSValue gen = JS_GetPropertyStr(ctx, store, IDB_STORE_KEY_GENERATOR);
+
+    DCHECK(JS_IsObject(gen), "§2.11's key generator was asked of a store that has none. §2.2 makes it optional "
+                             "and idb_object_store_uses_key_generator is how that is asked — every caller of "
+                             "this asks it first, because §6.1's whole first step is under that condition");
+    return gen;
+}
+
+void idb_object_store_record_generator_change(JSContext *ctx, JSValueConst tx, JSValueConst store, int64_t prior)
+{
+    JSValue change = idb_change_new(ctx, IDB_CHANGE_KEY_GENERATOR);
+
+    /* THE STORE AND NOT THE GENERATOR, for the reason every other change names the state it changed rather than
+       a pointer into it: the revert reaches the generator the same way §2.11's algorithms do, through the store
+       that owns it, so a store whose generator record were ever replaced could not leave the two disagreeing. */
+    JS_SetPropertyStr(ctx, change, IDB_CHANGE_STORE, JS_DupValue(ctx, store));
+    JS_SetPropertyStr(ctx, change, IDB_CHANGE_NUMBER, JS_NewBigInt64(ctx, prior));
+    idb_transaction_record_change(ctx, tx, change);
 }
 
 bool idb_object_store_is_deleted(JSContext *ctx, JSValueConst store)
@@ -614,9 +654,10 @@ JSValue idb_object_store_find(JSContext *ctx, JSValueConst db, const char *name)
 int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst value, JSValueConst key,
                      bool no_overwrite, JSValue *pkey)
 {
-    JSValue records, clone, rec, change;
+    JSValue records, clone, rec, change, generated = JS_UNDEFINED, indexes;
+    JSValueConst k = key;
     uint32_t n, pos, i;
-    bool exists;
+    bool exists, no_indexes, generator_raised = false;
 
     *pkey = JS_UNDEFINED;
     /* §6.1's FIRST STEP branches on the KEY GENERATOR and on nothing else — "if store uses a key generator,
@@ -624,39 +665,69 @@ int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValu
        because §4.5's `put` has already run §7.1's extract-a-key and handed the result in as `key`. That
        distinction is what this read is: the key path is not consulted here, and the arm below is the one arm
        §6.1 states rather than a "the key was derived somehow" test. */
-    if (idb_object_store_uses_key_generator(ctx, store)) {
-        /* IT CRASHES HERE because this is where the absence would otherwise become a wrong record: a store
-           with a key generator would file its record under a key nothing generated. */
-        DFAIL("Indexed Database §6.1's KEY-GENERATOR step is not built, and it is now the only step of this "
-              "algorithm that is not — §7.1's extract-a-key landed with §4.5's `put`, so a store with in-line "
-              "keys and no generator arrives here with its key already extracted. What is missing is §2.11's "
-              "\"generate a key\" (a monotonically increasing number, failing above 2^53) and \"possibly "
-              "update the key generator\" (a stored NUMBER key at or above the current number raises it) — "
-              "and that generator's current number is state an aborted transaction reverts, so it is recorded "
-              "as a change like every other write this file makes (see §5.5 step 2's revert at the bottom). "
-              "Where the store ALSO uses in-line keys, step 1.3 needs §7.2's \"inject a key into a value using "
-              "a key path\", which WRITES into the value being stored and therefore runs on the clone below "
-              "and never on the page's own object — and §7.2's other algorithm, \"check that a key could be "
-              "injected into a value\", is the step §4.5's `put` owes before this one, reported there as a "
-              "DataError. Those three land together, in core/indexeddb/idb_key_path.c beside §7.1");
-        /* A RELEASE BUILD FALLS THROUGH TO THE ALGORITHM'S OWN ANSWER for a key it could not derive — §6.1
-           step 1.1.2: "If key is failure, then this operation failed with a ConstraintError DOMException." A
-           bare -1 with nothing thrown would be a caller returning JS_EXCEPTION with no exception live. */
-        JS_ThrowDOMException(ctx, "ConstraintError", "a key could not be generated for the object store");
-        return -1;
+    if (idb_object_store_uses_key_generator(ctx, store)) {                    /* STEP 1 */
+        if (JS_IsUndefined(key)) {                                           /* STEP 1.1 */
+            JSValue key_path;
+
+            /* "Let key be the result of generating a key for store. If key is FAILURE, then this operation
+               failed with a ConstraintError DOMException. Abort this algorithm without taking any further
+               steps." The generator is spent at 2^53+1 and §2.11 keeps it spent; §5.6 step 5.2 takes the
+               exception as the request's error. */
+            if (!idb_key_generate(ctx, tx, store, &generated)) {             /* STEP 1.1.1 */
+                JS_ThrowDOMException(ctx, "ConstraintError",                 /* STEP 1.1.2 */
+                                     "the object store's key generator can generate no more keys");
+                return -1;
+            }
+            k = generated;
+            generator_raised = true;
+            /* "If store ALSO uses in-line keys, then run inject a key into a value using a key path with
+               value, key and store's key path." The value is §4.5 step 10's clone, and §4.5 step 11.4.2 has
+               already run §7.2's other algorithm over this same pair — which is why §7.2's steps here are
+               assertions rather than refusals. */
+            key_path = idb_object_store_key_path(ctx, store);
+            if (!JS_IsNull(key_path))                                        /* STEP 1.1.3 */
+                idb_key_path_inject(ctx, value, generated, key_path);
+            JS_FreeValue(ctx, key_path);
+        } else {
+            /* "Otherwise, run possibly update the key generator for store with key." */
+            generator_raised = idb_key_generator_possibly_update(ctx, tx, store, key);   /* STEP 1.2 */
+        }
     }
-    DCHECK(JS_IsObject(key), "§6.1 was handed no key for a store that has no key generator. The key is §7.4's "
-                             "key RECORD and not the page's value, and §4.5's `put` is where both of the ways "
-                             "one arrives are performed: an out-of-line store's key argument is converted "
-                             "there (and an absent one is a DataError there), and an in-line store's key is "
-                             "§7.1's extract-a-key over the clone, whose `invalid` and whose `failure` are "
-                             "that member's two DataErrors");
+    DCHECK(JS_IsObject(k), "§6.1 has no key to file its record under after its first step. The key is §7.4's "
+                           "key RECORD and not the page's value, and there are three ways one arrives: §4.5's "
+                           "`put` converts an out-of-line store's key argument (and reports an absent one as a "
+                           "DataError), it extracts an in-line store's key from the clone with §7.1 (whose "
+                           "`invalid` and `failure` are that member's other two DataErrors), and step 1.1.1 "
+                           "above generates one for a store with a key generator");
 
     records = idb_store_records(ctx, store);
     n = idb_list_len(ctx, records);
     /* WHERE THE KEY BELONGS, by §2.4's compare over a list §2.2 keeps sorted — see idb_record_pos, which is
        also where §5.5 step 2's revert of this write finds it again. */
-    pos = idb_record_pos(ctx, records, key, &exists);
+    pos = idb_record_pos(ctx, records, k, &exists);
+
+    /* §2.11: "IF AN INSERTION FAILS due to constraint violations or IO error, THE KEY GENERATOR IS NOT
+       UPDATED" — the per-operation half of "modifying a key generator's current number is considered part of a
+       database operation ... if the operation fails and the operation is reverted, the current number is
+       reverted to the value it had before the operation started."
+       THERE IS NO OPERATION-LEVEL REVERT HERE, because the state one would undo cannot arise, and this is that
+       proof asserted rather than restated. Write c for the current number step 1 found. Every numeric key this
+       store already holds went through step 1 itself, and each left c EITHER strictly above itself (c becomes
+       floor(k)+1 > k, or k+1 after a generate) OR at the ceiling+1, from which no key generates again. So on
+       the arm that RAISED c: a generate produces c, which is at most the ceiling and therefore above every
+       stored numeric key; and an update raises c only when floor(min(k, ceiling)) >= c, which likewise puts
+       every stored numeric key below k. Either way the key this record is about to be filed under is one no
+       record holds. The OTHER failure §2.11 names — step 5's unique-index ConstraintError — is not covered by
+       this, and its assertion is on step 5's own absence below. */
+    DCHECK(!generator_raised || !exists,
+           "§6.1's step 1 raised the key generator's current number and step 2 then found a record ALREADY "
+           "under that key. §2.11 forbids both halves of what that means: for `add` the operation is about to "
+           "fail with a ConstraintError leaving the generator raised (\"if an insertion fails due to "
+           "constraint violations or IO error, the key generator is not updated\"), and for `put` a number the "
+           "generator produced or accepted is one a record already holds (\"the same key is never generated "
+           "twice for the same object store\"). Every numeric key in a generator store passes through step 1, "
+           "which leaves the current number above it, so this state means one did not — and what is then owed "
+           "is the per-operation revert §2.11 names, recorded beside §5.5 step 2's list at the bottom");
 
     /* §6.1 STEP 2: "If the no-overwrite flag was given to these steps and is true, and a record already exists
        in store with its key equal to key, then this operation failed with a ConstraintError." That is what
@@ -664,10 +735,27 @@ int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValu
        nothing of its value read. */
     if (no_overwrite && exists) {
         JS_FreeValue(ctx, records);
+        JS_FreeValue(ctx, generated);
         JS_ThrowDOMException(ctx, "ConstraintError",
                              "a record with the given key is already in the object store");
         return -1;
     }
+
+    /* §6.1 STEP 5 — "for each index which references store" — is VACUOUS and not skipped: no store in this
+       engine carries §2.6's set of indexes, so there is no index for the step to walk. See IDB_STORE_INDEXES.
+       The day a store has one, this crashes, and what is owed with that step is more than the step: its
+       per-index §7.1 extract, its two unique-flag ConstraintErrors, its index-record writes — AND the
+       OPERATION-LEVEL REVERT §2.11 requires beside them, because a ConstraintError there is a failure AFTER
+       step 1 raised the current number, which is the one case the assertion above cannot cover. §2.11 writes
+       that example out itself: a store with a unique index takes key 1, fails on the second put, and the third
+       put gets key 2. */
+    indexes = JS_GetPropertyStr(ctx, store, IDB_STORE_INDEXES);
+    no_indexes = JS_IsUndefined(indexes);
+    JS_FreeValue(ctx, indexes);
+    DCHECK(no_indexes, "an object store carries §2.6's set of indexes and §6.1 step 5 is not built — a record "
+                       "would be stored with no index record referencing it, and a unique-index violation "
+                       "would go unreported. Build that step here, and the per-operation key-generator revert "
+                       "with it");
 
     /* §6.1 STEP 4's "! StructuredSerializeForStorage(value)", held as the live copy it produces. This is the
        step that makes §2.3's "later changes to a value have no effect on the record stored in the database"
@@ -676,11 +764,12 @@ int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValu
     clone = structured_clone(ctx, value);
     if (JS_IsException(clone)) {
         JS_FreeValue(ctx, records);
+        JS_FreeValue(ctx, generated);
         return -1;
     }
     rec = idl_slots_new(ctx);
     CHECK(!JS_IsException(rec), "IndexedDB: §2.2's record could not be allocated");
-    JS_SetPropertyStr(ctx, rec, IDB_RECORD_KEY, JS_DupValue(ctx, key));
+    JS_SetPropertyStr(ctx, rec, IDB_RECORD_KEY, JS_DupValue(ctx, k));
     JS_SetPropertyStr(ctx, rec, IDB_RECORD_VALUE, clone);
 
     /* §5.5 step 2's half of this write, recorded AFTER the two arms that refuse and BEFORE the list changes.
@@ -693,7 +782,7 @@ int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValu
        revert reads as a positive statement (remove what this put added) rather than as a missing field. */
     change = idb_change_new(ctx, IDB_CHANGE_RECORD_STORED);
     JS_SetPropertyStr(ctx, change, IDB_CHANGE_STORE, JS_DupValue(ctx, store));
-    JS_SetPropertyStr(ctx, change, IDB_CHANGE_KEY, JS_DupValue(ctx, key));
+    JS_SetPropertyStr(ctx, change, IDB_CHANGE_KEY, JS_DupValue(ctx, k));
     JS_SetPropertyStr(ctx, change, IDB_CHANGE_PRIOR,
                       exists ? JS_GetPropertyUint32(ctx, records, pos) : JS_NULL);
     idb_transaction_record_change(ctx, tx, change);
@@ -722,15 +811,16 @@ int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValu
        according to key in ascending order" and "There can never be multiple records in a given object store
        with the same key". Both are checked against the neighbours of the one position that changed, which is
        the whole of what this write can break. */
-    DCHECK(pos == 0 || idb_record_key_compare(ctx, records, pos - 1, key) < 0,
+    DCHECK(pos == 0 || idb_record_key_compare(ctx, records, pos - 1, k) < 0,
            "an object store's list of records is no longer sorted: the record before the one just written has "
            "a key that is not less than it");
-    DCHECK(pos + 1 >= idb_list_len(ctx, records) || idb_record_key_compare(ctx, records, pos + 1, key) > 0,
+    DCHECK(pos + 1 >= idb_list_len(ctx, records) || idb_record_key_compare(ctx, records, pos + 1, k) > 0,
            "an object store's list of records is no longer sorted, or holds two records under one key: the "
            "record after the one just written has a key that is not greater than it");
 
-    *pkey = JS_DupValue(ctx, key);   /* §6.1's last step: "Return key." */
+    *pkey = JS_DupValue(ctx, k);   /* §6.1's last step: "Return key." */
     JS_FreeValue(ctx, records);
+    JS_FreeValue(ctx, generated);
     return 0;
 }
 
@@ -1086,6 +1176,30 @@ void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx)
             JS_FreeValue(ctx, store);
             JS_FreeValue(ctx, db);
             break;
+        case IDB_CHANGE_KEY_GENERATOR: {
+            JSValue gen, was;
+            int64_t number = 0;
+            int r;
+
+            /* §2.11: "aborting a transaction rolls back any increases to the key generator which happened
+               during the transaction. This is to make all rollbacks consistent since rollbacks that happen due
+               to crash never has a chance to commit the increased key generator value." Each increase recorded
+               one change, and the list runs BACKWARDS, so the last write this arm performs is the earliest
+               recorded number — "the value it had before the transaction was started". */
+            store = idb_change_get(ctx, change, IDB_CHANGE_STORE);
+            was = idb_change_get(ctx, change, IDB_CHANGE_NUMBER);
+            r = JS_ToBigInt64(ctx, &number, was);
+            DCHECK(r >= 0, "a recorded key-generator change carried a current number that is not an exact "
+                           "integer — idb_object_store_record_generator_change writes a BigInt and nothing "
+                           "else writes this field");
+            (void)r;
+            gen = idb_object_store_key_generator(ctx, store);
+            idb_key_generator_revert(ctx, gen, number);
+            JS_FreeValue(ctx, gen);
+            JS_FreeValue(ctx, was);
+            JS_FreeValue(ctx, store);
+            break;
+        }
         case IDB_CHANGE_STORE_RENAMED:
             db = idb_change_get(ctx, change, IDB_CHANGE_DB);
             store = idb_change_get(ctx, change, IDB_CHANGE_STORE);
