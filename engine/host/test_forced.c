@@ -3413,8 +3413,22 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        derivable from the other: the transaction's is why it died, the open request's is §5.1 step 10.8's. */
     int idbuniq_tt = (strstr(js, "\"/api/idbuniq\"") && strstr(js, "ConstraintError:AbortError"));
 
-    int idbrec_tt = (strstr(js, "ConstraintError:first1:over21:made77gone:undoneAD") &&
-                     param_value_has(js, "/api/idbrec", "t", "{hash}"));
+    /* TWO ROWS BECAUSE THESE ARE TWO INDEPENDENT CLAIMS, and one boolean over both is not a measurement of
+       either — the same reason `deepest` and `completed` are two numbers a few hundred lines up. This was ONE
+       row, it has read 0 for as long as it has existed, and a 0 said only "one of two unrelated things is
+       wrong": either §6.1/§5.5's record semantics, or the taint round trip, and no run could tell them apart.
+       That is the shape §Offensive-programming calls a plausible datum — it has a value, and the value carries
+       no information about what to fix.
+       `idb-record` is the SEMANTICS chain, and it is one accumulating string in placement order, so the
+       longest prefix that matches localises which stage stopped: §6.1 step 2's ConstraintError on `add`, §2.2's
+       key ordering through §6.2, §6.1 step 3's overwrite, the two writes read back, then §5.5 step 2's revert
+       of both across a real `abort()`.
+       `idb-record-taint` is the half a browser's own suite cannot have: `location.hash` goes into a store and
+       has to come back out STILL CONCOLIC, because a page keeps its session in here and reads it into gated
+       code. It is a claim about §5.11's clone and §6.1 step 4's serialization, not about transactions at all —
+       a store that de-tainted on the way in would emit the EXAMPLE and read as a perfectly healthy endpoint. */
+    int idbrec_tt = strstr(js, "ConstraintError:first1:over21:made77gone:undoneAD") != NULL;
+    int idbtaint_tt = param_value_has(js, "/api/idbrec", "t", "{hash}");
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -3735,6 +3749,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE },
         { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE },
         { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
+        { "idb-record-taint", idbtaint_tt, "/api/idbrec", SESS_EXPLORE },
         { "idb-index", idbidx_tt, "/api/idbidx", SESS_EXPLORE },
         { "idb-index-uniq", idbuniq_tt, "/api/idbuniq", SESS_EXPLORE },
         { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE },
