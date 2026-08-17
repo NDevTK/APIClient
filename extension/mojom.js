@@ -137,9 +137,17 @@
          "CONTEXT and therefore which of Web IDL §3.3.13's members exist in it. The engine refuses an empty " +
          "one, so a document reaching here without it is one whose API surface is silently smaller" };
 
+  /* NO `version:` LINE, HERE OR BELOW, AND ITS DELETION IS A MECHANISM RATHER THAN A TIDY-UP. Both interfaces
+     carried `version: 0`; mojo.js posted it on every bind and the peer asserted it — and it caught nothing,
+     because nothing increments it and no change to a method list moves it. A mojom.js that gained a method,
+     renumbered an ordinal or changed a parameter type shipped `0` on both sides, so the check compared 0
+     against 0 and passed for exactly the skew it named itself as guarding against. Mojo's `version` is for
+     interfaces that EVOLVE across independently-shipped components ([MinVersion], a peer that may legitimately
+     be older); there is no such peer here — the renderer's mojom.js is the bytes the offscreen read off this
+     same extension — so what has to be asserted is not a number somebody remembers to bump but that the two
+     reads were one generation. mojo.js's `wireContract()` derives that from these declarations. */
   g.mojo.defineInterface({
     name: "content.mojom.Renderer",
-    version: 0,
     methods: [
       { ordinal: 0, name: "Init",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL],
@@ -340,7 +348,6 @@
      PROCESS and not about anything it serves. */
   g.mojo.defineInterface({
     name: "content.mojom.ChildProcess",
-    version: 0,
     methods: [
       { ordinal: 0, name: "GetMojoStats",
         params: [],

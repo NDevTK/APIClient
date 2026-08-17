@@ -45,7 +45,7 @@
  *                                outstanding call rejects, which is what a real bad-message kill looks like
  *                                from the browser's side.
  *
- * THE TWO PLACES THIS DELIBERATELY DIVERGES FROM MOJO, stated rather than left to be noticed:
+ * THE THREE PLACES THIS DELIBERATELY DIVERGES FROM MOJO, stated rather than left to be noticed:
  *
  *   (1) THE INTERFACE NAME IS ON THE WIRE. Mojo does not put it there — the pipe implies the interface. It is
  *       carried here because the failure it catches is otherwise silent-then-wrong: a broker that bound the
@@ -59,6 +59,20 @@
  *       broke — so it rides the TRANSPORT (attached by `_envelope`, absorbed by `_absorb`), never an
  *       interface's parameters. A process's output is a fact about the PROCESS and not about any interface it
  *       happens to serve, and which pipe answers next is not knowable, so it cannot live on one of them.
+ *   (3) THE WIRE CONTRACT ITSELF CROSSES THE HANDSHAKE. Mojo needs nothing of the kind: both ends are
+ *       GENERATED from one `.mojom` by the build, so a skew is not representable and the compiler is the
+ *       check. This platform cannot have that. mojom.js is READ TWICE — the offscreen loads it by
+ *       `<script src>` when ast-worker.html parses, and renderer-host.js `fetch()`es the same URL later to
+ *       build the invitation the frame boots from — so "one description loaded by both realms" is a claim
+ *       about two reads of one URL at two instants, with nothing in the extension tying them to one
+ *       generation. A hand-written `version: 0` stood here and DID NOT tie them: it was constant, nothing
+ *       ever incremented it, and a mojom.js that gained a method, renumbered an ordinal or changed a
+ *       parameter type shipped `0` on both sides — so the bind-time check compared 0 against 0 and passed
+ *       for every skew it named itself as guarding against. It is deleted, and what crosses instead is the
+ *       CONTRACT, DERIVED from the declarations rather than maintained beside them: a mismatch cannot be
+ *       forgotten, because nothing has to be remembered. It is not a negotiation and there is no
+ *       compatibility arm — a peer whose contract differs is REFUSED, at the acceptance and at every bind,
+ *       exactly as a mismatched generated binding would fail to link.
  *
  * ORDERING, AND WHAT IS NOT BUILT. Mojo guarantees ordering WITHIN a pipe and nothing across pipes; the tool
  * for cross-interface ordering is an ASSOCIATED interface, which multiplexes several interfaces onto one pipe
@@ -137,13 +151,25 @@
     }
   }
 
-  function checkValues(where, decls, vals) {
-    DCHECK(Array.isArray(vals) && vals.length === decls.length,
+  /* THE SEVERITY IS A PROPERTY OF WHOSE VALUE IT IS, SO THE CALL SITE STATES IT AND THERE IS STILL ONE
+     IMPLEMENTATION. A record this process PRODUCED is its own logic and is asserted DCHECK-class; a record
+     that ARRIVED is the peer's, and refusing a malformed one from the peer SECURITY.md calls UNTRUSTED is a
+     trust boundary, which check.js's own test puts in CHECK-class — fatal in dev AND release.
+     THIS WAS DCHECK ON BOTH SIDES AND THAT MADE THE RELEASE BUILD UNVALIDATED, which is the same defect one
+     layer down from the one this transport was written to fix. `content.mojom.Renderer` moved the typing onto
+     the boundary the threat is on; with every incoming check compiled out of release, the untrusted renderer's
+     records reached `this.impl[m.js]` unexamined there — and worse, the classification INVERTED: with the
+     unknown-ordinal DCHECK stripped, `m` stayed undefined, `validating` was already false by the time the
+     TypeError surfaced, and the one number that reports a refused record counted it as this process breaking
+     rather than the peer. A validator that exists only in dev is a validator the shipped extension does not
+     have. */
+  function checkValues(assert, where, decls, vals) {
+    assert(Array.isArray(vals) && vals.length === decls.length,
            where + " carried " + (Array.isArray(vals) ? vals.length : "no") + " value(s) where its mojom " +
            "declares " + decls.length + " — a short list reads every later parameter one position early, which " +
            "is a wrong call rather than a missing one");
     for (var i = 0; i < decls.length; i++)
-      DCHECK(typeOk(decls[i].type, vals[i]),
+      assert(typeOk(decls[i].type, vals[i]),
              where + " parameter `" + decls[i].name + "` is not the `" + decls[i].type + "` its mojom " +
              "declares — " + decls[i].why);
   }
@@ -166,9 +192,11 @@
            "a mojom interface must be named `<module>.mojom.<Interface>` — the module half is what says which " +
            "layer owns it (a network-service interface and a content-layer interface are not interchangeable) " +
            "and it is the name a bind request carries");
-    DCHECK(typeof def.version === "number" && (def.version | 0) === def.version && def.version >= 0,
-           def.name + " declares no version — a bind states the version it expects and the peer asserts it, so " +
-           "an interface without one cannot say whether the two processes were built together");
+    /* NO `version` FIELD, AND ITS ABSENCE IS THE MECHANISM. It was declared here, asserted here, posted on
+       every bind and compared by the peer — and it decided nothing, because it was the literal `0` in both
+       interfaces and no change to a method list moves it. What says whether the two processes were built
+       together is `wireContract()` below, which is DERIVED from these declarations and therefore cannot be
+       forgotten. A number a human maintains beside the thing it describes is the thing that drifts. */
     DCHECK(!_defs.has(def.name),
            def.name + " is defined twice in this realm — an interface is ONE description that both ends " +
            "validate against, and a second definition means two of them with nothing to say which is on the wire");
@@ -201,6 +229,92 @@
     return def;
   }
 
+  /* ── THE WIRE CONTRACT OF THIS REALM: everything two peers must agree on for a record to mean the same thing
+     at both ends, DERIVED from the declarations above and from this transport's own constants. Mojo gets this
+     from its build — both ends are generated from one `.mojom` and a mismatch does not link. Here the
+     description is READ TWICE (see divergence (3) at the top of this file), so the agreement is asserted at
+     runtime instead, on the handshake, once per direction.
+     WHAT IS IN IT IS EXACTLY WHAT THE WIRE CARRIES, AND NOTHING ELSE, because a contract that fires on a change
+     the wire cannot see is a confident false red. So: the transport's wire version and its two flag VALUES (a
+     peer whose `kMessageIsResponse` differed would route every reply as a request); the interface NAME, which
+     this transport puts on the wire deliberately (divergence (1)); each method's ORDINAL, which is the method's
+     identity here; and the declared TYPE of every parameter and every reply field, in order, since position is
+     how a value is read back. Deliberately ABSENT: a method's NAME (this file's own rule at the top — renaming
+     is not a wire change; a rename that reaches only one of mojom.js and renderer.html is caught inside the
+     frame by `rendererImpl`'s own binding asserts), a parameter's name (the record keyed by it never crosses —
+     only the positional array does), and every `why` (a sentence a validator prints, not a shape).
+     THE COMPARISON IS OVER THE TEXT AND NOT OVER A HASH, so a mismatch NAMES the method and the two shapes
+     rather than reporting that two opaque numbers differ. `wireDigest` exists only to put a short handle in a
+     diagnostic; it decides nothing, which is why a hand-rolled fold is not a security primitive here. */
+  function typeList(decls) {
+    var t = [];
+    for (var i = 0; i < decls.length; i++) t.push(decls[i].type);
+    return t.join(",");
+  }
+
+  function wireContract() {
+    var lines = ["transport " + WIRE + " " + F_EXPECTS_RESPONSE + " " + F_IS_RESPONSE], names = [];
+    _defs.forEach(function (d, n) { names.push(n); });
+    /* SORTED, so the contract is a property of the DECLARATIONS and not of the order a realm happened to load
+       them in — two realms that define the same interfaces must not disagree over insertion order. */
+    names.sort();
+    for (var i = 0; i < names.length; i++) {
+      var d = _defs.get(names[i]), ords = [];
+      d.byOrd.forEach(function (m, o) { ords.push(o); });
+      ords.sort(function (a, b) { return a - b; });
+      for (var j = 0; j < ords.length; j++) {
+        var m = d.byOrd.get(ords[j]);
+        /* A FIRE-AND-FORGET METHOD HAS NO ARROW AND A REPLY OF NOTHING HAS AN EMPTY ONE — the two are
+           different contracts (one side would park on a reply the other never sends), so they must be
+           different lines. */
+        lines.push(d.name + "@" + m.ordinal + "(" + typeList(m.params) + ")" +
+                   (m.reply === null ? "" : "->(" + typeList(m.reply) + ")"));
+      }
+    }
+    return lines.join("\n");
+  }
+
+  /* A SHORT HANDLE FOR A HUMAN READING A STATS RECORD, and nothing rests on it: the handshake compares the
+     CONTRACT. FNV-1a over the contract text, 32-bit, printed base 36. */
+  function wireDigest(contract) {
+    var h = 0x811c9dc5;
+    for (var i = 0; i < contract.length; i++) {
+      h ^= contract.charCodeAt(i);
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return h.toString(36);
+  }
+
+  /* THE FIRST LINE THE TWO CONTRACTS DISAGREE ON, which is what the refusal has to say to be worth having. A
+     peer that is a whole generation away differs on many lines and the first one is where a reader starts; a
+     peer that changed one parameter type differs on exactly one and this names it. */
+  function wireFirstDiff(mine, theirs) {
+    var a = mine.split("\n"), b = theirs.split("\n"), n = Math.max(a.length, b.length);
+    for (var i = 0; i < n; i++)
+      if (a[i] !== b[i])
+        return "first difference at line " + (i + 1) + ": this process declares `" +
+               (a[i] === undefined ? "(nothing — its contract ends here)" : a[i]) + "` and the peer declares `" +
+               (b[i] === undefined ? "(nothing — its contract ends here)" : b[i]) + "`";
+    return "the contracts are equal, which contradicts the comparison that produced this message";
+  }
+
+  /* THE REFUSAL, ONE FUNCTION SO BOTH DIRECTIONS PRINT THE SAME SENTENCE. It is a CHECK and not a DCHECK: a
+     skew is a PACKAGING failure, and release is precisely the build that cannot fix one and in which a
+     stripped check would let a call be dispatched to another generation's ordinal — the untrusted renderer
+     placing operands into its own linear memory by a declared type the caller did not send. */
+  function requireWireAgreement(peerName, where, theirs) {
+    var mine = wireContract();
+    CHECK(typeof theirs === "string" && theirs !== "",
+          where + " from " + peerName + " carried no wire contract — every record that opens a channel states " +
+          "the description this process speaks, because mojom.js is read once by the offscreen and once again " +
+          "to build the frame's invitation, and nothing else in this extension ties those two reads to one " +
+          "generation");
+    CHECK(theirs === mine,
+          peerName + " speaks a different wire contract than this process (" + where + ") — both ends ship out " +
+          "of ONE extension, so this is a build that packaged two generations of mojom.js/mojo.js and not a " +
+          "compatibility case to negotiate. " + wireFirstDiff(mine, theirs));
+  }
+
   /* ── THE BAD-MESSAGE COUNT, WHICH IS THE ONE NUMBER A VALIDATOR OWES THE OUTSIDE. A validation failure kills
      the connection (see `_crash`), so from inside there is nothing left to ask; from OUTSIDE, "how many records
      did this process's validator refuse" is what tells a healthy boundary from one whose peer is sending shapes
@@ -210,7 +324,13 @@
      IT COUNTS VALIDATION AND NOT EVERY CRASH, and the two are told apart by WHERE the throw came from: a record
      that failed a declared type is the PEER being broken, while an implementation that threw while serving a
      well-formed call is THIS process being broken (for a renderer, a WASM abort — a recorded outcome, not a bad
-     message). Both kill the connection, exactly as Mojo's ReportBadMessage does; only the first is counted. */
+     message). Both kill the connection, exactly as Mojo's ReportBadMessage does; only the first is counted.
+     AND IT COUNTS IN RELEASE, WHICH IT DID NOT. Every incoming check was DCHECK-class, so a release build had
+     no validator at all on the boundary SECURITY.md calls untrusted — and the classification INVERTED there
+     rather than merely weakening: with the unknown-ordinal check stripped, `m` stayed undefined until the
+     dispatch line, by which point `validating` was false, so the one number that reports a refused record read
+     0 for the very records it exists to count. `checkValues` now takes the severity from its call site and
+     every read of an incoming record is CHECK-class. */
   var _rejected = 0;
 
   function interfaceOf(name) {
@@ -249,11 +369,13 @@
   var _endpoints = new Set();
   function stats() {
     var remotes = [], receivers = [];
-    _endpoints.forEach(function (h) {
-      (h.kind === "remote" ? remotes : receivers).push(h.def.name + "@" + h.def.version);
-    });
+    _endpoints.forEach(function (h) { (h.kind === "remote" ? remotes : receivers).push(h.def.name); });
+    /* `wire` IS WHICH DESCRIPTION THIS REALM HOLDS, so a reader of any stats record can see WHETHER two
+       processes are the same generation rather than being told that they are. It replaces the `@0` that used
+       to be appended to every interface name: a constant printed beside twenty names said nothing, and the one
+       fact it pretended to carry is this one. */
     return { remotes: remotes.sort(), receivers: receivers.sort(), endpoints: _endpoints.size,
-             badMessages: _rejected };
+             badMessages: _rejected, wire: wireDigest(wireContract()) };
   }
 
   /* ── THE CALLER END. One JS method per mojom method, named by Chromium's JS-binding rule, taking the
@@ -282,7 +404,7 @@
            "a call was made on " + m.iface + "." + m.name + " after " + this.conn.name + " died (" +
            this.conn.deadReason + ") — what failed is that process, so this call would be a second crash " +
            "reported as a first, and its caller would park on a reply nothing is left to produce");
-    checkValues("a call to " + m.iface + "." + m.name, m.params, args);
+    checkValues(DCHECK, "a call to " + m.iface + "." + m.name, m.params, args);
     var xfer = [];
     collectHandles(m.params, args, xfer);
     var id = 0, p;
@@ -296,30 +418,32 @@
     return p;
   };
 
+  /* EVERY ASSERT ON THIS PATH READS THE INCOMING RECORD, so every one is CHECK-class — see `checkValues`. */
   Remote.prototype._onmessage = function (env) {
     try {
-      DCHECK(!!env && env.w === WIRE && typeof env.i === "string" && typeof env.o === "number" &&
-             typeof env.r === "number" && typeof env.f === "number" && Array.isArray(env.a),
-             "a record on a " + this.def.name + " pipe is not this transport's — a message is a wire version, " +
-             "the interface it belongs to, a method ordinal, a request id, flags and the parameter list");
+      CHECK(!!env && env.w === WIRE && typeof env.i === "string" && typeof env.o === "number" &&
+            typeof env.r === "number" && typeof env.f === "number" && Array.isArray(env.a),
+            "a record on a " + this.def.name + " pipe is not this transport's — a message is a wire version, " +
+            "the interface it belongs to, a method ordinal, a request id, flags and the parameter list");
       this.conn._absorb(env);
-      DCHECK(env.i === this.def.name,
-             "a " + this.def.name + " pipe carried a message for " + env.i + " — the interface name is on the " +
-             "wire precisely so a broker that bound the wrong implementation to this pipe names both " +
-             "interfaces here rather than diverging silently at whichever ordinal they stop sharing");
-      DCHECK((env.f & F_IS_RESPONSE) !== 0,
-             "a Remote received a REQUEST on " + this.def.name + " — a pipe has one Remote end and one " +
-             "Receiver end, so a request arriving here is two Remotes bound to one pipe and the real receiver " +
-             "is bound to nothing");
+      CHECK(env.i === this.def.name,
+            "a " + this.def.name + " pipe carried a message for " + env.i + " — the interface name is on the " +
+            "wire precisely so a broker that bound the wrong implementation to this pipe names both " +
+            "interfaces here rather than diverging silently at whichever ordinal they stop sharing");
+      CHECK((env.f & F_IS_RESPONSE) !== 0,
+            "a Remote received a REQUEST on " + this.def.name + " — a pipe has one Remote end and one " +
+            "Receiver end, so a request arriving here is two Remotes bound to one pipe and the real receiver " +
+            "is bound to nothing");
       var m = this.def.byOrd.get(env.o);
-      DCHECK(m !== undefined,
-             this.def.name + " has no method at ordinal " + env.o + " — both ends of this pipe are built from " +
-             "one extension, so an unknown ordinal is a peer running a different generation of mojom.js");
-      DCHECK(m.reply !== null,
-             m.iface + "." + m.name + " is declared fire-and-forget and answered anyway");
-      checkValues("the reply to " + m.iface + "." + m.name, m.reply, env.a);
+      CHECK(m !== undefined,
+            this.def.name + " has no method at ordinal " + env.o + " — both ends of this pipe are built from " +
+            "one extension and agreed their whole wire contract at bind time, so an unknown ordinal here is a " +
+            "peer that changed generation after the handshake");
+      CHECK(m.reply !== null,
+            m.iface + "." + m.name + " is declared fire-and-forget and answered anyway");
+      checkValues(CHECK, "the reply to " + m.iface + "." + m.name, m.reply, env.a);
       var w = this._await.get(env.r);
-      DCHECK(w !== undefined,
+      CHECK(w !== undefined,
              "a reply arrived for " + m.iface + "." + m.name + " request id " + env.r + ", which this endpoint " +
              "never made — the request id is the whole routing table for an answer, so an unknown one means " +
              "the call that IS outstanding will never be resolved");
@@ -357,25 +481,34 @@
        connection — a bad message is not an error return — and only the classification differs. */
     var validating = true;
     try {
-      DCHECK(!!env && env.w === WIRE && typeof env.i === "string" && typeof env.o === "number" &&
-             typeof env.r === "number" && typeof env.f === "number" && Array.isArray(env.a),
-             "a record on a " + this.def.name + " pipe is not this transport's — a message is a wire version, " +
-             "the interface it belongs to, a method ordinal, a request id, flags and the parameter list");
+      CHECK(!!env && env.w === WIRE && typeof env.i === "string" && typeof env.o === "number" &&
+            typeof env.r === "number" && typeof env.f === "number" && Array.isArray(env.a),
+            "a record on a " + this.def.name + " pipe is not this transport's — a message is a wire version, " +
+            "the interface it belongs to, a method ordinal, a request id, flags and the parameter list");
       this.conn._absorb(env);
-      DCHECK(env.i === this.def.name,
-             "a " + this.def.name + " pipe carried a message for " + env.i + " — see the Remote's copy of this " +
-             "assert: the name is on the wire so a crossed bind names both interfaces");
-      DCHECK((env.f & F_IS_RESPONSE) === 0,
-             "a Receiver received a RESPONSE on " + this.def.name + " — nothing on this end ever called out, " +
-             "so this pipe has two Receivers and the Remote is bound to nothing");
+      CHECK(env.i === this.def.name,
+            "a " + this.def.name + " pipe carried a message for " + env.i + " — see the Remote's copy of this " +
+            "assert: the name is on the wire so a crossed bind names both interfaces");
+      CHECK((env.f & F_IS_RESPONSE) === 0,
+            "a Receiver received a RESPONSE on " + this.def.name + " — nothing on this end ever called out, " +
+            "so this pipe has two Receivers and the Remote is bound to nothing");
       var m = this.def.byOrd.get(env.o);
-      DCHECK(m !== undefined,
-             this.def.name + " has no method at ordinal " + env.o + " — both ends are built from one " +
-             "extension, so an unknown ordinal is a peer running a different generation of mojom.js");
-      DCHECK(((env.f & F_EXPECTS_RESPONSE) !== 0) === (m.reply !== null),
-             "the caller of " + m.iface + "." + m.name + " disagrees with the mojom about whether it answers — " +
-             "one side would park on a reply the other will never send, or send one nobody is waiting for");
-      checkValues("a call to " + m.iface + "." + m.name, m.params, env.a);
+      CHECK(m !== undefined,
+            this.def.name + " has no method at ordinal " + env.o + " — both ends are built from one extension " +
+            "and agreed their whole wire contract at bind time, so an unknown ordinal here is a peer that " +
+            "changed generation after the handshake");
+      CHECK(((env.f & F_EXPECTS_RESPONSE) !== 0) === (m.reply !== null),
+            "the caller of " + m.iface + "." + m.name + " disagrees with the mojom about whether it answers — " +
+            "one side would park on a reply the other will never send, or send one nobody is waiting for");
+      /* THE REQUEST ID IS PART OF THE INCOMING RECORD, SO IT IS CHECKED BEFORE THE IMPLEMENTATION RUNS. It was
+         asserted AFTER the dispatch, which meant a call declaring a reply and carrying id 0 executed its C
+         entry — `qjs_init` parsing a document, `qjs_provide` handing a body to a parked flow — and only then
+         refused the record. A bad message must be refused before it has an effect; a refusal that arrives
+         after the side effect is a report, not a gate. */
+      CHECK(m.reply === null || env.r !== 0,
+            "a call to " + m.iface + "." + m.name + " expects a reply and carried request id 0, which is the " +
+            "id a fire-and-forget message uses — there is no id to answer on");
+      checkValues(CHECK, "a call to " + m.iface + "." + m.name, m.params, env.a);
       validating = false;
       var ret = this.impl[m.js].apply(this.impl, env.a);
       if (m.reply === null) {
@@ -384,16 +517,13 @@
                "— nothing carries it anywhere, so a result computed there is a result discarded");
         return;
       }
-      DCHECK(env.r !== 0,
-             "a call to " + m.iface + "." + m.name + " expects a reply and carried request id 0, which is the " +
-             "id a fire-and-forget message uses — there is no id to answer on");
       Promise.resolve(ret).then(function (rec) {
         DCHECK(!!rec && typeof rec === "object",
                "the implementation of " + m.iface + "." + m.name + " answered with no reply record — a method " +
                "that declares a reply returns an object keyed by the reply's declared names");
         var vals = [];
         for (var i = 0; i < m.reply.length; i++) vals.push(rec[m.reply[i].name]);
-        checkValues("the reply " + m.iface + "." + m.name + "'s implementation returned", m.reply, vals);
+        checkValues(DCHECK, "the reply " + m.iface + "." + m.name + "'s implementation returned", m.reply, vals);
         var xfer = [];
         collectHandles(m.reply, vals, xfer);
         self_.port.postMessage(self_.conn._envelope({ w: WIRE, i: m.iface, o: m.ordinal, r: env.r,
@@ -455,17 +585,20 @@
     return e;
   };
 
+  /* THE INCOMING RECORD AGAIN, SO CHECK-CLASS AGAIN — and this one is why the severity matters even for a
+     field nothing dispatches on: with the assert stripped, a child record missing `out` reached `_onStdio`
+     as `undefined` and the parent's absorber indexed it. */
   Connection.prototype._absorb = function (env) {
     if (this.role === "child") {
-      DCHECK(env.out === undefined,
-             "the parent sent stdio to a child — output flows one way across a process boundary, and a field " +
-             "arriving in this direction is a parent that has started narrating into its own child");
+      CHECK(env.out === undefined,
+            "the parent sent stdio to a child — output flows one way across a process boundary, and a field " +
+            "arriving in this direction is a parent that has started narrating into its own child");
       return;
     }
-    DCHECK(Array.isArray(env.out),
-           "a record from " + this.name + " carried no output field — every record a child posts drains the " +
-           "process's output with it, so a missing one is a child that stopped reporting and a crash whose " +
-           "cause stays inside the process that died");
+    CHECK(Array.isArray(env.out),
+          "a record from " + this.name + " carried no output field — every record a child posts drains the " +
+          "process's output with it, so a missing one is a child that stopped reporting and a crash whose " +
+          "cause stays inside the process that died");
     this._onStdio(env.out);
   };
 
@@ -484,11 +617,16 @@
      send a call into a program that does not exist. A failure travels IN the acceptance rather than being
      swallowed, because there is no timeout on the far side — a wall clock there would report a loaded machine
      as a broken transport (CLAUDE.md §Testing). */
+  /* IT CARRIES THIS PROCESS'S WIRE CONTRACT, which is the FIRST record that travels child->parent and
+     therefore the earliest point the parent can refuse a peer of another generation — before it binds a
+     single interface, so no ordinal is ever dispatched across a skew. A refused acceptance (`ok:false`)
+     carries none: the program that did not start may BE mojo.js, so there is no contract to state. */
   Connection.prototype.acceptInvitation = function (ok, err) {
     DCHECK(this.role === "child", "only a child accepts an invitation");
     DCHECK(typeof ok === "boolean" && (err === null || typeof err === "string"),
            "an invitation acceptance states whether this process started and, when it did not, why");
-    this._post({ w: WIRE, k: "accept-invitation", ok: ok, err: err }, []);
+    this._post({ w: WIRE, k: "accept-invitation", ok: ok, err: err,
+                 wire: ok ? wireContract() : null }, []);
   };
 
   /* THE BROKER'S ONE REQUEST. A name goes out with one end of a fresh pipe; the peer's binder map answers it.
@@ -499,53 +637,69 @@
            "an interface was requested from " + this.name + " after it died (" + this.deadReason + ")");
     var def = interfaceOf(name);
     var ch = new MessageChannel();
-    this._post({ w: WIRE, k: "bind", iface: name, version: def.version, port: ch.port2 }, [ch.port2]);
+    /* THE CONTRACT RIDES THE BIND, which is the first and only record that travels parent->child, so each
+       direction asserts the peer's description exactly once, on the earliest record that carries it. Neither
+       is a fallback for the other and neither is redundant: the parent's refusal gates `ready`, so no
+       interface is bound across a skew by a host that awaits it, and this one gates the PIPE, so a host that
+       binds without awaiting `ready` — one line, and `bindInterface` asks only that the peer is alive — is
+       refused here instead of being served an ordinal from another generation. */
+    this._post({ w: WIRE, k: "bind", iface: name, wire: wireContract(), port: ch.port2 }, [ch.port2]);
     return new Remote(this, def, ch.port1);
   };
 
   Connection.prototype._onprimordial = function (m) {
     try {
-      DCHECK(!!m && m.w === WIRE && typeof m.k === "string",
-             "a record on the primordial pipe to " + this.name + " is not this transport's — it carries a wire " +
-             "version and a kind");
+      CHECK(!!m && m.w === WIRE && typeof m.k === "string",
+            "a record on the primordial pipe to " + this.name + " is not this transport's — it carries a wire " +
+            "version and a kind");
       this._absorb(m);
       if (m.k === "accept-invitation") {
-        DCHECK(this.role === "parent", "a child received an invitation acceptance");
-        DCHECK(typeof m.ok === "boolean", "an invitation acceptance from " + this.name + " states no outcome");
-        if (m.ok) { this._readyRes(this); return; }
+        CHECK(this.role === "parent", "a child received an invitation acceptance");
+        CHECK(typeof m.ok === "boolean", "an invitation acceptance from " + this.name + " states no outcome");
+        if (m.ok) {
+          /* THE PEER IS REFUSED HERE OR NOT AT ALL, and this is before `ready` resolves — so a caller that
+             awaited a renderer either has one built from this generation or has an error, never a live pipe
+             onto a description this process does not speak. */
+          requireWireAgreement(this.name, "its invitation acceptance", m.wire);
+          this._readyRes(this);
+          return;
+        }
         this._die(this.name + " did not start: " + m.err);
         return;
       }
       if (m.k === "bind") { this._onbind(m); return; }
       if (m.k === "abort") {
-        DCHECK(this.role === "parent",
-               "a parent reported its own death to a child — there is nothing above a parent to report to, and " +
-               "a child that believed it would go on making calls into a process that is gone");
-        DCHECK(typeof m.reason === "string", "an abort from " + this.name + " carries the reason it died");
+        CHECK(this.role === "parent",
+              "a parent reported its own death to a child — there is nothing above a parent to report to, and " +
+              "a child that believed it would go on making calls into a process that is gone");
+        CHECK(typeof m.reason === "string", "an abort from " + this.name + " carries the reason it died");
         this._die(this.name + " died: " + m.reason);
         return;
       }
-      DFAIL("the primordial pipe to " + this.name + " carried a record kind it does not serve: `" + m.k + "` — " +
-            "a capability is an INTERFACE brokered onto its own pipe, never a new kind here");
+      CHECK_FAIL("the primordial pipe to " + this.name + " carried a record kind it does not serve: `" + m.k +
+                 "` — a capability is an INTERFACE brokered onto its own pipe, never a new kind here. It is " +
+                 "CHECK-class with the rest of this path: as a DFAIL it was stripped from release, where the " +
+                 "record then fell out of this function and was DROPPED, so a peer that asked for something " +
+                 "waited on an answer nothing was left to produce");
       /* THE PRIMORDIAL PIPE RUNS NO IMPLEMENTATION EITHER — an acceptance, a bind and an abort are all records
          this READS — so a throw here is the peer, and it is counted with the rest. */
     } catch (e) { _rejected++; this._crash(e); }
   };
 
   Connection.prototype._onbind = function (m) {
-    DCHECK(typeof m.iface === "string" && typeof m.version === "number" && m.port instanceof MessagePort,
-           "a bind request from " + this.name + " is not one — it names an interface, states the version it " +
-           "expects, and carries the pipe end this process is to bind its implementation to");
+    CHECK(typeof m.iface === "string" && m.port instanceof MessagePort,
+          "a bind request from " + this.name + " is not one — it names an interface, states the wire contract " +
+          "it was built from, and carries the pipe end this process is to bind its implementation to");
+    /* THE CONTRACT IS CHECKED BEFORE THE NAME IS LOOKED UP, because a peer of another generation may well ask
+       for an interface this one does not define, and "no such interface" would then be a true statement that
+       names the wrong fault. */
+    requireWireAgreement(this.name, "a bind request for " + m.iface, m.wire);
     var def = interfaceOf(m.iface);
-    DCHECK(m.version === def.version,
-           this.name + " asked to bind " + m.iface + " at version " + m.version + " while this process defines " +
-           "version " + def.version + " — both ends ship out of ONE extension, so a skew is a build that " +
-           "packaged two generations of mojom.js rather than a compatibility case to negotiate");
     var impl = _binders.get(m.iface);
-    DCHECK(impl !== undefined,
-           this.name + " asked this process for `" + m.iface + "`, which nothing here implements — an interface " +
-           "reaches a peer only if a component registered it with mojo.exposeInterface, and a bind nobody " +
-           "answers leaves the caller holding a pipe with no receiver on the far end and no error either");
+    CHECK(impl !== undefined,
+          this.name + " asked this process for `" + m.iface + "`, which nothing here implements — an interface " +
+          "reaches a peer only if a component registered it with mojo.exposeInterface, and a bind nobody " +
+          "answers leaves the caller holding a pipe with no receiver on the far end and no error either");
     new Receiver(this, def, impl, m.port);
   };
 

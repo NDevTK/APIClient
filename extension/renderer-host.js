@@ -103,10 +103,21 @@
   function programOnce() {
     if (_programP) return _programP;
     _programP = (async function () {
-      /* THE TRANSPORT IS PART OF THE PROGRAM, and it is the SAME BYTES this document loaded by <script src>.
-         mojo.js's own rule is that an interface exists only if both ends agree on it, and one description is
-         what makes that true — so the frame is handed this extension's mojo.js and mojom.js rather than a copy
-         inlined into renderer.html, where a second generation could live. */
+      /* THE TRANSPORT IS PART OF THE PROGRAM, so the frame is handed this extension's mojo.js and mojom.js
+         rather than a copy inlined into renderer.html, where a second generation could live.
+         IT IS NOT "THE SAME BYTES this document loaded by <script src>", WHICH IS WHAT THIS COMMENT CLAIMED
+         AND COULD NOT SHOW. It is a SECOND READ of the same three URLs: ast-worker.html loads check.js,
+         mojo.js and mojom.js when it parses, and this `fetch` runs at the FIRST rendererLaunch, which is a
+         later instant — and the extension is served out of a live directory, so nothing in this tree makes
+         the two reads one generation. The frame's own document is a THIRD read (`src=RENDERER_URL` below),
+         though that one is covered from inside: renderer.html's `rendererImpl` walks the mojom's own method
+         list and crashes naming itself if its ABI table and the declarations disagree.
+         WHAT MAKES THE TWO READS ONE GENERATION IS ASSERTED AND NO LONGER ASSUMED. The `version: 0` that used
+         to stand in the mojom was a constant nothing incremented, so it compared equal across every skew it
+         named; mojo.js derives the WIRE CONTRACT from the declarations instead and refuses a peer whose
+         contract differs — at the invitation acceptance, before a single interface is bound. A frame from
+         another generation therefore fails its boot, is torn down by the catch below, and frees its agent
+         cluster, rather than being handed ABI calls whose operands its own mojom places differently. */
       var names = ["check.js", "mojo.js", "mojom.js", "lib/qjs/qjs.mjs", "lib/qjs/qjs.wasm"];
       var rs = await Promise.all(names.map(function (n) { return fetch(n); }));
       for (var i = 0; i < rs.length; i++)
@@ -504,11 +515,17 @@
      the cluster gets an instance, and its presence in that table's own snapshot is what `rendererPoolProbe`
      cross-checks. That check no longer spans two PROGRAMS — the table is a Map in this realm — so what it
      proves is stated where it is made, at that probe.
-     AND THE TYPING IS OBSERVABLE. `iface`/`ifaceVersion`/`ifaceMethods` are read off each bound interface's own
-     descriptor rather than restated here, so they answer "which interface is this pipe actually carrying, at
-     which version" — the question a broker that bound the wrong implementation would get wrong. `badMessages`
-     is the count of records this TRUSTED zone's validator refused: SECURITY.md makes the renderer the peer
-     whose messages must be assumed hostile, so a healthy run reads 0. `child` is the same IPC surface asked of
+     AND THE TYPING IS OBSERVABLE. `iface`/`ifaceMethods` are read off each bound interface's own descriptor
+     rather than restated here, so they answer "which interface is this pipe actually carrying" — the question
+     a broker that bound the wrong implementation would get wrong. `wire` is the digest of the DESCRIPTION this
+     realm holds, and it is reported because the property it stands for is the one this boundary cannot get
+     from a build: mojom.js is read once by this document's `<script src>` and once again by `programOnce`, and
+     the mojo handshake refuses a frame whose contract differs from this one. It replaces `ifaceVersion`, which
+     reported the literal 0 both interfaces declared and moved for no change anybody could make to them.
+     `badMessages` is the count of records this TRUSTED zone's validator refused: SECURITY.md makes the
+     renderer the peer whose messages must be assumed hostile, so a healthy run reads 0 — and the probe now
+     ASSERTS that rather than reporting it, because a number carried in a record and compared by nobody is the
+     shape CLAUDE.md names. `child` is the same IPC surface asked of
      each frame ITSELF over a second brokered pipe, because a transport whose only evidence is that a message
      arrived is one whose shape nobody can check from outside — and asked of BOTH frames it is also how this
      document sees that each renderer holds its OWN endpoints rather than a shared set.
@@ -539,7 +556,7 @@
     var rec = { group: GROUP, asked: PEERS.length, provisioned: 0,
                 peers: PEERS.map(function () { return null; }),
                 whileLive: null, after: null, torndown: 0, crashed: false, err: null, badMessages: null,
-                rendererLines: null };
+                wire: null, rendererLines: null };
 
     /* ONE ORDER, ONE ARM PER OUTCOME. `Promise.all` would reject on the first failed fork while the others
        kept building frames nobody holds a record of, so a probe that failed once would leave this document
@@ -602,8 +619,7 @@
         var b = await r.renderer.getBundleId();
         var child = await r.childProcess.getMojoStats();
         rec.peers[idx] = { origin: p.origin, routingId: r.routingId, name: r.name, addr: p.addr,
-                           iface: r.renderer.def.name, ifaceVersion: r.renderer.def.version,
-                           ifaceMethods: r.renderer.def.byOrd.size,
+                           iface: r.renderer.def.name, ifaceMethods: r.renderer.def.byOrd.size,
                            initrc: v.rc, bundleId: (b.bundleId >>> 0).toString(36),
                            /* THE WORKING SET THE FRAME STATED, read off the reply that carried it — the fact
                               bridge.js's RAM floor is summed out of. A probe that never looked at it would
@@ -656,6 +672,18 @@
            "instance and a WASM heap resident under a document that does not reload");
     rec.after = after;
     rec.badMessages = after.mojo.badMessages;
+    rec.wire = after.mojo.wire;
+    /* THE VALIDATOR'S OWN NUMBER, DECIDED ON AND NOT MERELY CARRIED. It is the one fact this file can state
+       about the direction SECURITY.md calls hostile — how many records this TRUSTED zone's validator refused
+       — and it was written into the record with nothing anywhere comparing it, which reads identically whether
+       the validator held or was never reached. A refusal kills the connection, so the calls above would have
+       rejected and this probe would be on its crash path; a non-zero here with a record still being returned
+       is a refusal that killed a pipe nothing was waiting on, which is the one way it stays silent. */
+    DCHECK(after.mojo.badMessages === 0,
+           "this document's mojo validator refused " + after.mojo.badMessages + " record(s) from its " +
+           "renderers — a record that does not match a declared type is the peer being broken and kills the " +
+           "connection (Mojo's ReportBadMessage), so a probe that provisioned two frames, spoke the whole ABI " +
+           "to both and still saw one is a renderer speaking a shape content.mojom.Renderer does not declare");
     return rec;
   };
 
