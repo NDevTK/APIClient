@@ -120,6 +120,17 @@ static JSContext           *g_ctx;
 static int                  g_begun;
 static int                  g_done;
 
+/* THE DOCUMENTS THAT JOINED THIS AGENT AFTER IT WAS ROOTED — `qjs_join`'s realms and trees, held because THIS
+ * host is what gives them back. It is not a registry and does not answer any question about the agent: the
+ * world registry names documents, `navigable.c` owns the §7.4 child realms, and these two arrays exist for the
+ * one reason a host holds anything, which is that `qjs_teardown` must free exactly what `qjs_*` allocated. A
+ * joined realm freed by nobody is a leak `JS_FreeRuntime`'s gc_obj_list walk reports and nothing else would,
+ * and a joined tree freed by nobody outlives the arenas it came out of. */
+static JSContext          **g_joined_ctx;
+static lxb_html_document_t **g_joined_dom;
+static int                  g_joined_n;
+static int                  g_joined_cap;
+
 /* THE AGENT AND THE DOCUMENT, SPLIT. An AGENT is a JSRuntime: every class registration, the world registry,
    the flow frontier. A DOCUMENT is a JSContext in it. A SAME-ORIGIN CHILD NAVIGABLE IS A SECOND DOCUMENT IN
    THIS AGENT, so what a document IS has to be one description that runs twice.
