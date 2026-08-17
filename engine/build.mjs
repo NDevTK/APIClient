@@ -36,6 +36,15 @@ const RUN_BACKSTOP_MS = 15 * 60 * 1000;
    signal without it is a CRASH, and a crash's `@WHY` is the result — it must not be dressed as a timing
    artifact. Three outcomes, three reports, three exit codes.
 
+   AND THE HUNG REPORT ASSERTED A CAUSE IT NEVER MEASURED. It said the kill meant "a defect in the fixture,
+   not the engine" — a claim about which of two named causes held, made by a function whose children run
+   `stdio: "inherit"`, so it has never seen a line of their output. Measured, it was backwards: the three runs
+   it called HUNG reached `finished` 545-705 while every run it called FAILED died on an abort at 16-261, so
+   it reported 20-40x MORE work completed as the worse verdict, and a reader who trusted it went looking for a
+   stall in a frontier whose `blocked` and `owed` were 0 in every sample of every run. The kill cannot decide
+   this — deciding it needs the child's census, which needs capturing stdout rather than inheriting it, and
+   that is a real change and not this one. So it now names the discriminator and stops claiming the answer.
+
    AND THE VERDICT IS RETURNED RATHER THAN EXITED ON, BECAUSE A STAGE THAT EXITS IS A DOOR IN FRONT OF EVERY
    STAGE BEHIND IT — see the stage list at the bottom for the one that stood behind this exit.
    The `hint` is printed HERE, at the non-pass, which is also the only way it prints at all: the three call
@@ -55,8 +64,10 @@ function runOutcome(label, t, hint) {
       `DID NOT FINISH within ${RUN_BACKSTOP_MS / 60000} min — killed by the harness ` +
       `backstop, NOT a failing run and NOT a passing one.\n` +
       `[build]   load average at kill: ${load} (on ${cpus().length} cores)\n` +
-      `[build]   Either the machine is saturated, or the fixture's frontier does not drain and the\n` +
-      `[build]   program has no completion condition — a defect in the fixture, not the engine.`);
+      `[build]   READ THE @COLD CENSUS ABOVE — this kill does not know why it fired, and the two causes\n` +
+      `[build]   it used to name are told apart by numbers already on screen. \`finished\` rising with\n` +
+      `[build]   \`blocked\`/\`owed\` at 0 is a HEALTHY frontier that wanted more budget; \`finished\` flat\n` +
+      `[build]   with \`live\` rising is the stall. A plateau that resolves is WFQ re-ranking, not a stall.`);
   }
   if (t.signal) {
     return bad("CRASHED on " + t.signal, 3,
