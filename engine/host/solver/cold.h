@@ -97,9 +97,20 @@ void cold_census(ColdCensus *out);
  * THE SHARING SURVIVES THE TIER. A recipe per flow, written in full, would flatten the prefix every fork
  * shares — the quadratic decide.c deleted from RAM, re-created on the way to disk, and allocated at the one
  * moment RAM pressure asked for relief. So the park writes each frozen SEGMENT once and names it by a
- * park-local ordinal; a flow's own record is that ordinal plus its accumulated reward. Two record kinds, both
- * plain text, and neither may contain the ';' the host joins them with:
+ * park-local ordinal; a flow's own record is that ordinal plus its accumulated reward. Three record kinds, all
+ * plain text, and none may contain the ';' the host joins them with:
  *
+ *     g<generation>               THE WORLD-NAME GENERATION this residue was written under, and the FIRST
+ *                                 record in the document because everything after it is named under the one
+ *                                 above it. A WorldId is (document, generation, serial): the document name is
+ *                                 stable across a park BY REQUIREMENT — routing keys on it — and the serial
+ *                                 counts from 1 in every session, so without this a resumed session hands a
+ *                                 peer that never left memory the names of the session that ended, and the
+ *                                 peer answers those flows out of a dead flow's segments (solver/world.h says
+ *                                 why the generation and not a park-time notice). A park is the ONLY thing
+ *                                 that makes a document name outlive a session, so the residue is the only
+ *                                 thing this has to ride, and it rides it as the writer's OWN generation:
+ *                                 cold_resume mints one above it rather than trusting a number to be next.
  *     s<id>,<base-id|->,<arms>    a frozen segment: its own arms as '0'/'1', over the segment `base-id`
  *     f<seg-id|->,<val>           a flow standing on that segment, carrying its WFQ reward
  *     c<seg-id|->,<val>,<sink>,<src-hex>,<payload-hex>
@@ -165,7 +176,10 @@ long cold_park_records(void);
    residue of nothing but `f-,<val>` records — every flow standing on no decision segment, which is what a park
    taken before the first pick writes — resumes without touching park_emit_chain's output, park_unhex or the
    sink-class re-bind, and reports the identical record count as one taken after the document forked. A host
-   that cannot tell those apart cannot tell an exercised round trip from an unexercised one. */
+   that cannot tell those apart cannot tell an exercised round trip from an unexercised one.
+   THE 'g' RECORD IS NOT A KIND HERE, and that is deliberate rather than an omission: there is exactly one per
+   document and it names no flow, so counting it would put a constant in every one of these numbers. It is in
+   cold_park_records (which is what the document HOLDS) and in neither census (which are what it RESUMES). */
 typedef struct {
     long segs;     /* 's': frozen decision segments, written once each however many flows stand on them */
     long flows;    /* 'f' */

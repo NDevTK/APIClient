@@ -42,10 +42,13 @@ typedef struct RemoteOp RemoteOp;
 
 /* `record` is the text the asking instance emitted, VERBATIM:
      windowproxy.get <doc> <world+ancestry> <member>
-     object.get      <doc> <world+ancestry> <id> <key>
-     object.set      <doc> <world+ancestry> <id> <key> <value>
-     object.delete   <doc> <world+ancestry> <id> <key>
-     object.apply    <doc> <world+ancestry> <id> <thisArg> <arg>*
+     object.get      <doc> <world+ancestry> <generation>:<id> <key>
+     object.set      <doc> <world+ancestry> <generation>:<id> <key> <value>
+     object.delete   <doc> <world+ancestry> <generation>:<id> <key>
+     object.apply    <doc> <world+ancestry> <generation>:<id> <thisArg> <arg>*
+   The object is named by (generation, id) because an id is an index into ONE session's export table
+   (remote_object.h): the document name is stable across a park by requirement, so an id alone resolves in
+   range in every session of that document and names a different object in each.
    The first two fields are the TRANSPORT'S — which instance, and whose timeline — exactly as they are on a
    routed delivery, which is what lets one router carry both. Crashes on a verb this agent does not perform: an
    unanswered record parks the asking flow forever, so the operation has to be built rather than ignored. */

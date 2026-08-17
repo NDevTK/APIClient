@@ -9,10 +9,17 @@
 void remote_object_init(JSContext *ctx);
 void remote_object_free(JSContext *ctx);
 
-/* The object an id names, BORROWED. JS_UNDEFINED for an id this agent never exported, which is a peer naming
+/* The object a name names, BORROWED. JS_UNDEFINED for an id this agent never exported, which is a peer naming
    something that was never lent — a protocol error, not a missing property. Lending is not a separate door: an
-   object is exported by ENCODING it, which is the only way one ever crosses. */
-JSValueConst remote_object_by_id(uint32_t id);
+   object is exported by ENCODING it, which is the only way one ever crosses.
+   AN ID IS AN INDEX INTO ONE SESSION'S TABLE, SO THE GENERATION IS HALF THE NAME. The export table dies with
+   the instance and a resumed session mints from 1 again, while the DOCUMENT name is stable across a park by
+   requirement — so a name lent before a park is IN RANGE in the new table and would resolve, silently, to an
+   unrelated object: `w.document === w.document` across the park answered by two different objects, with the
+   "never lent" check passing. The generation is world.h's, because it is the same fact about the same session
+   and a second counter would be a second answer to it. A name from an ended session is REFUSED here rather
+   than resolved — that is a capability to build, and it aborts saying which. */
+JSValueConst remote_object_by_id(uint32_t session, uint32_t id);
 
 /* THE ONE GRAMMAR FOR A VALUE THAT CROSSES AN INSTANCE BOUNDARY, both directions, both processes.
  *
@@ -21,7 +28,7 @@ JSValueConst remote_object_by_id(uint32_t id);
  * session, nor a park, which is why there is an encoding at all.
  *
  *   u  undefined            N  null              b0 / b1  a boolean
- *   n  a double, %.17g      s  base64 UTF-8      o / f / c  an OBJECT, by NAME: `<document>:<id>`
+ *   n  a double, %.17g      s  base64 UTF-8      o / f / c  an OBJECT, by NAME: `<document>:<generation>:<id>`
  *   w  a WELL-KNOWN symbol, by its [[Description]]   g  a REGISTERED symbol, by base64 of its Symbol.for key
  *
  * A STRING RIDES AS BASE64 because these records are TAB-SEPARATED and a property name or a written value may
@@ -68,11 +75,5 @@ JSValue remote_object_decode(JSContext *ctx, const char *text);
  * record the caller frees. */
 char   *remote_completion_encode(JSContext *ctx, int completion, JSValueConst v);
 JSValue remote_completion_decode(JSContext *ctx, const char *text, int *pcompletion);
-
-/* IS THIS a reference to an object in another agent, and WHICH object — the (document, id) the name it was
-   minted from carried. Asked by the encoder, which must re-emit that name rather than lend the proxy. */
-bool     remote_object_is(JSContext *ctx, JSValueConst v);
-uint32_t remote_object_doc(JSContext *ctx, JSValueConst v);
-uint32_t remote_object_id(JSContext *ctx, JSValueConst v);
 
 #endif

@@ -23,7 +23,7 @@
  * which is the same navigable spelled the other way — is the one object both agents can independently BUILD,
  * because a navigable belongs to the agent that created it and only its ACTIVE DOCUMENT lives in the peer. So
  * it crosses as the five facts that decide which navigable it is (nav_encode) and is resolved on the far side
- * to that agent's own WindowProxy, never lent as `o<doc>:<id>` — see the encoder for what a reference proxy
+ * to that agent's own WindowProxy, never lent as `o<doc>:<gen>:<id>` — see the encoder for what a reference proxy
  * would silently do to postMessage, to §7.2.1's cross-origin filter and to `w[0] === w.frames[0]`.
  *
  * IDENTITY HOLDS ON BOTH SIDES, and neither half is optional. The exporting agent mints ONE id per object, so
@@ -123,21 +123,40 @@ static uint32_t remote_object_export(JSContext *ctx, JSValueConst v)
     return ++g_exports_n;
 }
 
-JSValueConst remote_object_by_id(uint32_t id)
+JSValueConst remote_object_by_id(uint32_t session, uint32_t id)
 {
+    /* A NAME THIS DOCUMENT LENT IN AN EARLIER SESSION. The id is an index into a table that died with that
+       session, and this one mints from 1 again, so the name is IN RANGE and names a different object. It is
+       refused — the whole reason the generation is on the wire is that an old name must be unresolvable rather
+       than wrongly resolvable — and the refusal names the capability, because a peer that legitimately holds a
+       reference across a park is the ordinary case: Level-1 eviction gives up ONE document's engine while the
+       instance reading from it stays exactly where it was. */
+    if (session != world_session()) {
+        DFAIL("a peer performed an operation through a reference this document lent in an EARLIER SESSION — "
+              "the export table died with that session and this one mints its ids from 1 again, so the name "
+              "resolves in range to an unrelated object and `===` answers wrong. Build what carries an export "
+              "across a park: an exported object is state the RECIPE has to name (solver/cold.h), or the park "
+              "must tell each peer that its references into this document are gone — which is the same notice "
+              "world_release is missing a caller for (solver/world.h)");
+        return JS_UNDEFINED;
+    }
     if (id == 0 || id > g_exports_n) return JS_UNDEFINED;
     return g_exports[id - 1].v;
 }
 
 /* ---- THIS AGENT AS AN IMPORTER --------------------------------------------------------------------------- */
 
-/* The (doc, id) a reference names, kept on the PROXY'S TARGET. Not on the handler, and the difference is not
-   stylistic: a trap is passed (target, property, receiver) and the target is argv[0] every time, whereas what
-   `this` is inside a trap depends on how the interpreter dispatched it. Reading the identity off an argument
-   the contract guarantees is the only version that cannot be wrong.
+/* The (doc, session, id) a reference names, kept on the PROXY'S TARGET. Not on the handler, and the difference
+   is not stylistic: a trap is passed (target, property, receiver) and the target is argv[0] every time, whereas
+   what `this` is inside a trap depends on how the interpreter dispatched it. Reading the identity off an
+   argument the contract guarantees is the only version that cannot be wrong.
+   `session` is the exporting agent's GENERATION and is part of the name, not metadata about it: an id is an
+   index into ONE session's export table (remote_object.h), so a reference that kept only (doc, id) would ask
+   the resumed instance of that document for an object of the session that ended and be answered by whatever
+   the new table happens to hold at that index.
    `callable` is what the peer said about the object, and it rides HERE rather than being inferred because
    nothing in this heap can look at the object to ask. */
-typedef struct { uint32_t doc, id; uint8_t callable, constructor; } RefData;
+typedef struct { uint32_t doc, session, id; uint8_t callable, constructor; } RefData;
 
 /* TWO TARGET CLASSES FOR ONE KIND OF REFERENCE, because JS_NewProxy reads `JS_IsFunction(target)` and
    `JS_IsConstructor(target)` ONCE, at mint, and a Proxy over a non-callable target has no [[Call]] at all — its
@@ -145,7 +164,7 @@ typedef struct { uint32_t doc, id; uint8_t callable, constructor; } RefData;
    a target whose class declares a `call`, and the constructor bit is set on top of that for a `c`. The class's
    own call handler is unreachable by construction (a Proxy's target is not script-reachable) and says so. */
 static JSClassID g_ref_class, g_ref_fn_class;
-static JSValue   g_refs = JS_UNDEFINED;   /* "<doc>:<id>" -> the one reference for it (owned) */
+static JSValue   g_refs = JS_UNDEFINED;   /* "<doc>:<session>:<id>" -> the one reference for it (owned) */
 
 /* WHICH INTERNAL METHOD a reference is performing — the machine's magic, and the index of its verb on the
    wire. One enumeration, so a verb and the operands that follow it cannot be declared apart. */
@@ -157,7 +176,8 @@ static const char *const REF_VERB[REF_OP_N] = { "get", "set", "delete", "apply" 
 static const int REF_ARGC[REF_OP_N] = { 3, 4, 2, 3 };
 static int g_ref_stepid[REF_OP_N] = { -1, -1, -1, -1 };
 
-static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t id, bool callable, bool constructor);
+static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t session, uint32_t id,
+                        bool callable, bool constructor);
 
 /* The reference identity behind a proxy's TARGET (what a trap is handed as argv[0]). */
 static RefData *ref_of_target(JSValueConst target)
@@ -178,22 +198,6 @@ static RefData *ref_of_proxy(JSContext *ctx, JSValueConst proxy)
     r = ref_of_target(t);
     JS_FreeValue(ctx, t);
     return r;
-}
-
-bool remote_object_is(JSContext *ctx, JSValueConst v) { return ref_of_proxy(ctx, v) != NULL; }
-
-uint32_t remote_object_doc(JSContext *ctx, JSValueConst v)
-{
-    RefData *r = ref_of_proxy(ctx, v);
-    DCHECK(r != NULL, "the document of something that is not a cross-agent reference was asked for");
-    return r->doc;
-}
-
-uint32_t remote_object_id(JSContext *ctx, JSValueConst v)
-{
-    RefData *r = ref_of_proxy(ctx, v);
-    DCHECK(r != NULL, "the id of something that is not a cross-agent reference was asked for");
-    return r->id;
 }
 
 /* ---- THE WELL-KNOWN SYMBOLS OF THIS AGENT ---------------------------------------------------------------- */
@@ -347,7 +351,7 @@ static char *dec_b64(const char *b64, size_t *plen)
 /* ---- A NAVIGABLE CROSSES AS ITS IDENTITY ----------------------------------------------------------------- */
 
 /* ITS OWN TAG, BESIDE 'o'/'f'/'c' AND NOT ONE OF THEM, because a navigable is not an object this agent may
-   lend — see remote_object_encode for what an `o<doc>:<id>` would silently do to one. */
+   lend — see remote_object_encode for what an `o<doc>:<gen>:<id>` would silently do to one. */
 #define NAV_TAG 'W'
 
 /* WHAT THE IDENTITY IS, and every field of it is load-bearing:
@@ -556,7 +560,7 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
               "slot in every agent) and a registered one (which IS its Symbol.for key), a unique symbol is "
               "identity and nothing else, so it crosses the way an object does: EXPORT it — an id minted once "
               "per symbol in this agent's export table, carried as `<document>:<id>` — and give the importing "
-              "agent a per-(doc, id) LOCAL symbol standing for it, with the pairing remembered in both "
+              "agent a per-(doc, gen, id) LOCAL symbol standing for it, with the pairing remembered in both "
               "directions so a name that comes home resolves to the original symbol and `k === k` holds on "
               "both sides. That local stand-in is a symbol and not a Proxy, which is why it is a mechanism of "
               "its own rather than a call to ref_mint");
@@ -567,7 +571,7 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
      * and wrong for a window in exactly the way that leaves no trace.
      *
      * WHAT WOULD HAPPEN OTHERWISE. `otherW[0]`'s peer-side program answers with a WindowProxy (§7.2.2.2), and
-     * the export below would name it `o<doc>:<id>` — so the asking agent would build a REFERENCE PROXY where a
+     * the export below would name it `o<doc>:<gen>:<id>` — so the asking agent would build a REFERENCE PROXY where a
      * WindowProxy belongs. Every consequence of that is silent: `w[0].postMessage(…)` would park a flow on an
      * `object.apply` instead of running §7.2.1's postMessage; `w[0] === w.frames[0]` would be false about one
      * navigable; §7.2.1's cross-origin FILTER would not run at all, because a reference proxy forwards every
@@ -581,7 +585,7 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
      * facts that decide WHICH navigable it is. The receiving side resolves the DOCUMENT NAME first — a name
      * this agent hosts is its OWN WindowProxy, never a remote one — and only a name it holds no proxy for at
      * all is minted, once, because `w[0] === w[0]` is a page-visible identity and this file already keeps one
-     * reference per (doc, id) for exactly that reason. THE KEEPING IS window_proxy.c's, because a navigable's
+     * reference per (doc, gen, id) for exactly that reason. THE KEEPING IS window_proxy.c's, because a navigable's
      * proxy is the navigable's, and its row BORROWS: core/dom/document.h refuses an OWNING table keyed by
      * document, and correctly, since a navigable is created per `open()` per flow and owning rows would root
      * every one the frontier ever made. A borrowed row is cleared by proxy_finalizer, so the table is the set
@@ -593,7 +597,7 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
         /* AND THE THIRD SPELLING IS NOT ONE. An instance is an origin-keyed agent CLUSTER, so a Window global
            of ANOTHER realm of this agent can reach here — and it is a navigable this file cannot name, because
            window_proxy_navigable_of resolves a global against the realm it was handed. Crossing it as an
-           object would lend that navigable as `o<doc>:<id>`, which is the whole failure above. */
+           object would lend that navigable as `o<doc>:<gen>:<id>`, which is the whole failure above. */
         DCHECK(!window_is(v),
                "a Window global of another realm of THIS agent was about to cross an agent boundary as a "
                "generic object reference. It is a navigable and must cross as its IDENTITY, but the mapping "
@@ -608,17 +612,22 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
            and the page's `===` would answer false about an object that never moved. */
         RefData *r = ref_of_proxy(ctx, v);
         uint32_t doc = r ? r->doc : world_local_doc();
+        /* THE GENERATION IS THE EXPORTING SESSION'S — this one's for an object of this heap, and the one the
+           reference ARRIVED with for a name that is going home. It is world.h's, not a counter of this file's:
+           the export table and the world registry are the same session, and two counters for one fact are two
+           answers to it. */
+        uint32_t session = r ? r->session : world_session();
         uint32_t id  = r ? r->id  : remote_object_export(ctx, v);
         const char *doc_name = world_doc_name(doc);
         char tag = JS_IsConstructor(ctx, v) ? 'c' : JS_IsFunction(ctx, v) ? 'f' : 'o';
-        size_t cap = strlen(doc_name) + 32;
+        size_t cap = strlen(doc_name) + 40;
 
         DCHECK(!strchr(doc_name, '\t') && !strchr(doc_name, '\n'),
                "a document name carries a tab or a newline — these records are one tab-separated line, so the "
                "peer would read one field as two and the id would come back as zero");
         out = malloc(cap);
         CHECK(out != NULL, "remote object: OOM naming an object for another agent");
-        snprintf(out, cap, "%c%s:%u", tag, doc_name, id);
+        snprintf(out, cap, "%c%s:%u:%u", tag, doc_name, session, id);
         return out;
     }
     DFAIL("a value crossed an agent boundary that this protocol does not name — a BigInt is the primitive that "
@@ -669,24 +678,36 @@ JSValue remote_object_decode(JSContext *ctx, const char *text)
        encoder's own refusal to lend one. */
     case NAV_TAG: return nav_decode(ctx, text);
     case 'o': case 'f': case 'c': {
-        const char *colon = strrchr(text + 1, ':');
+        const char *colon = strrchr(text + 1, ':'), *gen;
         char *doc_name;
-        uint32_t doc, id;
+        uint32_t doc, session, id;
 
         DCHECK(colon != NULL, "a cross-agent object name carried no document — an id alone means nothing "
                               "outside the agent that minted it, and resolving it here would answer with "
                               "whatever this agent happens to have lent under that number");
         if (!colon) return JS_UNDEFINED;
-        doc_name = strndup(text + 1, (size_t)(colon - (text + 1)));
+        id = (uint32_t)strtoul(colon + 1, NULL, 10);
+        /* AND THE GENERATION IMMEDIATELY BEFORE IT. Scanned backwards rather than forwards for the same reason
+           the serial is taken from the LAST colon: a document name is "<parent>.<n>" over a root the host may
+           name anything, so only the two separators at the end are known to be the ones. */
+        for (gen = colon; gen > text + 1 && gen[-1] != ':'; gen--)
+            ;
+        DCHECK(gen > text + 1,
+               "a cross-agent object name carried no GENERATION — an export id is an index into ONE session's "
+               "table, so a name without one names a different object in every session of the document that "
+               "lent it, and this agent would resolve it against whichever session is running now");
+        if (gen <= text + 1) return JS_UNDEFINED;
+        session = (uint32_t)strtoul(gen, NULL, 10);
+        doc_name = strndup(text + 1, (size_t)(gen - 1 - (text + 1)));
         CHECK(doc_name != NULL, "remote object: OOM reading a cross-agent object name");
         doc = world_doc_intern(doc_name);
         free(doc_name);
-        id = (uint32_t)strtoul(colon + 1, NULL, 10);
         /* A NAME THAT CAME HOME. The object is in THIS heap and is reached directly: minting a reference for it
            would route a read back out to a peer for a question this agent is the answer to, and would make
-           `x === theSameXComingBack` false. */
+           `x === theSameXComingBack` false. Home is (document AND session): a name of an earlier session of
+           this document is refused by remote_object_by_id rather than resolved against the live table. */
         if (doc == world_local_doc()) {
-            JSValueConst held = remote_object_by_id(id);
+            JSValueConst held = remote_object_by_id(session, id);
             DCHECK(!JS_IsUndefined(held),
                    "a peer named an object of THIS agent that was never lent — the name it used was minted "
                    "somewhere else, or the export table was lost between the lend and the return");
@@ -695,7 +716,7 @@ JSValue remote_object_decode(JSContext *ctx, const char *text)
         DCHECK(!world_doc_hosted(doc),
                "a cross-agent name resolved to a document THIS agent holds under a foreign name — one document "
                "would then have two identities, and an object of it would answer `===` against itself as false");
-        return ref_mint(ctx, doc, id, text[0] != 'o', text[0] == 'c');
+        return ref_mint(ctx, doc, session, id, text[0] != 'o', text[0] == 'c');
     }
     default: break;
     }
@@ -895,7 +916,9 @@ static int ref_op_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         rec_add(&rec, "\t");
         world_serialize(f->world, world, sizeof world);
         rec_add(&rec, world);
-        snprintf(idbuf, sizeof idbuf, "\t%u", r->id);
+        /* THE OBJECT'S NAME IS (GENERATION, ID), the same pair the value grammar puts after the document. An
+           id alone is an index into whichever of that document's sessions is running when the record lands. */
+        snprintf(idbuf, sizeof idbuf, "\t%u:%u", r->session, r->id);
         rec_add(&rec, idbuf);
 
         if (op == REF_OP_APPLY) {
@@ -1010,7 +1033,8 @@ static JSValue ref_unbuilt(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 
 /* ---- MINTING A REFERENCE --------------------------------------------------------------------------------- */
 
-static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t id, bool callable, bool constructor)
+static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t session, uint32_t id,
+                        bool callable, bool constructor)
 {
     char key[64];
     JSValue found, handler, target, proxy;
@@ -1025,15 +1049,17 @@ static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t id, bool callable
     DCHECK(!constructor || callable, "a cross-agent reference claims [[Construct]] without [[Call]] — a "
                                      "constructor is a function, so the peer named something impossible");
 
-    /* ONE REFERENCE PER (doc, id): the other half of identity. The exporter mints one id per object; without
-       this the same id would arrive twice as two objects and `w.document === w.document` would be false on
-       this side instead of the other. */
-    snprintf(key, sizeof key, "%u:%u", doc, id);
+    /* ONE REFERENCE PER (doc, session, id): the other half of identity. The exporter mints one id per object;
+       without this the same id would arrive twice as two objects and `w.document === w.document` would be
+       false on this side instead of the other. The generation is in the key because it is in the NAME — two
+       sessions of one document both mint id 1, and a key without it would answer the second session's name
+       with the first session's proxy, which is the importing half of the same defect. */
+    snprintf(key, sizeof key, "%u:%u:%u", doc, session, id);
     found = JS_GetPropertyStr(ctx, g_refs, key);
     if (JS_IsObject(found)) {
         RefData *had = ref_of_proxy(ctx, found);
         (void)had;
-        DCHECK(had != NULL, "the reference table held something that is not a reference under a (doc, id) key");
+        DCHECK(had != NULL, "the reference table held something that is not a reference under a (doc, gen, id) key");
         DCHECK(had == NULL || (had->callable == (uint8_t)callable && had->constructor == (uint8_t)constructor),
                "one object of a peer arrived twice with two different callabilities — an object does not stop "
                "being a function, so either the peer minted one id for two objects or the kind byte was lost");
@@ -1056,7 +1082,7 @@ static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t id, bool callable
     /* AN EMPTY EXTENSIBLE TARGET, which is what makes the reference fully virtual: a Proxy's invariants are
        stated against its target, and an extensible target with no own properties constrains no trap's result.
        A target carrying a property would make the peer's answers checkable against this agent's guesses. It
-       carries the (doc, id) as an internal slot instead, which is not a property and constrains nothing —
+       carries the (doc, gen, id) as an internal slot instead, which is not a property and constrains nothing —
        and it carries CALLABILITY in its CLASS, because JS_NewProxy reads that once and a reference over a
        plain target has no [[Call]] at all. */
     target = JS_NewObjectClass(ctx, callable ? g_ref_fn_class : g_ref_class);
@@ -1064,6 +1090,7 @@ static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t id, bool callable
     r = calloc(1, sizeof *r);
     CHECK(r != NULL, "remote object: OOM building a cross-agent reference");
     r->doc = doc;
+    r->session = session;
     r->id = id;
     r->callable = (uint8_t)callable;
     r->constructor = (uint8_t)constructor;
@@ -1141,24 +1168,16 @@ void remote_object_free(JSContext *ctx)
 {
     uint32_t i;
     int k;
-    /* AN EXPORT ID IS AN IDENTITY IN THIS SESSION'S TABLE, AND A PARKED INSTANCE COMES BACK AS A NEW ONE. A
-       name is `<doc>:<id>` and `id` is this table's index+1, minted from 1 by every session; the DOCUMENT name
-       is stable across a park by construction, because routing needs it to be. So an instance that pages its
-       frontier out and resumes re-mints the same ids for whatever its replay happens to export first, while a
-       peer that outlived the park — which is the ordinary case, since Level-1 eviction gives up ONE document's
-       engine — still holds `o<doc>:<id>` for the objects of the session that ended. That name then resolves,
-       in range and with nothing to say so, to a DIFFERENT object: `w.document === w.document` across the park
-       is answered by two unrelated objects and remote_op.c's own "never lent" check passes.
-       The mechanism is the one the world namespace needs for the same reason (solver/world.h): an identity
-       minted per session must carry the session, or the exporting instance must tell every peer that the names
-       it lent are dead before it leaves memory. Until one of those exists, an instance with live exports may
-       not park. */
-    DCHECK(!engine_frontier_paged() || g_exports_n == 0,
-           "this agent PARKED its frontier while peers hold names for objects it lent — an export id is an "
-           "index into this session's table and the resumed session mints from 1 again, so every name a peer "
-           "still holds resolves to a different object of the new session and `===` answers wrong with nothing "
-           "to say so. Build the session component of an exported name, or the park-time notice that tells "
-           "each peer its references into this document are gone");
+    /* AN EXPORT ID IS AN IDENTITY IN THIS SESSION'S TABLE, AND A PARKED INSTANCE COMES BACK AS A NEW ONE — so
+       the name carries the SESSION and this call has nothing left to refuse. It used to abort a park taken
+       while any export was live, which was the right crash for as long as `o<doc>:<id>` was all a peer had:
+       the resumed session mints ids from 1 again under a document name that is stable by requirement, so a
+       surviving peer's name resolved IN RANGE to an unrelated object with `===` answering wrong and nothing
+       saying so. The refusal is deleted rather than kept beside the fix, because it is a CAP on Level-1
+       eviction — it forbids exactly the case that eviction is for, one document's engine leaving memory while
+       the instance reading from it stays — and because what it was guarding is now impossible: a name from an
+       ended session is REFUSED at the point it is used (remote_object_by_id), which is where the reader
+       actually is and what names the capability still to build. */
     for (i = 0; i < g_exports_n; i++) JS_FreeValue(ctx, g_exports[i].v);
     free(g_exports);
     g_exports = NULL;

@@ -39,6 +39,9 @@ typedef struct {
 
 static uint32_t g_doc;
 static uint32_t g_next_serial;
+/* THIS SESSION'S GENERATION — see world.h. Zero is a real value (a document nobody has parked), which is why
+   nothing here tests it for presence: what a name needs is that no OTHER session of this document mints it. */
+static uint32_t g_session;
 
 /* THE DOCUMENT NAME TABLE. A handle is an index+1, so 0 stays the NONE value; the table is append-only for the
    life of the instance because a handle already stored in a WindowProxy or a WorldId must never come to mean a
@@ -177,6 +180,36 @@ void world_registry_init(const char *doc_name)
        built the agent for. Every other document is hosted only once a realm has been built for it. */
     if (!g_docs[doc - 1].hosted) world_doc_adopt(doc);
     g_next_serial = 1;
+    /* THE GENERATION IS NOT ASSIGNED HERE, AND THAT IS THE STATEMENT. A document reaching this line for the
+       first time is generation 0 — the host minted its name for THIS load, so it can collide with nothing —
+       and a RESUMED one is handed its namespace later, by the residue (world_session_resume). Re-initialising
+       after that would silently put it back to the ended session's names, so it is asserted rather than set. */
+    DCHECK(g_session == 0,
+           "the world registry was re-initialised after a resumed session had installed its generation — every "
+           "world minted from here would carry the names of the session that parked, which a peer that never "
+           "left memory already keys its segments on");
+}
+
+uint32_t world_session(void)
+{
+    DCHECK(g_doc != 0, "this instance's generation was asked for before world_registry_init named its document "
+                       "— a generation is one coordinate of a name and there is nothing here yet to name");
+    return g_session;
+}
+
+void world_session_resume(uint32_t prev)
+{
+    DCHECK(g_doc != 0, "a resumed generation was installed before world_registry_init named this document");
+    DCHECK(g_minted_n == 0,
+           "a generation was installed after this session had already minted a world — every name minted "
+           "before it carries the ENDED session's generation, so a peer that never left memory answers those "
+           "flows out of segments the session that parked already owns. The generation record is the FIRST in "
+           "a park document precisely so this cannot happen");
+    DCHECK(g_session == 0, "a session's generation was installed twice — a session has one, and the second "
+                           "would rename every world minted after it");
+    g_session = prev + 1;
+    DCHECK(g_session != 0, "the world generation counter wrapped — every name this session mints collides with "
+                           "a session a peer may still hold segments for, merging two timelines");
 }
 
 void world_registry_free(JSContext *ctx)
@@ -200,6 +233,7 @@ void world_registry_free(JSContext *ctx)
     g_docs_n = g_docs_cap = 0;
     g_doc = 0;
     g_next_serial = 0;
+    g_session = 0;
     /* THE COUNTS GO WITH THE REGISTRY, because they say what THIS instance's seam did and a host that runs
        several documents in one process (the native WPT runner) would otherwise report the previous one's. */
     world_segment_counts_reset();
@@ -227,6 +261,9 @@ static WorldId mint(WorldId parent)
     if (!world_is_none(parent)) g_minted[parent.serial - 1].forked = true;
 
     w.doc = g_doc;
+    /* THE GENERATION IS STAMPED HERE and nowhere else, for the reason the document is: a name is composed at
+       the one point a name is made, so a session cannot mint under another session's namespace. */
+    w.session = g_session;
     w.serial = g_next_serial++;
     /* A REUSED SERIAL IS A MERGED TIMELINE. A peer keys its segment by this name, so a wrapped counter hands
        one flow another flow's writes in another document — silently, and only in the multi-document case. */
@@ -251,6 +288,10 @@ WorldId world_mint_child(WorldId parent)
     DCHECK(parent.doc == g_doc,
            "a world minted in ANOTHER document was forked here — a fork mirrors into the instance that owns the "
            "parent, so the peer holding that world is the one that must mint the child and send it back");
+    DCHECK(parent.session == g_session,
+           "a world minted in a PREVIOUS session of this document was forked here — that name belongs to a "
+           "timeline that ended with its session, and a peer still keys a segment on it, so the child would "
+           "inherit a dead flow's writes at every peer that has one");
     DCHECK(parent.serial != 0 && parent.serial <= g_minted_n, "a world was forked from a name never minted here");
     return mint(parent);
 }
@@ -287,6 +328,10 @@ static int world_ancestry(WorldId w, WorldId **out)
 {
     DCHECK(w.doc == g_doc, "the ancestry of a world minted in another document was asked for here — only the "
                            "minting instance holds its fork edges, so the request must carry it");
+    DCHECK(w.session == g_session,
+           "the ancestry of a world minted in a PREVIOUS session of this document was asked for here — the "
+           "fork edges below are this session's table, so the chain would be one session's edges walked under "
+           "another session's name");
     DCHECK(w.serial != 0 && w.serial <= g_minted_n, "the ancestry of a world never minted here was asked for");
     DCHECK(!g_minted[w.serial - 1].forked,
            "a RETIRED FORK POINT was serialized as a flow's world — a fork mints a child for BOTH arms and "
@@ -329,11 +374,12 @@ int world_serialize(WorldId w, char *dst, size_t cap)
 
     DCHECK(dst != NULL && cap > 0, "a world was serialized into no buffer");
     n_anc = world_ancestry(w, &anc);
-    n = snprintf(dst, cap, "%s:%u", world_doc_name(w.doc), w.serial);
+    n = snprintf(dst, cap, "%s:%u:%u", world_doc_name(w.doc), w.session, w.serial);
     CHECK(n > 0 && (size_t)n < cap, "the world vector did not fit its buffer — a truncated vector makes the "
                                     "peer fork a more distant ancestor and silently lose the nearer writes");
     for (k = 0; k < n_anc; k++) {
-        int m = snprintf(dst + n, cap - (size_t)n, ",%s:%u", world_doc_name(anc[k].doc), anc[k].serial);
+        int m = snprintf(dst + n, cap - (size_t)n, ",%s:%u:%u",
+                         world_doc_name(anc[k].doc), anc[k].session, anc[k].serial);
         CHECK(m > 0 && (size_t)(n + m) < cap,
               "the world vector did not fit its buffer — a truncated vector makes the peer fork a more distant "
               "ancestor and silently lose the nearer writes");
@@ -361,21 +407,31 @@ int world_parse(const char *s, WorldId *out, const WorldId **ancestry)
     CHECK(dup != NULL, "world: OOM parsing a world vector");
     q = dup;
     while (q && *q) {
-        char *comma = strchr(q, ','), *colon;
+        char *comma = strchr(q, ','), *colon, *gen;
         if (comma) *comma = 0;
-        /* THE LAST colon: a document name is minted as "<parent>.<n>" and a host may name the root anything,
-           so only the serial's separator is known to be final. */
+        /* THE LAST TWO colons: a document name is minted as "<parent>.<n>" and a host may name the root
+           anything, so only the serial's and the generation's separators are known to be final. */
         colon = strrchr(q, ':');
         /* EVERY FIELD THE WRITER WROTE IS A WORLD, so a field with no serial is not one to skip — skipping it
            drops an ancestor, which is the same silent loss a truncated vector causes: the reader forks
            the next ancestor it holds and every write in between goes with it. world_serialize emits
-           "<doc>:<serial>" for the head and for each ancestor, so there is no field this can legitimately be. */
-        DCHECK(colon != NULL, "a world vector field carried no serial — world_serialize writes <doc>:<serial> "
-                              "for every field, so this vector was not written by it, and reading past the "
-                              "field would silently drop the ancestor it names");
+           "<doc>:<session>:<serial>" for the head and for each ancestor, so there is no field this can
+           legitimately be. */
+        DCHECK(colon != NULL, "a world vector field carried no serial — world_serialize writes "
+                              "<doc>:<session>:<serial> for every field, so this vector was not written by it, "
+                              "and reading past the field would silently drop the ancestor it names");
         {
             WorldId id;
             *colon = 0;
+            /* THE GENERATION IS READ WHERE THE SERIAL IS, because it is part of the name rather than a header
+               (world.h). A field short of one is a vector from a writer that does not have generations — and
+               its names would land on THIS session's, which is the exact collision they exist to prevent. */
+            gen = strrchr(q, ':');
+            DCHECK(gen != NULL, "a world vector field carried no GENERATION — a name without one belongs to "
+                                "every session of the document that minted it at once, so this instance would "
+                                "key a segment for a parked session's flow on a live one's name");
+            id.session = gen ? (uint32_t)strtoul(gen + 1, NULL, 10) : 0;
+            if (gen) *gen = 0;
             id.doc = world_doc_intern(q);
             id.serial = (uint32_t)strtoul(colon + 1, NULL, 10);
             if (world_is_none(*out)) {
@@ -398,10 +454,11 @@ int world_parse(const char *s, WorldId *out, const WorldId **ancestry)
     {
         int k;
         for (k = 0; k < n_anc; k++)
-            DCHECK((*ancestry)[k].doc == out->doc,
-                   "a world vector's ancestry names a world from another document than its own — world_ancestry "
-                   "walks only the edges the minting instance holds, so a mixed chain means the vector was "
-                   "mis-parsed and this instance would fork the wrong segment");
+            DCHECK((*ancestry)[k].doc == out->doc && (*ancestry)[k].session == out->session,
+                   "a world vector's ancestry names a world from another document or another SESSION than its "
+                   "own — world_ancestry walks only the edges the minting instance holds, and those are one "
+                   "session's, so a mixed chain means the vector was mis-parsed and this instance would fork "
+                   "the wrong segment");
     }
     return n_anc;
 }
@@ -482,11 +539,17 @@ CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int 
            this instance, and world_release — the operation that would drop one — has no caller: nothing tells a
            peer that a sending flow has finished, so every arm of every sender's fork that posts leaves a
            segment here for the life of the instance. A reader standing at this allocation needs to know that,
-           because "OOM" alone sends them looking at the page. Build the release: a flow that finishes announces
-           its world to the peers it may have reached, exactly as it announces a document it created. */
+           because "OOM" alone sends them looking at the page. And the GENERATION multiplies it rather than
+           relieving it: a sender that parks and resumes mints in a namespace disjoint from its last, which is
+           the point, so every one of its resumed flows lands BESIDE the dead session's segment instead of on
+           top of it. That is the correct trade — a leak against an answer from a timeline that ended — and it
+           is what makes the release the next thing to build rather than an eventual tidy-up: a flow that
+           finishes, and a session that parks, announce their worlds to the peers they may have reached,
+           exactly as they announce a document they created. */
         CHECK(g != NULL, "world registry: OOM growing the segment table — one segment per foreign world that "
-                         "has ever reached this instance, and none is ever released: build the sender-side "
-                         "notice that tells a peer a world is gone, so world_release has a caller");
+                         "has ever reached this instance, per SESSION of the sender, and none is ever "
+                         "released: build the sender-side notice that tells a peer a world is gone, so "
+                         "world_release has a caller");
         g_segs = g;
         g_segs_cap = cap;
     }

@@ -166,11 +166,33 @@ static void park_rec(const char *s)
 
     for (p = s; *p; p++)
         DCHECK((*p >= '0' && *p <= '9') || *p == ',' || *p == '-' || *p == '+' || *p == '.' ||
-               *p == 'e' || *p == 'E' || *p == 'f',
+               *p == 'e' || *p == 'E' || *p == 'f' || *p == 'g',
                "a park record holds a character the recipe grammar does not have — it would need JSON escaping "
                "on the way out, or (a ';') would split into two records on the way back in");
     park_open_rec();
     park_str(s);
+}
+
+/* THE WORLD-NAME GENERATION THIS DOCUMENT IS WRITTEN UNDER — see cold.h, and solver/world.h for what a name
+   without one does to a peer that never left memory. Written by whichever park runs FIRST, which is why it is
+   here and not in cold_park: a PARTIAL self-park writes a tail while the engine keeps running, and the tail is
+   as much of a residue as the whole frontier is. Once per document, and first in it, because cold_resume has
+   to install the generation before it rebuilds a flow — a flow rebuilt under the old namespace is exactly the
+   collision this record exists to prevent, so the ordering is asserted at both ends. */
+static int g_park_gen_written;
+
+static void park_gen_rec(void)
+{
+    char rec[32];
+
+    if (g_park_gen_written) return;
+    g_park_gen_written = 1;
+    DCHECK(g_park_recs == 0,
+           "the generation record is not the first in the park document — every record after it is named under "
+           "the generation above it, so a reader that met a flow first would rebuild it in the ended session's "
+           "namespace and hand a peer a name it already holds a segment for");
+    snprintf(rec, sizeof rec, "g%u", world_session());
+    park_rec(rec);
 }
 
 /* ATTACKER TEXT CROSSES AS HEX, and it is the one thing in this document whose charset the grammar cannot
@@ -412,6 +434,10 @@ void cold_park_flow(Flow *f)
     char rec[64];
 
     DCHECK(f != NULL, "the cold tier was asked to write the recipe of no flow at all");
+    /* THE NAMESPACE THE RESIDUE RESUMES INTO IS THE FIRST THING IN IT. Before any segment ordinal and before
+       any flow, because both are read back in one forward pass and a flow rebuilt before the generation is
+       installed mints under the ended session's names. */
+    park_gen_rec();
     /* THE RUNNING FLOW'S PATH IS NOT IN ITS BLOB. decide.c keeps the live flow's evolving vector in its own
        globals and only a suspend freezes it into the chain, so a park taken with this flow still switched in
        would write its recipe from the chain it stood on at its LAST suspend — every arm it has taken since, and
@@ -663,6 +689,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
     long seg_n = 0, seg_cap = 0, flows = 0, k;
     const char *p = recipes;
     const int before = flow_count();
+    int gen_seen = 0;
 
     DCHECK(recipes != NULL && *recipes != '\0',
            "the cold tier was asked to resume an empty park document — a document with no residue DELETES its "
@@ -692,7 +719,23 @@ void cold_resume(JSContext *ctx, const char *recipes)
 
         if (!end) end = p + strlen(p);
         q = p + 1;
-        if (kind == 's') {
+        if (kind == 'g') {
+            /* THE NAMESPACE THIS RESIDUE RESUMES INTO, INSTALLED BEFORE ANYTHING IS NAMED UNDER IT. The record
+               carries the WRITER's generation and world_session_resume mints one above it — the successor is
+               computed here rather than written out there, so a document cannot state a namespace that is not
+               strictly beyond the one its own flows ran in. */
+            DCHECK(p == recipes,
+                   "a park document's generation record is not its first — every flow read before it would be "
+                   "rebuilt in the ENDED session's namespace, and a peer that never left memory already holds "
+                   "a segment for each of those names (solver/world.h)");
+            DCHECK(!gen_seen,
+                   "a park document names TWO generations — one document is one session's residue, however "
+                   "many partial parks appended to it, so a second is two sessions' flows merged into one");
+            gen_seen = 1;
+            world_session_resume((uint32_t)strtoul(q, &ep, 10));
+            DCHECK(ep == end, "a generation record carries something after its number — the record is one "
+                              "unsigned integer and nothing else");
+        } else if (kind == 's') {
             long id, bid;
             signed char *arms;
             int n;
@@ -744,12 +787,15 @@ void cold_resume(JSContext *ctx, const char *recipes)
                it re-runs the document from its first script, consumes one recorded arm at each branch it
                re-reaches, and forks like any other flow the moment the recipe runs out. Its constraint is
                empty because it re-derives every pin and every decided predicate from the gates it replays.
-               ITS WORLD IS A ROOT, not a child of whatever it was forked from, and that is sound for exactly
-               the reason the park asserts at its own end: a world's ancestry exists so ANOTHER INSTANCE can
-               materialize this flow's segment by forking the nearest ancestor it already holds, and a park is
-               refused while any foreign segment lives here. Nothing across the tier is holding an edge into
-               this frontier, so there is no edge to carry. When cross-instance park is built, the world NAME
-               is what will travel — never this document's flow ancestry. */
+               ITS WORLD IS A ROOT, not a child of whatever it was forked from, and what makes that sound is
+               the GENERATION rather than an absence of peers. A peer holding segments for this document is the
+               ORDINARY case, not the excluded one — Level-1 eviction gives up ONE document's engine and the
+               instance that was reading from it stays exactly where it was — so the resumed flow's names must
+               be disjoint from the ended session's rather than continuous with them. They are: the 'g' record
+               above installed a namespace strictly beyond the one those names were minted in, so this root is
+               a world no peer can be holding and its segment is materialized from that peer's baseline, which
+               is the truth about a flow that is re-running the document from its first script. The ancestry
+               that is NOT carried is the ended session's fork edges, and they belong to flows that are gone. */
             fl = park_flow_add(ctx, val, before, flows);
             fl->started = 1;
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
@@ -817,10 +863,11 @@ void cold_resume(JSContext *ctx, const char *recipes)
                by a session that still could is a real document sitting in a real IndexedDB, and it lands here:
                the letter is named in the abort so a reader is told which capability wrote it rather than being
                told the document is corrupt. */
-            DFAIL("a park record names a kind this grammar does not have — the recipe holds SEGMENTS ('s'), "
-                  "FLOWS ('f') and @S CANDIDATE SESSIONS ('c') and nothing else. A 'd' record is a DISCOVERY "
-                  "PROBE written by a session in which the engine seeded its own document fetches; that flow "
-                  "kind no longer exists, so this residue predates the change or came from another writer");
+            DFAIL("a park record names a kind this grammar does not have — the recipe holds a GENERATION ('g'), "
+                  "SEGMENTS ('s'), FLOWS ('f') and @S CANDIDATE SESSIONS ('c') and nothing else. A 'd' record "
+                  "is a DISCOVERY PROBE written by a session in which the engine seeded its own document "
+                  "fetches; that flow kind no longer exists, so this residue predates the change or came from "
+                  "another writer");
         }
         p = (*end == ';') ? end + 1 : end;
     }
@@ -832,6 +879,15 @@ void cold_resume(JSContext *ctx, const char *recipes)
     DCHECK(flows > 0,
            "a parked frontier rebuilt no flows at all — the document held segments with nobody standing on "
            "them, so the whole residue it was written to save is unreachable");
+    /* AND IT SAID WHICH NAMESPACE IT CAME FROM. A residue written by a session that had no generation to state
+       is one whose names collide with this one's by construction — the same failure the 'd' arm refuses, from
+       the other direction: a reader that filled the gap with 0 would hand every peer that never left memory
+       the exact names it already holds segments for. */
+    DCHECK(gen_seen,
+           "a park document names no world-name GENERATION — a WorldId is (document, generation, serial) and "
+           "the document name is stable across a park by requirement, so a residue that cannot say which "
+           "session wrote it resumes into names a surviving peer already keys its segments on, and answers "
+           "every rebuilt flow inside the timeline of a flow that no longer exists");
     /* THE OTHER SIDE OF THE MERGE, AND IT IS THE RAZOR ITSELF: "a resume that drops, starves, skips, reorders
        or forgets ANY flow is a CAP". Every record that named a flow produced one, and every member that was
        already here is still here — one equality says both, because the registry only ever appends and the
@@ -868,6 +924,7 @@ void cold_free(void)
     /* THE ORDINAL COUNTER GOES BACK TO ZERO WITH THE DOCUMENT IT NUMBERED, and the names it handed out died
        with the segments (decide.c's `park_id`), which flow_registry_free has just asserted are all gone. */
     g_park_segs = 0;
+    g_park_gen_written = 0;   /* …and so does the statement of which namespace it was written under */
     memset(&g_parked_census, 0, sizeof g_parked_census);   /* the census is OF the document; it dies with it */
     free(g_walk); g_walk = NULL; g_walk_n = g_walk_cap = 0;
 }

@@ -56,11 +56,12 @@
        and the resumed one never asked that question), so it is an ORPHAN this zone must still be holding;
      - the resumed flow RE-ISSUES the read — which is the cold tier's own claim about the replies a host owes
        (solver/cold.h), and the only thing that makes a park at a cross-instance read lossless;
-     - and the world name it re-issues under must be one the peer has never seen. It is not: a WorldId's serial
-       counts from 1 in every session (world.c) under a document name that is stable BY REQUIREMENT, so the
-       resumed session hands `b` the names of the session that ended and `b` answers out of the segments those
-       names already own. That is two timelines wearing one name, across sessions instead of across instances,
-       and it is what this driver exists to make decidable. */
+     - and the world name it re-issues under must be one the peer has never seen. A WorldId's serial counts
+       from 1 in every session under a document name that is stable BY REQUIREMENT, so the name carries a third
+       coordinate: the session's GENERATION, minted into every world and carried across the tier by the residue
+       itself (solver/world.h, solver/cold.h's 'g' record). The resumed session therefore mints in a namespace
+       disjoint from the one that parked, and `b` materializes new segments instead of answering out of a dead
+       flow's. This driver is what makes that decidable — it is the only place both sessions are visible. */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -485,16 +486,15 @@ if (!resumedReads.length)
   fail('the resumed instance asked the peer nothing — the flow that was parked AT a cross-instance read did ' +
        'not replay to that read, so the park lost it. A recipe is a replay (solver/cold.h): the request is ' +
        'not carried across, it is re-issued by the code that issued it the first time');
-/* THE ONE THAT FAILS, AND IT IS THE FINDING. A WorldId is (document, serial): the DOCUMENT name is stable
-   across a park by requirement — the routing above depends on it — and the SERIAL counts from 1 in every
-   session (world.c's world_registry_init). So the resumed session hands the peer the same names the session
-   that ended handed it, and the peer keys segments on the head of a vector it received: world_segment finds
-   the existing entry and answers the resumed flow out of a dead flow's timeline. Nothing on either side can
-   tell — the ancestry is identical too — so there is no assert in the engine that can catch it, which is why
-   this one lives out here where the two sessions are both visible.
-   WHAT IT NAMES: a world's name must carry the SESSION, in the residue that already crosses the tier, or the
-   parking instance must tell every peer it reached that those names are dead — which is world_release's
-   missing caller (world.c names it at the allocation that has no ceiling). Either one, not both. */
+/* THE ONE A WRONG NAME PASSES, AND IT LIVES OUT HERE BECAUSE NOTHING INSIDE EITHER ENGINE CAN SEE BOTH
+   SESSIONS. A WorldId is (document, GENERATION, serial): the document name is stable across a park by
+   requirement — the routing above depends on it — and the serial counts from 1 in every session, so without
+   the generation the resumed session would hand the peer the exact names the session that ended handed it and
+   the peer would answer each resumed flow out of a dead flow's timeline. The ancestry would match too, so no
+   assert in either engine could catch it. The generation rides the residue (solver/cold.h's 'g' record) and
+   world_session_resume mints above it, so a name from the ended session is now unresolvable rather than
+   wrongly resolvable. What remains owed is the LEAK, not the collision: nothing tells a peer a world is gone,
+   so world_release still has no caller and the dead session's segments stay. */
 if (reusedWorlds.length)
   fail(`the resumed session put ${reusedWorlds.length} world name(s) on the wire that the session that ended ` +
        `had already sent: ${reusedWorlds.join(' ')}. A WorldId's serial counts from 1 in every session while ` +

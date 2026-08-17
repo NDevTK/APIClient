@@ -150,7 +150,19 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
            spelling (window_proxy.c's PROXY_MEMBER), so it crosses as itself. */
         JS_SetPropertyStr(ctx, g, "__apiclientKey", JS_NewString(ctx, op->f[3]));
     } else {
-        JSValueConst held = remote_object_by_id((uint32_t)strtoul(op->f[3], NULL, 10));
+        /* THE OBJECT IS NAMED BY (GENERATION, ID) — see remote_object.h. An id alone is an index into
+           whichever of this document's sessions happens to be running when the record lands, and it is IN
+           RANGE in every one of them, so a name from a session that parked would resolve to an unrelated
+           object. A CHECK and not a DCHECK for the reason the field count above is one: the release build
+           would read past the field rather than answer a different question. */
+        const char *idf = op->f[3], *sep = strchr(idf, ':');
+        JSValueConst held;
+
+        CHECK(sep != NULL,
+              "a cross-agent operation named an object by an id with no GENERATION — an export id is an index "
+              "into ONE session's table, so the instance that wrote this record and this one disagree about "
+              "what names an object");
+        held = remote_object_by_id((uint32_t)strtoul(idf, NULL, 10), (uint32_t)strtoul(sep + 1, NULL, 10));
 
         DCHECK(!JS_IsUndefined(held),
                "a peer named an object this agent never lent — the name it used was minted somewhere else, or "

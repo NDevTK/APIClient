@@ -52,19 +52,50 @@
 #include "quickjs.h"
 #include "solver/cow.h"
 
-/* A GLOBALLY UNIQUE WORLD NAME. `doc` is the minting instance's document id and `serial` is its own counter, so
-   uniqueness needs no allocator, no lock and no round trip — which matters because a world is minted on the
-   fork path, the hottest path in the engine. A zeroed WorldId is the NONE value: serial counts from 1. */
-typedef struct { uint32_t doc; uint32_t serial; } WorldId;
+/* A GLOBALLY UNIQUE WORLD NAME. `doc` is the minting instance's document id, `serial` is its own counter and
+   `session` is its GENERATION (world_session below), so uniqueness needs no allocator, no lock and no round
+   trip — which matters because a world is minted on the fork path, the hottest path in the engine. A zeroed
+   WorldId is the NONE value: serial counts from 1, and a generation legitimately starts at 0. */
+typedef struct { uint32_t doc; uint32_t serial; uint32_t session; } WorldId;
 
-#define WORLD_NONE ((WorldId){ 0, 0 })
+#define WORLD_NONE ((WorldId){ 0, 0, 0 })
 static inline bool world_is_none(WorldId w) { return w.doc == 0 && w.serial == 0; }
-static inline bool world_eq(WorldId a, WorldId b) { return a.doc == b.doc && a.serial == b.serial; }
+static inline bool world_eq(WorldId a, WorldId b)
+{
+    return a.doc == b.doc && a.serial == b.serial && a.session == b.session;
+}
 
 /* THIS INSTANCE'S DOCUMENT, BY NAME. The root instance's name comes from the host, because only the host knows
    there is more than one document at all; every name below it is minted here — see world_mint_doc. */
 void world_registry_init(const char *doc_name);
 void world_registry_free(JSContext *ctx);
+
+/* THIS SESSION'S GENERATION — the third coordinate of every name this instance mints, and what stops a resumed
+ * session from answering for the one that ended.
+ *
+ * THE DEFECT IT CLOSES. `serial` counts from 1 in every session, while the document NAME is stable across a
+ * park BY REQUIREMENT — routing keys on it (SECURITY.md: the engine NAMES its own child documents, the
+ * offscreen ROUTES them). So without a third coordinate an instance that parks its frontier and comes back
+ * would hand a surviving peer the very names it handed it before; world_segment would find the entry those
+ * names already own, and the resumed flow would be answered inside the timeline of a flow that no longer
+ * exists. The ancestry would match too, so neither side could tell. The only thing between that and silence
+ * was engine.c's empty-delta assert, which fires only if the ended session happened to WRITE through that
+ * world.
+ *
+ * WHY A GENERATION AND NOT A PARK-TIME NOTICE. A notice makes a peer FORGET a segment; it cannot make a NAME
+ * unresolvable, and names outlive it — a vector already on the wire, a reference proxy the peer's page still
+ * holds. It also has to be DELIVERED at the instant an instance leaves memory, which a browser restart does
+ * not offer, while the residue crosses that boundary by construction. A generation is the same argument the
+ * pair above already rests on: disjoint by construction, no allocator, no lock, no round trip. The notice is
+ * still owed for a DIFFERENT reason — a peer holding a segment for a session that will never resume is a LEAK
+ * — and that is world_release's missing caller, named where the segment table has no ceiling.
+ *
+ * WHERE IT COMES FROM. A park is the ONLY thing that makes a document name outlive a session: a document
+ * loaded afresh is named by the host from what the browser minted for THAT load, so a fresh instance's
+ * generation-0 names can collide with nothing. So the generation rides the RESIDUE — cold.c writes this
+ * session's into the park document and a resumed session mints one above it. Nothing else has to cross. */
+uint32_t world_session(void);
+void     world_session_resume(uint32_t prev);
 
 /* THIS INSTANCE'S ROOT DOCUMENT — the one the host named. It is NOT "the document I am": an instance is an
    origin-keyed AGENT and holds one realm per same-origin document, so several documents are this instance's. */
@@ -151,7 +182,10 @@ WorldId world_mint(void);
  * a vector carries does not grow with it, because only worlds that have themselves crossed are named. */
 WorldId world_mint_child(WorldId parent);
 
-/* THE WIRE FORM OF A WORLD AND ITS ANCESTRY — `doc:serial,anc:serial,...`, nearest ancestor first. Every
+/* THE WIRE FORM OF A WORLD AND ITS ANCESTRY — `doc:session:serial,anc:session:serial,...`, nearest ancestor
+   first. The GENERATION is in every field because it is part of the name, not a header: a peer keys its
+   segment on the head of a vector it received, and a head short of its generation is the name of a session
+   that may have ended. Every
    request or notice that crosses to another instance carries this, and it is ONE function because two
    spellings of it would be two peers materializing different segments for the same flow. Writes at most `cap`
    bytes including the NUL and returns the length written; a truncation is a corrupted vector, so it crashes
