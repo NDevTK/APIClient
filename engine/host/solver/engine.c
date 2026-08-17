@@ -1863,21 +1863,13 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            "an arm of an @S candidate session left the fork without the substitution that makes it one — it "
            "would explore the other arm as an ordinary flow inside a heap the payload has already been read "
            "into, report its requests as observed endpoints, and be unable to record a fire");
-    /* THE ANSWER TOKEN TRAVELS: this sibling resumes the same operation's program from the fork point and
-       completes it in its own timeline, so it owes the same peer an answer of its own. That is the multiplicity
-       §7.2.1 has when a document's state is its flows — N answers under one token is a thing this fork is
-       BUILT to produce, and it is what engine_host_answer records extras for at the other end. */
-    if (parent->answer_token) {
-        sib->answer_token = strdup(parent->answer_token);
-        CHECK(sib->answer_token, "engine: OOM forking a cross-agent operation's rendezvous token");
-        /* AND THE DOCUMENT IT WAS ASKED OF. The sibling resumes the SAME program, which was compiled in that
-           document's realm; a sibling that inherited the token without it would answer the question and then
-           compile the operation's next program somewhere else. They are one fact and travel together. */
-        DCHECK(parent->perform_doc != 0,
-               "a flow holding a cross-agent operation's token names no document — the two are written and "
-               "cleared together, so one without the other means a program was queued outside flow_perform");
-        sib->perform_doc = parent->perform_doc;
-    }
+    /* THE ANSWER TOKEN TRAVELS, AND IT TRAVELS WITH THE QUEUE — there is nothing to copy here any more. This
+       sibling resumes the same operation's program from the fork point and completes it in its own timeline,
+       so it owes the same peer an answer of its own: that is the multiplicity §7.2.1 has when a document's
+       state is its flows, and it is what engine_host_answer records extras for at the other end. The token is
+       on the row of the program being resumed (flow.h), so the queue copy below carries it — along with the
+       document the operation was asked of, which is that row's `dyn_doc`. Copied here instead, the two were a
+       second statement of one fact that the queue was already making. */
     if (parent->dyn_n) {              /* inherit the lazy chunks loaded up to the branch */
         sib->dyn = malloc((size_t)parent->dyn_n * sizeof(char *)); CHECK(sib->dyn, "engine: OOM fork dyn");
         /* THE FLAGS COME WITH THE BODIES. A field added to the queue is an obligation at every clone, free and
@@ -1889,19 +1881,30 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            document's globals on the creator's Window. */
         sib->dyn_doc = malloc((size_t)parent->dyn_n * sizeof(uint32_t));
         CHECK(sib->dyn_doc, "engine: OOM fork dyn documents");
+        /* AND THE RENDEZVOUS TOKEN OF ANY ROW THAT STILL OWES AN ANSWER, by the same sentence and for the
+           reason above: the arm is the operation's program continued, so it answers the same peer under the
+           same token. An arm that inherited the row without it would run a peer's operation and tell nobody. */
+        sib->dyn_token = malloc((size_t)parent->dyn_n * sizeof(char *));
+        CHECK(sib->dyn_token, "engine: OOM fork dyn tokens");
         /* THE THREE ARRAYS ARE ONE TABLE WITH ONE LENGTH, asserted rather than defaulted past. This read used to
            be `parent->dyn_cand ? parent->dyn_cand[i] : 0`, and a zero there is DYN_PAGE_SCRIPT — a real kind
            belonging to a real entry — so a parent whose flags were somehow absent handed the arm a queue of
            page scripts. The three are allocated, grown and freed together, which makes the `? :` a claim about
            a state this file makes impossible; now the arm CRASHES where that state would be born instead of
            compiling a candidate as a page script, or an ADDRESS (DYN_SCRIPT_SRC) as a program. */
-        DCHECK(parent->dyn_cand != NULL && parent->dyn_doc != NULL,
-               "a flow holds queued programs with no kind or document column — the three arrays are one table "
-               "and are allocated together, so the arm would inherit bodies whose kind and realm are lost");
+        DCHECK(parent->dyn_cand != NULL && parent->dyn_doc != NULL && parent->dyn_token != NULL,
+               "a flow holds queued programs with no kind, document or token column — the four arrays are one "
+               "table and are allocated together, so the arm would inherit bodies whose kind, realm and waiting "
+               "peer are lost");
         for (int i = 0; i < parent->dyn_n; i++) {
             sib->dyn[i] = strdup(parent->dyn[i]); CHECK(sib->dyn[i], "engine: OOM fork dyn body");
             sib->dyn_cand[i] = parent->dyn_cand[i];
             sib->dyn_doc[i] = parent->dyn_doc[i];
+            sib->dyn_token[i] = NULL;
+            if (parent->dyn_token[i]) {
+                sib->dyn_token[i] = strdup(parent->dyn_token[i]);
+                CHECK(sib->dyn_token[i], "engine: OOM forking a cross-agent operation's rendezvous token");
+            }
         }
         sib->dyn_n = sib->dyn_cap = parent->dyn_n;
     }
@@ -2003,9 +2006,11 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
        question it asked of one timeline. But the ANSWER TOKEN is different in kind: the program that answers is
        the page's own code, so a branch inside it is a real peer timeline in which the answer differs, and the
        sibling must carry the token and answer too (which the assembly does). */
-    DCHECK(parent->perform == NULL, "a flow forked while still holding an unstarted cross-agent operation — the "
-                                    "sibling would inherit the record and perform the peer's one operation a "
-                                    "second time under the same token");
+    DCHECK(parent->perform == NULL && parent->answer_token == NULL,
+           "a flow forked while still holding an unstarted cross-agent operation — the sibling would inherit "
+           "the record and perform the peer's one operation a second time under the same token. The two "
+           "arrival fields are asserted together because they are written and consumed together: a token with "
+           "no record is a question whose program was queued outside flow_perform");
     dec = g_fork_dec; g_fork_dec = NULL;
     pins = g_fork_pins; g_fork_pins = NULL;
     engine_sibling_assemble(ctx, parent, clone, dec, pins);
@@ -2063,11 +2068,11 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
                "a flow holding a ROUTED DELIVERY got a peer's second answer — the arm is that timeline "
                "continued, so the message that arrived in it arrived in the arm too, and the assembly does not "
                "carry the record. Give the arm its own copy of the record and the trusted zone's origin stamp");
-        DCHECK(f->perform == NULL,
+        DCHECK(f->perform == NULL && f->answer_token == NULL,
                "a flow holding an UNSTARTED cross-agent operation got a peer's second answer — the arm is that "
-               "timeline continued, so it owes the same peer an answer of its own and the assembly carries only "
-               "the token, never the record. Give the arm the record too, exactly as a branch inside the "
-               "operation's program already gives its sibling the token");
+               "timeline continued, so it owes the same peer an answer of its own, and the assembly carries "
+               "only the QUEUE, which an operation that has not started yet is not on. Give the arm the "
+               "arrival record and its token too, exactly as the queue copy already gives it a started one");
 
         /* TAKEN FROM THE PARENT FIRST, so the arm inherits a list that no longer names it: the arm's copy is
            cleared below in any case, and the parent's must not fork over this answer a second time. */
@@ -2117,7 +2122,7 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
    program the page CAUSED to run belongs to the flow that ran the code, and a JOINED document's own scripts
    belong to the boot flow this engine mints for that document before any of it has run. Both are members of the
    one frontier; only one of them has the thread. */
-static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind kind) {
+static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind kind, char *token) {
     /* A PROGRAM QUEUED WITH NO FLOW IS A DROPPED PROGRAM, and it used to leave silently. There is no global
        queue to fall back to — the frontier IS the queue — so the caller is the one that has to name the flow
        whose sequence this program joins: an injected <script>'s insertion, a document's own load job, a fired
@@ -2131,16 +2136,28 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
     DCHECK(doc != 0, "a program was queued naming no document — the realm it is compiled in is a fact about "
                      "the document it belongs to, and a program with none would be compiled in whichever realm "
                      "the session happens to be rooted at and read that Window's globals as its own");
+    /* THE KIND AND THE TOKEN ARE ONE STATEMENT, ASSERTED IN BOTH DIRECTIONS. A cross-agent operation's row owes
+       the peer parked on it an answer and carries its rendezvous token (flow.h); every other kind owes nobody
+       anything. A row of that kind with no token is a peer suspended at the line that asked for the rest of the
+       session with nothing in this engine that could say so; a token on any other kind is an answer that will
+       never be sent, because only that kind's completion is read as one. Stated here, at the ONE site that
+       creates a row, so neither can be forgotten at a call site. */
+    DCHECK((kind == DYN_CROSS_AGENT_OP) == (token != NULL),
+           "a queued program's kind and its rendezvous token disagree — a cross-agent operation's row must "
+           "carry the token of the peer waiting on its completion, and no other kind may carry one, because "
+           "only that kind's completion is ever read as an answer");
     if (f->dyn_n >= f->dyn_cap) {
         f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8;
         f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(char *));
         f->dyn_cand = realloc(f->dyn_cand, (size_t)f->dyn_cap);
         f->dyn_doc = realloc(f->dyn_doc, (size_t)f->dyn_cap * sizeof(uint32_t));
-        CHECK(f->dyn && f->dyn_cand && f->dyn_doc, "engine: OOM dynamic-script queue");
+        f->dyn_token = realloc(f->dyn_token, (size_t)f->dyn_cap * sizeof(char *));
+        CHECK(f->dyn && f->dyn_cand && f->dyn_doc && f->dyn_token, "engine: OOM dynamic-script queue");
     }
     f->dyn[f->dyn_n] = strdup(body); CHECK(f->dyn[f->dyn_n], "engine: OOM dynamic-script body");
     f->dyn_cand[f->dyn_n] = (unsigned char)kind;
     f->dyn_doc[f->dyn_n] = doc;
+    f->dyn_token[f->dyn_n] = token;   /* MOVED: one allocation from engine_perform to flow_answer_perform */
     f->dyn_n++;
 }
 
@@ -2148,7 +2165,7 @@ static void engine_queue(uint32_t doc, const char *body, DynKind kind) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
     DCHECK(f != NULL, "a program was queued with no flow running — a program is a work item of the ONE "
                       "frontier and there is no member to give it to, so it would be dropped without a trace");
-    engine_queue_into(f, doc, body, kind);
+    engine_queue_into(f, doc, body, kind, NULL);
 }
 
 /* WHICH KIND THE PROGRAM AT `script_i` IS, asked at the two places that need it — the compile and the resume.
@@ -2167,6 +2184,17 @@ static uint32_t flow_dyn_doc(const Flow *f, int n) {
     if (f->script_i < n) return g_sess_doc;
     if (f->script_i - n >= f->dyn_n) return g_sess_doc;
     return f->dyn_doc[f->script_i - n];
+}
+
+/* DOES THIS FLOW STILL OWE A PEER AN ANSWER — asked of the ARRIVAL slot and of the QUEUE together, because an
+   operation is in one or the other from the moment it lands until its program completes. The teardown asserts
+   read it: a token that dies with the flow is another instance's flow suspended at the line that asked, for
+   good, and after the token moved onto the row a check of the arrival slot alone would have stopped seeing it. */
+static int flow_owes_answer(const Flow *f) {
+    if (f->answer_token) return 1;
+    for (int i = 0; i < f->dyn_n; i++)
+        if (f->dyn_token[i]) return 1;
+    return 0;
 }
 
 void engine_queue_script(uint32_t doc, const char *body) { engine_queue(doc, body, DYN_PAGE_SCRIPT); }
@@ -2202,9 +2230,10 @@ void engine_queue_javascript_url(uint32_t doc, const char *body) { engine_queue(
 /* AND IT RUNS IN THE REALM OF THE DOCUMENT THE PEER NAMED. Every operand is installed there and the program is
    compiled there (flow_step), because that is what the operation IS: §7.2.1's member is read of the OTHER
    navigable's active document, and a getter answered out of this instance's root would count the root's child
-   navigables and hand them back as the child's. The document is held on the flow as the HANDLE that crossed the
-   wire rather than as the JSContext, for the reason every other queued platform datum is a name and not a
-   pointer: a handle survives a park and a realm does not. */
+   navigables and hand them back as the child's. The document is carried as the HANDLE that crossed the wire
+   rather than as a JSContext, for the reason every other queued platform datum is a name and not a pointer: a
+   handle survives a park and a realm does not — and it is carried ON THE ROW, because `dyn_doc` is already the
+   field that says which realm a queued program is compiled in. */
 static void flow_perform(JSContext *ctx, Flow *f)
 {
     RemoteOp *op = remote_op_parse(f->perform);
@@ -2213,16 +2242,17 @@ static void flow_perform(JSContext *ctx, Flow *f)
     int n_anc;
     CowDelta *seg;
     JSContext *rctx;
+    uint32_t doc;
 
     DCHECK(flow_running() == f, "a cross-agent operation was performed while another flow was switched in — its "
                                 "operands would be written into that flow's delta and its program would run "
                                 "against that flow's document");
-    DCHECK(f->perform_doc == 0,
-           "a flow began a cross-agent operation while still naming the document of another one — the two "
-           "programs would be compiled in whichever realm was written last, and one peer's question answered "
-           "out of the other's document");
-    f->perform_doc = world_doc_intern(remote_op_doc(op));
-    rctx = doc_realm(f->perform_doc);
+    DCHECK(f->answer_token != NULL,
+           "a cross-agent operation reached its start with no rendezvous token — the record and the token "
+           "arrive together and are consumed together, so a record without one is an operation whose completion "
+           "could name no question and whose peer would stay suspended at the read that asked");
+    doc = world_doc_intern(remote_op_doc(op));
+    rctx = doc_realm(doc);
     n_anc = world_parse(remote_op_worlds(op), &w, &anc);
     /* ASKED AGAIN AT THE MOMENT IT RUNS, for the reason flow_deliver asks it again: the scheduler has run other
        flows since the record arrived, and which world holds writes here is a property of the run. */
@@ -2232,9 +2262,14 @@ static void flow_perform(JSContext *ctx, Flow *f)
            "a cross-agent operation ran in the answering flow's timeline alone while the asking world holds "
            "writes in this instance — it answers about a document missing everything the asking flow did here. "
            "Build the join of the two deltas that engine_route names");
-    engine_queue(f->perform_doc, remote_op_program(rctx, op), DYN_CROSS_AGENT_OP);
+    /* THE RECORD AND THE TOKEN ARE BOTH CONSUMED HERE, and only one of them is freed. The record has become a
+       program and has nothing left to say; the TOKEN moves onto that program's row, because the answer is the
+       program's COMPLETION and the row is what says which completion. Nothing about this operation is left on
+       the flow afterwards, which is what lets the next record land on a flow that is already performing one. */
+    engine_queue_into(f, doc, remote_op_program(rctx, op), DYN_CROSS_AGENT_OP, f->answer_token);
+    f->answer_token = NULL;
     remote_op_free(op);
-    free(f->perform); f->perform = NULL;   /* the TOKEN outlives it: the answer is the program's completion */
+    free(f->perform); f->perform = NULL;
 }
 
 /* AND THE COMPLETION, READ WHERE THE SCHEDULER READS ONE. `cv` is what the program completed with — its value,
@@ -2244,16 +2279,28 @@ static void flow_perform(JSContext *ctx, Flow *f)
    error instead would lose it and answer `undefined`.
    IT CROSSES AS AN EMISSION, one-way: nothing here waits for it, so nothing has to un-send it when this flow
    parks or is outranked — the same argument that makes a cross-document message an emission. */
-static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
+/* `n` IS THE SESSION'S STATIC SCRIPT COUNT, because the question and the answer are the ROW the flow is
+   standing on: which operation completed is read from the cursor, exactly as the kind and the realm are. */
+static void flow_answer_perform(JSContext *ctx, Flow *f, int n, JSValueConst cv)
 {
     JSValue thrown = JS_UNDEFINED;
     int completion = ENGINE_COMPLETION_NORMAL;
+    /* THE ROW THE FLOW IS STANDING ON IS THE QUESTION IT IS ANSWERING — no bounds guard, because the caller
+       has already read this row's KIND to get here and only a row inside the queue has one. */
+    int row = f->script_i - n;
+    char *token;
     char *enc, *rec;
     size_t cap;
 
-    DCHECK(f->answer_token != NULL,
-           "a cross-agent operation's program completed with no rendezvous token — the completion names no "
-           "question, so the flow that asked would park on it forever");
+    DCHECK(row >= 0 && row < f->dyn_n,
+           "a cross-agent operation was answered from a cursor that is not on the queue — the kind that "
+           "selected this call is read from that same row, so the two cursors have come apart");
+    token = f->dyn_token[row];
+    DCHECK(token != NULL,
+           "a cross-agent operation's program completed with no rendezvous token on its row — the completion "
+           "names no question, so the flow that asked would park on it forever. Two operations differing only "
+           "in the asking WORLD are two rows and nothing else tells them apart, so this cannot be recovered "
+           "from the flow");
     if (JS_IsException(cv)) {
         thrown = JS_GetException(ctx);
         completion = ENGINE_COMPLETION_THROW;
@@ -2262,21 +2309,21 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
     /* ENCODED IN THE REALM THE PROGRAM RAN IN, because the value is that realm's — §3.7 gives every realm its
        own intrinsics, and a value converted through another document's is converted by a platform that is not
        the one that produced it. It is the same realm the program was compiled in, asked the same way. */
-    enc = remote_completion_encode(doc_realm(f->perform_doc), completion, cv);
-    cap = strlen(f->answer_token) + strlen(enc) + 24;
+    enc = remote_completion_encode(doc_realm(flow_dyn_doc(f, n)), completion, cv);
+    cap = strlen(token) + strlen(enc) + 24;
     rec = malloc(cap);
     CHECK(rec != NULL, "engine: OOM writing a cross-agent operation's answer — a dropped answer parks the "
                        "asking flow on a question nothing will answer again");
-    snprintf(rec, cap, "remoteop.answer\t%s\t%s", f->answer_token, enc);
+    snprintf(rec, cap, "remoteop.answer\t%s\t%s", token, enc);
     engine_host_notify(ctx, rec);
     free(rec);
     free(enc);
     JS_FreeValue(ctx, thrown);
-    free(f->answer_token); f->answer_token = NULL;
-    /* THE DOCUMENT GOES WITH THE TOKEN, because the two are one fact: the question and the realm it was asked
-       of. Left behind, the next operation this flow performs would compile its program in the previous one's
-       document — and the assert that catches that is in flow_perform, which is why this is not merely tidy. */
-    f->perform_doc = 0;
+    /* THE ROW STOPS OWING, and it is the row rather than the flow that stops: this program's question has been
+       answered and the flow's other rows are other questions, each still holding its own token. The kind stays
+       DYN_CROSS_AGENT_OP — it is what the program IS, and a completion is read once (the cursor advances) —
+       so what an answered row asserts from here is that nothing asks it for a token again. */
+    free(f->dyn_token[row]); f->dyn_token[row] = NULL;
 }
 
 /* Preempt hook, two orthogonal yield decisions at the one per-opcode suspend point:
@@ -2905,7 +2952,7 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                belongs to the flow that ASKED — reported here as this document's page error it would be lost and
                the peer would resume with `undefined` where the spec propagates a throw. */
             if (r == 0 && flow_dyn_kind(f, n) == DYN_CROSS_AGENT_OP)
-                flow_answer_perform(ctx, f, cv);
+                flow_answer_perform(ctx, f, n, cv);
             /* A SCRIPT THAT THREW names a capability the page needed and this engine does not have. Ending the
                flow there is intentional; losing WHICH capability was not. */
             else if (JS_IsException(cv)) {
@@ -3055,10 +3102,11 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
                                "with is a message the peer sent and this document never received");
     /* AND THE SAME FOR AN OPERATION, at both ends of it: a record never turned into a program is a question
        nobody performed, and a token never spent is a peer's flow parked at the line that asked, forever. */
-    DCHECK(f->perform == NULL && f->answer_token == NULL,
+    DCHECK(f->perform == NULL && !flow_owes_answer(f),
            "a flow finished holding a cross-agent operation — either the record was never performed, or its "
            "program's completion was never sent, and either way the flow that ASKED is suspended at the line "
-           "that asked it with nothing coming");
+           "that asked it with nothing coming. Asked of the QUEUE as well as the arrival slot, because a "
+           "started operation's token is on the row of the program that answers it");
     /* THE QUEUE AND THE PENDING LIST ARE EMPTY HERE, AND THAT IS ASSERTED RATHER THAN CLEANED UP AFTER. Both
        used to be walked and freed "defensively" right here, which is the fallback shape: the walk can only ever
        run when a work item is being DROPPED, and freeing it quietly is precisely how that drop stays invisible.
@@ -3271,6 +3319,16 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        more answers may arrive for and stays in the reported count. */
     g_paged_reqs += pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
     g_paged_owed += pending_owed_replies(tail->pending);
+    /* AND THE DEBT THAT MAY NOT LEAVE AT ALL. cold_park_flow refuses a flow holding a cross-agent operation
+       (cold.c) — its recipe does not carry the record or the token, so selling it parks a flow in ANOTHER
+       instance forever. That refusal reads the flow's arrival slot, which stops being where a STARTED
+       operation's token lives the moment the token moves onto its program's row, so the queue is asked here
+       too. Two asks, one invariant, until the recipe carries the operation and neither is needed. */
+    DCHECK(!flow_owes_answer(tail),
+           "the pager chose a flow that still owes a peer the answer to a cross-agent operation — the record "
+           "and the token are not in its recipe, so the operation is dropped and the flow that ASKED, in "
+           "another instance, stays suspended on an answer nothing will ever send. Park it as what it is: the "
+           "token is text and crosses as text, and a resumed flow re-queues the program and answers it");
     cold_park_flow(tail);
     flow_release(g_sess_ctx, tail);
     g_flows_sold++;
@@ -3444,7 +3502,7 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
                "and solver/flow.h's dyn arrays), the way the document's own sequence carries one, so flow_step "
                "routes it to §8.1.3.3's module entry");
         if (bodies[i]) {
-            engine_queue_into(f, doc, bodies[i], DYN_PAGE_SCRIPT);
+            engine_queue_into(f, doc, bodies[i], DYN_PAGE_SCRIPT, NULL);
             continue;
         }
         DCHECK(srcs[i] != NULL,
@@ -3472,7 +3530,7 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
                the element, which needs a task on this document rather than anything here. */
             if (!abs_url) continue;
             /* AT ITS POSITION, holding only its address until the reply fills it — see DYN_SCRIPT_SRC. */
-            engine_queue_into(f, doc, abs_url, DYN_SCRIPT_SRC);
+            engine_queue_into(f, doc, abs_url, DYN_SCRIPT_SRC, NULL);
             free(abs_url);
         }
     }
@@ -4000,7 +4058,7 @@ static int engine_sched_slice(void) {
            peer's message, dropped, indistinguishable from a page that registered no handler. A flow suspended
            inside a live frame is the shape that reaches here holding one: the delivery is made only where
            flow_step has no frame, so if this fires, the enqueue belongs earlier than that branch. */
-        DCHECK(flow_at(i)->perform == NULL && flow_at(i)->answer_token == NULL,
+        DCHECK(flow_at(i)->perform == NULL && !flow_owes_answer(flow_at(i)),
                "the frontier was declared exhausted while a live flow still owed a peer the answer to a "
                "cross-agent operation — the asking flow, in another instance, is suspended at the line that "
                "asked and this session is about to end without ever telling it anything");

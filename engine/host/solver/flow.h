@@ -181,12 +181,24 @@ typedef struct Flow {
        load hands a same-origin child its own realm and that document's classic scripts are the CREATING FLOW's
        next programs; compiled in the session's realm they would run against the creator's Window, defining the
        child's globals on the parent and reading the parent's back as the child's.
-       A DOCUMENT HANDLE AND NOT A JSContext*, for the reason `perform_doc` is one: a handle survives a park and
-       a realm does not, and a queued program outlives the turn that queued it. Parallel to `dyn` for the reason
+       A DOCUMENT HANDLE AND NOT A JSContext*: a handle survives a park and a realm does not, and a queued
+       program outlives the turn that queued it. It is also where a cross-agent operation's document lives —
+       there was a `perform_doc` beside the token on the flow saying the same thing, and this is the field that
+       already said it. Parallel to `dyn` for the reason
        `dyn_cand` is — a field added to the queue is an obligation at every clone, free and finish site, and the
-       three arrays are allocated, copied and freed together so one that got a field the others did not cannot
+       four arrays are allocated, copied and freed together so one that got a field the others did not cannot
        stay unnoticed. */
     uint32_t *dyn_doc;
+    /* AND THE RENDEZVOUS TOKEN OF THE PEER PARKED ON IT, for the one kind of row that OWES AN ANSWER. A
+       cross-agent operation's answer IS its program's completion, so the question and the program are one thing
+       and the token is a fact about the ROW. Held beside the flow instead it was a single slot, and both halves
+       of that were wrong: a second operation arriving before the first had answered had nowhere to go, and two
+       operations that differ ONLY in the asking WORLD — same verb, same document, same member, which is what
+       route.mjs phase 3 asks twice — are indistinguishable by every other thing a row carries, so no amount of
+       re-deriving from the cursor could have paired them. NULL for every other kind, and NULL again the moment
+       the answer is sent; a DYN_CROSS_AGENT_OP row with no token is a peer suspended forever, which is why the
+       kind and the token are written together at the one queue entry allowed to create that kind. */
+    char **dyn_token;
     /* WHAT KIND each of those programs is (a DynKind, engine.c). A page script that does not compile is a real
        problem and asserts; the two other kinds are ORDINARY when they do not. An @S CANDIDATE that does not
        compile is the common case — most breakouts do not fit most sink contexts, which is why the solver tries
@@ -235,22 +247,14 @@ typedef struct Flow {
        one-way and this one owes an ANSWER. A document's state IS its flows, so `otherW.length` has N answers
        for N timelines — the record is attached to every live flow exactly as a delivery is, and each of them
        answers under its own delta. A channel that carried one answer would silently pick a timeline.
-       `perform` is consumed when the flow QUEUES the operation's program; `answer_token` outlives it, because
-       the answer is the program's COMPLETION and that does not exist until the program ends. A fork inside that
-       program is a peer timeline that also answers, so the sibling inherits the token rather than dropping it.
-       Both owned; NULL on a flow with no operation outstanding. */
+       THEY ARE THE ARRIVAL SLOT AND NOTHING MORE: both are consumed when the flow turns the record into a
+       program, the record freed and the token MOVED onto that program's row (`dyn_token` above), because from
+       that moment the question and the program are one thing. Which document the operation names is the row's
+       too — it is `dyn_doc`, the field that already says where a program is compiled, and a second copy on the
+       flow was a copy that could be behind (the same reason `flow_dyn_kind` re-derives from the cursor).
+       Both owned; NULL on a flow with no operation waiting to start, which after one step is every flow. */
     char *perform;
     char *answer_token;
-    /* AND WHICH DOCUMENT OF THIS AGENT THE OPERATION NAMES, which is WHERE its program runs. An instance is an
-       origin-keyed agent CLUSTER, so the document a peer asks about is a child navigable as often as it is the
-       root — and §7.2.1's member is read of THAT document's Window, so a program compiled in the root's
-       realm would count the root's child navigables and hand them back as the child's. It is held beside the
-       token and cleared with it, for the same reason the token outlives `perform`: the program is compiled
-       after the record is consumed, and the realm has to be selected then.
-       A DOCUMENT HANDLE AND NOT A JSContext*, because a handle is what crossed the wire, what a park can carry
-       and what a resumed flow can still resolve — a realm is none of the three. 0 on a flow with no operation
-       outstanding, which is every flow that has never been asked one. */
-    uint32_t perform_doc;
 } Flow;
 
 /* `doc_name` is THIS INSTANCE'S DOCUMENT identity, and it is a parameter rather than a separate init call so a
