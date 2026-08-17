@@ -247,9 +247,10 @@ static void dialog_queue_toggle_task(JSContext *ctx, JSValueConst element, const
     argv[3] = source;
     /* Step 2 is "QUEUE AN ELEMENT TASK GIVEN THE DOM MANIPULATION TASK SOURCE and element to run the following
        steps", so it is a task and it was a microtask — a different position in HTML §8.1.7's event loop and
-       not a smaller one. `showModal()` fires `toggle` and a microtask ran it inside the calling script's own
-       checkpoint, ahead of every task already standing (an expired timer, a delivered message) and ahead of
-       the `beforetoggle` half of any OTHER element queued before it. */
+       not a smaller one. The one caller this build has is §4.10.22.3 step 11.6's close-the-dialog, reached by
+       submitting a `<form method=dialog>` inside an open `<dialog>`, so a microtask fired `toggle` inside the
+       checkpoint of the script that called `submit()` — ahead of every task already standing, an expired
+       timer or a delivered message among them. */
     JS_EnqueueCallTask(ctx, fn, 4, argv);   /* §4.11.4: the DOM manipulation task source */
     /* Step 3: "set element's dialog toggle task tracker to a struct with task set to the just-queued task and
        old state set to oldState". The OLD STATE is the field anything reads back; the task is the job just

@@ -290,10 +290,11 @@ int unhandled_rejection_notify(JSContext *ctx)
         DCHECK(JS_IsFunction(ctx, notify), "a recorded rejection lost the driver of the realm it rejected in");
         argv[0] = promise; argv[1] = reason;
         /* §8.1.4.7 step 4: "QUEUE A GLOBAL TASK ON THE DOM MANIPULATION TASK SOURCE given global to run the
-           following step". It was a microtask, which put `unhandledrejection` inside the checkpoint of the
-           flow that reached the end of its work — ahead of every task already standing, and ahead of the very
-           handler-attaching task a page uses to cancel it. §8.1.7's two queues are the reason a rejection the
-           page handles in a later task is still reported once and only once. */
+           following step". It was a microtask, which is a different position in HTML §8.1.7's event loop and
+           not a smaller one — a microtask runs inside the enqueuing flow's own checkpoint, so a
+           `unhandledrejection` handler's own promise reaction was queued BEHIND the remaining notifications
+           instead of running before the next one, which is what the spec's one-task-then-checkpoint shape
+           gives. */
         JS_EnqueueCallTask(ctx, notify, 2, argv);
         JS_FreeValue(ctx, notify);
         JS_FreeValue(ctx, promise);
