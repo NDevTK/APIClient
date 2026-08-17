@@ -34,25 +34,61 @@ const RUN_BACKSTOP_MS = 15 * 60 * 1000;
    that reached its completion moment and then aborted at `idl_args.c:2148` was filed as a hang.
    The discriminator is node's own: a timeout kill sets `error.code === "ETIMEDOUT"`, and nothing else does. A
    signal without it is a CRASH, and a crash's `@WHY` is the result — it must not be dressed as a timing
-   artifact. Three outcomes, three reports, three exit codes. */
-function runOutcome(label, t) {
+   artifact. Three outcomes, three reports, three exit codes.
+
+   AND THE VERDICT IS RETURNED RATHER THAN EXITED ON, BECAUSE A STAGE THAT EXITS IS A DOOR IN FRONT OF EVERY
+   STAGE BEHIND IT — see the stage list at the bottom for the one that stood behind this exit.
+   The `hint` is printed HERE, at the non-pass, which is also the only way it prints at all: the three call
+   sites below each carried an `if (t.status !== 0)` block with a diagnostic in it, and every one of those
+   blocks was DEAD CODE — this function had already exited on that exact condition. The lines naming the
+   @COLDPARK census and the LeakSanitizer summary have never once reached a terminal. */
+function runOutcome(label, t, hint) {
+  const bad = (verdict, code, why) => {
+    console.error(`[build] ${label} ${why}`);
+    if (hint) console.error(`[build]   ${hint}`);
+    return { label, verdict, code };
+  };
   if (t.error && t.error.code === "ETIMEDOUT") {
     let load = "unknown";
     try { load = readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).join(" "); } catch { /* not linux */ }
-    console.error(`[build] ${label} DID NOT FINISH within ${RUN_BACKSTOP_MS / 60000} min — killed by the harness ` +
-                  `backstop, NOT a failing run and NOT a passing one.\n` +
-                  `[build]   load average at kill: ${load} (on ${cpus().length} cores)\n` +
-                  `[build]   Either the machine is saturated, or the fixture's frontier does not drain and the\n` +
-                  `[build]   program has no completion condition — a defect in the fixture, not the engine.`);
-    process.exit(2);
+    return bad("HUNG", 2,
+      `DID NOT FINISH within ${RUN_BACKSTOP_MS / 60000} min — killed by the harness ` +
+      `backstop, NOT a failing run and NOT a passing one.\n` +
+      `[build]   load average at kill: ${load} (on ${cpus().length} cores)\n` +
+      `[build]   Either the machine is saturated, or the fixture's frontier does not drain and the\n` +
+      `[build]   program has no completion condition — a defect in the fixture, not the engine.`);
   }
   if (t.signal) {
-    console.error(`[build] ${label} DIED ON ${t.signal} — read the @WHY above it; an abort is a DCHECK naming ` +
-                  `either an invariant to fix at its root or a capability to build, and it is the RESULT of this ` +
-                  `run rather than an interruption of it.`);
-    process.exit(3);
+    return bad("CRASHED on " + t.signal, 3,
+      `DIED ON ${t.signal} — read the @WHY above it; an abort is a DCHECK naming ` +
+      `either an invariant to fix at its root or a capability to build, and it is the RESULT of this ` +
+      `run rather than an interruption of it.`);
   }
-  if (t.status !== 0) { console.error(`[build] ${label} FAILED rc=${t.status}`); process.exit(t.status); }
+  if (t.status !== 0) return bad("FAILED rc=" + t.status, t.status || 1, `FAILED rc=${t.status}`);
+  return { label, verdict: "PASS", code: 0 };
+}
+
+/* A STAGE THAT CANNOT RUN IS REPORTED AS SKIPPED WITH ITS REASON, AND IT CARRIES A NON-ZERO CODE. Absorbing it
+   into a pass is the excluded test again — a run that did not ask the question must never read like one that
+   asked and liked the answer. The code is non-zero BY CONSTRUCTION rather than by the argument that whatever
+   caused the skip already failed: that argument is true today and is exactly the kind of thing a later edit
+   makes quietly false. */
+function skipped(label, why) {
+  console.error(`[build] ${label} SKIPPED — ${why}`);
+  return { label, verdict: "SKIPPED (" + why + ")", code: 1 };
+}
+
+/* PER STAGE, IN ONE REPORT — §Testing: a gate reports PER AREA, never one number in which one area drowns the
+   rest. Every stage this run reached is named with its own verdict, so "the smoke failed" and "the two-instance
+   drive was never asked" can never again be the same line. The exit code is the FIRST non-zero in stage order,
+   which is exactly what each single-stage target exited with before. */
+function report(stages) {
+  const w = Math.max(...stages.map((s) => s.label.length));
+  console.log("[build] ── stages ──");
+  for (const s of stages) console.log("[build]   " + s.label.padEnd(w) + "  " + s.verdict);
+  const bad = stages.find((s) => s.code !== 0);
+  if (bad) { console.error("[build] BUILD FAILED — " + bad.label + ": " + bad.verdict); process.exit(bad.code); }
+  process.exit(0);
 }
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
@@ -331,36 +367,26 @@ if (NATIVE) {
        flows standing on segments this build never wrote — and it would look like a pass. */
     rmSync(store, { force: true });
     const one = spawnSync(bin, ["--cold-park", store], { stdio: "inherit", timeout: RUN_BACKSTOP_MS });
-    runOutcome("session ONE (--cold-park)", one);
-    if (one.status !== 0) {
-      console.error("[build] session ONE (--cold-park) reported rc=" + (one.status ?? "signal") +
-                    " — read its `@H park-*` rows and the @COLDPARK census: a 0 there names which record kind " +
-                    "the park did not write, and the moment it was taken at is `fixture_want_park` in " +
-                    "engine/host/test_forced.c.");
-      process.exit(one.status || 1);
-    }
-    const two = spawnSync(bin, ["--cold-resume", store], { stdio: "inherit", timeout: RUN_BACKSTOP_MS });
-    runOutcome("session TWO (--cold-resume)", two);
-    if (two.status !== 0) {
-      console.error("[build] session TWO (--cold-resume) reported rc=" + (two.status ?? "signal") +
-                    " — `@RESUMED <n>` and the @COLDRESUME census say what it rebuilt out of the residue; a " +
-                    "kind session one wrote and this one did not rebuild is the arm to look at.");
-      process.exit(two.status || 1);
-    }
-    console.log("[build] cold round trip PASS (" + kind + ") — residue at " + store);
-    process.exit(0);
+    const v1 = runOutcome("session ONE (--cold-park)", one,
+      "read its `@H park-*` rows and the @COLDPARK census: a 0 there names which record kind the park did " +
+      "not write, and the moment it was taken at is `fixture_want_park` in engine/host/test_forced.c.");
+    /* SESSION TWO IS SKIPPED AND NOT MERELY UNREPORTED. This is a real data dependency and not a door — the
+       resume reads the residue session ONE writes, so with no residue there is nothing for it to be a test OF
+       — and it is stated as a skip with that reason so the report never has a silent hole in it. */
+    const v2 = v1.code
+      ? skipped("session TWO (--cold-resume)", "session ONE wrote no residue for it to resume from")
+      : runOutcome("session TWO (--cold-resume)",
+                   spawnSync(bin, ["--cold-resume", store], { stdio: "inherit", timeout: RUN_BACKSTOP_MS }),
+                   "`@RESUMED <n>` and the @COLDRESUME census say what it rebuilt out of the residue; a kind " +
+                   "session one wrote and this one did not rebuild is the arm to look at.");
+    if (!v1.code && !v2.code) console.log("[build] cold round trip (" + kind + ") — residue at " + store);
+    report([v1, v2]);
   }
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
      the stream it prints and the report it ends with, and nothing else in the tree produces either. */
   const t = spawnSync(bin, MIN ? ["--min"] : [], { stdio: "inherit", timeout: RUN_BACKSTOP_MS });
-  runOutcome("the native run", t);
-  if (t.status !== 0) {
-    console.error("[build] the native run reported rc=" + (t.status ?? "signal") +
-                  " — a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault");
-    process.exit(t.status || 1);
-  }
-  console.log("[build] native run PASS (" + kind + (MIN ? ", minimal document" : "") + ")");
-  process.exit(0);
+  report([runOutcome("the native run (" + kind + (MIN ? ", minimal document" : "") + ")", t,
+                     "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault")]);
 }
 
 /* THE EXPORTS THE BRIDGE ccalls — and the previous sentence here ("emscripten drops anything not named") is
@@ -405,10 +431,16 @@ function abiCheck(program, entrySrc, marker, prefix, list) {
                   "[build] of nothing (" + entrySrc + "):\n" +
                   (missing.length ? "[build]   defined in the entry, missing from the list: " + missing.join(", ") + "\n" : "") +
                   (phantom.length ? "[build]   named in the list, defined nowhere:          " + phantom.join(", ") + "\n" : ""));
-    process.exit(1);
+    return { label: program + " ABI list", verdict: "FAILED (list vs " + marker + " bodies)", code: 1 };
   }
+  return { label: program + " ABI list", verdict: "PASS", code: 0 };
 }
-abiCheck("renderer", join(HOST, "main.c"), "QJS_EXPORT", "qjs_", QJS_ABI);
+/* IT FAILS THE RUN AND IT IS NOT A DOOR EITHER. This check is about ONE program's export list, and it used to
+   exit before anything was compiled — so a name added to main.c and not to QJS_ABI took the SMOKE gate, which
+   has no export list and does not know main.c exists, out of the run with it. It reports its own verdict; what
+   it withholds is the one thing it is actually about, the ABI link (an `--export=` of a name defined nowhere is
+   what wasm-ld would report, less clearly and only by the accident of ERROR_ON_UNDEFINED_SYMBOLS). */
+const ABI_LIST = abiCheck("renderer", join(HOST, "main.c"), "QJS_EXPORT", "qjs_", QJS_ABI);
 /* A SECOND ABI LIST STOOD HERE, five entries of a second program, and it is deleted with that program. What
    it exported was the RENDERER REGISTRY: which agent clusters have an instance, what routing id each was
    given, and the refusal of a second instance for one cluster. That is `extension/render-process-host.js`
@@ -565,15 +597,25 @@ const OBJS_SHARED = SHARED_SOURCES.map(objPath);
    AND THAT IS ALL A SEPARATE LINK IS — a separate FILE. There is no `extra` object list here selecting which
    components a program may reach, because a link boundary is not a trust boundary: the objects are the same
    objects, what wasm-ld leaves out is only what the exports do not reach, and both artifacts are instantiated
-   in the offscreen's own realm with the host holding an exported HEAPU8 over each. */
+   in the offscreen's own realm with the host holding an exported HEAPU8 over each.
+   AND NEITHER LINK IS A DOOR IN FRONT OF THE OTHER: a failing smoke link used to take the production ABI link
+   — and with it the only two-instance drive in the tree — out of the run entirely. Both are attempted, both
+   are reported, and a program that did not link makes its OWN drive a SKIP with that reason. */
 function link(what, entryObj, ldflags, out) {
   const l = spawnSync(EMCC, [...OBJS_SHARED, entryObj, ...LDFLAGS_COMMON, ...ldflags, "-o", out],
                       { stdio: "inherit", shell: true, cwd: QJS });
-  if (l.status !== 0) { console.error("[build] " + what + " LINK FAILED rc=" + l.status); process.exit(l.status || 1); }
+  if (l.status !== 0) {
+    console.error("[build] " + what + " LINK FAILED rc=" + l.status);
+    return { label: what + " link", verdict: "FAILED rc=" + l.status, code: l.status || 1 };
+  }
   console.log("[build] OK -> " + out);
+  return { label: what + " link", verdict: "PASS", code: 0 };
 }
-link("smoke", objPath(ENTRY_SMOKE), LDFLAGS_SMOKE, join(OUT, "qjs.js"));
-link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs"));
+const SMOKE_LINK = link("smoke", objPath(ENTRY_SMOKE), LDFLAGS_SMOKE, join(OUT, "qjs.js"));
+const ABI_LINK = ABI_LIST.code
+  ? skipped("production ABI link", "the renderer ABI list and main.c's QJS_EXPORT bodies disagree, so this "
+                                 + "link's --export= list is known wrong")
+  : link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs"));
 
 /* THE ARTIFACT RECORDS THE REVISION IT WAS BUILT FROM, because engine/solvergate.mjs runs this file and
    never compiles anything, so without a stamp the only question it could ask about the program was how old
@@ -583,8 +625,11 @@ link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs")
    after the checkout. The stamp is computed by gate_revision.mjs itself rather than re-derived here, so
    what is written and what is checked are the same answer by construction. The cone is what this link
    actually compiled — the host and the submodule — and not the whole tree, for the reason that file gives:
-   another agent's popup edit is not a reason to distrust a JS-engine number. */
-stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
+   another agent's popup edit is not a reason to distrust a JS-engine number.
+   ONLY WHEN THAT LINK PRODUCED THE ARTIFACT: stamping after a failed link would mark whatever qjs.mjs a
+   PREVIOUS build left on disk as belonging to this revision, which is §Testing's number about nothing with the
+   stamp itself doing the lying. */
+if (ABI_LINK.code === 0) stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
 
 // Milestone smoke test: run test_forced.c's main (the @H merge + @S sink fire-verification on a fixture doc) —
 // the design-correctness signal until the live-Chrome harness is re-wired to a rebuilt production ABI entry.
@@ -612,29 +657,44 @@ stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
    named as a hang, with the load average that is the first thing to suspect, and it is NOT reported as a
    failing smoke test. §NO BOUNDS is about the FRONTIER: it forbids the engine capping its own exploration, and
    it has never had anything to say about a harness refusing to wait forever for a process it launched. */
-function runProgram(label, argv) {
+function runProgram(label, argv, hint) {
   const t = spawnSync(process.execPath, argv, { stdio: "inherit", shell: false, timeout: RUN_BACKSTOP_MS });
-  runOutcome(label, t);
+  return runOutcome(label, t, hint);
 }
 
-/* The trailing arguments reach main()'s argv — the channel getenv could not be, since emscripten's ENV never
-   merges the launching process's environment. */
-{
-  runProgram("smoke test", [join(OUT, "qjs.js"), ...(MIN ? ["--min"] : [])]);
-  console.log("[build] smoke test PASS (new-world @H + @S" + (MIN ? ", minimal document" : "") + ")");
-}
-
-/* THE SHIPPED ENTRY, DRIVEN THROUGH THE SURFACE THE BRIDGE ACTUALLY CALLS. "The ABI entry has no main()" was
-   true and was not a reason: the entry is DRIVEN, so its smoke test is a driver, and engine/route.mjs is one —
-   it boots the module just linked, provisions a SECOND instance from the create notice, and routes a post
-   between them. That is the shipped qjs_init/qjs_begin/qjs_step/qjs_pending/qjs_host_notices/qjs_route path,
-   end to end. It is also the only thing in the tree that provisions two instances at all, which §SECURITY makes
-   the precondition for believing any cross-instance mechanism has ever run — and it used to run only when
-   somebody remembered to pass `abi`, which is to say almost never. */
-{
-  runProgram("the two-instance ABI drive", [join(ENGINE, "route.mjs")]);
-  console.log("[build] two-instance ABI drive PASS");
-}
+/* THE TWO PROGRAMS ARE TWO AREAS AND BOTH ARE ASKED, EVERY RUN.
+ *
+ * The smoke drives test_forced.c's fixture document (its @H probe stream: any row 0 and the process exits
+ * non-zero — the trailing arguments reach main()'s argv, the channel getenv could not be, since emscripten's
+ * ENV never merges the launching process's environment). The second drives the SHIPPED entry through the
+ * surface the bridge actually calls: engine/route.mjs boots the module just linked, provisions a SECOND
+ * instance from the create notice, routes posts and a synchronous cross-origin `length` read between them,
+ * and parks one of them on an outstanding read.
+ *
+ * IT IS THE ONLY THING IN THE TREE THAT PROVISIONS TWO INSTANCES, which §SECURITY makes the precondition for
+ * believing any cross-instance mechanism has ever run — the world registry, the nearest-first ancestry, the
+ * lazy segment materialization, the peer that answers by running a program. It stood BEHIND the smoke's exit,
+ * so the run that would first show a cross-instance regression is precisely the run that never asked: any
+ * probe row 0, in any unrelated area of the fixture, and the seam went unexercised while the report named only
+ * the smoke. That is §Testing's excluded test wearing a complete-looking total, and the fix is that neither
+ * stage gates the other and BOTH numbers are in one report. */
+const STAGES = [ABI_LIST, SMOKE_LINK, ABI_LINK];
+STAGES.push(SMOKE_LINK.code
+  ? skipped("smoke test", "the smoke program did not link")
+  : runProgram("smoke test" + (MIN ? " (minimal document)" : ""),
+               [join(OUT, "qjs.js"), ...(MIN ? ["--min"] : [])],
+               "the @H row printed 0 above names the statement the fixture document makes and this run did " +
+               "not answer — engine/host/test_forced.c's probe table is where that row is declared."));
+/* A STALE ARTIFACT IS NOT A SUBJECT. route.mjs imports extension/lib/qjs/qjs.mjs off disk, so running it after
+   a failed ABI link would measure whatever a PREVIOUS build left there and report the number under this
+   revision — which is worse than not running it, and is why this is a SKIP rather than an attempt. */
+STAGES.push(ABI_LINK.code
+  ? skipped("two-instance ABI drive", "the production ABI program did not link")
+  : runProgram("two-instance ABI drive", [join(ENGINE, "route.mjs")],
+               "this is the cross-instance seam: the world registry, the nearest-first ancestry fork, the " +
+               "synchronous cross-origin read, and the park on an outstanding one. Nothing else in this tree " +
+               "provisions a second instance, so a failure here is unobserved by every other gate."));
+report(STAGES);
 
 /* A THIRD DRIVE STOOD HERE — the driver for the deleted second program, which put the RENDERER REGISTRY's
    transitions through it — and it is deleted with the program it drove. THE COVERAGE IT HELD IS NAMED RATHER
