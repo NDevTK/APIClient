@@ -425,8 +425,12 @@ bool idl_declared_before_seal(int stepid)
    member states its LEVEL and the check is over both.
    ONE STATEMENT of the rule, because there are now two kinds of declaration to check it on: a member's own
    dictionary argument and a NESTED dictionary a sequence's element type names. */
-static void idl_dict_order_check(const IdlDictMember *members, int k)
+static void idl_dict_order_check(const IdlDictMember *members, int n, int k)
 {
+    DCHECK(k >= 0 && k < n, "a dictionary's order check was asked about a member outside the table — `n` is "
+                            "the caller's own loop bound and `k` its own index, so the two disagreeing means "
+                            "one of them is not this table's");
+    (void)n;
     if (k == 0) return;
     if (members[k].level > members[k - 1].level) return;
     if (members[k].level == members[k - 1].level && strcmp(members[k - 1].name, members[k].name) < 0) return;
@@ -435,13 +439,29 @@ static void idl_dict_order_check(const IdlDictMember *members, int k)
         /* NAME THE PAIR. This used to abort with the RULE and nothing else, and the pool holds every dictionary
            in the engine — so a reader standing at the abort had a search rather than a diagnosis, and the two
            members that have to swap are the entire content of the answer. Building it costs a stack buffer on
-           a path that is about to abort. */
-        char why[320];
+           a path that is about to abort.
+           AND NAME THE TABLE, WHICH THE PAIR ALONE DOES ONLY WHILE THOSE TWO NAMES ARE UNIQUE IN THE TREE.
+           `multiEntry`/`unique` were, so IDBIndexParameters was one grep; `mode`, `type` and `signal` are not,
+           and for a table made of those the pair is a search again. There is no NAME to print: a member's own
+           dictionary argument is an ANONYMOUS array, and giving every one of them a name would be a change at
+           every declaration in the engine. Its MEMBER LIST identifies it exactly and costs only this buffer.
+           THE PAIR STAYS FIRST so that a message this truncates loses the list and never the diagnosis. */
+        char why[640], list[320];
+        size_t used = 0;
+        int i;
+
+        list[0] = '\0';
+        for (i = 0; i < n; i++) {
+            int w = snprintf(list + used, sizeof list - used, "%s%s", i ? ", " : "", members[i].name);
+
+            if (w < 0 || (size_t)w >= sizeof list - used) break;
+            used += (size_t)w;
+        }
         snprintf(why, sizeof why,
                  "a dictionary's members were declared out of Web IDL 3.2.17's read order: `%s` (level %d) is "
                  "declared after `%s` (level %d). Inherited levels come first, and each level's own members "
-                 "sort lexicographically among themselves",
-                 members[k].name, members[k].level, members[k - 1].name, members[k - 1].level);
+                 "sort lexicographically among themselves. The table declares [%s]",
+                 members[k].name, members[k].level, members[k - 1].name, members[k - 1].level, list);
         DFAIL(why);
     }
 #endif
@@ -491,7 +511,7 @@ static void idl_dict_intern(JSContext *ctx, const IdlDictDecl *d)
     g_dicts[g_ndicts].atoms = atoms;
     g_ndicts++;
     for (k = 0; k < d->n; k++) {
-        idl_dict_order_check(d->members, k);
+        idl_dict_order_check(d->members, d->n, k);
         atoms[k] = JS_NewAtom(ctx, d->members[k].name);
         if (d->members[k].dict) idl_dict_intern(ctx, d->members[k].dict);
     }
@@ -2292,7 +2312,7 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
         idl_member(idx)->dict_atoms = malloc(sizeof(JSAtom) * (size_t)nmembers);
         CHECK(idl_member(idx)->dict_atoms, "idl: OOM interning a dictionary's member names");
         for (k = 0; k < nmembers; k++) {
-            idl_dict_order_check(members, k);
+            idl_dict_order_check(members, nmembers, k);
             idl_member(idx)->dict_atoms[k] = JS_NewAtom(ctx, members[k].name);
             /* A NESTED DICTIONARY is interned HERE, at the declaration, and so is every dictionary reachable
                from it: the conversion needs its member atoms live across a suspension, and the declaration is
