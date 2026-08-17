@@ -16,7 +16,20 @@ var _FIRES_ON = {
   "navigation":     "fires on navigation: the payload is a javascript: URL, so it runs when the navigation this sink starts is performed (for a form action, on submission)",
 };
 var _DELIVERY = {
-  "address":           function (p) { return "delivered in the victim's own URL (" + (p === "#" ? "fragment" : p === "?" ? "query string" : String(p)) + ") — one navigation is the whole PoC"; },
+  // A URL HAS EXACTLY TWO PLACES an attacker-controlled component lives, and `concolic_declare_source` refuses
+  // an `address` source without one — so the third arm (`String(p)`) named a URL component no browser has, out
+  // of a record that cannot exist. offscreen-brain.js's buildLiveDelivery asserts the identical pair at the
+  // layer that PERFORMS the navigation; this is the same contract at the layer that DESCRIBES it, and the two
+  // disagreeing is how a card and its verify came to say different things before.
+  "address":           function (p) {
+                         DCHECK(p === "#" || p === "?",
+                           "an @S record declared an `address` delivery whose component is neither `#` nor `?` ("
+                           + JSON.stringify(p) + ") — concolic_declare_source (solver/concolic.c) refuses an "
+                           + "address source with no prefix, so this is either a component added in C with no "
+                           + "placement here or a record that did not come from solve_json_array");
+                         return "delivered in the victim's own URL (" + (p === "#" ? "fragment" : "query string")
+                              + ") — one navigation is the whole PoC";
+                       },
   "plant":             function ()  { return "TWO-STAGE (stored): the attacker plants the value on the victim's origin first, and the victim's later load is what fires it"; },
   "referring-address": function ()  { return "the payload rides the address the victim ARRIVES FROM — the attacker's URL, not the victim's"; },
   "user-file":         function ()  { return "the user must hand the document an attacker-supplied file — no navigation delivers it"; },
@@ -80,11 +93,18 @@ function _encodeSentence(item) {
        + "candidate needing those bytes arrives escaped";
 }
 
-// Stable-ish key for a finding card within a tab. The engine emits one record per
-// (sink, source); key by that + the script the sink lives in.
+// Stable key for a FIRED finding card within a tab. The engine emits one record per (sink, source); key by
+// that + the script the sink lives in.
+//
+// NOTHING HERE IS DEFAULTED. This runs only from the fired loop, below the DCHECK that sink/source/poc are all
+// present, so `|| "?"` / `|| ""` beside them was the release behaviour of a contract already declared — and it
+// was not inert: two drifted records both missing a poc collapse onto ONE key, so the second card's verify
+// result lands in the first card's row and reports Chrome's answer about the wrong payload. `sourceUrl` is the
+// one genuinely optional half — the engine analyses inline script that has no address of its own and bridge.js
+// carries that as "" — so the empty case is NAMED rather than filled.
 function _findingKey(entry) {
-  const it = entry.item || {};
-  return (entry.sourceUrl || "(inline)") + "|" + (it.sink || "?") + "|" + (it.source || "") + "|" + (it.poc || "");
+  const it = entry.item;
+  return (entry.sourceUrl || "(inline)") + "|" + it.sink + "|" + it.source + "|" + it.poc;
 }
 
 
@@ -109,7 +129,21 @@ function renderSecurityPanel() {
   // PARKED search on a sink attacker input demonstrably reaches. Neither carries a verdict to compute: a
   // proven exploit is HIGH unless the page's own policy kills the vector (see _policyBlockers), and the
   // absence of either record is NOT "safe".
-  let secCount = 0;
+  /* THE FINGERPRINT IS OVER WHAT THE CARDS CLAIM, NOT OVER HOW MANY THERE ARE. It was
+     `findings.length + ":" + secCount`, and every event this panel exists to show leaves BOTH numbers
+     unchanged:
+       - a PARKED search that finally SOLVES replaces one entry with another (`search`:"parked" becomes a
+         `poc`), so the array is the same length and the panel kept rendering PARKED over a fire-verified
+         working exploit until some unrelated sink appeared;
+       - a `cspBlocks` or `trustedTypes` that arrives on a re-analysis (the policy is read from fetched headers
+         and a `<meta>`, so it can land after the sink) flips a HIGH badge to POLICY-BLOCKED and moved neither
+         count, so the panel went on badging a policy-dead vector HIGH — the same visible consequence as the
+         recorded `cspBlocked` defect, reached through the cache in front of the fix instead of through the
+         read;
+       - `tried` rising is the parked card's whole content.
+     So the key is built from exactly the fields a card's claim is computed from. It is not a change detector
+     over rendered HTML: each name here is one the card reads. */
+  const fpParts = [];
   for (let i = 0; i < findings.length; i++) {
     // lib/merge.js pushes `securitySinks: secSinks` straight from the analysis it has already DCHECKed is an
     // array, so an entry without one is that merge broken — not a source that reported no sinks (merge.js
@@ -118,9 +152,16 @@ function renderSecurityPanel() {
            "a securityFindings entry reached the popup with no securitySinks array — lib/merge.js only "
            + "creates an entry when it HAS sinks, so an entry without the array is that merge broken "
            + "(sourceUrl=" + findings[i].sourceUrl + ")");
-    secCount += findings[i].securitySinks.length;
+    const sinks = findings[i].securitySinks;
+    for (let j = 0; j < sinks.length; j++) {
+      const s = sinks[j];
+      // JSON, not a delimiter-joined string: a `poc` is an attacker payload and may hold any byte this file
+      // would use as a separator, so a hand-rolled key is one the PAGE picks collisions in.
+      fpParts.push([findings[i].sourceUrl, s.sink, s.source, s.search, s.tried, s.poc,
+                    !!s.cspBlocks, !!s.trustedTypes]);
+    }
   }
-  const fp = findings.length + ":" + secCount;
+  const fp = JSON.stringify(fpParts);
   if (fp === _lastSecFp) return;
   _lastSecFp = fp;
 
@@ -141,8 +182,24 @@ function renderSecurityPanel() {
     var srcLabel = f.sourceUrl ? _shortUrl(f.sourceUrl) : "(unknown)";
     for (var si = 0; si < f.securitySinks.length; si++) {
       var it = f.securitySinks[si];
+      // THE TWO SHAPES ARE ASSERTED ON THE LINE THAT TELLS THEM APART, because this is where the panel decides
+      // which CLAIM it makes about a sink: a fired record gets a HIGH badge and a payload, a parked one gets
+      // neither. `it && it.search === "parked"` guarded a null the DCHECK further down says cannot exist, and
+      // the guard was not harmless — ANYTHING that is not exactly the string "parked" (a null element, a third
+      // state, a record from some other producer) routed into the FIRED list, where a missing `poc` renders as
+      // a HIGH XSS badge over an empty breakout input. solve_json_array emits EXACTLY ONE of `poc` and
+      // `search`:"parked" per entry (solve.h states both shapes), so that is what is checked, once, here.
+      DCHECK(it && typeof it === "object" && !Array.isArray(it),
+             "a securitySinks element is not an object — solve_json_array emits one JSON object per detected "
+             + "sink, so anything else is that serializer or the relay to this panel broken (sourceUrl="
+             + f.sourceUrl + ")");
+      DCHECK((typeof it.poc === "string") !== (it.search === "parked"),
+             "an @S record is neither a fired PoC nor a parked search, or claims to be both — solve_json_array "
+             + "emits exactly one of `poc` and `search`:\"parked\", and this is the line that decides whether "
+             + "this sink is badged a working exploit or reported as an open search (sink=" + it.sink
+             + " search=" + JSON.stringify(it.search) + ")");
       var e = { item: it, sourceUrl: f.sourceUrl, srcLabel: srcLabel, pageUrl: f.pageUrl };
-      (it && it.search === "parked" ? parked : allItems).push(e);
+      (it.search === "parked" ? parked : allItems).push(e);
     }
   }
 
@@ -365,6 +422,16 @@ async function _handleVerify(btn) {
         + ((start && (start.error || start.pocWhy)) || "the offscreen returned no PoC and no reason — an engine↔host contract gap");
       btn.disabled = false; btn.textContent = prev; return;
     }
+    // THE MARKER IS THE WHOLE CORRELATION, so it is asserted and never allowed to arrive as `undefined`. It
+    // rides INSIDE the payload as apiclientsink('<id>') and is the only thing that ties a real Chrome hit back
+    // to this session, so an absent one keys _verifySandboxes under `undefined` and then polls a session id the
+    // offscreen has never held — every live verify would report NOT REPRODUCED whatever Chrome actually did,
+    // which is the exact consequence the deleted `snap.executed` read used to have. `pocJs` above was already
+    // checked; the id it is useless without was not.
+    DCHECK(typeof start.sessionId === "string" && start.sessionId.length > 0,
+           "EXPLOIT_PROBE_START answered with a pocJs but no sessionId — startExploitProbe mints a "
+           + "crypto.randomUUID marker on every session and popup-handlers answers it as `sessionId`, so its "
+           + "absence is that reply broken and this verify could never be correlated to a real Chrome hit");
     var pocId = "v" + (_verifyIdSeq++);
     // The probe carries the engine's policy facts (present only when the engine stated them), so the ONE
     // _policyBlockers reading serves the card and the verify verdict alike. Two spellings of "did the page's

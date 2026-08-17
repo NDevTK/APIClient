@@ -992,27 +992,88 @@ function renderEngineRuns() {
 
 // ─── Data Panel ──────────────────────────────────────────────────────────────
 
+// A LIST OF URLs AS LINKS, one spelling. The key card wrote this inline for `pageUrls` and the new endpoint
+// line needs the same thing, and two copies of it is how one of them ends up escaping a title and the other not.
+function _urlListHtml(list) {
+  return list.map((u) => {
+    if (/^https?:\/\//i.test(u)) return `<a href="${esc(u)}" target="_blank" title="${esc(u)}">${esc(_shortUrl(u))}</a>`;
+    return `<span title="${esc(u)}">${esc(_shortUrl(u))}</span>`;
+  }).join(", ");
+}
+
 function renderDataPanel() {
   const keysContainer = document.getElementById("data-keys");
   const empty = document.getElementById("data-empty");
 
+  // A null tabData is "GET_STATE has not answered yet, or Clear just emptied the view" — a real state this
+  // panel renders as its empty text, and a different statement from a snapshot whose serializer dropped a
+  // field. Under a real snapshot every field read below is one serializeTabData writes on EVERY path
+  // (GET_STATE falls back to _emptyDocView, which carries them too), so each is asserted, never defaulted.
   const keys = tabData?.apiKeys ? Object.entries(tabData.apiKeys) : [];
-  const fp = keys.length + ":" + keys.map(k => k[0]).join(",");
+  let scopeRows = [];
+  let auth = null;
+  if (tabData) {
+    DCHECK(tabData.apiKeys && typeof tabData.apiKeys === "object",
+           "GET_STATE answered without an apiKeys record — serializeTabData builds one on every path " +
+           "(lib/serialize.js), so its absence is that serializer broken and every key this extension has " +
+           "learned would render as a page that leaked none");
+    /* THE REQUIRED OAUTH SCOPES, WHICH REACHED NO READER AT ALL. lib/response-decode.js pulls them out of a
+       403's `WWW-Authenticate`, lib/discovery-probe.js and lib/popup-handlers.js out of the gapi error
+       envelope, mergeToGlobal carries them into the cumulative store, lib/persistence.js saves them across
+       sessions and serializeTabData puts them on this snapshot — and grep found no consumer of
+       `tabData.scopes` anywhere. That is the exact mirror of a reader with no writer and it hides the same
+       way: every hop of the path is live, so the path looks live. What a scope states is what a replay of
+       this service NEEDS, which is one of the things §What-the-tool-produces exists to report. */
+    DCHECK(tabData.scopes && typeof tabData.scopes === "object",
+           "GET_STATE answered without a scopes record — serializeTabData builds one on every path from " +
+           "globalStore.scopes overlaid with the document's, so its absence is that serializer broken and the " +
+           "scope list a 403 named would be dropped");
+    scopeRows = Object.entries(tabData.scopes).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    for (const [_svc, _list] of scopeRows)
+      DCHECK(Array.isArray(_list) && _list.length > 0,
+             "a scopes entry is not a non-empty array of scope strings — all three writers (lib/" +
+             "response-decode.js, lib/discovery-probe.js, lib/popup-handlers.js) store the split scope list " +
+             "ONLY when it has entries, so an empty one is a producer that stopped guarding and this line " +
+             "would report a service as requiring no scope (service=" + _svc + ")");
+    /* THE CREDENTIAL CONTEXT, in the same state. lib/response-decode.js writes it ONLY when a request from
+       this document carried an Authorization header or a cookie, so `null` is the POSITIVE statement that
+       none did — and that is the first thing a reader of a learned surface needs, because §What-the-tool-
+       produces is about learning the LOGGED-IN surface while logged out. It was serialized to nobody. */
+    auth = tabData.authContext;
+    DCHECK(auth === null || (auth && typeof auth === "object" && !Array.isArray(auth)),
+           "a document's authContext is neither null nor a record — lib/response-decode.js writes " +
+           "{hasAuthorization?, hasCookies?, origin?} and offscreen-brain.js initialises it to null, so a " +
+           "third shape is one of those two producers having changed under this view");
+  }
+  /* THE FINGERPRINT COVERS EVERYTHING THIS PANEL RENDERS, or the cache in front of it makes a rendered fact
+     invisible again. It keyed on the KEYS alone, so a service whose scopes arrived after the last key — or a
+     document that started sending cookies — short-circuited here and never appeared. */
+  const fp = keys.length + ":" + keys.map(k => k[0]).join(",")
+           + "|" + scopeRows.map(([s, l]) => s + "=" + l.length).join(",")
+           + "|" + (auth ? [!!auth.hasAuthorization, !!auth.hasCookies, auth.origin || ""].join(",") : "-");
   if (fp === _lastKeysFp) return;
   _lastKeysFp = fp;
 
-  keysContainer.innerHTML = "";
-  const hasData = keys.length > 0;
+  const hasData = keys.length > 0 || scopeRows.length > 0 || auth !== null;
   empty.style.display = hasData ? "none" : "block";
+
+  let html = "";
 
   // Keys section
   if (keys.length) {
-    let html = '<div class="section-header">Discovered API Keys</div>';
+    html += '<div class="section-header">Discovered API Keys</div>';
     for (const [key, info] of keys) {
-      const services = info.services || [];
-      const hosts = info.hosts || [];
-      const eps = info.endpoints || [];
-      const reqCount = info.requestCount || eps.length || 0;
+      /* THE WHOLE RECORD, ASSERTED, BECAUSE ONE PROJECTION WRITES ALL OF IT. serializeApiKeyEntry
+         (lib/serialize.js) DCHECKs that the four collections are Sets and that requestCount is a number, then
+         writes each of them unconditionally — so `info.services || []`, `|| []`, `|| []` and `|| []` here
+         could only ever fire for a record that projection did not write, and what they produced was four
+         empty lists that read as "this key was never used against any service, host, endpoint or page". */
+      for (const _f of ["services", "hosts", "endpoints", "pageUrls"])
+        DCHECK(Array.isArray(info[_f]),
+               "an API key reached the popup with a `" + _f + "` that is not an array — " +
+               "serializeApiKeyEntry spreads the store's Set into one on every entry it writes, so anything " +
+               "else is that projection broken and this card would report the key as never used");
+      const services = info.services, hosts = info.hosts, eps = info.endpoints, pageUrls = info.pageUrls;
 
       /* THE KEY'S TYPE, UNDEFAULTED. `info.name || "API Key"` stood in the label and it CONCEALED a real
          defect for as long as it shipped: four components copied an API-key record field-by-field and two of
@@ -1025,29 +1086,107 @@ function renderDataPanel() {
              "an API key reached the popup with no type name — lib/keys.js stamps the matched pattern's name " +
              "on every key it records and serializeApiKeyEntry is the one projection that carries it, so a " +
              "missing one is a copier dropping the field again (or a record stored before it was carried)");
+      /* WHERE THE KEY WAS FOUND IS THE PRODUCER'S OWN WORD, and this badge tested it against a name no
+         producer has ever written. `info.source === "page_source" ? "page source" : "network"` — nothing in
+         this extension passes "page_source" to extractKeysFromText: every one of its twelve call sites passes
+         `url`, `header:<name>`, `response_body`, `response_grpc`, `response_protobuf`, `protobuf_body`,
+         `send_response_grpc` or `send_response_protobuf` (plus a " > b64" suffix when the key came out of a
+         nested base64 blob). So the "page source" arm has never rendered once, every key has been badged
+         "network", and the specific provenance the producer computed was thrown away by the consumer. It is
+         the `if (kind === N)` on a value the producer never returns, and the fix is to show the value:
+         lib/popup-handlers.js already reads this exact vocabulary (`=== "url"`, `startsWith("header:")`) to
+         decide where to inject the key, so it is a live contract and not free text. */
+      DCHECK(typeof info.source === "string" && info.source !== "",
+             "an API key reached the popup with no source context — extractKeysFromText takes it as a required " +
+             "argument and lib/popup-handlers.js switches on it to decide the key's injection point, so a " +
+             "missing one is that producer broken (key type=" + info.name + ")");
+      /* THE COUNT IS THE COUNT. `info.requestCount || eps.length || 0` substituted the size of the ENDPOINT
+         SET for the request count whenever the count was 0 — a fabricated measurement wearing the "req"
+         label, and it hid the state of the field completely: grep finds NO writer that ever increments an
+         API-key entry's requestCount (lib/keys.js initialises it to 0, mergeToGlobal takes the max of two
+         zeroes, serializeApiKeyEntry carries it, three DCHECKs guard its type). So the badge has never once
+         shown a request count. `learn.js`'s requestCount is a different record's (a method's `_stats`). The
+         honest read is rendered unconditionally, because 0 is a real value about a key that was seen in a
+         reply and never sent back — and the endpoints the key WAS seen against get their own line below,
+         which is the fact that number was standing in for. */
+      DCHECK(typeof info.requestCount === "number",
+             "an API key reached the popup with no numeric requestCount — serializeApiKeyEntry asserts and " +
+             "writes it on every entry, so a missing one is that projection broken");
       html += `<div class="card">
-        <div class="card-label">${esc(info.name)} ${info.source === "page_source" ? '<span class="badge badge-source">page source</span>' : '<span class="badge badge-source">network</span>'}
-          ${reqCount > 0 ? `<span class="badge badge-status">${esc(String(reqCount))} req</span>` : ""}
+        <div class="card-label">${esc(info.name)} <span class="badge badge-source" title="where this key was found — the request/response context it was matched in">${esc(info.source)}</span>
+          <span class="badge badge-status">${esc(String(info.requestCount))} req</span>
         </div>
-        <div class="card-value">${esc(key)}</div>
-        <div class="card-meta">
-          ${hosts.length ? `${hosts.length === 1 ? "Host" : "Hosts"}: ${hosts.map((h) => `<strong>${esc(h)}</strong>`).join(", ")}` : ""}
-        </div>`;
+        <div class="card-value">${esc(key)}</div>`;
 
+      if (hosts.length) {
+        html += `<div class="card-meta">${hosts.length === 1 ? "Host" : "Hosts"}: ${hosts.map((h) => `<strong>${esc(h)}</strong>`).join(", ")}</div>`;
+      }
       if (services.length) {
-        html += `<div class="card-meta">${services.length === 1 ? "Service" : "Services"}: ${[...services].map((s) => `<code>${esc(s)}</code>`).join(" ")}</div>`;
+        html += `<div class="card-meta">${services.length === 1 ? "Service" : "Services"}: ${services.map((s) => `<code>${esc(s)}</code>`).join(" ")}</div>`;
       }
-      const pageUrls = info.pageUrls || [];
+      /* THE ENDPOINTS THIS KEY WAS SEEN AGAINST — `<host><path>` per lib/keys.js, and until now the set was
+         read only for its `.length`, laundered into the "req" badge above. It is the one measured usage fact
+         on the record, so it is stated as itself. */
+      if (eps.length) {
+        html += `<div class="card-meta">${eps.length === 1 ? "Endpoint" : "Endpoints"}: ${eps.map((e2) => `<code>${esc(e2)}</code>`).join(" ")}</div>`;
+      }
       if (pageUrls.length) {
-        html += `<div class="card-meta">${pageUrls.length === 1 ? "Page" : "Pages"}: ${[...pageUrls].map((u) => {
-          if (/^https?:\/\//i.test(u)) return `<a href="${esc(u)}" target="_blank" title="${esc(u)}">${esc(_shortUrl(u))}</a>`;
-          return `<span title="${esc(u)}">${esc(_shortUrl(u))}</span>`;
-        }).join(", ")}</div>`;
+        html += `<div class="card-meta">${pageUrls.length === 1 ? "Page" : "Pages"}: ${_urlListHtml(pageUrls)}</div>`;
       }
+      /* WHEN AND WHERE, the last fields of the record. lib/keys.js stamps `firstSeen`/`lastSeen` on every
+         entry and `origin`/`referer` from the URL the key was matched in; lib/merge.js's own comment records
+         that `lastSeen` "was written here and read NOWHERE", and that was true of all four of them.
+         `referer` is that URL in full and `origin` is the SAME url's origin, so the address below subsumes it
+         — which is why there is one line here and not two, and not because `origin` is unread. The two
+         timestamps are asserted; `referer` is guarded because keys.js writes null when the scanned text had no
+         source URL, and that null is a positive statement (a body with no address of its own). */
+      DCHECK(typeof info.firstSeen === "number" && typeof info.lastSeen === "number",
+             "an API key reached the popup without numeric firstSeen/lastSeen — lib/keys.js stamps both when " +
+             "it mints the entry and refreshes lastSeen on every later sighting, so a missing one is a " +
+             "copier dropping the field");
+      html += `<div class="card-meta">first seen ${esc(new Date(info.firstSeen).toLocaleString())}`
+            + ` &middot; last seen ${esc(new Date(info.lastSeen).toLocaleString())}`
+            + (info.referer ? ` &middot; matched in ${_urlListHtml([info.referer])}` : "")
+            + `</div>`;
       html += `</div>`;
     }
-    keysContainer.innerHTML = html;
   }
+
+  /* WHAT THE OBSERVED TRAFFIC CARRIED, AND WHAT A REPLAY WOULD NEED. Two facts serializeTabData has put on
+     this snapshot from the beginning and no view has ever read. Rendered together because they answer one
+     question — is the surface below the anonymous one, and what would it take to reach the other. */
+  if (hasData) {
+    html += '<div class="section-header">Credentials and scopes observed</div>';
+    if (auth) {
+      const carried = [];
+      if (auth.hasAuthorization) carried.push("an <code>Authorization</code> header");
+      if (auth.hasCookies) carried.push("cookies");
+      // response-decode.js writes the record ONLY inside `if (authorization || cookie)`, so at least one of
+      // the two is true whenever it exists. An empty list here is that producer changed shape, and reporting
+      // a credentialed document as anonymous is the wrong half of the tool's headline claim.
+      DCHECK(carried.length,
+             "a document's authContext claims neither an Authorization header nor cookies — " +
+             "lib/response-decode.js writes the record only when one of the two was observed, so an empty " +
+             "one is that producer broken and this line would report a credentialed document as anonymous");
+      html += '<div class="card card-compact"><div class="card-label">Credentialed traffic observed</div>'
+           + '<div class="card-meta">requests from this document carried ' + carried.join(" and ")
+           + (auth.origin ? ' &middot; <code>Origin: ' + esc(auth.origin) + '</code>' : "")
+           + ' — so what this extension learned here includes what those credentials could reach</div></div>';
+    } else {
+      html += '<div class="card card-compact"><div class="card-label">No credentialed traffic observed</div>'
+           + '<div class="card-meta">no request from this document carried an <code>Authorization</code> header '
+           + 'or a cookie, so everything learned here is the ANONYMOUS surface — which is the point: the bundle '
+           + 'ships the authenticated code path to a logged-out visitor too</div></div>';
+    }
+    for (const [svc, list] of scopeRows) {
+      html += '<div class="card card-compact"><div class="card-label">Required OAuth scopes &mdash; <code>'
+           + esc(svc) + '</code></div><div class="card-meta">'
+           + list.map((s) => '<code>' + esc(s) + '</code>').join(" ")
+           + '</div></div>';
+    }
+  }
+
+  keysContainer.innerHTML = html;
 }
 
 

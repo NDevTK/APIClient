@@ -159,6 +159,20 @@ function serializeTabData(tab) {
   const mergedDiscovery = {};
   for (const [k, v] of globalStore.discoveryDocs) {
     if (v.status === "found") {
+      /* THE SAME LADDER serializeApiKeyEntry ABOVE DELETED, surviving one loop later on the same two names.
+         Every producer of a `status:"found"` GLOBAL entry writes both as Sets — lib/merge.js's mergeToGlobal
+         builds them with `new Set(...)`, _deserializeIntoGlobalStore rebuilds them from the stored arrays, and
+         lib/popup-handlers.js's re-fetch carries the previous entry's — so `instanceof Set ? … : … || []`
+         could only ever fire for a record none of those three wrote, and what it produced then was an EMPTY
+         LIST, which reads as "this service was never used from any page" rather than as a broken producer.
+         (The TAB loop below is the case that genuinely IS optional and says so there: lib/learn.js mints a
+         virtual doc entry carrying neither field, and lib/response-decode.js adds them the first time a
+         request names the service.) */
+      DCHECK(v.pageUrls instanceof Set && v.frameOrigins instanceof Set,
+             "a global discoveryDocs entry with status \"found\" carries a pageUrls/frameOrigins that is not " +
+             "a Set — mergeToGlobal, _deserializeIntoGlobalStore and the popup's re-fetch all build Sets, so " +
+             "anything else here serializes as an empty list that reads as 'never used from any page' " +
+             "(service=" + k + ")");
       mergedDiscovery[k] = {
         status: v.status,
         url: v.url,
@@ -167,8 +181,8 @@ function serializeTabData(tab) {
         doc: v.doc || null,
         grouping: v.grouping || null,
         isVirtual: !!v.isVirtual,
-        pageUrls: [...(v.pageUrls instanceof Set ? v.pageUrls : v.pageUrls || [])],
-        frameOrigins: [...(v.frameOrigins instanceof Set ? v.frameOrigins : v.frameOrigins || [])],
+        pageUrls: [...v.pageUrls],
+        frameOrigins: [...v.frameOrigins],
       };
     } else {
       mergedDiscovery[k] = { status: v.status };
