@@ -943,20 +943,13 @@ function handleContentMessage(msg, sender) {
   // isExtensionPage branch — they originate from the offscreen doc, which has
   // no sender.tab, so handleContentMessage would have dropped them at the top.)
 
-  // PROBE_HIT: intercept.js recorded a sink that saw the active
-  // probe marker. Correlate to an open exploit-probe session via the
-  // hit's own marker (carried in the URL at probe time) and append.
+  // PROBE_HIT: a document reports that apiclientsink was called with an active probe marker. Correlating it to
+  // a session is only half the question — WHICH DOCUMENT reported it is the other half, and the record is only
+  // evidence about the sink if that document is the one the payload was delivered to. `_facts` is the ONE
+  // mint's output; the hit's own fields are the untrusted renderer's claims. (`sender.frameId || 0` and
+  // `tabId` were re-derived here beside the mint that already answers both — one record, one derivation.)
   if (msg.type === "PROBE_HIT") {
-    // The hit carries the finding's crypto.randomUUID (`id`) the PoC payload
-    // passed to apiclientsink — correlate to the session by that id. (Legacy
-    // `marker` field tolerated for safety.)
-    const hid = msg.hit && (msg.hit.id || msg.hit.marker);
-    if (typeof hid === "string") {
-      const ses = _probeSessions.get(hid);
-      if (ses) {
-        ses.hits.push(Object.assign({}, msg.hit, { id: hid, tabId: tabId, frameId: sender.frameId || 0 }));
-      }
-    }
+    _recordProbeHit(msg, _facts);
     return;
   }
 
@@ -1098,8 +1091,23 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
            + JSON.stringify(deliveryPrefix) + ") — a URL has no third place an attacker-controlled component "
            + "lives, so this is either a declaration with no prefix or a component this layer cannot place");
     var frag = deliveryPrefix === "#";
-    out.pocJs = "window.open(" + JSON.stringify(frag ? pageUrl.split("#")[0] + "#" + payload
-                                                     : pageUrl.split("#")[0].split("?")[0] + "?" + payload) + ', "_blank");';
+    /* THE ADDRESS IS BUILT THROUGH THE URL PARSER, AND IT IS RETURNED, because it is not only the thing to
+       navigate to — it is the thing a HIT IS ATTRIBUTED AGAINST. `pageUrl.split("#")[0]` produced a string
+       nobody had parsed, so an unparseable pageUrl became an unparseable window.open argument and there was
+       no origin to compare a reporting document's principal to. A page whose address does not parse has no
+       document to navigate and no origin to attribute to, which is an answer, not a build failure. */
+    var base;
+    try { base = new URL(pageUrl); }
+    catch (_) {
+      out.why = "the page this sink was observed on has no parseable address (" + JSON.stringify(pageUrl)
+              + "), so there is no document to navigate to and no origin a hit could be attributed to.";
+      return out;
+    }
+    base.hash = "";                       // empty string ⇒ fragment null ⇒ no trailing `#` in href
+    if (!frag) base.search = "";
+    out.targetUrl = base.href + deliveryPrefix + payload;
+    out.targetOrigin = base.origin;       // OUR expectation, compared against the browser's MessageSender.origin — never the reverse
+    out.pocJs = "window.open(" + JSON.stringify(out.targetUrl) + ', "_blank");';
     out.delivery = "navigate the victim to a URL whose " + (frag ? "fragment" : "query string") + " is the payload";
     return out;
   }
@@ -1160,17 +1168,132 @@ function startExploitProbe(msg) {
     findingId: findingId || null, sourceUrl: (msg && msg.sourceUrl) || null,
     sinkName: sinkName || null, waitMs: wait,
     hits: [], createdAt: Date.now(), finishedAt: null, error: null,
+    /* THE DELIVERED DOCUMENT — the whole basis on which a hit can be ATTRIBUTED rather than merely counted.
+       Filled from the delivery this zone actually built (never re-derived at hit time: §scheduler's rule that
+       an operation becoming a work item takes its inputs WITH it — a PROBE_HIT arrives long after, and reading
+       the address back off the finding then would read whatever the store holds by then). `expect` null means
+       this session performed no delivery at all, so NO document was ever handed the marker and every hit on it
+       is somebody's claim about a payload that was never sent. `deliveredDocumentId` is latched by the first
+       attributed hit: documentId is the only stable per-document identity (a (tab, frame) pair is reused across
+       navigations at a DIFFERENT origin), so it is what makes "the same document fired twice" distinguishable
+       from "two documents both know the marker". */
+    expect: null,
+    deliveredDocumentId: null,
   };
   // ENGINE AGREEMENT: perform the delivery the ENGINE declared, carrying its EXACT poc (X9 -> apiclientsink).
   // The user runs it by clicking Run in the sandboxed attacker page (poc-sandbox.html) — that real click is
   // the user activation window.open needs. When the real page's sink fires, intercept.js → content.js →
-  // PROBE_HIT lands on this marker and EXPLOIT_PROBE_STATUS reports REAL EXPLOIT (Chrome-confirmed).
+  // PROBE_HIT lands on this marker and _recordProbeHit decides whether the reporting document is the one the
+  // payload was delivered to.
   var _poc = buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, session.pageUrl, marker);
-  session.pocJs = (_poc && _poc.pocJs) || null;
-  session.pocWhy = _poc && !_poc.pocJs ? _poc.why : null;   // which declared mechanism this layer cannot perform
+  DCHECK(!!_poc && typeof _poc === "object" && typeof _poc.payload === "string",
+         "buildLiveDelivery answered with no record — it returns {pocJs, payload, context, source} on every "
+         + "arm including the ones it cannot perform, so an absent one is that function having grown a path "
+         + "that returns nothing and this session would carry neither a PoC nor a reason");
+  session.pocJs = _poc.pocJs;
+  session.pocWhy = _poc.pocJs ? null : _poc.why;   // which declared mechanism this layer cannot perform
+  if (_poc.pocJs) {
+    DCHECK(typeof _poc.targetUrl === "string" && typeof _poc.targetOrigin === "string",
+           "a delivery arm produced a pocJs without naming the address it navigates to — the target URL and "
+           + "its origin are what a PROBE_HIT is attributed against, so a PoC without them can only ever be "
+           + "counted, and every hit on this session would report as unattributable");
+    // frameId 0 is the BROWSER'S name for the top-level traversable, and window.open creates exactly one.
+    session.expect = { url: _poc.targetUrl, origin: _poc.targetOrigin, frameId: 0 };
+  }
   session.status = "prepared";
   _probeSessions.set(marker, session);
   return session;
+}
+
+/* ATTRIBUTE A RELAYED apiclientsink CALL TO A DOCUMENT — the check SECURITY.md names as missing and buildable.
+   Before this, a PROBE_HIT was accepted from ANY document in ANY tab that knew the marker: tabId/frameId were
+   stamped onto the record and never compared, and the reporting document's principal was never looked at. The
+   marker rides INSIDE the payload (it has to — it is what a fired sink relays), and the payload is delivered TO
+   a page, so ANY document that can read that address holds it. A hit from somewhere else is therefore not a
+   weaker hit; it is a different document's claim about someone else's exploit.
+
+   WHAT THIS CLOSES AND WHAT IT DOES NOT. It closes CROSS-DOCUMENT fabrication: a document at another origin,
+   in another tab, in a subframe, or in a second document of the target origin cannot make this zone print a
+   hit as evidence for the sink. It does NOT close the SAME-DOCUMENT case and cannot: `window.apiclientsink` is
+   installed in the page's own main world, so any script in the delivered document can call it, and every fact
+   the hook could report about its own caller is reported BY that world. That residual is irreducible by this
+   mechanism and is what the verdict wording must state (lib/popup-security.js).
+
+   THE DIRECTION OF THE ORIGIN COMPARISON IS THE SECURITY RULE. `facts.origin` is the browser's
+   MessageSender.origin (opaque-unique via _senderOrigin) — the principal, never derived here. `expect.origin`
+   is OUR OWN value: the origin of the address this zone built and handed to window.open. A fact is compared
+   against an expectation; an expectation is never promoted to a fact. (An opaque target — a file:/data: page —
+   parses to "null" while every opaque DOCUMENT gets a per-document `null:<uuid>` token, so such a session can
+   never attribute a hit. That is the spec's rule, not a gap: an opaque origin is same-origin with nothing.)
+
+   A MISMATCH IS RECORDED, NEVER DROPPED. §@S: absence of a PoC is never a "safe" verdict, and a marker
+   surfacing in a document that was never handed it is itself a fact about the page. It lands on the same one
+   `hits` array carrying its own verdict, because two arrays would be two vocabularies for one event. */
+function _sameAddress(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  try { return new URL(a).href === new URL(b).href; } catch (_) { return false; }   // b is attacker text; a non-URL is an answer
+}
+function _recordProbeHit(msg, facts) {
+  // `hit` crosses from the UNTRUSTED renderer, so its fields are validated as attacker input rather than
+  // asserted — a DCHECK here would be this zone asserting a hostile producer's correctness, and a page could
+  // abort the offscreen by sending `{type:"PROBE_HIT", hit:{}}`. The legacy `marker` spelling is DELETED:
+  // intercept.js relays `{id, at, url, …}` and always has, so it was a reader with no writer.
+  const hit = msg && msg.hit;
+  const hid = hit && hit.id;
+  if (typeof hid !== "string" || hid === "") return;
+  const ses = _probeSessions.get(hid);
+  if (!ses) return;                 // no session by that marker — nothing this hit could be evidence about
+
+  const exp = ses.expect;
+  let mismatch = null;
+  if (!exp) {
+    mismatch = "this session delivered nothing — its engine-declared mechanism is one this zone cannot perform, "
+             + "so no document was ever handed this marker";
+  } else if (facts.origin !== exp.origin) {
+    mismatch = "reported by " + facts.origin + ", but the payload was delivered to " + exp.origin;
+  } else if (facts.frameId !== exp.frameId) {
+    mismatch = "reported by frame " + facts.frameId + ", but the payload was delivered to the top-level document";
+  } else if (ses.deliveredDocumentId !== null && ses.deliveredDocumentId !== facts.documentId) {
+    mismatch = "reported by a second document of " + exp.origin + " — the delivered one already fired this marker";
+  }
+  if (!mismatch && ses.deliveredDocumentId === null) ses.deliveredDocumentId = facts.documentId;   // latch it
+
+  /* TWO HALVES, NAMED FOR THEIR PROVENANCE, because the whole defect this fixes was a record that mixed them.
+     `browserStated` is the ONE mint's output — chrome.* answers a renderer cannot forge. `pageClaimed` is
+     everything intercept.js read inside the page: it is CORROBORATION and never attribution, and the popup
+     labels it as such. `Object.assign({}, msg.hit, …)` used to splice the untrusted half straight onto the
+     record under unmarked names, which is SECURITY.md's "a UI that labels an untrusted claim like a fact". */
+  ses.hits.push({
+    id: hid,
+    attributed: !mismatch,
+    mismatch: mismatch,
+    browserStated: {
+      documentId: facts.documentId, origin: facts.origin, url: facts.url,
+      tabId: facts.tabId, frameId: facts.frameId,
+    },
+    pageClaimed: {
+      at: typeof hit.at === "number" ? hit.at : null,
+      url: typeof hit.url === "string" ? hit.url : null,
+      // Was the reporting document still AT the delivered address when the hook ran? BOTH sides go through
+      // the URL parser rather than being compared as strings: the fragment percent-encode set (WHATWG, and
+      // the engine owns the table — a second copy here is the drift CLAUDE.md forbids) means `location.href`
+      // shows an HTML breakout re-encoded, so a raw `indexOf(payload)` is false for every real payload. The
+      // platform normalises both ends identically, which is the only comparison that is spec-faithful.
+      addressMatch: _sameAddress(exp && exp.url, hit.url),
+      /* The caller's own frame, for a HUMAN to read. It is deliberately NOT scored, and the reason is worth
+         stating so nobody later promotes it: there is no shape here that only a fired sink produces. A real
+         `eval(location.hash)` sink fires with the page's own script on the stack and `document.currentScript`
+         set to it — byte-identical to a page script calling the hook directly — so any rule over these fields
+         would call a genuine sink a fabrication. It is context; the verdict never derives strength from it. */
+      stack: typeof hit.stack === "string" ? hit.stack.slice(0, 1024) : null,
+      currentScript: typeof hit.currentScript === "string" ? hit.currentScript : null,
+      eventType: hit.event && typeof hit.event.type === "string" ? hit.event.type : null,
+      eventTarget: hit.event && typeof hit.event.target === "string" ? hit.event.target : null,
+      // The page's world refused to answer at all — itself a signal, so it is recorded rather than defaulted
+      // into "no evidence".
+      unavailable: hit.evidenceUnavailable === true,
+    },
+  });
 }
 
 

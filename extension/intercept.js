@@ -495,8 +495,30 @@
   // `id`) via a CustomEvent AND mirrored onto a documentElement attribute so a
   // content script that loads AFTER the sink fired still drains it — the event
   // alone races content.js's document_idle injection.
+  //
+  // WHAT THE HOOK CAN AND CANNOT PROVE, AND WHY NO EXTRA FIELD FIXES IT. A call means
+  // the payload's CODE RAN in this document; it does NOT mean the SINK produced it,
+  // because this hook is installed in the page's own main world and any script here can
+  // call it. Nothing added to the payload changes that (the payload IS handed to the
+  // page, so it carries no secret), and NEITHER DOES anything reported about the caller:
+  // a real `eval(location.hash)` sink fires with the page's own script on the stack and
+  // `document.currentScript` set to it, which is byte-identical to a page script calling
+  // the hook directly. So the caller's frame is relayed as CONTEXT FOR A HUMAN — the
+  // offscreen files it under `pageClaimed`, the verdict never scores it, and a rule over
+  // these fields would call a genuine sink a fabrication. Attribution is done where the
+  // browser's own facts are (offscreen `_recordProbeHit`), never here.
   function _uasrRelayHit(id) {
     var hit = { id: String(id == null ? "" : id), at: Date.now(), url: location.href };
+    try {
+      // One block, not five: a page that poisons Error/currentScript refuses the whole
+      // answer, and that refusal is RECORDED rather than defaulted into "no evidence".
+      var cs = document.currentScript;
+      var ev = window.event;
+      hit.stack = String(new Error().stack || "").split("\n").slice(1, 6).join("\n").slice(0, 1024);
+      hit.currentScript = cs ? String(cs.src || "inline") : null;
+      hit.event = ev ? { type: String(ev.type || ""),
+                         target: ev.target && ev.target.tagName ? String(ev.target.tagName) : null } : null;
+    } catch (_) { hit.evidenceUnavailable = true; }
     try { document.dispatchEvent(new CustomEvent("__uasr_probe_hit", { detail: hit })); } catch (_) {}
     try {
       var el = document.documentElement;

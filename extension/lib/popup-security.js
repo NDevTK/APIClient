@@ -312,7 +312,7 @@ function renderSecurityPanel() {
       var probe = JSON.stringify(probeObj);
       verifyHtml = '<div class="verify-row">'
         + '<button class="verify-btn" data-probe=\'' + esc(probe) + '\' data-key="' + esc(key) + '">Verify in real Chrome</button>'
-        + '<span class="verify-hint">loads the real page with the engine’s EXACT payload in a sandboxed attacker window — the sink firing <code>apiclientsink</code> is ground-truth REAL EXPLOIT (no fire → engine/Chrome divergence)</span>'
+        + '<span class="verify-hint">loads the real page with the engine’s EXACT payload in a sandboxed attacker window, under the page’s real CSP/Trusted-Types. A relayed <code>apiclientsink</code> call from the delivered document (origin/tab/frame browser-matched) means the payload’s code RAN there — what a fired sink produces, and what the model predicts. It is not proof the SINK produced it: the hook lives in the page’s own world.</span>'
         + '<div class="verify-result" data-key="' + esc(key) + '"></div></div>';
     } else {
       verifyHtml = '<div class="verify-na">no page url recorded for this finding — live verify delivers the payload to the page the sink was observed on</div>';
@@ -377,7 +377,24 @@ function renderSecurityPanel() {
 // The offscreen builds pocJs = the engine's EXACT poc (X9 -> apiclientsink) delivered to the REAL page via
 // its source. We embed the sandboxed attacker page (poc-sandbox.html) and postMessage it the pocJs; the
 // user clicks Run inside it (real user gesture for window.open). When the real sink fires, intercept.js's
-// apiclientsink relays a hit keyed by the session marker -> REAL EXPLOIT (Chrome-confirmed).
+// apiclientsink relays a hit keyed by the session marker.
+//
+// WHAT A HIT PROVES, STATED ONCE HERE BECAUSE EVERY SENTENCE BELOW IS BOUNDED BY IT. The marker rides INSIDE
+// the payload — it must, since it is what a fired sink relays — and the payload is delivered TO the page, so
+// the page holds it. Two consequences, and they are different sizes:
+//   * CROSS-DOCUMENT: closed. The offscreen attributes each hit against the delivery it actually built —
+//     browser-stated MessageSender.origin / tabId / frameId / documentId vs the address this zone navigated to
+//     (offscreen-brain.js `_recordProbeHit`). A hit from any other document is REFUSED as evidence for the
+//     sink and reported as what it is.
+//   * SAME-DOCUMENT: IRREDUCIBLE, and no evidence the hook could carry changes that. `window.apiclientsink` is
+//     installed in the page's own main world, and everything the payload does, a page script can do — there is
+//     no secret to put in a payload that is handed to the page, and no "only the sink path could have done
+//     this" fact, because a real `eval(location.hash)` sink fires with the page's own script on the stack,
+//     which is the same shape a fabricating script has. So the hook reports the caller's frame as CONTEXT for
+//     a human (offscreen `pageClaimed`), the verdict never derives strength from it, and the verdict says
+//     "the payload's code RAN in the delivered document", never "the sink produced it".
+// That is the strongest claim the evidence supports, and it is still the claim worth having: the payload only
+// executes if the page's real CSP and Trusted-Types let it, which is exactly what the model predicted.
 var _verifySandboxes = new Map();   // pocId -> {pocJs, marker, resultEl}
 var _verifyIdSeq = 0;
 window.addEventListener("message", function (e) {
@@ -450,7 +467,31 @@ async function _handleVerify(btn) {
     resultEl.textContent = "verify error: " + (err && err.message || err); btn.disabled = false; btn.textContent = prev;
   }
 }
+// The page's own account of the caller — CONTEXT for a human, never a component of the verdict. intercept.js
+// reads it inside the untrusted main world, so it is prefixed as a claim and is the only place `pageClaimed`
+// is rendered. `unavailable` is a real state (that document refused to describe its own caller) and prints as
+// one rather than folding into "nothing to show" — the same reason the offscreen records it instead of
+// defaulting it away.
+function _hitFrame(pc) {
+  DCHECK(!!pc && typeof pc === "object",
+         "a probe hit reached the panel with no pageClaimed half — _recordProbeHit writes both halves on every "
+         + "hit it pushes, and the split is what keeps the untrusted renderer's claims from being rendered "
+         + "beside the browser's facts with nothing marking which is which");
+  if (pc.unavailable) return " The page’s world refused to describe the caller (Error/currentScript poisoned) — itself a signal.";
+  var bits = [];
+  if (pc.eventType) bits.push("called inside a ‘" + pc.eventType + "’ handler"
+                              + (pc.eventTarget ? " on <" + pc.eventTarget.toLowerCase() + ">" : ""));
+  bits.push(pc.currentScript ? "document.currentScript = " + pc.currentScript : "no script element was executing");
+  if (!pc.addressMatch) bits.push("that document was no longer at the delivered address");
+  return " Page-CLAIMED caller context (read in the page’s own world — context, not evidence): " + bits.join("; ") + ".";
+}
+function _refusedReasons(refused) {
+  var seen = [];
+  refused.forEach(function (h) { if (h.mismatch && seen.indexOf(h.mismatch) < 0) seen.push(h.mismatch); });
+  return seen.join("; ");
+}
 async function _pollVerify(resultEl, marker, blockers) {
+  var refused = [];
   for (var i = 0; i < 20; i++) {
     await new Promise(function (r) { setTimeout(r, 400); });
     var snap = await new Promise(function (res) { chrome.runtime.sendMessage({ type: "EXPLOIT_PROBE_STATUS", sessionId: marker }, function (r) { res(r); }); });
@@ -470,19 +511,61 @@ async function _pollVerify(resultEl, marker, blockers) {
            "EXPLOIT_PROBE_STATUS answered without a hits array — the probe session is created with hits:[] "
            + "and PROBE_HIT only appends to it, so its absence is that reply broken and every live verify "
            + "would report NOT REPRODUCED no matter what real Chrome did");
-    if (snap.hits.length) {
+    /* A HIT IS EVIDENCE ONLY IF IT CAME FROM THE DELIVERED DOCUMENT, so the array is PARTITIONED before it is
+       read as an outcome. `snap.hits.length` alone was the whole test, which is why any document in any tab
+       that knew the marker could print the strongest verdict this panel has. Attribution is decided in the
+       trusted zone against browser-stated facts (offscreen `_recordProbeHit`); this view only reports it. */
+    var fired = null;
+    refused = [];
+    for (var h of snap.hits) {
+      DCHECK(typeof h.attributed === "boolean",
+             "a probe hit reached the panel with no attribution verdict — _recordProbeHit decides `attributed` "
+             + "on every hit it pushes, so an absent one is this view counting a call it has not established "
+             + "came from the document the payload was delivered to");
+      if (h.attributed) { if (!fired) fired = h; } else refused.push(h);
+    }
+    if (fired) {
       resultEl.className = "verify-result verify-hit";
-      // A FIRE THE ENGINE PREDICTED WOULD BE BLOCKED IS A DIVERGENCE, NOT AN AGREEMENT. §LIVE-VERIFY reads a
-      // hit as ground truth, and it is — but "engine agrees with Chrome" is a claim about the MODEL, and the
-      // model said this vector was dead. Saying it agreed there would hide a wrong policy read behind the
-      // best-looking result the panel can print.
-      resultEl.textContent = blockers.length
-        ? "REAL EXPLOIT — apiclientsink fired in real Chrome. But the engine predicted this vector was dead ("
-          + _blockerNames(blockers) + "), so its policy read DIVERGES from Chrome here: the exploit is real and "
-          + "the model that called it blocked is wrong (an engine-fidelity bug to investigate)."
-        : "REAL EXPLOIT — the engine’s payload fired the sink in real Chrome (apiclientsink relayed). Engine agrees with Chrome.";
+      // TWO CLAIMS, KEPT APART. (1) The MODEL: a fire the engine predicted would be blocked is a DIVERGENCE,
+      // not an agreement — saying it agreed would hide a wrong policy read behind the best-looking result the
+      // panel can print. (2) The EVIDENCE: what a hit establishes is that the payload's CODE RAN in the
+      // delivered document, which is what a fired sink produces and is not the same statement as "the sink
+      // produced it" — see the section comment above for why no evidence the hook can carry closes that gap.
+      resultEl.textContent =
+        "FIRED IN THE DELIVERED DOCUMENT — apiclientsink was called from the document the payload was "
+        + "navigated to (browser-stated origin, tab and frame all match the delivery), so the payload’s code "
+        + "RAN in real Chrome under the page’s own CSP and Trusted-Types. "
+        + (blockers.length
+            ? "But the engine predicted this vector was dead (" + _blockerNames(blockers) + "), so its policy "
+              + "read DIVERGES from Chrome here: the model that called it blocked is wrong (an engine-fidelity "
+              + "bug to investigate). "
+            : "That is what a fired sink produces, and the engine’s model agrees with Chrome. ")
+        + "NOT proof the SINK produced the call: apiclientsink is installed in the page’s own world, so any "
+        + "script in that document can call it. Cross-document fabrication is refused; the same-document case "
+        + "is irreducible by this mechanism."
+        + _hitFrame(fired.pageClaimed)
+        + (refused.length ? " Also refused: " + refused.length + " call(s) with this marker from elsewhere ("
+                            + _refusedReasons(refused) + ")." : "");
       return;
     }
+  }
+  if (refused.length) {
+    // §@S: absence of a PoC is never a "safe" verdict, and a marker surfacing where it was never delivered is
+    // itself a fact about the page — so this is REFUSED (not evidence for this sink), never dropped and never
+    // counted as a fire.
+    resultEl.className = "verify-result verify-miss";
+    resultEl.textContent =
+      "REFUSED — apiclientsink fired with this session’s marker " + refused.length + " time(s), and every one "
+      + "came from a document the payload was never delivered to (" + _refusedReasons(refused) + "). The marker "
+      + "rides inside the payload, so any document that can read the delivered address holds it; a call from "
+      + "elsewhere is another document’s claim about this sink, not evidence for it. It IS a fact about the "
+      + "page — the marker reached a document that was never handed one. The sink stays REAL and this vector "
+      + "stays unverified; NOT a statement that the sink is safe."
+      + (blockers.length
+          ? " No call came from the delivered document, which is consistent with the engine’s prediction that "
+            + "the page’s own policy kills this vector (" + _blockerNames(blockers) + ")."
+          : "");
+    return;
   }
   resultEl.className = "verify-result verify-miss";
   // POLICY-RELATIVE no-fire: when the engine already flagged the page's own policy — a CSP, a Trusted-Types
