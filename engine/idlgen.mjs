@@ -541,6 +541,17 @@ function members(name) {
        about whether it is missing; the installed-name scan is by property name and reads both alike. */
     if (m.type === "attribute") add(m.name);
     else if (m.type === "operation") add(m.name);
+    /* A CONSTANT IS A MEMBER, and skipping the kind meant an entire member kind was audited by nobody —
+       the excluded-check defect inside the checker. `Node.ELEMENT_NODE`, `NodeFilter.SHOW_ELEMENT`,
+       `CSSRule.STYLE_RULE` and `XMLHttpRequest.DONE` are reads a page makes, and Web IDL §3.7.5 defines them
+       on the interface object AND on the prototype, which is why §4.4's own comment in node.c installs both.
+       MEASURED before it was added, because the ordering claim it was landed under was mine and was wrong: I
+       said attribution had to come first or this would inject ~34 false absents at the two unattributed
+       constant sites. It injects TWO, and both are real — COUNTER_STYLE_RULE and FONT_FEATURE_VALUES_RULE, the
+       rule types for @counter-style and @font-feature-values, which this engine does not implement. The
+       unattributed records at those sites are the INTERFACE-OBJECT copies; the prototype copies attribute
+       fine, so 59 constants over the interfaces that declare any were already credited. */
+    else if (m.type === "const") add(m.name);
   }
   /* the iteration members of this interface AND of everything it inherits from, which is what flatten walks */
   for (const m of flatten(name)) {
