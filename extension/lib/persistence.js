@@ -84,28 +84,13 @@ function scheduleSave() {
 
 function _serializeGlobalStore() {
   return {
+    /* ONE PROJECTION, SHARED WITH THE POPUP'S (lib/serialize.js `serializeApiKeyEntry`). This was a second
+       copy of that function's body, and the copies disagreed about one field: it dropped `name`, the key
+       TYPE lib/keys.js matched, so a key that survived a save/load came back with no type at all and the
+       popup labelled it with its own `|| "API Key"` default. Two hand-maintained projections of one record
+       is how a field goes missing on exactly one path; there is now one. */
     apiKeys: Object.fromEntries(
-      [...globalStore.apiKeys].map(([k, v]) => [
-        k,
-        {
-          origin: v.origin,
-          referer: v.referer,
-          source: v.source,
-          firstSeen: v.firstSeen,
-          lastSeen: v.lastSeen,
-          requestCount: v.requestCount || 0,
-          services: [
-            ...(v.services instanceof Set ? v.services : v.services || []),
-          ],
-          hosts: [...(v.hosts instanceof Set ? v.hosts : v.hosts || [])],
-          endpoints: [
-            ...(v.endpoints instanceof Set ? v.endpoints : v.endpoints || []),
-          ],
-          pageUrls: [
-            ...(v.pageUrls instanceof Set ? v.pageUrls : v.pageUrls || []),
-          ],
-        },
-      ]),
+      [...globalStore.apiKeys].map(([k, v]) => [k, serializeApiKeyEntry(v)]),
     ),
     endpoints: Object.fromEntries(globalStore.endpoints),
     discoveryDocs: Object.fromEntries(

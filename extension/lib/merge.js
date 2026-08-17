@@ -299,40 +299,62 @@ function mergeToGlobal(tab) {
   DCHECK(tab.apiKeys && typeof tab.apiKeys[Symbol.iterator] === "function", "mergeToGlobal: tab.apiKeys must be an iterable Map");
   DCHECK(globalStore && globalStore.apiKeys, "mergeToGlobal: globalStore must be initialized before a merge");
   for (const [k, v] of tab.apiKeys) {
+    /* THE KEY'S TYPE IS PART OF THE KEY, AND THIS LOOP USED TO DROP IT. lib/keys.js writes `name` — the
+       KEY_PATTERNS entry that matched, "GitHub Token" / "JWT" / "Stripe Key" — and both branches below
+       rebuilt the global entry field by field without it, so a key kept its type only while the tab that
+       found it was the one being rendered. Every key in the cumulative moat (another tab, an earlier
+       session) reached the popup with no type, where `info.name || "API Key"` turned that into a generic
+       label indistinguishable from a key whose pattern really was the generic one. Asserted here rather
+       than at the reader because THIS is the origin: the value in hand comes straight from lib/keys.js. */
+    DCHECK(typeof v.name === "string" && v.name,
+           "a tab's API-key entry carries no `name` — lib/keys.js sets it from the KEY_PATTERNS entry that " +
+           "matched, so an absent one means a key was recorded by something that does not know what kind of " +
+           "key it is, and the moat would show it as a nameless secret");
+    /* THE TAB SIDE OF THE ENTRY, ASSERTED ONCE FOR BOTH ARMS BELOW — a fresh global entry is built out of
+       these values directly and a merge unions them into an existing one, so a wrong shape here is either a
+       key whose usage total resets to zero or a union that silently stops accumulating. */
+    DCHECK(typeof v.requestCount === "number", "a tab's API-key entry carries no numeric requestCount — lib/keys.js initialises it to 0");
+    for (const _f of ["services", "hosts", "endpoints", "pageUrls"]) {
+      DCHECK(v[_f] instanceof Set,
+             "a tab's API-key entry's `" + _f + "` is not a Set — lib/keys.js builds all four, and what this " +
+             "key was seen against is the whole of what the moat knows about it");
+    }
     const existing = globalStore.apiKeys.get(k);
     if (existing) {
       existing.lastSeen = v.lastSeen;
+      // The pattern that matched is a function of the key text, so the tab's answer is authoritative and
+      // an entry stored before this field travelled heals on the next sighting.
+      existing.name = v.name;
       // Take the higher count — tab count is a running total, not a delta
-      existing.requestCount = Math.max(
-        existing.requestCount || 0,
-        v.requestCount || 0,
-      );
-      const mergeSet = (target, source) => {
-        if (source instanceof Set)
-          source.forEach((s) => (target instanceof Set ? target.add(s) : null));
-        else if (Array.isArray(source))
-          source.forEach((s) => (target instanceof Set ? target.add(s) : null));
-      };
-      if (existing.services instanceof Set)
-        mergeSet(existing.services, v.services);
-      if (existing.hosts instanceof Set) mergeSet(existing.hosts, v.hosts);
-      if (existing.endpoints instanceof Set)
-        mergeSet(existing.endpoints, v.endpoints);
-      if (!existing.pageUrls) existing.pageUrls = new Set();
-      if (existing.pageUrls instanceof Set)
-        mergeSet(existing.pageUrls, v.pageUrls);
+      DCHECK(typeof existing.requestCount === "number",
+             "a stored API-key entry's requestCount is not a number — this file and " +
+             "_deserializeIntoGlobalStore are its only writers, and a `|| 0` here would silently reset a " +
+             "key's usage total to zero");
+      existing.requestCount = Math.max(existing.requestCount, v.requestCount);
+      /* ALL FOUR COLLECTIONS ARE SETS ON BOTH SIDES — lib/keys.js builds them, the arm below builds them,
+         and _deserializeIntoGlobalStore reconstructs them from the stored arrays. Each merge stood behind
+         its own `instanceof Set` test whose false arm did NOTHING, so a record that had somehow lost a Set
+         would have kept the key and silently stopped accumulating the services, hosts and endpoints it was
+         seen against — the union quietly frozen, with a full-looking entry to show for it. */
+      for (const _f of ["services", "hosts", "endpoints", "pageUrls"]) {
+        DCHECK(existing[_f] instanceof Set,
+               "a stored API-key entry's `" + _f + "` is not a Set — the union of what this key was seen " +
+               "against is the moat's cross-session surface for it");
+        for (const _s of v[_f]) existing[_f].add(_s);
+      }
     } else {
       globalStore.apiKeys.set(k, {
+        name: v.name,
         origin: v.origin,
         referer: v.referer,
         source: v.source,
         firstSeen: v.firstSeen,
         lastSeen: v.lastSeen,
-        requestCount: v.requestCount || 0,
-        services: new Set(v.services || []),
-        hosts: new Set(v.hosts || []),
-        endpoints: new Set(v.endpoints || []),
-        pageUrls: new Set(v.pageUrls || []),
+        requestCount: v.requestCount,
+        services: new Set(v.services),
+        hosts: new Set(v.hosts),
+        endpoints: new Set(v.endpoints),
+        pageUrls: new Set(v.pageUrls),
       });
     }
   }

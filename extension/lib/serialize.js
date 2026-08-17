@@ -67,23 +67,46 @@ function mergeVirtualParts(newDoc, oldDoc) {
   return newDoc;
 }
 
+/* THE ONE PLACE AN API-KEY ENTRY BECOMES JSON — for the popup AND for IndexedDB.
+   lib/persistence.js held a SECOND copy of this projection, and the two disagreed about exactly one field:
+   this one carried `name` (the key TYPE lib/keys.js matched — "GitHub Token", "JWT", "Stripe Key") and that
+   one did not, so every key surviving a save/load lost its type. lib/merge.js held a THIRD copy, in
+   mergeToGlobal, which dropped the same field on the way from a tab to the cumulative store. Four components
+   copying one record field-by-field, two of them omitting the same name, and the consumer reading
+   `info.name || "API Key"` — so the loss rendered as a plausible generic label on exactly the keys that
+   matter most, the ones carried across tabs and sessions. One projection now, called by both writers.
+
+   The four collections are SETS and the count is a NUMBER, from every producer that exists: lib/keys.js
+   builds them, mergeToGlobal rebuilds them, and _deserializeIntoGlobalStore reconstructs them from the
+   stored arrays. The `instanceof Set ? … : v.<f> || []` ladder that stood on each one could therefore only
+   ever fire for a record none of those three wrote. */
 function serializeApiKeyEntry(v) {
+  DCHECK(v && typeof v === "object", "serializeApiKeyEntry: an apiKeys value must be an entry object");
+  DCHECK(typeof v.requestCount === "number",
+         "an API-key entry carries no requestCount — lib/keys.js initialises it to 0 and every merge path " +
+         "keeps a number there, so a missing one is a producer that stopped writing it and would serialize " +
+         "as a real zero");
+  for (const _f of ["services", "hosts", "endpoints", "pageUrls"]) {
+    DCHECK(v[_f] instanceof Set,
+           "an API-key entry's `" + _f + "` is not a Set — the three producers (lib/keys.js, mergeToGlobal, " +
+           "_deserializeIntoGlobalStore) all build one, and anything else here serializes to an empty list " +
+           "that reads as 'this key was never used against any'");
+  }
   return {
+    /* The key TYPE lib/keys.js's pattern named. NOT defaulted: an entry stored before this field was carried
+       across the merge has none, and that absence is "recorded before the type travelled", which the reader
+       must be able to tell from a key whose type is genuinely unknown. */
     name: v.name,
     origin: v.origin,
     referer: v.referer,
     source: v.source,
     firstSeen: v.firstSeen,
     lastSeen: v.lastSeen,
-    requestCount: v.requestCount || 0,
-    services: [...(v.services instanceof Set ? v.services : v.services || [])],
-    hosts: [...(v.hosts instanceof Set ? v.hosts : v.hosts || [])],
-    endpoints: [
-      ...(v.endpoints instanceof Set ? v.endpoints : v.endpoints || []),
-    ],
-    pageUrls: [
-      ...(v.pageUrls instanceof Set ? v.pageUrls : v.pageUrls || []),
-    ],
+    requestCount: v.requestCount,
+    services: [...v.services],
+    hosts: [...v.hosts],
+    endpoints: [...v.endpoints],
+    pageUrls: [...v.pageUrls],
   };
 }
 
@@ -192,6 +215,17 @@ function serializeTabData(tab) {
     probeResults: mergedProbe,
     requestLog: tab.documentId ? globalRequestLog.filter(function (r) { return r.documentId === tab.documentId; }) : [],
     securityFindings: mergedSecurityFindings(tab),
-    resolverErrors: tab._resolverErrors || [],
+    /* THE ENGINE'S PAGE ERRORS, WHOSE ABSENCE IS A STATEMENT. offscreen-brain.js creates `_resolverErrors`
+       only when the engine's result actually carried one, so the field being missing MEANS "the engine ran
+       this document and recorded nothing that went wrong" — a real finding, not a hole. It is written that
+       way rather than `|| []` so that a malformed one still crashes instead of being flattened into the
+       same empty list. */
+    resolverErrors: (function () {
+      if (tab._resolverErrors === undefined) return [];   // the engine recorded no page error for this document
+      DCHECK(Array.isArray(tab._resolverErrors),
+             "a DocView's _resolverErrors is present but is not an array — offscreen-brain.js pushes " +
+             "{context, message, snippet} records into it and the popup's diagnostic view iterates them");
+      return tab._resolverErrors;
+    })(),
   };
 }
