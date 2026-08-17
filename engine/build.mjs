@@ -174,17 +174,12 @@ function buildLexbor(force) {
 buildLexbor(process.argv[2] === "lexbor");
 if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
 
-// THE IDL GAP AUDIT IS NOT IN THIS BUILD, AND THAT ABSENCE IS THE WORK — it is not a note about history.
-// engine/idlgen.mjs's own header says it "Runs at build time (best-effort)", and CLAUDE.md §Web-IDL says it
-// DIFFS the spec member list against what each component installs at build time. Nothing in this tree calls
-// it: grep answers this comment and idlgen.mjs itself. What stood here said the browser half had been deleted
-// and there was therefore "nothing to generate" — that stopped being true when the components came back, and
-// the sentence went on reading as authoritative while walkC(join(HOST,"browser")) below grew to 157 real
-// components. The output is host/browser/platform_names.h (the [Exposed=Window] table solver/absent.c decides
-// ReferenceError-vs-fork on), which is COMMITTED so the build works with no network — the long-gone
-// idl_generated.h it named is not what idlgen writes. So a spec member no component installs is reported by
-// NOBODY today. Wiring the audit in here is the next diff, and it must FAIL rather than warn, like every other
-// gate — a best-effort step that is skipped when @webref/idl is absent is a gate that silently is not one.
+// THE IDL GAP AUDIT IS A STAGE OF THIS BUILD — see the stage list at the bottom. It was in nobody's build,
+// which is §Testing's excluded gate: its whole subject (does each component install the members its IDL
+// declares) was unmeasured while the report ended in a complete-looking total. It is a stage on the SAME terms
+// as every other one — it fails the run, it is not best-effort, and it is not skipped when @webref/idl is
+// absent, because that package is a declared devDependency of this repo and a gate that skips itself when its
+// input is missing is a gate that silently is not one.
 
 // THE SOLVER CORE AND THE BROWSER HALF ARE BOTH IN THE PROGRAM, and both entries are BUILT. The note that
 // stood here — "there is no qjs_* extension ABI entry yet" — was false in the way CLAUDE.md §DFAIL describes:
@@ -694,6 +689,16 @@ STAGES.push(ABI_LINK.code
                "this is the cross-instance seam: the world registry, the nearest-first ancestry fork, the " +
                "synchronous cross-origin read, and the park on an outstanding one. Nothing else in this tree " +
                "provisions a second instance, so a failure here is unobserved by every other gate."));
+/* THE THIRD AREA: does each component install the surface its Web IDL declares. It gates nothing and nothing
+   gates it — it compiles no C and reads no artifact, so it asks its question of the SOURCES whatever the two
+   programs above did, and a link failure can never take the member census out of the run with it.
+   IT IS LAST IN STAGE ORDER, AND THAT IS THE ONE THING THIS PLACEMENT DECIDES: report() exits with the first
+   non-zero code, so a program that does not build or does not run keeps its own exit code and the member gap
+   does not stand in front of it. Every stage still reports, which is the whole point of the list. */
+STAGES.push(runProgram("Web IDL gap audit", [join(ENGINE, "idlgen.mjs")],
+                       "each category above is a spec member no component installs, a stub where a real value " +
+                       "belongs, or an install construct the audit cannot resolve — implement it at the root " +
+                       "in its real component. There is no baseline to update: the count IS the gap."));
 report(STAGES);
 
 /* A THIRD DRIVE STOOD HERE — the driver for the deleted second program, which put the RENDERER REGISTRY's

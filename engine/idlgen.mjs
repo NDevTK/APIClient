@@ -2,8 +2,16 @@
  * For each interface we implement, it reads the canonical .idl (@webref/idl, the W3C-curated corpus browsers
  * use), parses it (webidl2), flattens inherited + mixin members, and DIFFS the spec member list against the
  * members the component actually installs (a scan of the component .c for the property names it wires). It
- * prints the missing members so we implement them at the root — never a generated noop/DCHECK stub. Runs at
- * build time (best-effort: skipped if the idl toolchain isn't installed).
+ * prints the missing members so we implement them at the root — never a generated noop/DCHECK stub.
+ *
+ * IT IS A BUILD STAGE AND IT FAILS. It ran at build time nowhere at all — nothing in the tree invoked it, so
+ * every component's member gap was unmeasured while `node engine/build.mjs` reported a complete-looking total.
+ * "Best-effort, skipped if the toolchain isn't installed" is what stood here, and it was stale twice over:
+ * @webref/idl and webidl2 are DECLARED devDependencies of this package and are installed, and a gate that
+ * skips itself when its input is absent is the excluded check §Testing forbids. So the exit code is the
+ * verdict — a spec member no component installs is a gap to implement at the root, and the run is RED until
+ * it is. There is no baseline file, no allowlist, no threshold and no --warn-only: every one of those is a
+ * number about nothing, and the honest first count is the measurement rather than a reason to soften it.
  *
  * WHAT A COMPONENT INSTALLS IS READ FROM THE INSTALL CONSTRUCTS THEMSELVES (engine/idl_installed.mjs), never
  * from the file's text. It used to be a scan for any string literal, which made the audit lie in both
@@ -35,8 +43,11 @@
  * A list a person maintains cannot be right about a surface of 1500 names.
  *
  * The generated header is COMMITTED, because the build must work with no network and the platform table is not
- * optional the way the audit is. Regenerate it with `node engine/idlgen.mjs` after `npm install @webref/idl
- * webidl2`; the audit run prints a warning when the checked-in file no longer matches the corpus. */
+ * optional the way the audit is. THE AUDIT RUN NEVER WRITES IT: a build that rewrites a committed source is
+ * §Testing's gate measuring a tree that no longer exists, and the checkout is shared, so a build stage editing
+ * absent.c's input under another lane's compile is the loaded-machine defect with a generator behind it. A
+ * checked-in table that no longer matches the corpus is therefore a FAILING category like any other gap, and
+ * `node engine/idlgen.mjs --regen` is the one command that writes it. */
 import { listAll } from "@webref/idl";
 import { parse } from "webidl2";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -47,6 +58,20 @@ import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOST = join(HERE, "host");
 const BROWSER = join(HOST, "browser");
+
+const REGEN = process.argv.includes("--regen");
+
+/* THE VERDICT IS A LEDGER OF CATEGORIES, NOT A TOTAL. §Testing: one number in which one area answers most of
+   the corpus makes every other component invisible, and that is exactly what a single "N members missing"
+   would be here — the ABSENT count is dominated by whichever interface inherits the widest base. So every
+   category this run can report counts SEPARATELY, the per-interface table below names the areas, and the exit
+   code is non-zero if ANY category is non-empty. What is NOT a defect is stated by declaration rather than by
+   omission: an interface declared UNBUILT with its reason, and a member declared CONDITIONAL by
+   idl_members_excluded, are the two accepted steady states — and both are checked from the other side, so a
+   declaration that has gone stale is itself a category. */
+const defects = new Map();
+const defect = (kind, n = 1) => { if (n) defects.set(kind, (defects.get(kind) || 0) + n); };
+const gapRows = [];
 
 // interface -> the component .c that implements it, or the componentS: one interface's surface can be split
 // across components when the spec puts unrelated capabilities on one object. Window is the case that forces it —
@@ -667,6 +692,15 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
   totalMissing += absent.length + noop.length;
   for (const n of absent) distinct.add(n);
   for (const n of noop) distinct.add(n);
+  /* PER INTERFACE, so the verdict names an AREA. An interface with nothing missing is a row too — it is what
+     makes the table a census rather than a list of the loudest components. */
+  gapRows.push({ iface, absent: absent.length, noop: noop.length });
+  defect("ABSENT members", absent.length);
+  defect("js_noop-STUB members", noop.length);
+  defect("STALE member exclusions", condStale.length);
+  defect("CONTRADICTED member exclusions", condInstalled.length);
+  defect("CROSS-CHECK rows naming a file that installs nothing this interface has", strangers.length);
+  if (bannedShrug) defect("BANNED g_opaque-prototype shrugs");
   for (const u of unresolved)
     unresolvedAll.set(`${u.file}:${u.line}:${u.expr}`, u);
   /* A property write with a member's NAME onto an object no installer ever names. Not counted (it may be a
@@ -708,6 +742,8 @@ if (unbuiltSeen.length) {
   console.log(`[idl-audit] ${unbuiltSeen.length} interface(s) declared unbuilt — no component, absence intended:`);
   for (const [iface, file, why] of unbuiltSeen) console.log(`[idl-audit]   ${iface} (${file}) — ${why}`);
 }
+defect("interfaces whose component is missing and whose absence is undeclared", unmapped.length);
+defect("STALE UNBUILT declarations", stale.length);
 for (const [iface, file] of unmapped)
   console.log(`[idl-audit] ${iface}: component ${file} not found and NOT declared unbuilt — either the row names ` +
               `a path that moved (the audit for a shipping interface is silently not running) or the interface ` +
@@ -719,6 +755,11 @@ for (const [iface, files] of stale)
    the IDL, and pretending either way is what this rewrite exists to stop: counted, it fills a gap that is open;
    dropped, it opens a gap that is filled. Named here with file and line, it is a work queue — make the name
    static, or teach the detector the construct. */
+/* AN UNANSWERABLE QUESTION IS NOT AN ANSWER. These four categories are the audit's own gap report on itself,
+   and they fail the run for the reason the report exists: a construct it cannot resolve is a member it can
+   neither count nor miss, so the ABSENT number beside it is a number over a surface with holes in it. Making
+   them a warning would be the gate reporting green about a question it declined to ask. */
+defect("install constructs whose member name is not statically resolvable", unresolvedAll.size);
 if (unresolvedAll.size) {
   console.log(`[idl-audit] ${unresolvedAll.size} install construct(s) whose member name could not be resolved ` +
               `statically — neither counted as installed nor reported as a gap:`);
@@ -728,6 +769,7 @@ if (unresolvedAll.size) {
 /* The same constructs in components no row names. The scan is over the whole program now, so these exist and
    are counted; hiding them behind "no row asked" would be the audit choosing what to know about itself. */
 const elsewhere = world.unresolved.filter((u) => !unresolvedAll.has(`${u.file}:${u.line}:${u.expr}`));
+defect("install constructs whose member name is not statically resolvable", elsewhere.length);
 if (elsewhere.length) {
   const byFile = new Map();
   for (const u of elsewhere) byFile.set(u.file, (byFile.get(u.file) || 0) + 1);
@@ -741,6 +783,7 @@ if (elsewhere.length) {
    happened to name the file (the file-granular lie); dropped, it opens a gap that is filled. So it is named,
    grouped by the file that wrote it, and the work is either to give the prototype its §3.7.3 tag or to teach
    this detector the construct that carries the object. */
+defect("installed members whose target interface could not be decided", unattributed.length);
 if (unattributed.length) {
   const byFile = new Map();
   for (const r of unattributed) {
@@ -761,6 +804,10 @@ if (unattributed.length) {
    can contradict it. */
 const tagged = new Set([...installedBy.keys(), ...stubbedBy.keys()]);
 const unknownTags = [...tagged].filter((n) => !byName.has(n)).sort();
+defect("interface tags naming something the IDL corpus does not declare", unknownTags.length);
+defect("install targets whose interface tag is not statically decidable", env.tagIssues.length);
+defect("interface objects whose prototype identity the corpus contradicts or cannot reach", env.tagChecks.length);
+defect("installs onto an object built with no prototype", env.recordContradictions.length);
 if (unknownTags.length)
   console.log(`[idl-audit] ${unknownTags.length} interface tag(s) name something the IDL corpus does not ` +
               `declare — ${unknownTags.join(", ")}`);
@@ -834,9 +881,44 @@ const header =
 const OUTH = join(HERE, "host", "browser", "platform_names.h");
 let prev = "";
 try { prev = readFileSync(OUTH, "utf8"); } catch { /* first run */ }
-if (prev !== header) {
+if (prev === header) {
+  console.log(`[idl-audit] platform_names.h current — ${names.length} global names exposed on Window`);
+} else if (REGEN) {
   writeFileSync(OUTH, header);
   console.log(`[idl-audit] platform_names.h REGENERATED — ${names.length} global names exposed on Window`);
 } else {
-  console.log(`[idl-audit] platform_names.h current — ${names.length} global names exposed on Window`);
+  /* THE AUDIT RUN DOES NOT WRITE. What absent.c decides off this table is ReferenceError-vs-fork, so a table
+     that disagrees with the corpus is a page's Web API read forking as app state (or a real injected global
+     throwing) — a wrong answer, not a formatting drift, and one that a build silently rewriting the header
+     would have hidden by fixing it out from under whoever was compiling. */
+  defect("stale generated platform table");
+  console.log(`[idl-audit] platform_names.h STALE — the corpus exposes ${names.length} global names on Window ` +
+              `and the checked-in table is not that. absent.c decides ReferenceError-vs-fork off it, so a stale ` +
+              `table is a wrong answer per name. Regenerate it with \`node engine/idlgen.mjs --regen\` and commit.`);
 }
+
+/* ---------------------------------------------------------------------------------------------------------
+ * THE VERDICT, PER INTERFACE FIRST. §Testing: a gate reports per AREA as well as in total, because one number
+ * in which the widest base answers most of the count makes every other component invisible — and here the
+ * inherited members make that literal, since one absent Element member is absent on every HTML interface. */
+const withGaps = gapRows.filter((r) => r.absent || r.noop).sort((a, b) => (b.absent + b.noop) - (a.absent + a.noop));
+console.log(`[idl-audit] ── per interface ── ${gapRows.length - withGaps.length} of ${gapRows.length} audited ` +
+            `interfaces install every member their IDL declares`);
+if (withGaps.length) {
+  const w = Math.max(...withGaps.map((r) => r.iface.length));
+  for (const r of withGaps)
+    console.log(`[idl-audit]   ${r.iface.padEnd(w)}  ABSENT ${String(r.absent).padStart(3)}` +
+                (r.noop ? `  js_noop-STUB ${r.noop}` : ""));
+}
+console.log("[idl-audit] ── verdict ──");
+if (!defects.size) {
+  console.log("[idl-audit]   PASS — every audited interface installs its whole IDL surface, every declaration " +
+              "is current, and every install construct resolved.");
+  process.exit(0);
+}
+for (const [kind, n] of [...defects].sort((a, b) => b[1] - a[1]))
+  console.log(`[idl-audit]   ${String(n).padStart(5)}  ${kind}`);
+console.error(`[idl-audit] FAILED — ${defects.size} category(ies) above. Each is a gap to close at the ROOT: ` +
+              `implement the member in its real component (never a js_noop stub, never a g_opaque prototype), ` +
+              `make the install construct resolvable, or delete the declaration that has gone stale.`);
+process.exit(1);
