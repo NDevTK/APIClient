@@ -222,7 +222,9 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       }
       if (prev.length > before) merged = true;
       target._astValidValues = prev;
-      if (prev.length >= 2 && !target.customEnum && !target.enum) {
+      // (No `customEnum` test: nothing writes that flag — see _applyStatsToField. An existing `enum` still
+      //  wins, which is the real condition, since a declared one is a fact about the API description.)
+      if (prev.length >= 2 && !target.enum) {
         target.enum = prev.slice();
         target._detectedEnum = true;
       }
@@ -924,16 +926,24 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
 function _applyStatsToField(field, fieldStats, requestCount) {
   if (!field || !fieldStats) return;
 
+  /* TWO USER-OVERRIDE GUARDS ARE GONE, BECAUSE NOTHING SETS EITHER FLAG. `customRequired` and `customEnum`
+     read as the pair of `customName` — the flag lib/popup-handlers.js writes when the reviewer RENAMES a
+     parameter, which every merge path then honours so an automated re-derivation never clobbers a manual
+     edit. But the popup sets `customName` and only `customName`: grep finds no writer for the other two
+     anywhere in the extension, the harness or the engine, so both guards were permanently open and the
+     automated answer has always won. Deleted rather than left standing, because a guard against a state no
+     producer can create is not protection — it is a claim that manual enum/required overrides exist and are
+     respected. If they should, the popup gains the same write it already makes for a rename, and the guard
+     comes back at that point with a producer behind it. */
+
   // Required detection
   const reqAnalysis = analyzeRequired(fieldStats, requestCount);
-  if (!field.customRequired) {
-    field.required = reqAnalysis.required;
-    field._requiredConfidence = reqAnalysis.confidence;
-  }
+  field.required = reqAnalysis.required;
+  field._requiredConfidence = reqAnalysis.confidence;
 
   // Enum detection
   const enumAnalysis = analyzeEnum(fieldStats);
-  if (enumAnalysis.isEnum && !field.customEnum) {
+  if (enumAnalysis.isEnum) {
     field.enum = enumAnalysis.values;
     field._detectedEnum = true;
   }
