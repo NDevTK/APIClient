@@ -32,6 +32,11 @@ function getDocMethods(doc) {
 
 let currentTabId = null;
 let tabData = null;
+// The last few engine RUN records (bridge.js `self._engineLog`), fetched beside tabData. GLOBAL, not
+// per-document: one WASM instance per origin-keyed agent cluster runs on the ONE cross-session frontier, so a
+// run record belongs to the frontier rather than to the tab whose popup is open. `null` until the first
+// GET_ENGINE_RUNS answers — a different statement from an empty array (no engine has run yet).
+let engineRuns = null;
 let currentSchema = null;
 let currentRequestUrl = "";
 let currentRequestMethod = "POST";
@@ -792,6 +797,14 @@ async function loadState() {
     tabId: currentTabId,
     documentId: currentDocumentId(),
   });
+  // The engine's own run records — see renderEngineRuns for why they had never reached a human surface. No
+  // try/catch and no `|| []`: the offscreen answers this command unconditionally off an array bridge.js
+  // declares at load, so a failure here is that document not being there, which is the one thing an empty
+  // list would have to mean and could not say.
+  engineRuns = await chrome.runtime.sendMessage({ type: "GET_ENGINE_RUNS" });
+  DCHECK(Array.isArray(engineRuns),
+         "GET_ENGINE_RUNS did not answer with an array — the offscreen slices it straight off bridge.js's " +
+         "_engineLog, so anything else is that command not reaching the offscreen document at all");
   await loadRequestLog();
   render();
   _refreshSendEnabled();   // readiness may have changed (pin became live / stale / not-ready)
@@ -801,6 +814,11 @@ async function clearState() {
   await chrome.runtime.sendMessage({ type: "CLEAR_TAB", tabId: currentTabId });
   tabData = null;
   allTabsData = null;
+  // The run records name the pages that were analysed, so the view drops them with everything else. NOTE for
+  // the bridge lane: `self._engineLog` itself SURVIVES AST_CLEAR — it is declared at load and nothing in
+  // frontierClear empties it — so the next loadState will fetch the same records back. That is a real gap in
+  // the Clear contract ("delete ALL extension data") and it is bridge.js's to close, not this view's to hide.
+  engineRuns = null;
   _lastKeysFp = _lastSecFp = _lastLogFp = _lastSendFp = "";
   render();
 }
@@ -900,15 +918,68 @@ function renderDeepStatus() {
          "(lib/serialize.js), so its absence is that serializer broken and every error the engine recorded " +
          "while running this page would vanish from the only surface that shows them");
   const rerrs = tabData.resolverErrors;
-  if (!rerrs.length) { el.style.display = "none"; return; }
-  const rows = rerrs.map((r) => {
-    DCHECK(typeof r.context === "string" && typeof r.message === "string",
-           "a page-error row reached the popup without a context/message pair — bridge.js writes both as " +
-           "strings on every entry it builds, so a row missing one is that relay broken");
-    return `<div class="deep-row" title="${esc(r.message)}"><span class="deep-label">${esc(r.context + ": " + r.message.slice(0, 140))}</span></div>`;
-  }).join("");
-  el.innerHTML = `<details class="deep-cross-tab"><summary>Analyzer gaps — reached-but-unresolved / host-model (${rerrs.length})</summary>${rows}</details>`;
+  let html = "";
+  if (rerrs.length) {
+    const rows = rerrs.map((r) => {
+      DCHECK(typeof r.context === "string" && typeof r.message === "string",
+             "a page-error row reached the popup without a context/message pair — bridge.js writes both as " +
+             "strings on every entry it builds, so a row missing one is that relay broken");
+      return `<div class="deep-row" title="${esc(r.message)}"><span class="deep-label">${esc(r.context + ": " + r.message.slice(0, 140))}</span></div>`;
+    }).join("");
+    html = `<details class="deep-cross-tab"><summary>Analyzer gaps — reached-but-unresolved / host-model (${rerrs.length})</summary>${rows}</details>`;
+  }
+  // The two sections are INDEPENDENT. A document with no page errors is the ordinary case and still has a run
+  // record worth showing; gating the run record on `rerrs.length` would hide it for exactly the pages that
+  // went well, which is most of them.
+  html += renderEngineRuns();
+  if (!html) { el.style.display = "none"; return; }
+  el.innerHTML = html;
   el.style.display = "block";
+}
+
+// WHAT EACH ENGINE RUN COST AND WHAT IT LEARNED — the eight counters solver/result.c emits in one snprintf,
+// which bridge.js asserts field-for-field and pushes onto `self._engineLog`, and which until now reached no
+// human at all: the array's only reader was `self.rendererPoolProbe`, a function nothing in this extension or
+// in testing/ calls. They are the ONLY observable that the single BFS context-switches, forks and pumps jobs
+// rather than running its flows FIFO, and beside them ride what the run LEARNED (endpoints, sinks) and what
+// it PARKED for the next session — the cross-session frontier, otherwise invisible.
+//
+// A CRASH RECORD IS RENDERED AS AN ABSENCE, NEVER AS ZEROES. bridge.js builds two shapes on purpose: a run
+// with an @RESULT document carries all thirteen fields, and a run without one carries `crashed:true`,
+// `resumed` and `url` and nothing else, because "seven zeroes read as 'the engine ran and did nothing' —
+// indistinguishable in the log from a real run that explored nothing, which is a finding". A `|| 0` here would
+// undo exactly that distinction, one field at a time, which is why every field below is asserted instead.
+function renderEngineRuns() {
+  if (!engineRuns || !engineRuns.length) return "";
+  const FULL = [
+    ["endpoints", "endpoints learned"], ["sinks", "@S sinks"], ["park", "flows parked for next session"],
+    ["switches", "flow context-switches"], ["flows", "flows created"], ["candidates", "@S candidates run"],
+    ["jobsQueued", "jobs queued"], ["jobsRun", "jobs run"],
+    ["worldSegmentsHeld", "cross-instance world segments held"],
+    ["worldSegmentsMade", "…made (cumulative)"], ["worldSegmentsForked", "…forked"],
+  ];
+  const rows = engineRuns.slice().reverse().map((m) => {
+    DCHECK(typeof m.url === "string" && typeof m.resumed === "number",
+           "an engine run record reached the popup without url/resumed — bridge.js writes both on BOTH " +
+           "record shapes (the crash arm included), so a record missing one is that relay broken");
+    const where = esc(m.url ? _shortUrl(m.url) : "(no source url)");
+    if (m.crashed) {
+      // The honest report of a crashed run is that it has no numbers, said in those words.
+      return `<div class="deep-row"><span class="deep-label">${where} — <strong>the engine crashed</strong>`
+           + `; this run reported no result document, so it has no counters at all (not zeroes)`
+           + `${m.resumed ? `, ${m.resumed} parked flow(s) had been resumed into it` : ""}</span></div>`;
+    }
+    const parts = FULL.map(([k, label]) => {
+      DCHECK(typeof m[k] === "number",
+             "an engine run record reached the popup with no numeric " + k + " — solver/result.c emits the " +
+             "eight cost counters in one snprintf and bridge.js asserts each of them, so a record that has " +
+             "an @RESULT document and is missing one is that seam having changed underneath both");
+      return esc(label) + " " + esc(String(m[k]));
+    });
+    return `<div class="deep-row"><span class="deep-label">${where} — ${esc(String(m.resumed))} resumed · `
+         + parts.join(" · ") + `</span></div>`;
+  }).join("");
+  return `<details class="deep-cross-tab"><summary>Engine runs — cost, what was learned, what was parked (${engineRuns.length})</summary>${rows}</details>`;
 }
 
 // ─── Data Panel ──────────────────────────────────────────────────────────────

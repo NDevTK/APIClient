@@ -219,6 +219,30 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       return;
     }
 
+    /* THE ENGINE'S OWN RUN RECORD, WHICH NO HUMAN SURFACE HAS EVER SHOWN. solver/result.c emits eight cost
+       counters in ONE snprintf, bridge.js `assertResultDocument` checks every one of them field-for-field,
+       and `linesToAnalysis` pushes one record per run onto `self._engineLog` — and grep finds exactly one
+       reader for that array, `self.rendererPoolProbe`, which has no caller anywhere in this extension or in
+       testing/. So the ONLY observable that the single BFS context-switches, forks and pumps jobs rather
+       than running its flows FIFO — plus what each run LEARNED and what it PARKED for the next session —
+       was computed, asserted, stored, and then read by nothing. That is the mirror of a defaulted field:
+       not a value nobody notices is wrong, a value nobody sees at all.
+
+       IT CROSSES VERBATIM, BECAUSE THE RECORD HAS TWO SHAPES AND THEY MUST NOT BE NORMALISED. A run that
+       produced an @RESULT document carries the eight counters plus endpoints/sinks/park/resumed; a run that
+       crashed carries `crashed:true`, `resumed` and `url` and NO counters at all — bridge.js's own comment
+       says why, and it is this rule: nothing may compute a rate, a delta or a total out of a run that never
+       reported one, because seven zeroes read as "the engine ran and did nothing", which is a finding. So
+       this hands the reader the records as they are and lets the view say which shape each one is. */
+    case "GET_ENGINE_RUNS": {
+      DCHECK(Array.isArray(self._engineLog),
+             "there is no _engineLog array in this document — bridge.js declares it at load (never on first " +
+             "use, deliberately), so its absence is that file not having run here, and answering [] would " +
+             "report 'no engine has run yet' for a bridge that is not present at all");
+      sendResponse(self._engineLog.slice(-8));
+      return;
+    }
+
     case "GET_ENDPOINT_SCHEMA": {
       // GLOBAL — keyed by endpointKey/service against the cumulative store,
       // never per-tab/document (only the network-stream log is per-tab).
