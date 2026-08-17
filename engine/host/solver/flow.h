@@ -161,12 +161,20 @@ typedef struct Flow {
        slot), which is a heap write the COW delta already isolates per flow — so it is still per-flow, and it is
        now also per-document, which is what it always had to be. */
     int   script_i;        /* position in the script sequence: static [0,n), then this flow's dyn chunks [n, n+dyn_n) */
+    /* A POSITION IN IT MAY BE A SCRIPT WHOSE SOURCE HAS NOT ARRIVED, at either end of that split, and the flow
+       STOPS at it — which is what gives every document of this agent §4.12.1's order rather than the order its
+       replies happen to land in. In the static half the slot is the session document's, shared by every flow at
+       that index; in the dyn half it is this flow's own entry (engine.c's DYN_SCRIPT_SRC), holding the address
+       until the reply replaces it with the program. */
     /* THE HIGHEST SCRIPT INDEX THIS FLOW HAS COMPILED, so that compiling one twice can be caught. A flow runs
        each program in its sequence ONCE; a preempted flow RESUMES its suspended frame and never re-enters
        JS_FlowNew for a program it already started. Re-compiling is a REPLAY, which this engine does not do — a
        replay re-executes side effects the flow already performed against a delta that already holds them. */
     int   last_compiled;   /* -1 until the flow compiles its first program */
-    char **dyn; int dyn_n, dyn_cap;   /* this flow's OWN lazily-loaded chunk bodies (per-flow, not global) */
+    /* this flow's OWN program bodies (per-flow, not global): a lazily-loaded chunk, a queued document script —
+       or, while the kind beside it is DYN_SCRIPT_SRC, the ADDRESS of a script whose source has not arrived. One
+       column either way, because it is one queue and the entry is one position in it. */
+    char **dyn; int dyn_n, dyn_cap;
     /* WHICH DOCUMENT each of those programs belongs to, which is WHERE it is compiled — a program is closed
        over the compiling realm's global (JS_FlowNew), and an instance is an ORIGIN-KEYED AGENT CLUSTER, so the
        document a program belongs to is a child navigable's as often as it is the session's. §7.4 step 14's

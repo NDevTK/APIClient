@@ -29,6 +29,16 @@
    knows which document's code it is holding, and a scheduler that guessed would guess the same way for every
    document this agent has. */
 void engine_queue_script(uint32_t doc, const char *body);
+/* THE SAME POSITION IN THE SAME SEQUENCE, FOR A SCRIPT WHOSE SOURCE IS AN ADDRESS. §4.12.1 fixes an external
+   script's position against the scripts written around it — a `pending parsing-blocking script` blocks the
+   tokenizer (§13.2.6.4.8), and the `list of scripts that will execute when the document has finished parsing`
+   runs IN ORDER (§13.2.7) — so the entry occupies that position with only its URL, the flow WAITS there, and the
+   host's reply becomes the program in the slot. Without it a document's external scripts could only park on
+   their replies and run in ARRIVAL order, which is why an inline script after a `<script src>` used to abort.
+   `url` is already resolved: §4.4's API base URL belongs to the document whose element it is, so only the
+   caller can resolve it. The ASAP SET does not come here — it has no position, so it parks with
+   engine_pending_script_url and runs when its reply drains. */
+void engine_queue_docscript_url(uint32_t doc, const char *url);
 /* An @S CANDIDATE, queued as the program it would be if it fired. Same queue, one difference: it is ALLOWED not
    to compile, because most breakouts do not fit most sink contexts and a candidate that does not parse simply
    never fires. A page script that does not compile still asserts. */
@@ -48,11 +58,17 @@ void engine_queue_candidate(const char *body);
      `doc` is the TARGET NAVIGABLE'S ACTIVE DOCUMENT, which step 5 names as the settings object the classic
    script is created with — the realm it is compiled in, and not always the session's. */
 void engine_queue_javascript_url(uint32_t doc, const char *body);
-/* Park the running flow on an injected <script src>: the host fetches it, and the reply becomes this flow's next
-   program rather than a promise's value. */
+/* Park the running flow on a <script src> WITH NO POSITION TO HOLD: the host fetches it, and the reply becomes
+   this flow's next program rather than a promise's value. Two kinds of element are that — one a page INJECTED,
+   and a member of §4.12.1's `set of scripts that will execute as soon as possible`, which is a SET (§13.2.7
+   waits for it only before the load event, so arrival order is a correct order). An element whose position
+   §4.12.1 does fix takes a slot instead: engine_queue_docscript_url. */
 void engine_pending_script_url(JSContext *ctx, const char *url);
-/* Park the running flow on the document's OWN external <script src> at position `script_i`: classic scripts run
-   in document order, so the flow waits there, and the reply fills the shared slot every flow reads. */
+/* Park the running flow on a document's OWN external <script src> at sequence position `script_i`: the scripts
+   §4.12.1 orders run in that order, so the flow waits there and the reply fills the slot. WHOSE slot follows from
+   the position: inside the SESSION document's static sequence it is that document's, shared by every flow parked
+   at the same index; past it, it is this flow's own DYN_SCRIPT_SRC entry, which is a child navigable's or a
+   joined document's script and is shared with nobody. */
 void engine_pending_docscript(JSContext *ctx, const char *url, int script_i);
 /* THE DOCUMENT'S LOAD LIFECYCLE, owned by the browser layer and asked by the scheduler. Called once per stage
    per flow when that flow has run everything the document gave it: stage 0 fires DOMContentLoaded, stage 1

@@ -132,15 +132,16 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
    the URL exactly as a fetch does (same register, same dedup, same stall accounting) and the drain queues the
    body as this flow's next script, so the loaded code runs in the world that injected it: its COW delta, its
    pins, its position in the BFS. A sibling that never took that branch never sees the script. */
-/* WHICH FLOW IS A PARAMETER, because there are two moments a document's external script becomes one flow's
-   owed reply and only one of them has a flow switched in. An INJECTED script is inserted by running code, so
-   the flow is the one that ran it; a JOINED document's own <script src> is registered against the boot flow
-   this engine mints for that document, at host time, before anything of it has run. Same register, same
-   dedup, same stall accounting — the caller states which member owes the reply rather than the register
-   asking a scheduler that is not currently running one. */
-static void pending_script_push(Flow *f, JSContext *ctx, const char *url) {
+/* …AND THE `set of scripts that will execute as soon as possible` PARKS THE SAME WAY, which is why this is one
+   entry and no longer takes the flow as a parameter. A member of that set has no POSITION to hold — §13.2.7
+   waits for the set only before the load event — so its reply becomes a program whenever it drains, exactly as
+   an injected script's does. A script whose position IS fixed takes a slot instead (engine_queue_docscript_url),
+   and the second caller this used to have, which registered a joined document's own <script src> against a flow
+   that was not running, went with that. */
+void engine_pending_script_url(JSContext *ctx, const char *url) {
+    Flow *f = flow_running();
     JSValue e;
-    DCHECK(f != NULL, "a <script src> was parked on with no flow to owe the reply to");
+    DCHECK(f != NULL, "a <script src> was parked on outside a running flow");
     DCHECK(url != NULL && *url, "a <script src> was parked on with no URL");
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT);
     pending_set(e, PEND_URL, JS_NewString(ctx, url));
@@ -149,12 +150,6 @@ static void pending_script_push(Flow *f, JSContext *ctx, const char *url) {
        whichever realm the session happens to be rooted at. */
     pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
     JS_FreeValue(ctx, e);
-}
-
-void engine_pending_script_url(JSContext *ctx, const char *url) {
-    Flow *f = flow_running();
-    DCHECK(f != NULL, "a <script src> was injected outside a running flow");
-    pending_script_push(f, ctx, url);
 }
 
 /* THE SESSION'S SCRIPT SEQUENCE — the document's own scripts in order. Entry i is inline (bodies[i] is its text)
@@ -1120,6 +1115,27 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
     if (n) reply_decode_learn(ctx, url, value);
     return n;
 }
+/* WHAT KIND OF PROGRAM a queued body is. It is ONE queue because they are one thing — code the page caused to
+   run — and the kind decides exactly two questions, both of them at the ends of that program's life: may it
+   fail to COMPILE, and does anything read its COMPLETION VALUE. */
+/* A CROSS-AGENT OPERATION is a fourth kind and answers those two questions differently from all three: its
+   program is the ENGINE's own text, so a compile failure is this engine's bug and not the page's; and its
+   completion is not merely read, it is the ANSWER a peer's flow is parked on. */
+/* AN EXTERNAL SCRIPT'S ADDRESS, HOLDING THE POSITION ITS PROGRAM WILL RUN AT — the fifth kind, and the only one
+   whose payload is not a program yet. The entry carries the URL, the flow WAITS at it (flow_step below), and the
+   reply REPLACES the address with the source text and this kind with DYN_PAGE_SCRIPT (flow_drain_pending), after
+   which it is an ordinary program of the sequence.
+   IT IS WHAT GIVES EVERY DOCUMENT OF THIS AGENT §4.12.1's ORDER. The SESSION's document already had it — a slot
+   per script INDEX that the flow stops at — and no other document did: a child navigable's (core/frame/
+   navigable.c) and a joined one's (engine_join_document) external scripts could only park on their replies and
+   become programs when those DRAINED, which is after everything queued in that pass and in ARRIVAL order among
+   the replies. So an inline script written after a parser-blocking `<script src>` ran before the bundle it is
+   written after — HTML §13.2.6.4.8 'The "text" insertion mode' blocks the tokenizer and spins the event loop
+   until that script is `ready to be parser-executed` — and two ordered externals ran in whichever order the
+   network answered. Both were named aborts. What they were missing is a POSITION, and a queue entry IS one. */
+typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL, DYN_CROSS_AGENT_OP,
+               DYN_SCRIPT_SRC } DynKind;
+
 /* Resolve every pending fetch this flow issued (the network completed). Returns how many were drained. */
 /* Is any of this flow's pending fetches deliverable? A flow with only host-owed entries has no work — it stalls
    rather than spinning on a drain that would resolve nothing. */
@@ -1211,7 +1227,33 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
         pending_remove(&f->pending, i);
         kind = (int)pending_get_int(p, PEND_KIND);
         pv = pending_get(p, PEND_VALUE);
-        if (kind == FLOW_PENDING_DOCSCRIPT) {
+        if (kind == FLOW_PENDING_DOCSCRIPT && (int)pending_get_int(p, PEND_SCRIPT_I) >= g_sess_n) {
+            /* A DOCUMENT OF THIS AGENT THAT IS NOT THE SESSION'S — the slot is this FLOW's own sequence entry
+               (DYN_SCRIPT_SRC), and the text is shared with nobody. A child navigable's Document is built inside
+               the flow that created it, one per flow that creates one, so no other flow holds this position; and
+               there is no whole-frontier clear to make, because engine_provide has already un-marked every flow
+               whose register named this address. */
+            int di = (int)pending_get_int(p, PEND_SCRIPT_I) - g_sess_n;
+            size_t src_n = 0;
+            char *src;
+            DCHECK(di < f->dyn_n,
+                   "an external document script replied for a sequence position this flow does not have — the "
+                   "entry was queued on one flow and the reply is being drained into another");
+            DCHECK(f->dyn_cand[di] == DYN_SCRIPT_SRC,
+                   "an external document script replied for a sequence position that is not awaiting one — the "
+                   "slot holds a program already, so this reply is a second answer to one request and the "
+                   "program it overwrites would never run");
+            /* AN EXTERNAL SCRIPT OF ONE OF THESE DOCUMENTS IS A CLASSIC SCRIPT, which is a statement about these
+               entries rather than a default: the two seams that queue them (core/frame/navigable.c and
+               engine_join_document) reject a `<script type=module>` outright, because §8.1.3.3's module entry
+               needs a ScriptType the queue does not yet carry. The encoding is the ENTRY's document's. */
+            src = reply_source_text(ctx, pv, SCRIPT_TYPE_CLASSIC, doc_realm(f->dyn_doc[di]), &src_n);
+            CHECK(src, "engine: OOM storing an external document script");
+            REPLY_SOURCE_WHOLE(src, src_n);
+            free(f->dyn[di]);
+            f->dyn[di] = src;
+            f->dyn_cand[di] = DYN_PAGE_SCRIPT;
+        } else if (kind == FLOW_PENDING_DOCSCRIPT) {
             /* the DOCUMENT's text, shared by every flow: fill the slot once and all waiters proceed in order */
             int si = (int)pending_get_int(p, PEND_SCRIPT_I);
             if (!g_sess_bodies[si]) {
@@ -1544,9 +1586,18 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            document's globals on the creator's Window. */
         sib->dyn_doc = malloc((size_t)parent->dyn_n * sizeof(uint32_t));
         CHECK(sib->dyn_doc, "engine: OOM fork dyn documents");
+        /* THE THREE ARRAYS ARE ONE TABLE WITH ONE LENGTH, asserted rather than defaulted past. This read used to
+           be `parent->dyn_cand ? parent->dyn_cand[i] : 0`, and a zero there is DYN_PAGE_SCRIPT — a real kind
+           belonging to a real entry — so a parent whose flags were somehow absent handed the arm a queue of
+           page scripts. The three are allocated, grown and freed together, which makes the `? :` a claim about
+           a state this file makes impossible; now the arm CRASHES where that state would be born instead of
+           compiling a candidate as a page script, or an ADDRESS (DYN_SCRIPT_SRC) as a program. */
+        DCHECK(parent->dyn_cand != NULL && parent->dyn_doc != NULL,
+               "a flow holds queued programs with no kind or document column — the three arrays are one table "
+               "and are allocated together, so the arm would inherit bodies whose kind and realm are lost");
         for (int i = 0; i < parent->dyn_n; i++) {
             sib->dyn[i] = strdup(parent->dyn[i]); CHECK(sib->dyn[i], "engine: OOM fork dyn body");
-            sib->dyn_cand[i] = parent->dyn_cand ? parent->dyn_cand[i] : 0;
+            sib->dyn_cand[i] = parent->dyn_cand[i];
             sib->dyn_doc[i] = parent->dyn_doc[i];
         }
         sib->dyn_n = sib->dyn_cap = parent->dyn_n;
@@ -1753,23 +1804,16 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
    body on the tramp chain now DFAILs in the engine (see branch_arm_fork) until the sound async-frame snapshot
    is built; there is no re-run fallback to hide that gap. */
 
-/* WHAT KIND OF PROGRAM a queued body is. It is ONE queue because they are one thing — code the page caused to
-   run — and the kind decides exactly two questions, both of them at the ends of that program's life: may it
-   fail to COMPILE, and does anything read its COMPLETION VALUE. */
-/* A CROSS-AGENT OPERATION is a fourth kind and answers those two questions differently from all three: its
-   program is the ENGINE's own text, so a compile failure is this engine's bug and not the page's; and its
-   completion is not merely read, it is the ANSWER a peer's flow is parked on. */
-typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL, DYN_CROSS_AGENT_OP } DynKind;
 
 /* `doc` IS WHICH DOCUMENT'S PROGRAM THIS IS, and it is a parameter at every entry rather than a fact the
    scheduler assumes about itself. It used to be assumed: every program a flow ran was compiled with the
    SESSION's ctx, with one `? :` for the cross-agent operation — so a document of this agent that is not the
    one the session was rooted in had no way onto the frontier at all, and the host that had such programs (a
    same-origin child navigable's classic scripts) kept a queue of its own and ran them itself. */
-/* WHICH FLOW OWNS THE PROGRAM IS A PARAMETER HERE and the running flow's identity is asked one level up, for
-   the same reason pending_script_push takes one: a program the page CAUSED to run belongs to the flow that ran
-   the code, and a JOINED document's own scripts belong to the boot flow this engine mints for that document
-   before any of it has run. Both are members of the one frontier; only one of them has the thread. */
+/* WHICH FLOW OWNS THE PROGRAM IS A PARAMETER HERE and the running flow's identity is asked one level up: a
+   program the page CAUSED to run belongs to the flow that ran the code, and a JOINED document's own scripts
+   belong to the boot flow this engine mints for that document before any of it has run. Both are members of the
+   one frontier; only one of them has the thread. */
 static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind kind) {
     /* A PROGRAM QUEUED WITH NO FLOW IS A DROPPED PROGRAM, and it used to leave silently. There is no global
        queue to fall back to — the frontier IS the queue — so the caller is the one that has to name the flow
@@ -1823,6 +1867,10 @@ static uint32_t flow_dyn_doc(const Flow *f, int n) {
 }
 
 void engine_queue_script(uint32_t doc, const char *body) { engine_queue(doc, body, DYN_PAGE_SCRIPT); }
+
+/* …AND ITS EXTERNAL SIBLING, which takes the same position with only an ADDRESS — see DYN_SCRIPT_SRC. The
+   caller resolved the URL because §4.4's API base URL belongs to the document whose element it is. */
+void engine_queue_docscript_url(uint32_t doc, const char *url) { engine_queue(doc, url, DYN_SCRIPT_SRC); }
 
 /* AN @S CANDIDATE, queued as the program it would be if it fired. It is the same queue because it IS the same
    thing — code the page caused to run — but it carries the one difference that matters: it is allowed not to
@@ -2324,8 +2372,22 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                     return FLOW_STEP_OWED;
                 }
             }
-            else if (f->script_i - n < f->dyn_n) { body = f->dyn[f->script_i - n];
-                                                   kind = flow_dyn_kind(f, n); }
+            else if (f->script_i - n < f->dyn_n) {
+                body = f->dyn[f->script_i - n];
+                kind = flow_dyn_kind(f, n);
+                if (kind == DYN_SCRIPT_SRC) {
+                    /* AN EXTERNAL SCRIPT OF SOME DOCUMENT OF THIS AGENT, AT ITS POSITION. The entry holds its
+                       ADDRESS, so the flow WAITS here for exactly the reason the session document's own external
+                       entry above waits: §4.12.1 fixes this script's position against the scripts written around
+                       it, and running what comes after a bundle before the bundle is a different program. The
+                       reply REPLACES this entry and the next pass compiles it.
+                       A reply that has ALREADY arrived is delivered first — parking without checking leaves the
+                       flow owed forever on a URL the host has answered. */
+                    if (flow_pending_ready(f)) { flow_drain_pending(ctx, f); return 0; }
+                    engine_pending_docscript(ctx, body, f->script_i);
+                    return FLOW_STEP_OWED;
+                }
+            }
             else if (f->njob > 0) {
                 /* A JOB CAN PARK, and until now that park was invisible to the scheduler. A queued step machine
                    that suspends on a synchronous host request is parked by reaction_flow_step (JS_ParkFlow) and
@@ -3029,18 +3091,19 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
  * everything queued below is its whole program order. Left at zero it would re-run the ROOT's bundle in a
  * second timeline and report that document's surface twice.
  *
- * THE ORDER IS THE DOCUMENT'S ORDER, and this seeds only the half of it that is already expressible — the same
- * boundary core/frame/navigable.c's seeding hits and asserts, and for the same reason: an INLINE script is a
- * program queued in place, while an EXTERNAL one is a reply this flow is OWED and joins the sequence when the
- * register drains, which is after everything queued in this pass. An inline script FOLLOWING an external one
- * would therefore run before the bundle it is written after. What removes the limit is the SESSION document's
- * own mechanism (engine_pending_docscript fills the slot at the script's INDEX and the flow waits at that
- * index) generalized to every document of this agent, and until that exists this crashes rather than silently
- * reordering a page's own scripts. */
+ * THE ORDER IS THE DOCUMENT'S ORDER, and both halves of it are now positions in one sequence: an INLINE script
+ * is a program queued in place and an EXTERNAL one is a DYN_SCRIPT_SRC entry queued in place, holding its
+ * address until the reply fills it and stopping the flow there. It used to be a reply this flow was merely OWED,
+ * joining the sequence when the register drained — after everything queued in this pass — so an inline script
+ * FOLLOWING an external one ran before the bundle it is written after, and that was a named abort.
+ * WHAT IS STILL NOT EXPRESSED IS §4.12.1's SCHEDULE, because it does not arrive: the inventory reaching this
+ * entry carries bodies, srcs and types and not `sched`, so every external here takes its PARSE POSITION — right
+ * for a `pending parsing-blocking script`, and an over-ordering for an `async` one, which belongs to a SET that
+ * §13.2.7 waits for only before the load event. The hosts all compute the column (DocScripts.sched) and drop it
+ * at this call; core/frame/navigable.c, which has it, sorts by it. */
 void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
                           const ScriptType *types, int n) {
     Flow *f;
-    bool external_seeded = false;
     int i;
 
     DCHECK(g_sess_live, "a document was joined to an instance with no live session — the flow its scripts are "
@@ -3077,13 +3140,6 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
                "and solver/flow.h's dyn arrays), the way the document's own sequence carries one, so flow_step "
                "routes it to §8.1.3.3's module entry");
         if (bodies[i]) {
-            DCHECK(!external_seeded,
-                   "a joined document has an INLINE script after an EXTERNAL one, and this seam cannot keep "
-                   "§4.12.1's document order across the two: an external script's program joins this flow when "
-                   "its fetch REPLIES, which is after everything queued in this pass, so the inline script "
-                   "would run before the bundle it is written after. Generalize the session document's script "
-                   "sequence — a slot per script INDEX that the flow waits at (engine_pending_docscript) — to "
-                   "every document of this agent");
             engine_queue_into(f, doc, bodies[i], DYN_PAGE_SCRIPT);
             continue;
         }
@@ -3111,8 +3167,8 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
                It is the standard's answer and not a skip: what is still owed is the error event it fires at
                the element, which needs a task on this document rather than anything here. */
             if (!abs_url) continue;
-            pending_script_push(f, cctx, abs_url);
-            external_seeded = true;
+            /* AT ITS POSITION, holding only its address until the reply fills it — see DYN_SCRIPT_SRC. */
+            engine_queue_into(f, doc, abs_url, DYN_SCRIPT_SRC);
             free(abs_url);
         }
     }
