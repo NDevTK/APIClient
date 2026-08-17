@@ -196,7 +196,10 @@ static JSRuntime *g_wp_rt;
    asking document's side of a boundary. `a.postMessage === b.postMessage` still holds for two proxies of the
    same realm, which is what §7.2.5.1's shared surface means; two REALMS have two, exactly as two realms have
    two `Array.prototype.map`s. */
-static int g_wp_len_getter_id = -1, g_wp_name_setter_id = -1, g_wp_close_id = -1;
+/* TWO GETTER IDS OVER ONE STEP DECLARATION, and they are two because a pool entry carries the MEMBER MAGIC —
+   the step body reads it back with idl_step_magic to know which question it was asked. */
+static int g_wp_len_getter_id = -1, g_wp_closed_getter_id = -1;
+static int g_wp_name_setter_id = -1, g_wp_close_id = -1;
 
 
 #define WP_OFF(f) (uint16_t)offsetof(ProxyData, f)
@@ -704,10 +707,17 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
     return obj;
 }
 
-/* §7.2.5's `closed`, READ AND WRITTEN THROUGH THE ONE PLACE IT LIVES. It is a fact about the NAVIGABLE, so
-   `window.closed` and `iframe.contentWindow.closed` must be the same answer — they were two bytes, and closing
-   through one left the other reporting open. Captured through proxy_of, so the flow that closed the window is
-   the only one whose timeline contains it.
+/* §7.2.2.1's `closed` AS THIS AGENT'S RECORD OF IT, read and written through the one place it lives HERE. It
+   is a fact about the NAVIGABLE, so `window.closed` and `iframe.contentWindow.closed` must be the same answer
+   — they were two bytes, and closing through one left the other reporting open. Captured through proxy_of, so
+   the flow that closed the window is the only one whose timeline contains it.
+   THIS AGENT'S, AND THE CALLERS ARE WHY THAT IS THE RIGHT QUESTION. Every one of them is an ENGINE WALK over
+   navigables this agent holds — §7.3.1's fully-active ancestor chain, §7.1's named-target search, the
+   tree-order walk — and each is asking whether to keep walking THIS agent's tree, which is exactly what this
+   record answers. The JS-visible member is a different question and has a different answer path: a traversable
+   whose active document is in another instance is closed by whichever agent ran §7.2.2.1's close(), so the
+   member suspends and asks that one (proxy_get_step). A caller that wants the standard's `closed` about an
+   arbitrary navigable must go through the member, because only the member can suspend.
    IT IS AN OR OVER TWO FLAGS, which is the getter's own wording rather than a convenience: the two are set by
    two different algorithms at two different times, and every read in this file goes through here so that no
    member can accidentally ask only one of them. */
@@ -1073,15 +1083,31 @@ SandboxFlags window_proxy_creation_sandbox_flags(JSValueConst proxy)
  *
  * A NAVIGABLE IS NOT ITS ACTIVE DOCUMENT. That sentence is the reason this interface exists at all — a proxy
  * outlives the documents in it — and it is also the reason most of the surface below never leaves this
- * instance. `closed`, `name`, `opener`, `parent`, `top` and the four self-references are properties of the
- * NAVIGABLE, and a navigable belongs to the instance that CREATED it: this one made the child, named it, knows
- * what it was nested in and knows whether it has been destroyed. Only a member that reads through to the
- * ACTIVE DOCUMENT — `length` counts the child's own child navigables — is a question for the peer.
+ * instance. `name`, `opener`, `parent`, `top` and the four self-references are properties of the NAVIGABLE,
+ * and a navigable belongs to the instance that CREATED it: this one made the child, named it and knows what it
+ * was nested in.
  *
  * THAT SPLIT WAS THE WHOLE BUG. Every member here used to be a host request, so an iframe's `contentWindow`
  * could answer nothing at all until a host could run a second document; `otherW.self === otherW` — which is
  * true by definition, in any browser, about a navigable nobody has to look inside — parked its flow. Answering
  * the navigable's own state locally is not an optimisation, it is where the state actually is.
+ *
+ * AND `closed` IS NOT ONE OF THEM, WHICH IS THE HALF OF THAT SPLIT THAT WAS WRONG. This comment used to name
+ * it beside `name` and `opener` and say the creator "knows whether it has been destroyed", and that sentence
+ * was true of every navigable except the one the member exists for. §7.2.2.1 opening and closing windows makes
+ * `closed` the OR of two facts about the TOP-LEVEL TRAVERSABLE — its browsing context being null, and its is
+ * closing — and `close()` sets is closing IN THE AGENT THAT RUNS IT. A popup that calls `window.close()` on
+ * itself runs that in its OWN instance and writes its OWN record; the opener's copy of the same traversable
+ * never hears, so `w.closed` answered false about a window that had closed itself, forever, in the one
+ * direction a page actually polls. That is CLAUDE.md's ONE FACT ANSWERED FROM MANY PLACES exactly: two C
+ * records for one traversable, and the fix is never to write the second from more places but to ASK the
+ * instance whose record is the one the standard is talking about.
+ *
+ * IT IS MONOTONIC, AND THAT IS WHAT MAKES IT ANSWERABLE AT ALL. §7.2.2.1's close() step 3 returns early when
+ * is closing is already true, and a null browsing context is terminal, so `closed` never goes back to false:
+ * a record that says CLOSED is the answer wherever it is kept, and only a record that says OPEN leaves the
+ * question to the peer. `length` has no such half — it is a live count of the peer's active document and must
+ * be asked every time — so the two members share the step machine and differ in exactly this one branch.
  *
  * WHY THE REMOTE HALF IS A STEP MACHINE. `otherWindow.length` must answer at its own call site, and the answer
  * is not available in this turn. There is exactly one shape in this engine that can suspend and answer at the
@@ -1100,8 +1126,14 @@ enum {
        cross-origin whitelist; `globalThis` is the global object, which IS the proxy, and is same-origin only —
        the distinction costs nothing here because both answers are the same object. */
     WP_WINDOW, WP_SELF, WP_FRAMES, WP_GLOBALTHIS,
-    WP_PARENT, WP_TOP, WP_OPENER, WP_CLOSED, WP_NAME,
-    WP_LENGTH,   /* the ACTIVE DOCUMENT's — the one member below that leaves this instance */
+    WP_PARENT, WP_TOP, WP_OPENER,
+    /* THE FIRST OF THE TWO MEMBERS THAT LEAVE THIS INSTANCE — the TOP-LEVEL TRAVERSABLE's is-closing, which
+       §7.2.2.1's close() writes in whichever agent ran it, so the peer's record is the one the standard names
+       whenever this agent's own says OPEN. The enum ORDER is load-bearing (PROXY_MEMBER and
+       PROXY_CROSS_ORIGIN are indexed by it), so this sits where it always sat. */
+    WP_CLOSED,
+    WP_NAME,
+    WP_LENGTH,   /* the ACTIVE DOCUMENT's child-navigable count — the other member that leaves this instance */
     /* §7.2.5's `document`, SAME-ORIGIN ONLY. It answers with the OTHER realm's Document OBJECT, and it can
        always do so in this turn: an agent is ORIGIN-KEYED, so a same-origin navigable is a realm of this agent
        by construction and a proxy this agent cannot answer for is cross-origin, where the answer is a
@@ -1663,8 +1695,6 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
         return win_or_proxy(ctx, window_proxy_top_navigable(ctx, this_val));
     case WP_OPENER:
         return win_or_proxy(ctx, JS_DupValue(ctx, p->opener));
-    case WP_CLOSED:
-        return JS_NewBool(ctx, wp_closed(p));
     case WP_NAME:
         return window_proxy_name_value(ctx, this_val);
     case WP_DOCUMENT:
@@ -1693,8 +1723,9 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            document_object is above. */
         return location_object(proxy_realm(ctx, this_val, p));
     default:
-        DFAIL("a WindowProxy member with no navigable-own answer reached this switch — WP_LENGTH and anything "
-              "added beside it read the ACTIVE DOCUMENT and are declared on the step machine below");
+        DFAIL("a WindowProxy member with no navigable-own answer reached this switch — WP_LENGTH, WP_CLOSED "
+              "and anything added beside them are answered by the instance holding the navigable's document "
+              "and are declared on the step machine below");
         return JS_UNDEFINED;
     }
 }
@@ -1818,14 +1849,15 @@ typedef struct { uint32_t req; } ProxyGetState;
 
 static void proxy_get_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 
-/* WHERE THIS MACHINE RESTS. §7.2.5.1 answers each cross-origin member from the OTHER navigable's active
-   document, so the read is one step of the standard performed in another instance — and the wait for that
-   peer is a sub-sequence inside it (`req` is its cursor), not a step of its own. One stage: a flow parked
-   here is parked at the read it made, whichever member it asked for. */
+/* WHERE THIS MACHINE RESTS. Both members it drives are read off state the OTHER instance keeps — §7.2.3's
+   `length` off that navigable's active document, §7.2.2.1's `closed` off the top-level traversable whichever
+   agent ran close() wrote — so the read is one step of the standard performed in another instance, and the
+   wait for that peer is a sub-sequence inside it (`req` is its cursor), not a step of its own. One stage: a
+   flow parked here is parked at the read it made, whichever member it asked for. */
 #define PROXY_GET_STAGES(X) \
     X(PROXY_GET_ASK = IDL_STEP_FIRST, \
-      "HTML §7.2.5.1 (the cross-origin member's value, resolved by the instance that holds the active " \
-      "document — the flow suspends on the line that made the read and resumes with the answer)")
+      "HTML §7.2.3 the WindowProxy exotic object (the cross-instance member's value, resolved by the instance " \
+      "that holds the navigable — the flow suspends on the line that made the read and resumes with the answer)")
 enum { PROXY_GET_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const PROXY_GET_STEPS[] = { PROXY_GET_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -1850,23 +1882,50 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         return JS_STEP_ABRUPT;
     }
 
-    /* THE HOSTED CASE, ANSWERED IN THIS TURN AND OUT OF THE TARGET'S OWN DOCUMENT. §7.2.5.1's `length` is the
+    /* THE HOSTED CASE, ANSWERED IN THIS TURN AND OUT OF THE TARGET'S OWN RECORD. §7.2.3's `length` is the
        child-navigable count of the ACTIVE DOCUMENT, so it is a walk of THAT document's tree — the reading
-       realm would count this document's frames and call them the other's.
+       realm would count this document's frames and call them the other's. §7.2.2.1's `closed` is the top-level
+       traversable's, and the agent that holds the active document is the agent whose `close()` writes it.
        A NAVIGABLE WHOSE REALM HAS NOT BEEN MATERIALIZED COUNTS ZERO, and that is the computed answer rather
        than a stand-in for one: its active document is the empty about:blank Document §7.4 created, an element
        can only get into it by script, and script cannot run in a realm that does not exist. Building a whole
        platform to count the iframes in a document that provably has none is what made this read cost a realm
        per flow — 4000 flows in and the frontier hit the RAM floor at ~57% of the depth it reaches without it. */
     if (world_doc_hosted(p->doc)) {
-        DCHECK(magic == WP_LENGTH, "a navigable-own member reached the step machine — it is answered by "
-                                   "proxy_member_get, in this turn, with no host round trip");
-        *presult = JS_NewInt32(ctx, p->realm ? iframe_child_navigable_count(p->realm) : 0);
+        switch (magic) {
+        case WP_LENGTH:
+            *presult = JS_NewInt32(ctx, p->realm ? iframe_child_navigable_count(p->realm) : 0);
+            break;
+        case WP_CLOSED:
+            *presult = JS_NewBool(ctx, wp_closed(p));
+            break;
+        default:
+            DFAIL("a navigable-own member reached the step machine — it is answered by proxy_member_get, in "
+                  "this turn, with no host round trip");
+            *presult = JS_UNDEFINED;
+            break;
+        }
         return JS_STEP_DONE;
     }
-    /* A DESTROYED NAVIGABLE HAS NO ACTIVE DOCUMENT to ask, and §7.2.5 answers for it here rather than parking
-       a flow on an instance the host has already torn down. */
-    if (wp_closed(p)) { *presult = JS_NewInt32(ctx, 0); return JS_STEP_DONE; }
+    /* THIS AGENT'S RECORD ALREADY SAYS CLOSED, AND `closed` NEVER GOES BACK. §7.2.2.1's close() step 3 returns
+       early once is closing is true and a null browsing context is terminal, so a local TRUE is the standard's
+       answer and asking a peer could only confirm it — which is also what keeps this read answerable after the
+       host has torn that instance down. A local FALSE says nothing about the peer, which is the whole reason
+       the branch below exists.
+       AND FOR `length` THE SAME STATE IS A DIFFERENT ANSWER: a destroyed navigable has no active document to
+       count, so §7.2.3 answers 0 here rather than parking a flow on an instance that is gone. */
+    if (wp_closed(p)) {
+        *presult = magic == WP_CLOSED ? JS_TRUE : JS_NewInt32(ctx, 0);
+        return JS_STEP_DONE;
+    }
+    /* AND A NESTED NAVIGABLE'S `closed` IS THIS AGENT'S EITHER WAY, so it is answered here rather than asked.
+       §7.3.1 navigables declares is closing with the sentence "This is only ever set to true for top-level
+       traversable navigables" — which window_proxy_set_closing already asserts — so the only half of §7.2.2.1's
+       OR that a nested navigable can satisfy is a null browsing context, and that is written by §7.3.1.6
+       navigable destruction's destroy a child navigable, run by the agent holding the CONTAINER ELEMENT. This
+       one. A peer asked about its own document would answer out of ITS root proxy, which is the record for a
+       navigable it believes is top-level — the one answer that is confidently wrong. */
+    if (magic == WP_CLOSED && !JS_IsUndefined(p->parent)) { *presult = JS_FALSE; return JS_STEP_DONE; }
 
     if (s->req == 0) {
         char op[1024];
@@ -1912,7 +1971,7 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 }
 
 static const IdlStepDecl PROXY_GET_DECL = { proxy_get_step, sizeof(ProxyGetState), proxy_get_visit, NULL,
-                                           "HTML §7.2.5.1 a cross-origin WindowProxy member's value",
+                                           "HTML §7.2.3 a cross-instance WindowProxy member's value",
                                            PROXY_GET_STEPS };
 
 /* §7.2.5.1's MEMBER SURFACE FOR ONE REALM. Declaration order in core/realm.h's list matters here in one
@@ -1933,6 +1992,8 @@ void window_proxy_install_proto(JSContext *ctx)
     for (i = 0; i < WP_MEMBER_N; i++) {
         if (i == WP_LENGTH)
             idl_install_accessor_step(ctx, proto, PROXY_MEMBER[i], g_wp_len_getter_id, -1);
+        else if (i == WP_CLOSED)
+            idl_install_accessor_step(ctx, proto, PROXY_MEMBER[i], g_wp_closed_getter_id, -1);
         else if (i == WP_NAME)
             idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, g_wp_name_setter_id);
         else
@@ -1961,7 +2022,8 @@ void window_proxy_init(JSContext *ctx)
     proxy_capture_names(ctx);
     /* THE POOL ENTRIES ARE THE AGENT'S — a declaration is a runtime registration, and every realm's members
        carry the same ids. Only the OBJECTS below are per realm. */
-    g_wp_len_getter_id  = idl_getter_id_step(ctx, &PROXY_GET_DECL, WP_LENGTH);
+    g_wp_len_getter_id    = idl_getter_id_step(ctx, &PROXY_GET_DECL, WP_LENGTH);
+    g_wp_closed_getter_id = idl_getter_id_step(ctx, &PROXY_GET_DECL, WP_CLOSED);
     g_wp_name_setter_id = idl_setter_id(ctx, IDL_DOMSTRING, false, proxy_name_set, WP_NAME);
     g_wp_close_id       = idl_method_id(ctx, NULL, 0, proxy_close, 0);
     realm_declare_intrinsic(window_proxy_install_proto);

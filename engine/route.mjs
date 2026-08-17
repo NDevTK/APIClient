@@ -53,12 +53,21 @@ const boot = factory.default ?? factory;
 
 /* THE READ IS LAST AND BOTH ARMS MAKE IT, so two DIFFERENT worlds ask the same question of one peer — which is
    the case a single-timeline peer cannot answer with one number, and the reason the entry that performs it has
-   to install the asking world's segment rather than read a property from C. */
+   to install the asking world's segment rather than read a property from C.
+   AND ONE READ COMES FIRST, BEFORE THE FORK, WHICH IS WHAT MAKES THE ANCESTRY FORK REACHABLE AT ALL. The
+   comment below used to say the root world's segment is the one "record 1 created" — but record 1 is a POST,
+   and this driver holds every post until phase 2 while it performs every READ inline in phase 1. So the peer
+   met the two CHILD worlds first and materialized both from its baseline, correctly and with no ancestor to
+   fork, and `forkedFromAncestor` was 0 — the exact number the check at the bottom exists to catch, sitting at
+   zero underneath a driver that aborted before it got there. A read in the ROOT world, taken before the branch,
+   is what puts that segment at the peer first; the two arms then name it as their nearest ancestor and
+   world_segment forks it. The fixture has to CREATE the precondition its own assertion is about. */
 const HTML_A = `<!doctype html><script>
   var w = window.open("https://b.test/child", "child");
-  w.postMessage({hello:"root"}, "*");
+  w.postMessage({hello:"root", n: w.length}, "*");
   if (__FLAGS.admin) { w.postMessage({hello:"admin"}, "*"); } else { w.postMessage({hello:"public"}, "*"); }
   w.postMessage({hello:"length", n: w.length}, "*");
+  fetch("/resume").then(function () { fetch("/closed?v=" + (typeof w.closed) + ":" + w.closed); });
 </script>`;
 /* `/hold` is NEVER answered, and that is the point: `b`'s boot flow stays live and owed, so the second and
    third arrivals have a timeline to arrive in. A document whose every flow has finished cannot receive, and
@@ -66,10 +75,17 @@ const HTML_A = `<!doctype html><script>
 /* `typeof e.data.n` RIDES THE DELIVERY because `otherW.length === 0` distinguishes a number from the string
    "0", and an answer that arrived as text and stayed text would satisfy every loose check in this file while
    proving only that bytes moved. */
+/* AND `b` CLOSES ITSELF, which is the one state change no read of `a`'s own records could ever discover.
+   §7.2.2.1 opening and closing windows makes `closed` the OR of a null browsing context and the top-level
+   traversable's is closing, and close() sets is closing IN THE AGENT THAT RUNS IT — here, `b`. `a` holds a
+   WindowProxy for the same traversable and its copy is never written, so `w.closed` was `false` forever about
+   a window that had closed itself. It is the reverse direction of `w.length`: `length` is a fact `a` cannot
+   COMPUTE, `closed` is a fact `a` is confidently WRONG about, and only the second one fails silently. */
 const HTML_B = `<!doctype html><script>
   fetch("/hold");
   window.addEventListener("message", function (e) {
     fetch("/got?origin=" + e.origin + "&hello=" + e.data.hello + "&n=" + (typeof e.data.n) + ":" + e.data.n);
+    if (e.data.hello === "length") window.close();
   });
 </script>`;
 
@@ -126,19 +142,36 @@ const got = [];     /* every /got the receiving page fetched — one per message
 const reads = new Map();
 /* The completions performing instances have emitted, by token, until the asker is handed each one. */
 const answers = new Map();
+/* Every `/closed` the ASKING page fetched — `a`'s own report of what `w.closed` answered, collected apart from
+   `got` because it is a different measurement: `got` counts what crossed INTO `b`, this counts what came BACK. */
+const closedReports = [];
+/* `/resume` IS DEFERRED, WHICH IS HOW THIS DRIVER ORDERS TWO INSTANCES WITHOUT A CLOCK. `a`'s read of
+   `w.closed` has to happen AFTER `b` has closed itself, and the only thing that orders one instance's flow
+   against another's here is an owed reply: `a` parks on this fetch, `b` is routed its messages and closes, and
+   phase 3 answers it. A `setTimeout` would order nothing — both engines advance only when this loop steps
+   them. */
+let resumeOwed = true;
 
 /* ONE STEP of `e`, then everything the host owes it. Returns false once the engine reports its frontier done. */
 async function service(e) {
   const r = e.M.ccall('qjs_step', 'number', [], []);
   for (const u of e.str('qjs_pending').split('\n').filter(Boolean)) {
     if (u.includes('/hold')) continue;
+    if (u.includes('/resume') && resumeOwed) continue;
     if (u.includes('/got')) { got.push(u); console.log(`  [${e.docId}] DELIVERED: ${u}`); }
+    if (u.includes('/closed')) { closedReports.push(u); console.log(`  [${e.docId}] READ BACK: ${u}`); }
     /* THE ONE REPLY RECORD every host of this engine delivers, crossing as JSON so it carries its type. This
        zone follows no redirect, so Fetch §4.1 gives the response a clone of the REQUEST's URL list — one item,
        RESOLVED against this document's address because a URL list holds URLs and `response.url` serializes the
-       last of them. */
+       last of them.
+       `computedType` IS THIS ZONE'S DECISION AND IT IS WHY THIS DRIVER STOPPED RUNNING. The sniff belongs to
+       whoever READ the bytes, so fetch_reply_computed_type asserts the field rather than defaulting it — and
+       this record was written before that field existed, so every host that grew one left this one behind and
+       the seam driver aborted on its FIRST reply. It is a host that has to state it like any other: the bytes
+       below are the two characters `{}`, this zone minted them, and `application/json` is what it computed them
+       to be. */
     const reply = { status: 200, statusText: 'OK', headers: [],
-                    urlList: [new URL(u, e.docUrl).href] };
+                    urlList: [new URL(u, e.docUrl).href], computedType: 'application/json' };
     /* THE BODY TRAVELS AS BYTES, beside that JSON and never inside it: §2.2.5 makes a response's body a BYTE
        SEQUENCE, and the only ways to put one in JSON are to encode it or to DECODE it — and a decode run by
        the zone that FETCHED is exactly what left HTML §8.1.4.2's classic-script decode nothing to decode. */
@@ -223,6 +256,14 @@ for (const p of posts) {
   if (got.length === before) console.log(`  NOT DELIVERED: ${p.world}`);
 }
 
+/* PHASE 3 — `b` HAS NOW CLOSED ITSELF, so `a`'s parked read is released and asks the one question whose answer
+   lives entirely in the other instance's record. `a` is stepped rather than told anything: the reply to
+   `/resume` resumes the flow it parked, that flow reads `w.closed`, and the read suspends again on the peer
+   exactly as `w.length` did — the whole point being that a driver never states the answer, it only routes. */
+resumeOwed = false;
+console.log(`\nphase 3: /resume answered — a's parked flow reads w.closed on a peer that closed itself`);
+for (let i = 0; i < 2000 && !closedReports.length; i++) if (!(await service(engines[0]))) break;
+
 console.log(`\nposts routed: ${posts.length}   messages the receiving page saw: ${got.length}`);
 for (const u of got) console.log('  ' + u);
 const readsAnswered = [...reads.values()].filter((r) => r.answered).length;
@@ -277,5 +318,22 @@ if (readsAnswered !== reads.size)
        'operation names (a `navigable.create` notice this zone dropped), or the performing instance never ' +
        'reached the end of the program its answer is — which is a flow on its frontier and can be parked ' +
        'behind anything else that frontier is doing');
+/* AND THE LAST ONE IS THE ONE A WRONG ANSWER PASSES. Every check above fails by a NUMBER staying zero — a
+   record that did not cross, a segment that was not forked, a completion that never came — and none of them
+   would have moved if `w.closed` had been answered out of `a`'s own byte, because a local answer is instant and
+   plausible. So this check is on the VALUE: `b` closed itself, so §7.2.2.1's `closed` is true about that
+   traversable, and the only record in existence that says so is `b`'s. `typeof` rides along for the reason it
+   rides on the delivery — an answer that arrived as text and stayed text satisfies `v ? ...` and is not a
+   boolean. */
+if (closedReports.length !== 1)
+  fail(`the asking page reported ${closedReports.length} reads of \`w.closed\` and this driver arranged exactly ` +
+       'one — either the parked flow was never resumed by the /resume reply, or the read never answered at all');
+if (!closedReports[0].includes('v=boolean:true'))
+  fail(`\`w.closed\` answered \`${closedReports[0].split('v=')[1]}\` about a top-level traversable that had run ` +
+       'window.close() in the OTHER instance. §7.2.2.1 opening and closing windows makes `closed` the OR of a ' +
+       'null browsing context and the top-level traversable\'s is closing, and close() writes is closing in the ' +
+       'agent that RUNS it — so an answer read out of this agent\'s own copy of that record is false about a ' +
+       'window that has closed itself, which is the one cross-instance defect that produces a plausible value ' +
+       'instead of a missing one');
 console.log('[route] OK — two instances, every routed record delivered, ancestry-forked segments: ' + forked +
-            `, cross-agent reads answered: ${readsAnswered}`);
+            `, cross-agent reads answered: ${readsAnswered}, w.closed read back: ${closedReports[0]}`);
