@@ -133,13 +133,23 @@ int64_t pending_get_int(JSValueConst e, int field)
     return n;
 }
 
+/* IS THE HOST OWED THIS ENTRY — the ONE condition the three questions below are made of, and the same one
+   engine_pending_fetches and engine_host_requests skip a record on. An entry carries a value or it does not;
+   what DIFFERS between the callers is which kinds they are asking about, never what "owed" means. Written once
+   here so the pager's credit and the list the host is actually shown cannot drift apart, which is the defect
+   pending.h describes at pending_owed_replies. Cheap by construction — one own-slot read of a boolean — because
+   pending_blocked is asked at every suspend point the interpreter offers. */
+static int pend_owed(JSValueConst e)
+{
+    return !pending_get_int(e, PEND_HAVE_VALUE);
+}
+
 int pending_blocked(JSValueConst reg)
 {
     int n = pend_len(reg), i;
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(reg, i);
-        int hit = pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ &&
-                  !pending_get_int(e, PEND_HAVE_VALUE);
+        int hit = pending_get_int(e, PEND_KIND) == FLOW_PENDING_HOSTREQ && pend_owed(e);
         JS_FreeValue(pend_ctx(), e);
         if (hit) return 1;
     }
@@ -168,11 +178,46 @@ int pending_outstanding(JSValueConst reg)
     int n = pend_len(reg), i;
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(reg, i);
-        int hit = !pending_get_int(e, PEND_HAVE_VALUE);
+        int hit = pend_owed(e);
         JS_FreeValue(pend_ctx(), e);
         if (hit) return 1;
     }
     return 0;
+}
+
+int pending_owed_replies(JSValueConst reg)
+{
+    int n = pend_len(reg), i, c = 0;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i);
+        int kind = (int)pending_get_int(e, PEND_KIND);
+        if (kind != FLOW_PENDING_HOSTREQ && pend_owed(e)) {
+            /* A DEBT IS A REPLY THAT CAN STILL ARRIVE, AND ONLY THE PAIR MAKES ONE ARRIVE. engine_pending_fetches
+               lists `METHOD<TAB>URL` and engine_provide delivers against both halves, so an owed entry missing
+               either is one the host was never shown and never will be — counting it credits a reply nobody is
+               going to send, and the credit is then spent by a reply the host genuinely mispaired. Asserted at
+               the origin of the DEBT rather than on the register's hot path: pending_blocked runs at every
+               suspend point, this runs once per flow the pager sells.
+               The OTHER half of the same contract — that an owed entry the host cannot be shown must not exist
+               at all — is engine_host_owes's `tellable`; this is the same statement said about the pair the
+               delivery is keyed on rather than about the address alone. */
+#if APICLIENT_DEV
+            JSValue uv = pending_get(e, PEND_URL);
+            JSValue mv = pending_get(e, PEND_METHOD);
+            int pair = JS_IsString(uv) && JS_IsString(mv);
+            JS_FreeValue(pend_ctx(), mv);
+            JS_FreeValue(pend_ctx(), uv);
+            DCHECK(pair,
+                   "a flow is owed a reply for an entry that names no (METHOD, URL) pair — the reply seam is "
+                   "keyed on the pair, so no host can ever answer this entry, and crediting it at a sale hands "
+                   "the reply door a credit that the next genuinely mispaired reply will spend");
+#endif
+            c++;
+        }
+        JS_FreeValue(pend_ctx(), e);
+    }
+    return c;
 }
 
 /* ---- writes -----------------------------------------------------------------------------------------------

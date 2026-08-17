@@ -324,7 +324,10 @@ static long g_host_answers_late;
  * a real defect and a silent one — a sold HOSTREQ entry inflated the fetch side, so the very next reply the
  * host genuinely mispaired spent that credit and the assert written to catch it (main.c's provide pairing)
  * said nothing.
- * Split at the sale, by kind, so each door consumes only its own.
+ * Split at the sale, by kind, so each door consumes only its own — and on this side by what is still OWED,
+ * because an ANSWERED fetch entry sold with a flow is a reply the host has already sent and can never send
+ * again (pending.h, pending_owed_replies): the residue of the same over-credit, wearing the other half of the
+ * register.
  *
  * A flow BLOCKED on the host is the cheapest member to page — its recipe re-issues the request in the session
  * that resumes it and gets today's answer, which is §Time-travel's whole point — so the tail is very often a
@@ -349,7 +352,21 @@ static long g_paged_reqs;
 static long g_flows_sold;
 
 int engine_take_paged_owed(void) {
-    if (g_paged_owed <= 0)
+    /* BELOW ZERO IS THE IMPOSSIBLE STATE, and it is the only one this function can see. The credit is a count
+       of entries the host was shown and has not answered (engine_reclaim_tail) and this is its ONLY spender,
+       so a negative debt means either a second spender exists or one reply spent two credits — and from then
+       on the number is no longer "replies owed for flows this instance sold", so every later answer to "is
+       this reply explained by a sale?" is a guess wearing a measurement's name. */
+    DCHECK(g_paged_owed >= 0,
+           "the paged-reply debt went NEGATIVE — it is a count of unanswered entries that left with sold "
+           "flows and this is its only spender, so more replies have been excused as sales than were ever "
+           "sold, and qjs_provide's pairing assert is now excusing the host's real mispairings");
+    /* ZERO IS NOT A BROKEN INVARIANT, IT IS THE ANSWER. This is the question qjs_provide asks to tell a SALE
+       from the host's pairing being off, and "no sale explains this reply" is precisely the case its DFAIL
+       exists for — so aborting here would report the host's mispairing under the pager's message, which is the
+       "right crash for the wrong reason" g_paged_reqs was split off to stop. The test is `== 0` because the
+       assert above has made `< 0` unreachable. */
+    if (g_paged_owed == 0)
         return 0;
     g_paged_owed--;
     return 1;
@@ -3194,12 +3211,16 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
     /* THE DEBT LEAVES WITH THE FLOW, AND IT IS TWO DEBTS. Counted by KIND rather than whole (see g_paged_owed):
        a synchronous request is answered by ID at a call site and a fetch reply is paired by (method, url), so
        a register counted whole hands the fetch side a credit that belongs to the request side, and the next
-       reply the host genuinely mispairs is excused by it. */
-    {
-        int reqs = pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
-        g_paged_reqs  += reqs;
-        g_paged_owed  += pending_count(tail->pending) - reqs;
-    }
+       reply the host genuinely mispairs is excused by it.
+       AND ON THE REPLY SIDE BY WHAT IS STILL OWED, WHICH IS NOT SYMMETRIC WITH THE REQUEST SIDE. The two doors
+       have different arity (pending.h, pending_owed_replies): the reply door answers a request ONCE and drops
+       it from the join the moment it carries a value, so an ANSWERED entry sold here is a reply already
+       delivered and crediting it is the same over-count as crediting a HOSTREQ was — the surplus is spent by
+       the next reply the host genuinely mispaired, and qjs_provide's pairing assert goes quiet again. The
+       request door answers one id once per PEER TIMELINE, so an answered HOSTREQ entry is still a rendezvous
+       more answers may arrive for and stays in the reported count. */
+    g_paged_reqs += pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
+    g_paged_owed += pending_owed_replies(tail->pending);
     cold_park_flow(tail);
     flow_release(g_sess_ctx, tail);
     g_flows_sold++;
@@ -3245,9 +3266,20 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            "a session was opened with a realm that is not the root document's — the session's scripts are that "
            "document's programs, so they would be compiled in one realm and belong to another");
     g_parked = 0;
-    g_paged_owed = 0;   /* replies owed to flows this session paged out — see engine_take_paged_owed */
-    g_paged_reqs = 0;   /* …and the SYNCHRONOUS requests they owed, which the fetch side must not spend */
-    g_flows_sold = 0;   /* …and how many flows that was, which is what @PROGRESS's `sold` reports */
+    /* WHAT A SALE LEFT BEHIND IS THE INSTANCE'S TOO, AND A ZERO HERE WOULD FORGET IT RATHER THAN RESET IT.
+       These three were assigned 0 at this line. Every host opens exactly ONE session per instance (main.c,
+       wpt_runner.c's two alternative entries, test_forced.c's engine_run), so the assignment could only ever
+       write 0 over 0 — but what it SAID was that the debt belongs to a session, and that is the opposite of
+       true: the reply is owed by the HOST that was shown the request, the sold flow is on the cold tier
+       re-issuing next session, and a reply still in flight across a session boundary must find its credit
+       still there. A zero would hand the first such reply to qjs_provide's pairing DFAIL. So the claim is
+       asserted instead of performed, and a second session opened on one instance crashes here rather than
+       silently dropping the debt it must CARRY. Same reason as the line below. */
+    DCHECK(g_paged_owed == 0 && g_paged_reqs == 0 && g_flows_sold == 0,
+           "a session began on an instance that had already sold flows — the debt those sales left is owed by "
+           "the HOST that was shown the requests, so it crosses a session boundary with them; it must be "
+           "carried into this session, never zeroed, or the first reply that arrives for a sold flow is "
+           "reported as the host's pairing being off");
     /* NOT RESET: g_host_asked/g_host_answered/g_host_answers_late are the INSTANCE's totals, not a session's —
        an instance opens one session, and a rate that restarted would be a level again (see g_host_asked). */
     /* WHAT AN UNCANCELLED REJECTION MEANS is this half's answer: the browser half fires the event and honours

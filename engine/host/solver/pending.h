@@ -152,8 +152,25 @@ int  pending_count(JSValueConst reg);
    host's own list (engine_take_paged_owed), and its synchronous requests are routed BY ID to a call site — so
    a register counted whole spends a fetch's credit on a request's departure, and the pairing assert that
    exists to catch a host naming a request nobody parked on is then excused by a HOSTREQ that has nothing to
-   do with it. */
+   do with it.
+   IT COUNTS ANSWERED ENTRIES TOO, AND FOR THE REQUEST DOOR THAT IS THE RIGHT NUMBER — see the arity below. */
 int  pending_count_kind(JSValueConst reg, int kind);
+
+/* HOW MANY REPLIES THE HOST STILL OWES THIS REGISTER — the reply door's half of the same question, and the one
+   the pager CREDITS (engine.c's g_paged_owed). It is not `pending_count_kind` with the HOSTREQ kinds taken
+   off, because the two doors have different ARITY and the answered entries are exactly where they differ:
+     - THE REPLY DOOR ANSWERS ONCE. engine_pending_fetches drops a request from the join the instant it carries
+       a value, and engine_provide DFAILs on a host that answers one twice — so an ANSWERED fetch/script/module
+       entry can never receive another reply, and crediting it tells the host a reply is owed for something
+       already delivered. The debt is then larger than the number of replies that can arrive, and the surplus is
+       spent by the next reply the host GENUINELY mispaired — silencing qjs_provide's pairing assert, which is
+       the one thing standing between a flow parked forever and a reader who can see why.
+     - THE REQUEST DOOR ANSWERS N TIMES. A peer's document state IS its flows, so one request id has one answer
+       per peer timeline (PEND_EXTRA) and an ANSWERED HOSTREQ entry is still a rendezvous more answers may
+       arrive for. That is why the request side stays a plain kind count above.
+   An entry is owed exactly when it carries no value, which is the same predicate `pending_outstanding` and the
+   join itself read — one condition, one place, so the credit and the list the host is shown cannot drift. */
+int  pending_owed_replies(JSValueConst reg);
 
 /* Entry `i`, owned by the caller. */
 JSValue pending_entry(JSValueConst reg, int i);
