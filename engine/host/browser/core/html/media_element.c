@@ -1193,28 +1193,19 @@ static void media_invoke_selection(JSContext *ctx, JSValueConst el)
     JSValue fn, st = media_state(ctx, el);
 
     DCHECK(g_select_stepid >= 0, "§4.8.11.5 was invoked before its machine was registered");
-    /* §4.8.11.5's OWN FIRST SENTENCE IS AN INVARIANT: "this algorithm is ALWAYS INVOKED AS PART OF A TASK". A
-       flow generation of 0 is this engine's spelling of "no flow is running at all" (quickjs.c's g_flow_gen),
-       so it is exactly the statement that there is no task — and the microtask step 4 queues then has no
-       timeline to belong to. It is reachable from ONE call site: media_element_parsed's walk over the tree the
-       parser built, run from document_install, which this engine performs in qjs_init while the frontier is
-       seeded in qjs_begin. §4.8.11.2 — "if a media element is CREATED WITH A SRC ATTRIBUTE, the user agent must
-       IMMEDIATELY invoke the media element's resource selection algorithm" — makes every `<video src>` and
-       `<audio src>` in a page's own markup arrive there, so this is a whole class of page and not an edge.
-       WHAT TO BUILD, and it is NOT a task at this line: engine/qjs's js_enqueue_platform_call routes an
-       ownerless callback to the runtime's baseline_call_list only when `is_task`, on the stated ground that "a
-       microtask is queued by RUNNING script and therefore always has a flow to own it". §8.1.7.3's
-       await-a-stable-state is the counterexample — the USER AGENT queues that microtask, from an algorithm
-       running IN PARALLEL, while it is creating a Document — so the baseline list must take a microtask too.
-       The entry already carries `is_task`, so js_adopt_baseline_calls hands the first flow the same queue the
-       enqueue named and nothing about the ordering changes; what has to go is the routing condition and the
-       DCHECK inside the adoption loop that asserts the list holds tasks only. */
-    DCHECK(JS_FlowGen() != 0,
-           "HTML §4.8.11.5's resource selection algorithm was invoked with NO FLOW RUNNING, and its own first "
-           "paragraph says it is always invoked as part of a task — so step 4's await-a-stable-state MICROTASK "
-           "has no timeline to belong to and lands on quickjs's global job list, which this engine never "
-           "drains: a `<video src>`/`<audio src>` in a document's initial markup, invoked by §4.8.11.2's "
-           "created-with-a-src rule from document_install before qjs_begin seeds the frontier");
+    /* §4.8.11.5'S "ALWAYS INVOKED AS PART OF A TASK" IS NOW TRUE HERE BY CONSTRUCTION, AND THE ASSERTION THAT
+       SAID OTHERWISE IS GONE WITH THE TWO THINGS IT NAMED. It stood here because step 4's await-a-stable-state
+       is, per §8.1.7.3, a microtask the USER AGENT queues from an algorithm running in parallel — and
+       §4.8.11.2's "if a media element is created with a src attribute, the user agent must IMMEDIATELY invoke
+       the resource selection algorithm" brought every `<video src>` in a page's own markup through
+       media_element_parsed's walk, inside qjs_init, before the frontier exists. quickjs's platform enqueue
+       routed an ownerless callback to the baseline list only when it was a TASK, so the microtask fell onto the
+       global job list this engine never drains and qjs_begin aborted on it.
+       Both halves this comment asked for have landed: the routing condition no longer asks `is_task`, and the
+       adoption loop no longer asserts the list holds tasks only — it hands the hook the entry's own `is_task`,
+       so a microtask is adopted onto the first flow as the microtask it was queued as. This line is deleted
+       rather than relaxed: the invariant it protected is now established by the mechanism instead of by a
+       caller remembering, which is the only reason an assertion may go. */
     st_set_int(ctx, st, "networkState", NETWORK_NO_SOURCE);   /* step 1 */
     st_set_bool(ctx, st, "showPoster", true);                 /* step 2 */
     /* A new run of the algorithm is not the run that parked at step 14's children mode waiting step, so the
