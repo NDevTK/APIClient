@@ -66,14 +66,22 @@
  * this cannot decide is UNATTRIBUTED — named with its file, line and member, never credited to its file, which
  * is the fallback the whole mechanism exists to remove.
  *
- * WHAT IS STILL COARSER THAN THE INTERFACE, so that nobody reads a silence as an answer: a shared installer
- * selecting a SUBSET of its names from a parameter. `event_target_install_handlers(ctx, target, EH_GLOBAL)`
- * installs the ninety handler attributes whose mask bit the caller asked for, and this reads the whole table
- * and attributes all ninety to every prototype any caller hands it — the same over-approximation the
- * file-granular audit made, no worse and no better, because the guard is a `continue` at the top of the loop
- * rather than a condition over the site, which is what guardAt() reads. It is honest on the corpus as it stands (a name
- * over-credited to a prototype is only a false COMPLETE when the IDL puts that name on that interface, and the
- * masks and the mixins agree today) and it is the next thing to make exact.
+ * THE SUBSET A SHARED INSTALLER SELECTS IS READ, and it was the last place this guessed.
+ * `event_target_install_handlers(ctx, target, EH_XHR)` walks HTML §8.1.7.2's ninety event handler IDL
+ * attributes and installs the rows whose MIXIN bit the caller asked for; the guard is a `continue` at the top
+ * of the loop rather than a condition over the site, so guardAt() reads nothing and all ninety were credited to
+ * every prototype any caller ever handed it. That was defended here as honest — "a name over-credited to a
+ * prototype is only a false COMPLETE when the IDL puts that name on that interface, and the masks and the
+ * mixins agree today" — and both halves of that defence are wrong. It is exactly the case where the IDL DOES
+ * put the name on the interface: XMLHttpRequestEventTarget declares seven of those names and Window declares
+ * eighty-odd, so wherever two callers' interfaces share a name the mask IS the difference between installed and
+ * credited. And "they agree today" is a fact about the corpus checked by nobody, in the ONE direction this
+ * audit cannot catch from the other side — an over-credited member does not print as anything at all.
+ * So the subset is resolved PER CALL SITE, where the caller supplies both the selector and the target: the name
+ * column and the selector column are two columns of one X-list, the caller's argument is evaluated as a C
+ * integer constant, and the rows whose bits intersect are the members that call installs on that target. A
+ * selector this cannot evaluate — or a row filter in any other shape — is a REFUSAL with its file and line,
+ * never a fallback to the union: a subset the audit cannot compute is a member list it does not know.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
@@ -373,6 +381,90 @@ function collectCharConsts(masked, into) {
   CHAR_CONST_RE.lastIndex = 0;
   let m;
   while ((m = CHAR_CONST_RE.exec(masked))) into.set(m[1], into.has(m[1]) ? null : m[2].trim());
+}
+
+/* ---- integer constants, for the SELECTOR a shared installer subsets its names by --------------------------- */
+
+/* An INTEGER the C states as a constant. It is needed for exactly one question and it is not a small one: a
+   shared installer that walks a table and installs the rows whose mask bit the CALLER asked for. Without the
+   arithmetic there is no way to tell which rows a call site takes, and the only alternative to computing it is
+   crediting every row to every caller — which is a false COMPLETE wherever the caller's interface really does
+   declare a name the mask withholds, and a false COMPLETE is the one error this audit cannot catch from the
+   other side, because the member it hides simply never prints. Only what a C constant expression holds is
+   evaluated; anything else answers null and the site REFUSES rather than guessing. */
+function evalInt(exprIn, consts, macros) {
+  const text = macros ? expand(String(exprIn), macros) : String(exprIn);
+  const toks = text.match(/0[xX][0-9a-fA-F]+|\d+[uUlL]*|[A-Za-z_]\w*|<<|>>|[()|&^~+]|\S/g);
+  if (!toks) return null;
+  let i = 0;
+  const prim = () => {
+    const t = toks[i];
+    if (t === undefined) return null;
+    if (t === "(") { i++; const v = or(); if (toks[i] !== ")") return null; i++; return v; }
+    if (t === "~") { i++; const v = prim(); return v === null ? null : ~v; }
+    if (t === "+") { i++; return prim(); }
+    if (/^0[xX]/.test(t)) { i++; return parseInt(t, 16); }
+    if (/^\d/.test(t)) { i++; return parseInt(t, 10); }
+    if (/^[A-Za-z_]\w*$/.test(t)) { if (!consts.has(t) || consts.get(t) === null) return null; i++; return consts.get(t); }
+    return null;
+  };
+  const bin = (next, ops) => () => {
+    let v = next();
+    while (v !== null && ops.includes(toks[i])) {
+      const op = toks[i++], r = next();
+      if (r === null) return null;
+      v = op === "&" ? (v & r) : op === "^" ? (v ^ r) : op === "|" ? (v | r)
+        : op === "<<" ? (v << r) : op === ">>" ? (v >> r) : (v + r);
+    }
+    return v;
+  };
+  const shift = bin(prim, ["<<", ">>"]);
+  const add = bin(shift, ["+"]);
+  const and = bin(add, ["&"]);
+  const xor = bin(and, ["^"]);
+  const or = bin(xor, ["|"]);
+  const v = or();
+  return v === null || i !== toks.length ? null : v;
+}
+
+/* THE ROW FILTER of a shared installer: `if (!(EH_MASK[i] & mask)) continue;` — a parallel column of the same
+   list tested against one of the installer's own parameters. It is the ONE shape this can read, and that is
+   stated rather than hidden: anything else with a `continue` in it REFUSES, because the alternative to reading
+   the filter is crediting every row to every caller. */
+const SELECT_RE = /\bif\s*\(\s*!\s*\(\s*([A-Za-z_]\w*)\s*\[\s*[A-Za-z_]\w*\s*\]\s*&\s*([A-Za-z_]\w*)\s*\)\s*\)\s*continue\s*;/;
+function selectorOf(f, R) {
+  const m = f.body.match(SELECT_RE);
+  if (!m) return { why: "the names come from a table and the body filters rows with a `continue` this cannot " +
+                        "read, so which rows a call installs is unknown" };
+  const at = f.params.indexOf(m[2]);
+  if (at < 0) return { why: `the row filter tests \`${m[2]}\`, which is not one of this installer's parameters` };
+  const cells = R.column(m[1], null);
+  if (!cells) return { why: `the selector column \`${m[1]}\` could not be read as a table` };
+  return { cells, at, table: m[1] };
+}
+
+/* `enum { EH_GLOBAL = 1, EH_WINDOW = 2, … }` — a bare name is the previous value plus one, which is C's rule and
+   is what makes a list nobody numbered still answerable. A name whose initializer this cannot evaluate is left
+   UNKNOWN rather than given a plausible number, and every later bare name in that body is unknown with it. */
+function collectEnums(masked, into, macros) {
+  const re = /\benum\b\s*(?:[A-Za-z_]\w*\s*)?\{/g;
+  let m;
+  while ((m = re.exec(masked))) {
+    const open = masked.indexOf("{", m.index);
+    const end = matchAt(masked, open);
+    if (end < 0) continue;
+    let next = 0;
+    for (const item of splitTop(masked.slice(open + 1, end - 1))) {
+      const eq = item.indexOf("=");
+      const name = (eq < 0 ? item : item.slice(0, eq)).trim();
+      if (!/^[A-Za-z_]\w*$/.test(name)) continue;
+      const v = eq < 0 ? next : evalInt(item.slice(eq + 1), into, macros);
+      if (v === null) { into.set(name, null); next = null; continue; }
+      into.set(name, into.has(name) && into.get(name) !== v ? null : v);
+      next = v + 1;
+    }
+    re.lastIndex = end;
+  }
 }
 
 class Resolver {
@@ -885,6 +977,9 @@ export function loadEnvironment(root) {
     }
   };
   walk(root);
+  /* AFTER the walk, because an enumerator's initializer may name a macro from any file. */
+  const ints = new Map();
+  for (const { masked } of sources.values()) collectEnums(masked, ints, macros);
   const fnsOf = new Map();          /* path -> functions() */
   const byName = new Map();         /* function name -> its parameter list (for the argument edge) */
   for (const [path, { masked }] of sources) {
@@ -1232,7 +1327,7 @@ export function loadEnvironment(root) {
 
   return { macros, typedefs, sources, resolver, forms, fnsOf,
            tags, tagKey: (path, f, v, at) => tagKey(path, f, v, at), tagIssues, tagChecks, interfaceTables,
-           recordContradictions, declaresIface };
+           recordContradictions, declaresIface, ints };
 }
 
 /* EVERY INSTALLED MEMBER, ATTRIBUTED TO THE INTERFACE ITS TARGET IS — one record per (member, site), carrying
@@ -1242,8 +1337,53 @@ export function loadEnvironment(root) {
    `paths` are absolute; pass the whole program, since which interface a member belongs to is a fact about the
    object it is installed on and not about which row named the file. */
 export function installedMembers(paths, env) {
-  const records = [], unresolved = [], offInstaller = [], excluded = [];
+  const records = [], unresolved = [], offInstaller = [], excluded = [], unselected = [];
   const { forms } = env;
+
+  /* WHICH INTERFACE THIS TARGET IS — hoisted out of the per-file loop because a SELECTED installer's target is
+     resolved in the CALLER's file and function, not in the one the install is written in. */
+  const interfacesOf = (path, f, targetExpr, off) => {
+    const v = stripDup(targetExpr || "");
+    if (!/^[A-Za-z_]\w*$/.test(v))
+      return { ifaces: [], candidates: [], why: `the install target \`${(targetExpr || "").trim()}\` is not a named object` };
+    const m = env.tags.get(env.tagKey(path, f, v, off - f.start));
+    if (!m || !m.size)
+      return { ifaces: [], candidates: [], why: `no interface tag reaches \`${v}\`` };
+    const certain = [...m].filter(([, c]) => c).map(([n]) => n);
+    const all = [...m.keys()];
+    /* ONE interface is one interface however the site was reached — a conditional call changes WHETHER the
+       member is installed, which is not what this asks; it asks WHICH interface it lands on. */
+    const one = certain.length ? certain : all;
+    if (one.length === 1) return { ifaces: one, candidates: [], why: null };
+    if (!certain.length)
+      return { ifaces: [], candidates: all, why: `\`${v}\` is reached conditionally from ${all.length} tagged prototype(s)` };
+    /* SEVERAL tagged prototypes and a conditional site: the member lands on some of them, not on all. The
+       guard is read (see guardAt) — where it names them, those are the answer; where it does not, this is
+       named UNATTRIBUTED rather than guessed, because crediting all of them is the false COMPLETE. */
+    const guard = guardAt(f.body, plainOf(f), off - f.start);
+    if (guard) {
+      const named = guard.only ? certain.filter((n) => guard.only.includes(n)) : [];
+      if (named.length) return { ifaces: named, candidates: [], why: null };
+      return { ifaces: [], candidates: certain,
+               why: `\`${v}\` is ${certain.length} tagged prototypes and this install is under a condition ` +
+                    `that does not name which` };
+    }
+    return { ifaces: certain, candidates: [], why: null };
+  };
+
+  /* EVERY CALL OF A FUNCTION, corpus-wide, with the function and file it stands in — what a SELECTED
+     installer's subset is resolved against. */
+  const callersOf = (name) => {
+    const out = [];
+    for (const p of paths) {
+      if (!env.sources.get(p)) continue;
+      for (const cf of env.fnsOf.get(p) || []) {
+        if (cf.name === name) continue;
+        for (const site of callSites(cf.body, name)) out.push({ path: p, fn: cf, site });
+      }
+    }
+    return out;
+  };
 
   for (const path of paths) {
     const src = env.sources.get(path);
@@ -1280,44 +1420,14 @@ export function installedMembers(paths, env) {
     const report = (off, form, expr) =>
       unresolved.push({ file: path, line: lineOf(orig, off), form, expr: expr.trim().replace(/\s+/g, " ") });
 
-    /* WHICH INTERFACE THIS TARGET IS. `off` is a FILE offset; the tag graph is keyed by the assignment that
-       produced the value, so the answer is the one that holds at this line and not at the end of the function. */
-    const interfacesOf = (f, targetExpr, off) => {
-      const v = stripDup(targetExpr || "");
-      if (!/^[A-Za-z_]\w*$/.test(v))
-        return { ifaces: [], candidates: [], why: `the install target \`${(targetExpr || "").trim()}\` is not a named object` };
-      const m = env.tags.get(env.tagKey(path, f, v, off - f.start));
-      if (!m || !m.size)
-        return { ifaces: [], candidates: [], why: `no interface tag reaches \`${v}\`` };
-      const certain = [...m].filter(([, c]) => c).map(([n]) => n);
-      const all = [...m.keys()];
-      /* ONE interface is one interface however the site was reached — a conditional call changes WHETHER the
-         member is installed, which is not what this asks; it asks WHICH interface it lands on. */
-      const one = certain.length ? certain : all;
-      if (one.length === 1) return { ifaces: one, candidates: [], why: null };
-      if (!certain.length)
-        return { ifaces: [], candidates: all, why: `\`${v}\` is reached conditionally from ${all.length} tagged prototype(s)` };
-      /* SEVERAL tagged prototypes and a conditional site: the member lands on some of them, not on all. The
-         guard is read (see guardAt) — where it names them, those are the answer; where it does not, this is
-         named UNATTRIBUTED rather than guessed, because crediting all of them is the false COMPLETE. */
-      const guard = guardAt(f.body, plainOf(f), off - f.start);
-      if (guard) {
-        const named = guard.only ? certain.filter((n) => guard.only.includes(n)) : [];
-        if (named.length) return { ifaces: named, candidates: [], why: null };
-        return { ifaces: [], candidates: certain,
-                 why: `\`${v}\` is ${certain.length} tagged prototypes and this install is under a condition ` +
-                      `that does not name which` };
-      }
-      return { ifaces: certain, candidates: [], why: null };
-    };
-    const emitWith = (names, stub, a, off, form) => {
-      const line = lineOf(orig, off);
+    const emitWith = (names, stub, a, off, form, where) => {
+      const at = where || { file: path, line: lineOf(orig, off) };
       for (const name of names)
-        records.push({ name, stubbed: !!stub, file: path, line, form,
+        records.push({ name, stubbed: !!stub, file: at.file, line: at.line, form,
                        ifaces: a.ifaces, candidates: a.candidates, why: a.why });
     };
     const emit = (names, stub, f, targetExpr, off, form) =>
-      emitWith(names, stub, interfacesOf(f, targetExpr, off), off, form);
+      emitWith(names, stub, interfacesOf(path, f, targetExpr, off), off, form);
 
     /* The member names one DECLARATION of a two-halved registry carries — a table of rows whose `field` column
        is the member's IDL name, reached either directly or (the byte readers) through the interface record that
@@ -1361,7 +1471,7 @@ export function installedMembers(paths, env) {
         if (forms.has(f.name) && fromParam(f, site.args[pos] || "")) continue;
         if (TABLE_FORMS.some((t) => t.install === f.name)) continue;
         const target = stripCast(site.args[form.target] || "");
-        const a = interfacesOf(f, target, site.at);
+        const a = interfacesOf(path, f, target, site.at);
         if (form.ambiguous && !a.ifaces.length && !a.candidates.length) {
           /* AN OBJECT NO INTERFACE DECLARATION REACHES — see the header. §3.7.3's tag, §3.7.1's interface
              object, the per-realm class-prototype slot and [Global] are how the corpus says a page can reach an
@@ -1399,6 +1509,61 @@ export function installedMembers(paths, env) {
           }
         }
         if (!names) { report(site.at, callee, site.args[pos]); continue; }
+        /* A SHARED INSTALLER THAT SELECTS A SUBSET OF ITS NAMES BY A CALLER'S ARGUMENT installs a DIFFERENT set
+           per call, and reading it as one set is the audit's only remaining false COMPLETE — the error it
+           cannot catch from the other side, because the member it hides never prints as anything.
+           `event_target_install_handlers(ctx, target, EH_XHR)` is the case: it walks HTML §8.1.7.2's ninety
+           event handler IDL attributes and installs the rows whose MIXIN bit the caller asked for, and this
+           credited all ninety to every prototype any caller ever handed it. XMLHttpRequestEventTarget declares
+           seven of those names, Window declares eighty-odd, MessagePort two — so the mask is the whole
+           difference between installed and credited wherever two callers' interfaces share a name.
+           It is resolved PER CALL SITE, where both facts are: the caller supplies the selector AND the target,
+           so the subset and the interface it lands on come from the same line. The name column and the
+           selector column are two columns of ONE list (`EH_NAME[i]` and `EH_MASK[i]` are both `EVENT_HANDLERS`
+           expanded), which is why they can be read positionally — and that is CHECKED rather than assumed: a
+           length disagreement refuses the whole installer.
+           A SELECTOR THIS CANNOT EVALUATE IS A REFUSAL, never a fallback to the union. It is named with its
+           file and line in its own failing category, because a subset the audit cannot compute is a member
+           list it does not know — and the one thing it must never do here is answer anyway. */
+        const tgtIdx = f.params.indexOf(target);
+        if (names.length > 1 && tgtIdx >= 0 && /\bcontinue\s*;/.test(f.body)) {
+          const sel = selectorOf(f, R);
+          const line = lineOf(orig, site.at);
+          if (sel.why) { unselected.push({ file: path, line, fn: f.name, why: sel.why }); continue; }
+          if (sel.cells.length !== names.length) {
+            unselected.push({ file: path, line, fn: f.name,
+                              why: `the selector column \`${sel.table}\` has ${sel.cells.length} rows and the ` +
+                                   `name column has ${names.length} — they are not two columns of one list` });
+            continue;
+          }
+          for (const c of callersOf(f.name)) {
+            const off = c.fn.start + c.site.at;
+            const cline = lineOf(env.sources.get(c.path).orig, off);
+            const arg = c.site.args[sel.at];
+            const mv = arg === undefined ? null : evalInt(arg, env.ints, env.macros);
+            if (mv === null) {
+              unselected.push({ file: c.path, line: cline, fn: f.name,
+                                why: `the selector argument \`${String(arg).trim()}\` is not a constant this ` +
+                                     `can evaluate, so which of ${names.length} names this call installs is unknown` });
+              continue;
+            }
+            const chosen = [], bad = [];
+            names.forEach((n, k) => {
+              const bits = evalInt(sel.cells[k], env.ints, env.macros);
+              if (bits === null) bad.push(n);
+              else if (bits & mv) chosen.push(n);
+            });
+            if (bad.length) {
+              unselected.push({ file: path, line, fn: f.name,
+                                why: `${bad.length} row(s) of \`${sel.table}\` hold a selector this cannot ` +
+                                     `evaluate — ${bad.slice(0, 4).join(", ")}` });
+              continue;
+            }
+            emitWith(chosen, noop, interfacesOf(c.path, c.fn, stripCast(c.site.args[tgtIdx] || ""), off),
+                     off, callee, { file: c.path, line: cline });
+          }
+          continue;
+        }
         emitWith(names, noop, a, site.at, callee);
       }
     }
@@ -1467,7 +1632,7 @@ export function installedMembers(paths, env) {
         const lhs = (stmt.match(/([A-Za-z_]\w*)\s*=\s*$/) || [])[1];
         let chosen = lhs ? installs.filter((s) => stripCast(s.args[form.handle] || "") === lhs) : [];
         if (!chosen.length && declares.length === 1) chosen = installs;
-        const parts = chosen.map((s) => interfacesOf(fnAt(s.at), stripCast(s.args[form.target] || ""), s.at));
+        const parts = chosen.map((s) => interfacesOf(path, fnAt(s.at), stripCast(s.args[form.target] || ""), s.at));
         const a = parts.length
           ? { ifaces: [...new Set(parts.flatMap((p) => p.ifaces))],
               candidates: [...new Set(parts.flatMap((p) => p.candidates))],
@@ -1503,5 +1668,5 @@ export function installedMembers(paths, env) {
       }
     }
   }
-  return { records, unresolved, offInstaller, excluded };
+  return { records, unresolved, offInstaller, excluded, unselected };
 }

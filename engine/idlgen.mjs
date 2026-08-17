@@ -843,6 +843,12 @@ if (unattributed.length) {
    can contradict it. */
 const tagged = new Set([...installedBy.keys(), ...stubbedBy.keys()]);
 const unknownTags = [...tagged].filter((n) => !byName.has(n)).sort();
+/* A SHARED INSTALLER WHOSE PER-CALL SUBSET COULD NOT BE COMPUTED. Neither credited (the false COMPLETE that
+   does not print) nor dropped (a gap that is not there) — named with the call site, because the fix is either
+   to make the selector a constant this can evaluate or to teach the detector the row filter's shape. */
+defect("install sites whose selected subset could not be computed", world.unselected.length);
+for (const u of world.unselected)
+  console.log(`[idl-audit] ${u.file.replace(BROWSER + "/", "")}:${u.line}  ${u.fn}() — ${u.why}`);
 defect("interface tags naming something the IDL corpus does not declare", unknownTags.length);
 defect("install targets whose interface tag is not statically decidable", env.tagIssues.length);
 defect("interface objects whose prototype identity the corpus contradicts or cannot reach", env.tagChecks.length);
