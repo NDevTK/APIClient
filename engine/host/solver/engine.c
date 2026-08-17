@@ -1073,19 +1073,27 @@ static JSValue perform_q_take(JSContext *ctx, Flow *f) {
 
 /* THE ARM'S OWN QUEUE — a new Array naming the parent's ENTRIES, for pending_fork's reason exactly: each arm
    takes an entry when IT starts that operation, so two flows sharing one Array would each see the other's
-   consumption; the entries themselves never change after they are pushed, so they are shared. */
-static JSValue perform_q_fork(JSContext *ctx, JSValueConst q) {
+   consumption; the entries themselves never change after they are pushed, so they are shared.
+   IT ASKS flow_perform_pending FOR THE LENGTH RATHER THAN READING IT, which is what makes flow.h's claim that
+   the queue's shape has ONE reader true. It read the `length` slot itself and took JS_VALUE_GET_INT off it
+   WITHOUT the tag check its twin makes one line before the same read — so the one place a non-int length could
+   arrive was the one place nothing would have said so, and the arm would have inherited a count read out of a
+   float's payload. Two readers of a shape is two readers, and the second is always the one missing the assert.
+   AN EMPTY QUEUE FORKS AS JS_UNDEFINED, not as an empty Array: a parent whose entries have all been started
+   has nothing to give, and the flow that has never been asked an operation is the common case the tag test
+   exists for. perform_q_push mints the Array again if the arm is ever asked one. */
+static JSValue perform_q_fork(JSContext *ctx, const Flow *parent) {
+    int n = flow_perform_pending(parent), i;
     JSValue out;
-    int n, i;
-    if (!JS_IsObject(q)) return JS_UNDEFINED;
-    n = 0;
-    { JSValue v = JS_GetPropertyStr(ctx, q, "length"); n = JS_VALUE_GET_INT(v); JS_FreeValue(ctx, v); }
+
+    if (n == 0) return JS_UNDEFINED;
     out = JS_NewArray(ctx);
     CHECK(!JS_IsException(out), "engine: OOM forking a flow's operation queue — an arm that lost it runs a "
                                 "peer's operation and tells nobody");
     cow_engine_write_begin();
     for (i = 0; i < n; i++)
-        JS_SetPropertyUint32(ctx, out, (uint32_t)i, JS_GetPropertyUint32(ctx, q, (uint32_t)i));
+        JS_SetPropertyUint32(ctx, out, (uint32_t)i,
+                             JS_GetPropertyUint32(ctx, parent->perform_q, (uint32_t)i));
     cow_engine_write_end();
     return out;
 }
@@ -2020,7 +2028,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        under its own delta — which is the multiplicity §7.2.1 has when a document's state is its flows. Same
        split as the register above and for the same reason: the ARRAY is per-flow (each arm starts its own copy
        of the operation), the ENTRIES are shared (a [record, token] pair is never edited after it is pushed). */
-    sib->perform_q = perform_q_fork(ctx, parent->perform_q);
+    sib->perform_q = perform_q_fork(ctx, parent);
     /* AN UNANSWERED SYNCHRONOUS REQUEST IS RE-ISSUED, NEVER INHERITED. Its answer is computed under the ASKING
        FLOW'S WORLD, and the sibling's world is not the parent's from this instant on — two arms of a fork that
        navigated a frame differently must not resolve to one Window. Sharing the id would deliver one answer
