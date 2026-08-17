@@ -1,5 +1,6 @@
 /* Document script inventory + bundle identity — see document_scripts.h. */
 #include "core/loader/document_scripts.h"
+#include "check.h"
 #include <string.h>
 #include <stdlib.h>
 #include <lexbor/css/css.h>
@@ -64,16 +65,58 @@ ScriptType script_block_type(lxb_dom_element_t *el) {
     return SCRIPT_TYPE_NONE;   /* HTML's null: no script is executed */
 }
 
+/* IS THE ATTRIBUTE PRESENT — asked of the attribute LIST and never through `get_attribute`, which answers NULL
+   for an attribute whose value is absent. `<script defer>` is exactly that: lexbor's tree construction only
+   calls `attr_set_value_wo_copy` when the token had a `value_begin`, so a boolean attribute in its usual
+   valueless spelling has `attr->value == NULL` and `get_attribute` cannot distinguish it from an absent one —
+   which is the whole of what `async` and `defer` are. */
+static bool scr_has_attr(lxb_dom_element_t *el, const char *name, size_t len) {
+    return lxb_dom_element_has_attribute(el, (const lxb_char_t *)name, len);
+}
+
+/* §4.12.1's LAST STEPS — see ScriptSchedule. The branches are the standard's, in the standard's order; the one
+   thing worth naming is WHICH question the first `if` is: the tail splits on whether the element's result is
+   still "uninitialized", which is the same set as "an external classic script, or any module script" — the two
+   the algorithm hands to a fetch. Everything else has already been marked as ready, so it reaches
+   "immediately execute the script element". */
+ScriptSchedule script_block_schedule(lxb_dom_element_t *el, ScriptType ty, bool parser_inserted,
+                                     bool force_async) {
+    bool external = scr_has_attr(el, "src", 3);   /* the ATTRIBUTE, not a non-empty value */
+
+    DCHECK(script_type_executes(ty),
+           "a script element's schedule was asked for a type that executes nothing — an import map and a set of "
+           "speculation rules are registered rather than run, and §4.12.1's null type runs nothing at all, so "
+           "none of them joins any of the Document's script queues");
+    DCHECK(!(parser_inserted && force_async),
+           "a parser-inserted script element was said to have `force async` true — §4.12.1 has the HTML and XML "
+           "parsers set it FALSE on every element they insert, so the two cannot both hold and the caller has "
+           "read one of them off something that is not the element");
+    if (!external && ty != SCRIPT_TYPE_MODULE) return SCRIPT_SCHED_IMMEDIATE;
+    if (scr_has_attr(el, "async", 5) || force_async) return SCRIPT_SCHED_ASAP;
+    if (!parser_inserted)                           return SCRIPT_SCHED_IN_ORDER_ASAP;
+    /* "if el has a defer attribute or el's type is module" — defer has no effect on a module script because a
+       module is in this list either way. */
+    if (scr_has_attr(el, "defer", 5) || ty == SCRIPT_TYPE_MODULE) return SCRIPT_SCHED_WHEN_PARSED;
+    return SCRIPT_SCHED_PARSER_BLOCKING;
+}
+
 unsigned document_bundle_id(lxb_html_document_t *dom) {
     struct scr_ctx c; dom_collect_scripts(dom, &c);
     uint32_t bh = 2166136261u;
     for (int i = 0; i < c.n; i++) {
         lxb_dom_element_t *el = c.els[i];
         size_t sl = 0;
-        const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
-        if (src && sl) {
-            for (size_t k = 0; k < sl; k++) { bh ^= src[k]; bh *= 16777619u; }   /* external src URL -> bundle id */
-            bh ^= '|'; bh *= 16777619u;
+        /* THE SAME PRESENCE TEST document_exec_scripts MAKES, because identity is over the scripts that RUN: an
+           element with a `src` attribute never runs its child text, so hashing that text would give a document
+           the identity of a program it does not have. */
+        bool has_src = scr_has_attr(el, "src", 3);
+        const lxb_char_t *src = has_src ? lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl)
+                                        : NULL;
+        if (has_src) {
+            if (src && sl) {
+                for (size_t k = 0; k < sl; k++) { bh ^= src[k]; bh *= 16777619u; }   /* the src URL IS the id */
+                bh ^= '|'; bh *= 16777619u;
+            }
             continue;
         }
         if (!script_type_executes(script_block_type(el))) continue;   /* data block: not part of JS identity */
@@ -87,14 +130,15 @@ unsigned document_bundle_id(lxb_html_document_t *dom) {
 
 DocScripts document_exec_scripts(lxb_html_document_t *dom) {
     struct scr_ctx c; dom_collect_scripts(dom, &c);
-    DocScripts ds = { NULL, NULL, NULL, 0 };
+    DocScripts ds = { NULL, NULL, NULL, NULL, 0 };
     if (c.n) {
         ds.bodies = calloc((size_t)c.n, sizeof(char *));
         ds.srcs   = calloc((size_t)c.n, sizeof(char *));
         ds.types  = calloc((size_t)c.n, sizeof(ScriptType));
-        if (!ds.bodies || !ds.srcs || !ds.types) {
-            free(ds.bodies); free(ds.srcs); free(ds.types); free(c.els);
-            ds.bodies = ds.srcs = NULL; ds.types = NULL;
+        ds.sched  = calloc((size_t)c.n, sizeof(ScriptSchedule));
+        if (!ds.bodies || !ds.srcs || !ds.types || !ds.sched) {
+            free(ds.bodies); free(ds.srcs); free(ds.types); free(ds.sched); free(c.els);
+            ds.bodies = ds.srcs = NULL; ds.types = NULL; ds.sched = NULL;
             return ds;
         }
     }
@@ -104,18 +148,35 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
     for (int i = 0; i < c.n; i++) {
         lxb_dom_element_t *el = c.els[i];
         size_t sl = 0;
-        const lxb_char_t *src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl);
+        bool has_src = scr_has_attr(el, "src", 3);
+        const lxb_char_t *src = has_src ? lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &sl)
+                                        : NULL;
         ScriptType ty = script_block_type(el);
+        ScriptSchedule sc;
         if (!script_type_executes(ty)) continue;   /* a data block is parsed, never run */
-        if (src && sl) {
-            char *u = malloc(sl + 1);
-            if (u) { memcpy(u, src, sl); u[sl] = 0; ds.srcs[ds.n] = u; ds.bodies[ds.n] = NULL; ds.types[ds.n] = ty; ds.n++; }
+        /* A PARSE PRODUCT IS PARSER-INSERTED, WITH `force async` FALSE — §4.12.1 states both of the parser, so
+           they are facts about this scan and not defaults it picks. An element a SCRIPT inserted goes through
+           html_script.c's half of §4.12.1 instead, where neither is true. */
+        sc = script_block_schedule(el, ty, /*parser_inserted*/true, /*force_async*/false);
+        if (has_src) {
+            /* §4.12.1's src BRANCH is entered on the ATTRIBUTE, and its second step is `src` being the empty
+               string: "queue an element task … to fire an event named error at el, and return". So the element
+               runs NOTHING — not its child text, which is what a value-length test let through
+               (`<script src="">alert(1)</script>` ran the alert). What is still owed is the error event, which
+               needs a task on this document rather than anything here. */
+            if (src && sl) {
+                char *u = malloc(sl + 1);
+                if (u) { memcpy(u, src, sl); u[sl] = 0;
+                         ds.srcs[ds.n] = u; ds.bodies[ds.n] = NULL; ds.types[ds.n] = ty; ds.sched[ds.n] = sc;
+                         ds.n++; }
+            }
             continue;
         }
         size_t tl = 0; lxb_char_t *txt = lxb_dom_node_text_content(lxb_dom_interface_node(el), &tl);
         if (txt && tl) {
             char *b = malloc(tl + 1);
-            if (b) { memcpy(b, txt, tl); b[tl] = 0; ds.types[ds.n] = ty; ds.bodies[ds.n++] = b; }
+            if (b) { memcpy(b, txt, tl); b[tl] = 0; ds.types[ds.n] = ty; ds.sched[ds.n] = sc;
+                     ds.bodies[ds.n++] = b; }
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }
@@ -126,6 +187,6 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
 void doc_scripts_free(DocScripts *ds) {
     if (!ds || !ds->bodies) return;
     for (int i = 0; i < ds->n; i++) { free(ds->bodies[i]); if (ds->srcs) free(ds->srcs[i]); }
-    free(ds->bodies); free(ds->srcs); free(ds->types);
-    ds->bodies = ds->srcs = NULL; ds->types = NULL; ds->n = 0;
+    free(ds->bodies); free(ds->srcs); free(ds->types); free(ds->sched);
+    ds->bodies = ds->srcs = NULL; ds->types = NULL; ds->sched = NULL; ds->n = 0;
 }

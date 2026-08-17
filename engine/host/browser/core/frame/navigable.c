@@ -213,13 +213,16 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
  * its own scripts) reported the child's. A host builds a platform surface; WHICH programs a Document runs is
  * the Document's, and the two hosts that never wrote the line are the reason it may not live there.
  *
- * THE ORDER IS THE DOCUMENT'S ORDER, and this seeds only the half of it that is already expressible. An INLINE
- * classic script is a program of the flow that created this navigable, queued in place. An EXTERNAL one is a
- * fetch the flow is OWED — its reply becomes a program of the same flow when the register drains — so it lands
- * AFTER everything queued in this pass, and an inline script that FOLLOWS an external one would then run before
- * the code it is written after. That is asserted rather than reordered, because the fix is a real mechanism and
- * not a sort: the SESSION's document already has one (engine_pending_docscript fills a slot at the script's own
- * INDEX and every flow waits at that index), and a child navigable's document needs the same sequence.
+ * THE ORDER IS THE DOCUMENT'S ORDER, AND §4.12.1 SAYS WHICH PAIRS OF SCRIPTS HAVE ONE. A program queued here
+ * runs in place; an EXTERNAL script's program joins the same flow only when its reply DRAINS, which is after
+ * everything queued in this pass and in ARRIVAL order among the replies. So this seam expresses exactly two
+ * schedules and no more: a script at its PARSE POSITION (an inline classic script), and ONE external script
+ * whose position is ordered. §4.12.1's `set of scripts that will execute as soon as possible` needs nothing —
+ * it is a SET, so arrival order IS a correct order, and an `async` external no longer forces an abort on the
+ * document it was never mis-ordering. The two it cannot express are asserted rather than silently reordered,
+ * and both want the same mechanism: the SESSION's document has a slot per script INDEX that the flow waits at
+ * (engine_pending_docscript fills it, flow_step stops at f->script_i), and every document of this agent needs
+ * that same sequence, seeded from §7.4 step 14's load job — which is a flow and can park.
  *
  * `doc` NAMES THE DOCUMENT AND THEREFORE THE REALM the program is compiled in (solver/engine.h): a child's
  * script compiled in its creator's realm defines the child's globals on the parent and reads the parent's back
@@ -227,7 +230,8 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len)
 static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, uint32_t doc)
 {
     DocScripts ds;
-    bool external_seeded = false;
+    bool blocking_seeded = false;   /* a `pending parsing-blocking script` is already parked on */
+    int ordered_externals = 0;      /* external entries whose position §4.12.1 fixes against another script's */
     int i;
 
     DCHECK(cctx != NULL && dom != NULL, "a Document's scripts were seeded with no realm or no tree");
@@ -237,24 +241,35 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
            "code in another document's Window");
     ds = document_exec_scripts(dom);
     for (i = 0; i < ds.n; i++) {
-        /* §8.1.3.3's TWO ALGORITHMS, and only one of them has a route. The same gap html_script.c names for an
+        /* §8.1.4.4's TWO ALGORITHMS, and only one of them has a route. The same gap html_script.c names for an
            INJECTED `<script type=module>`: the flow's dynamic sequence carries no ScriptType, so a module body
-           on it would be compiled by §8.1.3.3's CLASSIC entry and the child's own `import` would come back a
+           on it would be compiled by the CLASSIC entry and the child's own `import` would come back a
            SyntaxError from a parser that is perfectly correct. */
         DCHECK(ds.types[i] != SCRIPT_TYPE_MODULE,
                "a child navigable's Document carries a `<script type=module>` and this seam can only queue a "
                "CLASSIC program — give the flow's dynamic script sequence a ScriptType per entry "
                "(engine_queue_script and solver/flow.h's dyn arrays), the way the document's own sequence "
-               "carries one, so flow_step routes it to §8.1.3.3's module entry");
+               "carries one, so flow_step routes it to §8.1.4.4's run-a-module-script");
         if (ds.bodies[i]) {
-            DCHECK(!external_seeded,
-                   "a child navigable's Document has an INLINE script after an EXTERNAL one, and this seam "
-                   "cannot keep §4.12.1's document order across the two: an external script's program joins "
-                   "this flow when its fetch REPLIES, which is after everything queued in this pass, so the "
-                   "inline script would run before the bundle it is written after. Build the child document's "
-                   "script sequence the way the session's document already has one — a slot per script INDEX "
-                   "that the flow waits at (engine_pending_docscript), driven from §7.4 step 14's load job, "
-                   "which is a flow and can park");
+            /* An inline entry is §4.12.1's `immediately execute the script element`: its result is already
+               available, so it joins no queue and runs where it stands. The only other schedule an inline entry
+               of an executing type reaches is an inline MODULE's, rejected above. */
+            DCHECK(ds.sched[i] == SCRIPT_SCHED_IMMEDIATE,
+                   "an inline entry of a document's script inventory is scheduled somewhere other than its own "
+                   "parse position — §4.12.1 reaches `immediately execute the script element` for exactly the "
+                   "elements whose result is already available");
+            /* §13.2.6.4.8 BLOCKS THE TOKENIZER, so nothing later in the document is even PREPARED until the
+               pending parsing-blocking script has been fetched and evaluated. */
+            DCHECK(!blocking_seeded,
+                   "a child navigable's Document has an inline script after a parser-blocking `<script src>`, "
+                   "and this seam cannot keep that order: the blocking script's program joins this flow when its "
+                   "fetch REPLIES, which is after everything queued in this pass, so the inline script would run "
+                   "before the bundle it is written after. §13.2.6.4.8 blocks the tokenizer and SPINS THE EVENT "
+                   "LOOP until that script is ready — a suspend this engine has, but not one a seeding pass can "
+                   "take. Build the DOCUMENT's script sequence the way the session's already has one — a slot "
+                   "per script INDEX that the flow waits at (engine_pending_docscript fills it, flow_step stops "
+                   "at f->script_i) — for every document of this agent, and seed this Document's into it from "
+                   "§7.4 step 14's load job, which is a flow and can park");
             engine_queue_script(doc, ds.bodies[i]);
             continue;
         }
@@ -281,8 +296,25 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
                It is the standard's answer and not a skip: what is still owed is the error event it fires at
                the element, which needs a task on the child document rather than anything here. */
             if (!abs_url) continue;
+            /* THE REPLIES JOIN THE FLOW IN ARRIVAL ORDER, so a second ORDERED external is a silent reorder and
+               not merely an unbuilt case — the register is drained by a swap-remove walk and a reply that lands
+               first is queued first, whatever its position in the document. The `set of scripts that will
+               execute as soon as possible` is exempt because a SET has no order to keep. */
+            if (script_sched_is_ordered(ds.sched[i])) {
+                DCHECK(ordered_externals == 0,
+                       "a child navigable's Document has two external scripts whose relative order §4.12.1 fixes "
+                       "— a `pending parsing-blocking script` (§13.2.6.4.8) or a member of the `list of scripts "
+                       "that will execute when the document has finished parsing` (§13.2.7 runs that list IN "
+                       "ORDER, before DOMContentLoaded) — and this seam gives neither a POSITION: each parks on "
+                       "its own reply and becomes a program when the register drains, so the two run in ARRIVAL "
+                       "order. Same mechanism as the inline case above names: a slot per script INDEX that the "
+                       "flow waits at, for every document of this agent");
+                ordered_externals++;
+                /* A SECOND parser-blocking script is a parse-position script after a parser-blocking one too,
+                   and the assert above has already caught it — this only records the block for the inline case. */
+                if (ds.sched[i] == SCRIPT_SCHED_PARSER_BLOCKING) blocking_seeded = true;
+            }
             engine_pending_script_url(cctx, abs_url);
-            external_seeded = true;
             free(abs_url);
         }
     }

@@ -39,4 +39,44 @@ static inline int script_type_executes(ScriptType t)
     return t == SCRIPT_TYPE_CLASSIC || t == SCRIPT_TYPE_MODULE;
 }
 
+/* WHEN THE ELEMENT RUNS — the LAST steps of §4.12.1's "prepare the script element", which sort the element into
+ * one of the Document's four script queues (or run it on the spot). It is a second fact about the element that
+ * only the element knows, and it is beside `type` because the two answer together: the tail branches on `async`,
+ * `defer`, `force async`, `parser-inserted` AND on the type.
+ *
+ * IT IS MISSING FROM THE INVENTORY AND THAT IS WHY EVERY EXTERNAL SCRIPT LOOKED THE SAME. A consumer holding
+ * only "external" has to treat every one of them as ordered, so it asserted on a document whose order it was in
+ * fact keeping (`<script src=x async></script><script>…</script>` runs the inline FIRST — the parser is never
+ * blocked) and asserted nothing about the one it silently reorders (two ORDERED externals, whose replies join
+ * the flow in ARRIVAL order). A parser-inserted external script takes three different schedules, so a mechanism
+ * that fixes the ordering cannot be built before the classification exists: forcing an `async` script into a
+ * document-ordered sequence is a different wrong answer. */
+typedef enum {
+    /* No fetch is owed, so §4.12.1's tail ends at "immediately execute the script element": an inline classic
+       script, at its own parse position. That same tail routes one to the pending parsing-blocking script
+       instead when the parser document "has a style sheet that is blocking scripts" — this engine loads no
+       style sheets, so nothing of it can be blocking scripts and that arm is unreachable rather than skipped. */
+    SCRIPT_SCHED_IMMEDIATE = 0,
+    /* The parser document's `pending parsing-blocking script`: §13.2.6.4.8 blocks the tokenizer and spins the
+       event loop until it is ready, so EVERYTHING later in the document waits for its fetch AND evaluation. */
+    SCRIPT_SCHED_PARSER_BLOCKING,
+    /* The `list of scripts that will execute when the document has finished parsing` (a `defer` external
+       classic script, and every non-async module script). §13.2.7 runs the list IN ORDER, after the parse and
+       before DOMContentLoaded. */
+    SCRIPT_SCHED_WHEN_PARSED,
+    /* The `list of scripts that will execute in order as soon as possible` — not parser-inserted and not force
+       async, i.e. an element script created and then given `async = false`. Ordered against each other only. */
+    SCRIPT_SCHED_IN_ORDER_ASAP,
+    /* The `set of scripts that will execute as soon as possible` — a SET, and §13.2.7 waits for it only before
+       the load event. There is NO order to keep: any arrival order is a correct one. */
+    SCRIPT_SCHED_ASAP
+} ScriptSchedule;
+
+/* Is the element's position ORDERED against another script's? Everything except the ASAP set, which is a set —
+   §13.2.7 waits for that set only before the load event and never fixes an order within it. */
+static inline int script_sched_is_ordered(ScriptSchedule s)
+{
+    return s != SCRIPT_SCHED_ASAP;
+}
+
 #endif
