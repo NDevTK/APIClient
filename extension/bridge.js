@@ -546,7 +546,12 @@ function engineReserve(cluster, docId, msg, cold) {
      than a placeholder promise: a stand-in built here would be a second promise that resolves at a different
      moment than the provisioning does, and the wait arm would then be released by whichever of the two the
      next reader happened to reach for. The arm asserts it is there. */
-  const eng = { state: "booting", cluster, docId, msg, groupId: msg && msg.groupId,
+  /* `joinedDocIds` IS THE HOST'S HALF OF main.c's `g_joined_ctx`/`g_joined_dom`, AND IT IS DECLARED EMPTY HERE
+     RATHER THAN CREATED ON THE FIRST JOIN. An instance is an agent CLUSTER and holds one document per realm;
+     `docId` names only the one it was ROOTED at, so every document joined to it afterwards must answer for it
+     in `hostHolderOf` — that is the routing table a `windowproxy.post` to a joined child resolves through, and
+     a list that exists only once something has been joined is a list every reader has to ask about first. */
+  const eng = { state: "booting", cluster, docId, joinedDocIds: [], msg, groupId: msg && msg.groupId,
                 origin: (msg && msg.origin) || "", _cold: cold, _resolvers: [], _remoteAsked: new Set(),
                 r: null, _readyP: null };
   _pool.push(eng);
@@ -577,8 +582,23 @@ function engineBootFailed(eng, e) {
      callers would have counted N crashes for one aborted boot and the probe's `crashes` would read the number
      of documents that happened to share a cluster. */
   const m = String((e && e.message) || e);
-  crashBanner("create", m);
-  for (const w of eng._resolvers) w.resolve(crashRecord("create", m, w.msg));
+  /* AND IT POINTS AT ITS CAUSE, exactly as engineCrash's does. A boot that aborts inside the engine rejects on
+     an ABI call, and renderer-host.js attaches the frame's last lines to that rejection (`e.rendererLines`) —
+     which is where the C-side CHECK/DCHECK printed its @WHY ROOT line immediately before abort(). This read
+     `e.message` alone, so the banner and every caller's crash record carried emscripten's "native code called
+     abort()" and the engine's own statement of what was wrong was thrown away at the one line that had it.
+     TWO PRODUCERS, ENUMERATED RATHER THAN DEFAULTED PAST: a rejected ABI call carries the lines, and a failure
+     that never reached one (rendererLaunch itself, or an assert in this zone) has none to carry and its own
+     message IS the whole cause. Anything else on that field is renderer-host writing a shape this cannot read. */
+  const _rl = e ? e.rendererLines : undefined;
+  DCHECK(_rl === undefined || Array.isArray(_rl),
+         "a boot failure carried a `rendererLines` that is not a list of the frame's output — it is the only " +
+         "place the engine's own @WHY survives a rejected ABI call, and a shape this cannot scan is that root " +
+         "line being discarded at the one site that holds it");
+  const root = _rl === undefined ? "" : rootWhyLine(_rl);
+  const err = root ? (m + " | ROOT: " + root) : m;
+  crashBanner("create", err);
+  for (const w of eng._resolvers) w.resolve(crashRecord("create", err, w.msg));
   eng._resolvers.length = 0;
   _reserveStats.failed++;
 }
@@ -929,6 +949,70 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
   await engineRecordFacts(eng);
   eng.state = "hot";
 }
+/* A SECOND DOCUMENT OF AN AGENT CLUSTER JOINS THE INSTANCE THAT IS ALREADY RUNNING THAT CLUSTER. It is the same
+   five arguments `qjs_init` takes, stated by this zone for the same reasons, and it is a DIFFERENT operation
+   from rooting: the runtime, the class registrations, the world registry and the frontier already exist, so
+   what this adds is a Lexbor tree in the agent's own arenas, a realm through main.c's engine_child_realm, and
+   that document's scripts seeded on the ONE frontier. Provisioning a second instance instead is the split
+   SECURITY.md's `(browsing-context group, origin)` key exists to forbid — two heaps for one similar-origin
+   window agent, in which `iframe.contentDocument.body.appendChild(x)` is unrepresentable.
+   THE INSTANCE MUST ALREADY BE ROOTED AND SEEDED, which is what `qjs_join`'s own two asserts say (`g_dom`,
+   `g_begun`): a document joined between those two calls would be parsed, given a realm, and never execute a
+   line — indistinguishable from a document that had no scripts. So a caller holding a RESERVATION waits for it
+   the way the delivery branch does, and this asserts what it waited for.
+   IT IS NOT A PLACE THE SAME DOCUMENT MAY ARRIVE TWICE. The engine interns documents by NAME, and a name it
+   already holds fires main.c's own `world_doc_hosted` assert — but only if the two arrivals SPELL the document
+   the same way, which is exactly what the caller's `hostHolderOf` question decides here. Two spellings of one
+   document would pass both checks and build a second tree, a second realm and a second run of that document's
+   scripts inside one agent, so the name is asserted to be unheld across the WHOLE pool before it crosses. */
+async function engineJoin(eng, msg, docName, topLevelUrl) {
+  DCHECK(eng.state === "hot" || eng.state === "fetching",
+         "a document was joined to an instance in state `" + eng.state + "` — a join ADDS a document to a LIVE " +
+         "agent, and qjs_join's own asserts name the two calls that must already have happened (qjs_init roots " +
+         "the agent, qjs_begin seeds the frontier its scripts become members of)");
+  DCHECK(typeof docName === "string" && docName !== "",
+         "a document was joined with no NAME — a peer routes a delivery and a cross-agent operation on that " +
+         "name, so an unnamed one is a document no message can ever reach");
+  DCHECK(hostHolderOf(docName) === null,
+         "a document was joined under a name some instance in this pool already holds — the engine interns " +
+         "documents by name, so this would either be one document arriving twice (a second tree, a second " +
+         "realm and a second run of its scripts in one agent) or two documents wearing one name, and both are " +
+         "a routing table that answers a peer's delivery with whichever it wrote last");
+  DCHECK(msg.sourceUrl !== "" && originOf(msg.sourceUrl) === eng.origin,
+         "a document whose principal is not this instance's was joined to it — an instance is an ORIGIN-KEYED " +
+         "agent cluster and SECURITY.md makes the instance the principal, so this would put two origins behind " +
+         "one credentialed-read principal; the engine's own CHECK aborts on it, and this zone computed the " +
+         "cluster key that sent it here");
+  const html = msg.pageHtml;
+  const _docBytes = html instanceof Uint8Array;
+  /* THE SAME NUL THE ROOT'S DOCUMENT IS ASSERTED FOR, and for the same reason: qjs_join strlen()s the bytes,
+     so a document carrying a 0x00 is parsed truncated at it with the rest simply absent. HTML §13.2.5's
+     tokenizer has a rule for that byte, which is the proof a document may legitimately contain one. */
+  DCHECK(!_docBytes || html.indexOf(0) < 0,
+         "a joined document's bytes contain a 0x00 and qjs_join takes a NUL-terminated C string — the parse " +
+         "would stop there and the rest of the document would be absent with nothing to say so. Give qjs_join " +
+         "a LENGTH beside the pointer (qjs_provide now carries one) and run HTML §13.2.3.2's encoding " +
+         "sniffing over those bytes in the engine");
+  const rc = await eng.r.call("qjs_join", "number",
+    [_docBytes ? { t: "cbytes", i: 0 } : { t: "cstr", v: html || "" },
+     { t: "cstr", v: msg.sourceUrl },
+     { t: "cstr", v: docName },
+     { t: "cstr", v: responseFieldLines(msg.responseHeaders) },
+     { t: "cstr", v: topLevelUrl }],
+    _docBytes ? [html] : []);
+  DCHECK(rc === 0, "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
+                   "every precondition and aborts, so a non-zero return is a contract that changed");
+  /* THE NAME ENTERS THE ROUTING TABLE ONLY ONCE THE ENGINE HOLDS IT. Between the call and this line the
+     document is one this zone would answer for and the instance would not, which is the direction that is
+     safe: a delivery in that window is refused by the post branch's assert rather than routed into an agent
+     that has never heard the name. */
+  eng.joinedDocIds.push(docName);
+  /* THE ROUND ENDS HERE, SO IT RECORDS. A join is the second-biggest thing this zone ever copies into an
+     instance's linear memory (a whole document) and it seeds that document's scripts as flows on the frontier
+     — so both Level-1 facts have moved, and the ranking that picks next must see them. This is the same
+     statement engineRoot makes on its last line and the service round makes on its way out. */
+  await engineRecordFacts(eng);
+}
 /* THE LEVEL-1 RANKING'S TWO FACTS, RECORDED WHERE THE INSTANCE ANSWERS THEM RATHER THAN READ WHERE THE RANKING
    NEEDS THEM. Both were SYNCHRONOUS reaches into the module on every ranking pass — a `qjs_top_weight` ccall
    per comparison, and an `M.HEAPU8.length` per engine per admission check — and neither survives the boundary
@@ -1061,8 +1145,17 @@ async function engineOwedList(eng, entry) {
    and the creator is precisely the instance that does NOT hold it — that is why the notice exists at all — so a
    prefix match routes a message straight back to its sender. The engine catches that, twice; it should not have
    to be the thing that catches it. */
+/* AND IT ANSWERS FOR EVERY DOCUMENT THE INSTANCE HOLDS, NOT ONLY THE ONE IT WAS ROOTED AT. `qjs_join` adds a
+   second document of this cluster to the live agent (main.c records it in `g_joined_ctx`/`g_joined_dom`), and
+   the engine interns every document by NAME — `qjs_route`'s own arrival assert is
+   `world_doc_hosted(world_doc_intern(doc))` (solver/engine.c) — so a name this table cannot resolve is a
+   delivery routed to the wrong instance or dropped, which the post branch's assert reports as a create notice
+   that was lost. The two lists are read as one because they ARE one on the other side of the boundary. */
 function hostHolderOf(docName) {
-  for (const e of _pool) if (e.docId === docName) return e;
+  for (const e of _pool) {
+    if (e.docId === docName) return e;
+    if (e.joinedDocIds.indexOf(docName) >= 0) return e;
+  }
   return null;
 }
 
@@ -1152,15 +1245,15 @@ async function hostNotice(eng, line) {
        navigable, the navigable's own address for an auxiliary one) and this zone carries, because the new
        instance cannot see what embeds it. §8.1.3.5 reads it to decide whether the child is a SECURE CONTEXT,
        and Web IDL §3.3.13's members exist in that child or do not by that answer. */
-    /* AND IT MAY ONLY BE PROVISIONED IF ITS CLUSTER HAS NO INSTANCE YET. A SAME-ORIGIN child never reaches this
-       line at all — navigable.c's `child_in_this_agent` builds it as a realm in the creator's own heap and
-       emits no notice — so a cluster hit here is a SECOND CROSS-ORIGIN document of one cluster (two `<iframe
+    /* AND ITS CLUSTER DECIDES WHICH OF TWO OPERATIONS THIS IS. A SAME-ORIGIN child never reaches this line at
+       all — navigable.c's `child_in_this_agent` builds it as a realm in the creator's own heap and emits no
+       notice — so a cluster hit here is a SECOND CROSS-ORIGIN document of one cluster (two `<iframe
        src="https://cdn/…">` of one page), which HTML puts in ONE heap for exactly the reasons the same-origin
-       pair is in one. Building a second instance for it is the defect this file was keyed against; the entry
-       that would put it in the right heap is the join below, and until that exists NOT provisioning is the
-       honest state and the one navigable.h already names: "A HOST THAT WILL NOT HOST THE CHILD … simply never
-       provisions the instance, and every read through the proxy parks. That is a host gap, visible as a parked
-       flow." A dropped delivery to it is caught by the post branch's own assert. */
+       pair is in one. That document is JOINED to the instance already running the cluster; only a cluster with
+       no instance is PROVISIONED one. Both arms exist now, so there is no third state in which a child is
+       announced and nothing happens — the "host gap, visible as a parked flow" navigable.h names is what this
+       zone used to be left with, and a document that is never hosted is one every read through its proxy parks
+       on forever. */
     const _ckey = clusterKeyOf(msg);
     DCHECK(_ckey !== eng.cluster,
            "the engine sent a create notice for a child in its OWN agent cluster — a same-origin child is a " +
@@ -1172,13 +1265,19 @@ async function hostNotice(eng, line) {
        cluster could both be told "no instance" and both build one. engineCreate takes the pool slot before its
        first await now, so a cluster that is merely BEING provisioned answers here exactly as a provisioned one
        does, and the case below is reached only when it is genuinely a second document. */
-    if (hostClusterOf(_ckey)) {
-      DFAIL("a second cross-origin document of ONE agent cluster was announced — its cluster already has an " +
-            "instance (or a reservation for one), and the two documents are one similar-origin window agent " +
-            "that HTML puts in one heap. This needs an ABI entry beside qjs_init that JOINS a document to a " +
-            "LIVE instance (a second Lexbor parse, a realm through main.c's engine_child_realm, and its " +
-            "scripts seeded on the same frontier), which does not exist yet; provisioning a second instance " +
-            "instead is the split this key deleted");
+    const holder = hostClusterOf(_ckey);
+    if (holder) {
+      /* A RESERVATION IS STILL THE HOLDER, AND THE JOIN WAITS FOR IT — the same suspension the delivery branch
+         below takes, for the same reason: the pool slot is taken before the first await precisely so that a
+         cluster being provisioned answers here exactly as a provisioned one does, and the honest thing to do
+         with a document whose agent is being built is to hold it until it is. `qjs_join` needs both `qjs_init`
+         and `qjs_begin` to have run, which is what `_readyP` settling means. */
+      if (holder.state === "booting") await holder._readyP;
+      DCHECK(holder.state === "hot" || holder.state === "fetching",
+             "a document was announced for a cluster whose instance never became one — the reservation holding " +
+             "it failed to boot, so this child has an agent that does not exist rather than one it can join, " +
+             "and every read through its proxy would park forever");
+      await engineJoin(holder, msg, f[1], f[5]);
       return;
     }
     /* A CHILD DOCUMENT IS A DOCUMENT: it joins the ONE pool and is ranked, sliced, parked and finalized by the
@@ -1442,18 +1541,27 @@ function crashBanner(stage, m) {   // LOUD + a persistent batch flag; EVERY abor
   self._engineCrashOccurred++;
   console.error("\n==== ENGINE CRASH (" + stage + ") — WASM ABORTED, findings DISCARDED, NOT swallowed ====\n" + m + "\n");
 }
+// The C-side CHECK/DCHECK emits its @WHY/@E ROOT line (phase/cond/at/reason) to stderr -> sink -> the frame's
+// line buffer IMMEDIATELY before abort(). A bare emscripten Aborted() message ("native code called abort()") is
+// terse and useless on its own, so every crash path surfaces that root line IN the loud banner — a crash must
+// POINT AT ITS CAUSE, not just announce itself (this is what forced grepping the reason out of the result
+// during debugging).
+/* ONE SCAN, BECAUSE THERE IS ONE QUESTION. It stood inside engineCrash alone, so the CREATE path — the only
+   path whose whole failure is inside the engine's own boot — announced itself with the abort message and
+   nothing else, and a real @WHY that the frame had already printed cost a full day's wrong diagnosis. The two
+   callers differ only in WHERE the lines come from (a live engine's buffer, or the ones renderer-host attaches
+   to the rejection of the call that aborted), which is an argument and not a second copy of this loop. */
+function rootWhyLine(lines) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const ln = String(lines[i]);
+    if (ln.startsWith("@WHY ") || (ln.startsWith("@E ") && /"(reason|cond|phase)"/.test(ln))) return ln;
+  }
+  return "";
+}
 function engineCrash(eng, stage, e) {
   const m = String((e && e.message) || e);
   eng._crashed = true;
-  // The C-side CHECK/DCHECK emits its @WHY/@E ROOT line (phase/cond/at/reason) to stderr -> sink -> eng.lines
-  // IMMEDIATELY before abort(). A bare emscripten Aborted() message ("native code called abort()") is terse and
-  // useless on its own, so surface that root line IN the loud banner — a crash must POINT AT ITS CAUSE, not just
-  // announce itself (this is what forced grepping the reason out of the result during debugging).
-  let root = "";
-  for (let i = eng.lines.length - 1; i >= 0; i--) {
-    const ln = String(eng.lines[i]);
-    if (ln.startsWith("@WHY ") || (ln.startsWith("@E ") && /"(reason|cond|phase)"/.test(ln))) { root = ln; break; }
-  }
+  const root = rootWhyLine(eng.lines);
   const err = root ? (m + " | ROOT: " + root) : m;   // the crash RECORD carries its cause (netdiff/result-visible), not only the console banner
   eng.lines.push('@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(err) + "}");
   crashBanner(stage, err);
@@ -1754,24 +1862,38 @@ const _hostOps = {
                "the TOP document of a browsing-context group arrived for a cluster whose instance is rooted at " +
                "a different document — the group's top was REPLACED (a same-origin navigation, or a COOP " +
                "navigation that severed the group), so the new document is NOT one this instance is running " +
-               "and attaching it reports the page that was replaced. This needs §7.4's destroy-a-navigable for " +
-               "the old document plus an ABI entry beside qjs_init that JOINS a document to a live instance " +
-               "(`qjs_join`: a second Lexbor parse, a realm through main.c's engine_child_realm, its scripts " +
-               "seeded on the same frontier) — neither exists yet, and neither is a second instance");
+               "and attaching it reports the page that was replaced. HALF OF WHAT THIS NEEDS NOW EXISTS: " +
+               "`qjs_join` puts the new document in this agent (engineJoin above). The half that does not is " +
+               "§7.4's DESTROY A NAVIGABLE for the document being replaced, and joining without it leaves the " +
+               "old document's realm, tree and parked flows running and reporting inside the same instance — " +
+               "two tops for one traversable, which is a worse answer than this abort and is why the join is " +
+               "not simply called here");
         cluster._resolvers.push(job);
         _waiting.splice(i, 1);
         if (cluster.state === "booting") _reserveStats.joinedBooting++; else _reserveStats.joinedRooted++;
         continue;
       }
-      /* A SUB-FRAME MAY NOT ROOT ITS OWN CLUSTER WHILE THE GROUP'S TOP IS SAME-ORIGIN WITH IT. Its cluster's
-         instance is the TOP document's — the top creates this frame and runs it in its heap — and CONTENT_HTML
-         arrival order across frames is not the document order: a sub-frame that reported first would otherwise
-         root the cluster, and the top would then arrive at an instance rooted elsewhere and fire the assert
-         above for a reason that is an artifact of message timing rather than a replaced document. So it WAITS,
-         in place, and is seated by the next admit once the top has landed. `_isRealOrigin` is what keeps this
-         off the opaque case: a sandboxed top's frames are opaque too, their per-document tokens never equal
-         `originOf(topLevelUrl)`, and each is correctly its own cluster of one. */
-      if (!isTop && _isRealOrigin(job.msg.origin) && originOf(job.msg.topLevelUrl) === job.msg.origin) { i++; continue; }
+      /* A SUB-FRAME NEVER ROOTS A CLUSTER — ITS EMBEDDER NAMES IT, AND WAITING IS HOW THIS ZONE LETS IT. A
+         nested navigable is CREATED by the document that embeds it: §4.8.5's insertion steps mint its name in
+         the embedder's engine, hand the page a WindowProxy under that name, and load its address through this
+         same safeFetch chokepoint. The engine then either runs it as a REALM in its own heap (same-origin,
+         navigable.c's `child_in_this_agent`, no notice) or announces it, and the announcement is what roots or
+         joins its cluster HERE, under the engine's name.
+         A CONTENT SCRIPT'S ARRIVAL FOR THAT SAME DOCUMENT IS A SECOND ROUTE TO IT, NEVER A SECOND DOCUMENT, so
+         the one thing it may not do is NAME it. It used to, for the cross-origin case: the condition here was
+         additionally `originOf(topLevelUrl) === origin`, so only a same-origin sub-frame waited and a
+         cross-origin one raced its embedder — whichever arrived first named the document, and when the content
+         script won, the embedder's later `navigable.create` for the very same frame found a cluster it could
+         not recognise as holding it (`hostHolderOf` compares engine names) and the create arm aborted. Two
+         names for one document is also unroutable in the direction that has no symptom here at all: the engine
+         interns documents by NAME, so a `windowproxy.post` to `<embedder>.1` would reach an instance that has
+         never heard of it. Naming is therefore ONE zone's job, and the browser's `documentId` is what JOINS the
+         cluster (the branch above) rather than what names its document.
+         `_isRealOrigin` IS WHAT KEEPS THIS OFF THE OPAQUE CASE, and it is the whole of what is left of the old
+         condition: a sandboxed sub-frame's principal is a per-document token no embedder's notice can state
+         (the create arm names that residual — the sandbox flag set is not yet carried on the notice), so such a
+         document is correctly its own cluster of one and roots it here. */
+      if (!isTop && _isRealOrigin(job.msg.origin)) { i++; continue; }
       _waiting.splice(i, 1);
       /* THE JOB IS ATTACHED TO THE RESERVATION BEFORE ANYTHING SUSPENDS, which is what makes the boot's failure
          path the ONE owner of every caller on this document. It used to be pushed after the await, so a
@@ -1936,7 +2058,13 @@ self.rendererPoolProbe = async function rendererPoolProbe() {
        fetch, a frame boot and three ABI round trips. Its two Level-1 facts read `null` rather than a number
        because it has stated neither — `heapBytes: 0` would be the default that admits another engine against
        RAM about to be spent, and `topWeight: -Infinity` would be the engine's own word for a DRAINED frontier
-       on a record whose engine has not started. `joined` is how many callers are already waiting on it. */
+       on a record whose engine has not started. `joined` is how many callers are already waiting on it.
+       `joinedDocIds` IS THE OTHER KIND OF JOINING AND THE TWO ARE DELIBERATELY NOT ONE FIELD: that one counts
+       CALLERS waiting on this document's findings, this one names the DOCUMENTS this instance holds beyond the
+       one it was rooted at (main.c's `g_joined_ctx`). An instance is an agent CLUSTER, so a pool of two entries
+       can be a page of four documents — and without this the ones a `qjs_join` added are invisible from
+       outside, which is exactly the shape of number that reads identically whether the join happened or the
+       child was silently never hosted. */
     if (eng.state === "booting") {
       booting++;
       DCHECK(typeof eng.cluster === "string" && eng.cluster !== "" && typeof eng.docId === "string" && eng.docId !== "",
@@ -1945,7 +2073,8 @@ self.rendererPoolProbe = async function rendererPoolProbe() {
              "blocks admission while answering nobody");
       return { name: eng.cluster, docId: eng.docId, state: "booting",
                framed: !!(eng.r && eng.r.frame.parentNode), routingId: eng.r ? eng.r.routingId : null,
-               heapBytes: null, topWeight: null, cold: !!eng._cold, joined: eng._resolvers.length };
+               heapBytes: null, topWeight: null, cold: !!eng._cold, joined: eng._resolvers.length,
+               joinedDocIds: eng.joinedDocIds.slice() };
     }
     DCHECK(eng.r && typeof eng.r.heapBytes === "number" && typeof eng.r.name === "string",
            "a pooled engine is not backed by a renderer that has reported itself — every instance is obtained " +
@@ -1961,7 +2090,7 @@ self.rendererPoolProbe = async function rendererPoolProbe() {
            "this document created for itself");
     return { name: eng.r.name, docId: eng.docId, state: eng.state, framed: !!eng.r.frame.parentNode,
              routingId: eng.r.routingId, heapBytes: eng.r.heapBytes, topWeight: eng.topWeight,
-             cold: !!eng._cold, joined: eng._resolvers.length };
+             cold: !!eng._cold, joined: eng._resolvers.length, joinedDocIds: eng.joinedDocIds.slice() };
   });
   /* NO RESERVATION OUTLIVES ITS PROVISIONING, ASSERTED AS ARITHMETIC RATHER THAN LOOKED FOR. A reservation is
      made once and takes exactly one exit — it roots into an instance or it fails — so `made - rooted - failed`
