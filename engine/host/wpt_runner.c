@@ -1448,7 +1448,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
           "the runner's document did not parse");
     free(fetched);
 
-    /* THE ROOT NAVIGABLE IS THE HOST'S, so its §7.2.5.1 proxy is minted here — the same rule as every child,
+    /* THE ROOT NAVIGABLE IS THE HOST'S, so its §7.2.3 proxy is minted here — the same rule as every child,
        whose creator mints it. A navigable has one, and whoever owns the navigable is who makes it. */
     {
         /* THE RUNNER LOADED THIS DOCUMENT ITSELF, so it knows the navigable's name is the spec's initial "" —

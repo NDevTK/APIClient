@@ -12,7 +12,7 @@
 #include "core/frame/sandboxing.h"
 #include "core/frame/window_features.h"
 #include "core/dom/document.h"
-#include "core/html/html_iframe.h"   /* §7.2.5's document-tree child navigables — §7.1's walk descends them */
+#include "core/html/html_iframe.h"   /* §7.2.2.2's document-tree child navigables — §7.1's walk descends them */
 #include "core/html/html_parse.h"    /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/loader/document_scripts.h"  /* §4.12.1's script inventory: what a parsed Document's programs ARE */
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
@@ -430,7 +430,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
  * that was never loaded. The address travels with the job.
  *
  * WHAT THE NAVIGABLE'S STATE STILL DECIDES IS ITS DOCUMENT'S IDENTITY, and only that. A navigable with a
- * realm already is being NAVIGATED, and §7.2.5.1 supersedes a document, so the new one gets a NEW name — the
+ * realm already is being NAVIGATED, and §7.4.2.2 supersedes a document, so the new one gets a NEW name — the
  * world registry names documents rather than navigables, and a flow parked in the superseded one must still be
  * able to say where it is. A navigable with no realm yet is receiving its FIRST document, whose name §7.4
  * already minted and adopted when it created the navigable. Either way the realm is built at the job's address
@@ -483,7 +483,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     /* IS THERE ANYTHING TO FETCH — one spec fact about the SCHEME, asked where the fetch is. `about:blank` has
        no response and no content, so navigating to it produces a Document from nothing: asking the host for it
        would be a GET of the literal text `about:blank`, and every host would answer 404 or nothing at all.
-       It reaches here because §7.2.5.1 navigates to `about:blank` for real (the corpus does it while an
+       It reaches here because §7.4.2.2 navigates to `about:blank` for real (the corpus does it while an
        initial load is still pending); §7.4's create skips the job entirely for such an address, which is a
        different decision — deferring materialization — made for a different reason. */
     fetches = strncmp(addr, "about:", 6) != 0;
@@ -631,11 +631,11 @@ static int g_nav_load_stepid = -1;
 
 /* `inherit_csp` is §7.2.6's policy for a destination that carries none of its own, and WHOSE it is depends on
    the OPERATION rather than on the navigable's state — the CREATOR's when §7.4 creates a navigable, the
-   INITIATOR's when §7.2.5.1 navigates one. So the caller states it and it travels with the job, which is the
+   INITIATOR's when §7.4.2.2 navigates one. So the caller states it and it travels with the job, which is the
    same sentence as the address travelling: everything about where this load is going belongs to the operation
    that started it, and nothing about it can be read back off the navigable being loaded.
  *
- * IT IS A TASK ON THE NAVIGATION AND TRAVERSAL TASK SOURCE, WHICH IS WHAT §7.2.5.1 SAYS — "queue a global task
+ * IT IS A TASK ON THE NAVIGATION AND TRAVERSAL TASK SOURCE, WHICH IS WHAT §7.4.2.2 SAYS — "queue a global task
  * on the navigation and traversal task source" — and it was a MICROTASK, which is a different position in the
  * event loop and not a smaller one. A microtask runs inside the enqueuing flow's own checkpoint, so a load
  * jumped ahead of every task already queued (a timer that had expired, a delivered message, an event fire) and
@@ -684,7 +684,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[2] = org;
     argv[3] = csp;
     argv[4] = self;
-    JS_EnqueueCallTask(ctx, fn, 5, argv);   /* §7.2.5.1: the navigation and traversal task source */
+    JS_EnqueueCallTask(ctx, fn, 5, argv);   /* §7.4.2.2: the navigation and traversal task source */
     JS_FreeValue(ctx, self);
     JS_FreeValue(ctx, csp);
     JS_FreeValue(ctx, org);
@@ -692,7 +692,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     JS_FreeValue(ctx, fn);
 }
 
-/* §7.2.5.1's NAVIGATE, for a navigable this agent already holds. It RESOLVES the destination and ENQUEUES the
+/* §7.4.2.2's NAVIGATE, for a navigable this agent already holds. It RESOLVES the destination and ENQUEUES the
  * load; the document arrives later, which is what the spec says from both ends — `open()` hands back a
  * WindowProxy at its own call site, and the navigable it names is still showing what it was showing.
  *
@@ -712,7 +712,7 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
        to that instance. The check that used to catch this stood after the destination was resolved and spoke
        about the DESTINATION's origin, which is a different question with a different answer. */
     DCHECK(!window_proxy_is_remote(proxy),
-           "§7.2.5.1's navigate was asked to navigate a navigable whose ACTIVE DOCUMENT a PEER instance holds "
+           "§7.4.2.2's navigate was asked to navigate a navigable whose ACTIVE DOCUMENT a PEER instance holds "
            "— the navigation's target snapshot params, its policy container and the Document it creates are "
            "all that instance's, so this is a host route like §7.4's create notice and not a load this agent "
            "can perform");
@@ -1048,7 +1048,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            child's event handlers. Neither is a value that can be named across a transport; they are one object
            graph, and a browser's own model says so. */
         world_doc_adopt(child);   /* this agent holds it */
-        /* §7.2.5: `parent` and `opener` ARE WindowProxies. They held the creator's GLOBAL, which made the
+        /* §7.2.2.4: `parent` and `opener` ARE WindowProxies. They held the creator's GLOBAL, which made the
            `top` walk leave the proxies at the top and read a scriptable property to continue — and a popup's
            opener a Window rather than the navigable it belongs to. The creator's own proxy is what both are. */
         /* §7.4: `noopener` means the new navigable HAS NO OPENER — not that the opener is hidden, that there
@@ -1110,7 +1110,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                                                                         : document_window_proxy(ctx));
         CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
         /* §7.4's DECISION IS A FACT ABOUT THE NAVIGABLE, so it is read back where it was written. A popup that
-           does not know it is one answers `true` from all six of §7.2.5.3's BarProps, which is precisely how
+           does not know it is one answers `true` from all six of §7.2.2.5's BarProps, which is precisely how
            the corpus tells a popup from a tab — and a value written and then not there is worth catching at
            the write rather than 51 subtests downstream in another realm. */
         DCHECK(window_proxy_is_popup(proxy) == (feat != NULL && feat->is_popup),
@@ -1282,12 +1282,12 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     s->result = JS_UNDEFINED;
     url    = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
     target = argc > 1 ? JS_ToCString(ctx, argv[1]) : NULL;
-    /* §3.6.2: an OPTIONAL argument given `undefined` is ABSENT. `open(url, name, undefined)` is how the
+    /* §3.6: an OPTIONAL argument given `undefined` is ABSENT. `open(url, name, undefined)` is how the
        corpus spells "no features", and stringifying it produced the literal "undefined" — one token,
        a non-empty map, and therefore a popup where the spec has a tab. */
     features = (argc > 2 && !JS_IsUndefined(argv[2])) ? JS_ToCString(ctx, argv[2]) : NULL;
     if (argc > 0 && !url) return JS_STEP_ABRUPT;
-    /* §7.4's THIRD ARGUMENT decides whether the new navigable is a POPUP — what §7.2.5.3's six BarProps answer
+    /* §7.4's THIRD ARGUMENT decides whether the new navigable is a POPUP — what §7.2.2.5's six BarProps answer
        from — and whether it gets an OPENER at all. */
     feat = window_features_parse(features);
     s->noopener = feat.noopener ? 1 : 0;
