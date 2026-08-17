@@ -113,16 +113,17 @@ function danglingIncludes(rev) {
      finding, so the path is the deliverable and its absence is what makes the whole check inert. */
   /* THE ROOTS COME FROM THE BUILD, BECAUSE THE BUILD IS WHAT HANDS THEM TO THE COMPILER. This list used to be
      four paths written out here, and the browser process's `-I BPROC_DIR` made the copy wrong the day it
-     landed: `network/corb.c` includes "network/corb.h", the header is right there and the link succeeds, and
-     this check announced that the revision "cannot be built by anyone who checks it out". That is the phantom
+     landed: `renderer/registry.c` includes "renderer/registry.h", the header is right there and the link
+     succeeds, and this check announced that the revision "cannot be built by anyone who checks it out". That is the phantom
      §Testing describes — a confident false red costs more than a silent miss, because the next REAL dangling
      include arrives in a report already known to lie. A second copy of a build's configuration is the same
      defect as a second copy of its source list, which the paragraph above `--list-sources` in build.mjs was
      written about.
      PER SET, NOT A UNION. Only browser_process units are given BPROC_DIR, so a RENDERER file writing
-     `#include "network/corb.h"` must still fail — a flat union would answer "fine" to both and turn this into
-     the diagnostic that always says yes. A source compiled by BOTH sets (core/mime/mime_type.c is) must
-     satisfy BOTH, which is what its own link requires.
+     `#include "renderer/registry.h"` must still fail — a flat union would answer "fine" to both and turn this
+     into the diagnostic that always says yes. No source is in both sets today (core/mime/mime_type.c was, and
+     left with the sniffing entries); one that is again must satisfy BOTH, which is what its own link
+     requires.
      IF THE BUILD CANNOT ANSWER, THAT IS THE FINDING. There is no fallback to a remembered list here: a stale
      list is exactly what produced the false red, and a checker that quietly reverts to one when the question
      fails is a checker whose answer nobody can interpret. */

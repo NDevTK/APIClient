@@ -1,13 +1,13 @@
-/* browser-process.js — THE BROWSER PROCESS. A dedicated Worker of the offscreen document holding the network
- * service's own WASM module and the RENDERER REGISTRY, reached only over a Mojo primordial pipe.
+/* browser-process.js — THE BROWSER PROCESS. A dedicated Worker of the offscreen document holding the RENDERER
+ * REGISTRY's own WASM module, reached only over a Mojo primordial pipe.
  *
  * WHY A WORKER, AND WHY NOT THE SHAPE renderer.html USES. Those two boundaries face opposite ways.
  * `extension/renderer.html` is a sandboxed frame with a UNIQUE OPAQUE ORIGIN because the thing inside it —
  * QuickJS running an attacker's bundle — is UNTRUSTED and must be confined; Site Isolation is then free to put
- * it in its own OS-sandboxed process. This program is the thing that confinement PROTECTS: SECURITY.md's
- * network chokepoint, the algorithm CORB gates on. Giving it an opaque origin would confine the wrong side and
- * would cost it exactly what a network service needs — an opaque origin is same-origin with nothing, so
- * `connect-src`, credentialed fetch and same-origin reads of the extension's own resources all go with it. A
+ * it in its own OS-sandboxed process. This program is the thing that confinement PROTECTS: the authority for
+ * SECURITY.md's one-instance-per-agent-cluster rule. Giving it an opaque origin would confine the wrong side
+ * and would cost it what a trusted extension zone needs — an opaque origin is same-origin with nothing, so
+ * `connect-src` and same-origin reads of the extension's own resources go with it. A
  * Worker of the extension origin keeps every one of those and still gives the property the whole exercise is
  * about: its OWN realm, its OWN module instance and its OWN thread, with no `HEAPU8` exported to anybody. That
  * last clause is the entire difference from the deleted `browser_process/` link, where two Modules sat in the
@@ -19,7 +19,7 @@
  * nothing at all — no blobs, no wasm bytes — which is the shape a trusted counterpart should have and is why
  * the boot record renderer.html needs does not exist here.
  *
- * THE TRANSPORT IS MOJO, and the ad-hoc `{v:1,id,op:"corb"}` vocabulary this file used to carry is DELETED in
+ * THE TRANSPORT IS MOJO, and the ad-hoc `{v:1,id,op}` vocabulary this file used to carry is DELETED in
  * the same diff rather than kept beside it. That record was a hand-written routing table (`id`), a hand-written
  * capability list (`op`), a hand-written error convention (`ok`/`err`) and a hand-written output drain — and
  * the renderer boundary held a second, differently-spelled copy of every one of them. Two transports for one
@@ -30,10 +30,11 @@
  * right about the disease; a mojom interface is that argument's conclusion, with the types declared once
  * instead of asserted twice.
  *
- * WHAT THIS PROCESS OWNS, AND WHY THOSE TWO THINGS ARE IN ONE PROGRAM. §7/CORB are the NETWORK SERVICE's
- * algorithms — in Chromium they never run in a renderer — and the renderer registry is the BROWSER PROCESS's.
- * Running the network service IN-PROCESS with the browser is a configuration Chromium itself ships, and it is
- * the honest description of one Worker holding both rather than a pretence that a second process exists.
+ * WHAT THIS PROCESS OWNS. The RENDERER REGISTRY and nothing else. It held a second thing — WHATWG MIME
+ * Sniffing §7 and Chromium's CORB analyzer, behind `network.mojom.ContentSniffer` — and that is deleted along
+ * with the C it had been transliterated out of working JavaScript into. CLAUDE.md §Architecture: "TYPE
+ * SNIFFING STAYS IN JAVASCRIPT, in `safeFetch`, where SECURITY.md puts it." The trusted zone reads the bytes,
+ * decides once, and STAMPS what it decided onto the reply record it hands the renderer.
  *
  * WHAT IT CANNOT DO, AND WHAT FOLLOWS. A dedicated Worker's global is `DedicatedWorkerGlobalScope`: no
  * `document`, no DOM, no `createElement`. So this process cannot materialize a renderer frame — exactly as
@@ -59,18 +60,10 @@ let out = [];          /* the module's stdout/stderr since the last record; drai
    console, which is where a native diagnostic is capturable while the run is happening. */
 function drain() { const o = out; out = []; return o; }
 
-/* §5.2's RESOURCE HEADER is the first 1445 bytes, and the TRUNCATION IS THE SENDER'S — browser-process-host.js
-   slices there, because the point of slicing is to keep a multi-megabyte bundle out of the structured clone,
-   and a clone that already happened cannot be undone here. So this side ASSERTS the bound rather than
-   re-applying it: a longer header means the sender stopped truncating, and silently clamping would turn that
-   into a message nobody ever reads. */
-const RESOURCE_HEADER_MAX = 1445;
-
-/* THE BYTES, PLACED AND NEVER ENCODED — the same rule renderer.html states at its own `cbytes`. A resource
-   header is a byte sequence; running it through `stringToUTF8` would answer §7 a different question about a
-   different resource, and every non-ASCII signature in §6's tables is exactly what would be destroyed. The
-   placement is ONE function because the rule is one rule: everything this file hands the program is a byte
-   sequence with a LENGTH, and no entry takes a NUL-terminated string. */
+/* THE BYTES, PLACED AND NEVER ENCODED — the same rule renderer.html states at its own `cbytes`. Everything
+   this file hands the program is a byte sequence with a LENGTH, and no entry takes a NUL-terminated string.
+   (It served two callers while §7's resource header also crossed here; that entry is deleted with the sniffing
+   C, and the rule is unchanged by having one caller — it is a property of the boundary, not of the count.) */
 function place(what, bytes, fn) {
   const p = M._malloc(bytes.length + 1);
   CHECK(p !== 0, "OOM placing " + what + " in the browser process's linear memory — the decision it is for " +
@@ -79,50 +72,21 @@ function place(what, bytes, fn) {
   try { return fn(p, bytes.length); } finally { M._free(p); }
 }
 
-function withHeader(bytes, fn) {
-  DCHECK(bytes.length <= RESOURCE_HEADER_MAX,
-         "a resource header longer than §5.2's 1445 bytes reached the browser process — the sender truncates " +
-         "so the clone stays small, and one that did not has already copied a whole bundle across a thread to " +
-         "answer a question defined over its first bytes");
-  return place("a resource header", bytes, fn);
-}
-
-/* AND THE AGENT CLUSTER KEY IS BYTES FOR A SHARPER REASON THAN THE HEADER IS. `clusterKeyOf` joins the
-   browsing-context group and the origin with a NUL "because neither half can contain one", so the key holds an
-   interior NUL — and `ccall`'s `"string"` marshalling ends a C string at the first one. Marshalled that way,
-   every origin in one tab would arrive as the same key, and the registry whose entire job is to refuse a
-   merged agent cluster would perform one. `TextEncoder` emits that NUL as the byte it is. */
+/* THE AGENT CLUSTER KEY IS BYTES, AND THAT IS THE ONE MARSHALLING THIS BOUNDARY CAN GET SILENTLY WRONG.
+   `clusterKeyOf` joins the browsing-context group and the origin with a NUL "because neither half can contain
+   one", so the key holds an interior NUL — and `ccall`'s `"string"` marshalling ends a C string at the first
+   one. Marshalled that way, every origin in one tab would arrive as the same key, and the registry whose
+   entire job is to refuse a merged agent cluster would perform one. `TextEncoder` emits that NUL as the byte
+   it is. */
 const KEY_ENC = new TextEncoder();
 function withClusterKey(clusterKey, fn) { return place("an agent cluster key", KEY_ENC.encode(clusterKey), fn); }
 
-/* THE HEADER FACTS ARE NO LONGER ASSERTED IN THIS FILE, and that is the conversion rather than a loss of rigour.
-   `checkHeaderFacts` asserted that a Content-Type is `string|null`, that an X-Content-Type-Options is
-   `string|null` and that a resource header is bytes — and browser-process-host.js held a SECOND copy of the
-   same three, with the same sentences written out again and free to drift apart. Both copies are now ONE
-   declaration in mojom.js, where the sentence explaining the rule is the string the validator PRINTS, on both
-   sides of the pipe, at the origin of the wrong value. A shape mojo carries is asserted by mojo.
-   THE REPLY'S FIELDS ARE NOT RE-ASSERTED EITHER. `JSON.parse` of ONE document per answer is the discipline
-   CLAUDE.md blesses for `@RESULT` — the record is built where the decision is taken, so no consumer re-derives
-   a field — and mojom.js declares each field with the sentence naming the C file that writes it, validated as
-   the implementation RETURNS it. A field corb.c stopped writing still crashes on the line that produced it. */
-const CONTENT_SNIFFER = {
-  /* CORB. `sameOrigin` is the trusted zone's comparison of the browser-stated page origin with the response's,
-     which SECURITY.md keeps on that side and this program therefore never re-derives. */
-  checkCorb(contentType, xContentTypeOptions, sameOrigin, header) {
-    return JSON.parse(withHeader(header, (p, n) =>
-      M.ccall("bp_corb_check", "string", ["string", "string", "number", "number", "number"],
-              [contentType, xContentTypeOptions, sameOrigin ? 1 : 0, p, n])));
-  },
-
-  /* WHAT THE RESOURCE IS FOR — asset or API data. `opaque` is Fetch §2.2.6: the response is an opaque filtered
-     response, whose body is null and whose header list is empty, which is a fact about the Response OBJECT and
-     therefore one only the zone holding it can state. */
-  classifyResource(contentType, xContentTypeOptions, opaque, header) {
-    return JSON.parse(withHeader(header, (p, n) =>
-      M.ccall("bp_classify", "string", ["string", "string", "number", "number", "number"],
-              [contentType, xContentTypeOptions, opaque ? 1 : 0, p, n])));
-  },
-};
+/* NOTHING IS RE-ASSERTED IN THIS FILE, and that is the transport rather than a loss of rigour. Every shape a
+   parameter has is ONE declaration in mojom.js, where the sentence explaining the rule is the string the
+   validator PRINTS, on both sides of the pipe, at the origin of the wrong value; and `JSON.parse` of ONE
+   document per answer is the discipline CLAUDE.md blesses for `@RESULT` — the record is built where the
+   decision is taken, so no consumer re-derives a field. A field registry.c stopped writing still crashes on
+   the line that produced it. */
 
 /* ────────────────────────────────────────────────────────────────────────────────────────────────────────
    THE RENDERER REGISTRY — the browser process's own state, and what makes this program's name a description
@@ -149,9 +113,8 @@ const CONTENT_SNIFFER = {
 
 /* THE ZYGOTE IS BOUND ON FIRST USE, and that is an ordering requirement rather than laziness: the offscreen
    registers its Zygote implementation when renderer-host.js loads, while this process is provisioned by
-   whichever caller needs it first — which may be safe-fetch.js's CORB gate, running before that script has. A
-   bind request nobody can answer is a DFAIL on the far side; binding here means the first one cannot precede
-   the registration that answers it. */
+   whichever caller needs it first. A bind request nobody can answer is a DFAIL on the far side; binding here
+   means the first one cannot precede the registration that answers it. */
 let _zygote = null;
 function zygote() {
   if (_zygote === null) _zygote = conn.bindInterface("content.mojom.Zygote");
@@ -231,7 +194,6 @@ createBrowserProcess({
 }).then(
   (mod) => {
     M = mod;
-    self.mojo.exposeInterface("network.mojom.ContentSniffer", CONTENT_SNIFFER);
     self.mojo.exposeInterface("content.mojom.RendererHost", RENDERER_HOST);
     self.mojo.exposeInterface("content.mojom.ChildProcess", CHILD_PROCESS);
     conn.acceptInvitation(true, null);

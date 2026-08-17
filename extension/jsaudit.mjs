@@ -58,10 +58,15 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
  * serves would cross the boundary this architecture deletes. That puts the DRIVERS first and the leaf codecs
  * LAST — the exact inverse of what the deleted field claimed — and it is the same answer the three landed
  * moves already gave when they were made one capability at a time rather than one file at a time:
- * `multipart_batch.c` (an address, and `endpoint.c` already consumed addresses), `reply_decode.c`'s Flight
- * reader (`engine_provide` already held the reply), `browser_process/network/resource_kind.c` (the trusted
- * zone already called that program). Each moved because ITS CONSUMER WAS ALREADY IN C. That is what "takeable"
- * means here, and the derived order says which unit to look inside for the next one.
+ * `multipart_batch.c` (an address, and `endpoint.c` already consumed addresses) and `reply_decode.c`'s
+ * Flight reader (`engine_provide` already held the reply). Each moved because ITS CONSUMER WAS ALREADY IN C.
+ * That is what "takeable" means here, and the derived order says which unit to look inside for the next one.
+ * A THIRD MOVE IS NOT IN THAT LIST ANY MORE, AND ITS ABSENCE IS THE CORRECTION. `classifyResponseAsset` went
+ * to `browser_process/network/resource_kind.c` on the argument that the trusted zone already called that
+ * program, and that argument was about the EDGE and never about whether the capability belonged there.
+ * CLAUDE.md §Architecture now states the test the edge argument was standing in for: the engine gets what a
+ * FLOW needs mid-execution, whose answer must fork and park with the flow. A classification the trusted zone
+ * asks once about a captured reply is the other kind, so it is back in lib/discovery.js and is NOT queued.
  *
  * AND THE PRINTED NUMBER IS NOT A NAME — NOTHING OUTSIDE THIS FILE MAY CITE IT. It is a position in a
  * derivation, so it moves whenever an edge does, and the deleted field proved what that costs: six C headers
@@ -156,12 +161,11 @@ const LEDGER = [
     why: "THE BROWSER PROCESS's own bootstrap, and the whole of the JS inside that boundary: instantiate the " +
          "module, place a resource header in ITS linear memory, call the named entry, post the record back. " +
          "It is the same role renderer.html's bootstrap plays for a renderer and it is measured the same way " +
-         "— a line here that decided anything about a response would be the logic this move exists to delete, " +
-         "since the point of a network service is that the algorithm is the standard's and not a zone's. THE " +
-         "MEASUREMENT MOVED ONCE, in the right direction: `noSniff` used to arrive as a boolean, which meant " +
-         "Fetch's determine-nosniff was being computed in lib/safe-fetch.js as a substring test. Both entries " +
-         "now take the HEADER VALUE and network/nosniff.c decides what it means, so this file relays two " +
-         "header values, two browser-stated facts and a byte sequence, and interprets none of them. THE ROW " +
+         "— a line here that decided anything would be the logic this boundary exists to delete. IT SERVED " +
+         "TWO SNIFFING ENTRIES AND NO LONGER DOES: `bp_corb_check` and `bp_classify` relayed WHATWG MIME " +
+         "Sniffing §7 and an asset classifier into C that had been transliterated out of JavaScript that was " +
+         "shipping, and CLAUDE.md §Architecture now rules on that by name — \"TYPE SNIFFING STAYS IN " +
+         "JAVASCRIPT, in `safeFetch`, where SECURITY.md puts it\". What is left is the registry. THE ROW " +
          "USED TO END BY DEFENDING THE RENDERER REGISTRY AS STATE THIS FILE MAY HOLD — \"the one piece of " +
          "STATE in this program and not a semantic the engine could own\" — and that sentence was the excuse " +
          "shape this gate exists to catch. A `Map` from agent cluster key to routing id, a `_nextRoutingId++`, " +
@@ -184,17 +188,22 @@ const LEDGER = [
          "would have needed to catch it. HTML §8.1.4.2's classic-script decode (core/loader/script_fetch.c) " +
          "honours the response's charset LABEL, and it had never once been handed the bytes that label " +
          "describes. The chokepoint now answers a Uint8Array on every path and each consumer runs the decode " +
-         "ITS standard names. AND THE LAST CLAUSE OF THIS ROW WAS THE NEXT THING TO GO. It used to defend " +
-         "CORB's byte sniff as \"a CHECK decoding the bytes it judges\", which excused four functions — " +
-         "`_jsMime`, `_corbProtectedMime`, `_sniffsProtected`, `_corbAllowsScript` — that between them were a " +
-         "hand-rolled HTML JavaScript-MIME-type list, a hand-rolled CORB-protected set, and a body sniff " +
-         "taking `charAt(0) === \"<\"` for markup and a `JSON.parse` of the WHOLE body for JSON. A check is " +
-         "still an algorithm over content when it is one, and this one had a standard: WHATWG MIME Sniffing " +
-         "§7, which in a real browser runs in the NETWORK SERVICE. All four are deleted and the decision is " +
-         "asked of engine/host/browser_process/network/{mime_sniff,corb}.c across browser-process-host.js. " +
-         "What keeps this row BRIDGE is now literal: every remaining rule is decided from the URL, the " +
-         "principal and the headers, and the one fact about the body that this file still states is which " +
-         "BYTES to hand over." },
+         "ITS standard names. AND THE TYPE SNIFF IS BRIDGE, WHICH IS WHAT THIS ROW GOT WRONG ONCE. Four " +
+         "functions — `_jsMime`, `_corbProtectedMime`, `_sniffsProtected`, `_corbAllowsScript` — were deleted " +
+         "out of this file into C on the argument that a byte sniff is an algorithm over content and that " +
+         "WHATWG MIME Sniffing §7 runs in a real browser's network service. The second half is true and the " +
+         "conclusion did not follow: THIS FILE IS THAT NETWORK SIDE. It performs the fetch and it holds the " +
+         "principal, and CLAUDE.md §Architecture now says so outright — \"TYPE SNIFFING STAYS IN JAVASCRIPT, " +
+         "in `safeFetch`, where SECURITY.md puts it\" — because what belongs in the engine is what a FLOW " +
+         "needs mid-execution, whose answer must fork and park with the flow, and this is decided ONCE between " +
+         "flows. All four are back — `_corbAllowsScript` renamed `_corbDeniesScript`, because it answers the " +
+         "RULE that refused and a function called \"allows\" returning a deny reason reads wrong at every " +
+         "call site — and with Fetch's determine-nosniff fixed in place: it was " +
+         "`indexOf(\"nosniff\")`, where the standard SPLITS the header and matches its FIRST value, so " +
+         "`foo, nosniff` set a flag here that it does not set under Fetch. What keeps the row BRIDGE is that " +
+         "the answer is STATED and never re-derived — the sniff runs once and `computedType` on the reply " +
+         "record carries it to the renderer, whose solver/reply_decode.c reads it instead of parsing a raw " +
+         "header into a second opinion about the same response." },
   { f: "lib/persistence.js", zone: "BRIDGE:2",
     why: "IndexedDB open/get/put/clear. The WASM cannot reach IDB." },
   { f: "background.js", zone: "BRIDGE:3",
@@ -230,9 +239,11 @@ const LEDGER = [
          "and nothing here has ever been handed one. The LOGIC half is moat aggregation over a captured " +
          "exchange — the request-body decode (protobuf / JSPB / f.req / structural JSON), the key extraction, " +
          "the endpoint lastSeen and 403 `WWW-Authenticate` scope reads, the entry the learners are given. The " +
-         "BRIDGE half is the intake itself: `_pushGlobalLog`, `notifyPopup`, the WS/postMessage/MessageChannel " +
-         "log entries, and the one `await self.browserProcessClassify` that asks the browser process what a " +
-         "body is." },
+         "BRIDGE half is the intake itself: `_pushGlobalLog`, `notifyPopup`, and the WS/postMessage/" +
+         "MessageChannel log entries. It briefly held an `await self.browserProcessClassify` in place of the " +
+         "call to `classifyResponseAsset`, and the hoist that await forced — to the top of the function, above " +
+         "everything it mutates — was load-bearing only for that shape; the call is synchronous again and the " +
+         "classification sits beside its two readers." },
   { f: "lib/learn.js", zone: "LOGIC", dest: "engine/host/solver/moat.c",
     why: "THE moat aggregation — CLAUDE.md §Architecture names moat aggregation as the engine's. It holds the " +
          "protocol-chain unwrap the response-decode row used to claim: `learnFromResponse` is what dispatches " +
@@ -287,15 +298,14 @@ const LEDGER = [
          "one would be the orchestration layer inverted. THE OTHER TWO COMPONENTS ARE GONE, and the second " +
          "one is the reason that sentence needs its qualifier. The RSC parser went to the engine at " +
          "engine_provide (`looksLikeRSC` was a body-shape guess §RUN, DON'T MATCH forbids and did not move). " +
-         "classifyResponseAsset — a hand-rolled magic-byte table beside WHATWG MIME Sniffing §6, a two-row " +
-         "markup test beside §7.1's nineteen, and SVG/CSS/WebVTT/HLS/DASH sniffs no standard has — went to " +
-         "the BROWSER PROCESS (browser_process/network/resource_kind.c), and the version of this row that " +
-         "kept it said it could not, for the compute-edge reason above. That reason is about the ENGINE and " +
-         "does not reach this destination: the browser process is a program the TRUSTED ZONE CALLS over a " +
-         "postMessage the offscreen already owns, so lib/response-decode.js awaits it and no edge is " +
-         "inverted. The ruling it was standing against is one sentence — type checking is safeFetch's job and " +
-         "safeFetch is the only source of sniffing — and a second implementation in this file was what that " +
-         "forbids." },
+         "THE OTHER COMPONENT IS classifyResponseAsset AND IT IS NOT QUEUED AT ALL. It was deleted into " +
+         "browser_process/network/resource_kind.c under the ruling that type checking is safeFetch's job and " +
+         "safeFetch is the only source of sniffing — which is TRUE and is not an argument that reaches this " +
+         "function: safeFetch sniffs the bytes IT fetched and stamps the answer on the reply record it hands " +
+         "the renderer, and this reads bodies intercept.js captured off the live page, which safeFetch never " +
+         "saw and cannot state a type for. Two different inputs are not one duplicated algorithm, and " +
+         "CLAUDE.md §Architecture's test — the engine gets what a FLOW needs mid-execution — puts a question " +
+         "the trusted zone asks once about a captured reply on this side of the line." },
   { f: "lib/openapi-import.js", zone: "LOGIC", dest: "engine/host/solver/discovery.c", why: "OpenAPI → discovery conversion; the import half of the discovery component." },
   { f: "lib/openapi-export.js", zone: "LOGIC", dest: "engine/host/solver/result.c", why: "discovery → OpenAPI, a projection of the engine's result." },
 ];
@@ -483,7 +493,7 @@ if (queued.length) {
             ` Nothing may precede it: every file below it is called\n` +
             `                 by something inside it, so moving one of those first only lengthens the boundary.\n` +
             `                 Inside the unit, what moves is a CAPABILITY whose consumer is ALREADY IN C — the\n` +
-            `                 test the three landed moves passed. When the queue empties, this gate goes green\n` +
+            `                 test the landed moves passed. When the queue empties, this gate goes green\n` +
             `                 and is deleted with the last row.`);
 }
 

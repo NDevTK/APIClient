@@ -38,12 +38,11 @@ const DUMP_TAB = `
       _source: r._source || null,
       methodId: r.methodId || null,
       format: r.format || (r.body && r.body.format) || null,
-      // Content-based asset classification — the RULE that decided, stamped by
-      // response-decode.js from the browser process's answer
-      // (engine/host/browser_process/network/resource_kind.c). Non-null means the
-      // body is a static asset: it still appears in the log, but no response-body
-      // schema is extracted from it. _assetKind / _assetLabel / _boring stood here
-      // and named classifyResponseAsset in lib/discovery.js, which is deleted.
+      // Content-based asset classification — the classifier's LABEL, stamped by
+      // response-decode.js from classifyResponseAsset (lib/discovery.js). Non-null
+      // means the body is a static asset: it still appears in the log, but no
+      // response-body schema is extracted from it. _assetKind / _assetLabel /
+      // _boring stood here and were three fields where one carries the answer.
       _assetReason: r._assetReason || null,
       // WS / postMessage / MessageChannel frames live here:
       messages: r.messages || null,

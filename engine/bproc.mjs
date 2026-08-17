@@ -5,15 +5,25 @@
  * program would be BUILT and never RUN, which §Testing calls the excluded test one layer down. It is the same
  * role `engine/route.mjs` plays for the renderer ABI — a harness, not a pinned behaviour.
  *
- * ITS ORACLE IS THE STANDARD, WHICH IS WHY EACH ROW CARRIES THE SENTENCE THAT DECIDES IT. A test262 file is
- * self-validating because it states the spec's own answer; these rows do the same, naming the MIME Sniffing §
- * or the Chromium rule that produces each verdict. That is what makes this different from an expected-output
- * file: when the algorithm improves, a row changes only if the STANDARD's answer changed, and a row whose
- * comment cannot be traced to a sentence is a row that should not exist.
+ * WHAT IT DRIVES NOW. It drove `bp_corb_check` over nine MISLABELLED responses, and those entries are gone:
+ * CLAUDE.md §Architecture puts type sniffing back in `extension/lib/safe-fetch.js`, and the C that had been
+ * transliterated out of it — `network/{mime_sniff,corb,json_sniff,nosniff,resource_kind}.c` — is deleted with
+ * them. What is left in the program is the RENDERER REGISTRY, which is what makes its name a description, and
+ * that is what this drives. (The rows it used to carry had also stopped agreeing with the ABI: they passed
+ * `noSniff` as a NUMBER long after both entries were changed to take the HEADER VALUE, so this file had been
+ * calling a signature the program no longer had — an unrun harness rotting exactly as an unbuilt entry does.)
  *
- * AND EVERY ROW IS A MISLABEL, because that is the only case any of this exists for. A body whose declared type
- * and true type agree is decided by the header alone and proves nothing about §7 or about a byte ever having
- * been read.
+ * ITS ORACLE IS SECURITY.md, WHICH IS WHY EACH ROW CARRIES THE SENTENCE THAT DECIDES IT. "One WASM instance
+ * per ORIGIN-KEYED AGENT CLUSTER — `(browsing-context group, origin)`." Every row below is a TRANSITION of
+ * that table whose outcome the rule states, and the one transition the rule FORBIDS — a second renderer for a
+ * live cluster — is not a row at all: registry.c makes it a `CHECK`, fatal in every build, so a driver that
+ * "tested" it would be testing that this process aborts, which is not a value anything may inspect.
+ *
+ * AND THE KEY IS BYTES WITH AN INTERIOR NUL, which is the one marshalling this boundary can get silently
+ * wrong. `clusterKeyOf` joins the browsing-context group and the origin with a NUL, so a key passed through
+ * `ccall`'s `"string"` would arrive truncated at the separator and every origin in one tab would answer to one
+ * key — the registry whose whole job is to refuse a merged agent cluster would perform one. The last two rows
+ * are two keys that are equal up to that separator and must be two clusters.
  */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,92 +32,90 @@ const ENGINE = dirname(fileURLToPath(import.meta.url));
 const factory = await import(join(ENGINE, '..', 'extension', 'lib', 'bproc', 'bproc.mjs'));
 const M = await (factory.default ?? factory)();
 
-const enc = new TextEncoder();
-function corb(contentType, noSniff, sameOrigin, bodyText) {
-  const b = typeof bodyText === 'string' ? enc.encode(bodyText) : bodyText;
+const KEY_ENC = new TextEncoder();
+/* The placement `extension/browser-process.js` performs, verbatim in shape: bytes and a LENGTH, never a C
+   string. One extra byte so a zero-length key still has an address of its own. */
+function withKey(key, fn) {
+  const b = KEY_ENC.encode(key);
   const p = M._malloc(b.length + 1);
-  if (!p) throw new Error('OOM placing the resource header');
+  if (!p) throw new Error('OOM placing an agent cluster key');
   M.HEAPU8.set(b, p);
-  try {
-    const s = M.ccall('bp_corb_check', 'string',
-                      ['string', 'number', 'number', 'number', 'number'],
-                      [contentType, noSniff ? 1 : 0, sameOrigin ? 1 : 0, p, b.length]);
-    const r = JSON.parse(s);
-    if (typeof r.allow !== 'boolean' || typeof r.computed !== 'string' || typeof r.reason !== 'string')
-      throw new Error('the browser process answered something other than a CORB verdict: ' + s);
-    return r;
-  } finally { M._free(p); }
+  try { return fn(p, b.length); } finally { M._free(p); }
 }
+const create = (key) =>
+  withKey(key, (p, n) => M.ccall('bp_renderer_create', 'number', ['number', 'number'], [p, n]));
+const launched = (id) => M.ccall('bp_renderer_launched', null, ['number'], [id]);
+const launchFailed = (id) => M.ccall('bp_renderer_launch_failed', null, ['number'], [id]);
+const terminated = (id) => M.ccall('bp_renderer_terminated', null, ['number'], [id]);
+const snapshot = () => {
+  const r = JSON.parse(M.ccall('bp_registry_snapshot', 'string', [], []));
+  for (const f of ['clusters', 'routingIds']) {
+    if (typeof r[f] !== 'string') throw new Error('the registry snapshot carries no `' + f + '`');
+  }
+  for (const f of ['live', 'launched', 'terminated', 'failed', 'nextRoutingId']) {
+    if (typeof r[f] !== 'number') throw new Error('the registry snapshot carries no `' + f + '`');
+  }
+  return r;
+};
 
-const HTML = '<!doctype html><html><body><h1>login</h1></body></html>';
-const JS   = '(function(){window.__chunk=1;})();\n';
-const JSON_BODY = '{"user":{"id":42},"token":"abc"}';
-const PNG  = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+/* A cluster key as bridge.js builds one: the browsing-context group, a NUL, the origin. */
+const K = (group, origin) => group + '\0' + origin;
 
 const ROWS = [
-  { name: 'JS served as text/plain',
-    why: '§7 step 4 — "text/plain" is one of §5.1\'s four check-for-apache-bug values, so the BYTES decide; ' +
-         '§7.2 finds no binary data byte and answers text/plain, which is neither protected nor sniffable',
-    ct: 'text/plain', nosniff: false, same: false, body: JS,
-    want: { allow: true, computed: 'text/plain', reason: 'allowed' } },
+  { name: 'a cluster with no renderer gets one, and the id is positive',
+    why: 'a routing id is the only name a renderer has and it is minted HERE and nowhere else, which is what ' +
+         'makes it evidence of which process decided the instance should exist',
+    run: () => { const id = create(K('7', 'https://a.example')); launched(id);
+                 return { positive: id > 0, live: snapshot().live, launched: snapshot().launched }; },
+    want: { positive: true, live: 1, launched: 1 } },
 
-  { name: 'HTML served as application/javascript',
-    why: '§7 reaches step 8 and answers the SUPPLIED type — sniffing never downgrades a scriptable type, the ' +
-         'mirror of the step-1 rule that keeps it from upgrading into one — so the mislabel is caught by ' +
-         'CORB\'s own confirmation sniff, which is §7.1\'s scriptable table over the bytes',
-    ct: 'application/javascript', nosniff: false, same: false, body: HTML,
-    want: { allow: false, computed: 'application/javascript', reason: 'sniffed-html' } },
+  { name: 'a launch that FAILED frees its agent cluster',
+    why: 'the zygote has already removed the frame, so leaving the registration would refuse that cluster a ' +
+         'renderer forever with nothing anywhere to say why — registry.h states it as the reason there are ' +
+         'two entries and not one taking a boolean',
+    run: () => { const id = create(K('7', 'https://b.example')); launchFailed(id);
+                 const s = snapshot(); return { live: s.live, failed: s.failed }; },
+    want: { live: 1, failed: 1 } },
 
-  { name: 'JSON served as application/javascript',
-    why: '§7 has no JSON row at all, so this one is Chromium SniffForJSON\'s brace / string / colon machine — ' +
-         'the classic JSON-hijack shape, and a syntax error as a JS statement, which is why it is evidence',
-    ct: 'application/javascript', nosniff: false, same: false, body: JSON_BODY,
-    want: { allow: false, computed: 'application/javascript', reason: 'sniffed-json' } },
+  { name: 'the freed cluster may have a renderer again, with a NEW id',
+    why: 'the refusal is of a second LIVE instance and not of a cluster that has ever asked; a routing id is ' +
+         'never reissued, because a stale id coming back must be recognisable as one',
+    run: () => { const before = snapshot().nextRoutingId;
+                 const id = create(K('7', 'https://b.example')); launched(id);
+                 return { fresh: id >= before, live: snapshot().live }; },
+    want: { fresh: true, live: 2 } },
 
-  { name: 'HTML served honestly as text/html, cross-origin',
-    why: '§7 step 1 returns an HTML supplied type before any byte is examined; text/html is CORB-protected',
-    ct: 'text/html', nosniff: false, same: false, body: HTML,
-    want: { allow: false, computed: 'text/html', reason: 'protected-type' } },
+  { name: 'a renderer DEATH releases the slot',
+    why: 'a real renderer can exit on its own and the browser learns of it; here the offscreen owns the frame ' +
+         'and so is what notices, and this table is where the cluster is freed',
+    run: () => { const id = create(K('7', 'https://c.example')); launched(id); terminated(id);
+                 const s = snapshot(); return { live: s.live, terminated: s.terminated }; },
+    want: { live: 2, terminated: 1 } },
 
-  { name: 'the same body SAME-ORIGIN',
-    why: 'CORB protects across origins and nowhere else — the page\'s own data is its to read. It is still ' +
-         'refused to a CODE loader, which is a load that could not have executed anyway',
-    ct: 'text/html', nosniff: false, same: true, body: HTML,
-    want: { allow: false, computed: 'text/html', reason: 'same-origin' } },
+  { name: 'the SAME origin in another browsing-context group is another cluster',
+    why: 'SECURITY.md keys the instance on `(browsing-context group, origin)`, so neither half alone decides',
+    run: () => { const id = create(K('9', 'https://a.example')); launched(id); return { live: snapshot().live }; },
+    want: { live: 3 } },
 
-  { name: 'JS served honestly, same-origin',
-    why: 'the other arm of the same rule: a JavaScript type is not protected, so the page\'s own chunk loads',
-    ct: 'text/javascript', nosniff: false, same: true, body: JS,
-    want: { allow: true, computed: 'text/javascript', reason: 'same-origin' } },
-
-  { name: 'JS served as text/plain under nosniff',
-    why: '§7 step 3 hands back the supplied type before step 4\'s apache-bug branch can look at bytes, and ' +
-         'the server has said the label is final — so a cross-origin non-JS type is refused',
-    ct: 'text/plain', nosniff: true, same: false, body: JS,
-    want: { allow: false, computed: 'text/plain', reason: 'nosniff-not-js' } },
-
-  { name: 'a PNG served as text/plain',
-    why: '§7 step 4 again, and §7.2 finds 0x1A in the PNG signature — a binary data byte — so the computed ' +
-         'type is application/octet-stream. Not markup and not JSON, so CORB has nothing to block on',
-    ct: 'text/plain', nosniff: false, same: false, body: PNG,
-    want: { allow: true, computed: 'application/octet-stream', reason: 'allowed' } },
-
-  { name: 'a body with NO Content-Type at all',
-    why: '§5.1: a null supplied type IS "undefined", which sends §7 to step 2 and §7.1\'s scriptable table — ' +
-         'the one path on which sniffing may name text/html, and it names it here',
-    ct: null, nosniff: false, same: false, body: HTML,
-    want: { allow: false, computed: 'text/html', reason: 'protected-type' } },
+  { name: 'two keys equal up to the NUL separator are TWO clusters',
+    why: 'the row this whole byte-and-length marshalling exists for: `ccall`\'s "string" would truncate both ' +
+         'keys at the separator, they would collide, and the second create would abort as a duplicate — so a ' +
+         'marshalling regression shows up here as a CRASH rather than as a wrong number',
+    run: () => { const id = create('7\0https://d.example'); launched(id);
+                 const id2 = create('7\0https://d.example.evil'); launched(id2);
+                 const s = snapshot(); return { live: s.live, distinct: id !== id2 }; },
+    want: { live: 5, distinct: true } },
 ];
 
 let bad = 0;
 for (const r of ROWS) {
-  const got = corb(r.ct, r.nosniff, r.same, r.body);
-  const ok = got.allow === r.want.allow && got.computed === r.want.computed && got.reason === r.want.reason;
+  const got = r.run();
+  const ok = Object.keys(r.want).every((k) => got[k] === r.want[k]);
   if (!ok) bad++;
-  console.log((ok ? '  ok   ' : '  FAIL ') + r.name.padEnd(40) +
-              (got.allow ? 'allow' : 'BLOCK') + '  ' + got.computed + '  ' + got.reason +
-              (ok ? '' : '   want: ' + (r.want.allow ? 'allow' : 'BLOCK') + '  ' + r.want.computed +
-                          '  ' + r.want.reason + '\n         ' + r.why));
+  console.log((ok ? '  ok   ' : '  FAIL ') + r.name.padEnd(56) + JSON.stringify(got) +
+              (ok ? '' : '   want: ' + JSON.stringify(r.want) + '\n         ' + r.why));
 }
-console.log('[bproc] ' + (ROWS.length - bad) + '/' + ROWS.length + ' mislabelled-resource rows agree with the standard');
+console.log('[bproc] final registry: ' + JSON.stringify(snapshot()));
+console.log('[bproc] ' + (ROWS.length - bad) + '/' + ROWS.length + ' renderer-registry transitions agree with ' +
+            'SECURITY.md');
 process.exit(bad ? 1 : 0);

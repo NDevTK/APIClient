@@ -12,11 +12,9 @@
   // Decide whether to read a body as bytes (base64 for transport) vs. text.
   // THE CONSUMER IS lib/response-decode.js IN THE OFFSCREEN, not background.js —
   // that name was checked and is wrong: the service worker is STATELESS and never
-  // relays page data (SECURITY.md). What needs these bytes is the classification
-  // response-decode.js asks the BROWSER PROCESS for — WHATWG MIME Sniffing §6/§7
-  // over the resource header, engine/host/browser_process/network/resource_kind.c.
-  // (`classifyResponseAsset` in lib/discovery.js was that consumer and is deleted:
-  // it was a hand-rolled second implementation of the same standard.)
+  // relays page data (SECURITY.md), and the magic-byte classification that needs
+  // these bytes is `classifyResponseAsset` in lib/discovery.js, called from
+  // lib/response-decode.js.
   // The fact the name was attached to is still true and is the reason this split
   // exists: reading a body via Response.text() decodes it as UTF-8 and destroys
   // every non-ASCII byte, so a body classified by its leading bytes must not be

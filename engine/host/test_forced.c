@@ -234,8 +234,11 @@ static int fixture_provide(JSContext *ctx) {
         url_record_free(&rec);
         CHECK(abs, "the fixture could not serialize the URL it is answering");
         /* THE ONE REPLY RECORD every host delivers — the same shape the trusted zone stringifies as JSON. */
+        /* `application/json` is what this fixture SERVES, stated by the host that serves it — the same
+           position the trusted zone is in when it stamps `computedType` on a real reply (fetch.h). */
         reply = fetch_reply_new(ctx, 200, "OK", NULL, "{\"region\":\"us-west-2\"}",
-                                strlen("{\"region\":\"us-west-2\"}"), (const char *const *)&abs, 1);
+                                strlen("{\"region\":\"us-west-2\"}"), (const char *const *)&abs, 1,
+                                "application/json");
         filled += engine_provide(ctx, one, reply);
         JS_FreeValue(ctx, reply);
         free(abs);

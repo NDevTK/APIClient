@@ -410,37 +410,6 @@ bool mime_type_is_archive(const MimeType *m)
            essence_is(m, "application", "x-gzip");
 }
 
-/* §4.6's JAVASCRIPT MIME TYPE — sixteen essences, and the group HTML tests to decide whether a `<script>`'s
-   fetched body may be executed. It is stated as two subtype lists under their own type rather than as sixteen
-   essence compares, because that is the shape the other groups here have and because `application/jscript` is
-   NOT in the group while `text/jscript` is — a flat list makes that pair look like a typo and this does not. */
-bool mime_type_is_javascript(const MimeType *m)
-{
-    static const char *const TEXT[] = { "ecmascript", "javascript", "jscript", "livescript",
-                                        "x-ecmascript", "x-javascript", NULL };
-    static const char *const APP[]  = { "ecmascript", "javascript", "x-ecmascript", "x-javascript", NULL };
-    const char *const *list;
-    int i;
-
-    if (!m->type || !m->subtype) return false;
-    if (!strcmp(m->type, "text")) {
-        /* The group's six legacy `text/javascript1.0` … `text/javascript1.5`, written as the RANGE they are.
-           A prefix compare would also accept `text/javascript1.5x`, which is not in the group and which a
-           server can send; the terminator test is what makes the range a range. */
-        if (!strncmp(m->subtype, "javascript1.", 12) && m->subtype[12] >= '0' && m->subtype[12] <= '5' &&
-            m->subtype[13] == 0)
-            return true;
-        list = TEXT;
-    } else if (!strcmp(m->type, "application")) {
-        list = APP;
-    } else {
-        return false;
-    }
-    for (i = 0; list[i]; i++)
-        if (!strcmp(m->subtype, list[i])) return true;
-    return false;
-}
-
 /* ---- Fetch §2.2.3 "extract a MIME type" ----------------------------------------------------------------- */
 
 bool mime_type_extract(MimeType *out, const char *value)

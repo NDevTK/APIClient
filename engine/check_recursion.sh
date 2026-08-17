@@ -45,7 +45,7 @@ fi
 # translation unit: exactly the "silently covers a fraction of the program, and its zero is believed" failure
 # this file's own header warns about, arriving through the filename.
 # -I$H/browser_process is the browser process's own root, the way -I$H/browser is the renderer's: its
-# components include each other as "network/corb.h".
+# components include each other as "renderer/registry.h".
 n=0
 LLS=""
 for f in $UNITS; do

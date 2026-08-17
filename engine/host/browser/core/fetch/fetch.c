@@ -371,7 +371,8 @@ JSValue fetch_reply_parse_json(JSContext *ctx, JSValueConst reply)
    only the host knows which. It is the same shape the trusted zone's JSON reply carries, so there is ONE reply
    record and not one per host. */
 JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
-                        const char *body, size_t body_len, const char *const *url_list, int url_list_n)
+                        const char *body, size_t body_len, const char *const *url_list, int url_list_n,
+                        const char *computed_type)
 {
     JSValue o = JS_NewObject(ctx), h, v;
     int i;
@@ -435,7 +436,46 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
               "parses is one of these");
     }
     CHECK(JS_SetPropertyStr(ctx, o, "headers", h) >= 0, "fetch: a reply record refused its header list");
+    /* AND WHAT THE HOST DECIDED THIS RESOURCE IS (fetch.h). Asserted rather than defaulted at the WRITE, so a
+       host that has not run the sniff aborts here — where the omission is — instead of at the reader, which
+       would only be able to say that some producer somewhere left the field off. */
+    DCHECK(computed_type != NULL,
+           "a host built a reply without stating what it computed the resource to be — the sniff belongs to "
+           "whoever read the bytes, and a host that has not decided is not finished building this record; a "
+           "server that named nothing and bytes that named nothing is the EMPTY string, which is a value");
+    v = JS_NewString(ctx, computed_type ? computed_type : "");
+    CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's computed MIME type");
+    CHECK(JS_SetPropertyStr(ctx, o, "computedType", v) >= 0,
+          "fetch: a reply record refused its computed MIME type");
     return o;
+}
+
+/* THE COMPUTED TYPE, READ BACK — see fetch.h for why it is read and never derived. */
+char *fetch_reply_computed_type(JSContext *ctx, JSValueConst reply)
+{
+    JSValue v;
+    const char *s;
+    char *out;
+
+    DCHECK(JS_IsObject(reply) || JS_IsNull(reply),
+           "a computed MIME type was asked of something that is not the host's reply record — qjs_provide "
+           "parses the trusted zone's JSON and every C host builds the same record, and a network error is "
+           "the JSON `null`");
+    if (!JS_IsObject(reply)) return NULL;   /* a network error: nothing answered, so nothing was computed */
+    v = JS_GetPropertyStr(ctx, reply, "computedType");
+    /* THE FIELD IS ASSERTED, NEVER DEFAULTED — CLAUDE.md's greppable contract, from the reader's end. The
+       trusted zone's `safeFetch` stamps it on every path it has and `fetch_reply_new` takes it as a parameter,
+       so `undefined` here is a producer that stopped and would otherwise become a plausible "no type" that is
+       indistinguishable from a server that really named none. */
+    DCHECK(JS_IsString(v),
+           "the host's reply record carries no `computedType` — the zone that READ THE BYTES is the one that "
+           "may decide what a resource is, and a record without that decision is a producer that did not "
+           "finish building it; a resource nothing could name is the EMPTY string");
+    s = JS_ToCString(ctx, v);
+    out = s ? strdup(s) : NULL;
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, v);
+    return out;
 }
 
 /* SETTLING A SCHEME §4.3 ANSWERED LOCALLY. `data:` and `blob:` both produce their whole response inside this

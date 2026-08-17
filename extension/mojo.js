@@ -5,7 +5,7 @@
  *
  * WHAT THIS REPLACES. Two ad-hoc envelope vocabularies grew, one per boundary, each carrying its own `id`
  * routing table, its own `op` string, its own `ok`/`err` convention and its own reply drain — renderer-host's
- * `{v:1,id,op:"call",fn,ret,args,bodies}` and browser-process-host's `{v:1,id,op:"corb",…}`. Two transports for
+ * `{v:1,id,op:"call",fn,ret,args,bodies}` and browser-process-host's own `{v:1,id,op,…}`. Two transports for
  * one problem is the dual system CLAUDE.md forbids: every capability a boundary gains is a new `op` hand-written
  * on both sides, and every omission is silent. Mojo's answer is that a boundary carries no capability list at
  * all — it carries ONE brokered request, `GetInterface(name)`, and everything else rides a pipe of its own.

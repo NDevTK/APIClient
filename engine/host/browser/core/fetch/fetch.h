@@ -62,9 +62,19 @@ bool fetch_parse_url(JSContext *ctx, UrlRecord *rec, const char *url, size_t len
    — §4.1's "If internalResponse's URL list is empty, then set it to a clone of request's URL list" — so the
    list is never empty and the DCHECKs at both ends say so. Only the FIRST and LAST items are ever exposed to
    script, which is why a host that cannot enumerate the middle of a chain still reports a faithful list.
-   `body`/`body_len` are §2.2.5's BODY, which is a BYTE SEQUENCE and reaches the record as one. */
+   `body`/`body_len` are §2.2.5's BODY, which is a BYTE SEQUENCE and reaches the record as one.
+   `computed_type` is §4.2's ESSENCE of what the HOST decided this resource IS — the sniff's answer, taken
+   where the bytes were read. It is a PARAMETER for the same reason the URL list is: only the host performed
+   the fetch, and only the host may sniff. A renderer that derives a type from response bytes for itself can
+   classify — and then MINE — a cross-origin body a real renderer would have been handed as an opaque, empty
+   response, which is why §7 runs in the network service and why this crosses as an answer rather than as
+   evidence. In the extension the host is `extension/lib/safe-fetch.js`, whose `computedType` this is; a C host
+   states what it served. The EMPTY string is §5.1's "the supplied MIME type is undefined" surviving the sniff
+   — the server named nothing and the bytes named nothing either, a positive answer — and NULL is not allowed:
+   a host that has not decided has not finished building the record. */
 JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, const HeaderList *headers,
-                        const char *body, size_t body_len, const char *const *url_list, int url_list_n);
+                        const char *body, size_t body_len, const char *const *url_list, int url_list_n,
+                        const char *computed_type);
 
 /* ---- §2.2.5's BODY, WHICH IS A BYTE SEQUENCE AND CROSSES AS ONE ------------------------------------------
  *
@@ -124,5 +134,17 @@ JSValue fetch_reply_parse_json(JSContext *ctx, JSValueConst reply);
    responses' values together. A reply that is the JSON `null` (a network error) carries no headers and leaves
    `out` empty, which is what a caller reads as "the response had none". */
 void fetch_reply_header_list(JSContext *ctx, JSValueConst reply, HeaderList *out);
+
+/* WHAT THE HOST DECIDED THIS RESOURCE IS — the record's `computedType`, as a malloc'd string the caller frees.
+   It is READ instead of derived: the alternative is this process running its own sniff over the body, or
+   re-parsing the raw `Content-Type` and calling that a type, and both are the renderer answering a question
+   the network side already answered about the same bytes. Two answers to one question is the shape that has
+   nothing to make them agree.
+   THE FIELD IS ASSERTED AND NEVER DEFAULTED. Every producer of this record writes it — `fetch_reply_new` takes
+   it as a parameter and the trusted zone stamps it on the JSON — so an absent one is a producer that stopped,
+   not a resource whose type is unknown. That case has its own value and it is the EMPTY string.
+   A NETWORK ERROR (the JSON `null`) has no record at all and answers NULL, which is the one thing a reader
+   must distinguish from "" — "this address answered nothing" against "it answered, and named nothing". */
+char *fetch_reply_computed_type(JSContext *ctx, JSValueConst reply);
 
 #endif

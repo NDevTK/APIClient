@@ -4,7 +4,6 @@
 #include "core/mime/mime_type.h"     /* Fetch §4's extract a MIME type — the PARSE, which is the renderer's */
 #include "core/encoding/encoding.h"   /* §6's UTF-8 decode: what a `text/x-component` stream's bytes are read as */
 #include "core/fetch/fetch.h"
-#include "core/fetch/headers.h"
 #include "core/url/url.h"
 #include "check.h"
 #include <stdlib.h>
@@ -12,34 +11,23 @@
 
 /* §4.6's ASSET GROUPS, together: a body in one of them is BYTES a decoder turns into pixels or samples, and
    there is no request shape, no schema and no address inside it.
-   ASKED OF THE SUPPLIED TYPE — the server's own statement — AND NOT OF §7's COMPUTED ONE, WHICH THIS PROCESS
-   MAY NOT DECIDE. Sniffing is a NETWORK-side algorithm: a real browser runs §7 in the network service, CORB/ORB
-   gates on its result, and the renderer is TOLD a computed type it never derives from response bytes. This file
-   is the renderer. An engine that sniffs for itself can classify — and then MINE — a cross-origin body a real
-   renderer would have been handed as an opaque, empty response, and the endpoints it takes out of one are
-   surface the page could never have obtained, reported as a finding about the page. That is the same rule
-   CLAUDE.md states for active discovery ("CORS-bounded both ways") arriving from the other direction.
-   WHAT IT COSTS TODAY, MEASURED FROM §7 RATHER THAN ASSUMED: nothing. §7's computed type differs from the
-   supplied one only where a rule fires — steps 1-2 (no type at all, `unknown/unknown`, `application/unknown`,
-   the any-type `*` over `*`, or the Apache bug), step 5 (`text/html` feed-or-HTML), and steps 6-7 (an
-   image or audio-or-video supplied type re-matched against §6.1/§6.2's patterns). The ONE consumer below
-   keys on a supplied `text/x-component`, which no rule in §7 touches, so §7 reaches step 8 and answers the supplied type
-   unchanged for every body this file has ever learned from. The asset early-out is the only other reader, and a
-   body it would have skipped only on magic bytes is one whose essence is not `text/x-component` either way. So
-   the sniff decided ZERO of the endpoints in this engine's @H surface, and removing it from this process
-   removes no measurement — it removes a vote the renderer is not entitled to.
-   WHERE THE COMPUTED TYPE COMES FROM: the BROWSER PROCESS, which now exists —
-   `engine/host/browser_process/network/mime_sniff.c`, linked into a program of its own and run inside a
-   dedicated Worker of the offscreen (`extension/browser-process.js`), reached only by postMessage. That is what
-   this paragraph used to say did not exist, and the two attempts it warned about are worth keeping distinct: a
-   second wasm-ld link out of THIS object set is not a process (same objects, one realm, the host holding an
-   exported HEAPU8 over each), while a separate module in a separate realm on a separate thread is.
-   IT IS STILL NOT A FIELD ON THE REPLY RECORD, and that half of the warning stands unchanged. The browser
-   process serves exactly one operation today — the CORB verdict `extension/lib/safe-fetch.js` asks for at its
-   script gate — so nothing yet STAMPS a computed type onto a reply the way the trusted zone stamps a sender's
-   origin onto a message. Adding a `computedType` here first would be read here and written nowhere, which is
-   the contract CLAUDE.md calls greppable and mechanical, with a DCHECK that could only fire on every reply for
-   a value that decides nothing. The order is: the plumbing, then the reader. */
+   ASKED OF THE TYPE THE HOST COMPUTED AND STAMPED ON THE RECORD, WHICH THIS PROCESS MAY NOT DECIDE FOR ITSELF.
+   Sniffing is a NETWORK-side algorithm: a real browser runs it where the bytes arrive, CORB/ORB gates on its
+   result, and the renderer is TOLD a computed type it never derives from response bytes. This file is the
+   renderer. An engine that sniffs for itself can classify — and then MINE — a cross-origin body a real renderer
+   would have been handed as an opaque, empty response, and the endpoints it takes out of one are surface the
+   page could never have obtained, reported as a finding about the page. That is the same rule CLAUDE.md states
+   for active discovery ("CORS-bounded both ways") arriving from the other direction.
+   AND IT IS NOT THE RAW HEADER EITHER, WHICH IS THE CHANGE THIS PARAGRAPH USED TO ARGUE AGAINST ITSELF. What
+   stood here read `Content-Type` off the record's header list and ran Fetch §4's extract-a-MIME-type on it,
+   and defended that as "the server's own STATEMENT, which the renderer legitimately parses". The parse is
+   legitimate; deciding FROM IT WHAT THE RESOURCE IS is the thing that was already decided, by the zone that
+   held the bytes, one hop earlier — so two zones were answering one question about one response with nothing
+   to make them agree, and the one that could see the body was not the one being believed. `computedType` is
+   that zone's answer (`extension/lib/safe-fetch.js`, CLAUDE.md §Architecture: "TYPE SNIFFING STAYS IN
+   JAVASCRIPT, in `safeFetch`"), and reading it is what makes the sniff single-sourced rather than absent.
+   The paragraph that stood here ended "The order is: the plumbing, then the reader." The plumbing is
+   `fetch_reply_new`'s `computed_type` parameter and safeFetch's stamp; this is the reader. */
 static bool is_asset(const MimeType *m)
 {
     return mime_type_is_image(m) || mime_type_is_audio_or_video(m) ||
@@ -162,8 +150,7 @@ static void learn_flight(JSContext *ctx, const UrlRecord *base, const char *body
 
 void reply_decode_learn(JSContext *ctx, const char *url, JSValueConst reply)
 {
-    HeaderList hl = { 0 };
-    MimeType supplied;
+    MimeType computed;
     UrlRecord base;
     char *ct, *essence;
     JSValue bodyv;
@@ -184,30 +171,26 @@ void reply_decode_learn(JSContext *ctx, const char *url, JSValueConst reply)
     if (JS_IsException(bodyv)) { JS_FreeValue(ctx, JS_GetException(ctx)); return; }
     body = fetch_body_bytes(ctx, bodyv, &body_n);
 
-    /* Fetch §4's EXTRACT A MIME TYPE over the record's own header list — a PARSE of what the server STATED,
-       which is legitimately the renderer's because the same record is what `Blob.type`, `File.type` and
-       `accept` matching are read off. What is NOT the renderer's is §7's sniff over the body's bytes; see
-       `is_asset` above for why, and for the measurement that says this file never depended on it. */
-    fetch_reply_header_list(ctx, reply, &hl);
-    ct = header_list_get(&hl, "content-type");   /* NULL is Fetch's "values is null" = the supplied type is undefined */
-    if (!mime_type_extract(&supplied, ct)) {
-        /* FAILURE IS A VALUE, and it is the server having named nothing. A reply with no parseable type is not
-           a Flight stream — that protocol is recognised by the type its server states — so there is nothing
-           here to read and no sniff this process may run to find out otherwise. */
+    /* WHAT THE HOST DECIDED THIS RESOURCE IS, READ OFF THE RECORD (see `is_asset` above). The PARSE back into
+       a §4.1 record is this file's, because the group questions below are asked of a record and not of a
+       string; the DECISION it parses is not. */
+    ct = fetch_reply_computed_type(ctx, reply);
+    if (!mime_type_extract(&computed, ct)) {
+        /* FAILURE IS A VALUE, and it is that nothing named this resource — neither the server nor its bytes.
+           A reply with no type is not a Flight stream, that protocol being recognised by its type, so there is
+           nothing here to read and no sniff this process may run to find out otherwise. */
         free(ct);
-        header_list_free(&hl);
-        mime_type_free(&supplied);
+        mime_type_free(&computed);
         JS_FreeValue(ctx, bodyv);
         return;
     }
     free(ct);
-    header_list_free(&hl);
 
-    if (is_asset(&supplied)) { mime_type_free(&supplied); JS_FreeValue(ctx, bodyv); return; }
+    if (is_asset(&computed)) { mime_type_free(&computed); JS_FreeValue(ctx, bodyv); return; }
 
-    essence = mime_type_essence(&supplied);
-    CHECK(essence, "reply_decode: OOM reading a reply's supplied essence");
-    mime_type_free(&supplied);
+    essence = mime_type_essence(&computed);
+    CHECK(essence, "reply_decode: OOM reading a reply's computed essence");
+    mime_type_free(&computed);
 
     if (!strcmp(essence, "text/x-component")) {
         /* AND THE TEXT OF IT, decoded HERE. A Flight stream is `text/x-component` — text, whose charset React

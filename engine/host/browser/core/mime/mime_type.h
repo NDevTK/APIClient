@@ -37,17 +37,14 @@ const char *mime_type_parameter(const MimeType *m, const char *name);
 
 /* §4.6's MIME TYPE GROUPS. Only the groups this engine's algorithms branch on are here — each arrives with the
    algorithm that first needs it, and a group nobody calls is a table no gate can audit. XHR §3.6.6's "set a
-   document response" tests HTML and XML; §7's MIME type sniffing tests XML, HTML, image and audio-or-video
-   (browser_process/network/mime_sniff.c — a different PROGRAM, which is why this record is a pure value type
-   over strings with no dependency outside the C library); solver/reply_decode.c
-   tests image, audio-or-video, font, ZIP-based and archive over the SUPPLIED type to decide whether a reply
-   body has any structure to learn from. The JSON group is still ABSENT — nothing branches on it yet.
-   THE JAVASCRIPT GROUP ARRIVED WITH ITS SECOND CALLER, which is this comment's own rule for when a group is
-   written: browser_process/network/corb.c had a private copy (a `const char *` essence against a hand-written
-   list), and resource_kind.c needs the same question answered to tell a SCRIPT from the API data some servers
-   ship under a JavaScript type. Two copies of one group is the pair that can disagree about one response, and
-   corb.c's had in fact already drifted from §4.6 in both directions — it carried `application/node`, which is
-   not in the group, and lacked `text/livescript`, which is. */
+   document response" tests HTML and XML; solver/reply_decode.c tests image, audio-or-video, font, ZIP-based
+   and archive over the type the HOST computed, to decide whether a reply body has any structure to learn from.
+   The JSON group is still ABSENT — nothing branches on it yet.
+   THE JAVASCRIPT GROUP WENT WHEN ITS CALLERS DID, by this comment's own rule read in the other direction. It
+   was written for `browser_process/network/{corb,resource_kind}.c`, and those are deleted — CLAUDE.md
+   §Architecture puts type sniffing back in `extension/lib/safe-fetch.js`, whose `_jsMime` is HTML's list on
+   the side that reads the bytes. Nothing in this engine branches on the group now, so keeping the table would
+   be exactly what the first sentence forbids: sixteen essences no gate can audit. */
 bool mime_type_is_html(const MimeType *m);
 bool mime_type_is_xml(const MimeType *m);
 bool mime_type_is_image(const MimeType *m);
@@ -55,7 +52,6 @@ bool mime_type_is_audio_or_video(const MimeType *m);
 bool mime_type_is_font(const MimeType *m);
 bool mime_type_is_zip_based(const MimeType *m);
 bool mime_type_is_archive(const MimeType *m);
-bool mime_type_is_javascript(const MimeType *m);
 
 /* Fetch §2.2.3 "extract a MIME type", over the `Content-Type` value as "get a header" has already joined the
    list's duplicates (0x2C 0x20 between them) — which is exactly the string Fetch §2.2's "get, decode, and

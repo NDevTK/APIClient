@@ -762,7 +762,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
   }
   const canFetch = typeof self.safeFetch === "function" && msg && msg.sourceUrl;
   /* THE REPLY RECORD THE ENGINE PARSES, which is the ONE shape every host of this engine delivers —
-     `{status, statusText, headers: [[name, value], …], urlList}` PLUS the body's BYTES beside it, the same
+     `{status, statusText, headers: [[name, value], …], urlList, computedType}` PLUS the body's BYTES beside
+     it, the same
      record the C hosts build with fetch_reply_new. It used to hand back the BODY'S BYTES alone, so everything
      this zone had actually seen was dropped at this line and re-invented on the other side: the engine reported
      status 200, status message "OK", no headers, and — because Fetch §2.2.6's URL LIST is what `response.url`
@@ -819,6 +820,16 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
              "nothing else, and the engine would report every redirect as none");
       DCHECK(r.headers && typeof r.headers === "object",
              "safeFetch answered a reply with no header map — the engine's Headers record is built from it");
+      /* AND THE TYPE THE CHOKEPOINT COMPUTED, which is the one fact on this record the engine may not derive
+         for itself. safeFetch read the bytes and ran the sniff; the renderer is TOLD the answer, exactly as it
+         is told a browser-stated origin rather than handed a URL to parse. It is a STRING on every path,
+         and the empty one is §5.1's "the supplied MIME type is undefined" surviving the sniff — a positive
+         answer — so `undefined` here is a chokepoint that stopped stamping and would reach the engine's own
+         DCHECK one call later, naming the wrong side. */
+      DCHECK(typeof r.computedType === "string",
+             "safeFetch answered a reply with no computed content type — solver/reply_decode.c reads this " +
+             "field instead of re-deriving a type from the raw header, so an absent stamp is a producer that " +
+             "failed and never a resource whose type is unknown");
       /* STATUS 0 IS NOT A REPLY. It is the one status no HTTP response has, and it is exactly what the
          chokepoint answers when the request never went on the wire at all (bad URL, blocked scheme, blocked
          private target, CORB). This comment's own rule — «`null` is a NETWORK ERROR, which is what a URL this
@@ -829,7 +840,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
          and `bytes` is what it copies into the engine's heap beside it. They are handed over together so a
          caller cannot deliver one without the other. */
       return { meta: { status: r.status, statusText: r.statusText || "", headers: Object.entries(r.headers),
-                       urlList: r.urlList },
+                       urlList: r.urlList, computedType: r.computedType },
                bytes: r.body };
     } catch (e) {
       /* A THROWN fetch IS §5.6's network error and `null` is how it crosses. AN INVARIANT ABORT IS NOT: the

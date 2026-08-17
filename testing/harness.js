@@ -1023,9 +1023,9 @@ async function cmdNetDiff(args) {
       // A live GET to a STATIC ASSET is not an API endpoint the analyzer missed —
       // it's correctly not learned, and this diagnostic ASKS THE ANALYZER rather than
       // deciding for itself. Every captured HTTP response is classified in
-      // lib/response-decode.js by the browser process (WHATWG MIME Sniffing §6/§7 plus
-      // §4.6's groups, engine/host/browser_process/network/resource_kind.c) and stamped
-      // on the log entry as the RULE that decided, so non-null is the answer.
+      // lib/response-decode.js by `classifyResponseAsset` (lib/discovery.js, magic
+      // bytes first and the declared type only as a weaker cross-check) and stamped on
+      // the log entry as that classifier's LABEL, so non-null is the answer.
       // WHAT STOOD HERE WAS A SECOND CLASSIFIER, and it was reached on every entry:
       // it tested `r._assetKind`, a field whose writer had already been deleted, and
       // then fell through to its own content-type table — a declared-type guess, made

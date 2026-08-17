@@ -1,8 +1,10 @@
 /* THE RENDERER REGISTRY — which agent clusters have an instance, what routing id each was given, and the
  * refusal of a second instance for one cluster. It is the BROWSER PROCESS's own state, and it is the reason
- * that program's name is a description rather than an aspiration: everything else in `browser_process/` is a
- * NETWORK SERVICE algorithm over bytes (§7 sniffing, CORB, nosniff, resource classification), and a network
- * service is not what decides that a renderer exists.
+ * that program's name is a description rather than an aspiration — it is now the WHOLE of that program.
+ * `browser_process/network/` stood beside it holding §7 sniffing, CORB, nosniff and resource classification,
+ * and those are deleted: CLAUDE.md §Architecture puts type sniffing back in `extension/lib/safe-fetch.js`,
+ * which reads the bytes and stamps what it decided onto the reply record. A network service was never what
+ * decides that a renderer exists, and deciding that is what is left here.
  *
  * WHY IT IS C, WHICH IS THE WHOLE POINT OF THE FILE. It was JavaScript — a `Map`, a `_nextRoutingId++`, three
  * counters and a duplicate check, in `extension/browser-process.js` — and CLAUDE.md §Architecture leaves that

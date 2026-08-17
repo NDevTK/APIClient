@@ -41,56 +41,13 @@
          "extension/mojo.js is not loaded in this realm — the IDL is validated as it is declared, so a mojom " +
          "file that loads first would install interfaces nothing ever checked");
 
-  /* Two facts every response question takes, and the reason they are stated per method rather than shared: a
-     mojom method's parameter list IS its contract, and a shared record would let one method's list change
-     under the other. The sentences repeat because the rules do. */
-  var CONTENT_TYPE = { name: "contentType", type: "string?",
-    why: "an ABSENT Content-Type is §5.1's \"the supplied MIME type is undefined\" and says so with null, " +
-         "never with \"\" — an empty header is a value a server can really send and means something else" };
-  var XCTO = { name: "xContentTypeOptions", type: "string?",
-    why: "this boundary carries the HEADER VALUE and not the derived flag, so Fetch's determine-nosniff runs " +
-         "once beside the algorithms that read it (network/nosniff.c) instead of as an `indexOf(\"nosniff\")` " +
-         "in a zone the architecture leaves a bridge; an absent header is null exactly as an absent " +
-         "Content-Type is, and `foo, nosniff` does NOT set the flag because the standard matches the FIRST value" };
-  var HEADER = { name: "header", type: "array<uint8>",
-    why: "§5.2's resource header is a BYTE SEQUENCE and the whole reason this decision is taken in another " +
-         "process is that it reads the body — a string here is a zone that ran a decode it does not own, and " +
-         "every non-ASCII signature in §6's tables is what the decode destroys" };
-
-  /* ── THE NETWORK SERVICE'S CONTENT DECISIONS. In Chromium these run in the network service and never in a
-     renderer: a renderer that classifies for itself can mine a cross-origin body it would otherwise have been
-     handed empty. Here the network service is in-process with the browser process — one Worker — which is a
-     configuration Chromium itself ships rather than a collapse invented here. */
-  g.mojo.defineInterface({
-    name: "network.mojom.ContentSniffer",
-    version: 0,
-    methods: [
-      { ordinal: 0, name: "CheckCorb",
-        params: [CONTENT_TYPE, XCTO,
-          { name: "sameOrigin", type: "bool",
-            why: "the principal comparison is a fact the TRUSTED zone MADE from the browser's " +
-                 "MessageSender.origin (SECURITY.md forbids re-deriving it from a URL), so it crosses as a " +
-                 "browser-stated boolean and this process has no URL to invent one from" },
-          HEADER],
-        reply: [
-          { name: "allow", type: "bool",
-            why: "the verdict, §7's computed essence and the rule that decided are written together by corb.c" },
-          { name: "computed", type: "string", why: "§7's computed MIME type, written with the verdict by corb.c" },
-          { name: "reason", type: "string", why: "the rule that decided, written with the verdict by corb.c" }] },
-
-      { ordinal: 1, name: "ClassifyResource",
-        params: [CONTENT_TYPE, XCTO,
-          { name: "opaque", type: "bool",
-            why: "Fetch §2.2.6: the response is an opaque filtered response, so its body is null and its " +
-                 "header list is empty by construction — a fact only the zone HOLDING the Response can state, " +
-                 "and one no amount of looking at bytes can tell apart from a body that was read and was empty" },
-          HEADER],
-        reply: [
-          { name: "asset", type: "bool",
-            why: "the verdict and the rule that decided are written together by resource_kind.c" },
-          { name: "reason", type: "string", why: "the rule that decided, written with the verdict by resource_kind.c" }] },
-    ],
-  });
+  /* ── network.mojom.ContentSniffer IS GONE, AND THIS IS WHERE IT WAS. It declared `CheckCorb` and
+     `ClassifyResource` over `browser_process/network/{mime_sniff,corb,json_sniff,nosniff,resource_kind}.c`,
+     and both the interface and the C behind it are deleted. CLAUDE.md §Architecture: "TYPE SNIFFING STAYS IN
+     JAVASCRIPT, in `safeFetch`, where SECURITY.md puts it" — the trusted zone is the one that READ the bytes,
+     it answers the question once, and it STAMPS what it decided onto the reply record (`computedType`) so the
+     renderer is told rather than left to derive a second answer. An interface exists only if both ends agree
+     on it, and there is no longer anything on either end for these two to describe. */
 
   /* ── THE BROWSER PROCESS'S RENDERER REGISTRY. The interface name is Chromium's own for the browser-side
      object that owns renderer processes. The registry lives behind it and nowhere else: which agent clusters
@@ -204,8 +161,8 @@
      the wire to tell them apart, which is the failure a validator exists to prevent.
      ──────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
-  /* THE ONE FACT EVERY REPLY CARRIES, declared ONCE and referenced by every method for the reason CONTENT_TYPE
-     above is: a shared record cannot drift, twenty hand-copied ones can. It is a fact about the PROCESS rather
+  /* THE ONE FACT EVERY REPLY CARRIES, declared ONCE and referenced by every method: a shared record cannot
+     drift, twenty hand-copied ones can. It is a fact about the PROCESS rather
      than about any method — an ABI call is the only thing that can grow a wasm linear memory, so the moment a
      call answers is exactly the moment the number changed, and no extra round trip could be fresher. That is
      also why it is not a method of its own: a poll would report the memory as of the poll, which is a different

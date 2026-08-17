@@ -35,8 +35,8 @@ const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge
    copy wrong the day it landed, so the check declared a revision that BUILDS to be one that "cannot be built by
    anyone who checks it out". A confident false red is worse than a silent miss: it is the phantom §Testing
    describes, and the next real dangling include arrives in a report nobody believes. The answer is per SOURCE
-   SET and not a flat union, because a union would ACCEPT a renderer unit including "network/corb.h" — a header
-   its compiler is never given — and that is precisely the include this check exists to catch. */
+   SET and not a flat union, because a union would ACCEPT a renderer unit including "renderer/registry.h" — a
+   header its compiler is never given — and that is precisely the include this check exists to catch. */
 const LIST_SOURCES = process.argv.includes("--list-sources");
 const LIST_INCLUDE_ROOTS = process.argv.includes("--list-include-roots");
 
@@ -152,8 +152,8 @@ const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (th
    Modules instantiated in the offscreen's own realm with the host holding an exported HEAPU8 over each, so
    nothing about the link kept either out of the other's memory. A real boundary is a REALM the host cannot
    reach into: for the untrusted renderer that is a sandboxed opaque-origin frame (extension/renderer.html +
-   extension/renderer-host.js), and for the trusted network service it is a dedicated WORKER
-   (extension/browser-process.js) — see BPROC_SOURCES below and browser_process/network/mime_sniff.h. */
+   extension/renderer-host.js), and for the trusted browser process it is a dedicated WORKER
+   (extension/browser-process.js) — see BPROC_SOURCES below and browser_process/renderer/registry.h. */
 const ENTRY_SMOKE = join(HOST, "test_forced.c");
 const ENTRY_ABI   = join(HOST, "main.c");
 /* THE THIRD PROGRAM IS BACK AND THE PARAGRAPH ABOVE IS WHY IT IS DIFFERENT THIS TIME. What was deleted was a
@@ -161,17 +161,19 @@ const ENTRY_ABI   = join(HOST, "main.c");
    below into `bp_`-prefixed object files with their own include path) and its OWN runtime — a dedicated Worker
    of the offscreen document, `extension/browser-process.js`, holding its own realm, its own module instance and
    its own thread, reachable only by postMessage. The link is not the boundary and never was; the WORKER is, and
-   the link is what keeps §7 out of the renderer's symbol table so a renderer-side caller fails to link rather
-   than aborting at run time. Nothing in SHARED_SOURCES is offered to it: it links four files, one of which
-   (core/mime/mime_type.c) is a SOURCE both programs compile, which is what a shared source is — the same
-   algorithm in two programs, the way Chromium's net/ links into both of its. */
+   the link is what keeps the renderer registry out of the renderer's symbol table so a renderer-side caller
+   fails to link rather than aborting at run time. Nothing in SHARED_SOURCES is offered to it, and NOTHING is
+   appended either: `core/mime/mime_type.c` was concatenated here because the sniffing entries computed into a
+   `MimeType`, and those entries are deleted (CLAUDE.md §Architecture puts type sniffing in
+   `extension/lib/safe-fetch.js`). The set is now exactly what the directory holds — a source list that is
+   WALKED and never hand-extended is the same rule SHARED_SOURCES states for itself. */
 const BPROC_DIR = join(HOST, "browser_process");
-const BPROC_SOURCES = walkC(BPROC_DIR).concat([join(HOST, "browser", "core", "mime", "mime_type.c")]).sort();
+const BPROC_SOURCES = walkC(BPROC_DIR).sort();
 
 /* THE HEADER ROOTS EACH SET'S COMPILER IS GIVEN, DECLARED ONCE. CFLAGS and BPCFLAGS below are BUILT from these
    rather than spelling them again, and `--list-include-roots` reports them, so the compiler, the build and any
    checker are reading one statement. The two lists differ deliberately: only a browser_process unit is given
-   BPROC_DIR, which is what makes `#include "network/corb.h"` legal there and a build failure anywhere else.
+   BPROC_DIR, which is what makes `#include "renderer/registry.h"` legal there and a failure anywhere else.
    Include by FULL path from the host root — a browser component is "core/dom/dom_element.h", a solver component
    "solver/concolic.h" — so a cross-layer include always names its layer and no bare-name shortcut hides one. */
 const ENGINE_INCLUDE_ROOTS = [QJS, HOST, join(HOST, "browser"), LEXBOR_INC];
@@ -213,7 +215,7 @@ if (LIST_SOURCES) {
 
 /* THE HEADER ROOTS, PER SOURCE SET, EMITTED FROM THE ONE PLACE THAT HANDS THEM TO THE COMPILER. The two sets
    differ and the difference is the whole point: a browser_process unit is given `-I BPROC_DIR` so it may write
-   `#include "network/corb.h"`, and a renderer unit is NOT, so the same line in a renderer file is a build
+   `#include "renderer/registry.h"`, and a renderer unit is NOT, so the same line in a renderer file is a build
    failure that a consumer of this manifest must be able to SEE. Emitting a flat union would answer "fine" to
    both and turn the check into the diagnostic that always says yes.
    The roots are repo-relative because the consumer resolves them against a git revision rather than a path on
@@ -380,17 +382,17 @@ function abiCheck(program, entrySrc, marker, prefix, list) {
   }
 }
 abiCheck("renderer", join(HOST, "main.c"), "QJS_EXPORT", "qjs_", QJS_ABI);
-/* THE BROWSER PROCESS'S ABI, in its two halves. The first two entries are questions about BYTES answered with
-   no state kept between calls, which is what a NETWORK SERVICE is and why there is no scheduler behind them.
-   The last five are the RENDERER REGISTRY, which is state and is what makes the program a BROWSER PROCESS:
-   which agent clusters have an instance, what routing id each was given, and the refusal of a second instance
-   for one cluster. They were a `Map` and a counter in extension/browser-process.js until this list grew, and
-   the reason that was wrong is the reason this list exists — a decision taken in the bridge is a decision
-   nothing in C can assert. It is enforced by the same call for the same reason: an entry reaching `Module`
-   because EXPORT_KEEPALIVE happens to be on is not an ABI, it is an accident that survives until a setting
-   changes. */
-const BP_ABI = ["bp_corb_check", "bp_classify",
-                "bp_renderer_create", "bp_renderer_launched", "bp_renderer_launch_failed",
+/* THE BROWSER PROCESS'S ABI, WHICH IS NOW ONE THING: the RENDERER REGISTRY, the state that makes the program a
+   BROWSER PROCESS — which agent clusters have an instance, what routing id each was given, and the refusal of a
+   second instance for one cluster. They were a `Map` and a counter in extension/browser-process.js until this
+   list grew, and the reason that was wrong is the reason this list exists — a decision taken in the bridge is a
+   decision nothing in C can assert. It is enforced by the same call for the same reason: an entry reaching
+   `Module` because EXPORT_KEEPALIVE happens to be on is not an ABI, it is an accident that survives until a
+   setting changes.
+   TWO SNIFFING ENTRIES STOOD IN FRONT OF THESE — `bp_corb_check` and `bp_classify` — and they are deleted with
+   the standards that had been transliterated out of working JavaScript into them. CLAUDE.md §Architecture:
+   "TYPE SNIFFING STAYS IN JAVASCRIPT, in `safeFetch`, where SECURITY.md puts it." */
+const BP_ABI = ["bp_renderer_create", "bp_renderer_launched", "bp_renderer_launch_failed",
                 "bp_renderer_terminated", "bp_registry_snapshot"];
 abiCheck("browser process", join(BPROC_DIR, "main.c"), "BP_EXPORT", "bp_", BP_ABI);
 
@@ -541,7 +543,7 @@ link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs")
   mkdirSync(BPROC_OUT, { recursive: true });
   const bpObj = (src) => join(OBJDIR, "bp_" + resolve(src).replace(/[\\/:]/g, "_") + ".o");
   const BPCFLAGS = [
-    ...dashI(BPROC_INCLUDE_ROOTS),   // declared once beside the source sets; "network/corb.h" resolves ONLY here
+    ...dashI(BPROC_INCLUDE_ROOTS),   // declared once beside the source sets; "renderer/registry.h" resolves ONLY here
     "-O1", "-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
     "-Werror=implicit-function-declaration",
     "-D_GNU_SOURCE",
@@ -557,7 +559,7 @@ link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs")
   const l = spawnSync(EMCC, [
     ...BPROC_SOURCES.map(bpObj),
     /* THERE IS NO `main()` IN THIS PROGRAM AND THE LINK SAYS SO RATHER THAN LEAVING IT TO BE INFERRED. A
-       network service is entered by its callers; browser_process/main.c owns the ABI the way host/main.c owns
+       browser process is entered by its callers; browser_process/main.c owns the ABI the way host/main.c owns
        qjs_*, and neither runs on load. emcc would reach the same conclusion on its own (no `_main` in
        EXPORTED_FUNCTIONS turns EXPECT_MAIN off), and that is precisely the shape the ABI check above refuses to
        depend on: a property held by the accident of a default is a property the next setting change takes away
@@ -623,9 +625,9 @@ stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
 
 /* AND THE BROWSER PROCESS IS DRIVEN TOO, for the reason every other target here is: a program that is only
    built is the excluded test one layer down. engine/bproc.mjs loads the module just linked and puts the
-   MISLABELLED cases through it — the only cases §7 and CORB exist for — so the C is exercised in a process
-   with no browser in it, and the live-Chrome probe (self.browserProcessProbe) is then measuring the WORKER
-   boundary rather than the algorithm. */
+   RENDERER REGISTRY's transitions through it — SECURITY.md's one-instance-per-agent-cluster rule, including
+   the two keys that are equal up to `clusterKeyOf`'s NUL separator — so the C is exercised in a process with
+   no browser in it, and the live-Chrome probe is then measuring the WORKER boundary rather than the table. */
 {
   const t = spawnSync(process.execPath, [join(ENGINE, "bproc.mjs")], { stdio: "inherit", shell: false });
   if (t.status !== 0) {

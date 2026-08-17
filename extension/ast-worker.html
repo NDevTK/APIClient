@@ -32,11 +32,11 @@
 <script src="lib/stats.js"></script>
 <script src="lib/chains.js"></script>
 <!-- THE BROWSER PROCESS's trusted side: provisions extension/browser-process.js as a dedicated module Worker
-     (its own realm, its own WASM instance, its own thread — no HEAPU8 shared with this document) and relays
-     the decisions §7 backs to it — CORB for a script load, and what a captured reply IS FOR. Loaded BEFORE
-     both of its shipped callers, safe-fetch.js and lib/response-decode.js. `worker-src 'self'` in this
-     document's own policy above is what lets the Worker exist at all: policies COMBINE, so the manifest's
-     grant is not enough on its own. -->
+     (its own realm, its own WASM instance, its own thread — no HEAPU8 shared with this document) and holds the
+     Remotes for the RENDERER REGISTRY, which is the whole of what that process decides. `worker-src 'self'` in
+     this document's own policy above is what lets the Worker exist at all: policies COMBINE, so the manifest's
+     grant is not enough on its own. (It also relayed two SNIFFING entries; those are deleted — CLAUDE.md
+     §Architecture puts type sniffing in lib/safe-fetch.js, which is loaded below and needs nothing from it.) -->
 <script src="browser-process-host.js"></script>
 <!-- THE single external-fetch function (GET only, no cookies, http(s) only). -->
 

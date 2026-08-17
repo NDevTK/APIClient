@@ -1400,8 +1400,15 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
 
         CHECK(abs, "XMLHttpRequest: OOM serializing a data: URL for the response's URL list");
         header_list_append(&hl, "content-type", ct);
+        /* §4.2's ESSENCE of the type the `data:` URL itself CARRIES, which is what this host computed the
+           resource to be (core/fetch/fetch.h). There is no network and no sniff: §4.3's "data" step says the
+           MIME type IS the one parsed out of the URL, so the URL is the authority and it is stated rather than
+           re-derived by anyone downstream. */
+        char *cty = mime_type_essence(&ds.mime);
+        CHECK(cty, "XMLHttpRequest: OOM stating a data: URL's computed MIME type");
         reply = fetch_reply_new(ctx, 200, "OK", &hl, ds.body, ds.body_len,
-                                (const char *const *)&abs, 1);
+                                (const char *const *)&abs, 1, cty);
+        free(cty);
         free(abs);
         xhr_take_reply(ctx, d, reply);
         JS_FreeValue(ctx, reply);

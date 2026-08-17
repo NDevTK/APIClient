@@ -50,9 +50,8 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // with no query / body) can mean either "static asset fetch" or
   // "plain API endpoint." We register the method regardless and defer
   // real API-vs-asset classification to the moment real traffic flows
-  // (handleResponseBody stamps _responseKind="asset" from the browser process's
-  // answer over the response header's bytes — WHATWG MIME Sniffing §6/§7 plus
-  // §4.6's groups, engine/host/browser_process/network/resource_kind.c).
+  // (handleResponseBody stamps _responseKind="asset" via magic bytes —
+  // classifyResponseAsset in lib/discovery.js).
 
 
   // Get-or-create docEntry — same prologue as learnFromRequest.

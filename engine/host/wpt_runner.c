@@ -43,6 +43,7 @@
 #include "core/fetch/response.h"
 #include "core/fetch/request.h"
 #include "core/fetch/fetch.h"
+#include "core/mime/mime_type.h"   /* §4.2's essence: what this host states it served */
 #include "core/url/url.h"
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/frame/navigation_params.h"
@@ -339,6 +340,25 @@ static void wpt_send_all(int fd, const char *p, size_t n)
     }
 }
 
+/* WHAT THIS HOST COMPUTED THE RESOURCE TO BE (core/fetch/fetch.h). This runner IS the network side for the
+   corpus — it holds the socket and reads the bytes — so it is the zone entitled to answer, exactly as
+   `extension/lib/safe-fetch.js` is in the extension. wptserve serves the checked-out corpus with real types
+   and states them, so the answer is §4.2's ESSENCE of the `Content-Type` it sent; a response that named none
+   answers the EMPTY string, which is §5.1's "the supplied MIME type is undefined" and a value rather than a
+   hole. Malloc'd; the caller frees. */
+static char *wpt_computed_type(const HeaderList *rh)
+{
+    MimeType m;
+    char *ct = header_list_get(rh, "content-type");
+    char *out = NULL;
+
+    if (mime_type_extract(&m, ct)) out = mime_type_essence(&m);
+    mime_type_free(&m);
+    free(ct);
+    if (!out) { out = malloc(1); CHECK(out, "wpt: OOM stating a reply's computed type"); out[0] = 0; }
+    return out;
+}
+
 /* Perform one request and return its BODY, or NULL. A non-2xx is a NULL body, which is what the delivery turns
    into `fetch`'s TypeError — the same answer a real network error gives. */
 static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, HeaderList *phdrs)
@@ -494,7 +514,11 @@ static int wpt_provide_pending(JSContext *ctx)
         /* §4.1's clone of the REQUEST's URL list. This runner serves the checked-out corpus and follows no
            redirect, so the list is the one URL it was asked for — which is what makes `response.url` the
            address the test fetched and `response.redirected` false, both computed rather than declared. */
-        reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1) : JS_NULL;
+        {
+            char *cty = wpt_computed_type(&rh);
+            reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1, cty) : JS_NULL;
+            free(cty);
+        }
         filled += engine_provide(ctx, p, reply);
         JS_FreeValue(ctx, reply);
         header_list_free(&rh);
@@ -946,7 +970,11 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             body = wpt_http(&req, &len, &status, &rh);
             /* §4.1's clone of the REQUEST's URL list — see the fetch drain above; XHR's `responseURL` is the
                same fact and comes from the same place. */
-            reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1) : JS_NULL;
+            {
+                char *cty = wpt_computed_type(&rh);
+                reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1, cty) : JS_NULL;
+                free(cty);
+            }
             /* Also the host's own — §3.5.6's fetch, answered out of the network; a network error is a reply
                this component reads, never a thrown value. */
             engine_host_answer(ctx, id, reply, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);

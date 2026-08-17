@@ -9,12 +9,12 @@
  * quickjs.h, solver/cow.h, core/realm.h and core/idl_args.h. One line in mime_type.c reached it, and that one
  * line put the entire JS realm behind the MIME record.
  *
- * That mattered the moment a program without a realm needed the record. WHATWG MIME Sniffing §7 is the NETWORK
- * SERVICE'S algorithm (browser_process/network/mime_sniff.c), it computes into a `MimeType`, and the browser
- * process links neither quickjs nor a realm — so with the two in one object the sniffer could not be built at
- * all outside the renderer, which is exactly the housing problem §7 had. Splitting the reach-out is the root
- * fix: core/mime's record now has no dependency outside the C library, and this file is where the dependency
- * that does exist is declared, in one place a reader can see.
+ * That mattered the moment a program without a realm needed the record: `browser_process/` links neither
+ * quickjs nor a realm, so with the two in one object it could not build the record at all. That program no
+ * longer asks a MIME question — CLAUDE.md §Architecture puts type sniffing in `extension/lib/safe-fetch.js`
+ * and the C that had been transliterated out of it is deleted — but the SPLIT is right independently of who
+ * needed it: core/mime's record has no dependency outside the C library, and this file is where the one
+ * dependency that does exist is declared, in a place a reader can see.
  */
 #include <string.h>
 
