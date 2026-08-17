@@ -21,13 +21,20 @@
  * that is what the sentence says it is scoped to; a cache here would be a second answer to one question and
  * would have to be keyed by a pair this file has no identity for.
  *
- * WHAT IS ABSENT AND WHY. `indexNames`, `index()`, `createIndex()` and `deleteIndex()` are §2.6's INDEX, which
- * does not exist — there is nothing that can hold an index set, which is also why §6.3's index retrieval
- * operations are absent. The three `getAll*` members are §5.12's create-a-request-to-retrieve-multiple-items
- * over the `IDBGetAllOptions` dictionary §4.5 declares beside this interface and, for `getAllRecords`, §4.8's
- * IDBRecord — none of which exists. `openCursor` and `openKeyCursor` are §2.10's cursor and §6.7's iteration,
- * which does not exist either. Each absent member is a TypeError naming itself, which the IDL gap auditor
- * lists — never a shape-only member that would report a deletion nothing performed.
+ * WHAT IS ABSENT AND WHY — ONE NAMED CONSTRUCT PER MEMBER, so the next diff starts from building the construct
+ * rather than from re-deriving which one is missing. Every number and title below is the W3C Recommendation's
+ * own (§2.6 Index, §2.10 Cursor, §6.7 Cursor iteration operation, §6.3 Index retrieval operations, §5.12
+ * Creating a request to retrieve multiple items, §4.8 The IDBRecord interface):
+ *   - `indexNames`, `index()`, `createIndex()`, `deleteIndex()` wait on §2.6 INDEX. Nothing in this engine can
+ *     hold §2.6's index set, and §2.6.1's index handle has no interface (§4.6 The IDBIndex interface is
+ *     absent), which is the same reason §6.3 Index retrieval operations has no body.
+ *   - `openCursor()`, `openKeyCursor()` wait on §2.10 CURSOR — the record with a position, a source handle and
+ *     a direction — and on §6.7 Cursor iteration operation, which is what a `continue()` performs.
+ *   - `getAll()`, `getAllKeys()`, `getAllRecords()` wait on §5.12 CREATING A REQUEST TO RETRIEVE MULTIPLE
+ *     ITEMS, over the `IDBGetAllOptions` dictionary §4.5 declares beside this interface; `getAllRecords()`
+ *     additionally waits on §4.8's IDBRecord.
+ * Each absent member is a TypeError naming itself, which the IDL gap auditor lists — never a shape-only member
+ * that would report a retrieval nothing performed.
  *
  * The members that ARE here are exactly the algorithms that are: §6.1's storage operation (`put`/`add`), §6.2's
  * two retrievals (`get`/`getKey`), §6.4's deletion (`delete`), §6.5's counting (`count`) and §6.6's clear. */

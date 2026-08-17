@@ -25,10 +25,34 @@ void idb_transaction_free(JSRuntime *rt);
    named in scope" — §4.9's step 7, reached from C because the member that runs it does not exist yet.
    `scope` is an Array of §2.2 object store records (core/indexeddb/idb_database.h) and is CONSUMED; the
    connection is BORROWED and dup'd onto the transaction. The answer is the IDBTransaction object, OWNED.
-   IT IS CREATED ACTIVE and IT IS LIVE from here until its state is finished, which is what makes §2.7.2's
-   scheduling constraint answerable — see the file for the one arm of that constraint this engine crashes on
-   rather than queueing. */
+   IT IS CREATED ACTIVE and IT IS LIVE from here until its state is finished, which is what makes §2.7.2
+   Transaction scheduling's constraints answerable. The creation also performs §2.7.1 Transaction lifecycle's
+   "queue a database task to start the transaction asynchronously" when §2.7.2 permits it — for every mode
+   except "versionchange", whose start is §5.7 Upgrading a database's step 6, the line below. */
 JSValue idb_transaction_new(JSContext *ctx, JSValueConst connection, JSValue scope, int mode, int durability);
+
+/* §2.7.1 TRANSACTION LIFECYCLE's START, and §2.7 Transactions' "until the transaction is started the
+ * implementation must not execute these requests; however, the implementation must keep track of the requests
+ * and their order."
+ *
+ * THE HOLD IS WHY THERE IS NO SECOND QUEUE AND NO GATE ASKED PER OPERATION. §5.6 Asynchronously executing a
+ * request mints its task the moment the request is placed — that is what carries its operands with it — but a
+ * transaction that has not started is not allowed to EXECUTE it, so the task is held on the transaction and
+ * released, in placement order, into the ONE task queue when the start runs. Nothing polls: §2.7.2's
+ * constraints are stated over the earlier transactions that "are not finished", so the only event that can
+ * change the answer is a transaction LEAVING the live set, and the one line that performs that removal asks
+ * again for every transaction still waiting. A gate the request task asked before performing its operation
+ * would instead have to re-queue itself, which is a poll wearing the queue's clothes and would spin for as long
+ * as the page holds the earlier transaction open.
+ *
+ * `idb_transaction_start` is §5.7 step 6's line, exported for the upgrade transaction alone — every other
+ * transaction reaches it through the database task the creation queued. It asserts §2.7.2 rather than
+ * believing it, which is where §5.1 Opening a database connection step 10's wait for every connection to close
+ * gets checked. `idb_transaction_queue_request_task` is the one door §5.6's task goes through, so there is no
+ * call site left that could queue one without asking; `task` is BORROWED. */
+void idb_transaction_start(JSContext *ctx, JSValueConst tx);
+bool idb_transaction_started(JSContext *ctx, JSValueConst tx);
+void idb_transaction_queue_request_task(JSContext *ctx, JSValueConst tx, JSValueConst task);
 
 /* §4.9's step 8, "set transaction's cleanup event loop to the current event loop" — declared separately from
    the creation because §2.7 says a transaction only OPTIONALLY has one: §4.9's `transaction()` gives one (so a

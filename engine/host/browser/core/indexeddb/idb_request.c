@@ -340,6 +340,13 @@ static int js_idb_req_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         tx = rq_get(ctx, req, RQ_TRANSACTION);
         DCHECK(idb_transaction_is(tx), "a request task ran for a request that was never placed against a "
                                        "transaction — §5.6 step 4 adds it to one before this task exists");
+        /* §2.7: "until the transaction is started the implementation must not execute these requests". This
+           task exists only because idb_transaction_queue_request_task released it, and it releases nothing
+           before §2.7.1's start — so this is the other side of that contract rather than a second gate. */
+        DCHECK(idb_transaction_started(ctx, tx),
+               "§5.6's request task ran against a transaction that has not started — §2.7.2's constraints "
+               "were not enforceable for it, and executing this operation now would read or write an object "
+               "store an earlier live transaction still owns");
         JS_FreeValue(ctx, tx);
         {
             JSValueConst op = JS_StepClosureData(&s->hdr, RQ_CD_OPERATION);
@@ -506,12 +513,16 @@ JSValue idb_request_execute(JSContext *ctx, JSValueConst source, JSValueConst tr
        thread, and the parallel half is the operation — which is itself preemptible, since it is a step
        closure driven by the same scheduler. So the two are ONE task, which preserves the property the pair
        decides: this request's completion runs after every task already queued against this transaction, so
-       §5.6 step 5.1's wait and §5.4 step 2.1's are both discharged by the queue's order. */
+       §5.6 step 5.1's wait and §5.4 step 2.1's are both discharged by the queue's order.
+       THE TASK IS MINTED HERE AND QUEUED BY THE TRANSACTION, because §2.7 forbids executing a request before
+       the transaction has started while still requiring the implementation to keep the requests and their
+       order — so the task carries its operands from this line (which is what makes them the right ones) and
+       waits on the transaction rather than in the queue. */
     data[RQ_CD_REQUEST] = req;
     data[RQ_CD_OPERATION] = operation;
     fn = JS_NewStepClosure(ctx, g_exec_stepid, 0, 2, data);
     CHECK(!JS_IsException(fn), "IndexedDB: §5.6's request task could not be minted");
-    JS_EnqueueCallTask(ctx, fn, 0, NULL);
+    idb_transaction_queue_request_task(ctx, transaction, fn);
     JS_FreeValue(ctx, fn);
     return req;   /* §5.6's last step: "Return request." */
 }

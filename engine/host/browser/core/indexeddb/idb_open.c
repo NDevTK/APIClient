@@ -594,13 +594,18 @@ static int js_idb_upgrade_step(JSContext *ctx, void *st, JSValue cb_result, JSVa
             tx = idb_transaction_new(ctx, conn, scope, IDB_TX_VERSIONCHANGE, IDB_DUR_DEFAULT);
         }
         /* Step 4: "Set db's upgrade transaction to transaction." Step 5: "Set transaction's state to
-           inactive." Step 6 "start transaction" is what §2.7.2's constraint already decided at creation.
+           inactive." Step 6: "Start transaction" — DIRECTLY, which is why the creation does not queue
+           §2.7.1's start task for an upgrade transaction: step 9's `upgradeneeded` handler places requests
+           against this transaction inside the same task, and a start one queue hop away would hold every one
+           of them. §2.7.2's constraints are asserted inside the start, where §5.1 step 10's "wait until all
+           connections are closed" is what makes them hold.
            §5.7 gives the transaction NO cleanup event loop, and that omission is load-bearing: §2.7.1's
            cleanup would deactivate it at the end of this task, and its lifetime is the `upgradeneeded`
            dispatch (idb_transaction.h states the same thing from the other side). */
         idb_transaction_set_request(ctx, tx, req);
         idb_database_set_upgrade_transaction(ctx, db, JS_DupValue(ctx, tx));
         idb_transaction_set_state(ctx, tx, IDB_TX_INACTIVE);
+        idb_transaction_start(ctx, tx);
         /* Steps 7-8: "Let old version be db's version. Set db's version to version." The old version is
            carried on the entry because step 9.5 fires it at the page AFTER this task has ended. */
         old_version = idb_database_version(ctx, db);

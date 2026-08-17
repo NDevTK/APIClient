@@ -25,6 +25,11 @@
  * this file keeps for the AGENT — the live transactions §2.7.2 asks about and §2.7.1's cleanup set — are JS
  * Arrays for the same reason core/events/message_port.c's queue is one: a malloc'd list captured as head/tail
  * POINTERS reverts the pointers on a context switch and leaves the nodes reachable from nothing.
+ * §2.7's THIRD list is the one this file gained for §2.7.2 Transaction scheduling — the request tasks held for a
+ * transaction that has not started yet — and it is PER TRANSACTION rather than per agent, on the slot record
+ * beside the request list, because whose requests they are is the transaction's fact and because it then rides
+ * the flow's COW delta like everything else here: one arm of a fork can be holding two puts behind an earlier
+ * read/write transaction while its sibling, whose earlier transaction aborted, has already released them.
  *
  * WHAT IS ABSENT AND WHY, stated rather than stubbed. `objectStoreNames` is the one member of §4.10 this file
  * does not build, and it is blocked on a whole interface rather than on anything here: §4.10's getter ends in
@@ -65,6 +70,17 @@
 #define TX_REQUEST     "request"      /* §2.7.3's open request, for an upgrade transaction; JS_NULL otherwise */
 #define TX_HANDLES     "handles"      /* §2.2.1's one-handle-per-store set, keyed by the STORE — see below */
 #define TX_CHANGES     "changes"      /* §5.5 step 2's changes made to the database — see the header */
+#define TX_START       "start"        /* §2.7.1 Transaction lifecycle's `started`, as the three moments below */
+#define TX_HELD        "held"         /* §2.7 Transactions' requests kept track of until this one starts */
+
+/* §2.7.1 TRANSACTION LIFECYCLE's START, as the THREE moments its own sentence has: a transaction is created
+   UNSTARTED; "when an implementation is able to enforce the constraints for the transaction's scope and mode,
+   defined below, the implementation must queue a database task to start the transaction asynchronously" — that
+   queued task is the middle moment, and it exists because a second finish must not queue a second start; and
+   "once the transaction has been started the implementation can begin executing the requests placed against the
+   transaction". §5.7 Upgrading a database's step 6 starts its upgrade transaction DIRECTLY and never passes
+   through the middle one. */
+enum { TX_START_NO = 0, TX_START_QUEUED, TX_START_YES };
 
 static JSValue g_key;          /* the private Symbol the slot record hangs off */
 static int     g_ready;
@@ -80,7 +96,11 @@ static JSValue g_live = JS_UNDEFINED;
 static JSValue g_cleanup = JS_UNDEFINED;
 
 static int g_id_commit = -1, g_id_abort = -1, g_id_object_store = -1;
-static int g_complete_stepid = -1, g_abort_stepid = -1;
+static int g_complete_stepid = -1, g_abort_stepid = -1, g_start_stepid = -1;
+
+/* §2.7.2's consequence of a transaction leaving the live set, defined in the scheduling section below and
+   called from the one line that performs that removal. */
+static void tx_release_blocked(JSContext *ctx);
 /* §5.7 step 10's rendezvous — see the header. NULL until §5.1's component registers, which it does in its own
    declaration, so an upgrade transaction cannot finish before there is something to tell. */
 static void (*g_upgrade_finished)(JSContext *ctx, JSValueConst tx);
@@ -403,6 +423,18 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
                "edge is Array.prototype, and that edge makes the whole realm behind it immortal");
         JS_SetPropertyStr(ctx, changes, "length", JS_NewInt32(ctx, 0));
         JS_FreeValue(ctx, changes);
+        /* AND SO IS §2.7'S LIST OF HELD REQUEST TASKS, at the same door and for the same reason. A transaction
+           can be aborted "even if the transaction ... hasn't yet started", and one with no requests commits
+           from §2.7.1's cleanup without ever starting — either way its held tasks will never be queued, and
+           each one owns §5.6's operation closure and through it the value the page asked to store. §5.5 step 6
+           has already queued every one of those requests its own AbortError task, so nothing here is lost. */
+        {
+            JSValue held = tx_field(ctx, tx, TX_HELD);
+
+            DCHECK(JS_IsArray(held), "a transaction carried no list of held request tasks");
+            JS_SetPropertyStr(ctx, held, "length", JS_NewInt32(ctx, 0));
+            JS_FreeValue(ctx, held);
+        }
         /* "A transaction is said to be live from when it is created until its state is set to finished." The
            removal is HERE rather than at the two callers so a transaction cannot be finished by one path and
            stay live because the other path was the one that remembered. */
@@ -418,6 +450,11 @@ void idb_transaction_set_state(JSContext *ctx, JSValueConst tx, int state)
                 JS_DefinePropertyValueUint32(ctx, g_live, i, next, JS_PROP_C_W_E);
             }
             JS_SetPropertyStr(ctx, g_live, "length", JS_NewUint32(ctx, n - 1));
+            /* §2.7.2's constraints are stated over the transactions that "are not finished", so the moment
+               this one leaves that set is the moment the implementation may be able to enforce them for a
+               transaction that was created after it. §2.7.1's answer to that moment is a queued start, which
+               is what this does — adjacent to the removal, because it is that removal's whole consequence. */
+            tx_release_blocked(ctx);
             /* §5.2 step 3: "wait for all transactions created using connection to complete. Once they are
                complete, connection is closed." The moment that becomes true is exactly this one, and it is
                reported rather than polled — the connection is what owns the answer and what §5.1 step 10.6 is
@@ -906,7 +943,22 @@ static void idb_transaction_cleanup(JSContext *ctx)
     JS_FreeValue(ctx, taken);
 }
 
-/* ---- §2.7.2's SCHEDULING CONSTRAINT ---------------------------------------------------------------------- */
+/* ---- §2.7.2 TRANSACTION SCHEDULING, and the START QUEUE §2.7 Transactions requires of it ------------------
+ *
+ * §2.7.2 states the constraints and §2.7.1 Transaction lifecycle states what an implementation does about them:
+ * "when an implementation is able to enforce the constraints ... queue a database task to start the transaction
+ * asynchronously", and §2.7 states what happens meanwhile — "the implementation must allow requests to be
+ * placed against the transaction whenever it is active. This is the case even if the transaction has not yet
+ * been started. Until the transaction is started the implementation must not execute these requests; however,
+ * the implementation must keep track of the requests and their order."
+ *
+ * SO THE QUEUE IS THE REQUESTS' TASKS, HELD ON THE TRANSACTION — not a queue of transactions and not a gate
+ * asked per operation. §5.6 Asynchronously executing a request mints its task where the request is placed,
+ * because that is what carries the right operands; the transaction then decides whether that task may be
+ * EXECUTED, and releases every held one in placement order when it starts. Nothing polls, because §2.7.2's
+ * constraints are stated over the earlier transactions that "are not finished" — so the only event that can
+ * change the answer is a transaction LEAVING §2.7's live set, and that one line asks again for everything still
+ * waiting. */
 
 /* "Two transactions have overlapping scope if any object store is in both transactions' scope." The stores are
    compared by IDENTITY because §2.2 gives a database ONE record per name (idb_database.c's set of object
@@ -930,47 +982,206 @@ static bool tx_scopes_overlap(JSContext *ctx, JSValueConst a, JSValueConst b)
     return false;
 }
 
-/* §2.7.2's two constraints, asked of the transaction that has just been created. Anything already in the live
-   set was created before it, so "were created before tx" is membership. */
-static void tx_check_can_start(JSContext *ctx, JSValueConst scope, int mode)
+/* §2.7.2 TRANSACTION SCHEDULING's two constraints, asked of a LIVE transaction. "Were created before tx" is
+   the PREFIX of the live set that ends at tx itself — the set is append-ordered by creation — and "are not
+   finished" is membership of it, so both halves are read off one walk. NOTHING about `started` appears here:
+   §2.7.2 tests the earlier transactions' FINISHED-ness, so a transaction that is itself still waiting to start
+   goes on blocking the ones behind it, which is what makes a chain of overlapping read/write transactions run
+   in creation order rather than in whatever order they became unblocked. */
+static bool tx_can_start(JSContext *ctx, JSValueConst tx)
+{
+    JSValue scope = tx_scope(ctx, tx);
+    int mode = idb_transaction_mode(ctx, tx);
+    uint32_t i, n = tx_array_len(ctx, g_live);
+    bool can = true, found = false;
+
+    for (i = 0; i < n && can; i++) {
+        JSValue other = JS_GetPropertyUint32(ctx, g_live, i), oscope;
+        int omode;
+
+        DCHECK(idb_transaction_is(other), "§2.7.2's live set held something that is not a transaction");
+        if (JS_VALUE_GET_PTR(other) == JS_VALUE_GET_PTR(tx)) {
+            JS_FreeValue(ctx, other);
+            found = true;
+            break;
+        }
+        oscope = tx_scope(ctx, other);
+        omode = idb_transaction_mode(ctx, other);
+        /* A read-only transaction is blocked only by an earlier READ/WRITE one; a read/write transaction is
+           blocked by ANY earlier one. Both only when the scopes overlap. */
+        if ((mode != IDB_TX_READONLY || omode != IDB_TX_READONLY) && tx_scopes_overlap(ctx, scope, oscope))
+            can = false;
+        JS_FreeValue(ctx, oscope);
+        JS_FreeValue(ctx, other);
+    }
+    JS_FreeValue(ctx, scope);
+    DCHECK(found || !can,
+           "§2.7.2 was asked about a transaction that is not in §2.7's live set, so the walk read the whole "
+           "set as \"created before\" it — every transaction joins that set in idb_transaction_new and leaves "
+           "it only when it is finished, and a finished one can never start");
+    return can;
+}
+
+/* §2.7.1 Transaction lifecycle's "queue a database task to start the transaction asynchronously". It has one
+   stage and no request buffer — see the stage's own label for what that one stage is and why it is one. */
+typedef struct {
+    JSStepHdr hdr;   /* FIRST: the driver writes the def and the operand bounds through it */
+} JSIdbTxStartState;
+
+/* It owns NOTHING — the transaction is the closure's capture, read off the header — and it still declares that,
+   because a def with no ownership declaration cannot be forked at all (JS_RegisterStepDef refuses one). */
+static void js_idb_tx_start_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
+
+/* THE STAGE IS ONE STEP AND IT IS NOT O(1), WHICH THE LABEL SAYS RATHER THAN CLAIMS OTHERWISE. It performs one
+   queue append per request the page placed before this transaction started, so its length is the page's — and
+   it is nonetheless INDIVISIBLE, for the reason the mechanism exists: a rest between two appends would let a
+   success event of an already-released request run and place a NEW request, which would be queued directly and
+   would then execute AHEAD of one the page made earlier. §2.7.1's "requests must be executed in the order in
+   which they were made against the transaction" is exactly what the span protects. The work is also bounded by
+   work the page has already caused — §5.6 minted one task per request at placement — so this moves N tasks it
+   did not create. */
+#define TXS_STAGES(X) \
+    X(TXS_START, "Indexed Database §2.7.1 Transaction lifecycle's start the transaction, and with it §2.7 " \
+                 "Transactions' \"the implementation must keep track of the requests and their order\" — " \
+                 "every request task held for this transaction is appended to the one task queue in placement " \
+                 "order, an indivisible span because a rest inside it would let a released request's success " \
+                 "handler place a request that overtakes one the page made earlier")
+enum { TXS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TXS_STEPS[] = { TXS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_idb_tx_start_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSIdbTxStartState *s = st;
+    JSValueConst tx = tx_fire_target(&s->hdr);
+
+    (void)out_cb; (void)out_argc;
+    STEP_DISPATCH(TXS_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(TXS_START);
+        JS_FreeValue(ctx, cb_result);
+        /* §2.7.1: "a transaction can be aborted at any time before it is finished, even if the transaction
+           isn't currently active or hasn't yet started" — and a transaction with no requests commits from
+           §2.7.1's cleanup without ever starting. Either way it is FINISHED here and there is nothing left to
+           execute, which is the same shape as §5.4 step 2.2's "if transaction's state is no longer
+           committing, then terminate these steps". */
+        if (idb_transaction_state(ctx, tx) == IDB_TX_FINISHED)
+            return JS_STEP_DONE;
+        DCHECK(tx_int(ctx, tx, TX_START) == TX_START_QUEUED,
+               "§2.7.1's start task ran for a transaction that had not been left waiting for it — the only "
+               "writer of the queued moment is tx_schedule_start, and the only other way out of it is this "
+               "task, so a transaction found unqueued here was started by §5.7 step 6 behind a task queued "
+               "for it as well and its held requests are about to be executed twice");
+        idb_transaction_start(ctx, tx);
+        return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_idb_tx_start_def = {
+    sizeof(JSIdbTxStartState), js_idb_tx_start_step, NULL, 0, .visit = js_idb_tx_start_visit,
+    .algorithm = "Indexed Database §2.7.1 Transaction lifecycle's start-the-transaction database task",
+    .steps = TXS_STEPS
+};
+
+/* The middle moment of §2.7.1 Transaction lifecycle's sentence. A transaction whose constraints cannot yet be
+   enforced is simply left alone: tx_release_blocked asks again every time the live set shrinks, which is the
+   only event that can change the answer. */
+static void tx_schedule_start(JSContext *ctx, JSValueConst tx)
+{
+    JSValue fn;
+
+    DCHECK(tx_int(ctx, tx, TX_START) == TX_START_NO,
+           "a start was queued for a transaction that has already started or already has one queued — §2.7.1 "
+           "queues exactly one database task per transaction, and a second would assert its way through "
+           "idb_transaction_start's own check one task later, where the caller that queued it is gone");
+    DCHECK(tx_can_start(ctx, tx), "a start was queued for a transaction §2.7.2's constraints forbid starting");
+    tx_set_int(ctx, tx, TX_START, TX_START_QUEUED);
+    fn = JS_NewStepClosure(ctx, g_start_stepid, 0, 1, &tx);
+    CHECK(!JS_IsException(fn), "IndexedDB: §2.7.1's start task could not be minted");
+    JS_EnqueueCallTask(ctx, fn, 0, NULL);
+    JS_FreeValue(ctx, fn);
+}
+
+static void tx_release_blocked(JSContext *ctx)
 {
     uint32_t i, n = tx_array_len(ctx, g_live);
 
     for (i = 0; i < n; i++) {
         JSValue other = JS_GetPropertyUint32(ctx, g_live, i);
-        JSValue oslots = tx_slots(ctx, other);
-        JSValue oscope;
-        int omode;
-        bool blocks;
 
-        DCHECK(JS_IsObject(oslots), "§2.7.2's live set held something that is not a transaction");
-        oscope = JS_GetPropertyStr(ctx, oslots, TX_SCOPE);
-        omode = tx_int(ctx, other, TX_MODE);
-        /* A read-only transaction is blocked only by an earlier READ/WRITE one; a read/write transaction is
-           blocked by ANY earlier one. Both only when the scopes overlap. */
-        blocks = (mode == IDB_TX_READONLY ? omode != IDB_TX_READONLY : true) &&
-                 tx_scopes_overlap(ctx, scope, oscope);
-        JS_FreeValue(ctx, oscope);
-        JS_FreeValue(ctx, oslots);
+        DCHECK(idb_transaction_is(other), "§2.7's live set held something that is not a transaction");
+        if (tx_int(ctx, other, TX_START) == TX_START_NO && tx_can_start(ctx, other))
+            tx_schedule_start(ctx, other);
         JS_FreeValue(ctx, other);
-        if (!blocks)
-            continue;
-        DFAIL("Indexed Database §2.7.2's TRANSACTION START QUEUE is not built. A transaction was created that "
-              "cannot start yet — an earlier live transaction has an overlapping scope and the modes forbid "
-              "them running together — and §2.7.1 says the implementation must \"keep track of the requests "
-              "and their order\" and not execute them until the transaction is started. So the missing "
-              "mechanism is the DELAYED START: a created transaction is live and accepts requests "
-              "immediately, and its queued operations may not run until every earlier overlapping "
-              "transaction is finished. Build it as a per-transaction gate the request task asks before it "
-              "performs its operation — never as a bound on how many transactions may exist");
     }
+}
+
+bool idb_transaction_started(JSContext *ctx, JSValueConst tx)
+{
+    DCHECK(idb_transaction_is(tx), "§2.7.1's started was asked of something that is not a transaction");
+    return tx_int(ctx, tx, TX_START) == TX_START_YES;
+}
+
+void idb_transaction_start(JSContext *ctx, JSValueConst tx)
+{
+    JSValue held;
+    uint32_t i, n;
+
+    DCHECK(idb_transaction_is(tx), "§2.7.1's start was given something that is not a transaction");
+    DCHECK(tx_int(ctx, tx, TX_START) != TX_START_YES,
+           "a transaction was started twice — §2.7.1's start is the one edge that lets its requests execute, "
+           "and running it again would queue every request task this transaction has held since");
+    DCHECK(idb_transaction_state(ctx, tx) != IDB_TX_FINISHED,
+           "a FINISHED transaction was started — §2.7.1's own order is that a transaction is started and only "
+           "then committed or aborted, and its held tasks have already been dropped at that door");
+    DCHECK(tx_can_start(ctx, tx),
+           "a transaction was started while §2.7.2's constraints forbid it: an earlier live transaction has an "
+           "overlapping scope and the two modes may not run together. For §5.7 step 6's upgrade transaction "
+           "this is §5.1 step 10's guarantee, checked rather than believed — no other connection to the "
+           "database is open when the upgrade begins, so no other transaction against it can be live");
+    tx_set_int(ctx, tx, TX_START, TX_START_YES);
+    /* §2.7: "until the transaction is started the implementation must not execute these requests; however, the
+       implementation must keep track of the requests and their order." This is the release of that order —
+       every held task, oldest first, into the ONE queue, so §5.6 step 5.1's "wait until request is the first
+       item in transaction's request list that is not processed" stays discharged by the queue. */
+    held = tx_field(ctx, tx, TX_HELD);
+    DCHECK(JS_IsArray(held), "a transaction carried no list of held request tasks");
+    n = tx_array_len(ctx, held);
+    for (i = 0; i < n; i++) {
+        JSValue fn = JS_GetPropertyUint32(ctx, held, i);
+
+        DCHECK(JS_IsFunction(ctx, fn), "§2.7's list of held request tasks held something that is not one");
+        JS_EnqueueCallTask(ctx, fn, 0, NULL);
+        JS_FreeValue(ctx, fn);
+    }
+    JS_SetPropertyStr(ctx, held, "length", JS_NewInt32(ctx, 0));
+    JS_FreeValue(ctx, held);
+}
+
+void idb_transaction_queue_request_task(JSContext *ctx, JSValueConst tx, JSValueConst task)
+{
+    JSValue held;
+
+    DCHECK(idb_transaction_is(tx), "a §5.6 request task was queued against something that is not a transaction");
+    DCHECK(JS_IsFunction(ctx, task), "a §5.6 request task that is not callable was queued");
+    DCHECK(idb_transaction_state(ctx, tx) != IDB_TX_FINISHED,
+           "a request was placed against a FINISHED transaction — §5.6 step 2 asserts the state is active, and "
+           "§4.6's members report a \"TransactionInactiveError\" before this algorithm is reached");
+    if (idb_transaction_started(ctx, tx)) {
+        JS_EnqueueCallTask(ctx, task, 0, NULL);
+        return;
+    }
+    held = tx_field(ctx, tx, TX_HELD);
+    DCHECK(JS_IsArray(held), "a transaction carried no list of held request tasks");
+    /* A DEFINE and not an assignment, for core/idl_slots.h's sibling rule — the same reason the request list
+       and the change list are written with one. */
+    JS_DefinePropertyValueUint32(ctx, held, tx_array_len(ctx, held), JS_DupValue(ctx, task), JS_PROP_C_W_E);
+    JS_FreeValue(ctx, held);
 }
 
 /* ---- creation ------------------------------------------------------------------------------------------- */
 
 JSValue idb_transaction_new(JSContext *ctx, JSValueConst connection, JSValue scope, int mode, int durability)
 {
-    JSValue tx, st, proto, requests, handles, changes;
+    JSValue tx, st, proto, requests, handles, changes, held;
     JSAtom k;
 
     DCHECK(g_ready, "an IDBTransaction was created before idb_transaction_init declared the interface");
@@ -1018,15 +1229,27 @@ JSValue idb_transaction_new(JSContext *ctx, JSValueConst connection, JSValue sco
     changes = JS_NewArray(ctx);
     CHECK(!JS_IsException(changes), "IndexedDB: a transaction's list of database changes could not be allocated");
     JS_SetPropertyStr(ctx, st, TX_CHANGES, changes);
+    /* §2.7.1: "when a transaction is created ... its state is initially active" and it has not started. */
+    JS_SetPropertyStr(ctx, st, TX_START, JS_NewInt32(ctx, TX_START_NO));
+    held = JS_NewArray(ctx);
+    CHECK(!JS_IsException(held), "IndexedDB: a transaction's list of held request tasks could not be allocated");
+    JS_SetPropertyStr(ctx, st, TX_HELD, held);
     k = JS_ValueToAtom(ctx, g_key);
     CHECK(k != JS_ATOM_NULL, "the IDBTransaction slot key could not be interned");
     JS_SetProperty(ctx, tx, k, st);
     JS_FreeAtom(ctx, k);
 
-    tx_check_can_start(ctx, scope, mode);
     /* "A transaction is said to be live from when it is created": the set §2.7.2 asks about is joined here and
-       left in idb_transaction_set_state, so the two edges of `live` are the two edges of the sentence. */
+       left in idb_transaction_set_state, so the two edges of `live` are the two edges of the sentence. It is
+       joined BEFORE the constraints are asked, because "were created before tx" is this set's prefix and tx is
+       its own end of it. */
     JS_DefinePropertyValueUint32(ctx, g_live, tx_array_len(ctx, g_live), JS_DupValue(ctx, tx), JS_PROP_C_W_E);
+    /* §2.7.1's start, for every transaction a page can create. §5.7's upgrade transaction is NOT started here:
+       its step 6 says "start transaction" directly, between step 5's deactivation and step 7 — one moment
+       earlier than a queued task, which matters because step 9's `upgradeneeded` handler places requests
+       against it inside the same task. Queueing one here as well would start it twice. */
+    if (mode != IDB_TX_VERSIONCHANGE && tx_can_start(ctx, tx))
+        tx_schedule_start(ctx, tx);
     JS_FreeValue(ctx, scope);
     return tx;
 }
@@ -1228,6 +1451,7 @@ void idb_transaction_init(JSContext *ctx)
     g_id_abort = idl_method_id(ctx, NULL, 0, js_tx_abort, 0);
     g_complete_stepid = JS_RegisterStepDef(rt, &js_idb_tx_complete_def);
     g_abort_stepid = JS_RegisterStepDef(rt, &js_idb_tx_abort_def);
+    g_start_stepid = JS_RegisterStepDef(rt, &js_idb_tx_start_def);
     /* §2.7.1's cleanup, registered with the ONE frontier — see the file comment for why it is a hook and not a
        bracket around whoever created the transaction. */
     engine_set_checkpoint_hook(idb_transaction_cleanup);
