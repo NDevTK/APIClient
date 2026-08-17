@@ -6,6 +6,8 @@
 #include <stddef.h>
 
 #include "quickjs.h"
+#include "quickjs-step.h"
+#include "core/indexeddb/idb_key_array.h"
 
 /* §2.5's VALID KEY PATH, over ONE string. "A valid key path is one of: an empty string; an identifier, which is
  * a string matching the IdentifierName production from the ECMAScript Language Specification; a string
@@ -57,7 +59,36 @@ typedef enum { IDB_KEY_PATH_KEY = 0, IDB_KEY_PATH_INVALID, IDB_KEY_PATH_FAILURE 
  * selects ("convert a value to a multiEntry key") does not exist either. The parameter arrives with the index,
  * with its producer.
  *
- * *pkey is OWNED and is a key record (core/indexeddb/idb_key.h) on IDB_KEY_PATH_KEY, JS_UNDEFINED otherwise. */
+ * *pkey is OWNED and is a key record (core/indexeddb/idb_key.h) on IDB_KEY_PATH_KEY, JS_UNDEFINED otherwise.
+ *
+ * THIS IS THE C ENTRY, for a caller with no flow under it — an in-C fixture. Its step 3 is §7.4, whose ARRAY arm
+ * runs the page's own code, so a key path that resolves to an Array (which every LIST key path does, its step 1
+ * assembling one) crashes here exactly where §7.4's own C entry does. Every member drives the walk below. */
 IdbKeyPathResult idb_key_path_extract(JSContext *ctx, JSValueConst value, JSValueConst key_path, JSValue *pkey);
+
+/* §7.1 AS A DELEGATABLE ALGORITHM, in core/indexeddb/idb_key_array.h's shape and for its reason: its step 3 is
+ * §7.4, so a member performing §7.1 has that algorithm's rest points inside its own. Steps 1-2 (evaluate, and
+ * `failure`) and steps 4-5 (`invalid`, and the key) are each one O(1) engine action over data this engine owns
+ * and rest nowhere — the walk of the key path is over §2.5's own segments, whose count is the store's key path
+ * and not the page's value — so every stage of this block is §7.4's, which is why it expands that one.
+ *
+ * THE EXTRA STATE IS AN ENUM AND THEREFORE THE CALLER'S OWN FIELD, unlike §2.9's, which is a reference and needs
+ * a record with a `visit`. `*pres` is written by `start` and read back by `take`: it carries WHETHER step 2
+ * already answered `failure`, which is the one thing the walk cannot say (it was never begun). It is POD, so it
+ * rides the state's byte copy into a forked arm and into a parked snapshot with nothing to declare.
+ *
+ * SO THIS ALGORITHM HAS NO `run` AND NO `visit` OF ITS OWN, and that is the whole of the asymmetry with §2.9: the
+ * record the stages drive IS the caller's own IdbKeyWalk, so the caller's block calls idb_key_walk_run over it
+ * and its `visit` already names it. There is nothing here for a forwarding pair to forward. */
+#define IDB_KEY_PATH_EXTRACT_ALGO_STAGES(X, P, W) \
+    IDB_KEY_ARRAY_ALGO_STAGES(X, P, W " → Indexed Database §7.1 extract a key from a value using a key path " \
+                                      "step 3 (let key be the result of converting a value to a key with r)")
+
+void idb_key_path_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbKeyPathResult *pres,
+                             JSValueConst value, JSValueConst key_path, int base, int after);
+
+/* STEPS 4-5 AT THE CALLER'S OWN STAGE, over the answer `start` recorded in `res`. Returns §7.1's own three
+   answers, with *pkey OWNED on IDB_KEY_PATH_KEY — the same three the C entry returns, from the same two lines. */
+IdbKeyPathResult idb_key_path_walk_take(JSContext *ctx, IdbKeyWalk *w, IdbKeyPathResult res, JSValue *pkey);
 
 #endif

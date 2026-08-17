@@ -18,10 +18,13 @@
  * structure the page chose the size and the depth of — which is what §scheduler requires of a walk that is not
  * O(1), and the reason there is no second, non-suspending copy of these steps anywhere.
  *
- * A MEMBER THAT CANNOT DRIVE ONE CRASHES AT idb_key_convert's C ENTRY, naming itself. That is not a fallback:
- * there is no other implementation of the array arm to fall back TO. §4.5's `add or put`, §4.5's `get`,
- * `delete` and `count` (through idb_key_range_from_value) and §7.1's extract-a-key are the call sites still
- * standing there, and each is a member to convert rather than a limitation to record.
+ * A CALLER THAT CANNOT DRIVE ONE CRASHES AT idb_key_convert's C ENTRY, naming itself. That is not a fallback:
+ * there is no other implementation of the array arm to fall back TO. EVERY MEMBER OF §4 NOW DRIVES THE WALK —
+ * §4.3's `cmp`, §4.7's five, and §4.5's `add or put`, `get`, `getKey`, `delete` and `count`, the last five
+ * through the two algorithms that delegate into this one (§2.9's convert-a-value-to-a-key-range in
+ * core/indexeddb/idb_key_range.h and §7.1's extract-a-key in core/indexeddb/idb_key_path.h, each declaring its
+ * own stage block over this one's). What is left at that C entry is a caller with no flow base at all — an
+ * in-C fixture — and for that caller the crash is the honest answer rather than a member to convert.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_INDEXEDDB_IDB_KEY_ARRAY_H
 #define ENGINE_HOST_BROWSER_CORE_INDEXEDDB_IDB_KEY_ARRAY_H
@@ -101,6 +104,12 @@ int  idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in,
 /* THE CALLER'S OWN `visit` CHAINS INTO THIS — the level stack is this record's allocation and the three values
    are its references, so a caller has no second list to write and no `release` half to get wrong. */
 void idb_key_walk_visit(JSContext *ctx, IdbKeyWalk *w, JSStepVisit *v);
+
+/* §7.4's OWN ANSWER, TAKEN OUT OF THE WALK — the three results idb_key.h states, for a caller whose next step is
+   NOT §4's "throw a DataError": §7.1's extract-a-key maps both refusals onto its own `invalid` and lets its
+   caller decide what to report, which is exactly why idb_key.h keeps the two apart. `*pkey` is OWNED on
+   IDB_KEY_OK and JS_UNDEFINED otherwise. It is the walk's counterpart of idb_key_convert. */
+IdbKeyResult idb_key_walk_result(JSContext *ctx, IdbKeyWalk *w, JSValue *pkey);
 
 /* THE ANSWER, AS §4 SPELLS IT: "Rethrow any exceptions. If key is 'invalid value' or 'invalid type', throw a
    'DataError' DOMException." Returns 0 with `*pkey` an owned key record, or -1 with the "DataError" live —

@@ -290,8 +290,8 @@ static bool idb_key_path_evaluate_string(JSContext *ctx, JSValueConst value, JSV
             n++;
         i += n + 1;   /* past the separator; on the last segment this passes `len` and ends the walk */
         DCHECK(n > 0, "§7.1 split a key path into an EMPTY identifier — §2.5's validity refuses a leading "
-                      "period, a trailing period and an empty segment, and idb_key_path_extract asserts that "
-                      "every path reaching this walk passed it");
+                      "period, a trailing period and an empty segment, and idb_key_path_precondition asserts "
+                      "at both of §7.1's entries that every path reaching this walk passed it");
         if (!idb_key_path_step(ctx, cur, seg, n, &next)) {
             JS_FreeValue(ctx, cur);
             JS_FreeCString(ctx, path);
@@ -357,29 +357,79 @@ static bool idb_key_path_evaluate(JSContext *ctx, JSValueConst value, JSValueCon
 
 /* ---- §7.1's EXTRACT A KEY FROM A VALUE USING A KEY PATH ----------------------------------------------------- */
 
-IdbKeyPathResult idb_key_path_extract(JSContext *ctx, JSValueConst value, JSValueConst key_path, JSValue *pkey)
+/* THE PRECONDITION BOTH ENTRIES ASSERT, and it is asserted rather than tested because §2.5's validity is what
+   §4.4's createObjectStore already reported a SyntaxError for. */
+static void idb_key_path_precondition(JSContext *ctx, JSValueConst key_path)
 {
-    JSValue r;
-    IdbKeyResult k;
-
-    *pkey = JS_UNDEFINED;
     DCHECK(idb_key_path_value_is_valid(ctx, key_path),
            "§7.1 was asked to walk a key path §2.5 does not accept. Every key path in this engine reaches a "
            "store through §4.4's createObjectStore, which reports an invalid one as a SyntaxError, and the walk "
-           "below splits exactly the segments that validity accepts — so a path arriving here that would not "
-           "pass it is a member that stored one without asking");
+           "splits exactly the segments that validity accepts — so a path arriving here that would not pass it "
+           "is a member that stored one without asking");
+    (void)ctx; (void)key_path;
+}
+
+/* §7.1's STEPS 4-5 over §7.4's answer: "if key is 'invalid value' or 'invalid type', return invalid. Return
+   key." The two invalid answers are exactly where this algorithm collapses them, which is why idb_key.h keeps
+   them apart up to here and not past it. `key` is CONSUMED (it is JS_UNDEFINED on either refusal). */
+static IdbKeyPathResult idb_key_path_answer(IdbKeyResult k, JSValue key, JSValue *pkey)
+{
+    if (k != IDB_KEY_OK) {
+        DCHECK(JS_IsUndefined(key), "§7.4 answered `invalid` and left a key behind");
+        *pkey = JS_UNDEFINED;
+        return IDB_KEY_PATH_INVALID;   /* STEP 4 */
+    }
+    *pkey = key;
+    return IDB_KEY_PATH_KEY;           /* STEP 5 */
+}
+
+IdbKeyPathResult idb_key_path_extract(JSContext *ctx, JSValueConst value, JSValueConst key_path, JSValue *pkey)
+{
+    JSValue r, key = JS_UNDEFINED;
+    IdbKeyResult k;
+
+    *pkey = JS_UNDEFINED;
+    idb_key_path_precondition(ctx, key_path);
     /* "Let r be the result of evaluating a key path on a value with value and keyPath. Rethrow any exceptions.
        If r is failure, return failure." */
     if (!idb_key_path_evaluate(ctx, value, key_path, &r))
         return IDB_KEY_PATH_FAILURE;
-    /* "Let key be the result of converting a value to a key with r ... If key is 'invalid value' or 'invalid
-       type', return invalid." The two invalid answers are exactly where this algorithm collapses them, which is
-       why idb_key.h keeps them apart up to here and not past it. */
-    k = idb_key_convert(ctx, r, pkey);
+    k = idb_key_convert(ctx, r, &key);   /* STEP 3, whose ARRAY arm crashes at that C entry */
     JS_FreeValue(ctx, r);
-    if (k != IDB_KEY_OK) {
-        DCHECK(JS_IsUndefined(*pkey), "§7.4 answered `invalid` and left a key behind");
-        return IDB_KEY_PATH_INVALID;
+    return idb_key_path_answer(k, key, pkey);
+}
+
+void idb_key_path_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbKeyPathResult *pres,
+                             JSValueConst value, JSValueConst key_path, int base, int after)
+{
+    JSValue r;
+
+    idb_key_path_precondition(ctx, key_path);
+    if (!idb_key_path_evaluate(ctx, value, key_path, &r)) {   /* STEPS 1-2 */
+        *pres = IDB_KEY_PATH_FAILURE;
+        hdr->stage = (uint16_t)after;
+        return;
     }
-    return IDB_KEY_PATH_KEY;   /* "Return key." */
+    /* THE CONVERSION IS WHAT ANSWERS FROM HERE, which is what this records: `failure` is the one answer the walk
+       cannot report, because on that arm it was never begun. */
+    *pres = IDB_KEY_PATH_KEY;
+    idb_key_walk_start(ctx, hdr, w, r, base, after);          /* STEP 3 */
+    JS_FreeValue(ctx, r);
+}
+
+IdbKeyPathResult idb_key_path_walk_take(JSContext *ctx, IdbKeyWalk *w, IdbKeyPathResult res, JSValue *pkey)
+{
+    JSValue key = JS_UNDEFINED;
+    IdbKeyResult k;
+
+    *pkey = JS_UNDEFINED;
+    if (res == IDB_KEY_PATH_FAILURE)
+        return IDB_KEY_PATH_FAILURE;   /* STEP 2, recorded by `start` */
+    DCHECK(res == IDB_KEY_PATH_KEY, "§7.1's answer was taken with a `res` its own start never wrote — the two "
+                                    "states start records are `failure` and \"the conversion decides\", and "
+                                    "`invalid` is not one of them: it is what step 4 answers HERE");
+    /* SEQUENCED, and not one nested call: C leaves argument evaluation order unspecified, so `key` read as an
+       argument beside the call that WRITES it can be the stale undefined — which loses the key and leaks it. */
+    k = idb_key_walk_result(ctx, w, &key);
+    return idb_key_path_answer(k, key, pkey);
 }

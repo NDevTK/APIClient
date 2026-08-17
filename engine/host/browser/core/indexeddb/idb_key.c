@@ -293,13 +293,14 @@ IdbKeyResult idb_key_convert(JSContext *ctx, JSValueConst input, JSValue *pkey)
     JS_FreeValue(ctx, arr);
     /* THE C ENTRY REACHED §7.4's ARRAY ARM, whose steps are the page's own code and which therefore exists in
        exactly one form: the parkable walk in core/indexeddb/idb_key_array.h. There is nothing to fall back to
-       and this is not a fallback — it is the call site that has not been converted yet, named. */
+       and this is not a fallback — it is a caller with no flow base, named. */
     DFAIL("Indexed Database §7.4's ARRAY arm reached idb_key_convert's C entry, which has no flow under it to "
-          "run the page's index accessors on. Route this call site through idb_key_array.h's walk the way §4.3's "
-          "cmp and §4.7's IDBKeyRange members do — declare the algorithm's stage block with "
-          "IDB_KEY_ARRAY_ALGO_STAGES, embed an IdbKeyWalk, chain idb_key_walk_visit into the member's visit. The "
-          "sites still standing here are §4.5's `add or put` key argument, §4.5's `get`/`getKey`/`delete`/"
-          "`count` through idb_key_range_from_value, and §7.1's extract-a-key");
+          "run the page's index accessors on. Every member of §4 drives the walk instead — §4.3's cmp, §4.7's "
+          "five, and §4.5's add-or-put, get, getKey, delete and count through §2.9's convert-a-value-to-a-key-"
+          "range and §7.1's extract-a-key, each of which declares the algorithm's stage block with "
+          "IDB_KEY_ARRAY_ALGO_STAGES, embeds an IdbKeyWalk and chains idb_key_walk_visit into its visit. So what "
+          "stands here is a caller with no flow base at all: an in-C fixture, whose only route to an Array key "
+          "is to become a flow");
     return IDB_KEY_INVALID_TYPE;
 }
 

@@ -31,8 +31,9 @@ IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *p
    walk because a key record is this file's own shape and there is one constructor for one. */
 JSValue idb_key_new_array(JSContext *ctx, JSValue keys);
 
-/* §7.4 FOR A CALLER WITH NO FLOW UNDER IT. It answers the arms above and CRASHES on an Array, naming the member
-   to route through the walk — there is no second implementation of the array arm for it to fall back to. */
+/* §7.4 FOR A CALLER WITH NO FLOW UNDER IT — an in-C fixture, every §4 member having its own flow and driving the
+   walk. It answers the arms above and CRASHES on an Array, naming the walk to route through: there is no second
+   implementation of the array arm for it to fall back to. */
 IdbKeyResult idb_key_convert(JSContext *ctx, JSValueConst input, JSValue *pkey);
 
 /* THE SAME CONVERSION FOLLOWED BY THE STEP EVERY §4 MEMBER THAT TAKES A KEY PERFORMS. §4.3's `cmp`, §4.7's

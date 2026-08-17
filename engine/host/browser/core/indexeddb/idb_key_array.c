@@ -355,17 +355,23 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
     }
 }
 
-int idb_key_walk_take(JSContext *ctx, IdbKeyWalk *w, JSValue *pkey)
+IdbKeyResult idb_key_walk_result(JSContext *ctx, IdbKeyWalk *w, JSValue *pkey)
 {
+    (void)ctx;
     DCHECK(w->sp == 0, "§7.4's answer was taken while its walk still stands on a level — the algorithm points "
                        "the stage at the caller's own only once every level has left");
-    if (w->res == IDB_KEY_OK) {
-        DCHECK(JS_IsObject(w->key), "§7.4 answered with a key that is not a key record");
-        *pkey = w->key;
-        w->key = JS_UNDEFINED;
-        return 0;
-    }
     *pkey = JS_UNDEFINED;
+    if (w->res != IDB_KEY_OK)
+        return w->res;
+    DCHECK(JS_IsObject(w->key), "§7.4 answered with a key that is not a key record");
+    *pkey = w->key;
+    w->key = JS_UNDEFINED;
+    return IDB_KEY_OK;
+}
+
+int idb_key_walk_take(JSContext *ctx, IdbKeyWalk *w, JSValue *pkey)
+{
+    if (idb_key_walk_result(ctx, w, pkey) == IDB_KEY_OK) return 0;
     JS_ThrowDOMException(ctx, "DataError", "the value is not a valid IndexedDB key");
     return -1;
 }

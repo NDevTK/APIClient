@@ -158,16 +158,18 @@ static bool range_contains(JSContext *ctx, const IdbRangeData *r, JSValueConst k
 
 /* ---- §2.9's two algorithms, as the operations over a store are stated in them ------------------------------- */
 
-int idb_key_range_from_value(JSContext *ctx, JSValueConst value, bool null_disallowed, JSValue *prange)
+/* §2.9's STEPS 1-2 — the two arms that convert nothing, and the whole of what this algorithm decides before
+   §7.4 runs. 1 with *prange the answer, 0 to go on to step 3, -1 with step 2's "DataError" live. It is one
+   function because the C entry and the walk below are two ENTRIES to one algorithm and not two algorithms: a
+   second copy of these two sentences is a second place for the unbounded range to be built differently. */
+static int range_convert_pre(JSContext *ctx, JSValueConst value, bool null_disallowed, JSValue *prange)
 {
-    JSValue key;
-
     *prange = JS_UNDEFINED;
     /* "If value is a key range, return value." The brand is the class, which is the same question §4.7's
        members ask and the reason a page cannot hand a shape-alike object in. */
     if (JS_GetClassID(value) == g_range_class) {
         *prange = JS_DupValue(ctx, value);
-        return 0;
+        return 1;
     }
     /* "If value is undefined or is null, then throw a DataError DOMException if null disallowed flag is true,
        or return an UNBOUNDED key range otherwise" — §2.9's unbounded range is the one whose both bounds are
@@ -179,12 +181,84 @@ int idb_key_range_from_value(JSContext *ctx, JSValueConst value, bool null_disal
             return -1;
         }
         *prange = idb_key_range_new(ctx, JS_NULL, JS_NULL, false, false);
+        return 1;
+    }
+    return 0;
+}
+
+/* §2.9's STEP 5: "Return a key range containing only key" — the same two-bounds-equal range §4.7's `only`
+   builds, and §2.9's own sentence for why ("a key range containing only key has both lower bound and upper
+   bound EQUAL TO key"). `key` is CONSUMED. */
+static JSValue range_only(JSContext *ctx, JSValue key)
+{
+    return idb_key_range_new(ctx, JS_DupValue(ctx, key), key, false, false);
+}
+
+int idb_key_range_from_value(JSContext *ctx, JSValueConst value, bool null_disallowed, JSValue *prange)
+{
+    JSValue key;
+    int pre = range_convert_pre(ctx, value, null_disallowed, prange);
+
+    if (pre != 0)
+        return pre < 0 ? -1 : 0;
+    if (idb_key_from_value(ctx, value, &key) < 0)   /* STEPS 3-4 */
+        return -1;
+    *prange = range_only(ctx, key);                 /* STEP 5 */
+    return 0;
+}
+
+int idb_key_range_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbRangeWalk *rw, JSValueConst value,
+                             bool null_disallowed, int base, int after)
+{
+    int pre;
+
+    /* A ZEROED JSValue IS THE INTEGER 0 AND NOT JS_UNDEFINED, so the slot is PLACED here rather than assumed:
+       every later reader of it tells "steps 1-2 answered" from "step 3 decides" by exactly that value. */
+    JS_FreeValue(ctx, rw->range);
+    rw->range = JS_UNDEFINED;
+    pre = range_convert_pre(ctx, value, null_disallowed, &rw->range);
+    if (pre < 0)
+        return JS_STEP_ABRUPT;
+    if (pre > 0) {
+        hdr->stage = (uint16_t)after;
+        return JS_STEP_YIELD;
+    }
+    idb_key_walk_start(ctx, hdr, &rw->w, value, base, after);   /* STEP 3 */
+    return JS_STEP_YIELD;
+}
+
+int idb_key_range_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbRangeWalk *rw, JSValue in, int base,
+                           JSValue **out_cb, int *out_argc)
+{
+    DCHECK(JS_IsUndefined(rw->range), "§2.9's step 3 is running on a record whose steps 1-2 already answered — "
+                                      "the conversion is begun only where neither did, and the stage points at "
+                                      "the caller's own otherwise");
+    return idb_key_walk_run(ctx, hdr, &rw->w, in, base, out_cb, out_argc);
+}
+
+void idb_key_range_walk_visit(JSContext *ctx, IdbRangeWalk *rw, JSStepVisit *v)
+{
+    idb_key_walk_visit(ctx, &rw->w, v);
+    v->val(ctx, &rw->range);
+}
+
+int idb_key_range_walk_take(JSContext *ctx, IdbRangeWalk *rw, JSValue *prange)
+{
+    JSValue key;
+
+    DCHECK(JS_IsUndefined(rw->range) || JS_GetClassID(rw->range) == g_range_class,
+           "§2.9's answer was taken from a record its own start never placed — a zeroed JSValue is the integer 0 "
+           "and not undefined, so a record that skipped idb_key_range_walk_start reads as \"steps 1-2 answered\" "
+           "and hands a number back as a key range");
+    if (!JS_IsUndefined(rw->range)) {   /* STEP 1's or STEP 2's answer */
+        *prange = rw->range;
+        rw->range = JS_UNDEFINED;
         return 0;
     }
-    if (idb_key_from_value(ctx, value, &key) < 0)
+    *prange = JS_UNDEFINED;
+    if (idb_key_walk_take(ctx, &rw->w, &key) < 0)   /* STEP 4 */
         return -1;
-    /* "Return a key range containing only key" — the same two-bounds-equal range §4.7's `only` builds. */
-    *prange = idb_key_range_new(ctx, JS_DupValue(ctx, key), key, false, false);
+    *prange = range_only(ctx, key);                 /* STEP 5 */
     return 0;
 }
 
@@ -193,8 +267,8 @@ bool idb_key_range_contains(JSContext *ctx, JSValueConst range, JSValueConst key
     const IdbRangeData *r = range_of(range);
 
     DCHECK(r != NULL, "§2.9's membership test was asked of something that is not a key range — every range in "
-                      "this engine is built by this component, and an operation over a store converts its "
-                      "query through idb_key_range_from_value before it reaches the store");
+                      "this engine is built by this component, and an operation over a store has converted its "
+                      "query through §2.9's convert-a-value-to-a-key-range before it reaches the store");
     return range_contains(ctx, r, key);
 }
 
@@ -305,7 +379,7 @@ static int js_range_one_key(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         if (idb_key_walk_take(ctx, &s->w, &key) < 0) return JS_STEP_ABRUPT;   /* STEP 3 */
         switch (magic) {                                                      /* STEP 4 */
         case RANGE_M_ONLY:
-            *presult = idb_key_range_new(ctx, JS_DupValue(ctx, key), key, false, false);
+            *presult = range_only(ctx, key);   /* the same sentence §2.9's step 5 is, written once */
             return JS_STEP_DONE;
         case RANGE_M_LOWER_BOUND:
         case RANGE_M_UPPER_BOUND:
