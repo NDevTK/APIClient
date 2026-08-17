@@ -68,18 +68,32 @@ const RESOURCE_HEADER_MAX = 1445;
 
 /* THE BYTES, PLACED AND NEVER ENCODED — the same rule renderer.html states at its own `cbytes`. A resource
    header is a byte sequence; running it through `stringToUTF8` would answer §7 a different question about a
-   different resource, and every non-ASCII signature in §6's tables is exactly what would be destroyed. */
+   different resource, and every non-ASCII signature in §6's tables is exactly what would be destroyed. The
+   placement is ONE function because the rule is one rule: everything this file hands the program is a byte
+   sequence with a LENGTH, and no entry takes a NUL-terminated string. */
+function place(what, bytes, fn) {
+  const p = M._malloc(bytes.length + 1);
+  CHECK(p !== 0, "OOM placing " + what + " in the browser process's linear memory — the decision it is for " +
+                 "would otherwise be taken over bytes this program never received");
+  M.HEAPU8.set(bytes, p);
+  try { return fn(p, bytes.length); } finally { M._free(p); }
+}
+
 function withHeader(bytes, fn) {
   DCHECK(bytes.length <= RESOURCE_HEADER_MAX,
          "a resource header longer than §5.2's 1445 bytes reached the browser process — the sender truncates " +
          "so the clone stays small, and one that did not has already copied a whole bundle across a thread to " +
          "answer a question defined over its first bytes");
-  const p = M._malloc(bytes.length + 1);
-  CHECK(p !== 0, "OOM placing a resource header in the browser process's linear memory — the CORB decision " +
-                 "would otherwise be taken over a body this program never saw");
-  M.HEAPU8.set(bytes, p);
-  try { return fn(p, bytes.length); } finally { M._free(p); }
+  return place("a resource header", bytes, fn);
 }
+
+/* AND THE AGENT CLUSTER KEY IS BYTES FOR A SHARPER REASON THAN THE HEADER IS. `clusterKeyOf` joins the
+   browsing-context group and the origin with a NUL "because neither half can contain one", so the key holds an
+   interior NUL — and `ccall`'s `"string"` marshalling ends a C string at the first one. Marshalled that way,
+   every origin in one tab would arrive as the same key, and the registry whose entire job is to refuse a
+   merged agent cluster would perform one. `TextEncoder` emits that NUL as the byte it is. */
+const KEY_ENC = new TextEncoder();
+function withClusterKey(clusterKey, fn) { return place("an agent cluster key", KEY_ENC.encode(clusterKey), fn); }
 
 /* THE HEADER FACTS ARE NO LONGER ASSERTED IN THIS FILE, and that is the conversion rather than a loss of rigour.
    `checkHeaderFacts` asserted that a Content-Type is `string|null`, that an X-Content-Type-Options is
@@ -113,21 +127,25 @@ const CONTENT_SNIFFER = {
 /* ────────────────────────────────────────────────────────────────────────────────────────────────────────
    THE RENDERER REGISTRY — the browser process's own state, and what makes this program's name a description
    rather than an aspiration. SECURITY.md fixes the unit: "One WASM instance per ORIGIN-KEYED AGENT CLUSTER —
-   (browsing-context group, origin)". That rule is now held by the process whose job it is to hold it. The
+   (browsing-context group, origin)". That rule is held by the process whose job it is to hold it. The
    offscreen's pool ASKS; this DECIDES; the zygote OBEYS.
-   ONE MAP AND NO SECOND INDEX. `RendererTerminated` names a routing id while the duplicate check names a
-   cluster key, which is a standing invitation to keep two maps — and two maps for one authority is two answers
-   with nothing to say which is right the first time they disagree. The pool this serves holds a handful of
-   renderers, so the id lookup is a scan over the authority itself.
+   AND THE DECIDING IS C. What stood here was a `Map`, a `_nextRoutingId++`, three counters and a duplicate
+   check — which is LOGIC, and CLAUDE.md §Architecture leaves this zone a BRIDGE and never that: "Lexbor (DOM)
+   + quickjs (JS) in C own ALL semantics… A JS orchestration layer is unwanted context-switching across the
+   JS↔WASM boundary; DELETE it." Deciding which renderers exist is computation over a string and an integer,
+   so it is `engine/host/browser_process/renderer/registry.c` and nothing of it is kept here as a mirror or a
+   fallback. Two consequences are worth naming. The duplicate refusal was a `DCHECK` whose release path
+   OVERWROTE the map entry — it is a `CHECK` in C, fatal in every build, because SECURITY.md's rule is a
+   production invariant. And the slot is now taken before the fork order STRUCTURALLY rather than by comment: a
+   `ccall` cannot suspend, so a second request for one cluster arriving while a fork is outstanding cannot find
+   an empty registry.
+   WHAT IS IRREDUCIBLE HERE IS ONE LINE — `zygote().forkRenderer(...)`. A dedicated Worker's global is
+   `DedicatedWorkerGlobalScope`: no `document`, no `createElement`, no frame. So this process can ORDER a
+   renderer materialized and can never materialize one, which is a bridge edge in exactly SECURITY.md's sense —
+   the same shape as `safeFetch`, where the capability lives in another zone and the decision does not. What
+   crosses it is an integer this program minted and a key it was given; what comes back is a pipe or a reason,
+   and both are handed straight back to C.
    ──────────────────────────────────────────────────────────────────────────────────────────────────────── */
-const _renderers = new Map();      /* clusterKey -> routingId, for every renderer this process decided exists */
-let _nextRoutingId = 1;
-let _launched = 0, _terminated = 0, _failed = 0;
-
-/* `clusterKeyOf` joins the browsing-context group and the origin with a NUL, because neither half can contain
-   one. A NUL is invisible in every console that prints it, so the DIAGNOSTIC view below substitutes `|` for it
-   and the authority itself never does. */
-const CLUSTER_KEY_SEP = String.fromCharCode(0);
 
 /* THE ZYGOTE IS BOUND ON FIRST USE, and that is an ordering requirement rather than laziness: the offscreen
    registers its Zygote implementation when renderer-host.js loads, while this process is provisioned by
@@ -142,59 +160,47 @@ function zygote() {
 
 const RENDERER_HOST = {
   async createRendererForCluster(clusterKey) {
-    DCHECK(clusterKey !== "",
-           "the browser process was asked for a renderer for an EMPTY agent cluster key — a renderer IS a " +
-           "cluster, so an empty one would put every document that failed to state its cluster behind one heap " +
-           "and one principal");
-    DCHECK(!_renderers.has(clusterKey),
-           "the browser process was asked for a SECOND renderer for agent cluster `" + clusterKey + "` — two " +
-           "heaps for one similar-origin window agent is the split SECURITY.md's one-instance-per-cluster rule " +
-           "exists to forbid, and this registry is the authority that already held the answer");
-    /* THE SLOT IS TAKEN BEFORE THE FIRST AWAIT, which is the discipline 94c5998e put into the offscreen's pool
-       and is needed here for the same reason: a mojo handler that suspends does NOT block its pipe, so a second
-       request for one cluster arriving while the fork is outstanding would find an empty registry and order a
-       second renderer. The check above is only a check because the write below cannot suspend before it. */
-    const routingId = _nextRoutingId++;
-    _renderers.set(clusterKey, routingId);
+    /* THE DECISION, TAKEN IN C AND SYNCHRONOUSLY. Every refusal this admission has — an empty cluster key, a
+       second renderer for a live cluster, a routing id space exhausted — is a `CHECK` in registry.c rather
+       than a value returned here, because a returned refusal is a value a caller can ignore and what it would
+       be ignoring is two heaps behind one principal. There is nothing left to assert on this side: the key was
+       validated by mojom as it crossed the pipe, and everything after it is the registry's own contract. */
+    const routingId = withClusterKey(clusterKey, (p, n) =>
+      M.ccall("bp_renderer_create", "number", ["number", "number"], [p, n]));
+    /* THE ORDER, WHICH IS THE BRIDGE EDGE AND THE ONLY LINE OF THIS METHOD THAT COULD NOT BE C. A dedicated
+       Worker has no `document`, so the frame is materialized by the offscreen's zygote on this process's
+       order — exactly as Chromium's browser process cannot fork a renderer by itself. The id it is given was
+       minted above; this call decides nothing and remembers nothing. */
     const v = await zygote().forkRenderer(routingId, clusterKey);
     DCHECK((v.pipe === null) !== (v.error === null),
            "the zygote answered a fork order with both a pipe and an error, or with neither — a renderer that " +
            "booted has exactly one pipe and one that did not has exactly one reason");
     if (v.error !== null) {
-      /* A LAUNCH THAT FAILED FREES ITS CLUSTER HERE. The zygote has already removed the frame; leaving the
-         registration would refuse this agent cluster a renderer forever, with nothing anywhere to say why. */
-      _renderers.delete(clusterKey);
-      _failed++;
+      /* A LAUNCH THAT FAILED FREES ITS CLUSTER IN THE REGISTRY. The zygote has already removed the frame;
+         leaving the registration would refuse this agent cluster a renderer forever, with nothing anywhere to
+         say why. */
+      M.ccall("bp_renderer_launch_failed", null, ["number"], [routingId]);
       return { routingId: routingId, pipe: null, error: v.error };
     }
-    _launched++;
+    M.ccall("bp_renderer_launched", null, ["number"], [routingId]);
     return { routingId: routingId, pipe: v.pipe, error: null };
   },
 
   /* A RENDERER'S DEATH IS OBSERVED, NOT ORDERED — which is what a real one is: a child process can exit on its
-     own and the browser learns of it. The offscreen owns the frame and so is what notices; this is where the
-     agent cluster is freed, and it is a method of THIS interface so that one pipe orders it against the next
-     CreateRendererForCluster for the same cluster, which would otherwise be refused as a duplicate of a
-     renderer that no longer exists. */
+     own and the browser learns of it. The offscreen owns the frame and so is what notices; the registry is
+     where the agent cluster is freed, and this is a method of THIS interface so that one pipe orders it
+     against the next CreateRendererForCluster for the same cluster, which would otherwise be refused as a
+     duplicate of a renderer that no longer exists. A routing id the registry never minted aborts the program
+     there rather than being ignored here — it is the one number only that table can produce. */
   rendererTerminated(routingId) {
-    let key = null;
-    _renderers.forEach((id, k) => { if (id === routingId) key = k; });
-    DCHECK(key !== null,
-           "the browser process was told renderer " + routingId + " terminated and its registry has no such " +
-           "renderer — either a routing id this process never minted came back, or one renderer was reported " +
-           "dead twice and the second report would free an agent cluster that has a live instance");
-    if (key === null) return;   /* release path under the assert: never free a cluster this did not name */
-    _renderers.delete(key);
-    _terminated++;
+    M.ccall("bp_renderer_terminated", null, ["number"], [routingId]);
   },
 
+  /* THE TABLE, READ AS ONE RECORD. `JSON.parse` of ONE document per answer is the discipline CLAUDE.md
+     blesses for `@RESULT`, and it is what stops a caller re-deriving a field: the seven fields below are
+     rendered together from one scan of the table, so no two of them can be read from different moments. */
   getRegistry() {
-    const clusters = [], ids = [];
-    _renderers.forEach((id, k) => { clusters.push(k.split(CLUSTER_KEY_SEP).join("|")); ids.push(id); });
-    return { clusters: clusters.sort().join(","),
-             routingIds: ids.sort((a, b) => a - b).join(","),
-             live: _renderers.size, launched: _launched, terminated: _terminated, failed: _failed,
-             nextRoutingId: _nextRoutingId };
+    return JSON.parse(M.ccall("bp_registry_snapshot", "string", [], []));
   },
 };
 

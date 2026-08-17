@@ -144,14 +144,20 @@ const LEDGER = [
          "MEASUREMENT MOVED ONCE, in the right direction: `noSniff` used to arrive as a boolean, which meant " +
          "Fetch's determine-nosniff was being computed in lib/safe-fetch.js as a substring test. Both entries " +
          "now take the HEADER VALUE and network/nosniff.c decides what it means, so this file relays two " +
-         "header values, two browser-stated facts and a byte sequence, and interprets none of them. IT ALSO " +
-         "HOLDS THE RENDERER REGISTRY, which is the one piece of STATE in this program and is not a semantic " +
-         "the engine could own: which agent clusters have an instance, what routing id each was given, and the " +
-         "refusal of a second one — SECURITY.md's own one-instance-per-`(browsing-context group, origin)` rule, " +
-         "held by the process a browser holds it in. It is here rather than in the offscreen because a registry " +
-         "split across two zones is two authorities, and the first time they disagree the result is two heaps " +
-         "behind one principal. The transport under all of it is mojo.js; the `{v,id,op}` records this file " +
-         "used to build are deleted with it." },
+         "header values, two browser-stated facts and a byte sequence, and interprets none of them. THE ROW " +
+         "USED TO END BY DEFENDING THE RENDERER REGISTRY AS STATE THIS FILE MAY HOLD — \"the one piece of " +
+         "STATE in this program and not a semantic the engine could own\" — and that sentence was the excuse " +
+         "shape this gate exists to catch. A `Map` from agent cluster key to routing id, a `_nextRoutingId++`, " +
+         "three counters and a duplicate check are computation over a string and an integer: nothing in it " +
+         "needs a `document`, a `postMessage` or a `Worker`, which is the whole test for whether a bridge edge " +
+         "is irreducible. It is `engine/host/browser_process/renderer/registry.c` now, with SECURITY.md's " +
+         "one-instance-per-`(browsing-context group, origin)` refusal as a `CHECK` rather than a `DCHECK` whose " +
+         "release path overwrote the entry. WHAT REMAINS IS THE ONE LINE THAT CANNOT BE C: " +
+         "`content.mojom.Zygote.ForkRenderer`. A dedicated Worker's global has no `document`, so this process " +
+         "can ORDER a renderer materialized and can never materialize one — the same shape as `safeFetch`, " +
+         "where the capability is another zone's and the decision is not. It carries an integer C minted out " +
+         "and hands the pipe-or-reason straight back in. The transport under all of it is mojo.js; the " +
+         "`{v,id,op}` records this file used to build are deleted with it." },
   { f: "lib/safe-fetch.js", zone: "BRIDGE:1",
     why: "THE network chokepoint. SOP/CORS/PNA/CORB/GET-only cannot live inside the untrusted WASM — " +
          "SECURITY.md §Network. THIS ROW WAS FALSE UNTIL THE BODY BECAME BYTES: the file ended in " +

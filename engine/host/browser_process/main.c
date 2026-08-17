@@ -6,17 +6,29 @@
  * was deleted at 58ba66a7, where two wasm-ld invocations over ONE object set produced two file names.
  *
  * WHY THERE IS NO SCHEDULER HERE, no realm and no quickjs. A network service answers questions about bytes.
- * Every entry below is a pure function of its arguments — no state survives a call, so there is nothing to
- * park, nothing to fork and no flow to be fair to. The moment an entry here needs to SUSPEND (a peer read, a
- * fetch of its own) that stops being true and the answer is the one CLAUDE.md §scheduler already gives, not a
- * second scheduler invented in this file.
+ * Every SNIFFING entry below is a pure function of its arguments — no state survives a call, so there is
+ * nothing to park, nothing to fork and no flow to be fair to. The moment an entry here needs to SUSPEND (a
+ * peer read, a fetch of its own) that stops being true and the answer is the one CLAUDE.md §scheduler already
+ * gives, not a second scheduler invented in this file.
+ *
+ * AND WHY THAT SENTENCE DOES NOT COVER THE WHOLE PROGRAM, which is the correction this file's ABI now carries.
+ * A browser process is not a network service; running the network service IN-PROCESS with it is a
+ * configuration Chromium itself ships, and the thing that makes the other half a BROWSER PROCESS is the
+ * RENDERER REGISTRY — which agent clusters have an instance, what routing id each was given, and the refusal
+ * of a second instance for one cluster. That is STATE, and it lived in `extension/browser-process.js` as a
+ * `Map` and a counter, which is the JS orchestration layer CLAUDE.md §Architecture says to delete rather than
+ * grow. It is `renderer/registry.c` now. It still needs no scheduler: a registry entry answers from a table in
+ * this program's own memory and cannot suspend, which is exactly why the ONE part that must suspend — ordering
+ * the offscreen's zygote to materialize a frame, because a dedicated Worker has no `document` — stays on the
+ * JavaScript side of the pipe and takes its routing id from here.
  *
  * WHAT CROSSES, AND WHY IT IS TEXT. `extension/renderer-host.js` states the discipline this follows: a record
- * of primitives carrying its TYPE, with BYTES BESIDE IT. Here the bytes go IN (a resource header, placed in
- * this module's linear memory by the worker) and a RECORD comes back, and the record crosses as ONE JSON
- * document that the worker does ONE `JSON.parse` of — the same shape `qjs_result`'s `@RESULT` has, and for the
- * same reason: a decision with three fields answered as three separate calls is three chances for a caller to
- * read a stale one beside a fresh one.
+ * of primitives carrying its TYPE, with BYTES BESIDE IT. Here the bytes go IN — a resource header, or an agent
+ * cluster key, each placed in this module's linear memory by the worker and passed as a pointer and a LENGTH,
+ * never as a NUL-terminated string, because both of them are byte sequences and one of them contains a NUL —
+ * and a RECORD comes back, crossing as ONE JSON document that the worker does ONE `JSON.parse` of. That is the
+ * shape `qjs_result`'s `@RESULT` has, and for the same reason: a decision with three fields answered as three
+ * separate calls is three chances for a caller to read a stale one beside a fresh one.
  */
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +38,7 @@
 #include "network/mime_sniff.h"
 #include "network/nosniff.h"
 #include "network/resource_kind.h"
+#include "renderer/registry.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -34,12 +47,17 @@
 #define BP_EXPORT
 #endif
 
-/* ONE ANSWER BUFFER FOR ALL ENTRIES, because there is one caller and it is synchronous: `ccall` converts this
-   C string to a JS string before returning, and JavaScript is run-to-completion, so no second call — of this
-   entry or of any other — can begin while a first answer is still being read. That is a property of the
+/* ONE ANSWER BUFFER FOR THE SNIFFING ENTRIES, because there is one caller and it is synchronous: `ccall`
+   converts this C string to a JS string before returning, and JavaScript is run-to-completion, so no second
+   call — of this entry or of any other — can begin while a first answer is still being read. That is a property of the
    TRANSPORT (a Worker serving one postMessage at a time through one synchronous handler) rather than of the
    number of entries, which is why a second entry shares it rather than needing a second buffer. A malloc'd
-   answer would put a free on the far side of a postMessage. */
+   answer would put a free on the far side of a postMessage.
+   THE REGISTRY SNAPSHOT DOES NOT SHARE IT, and the reason is a property of the record rather than of the
+   number of entries: a CORB verdict is a fixed set of fields each bounded by a constant its own component
+   declares, while a registry snapshot is as long as the table has renderers. A fixed buffer there would be an
+   admission cap invented by a serializer, so that record is built where the table lives, in a buffer that
+   grows (renderer/registry.c). Its lifetime rule is this one's: valid until the next call. */
 static char g_answer[512];
 
 /* THE ONE PLACE A C STRING BECOMES JSON, and it ASSERTS the property that lets it be a `%s`. §4.4 restricts a
@@ -129,3 +147,44 @@ BP_EXPORT const char *bp_classify(const char *content_type, const char *x_conten
            "here is a field that grew without this buffer growing and would be delivered as malformed JSON");
     return g_answer;
 }
+
+/* ────────────────────────────────────────────────────────────────────────────────────────────────────────
+   THE RENDERER REGISTRY'S ABI — `content.mojom.RendererHost` implemented, minus the one line that cannot be.
+   The interface has three methods and this has five entries, and the difference is precisely the bridge edge:
+   `CreateRendererForCluster` is a DECISION followed by an ORDER followed by the ORDER'S OUTCOME, the order
+   travels through the offscreen because only a document can create a frame, and the outcome comes back later.
+   So the decision is one entry and the two outcomes are two more, and the JavaScript between them holds no
+   state at all — it carries an integer out to the zygote and brings a pipe or a reason back.
+   THE CLUSTER KEY ARRIVES AS BYTES AND A LENGTH, exactly as a resource header does, and for a sharper reason:
+   `clusterKeyOf` joins the browsing-context group and the origin with a NUL, so a key marshalled as a C string
+   would arrive truncated at the separator and every origin in one tab would answer to one key — the registry
+   whose entire job is to refuse a merged agent cluster would perform one.
+   ──────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* DECIDE THAT AN AGENT CLUSTER GETS AN INSTANCE. Returns the routing id, which is always positive, and there
+   is no refusal to return: the refusals are SECURITY.md's one-instance-per-cluster rule and an empty key, both
+   of which abort in registry.c rather than becoming a value a caller may inspect and carry on past. */
+BP_EXPORT int bp_renderer_create(const unsigned char *cluster_key, int cluster_key_n)
+{
+    DCHECK(cluster_key_n >= 0, "an agent cluster key was passed a negative length — the caller measures a byte "
+                               "sequence it holds, so a negative one is a subtraction that went past the start");
+    DCHECK(cluster_key != NULL || cluster_key_n == 0,
+           "an agent cluster key of non-zero length arrived as a null pointer — the worker places the bytes in "
+           "this module's memory and passes what it placed, so a null with a length is a placement that failed "
+           "silently and would decide a renderer for a cluster this program never saw");
+    return renderer_registry_create(cluster_key, (size_t)(cluster_key_n < 0 ? 0 : cluster_key_n));
+}
+
+/* THE FORK ORDER'S OUTCOME. A launch that failed frees its agent cluster here — the zygote has already removed
+   the frame, and leaving the registration would refuse that cluster a renderer forever. */
+BP_EXPORT void bp_renderer_launched(int routing_id) { renderer_registry_launched(routing_id); }
+BP_EXPORT void bp_renderer_launch_failed(int routing_id) { renderer_registry_launch_failed(routing_id); }
+
+/* A RENDERER'S DEATH, OBSERVED BY THE ZONE THAT OWNS THE FRAME AND REPORTED HERE. A routing id this process
+   never minted CRASHES: it is the one number only this program can produce. */
+BP_EXPORT void bp_renderer_terminated(int routing_id) { renderer_registry_terminated(routing_id); }
+
+/* THE TABLE, AS ONE RECORD. It is `GetRegistry`'s declared reply verbatim, built where the table lives so no
+   consumer re-derives a field, and it is what makes `rendererPoolProbe`'s cross-check mean something: the ids
+   in it were minted in THIS program's memory, and the frames the offscreen holds were counted in another. */
+BP_EXPORT const char *bp_registry_snapshot(void) { return renderer_registry_snapshot_json(); }

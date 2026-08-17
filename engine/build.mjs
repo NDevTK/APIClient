@@ -380,11 +380,18 @@ function abiCheck(program, entrySrc, marker, prefix, list) {
   }
 }
 abiCheck("renderer", join(HOST, "main.c"), "QJS_EXPORT", "qjs_", QJS_ABI);
-/* THE BROWSER PROCESS'S ABI. Every entry is a question about BYTES answered with no state kept between calls,
-   which is what a network service is and why there is no scheduler behind them. It is enforced by the same call
-   for the same reason: an entry reaching `Module` because EXPORT_KEEPALIVE happens to be on is not an ABI, it
-   is an accident that survives until a setting changes. */
-const BP_ABI = ["bp_corb_check", "bp_classify"];
+/* THE BROWSER PROCESS'S ABI, in its two halves. The first two entries are questions about BYTES answered with
+   no state kept between calls, which is what a NETWORK SERVICE is and why there is no scheduler behind them.
+   The last five are the RENDERER REGISTRY, which is state and is what makes the program a BROWSER PROCESS:
+   which agent clusters have an instance, what routing id each was given, and the refusal of a second instance
+   for one cluster. They were a `Map` and a counter in extension/browser-process.js until this list grew, and
+   the reason that was wrong is the reason this list exists — a decision taken in the bridge is a decision
+   nothing in C can assert. It is enforced by the same call for the same reason: an entry reaching `Module`
+   because EXPORT_KEEPALIVE happens to be on is not an ABI, it is an accident that survives until a setting
+   changes. */
+const BP_ABI = ["bp_corb_check", "bp_classify",
+                "bp_renderer_create", "bp_renderer_launched", "bp_renderer_launch_failed",
+                "bp_renderer_terminated", "bp_registry_snapshot"];
 abiCheck("browser process", join(BPROC_DIR, "main.c"), "BP_EXPORT", "bp_", BP_ABI);
 
 /* COMPILE FLAGS AND LINK FLAGS ARE SEPARATED, and that separation is what lets both entries be verified.
@@ -527,7 +534,9 @@ link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs")
    source path alone would silently reuse an object built with the wrong `-I`. It links no lexbor, no quickjs
    and nothing under host/solver or host/browser except the MIME record, which is what makes a renderer-side
    call to §7 an undefined symbol.
-   IT IS SEQUENTIAL because it is four translation units; the parallel pump above exists for 130. */
+   IT IS SEQUENTIAL because it is a handful of translation units; the parallel pump above exists for 130. (It
+   said "four" while the set was seven, which is what a count written into prose beside a list that walks a
+   directory always becomes — the set is BPROC_SOURCES and reading it is the only way to know.) */
 {
   mkdirSync(BPROC_OUT, { recursive: true });
   const bpObj = (src) => join(OBJDIR, "bp_" + resolve(src).replace(/[\\/:]/g, "_") + ".o");
