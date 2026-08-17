@@ -574,3 +574,59 @@ console.log(`world deaths announced: ${worldDeaths.length} — ${worldDeaths.joi
 console.log('[route] OK — two instances, every routed record delivered, ancestry-forked segments: ' + forked +
             `, cross-agent reads answered: ${readsAnswered}, w.closed read back: ${closedReports[0]}` +
             `, parked and resumed across ${residue.length} bytes of residue`);
+
+/* ── VARIANT A: PARK THE ANSWERING INSTANCE, AS A PROBE AND NOT A GATE ──────────────────────────────────────
+ * `node engine/route.mjs park-probe`. Opt-in, and deliberately NOT part of the drive above, for the reason the
+ * capability it probes is missing: it is EXPECTED to abort today, and a gate that requires an abort
+ * institutionalises the gap and breaks on the day someone closes it. It also cannot share a process with the
+ * drive — a DCHECK is a `abort()`, so an in-line probe would take the green run down with it.
+ *
+ * WHAT IT PARKS, AND WHY THAT IS THE WHOLE POINT. Every park this drive performs is of the ASKER (`a`, phase 4),
+ * and `flow_owes_answer` is false there. It is two disjuncts and they are DIFFERENT unbuilt capabilities:
+ *   (1) `perform_q` non-empty  — a record arrived and the flow has not stepped; parking drops pure TEXT.
+ *   (2) `dyn_token[i]` non-NULL — the operation STARTED; parking drops a record PLUS a half-run program and its
+ *       continuation.
+ * This is (1): route a record to `b` and park `b` WITHOUT pumping it, so nothing has converted the record into a
+ * program row. (2) needs one `qjs_step` between the two and is a separate phase, because they fire one assert and
+ * name different work — one passing says nothing about the other.
+ *
+ * (2) ALSO HAS A PREREQUISITE THAT IS NOT A CODING PROBLEM, recorded here so the next reader does not build the
+ * recipe half first and produce an answer nobody can route. `cold.c` says "the record and the token are text and
+ * cross as text"; the record half is true and the TOKEN half is not. The token is the trusted zone's
+ * (`engine.h`: not the asking flow's request id, which is unique only within the asking instance), and
+ * `g_host_answers_late` exists because the zone REFUSES an answer arriving after a session closed. So: does a
+ * token outlive the answering instance's park? If YES, `b` resumes, re-queues the program and answers that same
+ * token, and the zone must hold the mapping across `b`'s park. If NO, `a`'s flow must ALSO be paged and re-issue
+ * under a NEW token next session — which is what the reply door already does. Different systems; answer it
+ * before building either.
+ *
+ * THE PERMANENT SHAPE, once the capability exists: park `b` mid-operation, resume it, and assert `a`'s flow comes
+ * back with the VALUE — on the value like `w.closed` above and for the same reason, because a counter passes when
+ * the answer was fabricated locally.
+ *
+ * MEASURED, AND IT DOES NOT REACH `flow_owes_answer` AT ALL — there is a PRIOR gap and this probe is how it was
+ * found. Run against a green drive, variant A aborts at `solver/cold.c:574` on `held == 0`:
+ *     "the frontier was parked while this instance holds a segment of a FOREIGN world … held=2
+ *      materialized-ever=5 … Build the cross-instance park: a foreign segment travels with the WORLD's name
+ *      (solver/world.h), not with this document's flows"
+ * `b` cannot park while it holds `a`'s world segments, and it holds two by the time anything has been asked of
+ * it — so the answering instance is unparkable for a reason that has nothing to do with owing an answer. That
+ * orders the work: the cross-instance park (foreign segments travelling by world name, re-routed by the
+ * offscreen) comes BEFORE either disjunct of `flow_owes_answer` is reachable, and before the token-lifetime
+ * question below can be asked of a real run. A probe that reported only "it aborted" would have sent the next
+ * reader to build the recipe half of a capability nothing can reach yet. */
+if (process.argv[2] === 'park-probe') {
+  const peer = engines[1];
+  const sample = [...reads.values()].find((r) => holderOf(r.op.split('\t')[1]) === peer);
+  if (!sample) fail('park-probe: no read in this drive was held by the peer, so there is no record to park it on');
+  console.log(`\npark-probe (variant A): routing a record to [${peer.tag}] and parking it WITHOUT a step`);
+  console.log(`  record: ${sample.op}`);
+  peer.M.ccall('qjs_perform', 'void', ['number','number'], [peer.cs('park-probe'), peer.cs(sample.op)]);
+  /* NOT PUMPED. The record is in `perform_q` and no flow has stepped it, which is disjunct (1) exactly. */
+  peer.M.ccall('qjs_request_park', 'void', [], []);
+  const st = peer.M.ccall('qjs_step', 'number', [], []);
+  const res = JSON.parse(peer.str('qjs_result'))._park.join(';');
+  console.log(`park-probe: the peer parked holding an unstepped record — step ${st}, residue ${res.length} bytes`);
+  console.log('park-probe: NO ABORT. cold.c now carries the record across a park, or the DCHECK it was ' +
+              'written for is no longer reached by this shape — read solver/cold.c before believing the first.');
+}
