@@ -43,7 +43,24 @@
    the read, so one peer is asked the same question by two different worlds and answers each under the segment
    that world has here. A peer holding SEVERAL timelines answers each question that many times — its document's
    state IS its flows — and the asking flow must then FORK per answer; that half is named where the second
-   answer arrives (engine_host_answer) and this fixture's `b` has one timeline, so it is not reached here. */
+   answer arrives (engine_host_answer) and this fixture's `b` has one timeline, so it is not reached here.
+
+   AND THE PARK, WHICH IS THE HALF OF THIS SEAM THAT HAD NEVER RUN AT ALL. Every mechanism above was exercised
+   with both instances resident for the whole run, so "a flow suspends at a cross-instance read" was tested and
+   "…and is then PAGED OUT while the read is outstanding" was not — which is not a corner: Level-1 eviction
+   gives up ONE document's engine for a document worth more, so the peer OUTLIVING the asker's park is the
+   ordinary case rather than the exotic one. Phase 4 withholds one read, parks `a` on it, tears `a` down, and
+   resumes it from its own residue while `b` stays exactly where it was. What that measures is stated as
+   assertions at the bottom, and each of them is about a thing nothing else in the tree can observe:
+     - the completion the peer computed for the PRE-PARK read has nowhere to land (the asking instance is gone
+       and the resumed one never asked that question), so it is an ORPHAN this zone must still be holding;
+     - the resumed flow RE-ISSUES the read — which is the cold tier's own claim about the replies a host owes
+       (solver/cold.h), and the only thing that makes a park at a cross-instance read lossless;
+     - and the world name it re-issues under must be one the peer has never seen. It is not: a WorldId's serial
+       counts from 1 in every session (world.c) under a document name that is stable BY REQUIREMENT, so the
+       resumed session hands `b` the names of the session that ended and `b` answers out of the segments those
+       names already own. That is two timelines wearing one name, across sessions instead of across instances,
+       and it is what this driver exists to make decidable. */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -91,7 +108,14 @@ const HTML_B = `<!doctype html><script>
 
 /* `topLevelUrl` is HTML §8.1.3.1's TOP-LEVEL CREATION URL — this zone's to state, because one instance is
    one document and only the zone that routed the create knows what embeds it. */
-async function makeEngine(html, url, docId, csp, topLevelUrl) {
+/* THE INSTANCE COUNTER IS THIS ZONE'S, AND IT IS THE THING THE ENGINE'S WORLD NAME IS MISSING. A resumed
+   document is the SAME document — same name, same address, same routing — and a DIFFERENT session, whose
+   request ids and export ids both count from 1 again. So every token this zone mints carries `tag` and not
+   `docId`: without it the resumed instance's request 1 lands on the rendezvous of the parked instance's
+   request 1 and the driver answers a question nobody asked. */
+let instanceSerial = 0;
+
+async function makeEngine(html, url, docId, csp, topLevelUrl, recipes) {
   const M = await boot();
   const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
   const str = (f, ...a) => String(M.ccall(f, 'string', a.map(() => 'number'), a.map(cs)) ?? '');
@@ -120,8 +144,12 @@ async function makeEngine(html, url, docId, csp, topLevelUrl) {
   };
   M.ccall('qjs_init', 'number', ['number','number','number','number','number'],
     [cs(html), cs(url), cs(docId), cs(csp || ''), cs(topLevelUrl)]);
-  M.ccall('qjs_begin', 'void', ['number'], [cs('')]);
-  return { M, cs, str, provide, answer, docId, docUrl: url, origin: new URL(url).origin, done: false };
+  /* THE RESIDUE SEEDS THE FRONTIER INSTEAD OF THE BOOT FLOW (solver/cold.h). It is ';'-joined records, which
+     is the language cold_park_recipes both writes and reads; the extension joins the stored ARRAY the same
+     way, so this zone stores what that one stores. */
+  M.ccall('qjs_begin', 'void', ['number'], [cs(recipes || '')]);
+  return { M, cs, str, provide, answer, docId, tag: `${docId}/s${++instanceSerial}`,
+           docUrl: url, origin: new URL(url).origin, done: false };
 }
 
 const engines = [];
@@ -151,6 +179,17 @@ const closedReports = [];
    phase 3 answers it. A `setTimeout` would order nothing — both engines advance only when this loop steps
    them. */
 let resumeOwed = true;
+/* WHILE THIS IS SET, A CROSS-AGENT READ IS ASKED OF THE PEER AND ITS COMPLETION IS NOT RELAYED — the asking
+   flow stays suspended at the read with its snapshot intact, which is the state phase 4 parks it in. The peer
+   is still ASKED, deliberately: the question is what becomes of a peer's IN-FLIGHT turn when the instance that
+   asked pages out, and a read that was never put to the peer would not have one. */
+let withholdReads = false;
+/* Every record this zone could not route because no instance holds the document it names. Collected rather
+   than logged: an unroutable operation parks its asker forever, so it is a failure and not a note. */
+const routeFailures = [];
+/* DECLARED HERE BECAUSE THE PHASES USE IT. A phase that cannot reach the state the next one measures has to
+   stop there rather than carry a half-built precondition into an assertion about something else. */
+const fail = (why) => { console.error('[route] FAILED: ' + why); process.exit(1); };
 
 /* ONE STEP of `e`, then everything the host owes it. Returns false once the engine reports its frontier done. */
 async function service(e) {
@@ -188,20 +227,24 @@ async function service(e) {
        nothing in the ABI to ask the peer WITH. It is not skipped silently: leaving it out of the accounting is
        how a seam whose read half has never run reports OK. */
     if (op.startsWith('windowproxy.get\t') || op.startsWith('object.')) {
-      const key = `${e.docId}#${id}`;
+      const key = `${e.tag}#${id}`;
       /* AN UNANSWERED REQUEST IS RE-REPORTED EVERY STEP, so the first sighting is the one that acts. */
       if (reads.has(key)) continue;
       /* EVERY CROSS-AGENT OPERATION NAMES ITS TARGET DOCUMENT as its first operand, which is the one fact only
          this zone can act on: it is what says which instance holds the object. */
       const holder = holderOf(op.split('\t')[1]);
-      if (!holder) { console.log('  ROUTE FAILED: no instance holds', op.split('\t')[1]); continue; }
-      reads.set(key, { asker: e.docId, op, answered: false });
-      console.log(`  [${e.docId}] cross-agent read asked: ${op}`);
+      if (!holder) { routeFailures.push(`read ${op}`); continue; }
+      reads.set(key, { asker: e.tag, op, world: op.split('\t')[2], answered: false, withheld: withholdReads });
+      console.log(`  [${e.tag}] cross-agent read asked: ${op}`);
       /* THE PEER IS ASKED, AND NOTHING IS ANSWERED INSIDE THAT CALL. It answers by RUNNING A PROGRAM — the IDL
          getter §7.2.5.1 defines the member as — as a flow on its own frontier, so the completion arrives on a
          later step of that instance and comes out through its notices like every other emission. Pumping it
          here is this zone's job precisely because the answer is not a return value. */
       holder.M.ccall('qjs_perform', 'void', ['number','number'], [holder.cs(key), holder.cs(op)]);
+      /* WITHHELD: the peer has been asked and its answer is left where it lands. The asking flow stays parked
+         on the read — which is the correct behaviour for an unanswered request and is exactly the state a
+         Level-1 eviction finds a flow in. */
+      if (withholdReads) { console.log(`  [${e.tag}] WITHHELD — the asking flow stays suspended at the read`); continue; }
       for (let i = 0; i < 400 && !answers.has(key); i++) if (!(await service(holder))) break;
       if (!answers.has(key)) { console.log(`  NOT ANSWERED: ${key}`); continue; }
       /* RELAYED VERBATIM. The completion is in the engines' own grammar and this zone does not read it: a value
@@ -225,7 +268,16 @@ async function service(e) {
     /* FIELD 5 IS THE CHILD'S TOP-LEVEL CREATION URL, decided by the creator's §7.4 and carried on the
        notice for the same reason field 6's policy container is: the new instance cannot derive it. The policy
        is LAST because it is the record's remainder — a raw CSP header may contain HTAB. */
-    if (f[0] === 'navigable.create') engines.push(await makeEngine(HTML_B, f[3], f[1], f.slice(6).join('\t'), f[5]));
+    /* A DOCUMENT THIS ZONE ALREADY HOLDS AN INSTANCE FOR IS NOT PROVISIONED TWICE, and that is not a guard
+       against a duplicate notice — it is what a resumed document does. `a`'s replay re-runs its scripts, so it
+       re-creates the child navigable and re-announces it under the same name, while the instance that holds
+       that name has been running the whole time. Provisioning a second one would give one document two heaps
+       and two object graphs, which is the state SECURITY.md's one-instance-per-cluster rule exists to prevent
+       and which nothing downstream could tell from the routing. */
+    if (f[0] === 'navigable.create') {
+      if (holderOf(f[1])) console.log(`  [${e.tag}] create for ${f[1]}, already held — routing to the live instance`);
+      else engines.push(await makeEngine(HTML_B, f[3], f[1], f.slice(6).join('\t'), f[5]));
+    }
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
        minted. Held rather than delivered here: the asker is another instance and this loop is inside its step. */
@@ -245,30 +297,90 @@ engines.push(await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.te
 for (let i = 0; i < 2000; i++) if (!(await service(engines[0]))) break;
 console.log(`a emitted ${posts.length} posts, worlds: ${posts.map((p) => p.world).join('  ')}`);
 
-/* PHASE 2 — one at a time, each delivered before the next is routed. */
-for (const p of posts) {
-  const target = holderOf(p.doc);
-  if (!target) { console.log('  ROUTE FAILED: no instance holds', p.doc); continue; }
-  console.log(`routing world ${p.world} -> [${target.docId}] as origin ${p.origin}`);
-  target.M.ccall('qjs_route', 'void', ['number','number'], [target.cs(p.record), target.cs(p.origin)]);
-  const before = got.length;
-  for (let i = 0; i < 400 && got.length === before; i++) if (!(await service(target))) break;
-  if (got.length === before) console.log(`  NOT DELIVERED: ${p.world}`);
+/* PHASE 2 — one at a time, each delivered before the next is routed. Written as a routine because phase 4
+   routes the posts a RESUMED sender emits through the identical path: one record, then pump the target until
+   its listener has seen it. */
+let routedUpTo = 0;
+async function routePending() {
+  for (; routedUpTo < posts.length; routedUpTo++) {
+    const p = posts[routedUpTo];
+    const target = holderOf(p.doc);
+    if (!target) { routeFailures.push(`post ${p.world} -> ${p.doc}`); continue; }
+    console.log(`routing world ${p.world} -> [${target.tag}] as origin ${p.origin}`);
+    target.M.ccall('qjs_route', 'void', ['number','number'], [target.cs(p.record), target.cs(p.origin)]);
+    const before = got.length;
+    for (let i = 0; i < 400 && got.length === before; i++) if (!(await service(target))) break;
+    if (got.length === before) console.log(`  NOT DELIVERED: ${p.world}`);
+  }
 }
+await routePending();
 
 /* PHASE 3 — `b` HAS NOW CLOSED ITSELF, so `a`'s parked read is released and asks the one question whose answer
    lives entirely in the other instance's record. `a` is stepped rather than told anything: the reply to
    `/resume` resumes the flow it parked, that flow reads `w.closed`, and the read suspends again on the peer
-   exactly as `w.length` did — the whole point being that a driver never states the answer, it only routes. */
+   exactly as `w.length` did — the whole point being that a driver never states the answer, it only routes.
+   AND THE ANSWER IS WITHHELD, which is what leaves `a` in the one state phase 4 is about: a flow suspended AT
+   a cross-instance read, its snapshot intact, with the peer's turn already running. */
 resumeOwed = false;
-console.log(`\nphase 3: /resume answered — a's parked flow reads w.closed on a peer that closed itself`);
-for (let i = 0; i < 2000 && !closedReports.length; i++) if (!(await service(engines[0]))) break;
+withholdReads = true;
+const preParkWorlds = new Set([...posts.map((p) => p.world), ...[...reads.values()].map((r) => r.world)]
+                              .map((v) => v.split(',')[0]));
+const preParkReads = reads.size;
+console.log(`\nphase 3: /resume answered — a's parked flow reads w.closed, and the answer is WITHHELD`);
+let aLive = true;
+for (let i = 0; i < 2000 && reads.size === preParkReads; i++) { aLive = await service(engines[0]); if (!aLive) break; }
+if (reads.size === preParkReads)
+  fail('the withheld read was never asked, so phase 4 has nothing to park a flow ON — either the /resume reply ' +
+       'did not resume the flow that awaited it, or `w.closed` was answered without reaching the peer');
+if (!aLive)
+  fail("`a`'s frontier reported DONE while one of its flows was suspended at a cross-instance read — a blocked " +
+       'frontier is STALLED (engine.h), which is "call me again", and DONE over a suspended flow is that flow ' +
+       'dropped');
+
+/* PHASE 4 — THE PARK. `a` is paged out ON that suspended read, torn down, and resumed from its own residue
+   into a NEW instance, while `b` — which holds the answer, the export table and a segment for every world `a`
+   has sent it — is not touched. That asymmetry is the point: Level-1 eviction gives up ONE document's engine.
+   THE RESIDUE IS A REPLAY RECIPE (solver/cold.h), not a serialized continuation: it names the ARMS each
+   suspended flow took, and the flow's delta, its frames and the replies it was owed are regenerated by
+   re-running the document under them. So the read this flow is suspended at is not carried across — it is
+   RE-ISSUED, and everything below is about whether the question it re-asks is the same question. */
+/* THE PEER'S TURN RUNS TO ITS END FIRST, with the asker still suspended on it. That is what makes the
+   completion an ORPHAN rather than a question nobody started: `b` installs the asking world's segment, runs
+   the IDL getter as a flow on its own frontier and emits `remoteop.answer` — and by the time it does, the
+   instance that asked has been parked and torn down. */
+for (let i = 0; i < 400 && !answers.size; i++) if (!(await service(engines[1]))) break;
+
+const parked = engines[0];
+const postsAtPark = posts.length;
+parked.M.ccall('qjs_request_park', 'void', [], []);
+const parkStep = parked.M.ccall('qjs_step', 'number', [], []);
+const residue = JSON.parse(parked.str('qjs_result'))._park.join(';');
+console.log(`\nphase 4: park step answered ${parkStep}, residue ${residue.length} bytes: ${residue}`);
+parked.M.ccall('qjs_teardown', 'void', [], []);
+/* THE ORPHANS ARE COUNTED BEFORE THE RESUMED INSTANCE CAN ADD ANY. A completion held here names a token of the
+   instance that has just gone: `b` computed it under the asking flow's world, and there is no longer a flow,
+   a register or an instance for it to land in. */
+const orphanCompletions = [...answers.keys()];
+withholdReads = false;
+engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue);
+console.log(`phase 4: resumed as [${engines[0].tag}] from the residue; [${engines[1].tag}] never left memory`);
+for (let i = 0; i < 4000 && !closedReports.length; i++) {
+  if (!(await service(engines[0]))) break;
+  await routePending();
+}
+const resumedReads = [...reads.values()].filter((r) => r.asker === engines[0].tag);
+/* EVERY WORLD NAME THE RESUMED SESSION PUT ON THE WIRE, against every name the session that ended had already
+   put there. A name in both sets is one `b` keyed a segment on for a flow that no longer exists. */
+const reusedWorlds = [...new Set([...resumedReads.map((r) => r.world),
+                                  ...posts.slice(postsAtPark).map((p) => p.world)]
+                                 .map((v) => v.split(',')[0]))].filter((h) => preParkWorlds.has(h));
 
 console.log(`\nposts routed: ${posts.length}   messages the receiving page saw: ${got.length}`);
 for (const u of got) console.log('  ' + u);
 const readsAnswered = [...reads.values()].filter((r) => r.answered).length;
 console.log(`cross-agent reads asked: ${reads.size}   answered: ${readsAnswered}`);
-for (const r of reads.values()) console.log(`  [${r.asker}] ${r.answered ? 'ANSWERED' : 'UNANSWERED'} ${r.op}`);
+for (const r of reads.values())
+  console.log(`  [${r.asker}] ${r.withheld ? 'WITHHELD-AND-PARKED' : r.answered ? 'ANSWERED' : 'UNANSWERED'} ${r.op}`);
 /* THE SEAM'S OWN COUNTS, from the receiving instance, and HELD IS NOT MADE. This line printed one number under
    a sentence describing the other: `_worldSegments` carried world.c's CUMULATIVE materialized count while the
    words beside it said "how many foreign worlds hold a segment here", which is the live table. The two agree
@@ -282,7 +394,7 @@ let forked = 0;
 for (const e of engines) {
   const r = JSON.parse(e.str('qjs_result'));
   forked += r._worldSegmentsForked;
-  console.log(`[${e.docId}] worldSegments held=${r._worldSegmentsHeld} made=${r._worldSegmentsMade} ` +
+  console.log(`[${e.tag}] worldSegments held=${r._worldSegmentsHeld} made=${r._worldSegmentsMade} ` +
               `forkedFromAncestor=${r._worldSegmentsForked} flows=${r._flows} switches=${r._switches}`);
 }
 
@@ -292,7 +404,6 @@ for (const e of engines) {
    segment was materialized by FORKING an ancestor (the world vector's ancestry was READ and used), and the one
    synchronous cross-instance READ this engine has was asked AND answered by the instance that holds the
    document — which is the half that has never run. */
-const fail = (why) => { console.error('[route] FAILED: ' + why); process.exit(1); };
 if (engines.length < 2) fail('no second instance was provisioned — the navigable.create notice went unanswered');
 if (!posts.length) fail('the sender emitted no cross-instance post');
 if (got.length !== posts.length)
@@ -312,12 +423,17 @@ if (!reads.size)
    read that is asked and never answered leaves the asking flow parked with its snapshot intact, which is the
    correct behaviour and an unfinished seam: the peer has to install the asking world's segment and answer BY
    RUNNING A PROGRAM, on its own frontier, and hand back a COMPLETION rather than a value. */
-if (readsAnswered !== reads.size)
-  fail(`${reads.size} cross-agent read(s) asked and ${readsAnswered} answered — the instance holding the ` +
+const withheldReads = [...reads.values()].filter((r) => r.withheld);
+if (readsAnswered !== reads.size - withheldReads.length)
+  fail(`${reads.size} cross-agent read(s) asked, ${withheldReads.length} withheld on purpose and ` +
+       `${readsAnswered} answered — the instance holding the ` +
        'document did not produce a completion for one of them. Either no instance holds the document the ' +
        'operation names (a `navigable.create` notice this zone dropped), or the performing instance never ' +
        'reached the end of the program its answer is — which is a flow on its frontier and can be parked ' +
        'behind anything else that frontier is doing');
+if (routeFailures.length)
+  fail(`${routeFailures.length} record(s) named a document no instance holds, so their askers are parked on a ` +
+       `question nothing will ever answer: ${routeFailures.join(' ; ')}`);
 /* AND THE LAST ONE IS THE ONE A WRONG ANSWER PASSES. Every check above fails by a NUMBER staying zero — a
    record that did not cross, a segment that was not forked, a completion that never came — and none of them
    would have moved if `w.closed` had been answered out of `a`'s own byte, because a local answer is instant and
@@ -327,7 +443,9 @@ if (readsAnswered !== reads.size)
    boolean. */
 if (closedReports.length !== 1)
   fail(`the asking page reported ${closedReports.length} reads of \`w.closed\` and this driver arranged exactly ` +
-       'one — either the parked flow was never resumed by the /resume reply, or the read never answered at all');
+       'one — it is produced by the RESUMED instance, since the answer was withheld from the session that ' +
+       'parked, so a zero here is a flow that did not come back from the cold tier and a two is a flow that ' +
+       'came back beside one that had never left');
 if (!closedReports[0].includes('v=boolean:true'))
   fail(`\`w.closed\` answered \`${closedReports[0].split('v=')[1]}\` about a top-level traversable that had run ` +
        'window.close() in the OTHER instance. §7.2.2.1 opening and closing windows makes `closed` the OR of a ' +
@@ -335,5 +453,56 @@ if (!closedReports[0].includes('v=boolean:true'))
        'agent that RUNS it — so an answer read out of this agent\'s own copy of that record is false about a ' +
        'window that has closed itself, which is the one cross-instance defect that produces a plausible value ' +
        'instead of a missing one');
+
+/* ── THE PARK, WHICH IS THE PART OF THIS SEAM NOTHING HAD EVER EXERCISED ──────────────────────────────────
+   The checks above are all about two instances that were both resident for the whole run. These four are about
+   one of them LEAVING MEMORY while the other keeps its state, which is what Level-1 eviction does. */
+if (parkStep !== 0)
+  fail(`the park step answered ${parkStep} rather than DONE — engine_sched_step takes the park before its first ` +
+       'pick and closes the session, so anything else means the frontier was not written out and the residue ' +
+       'below is not the residue');
+if (!residue)
+  fail('the parked frontier wrote an EMPTY residue while a flow was suspended at a cross-instance read — an ' +
+       'empty park document is how a fully-explored document DELETES its cold entry (solver/cold.h), so a ' +
+       'suspended flow that produces one is a flow dropped under the name of a positive answer');
+/* THE PEER'S IN-FLIGHT TURN OUTLIVES THE INSTANCE THAT ASKED, and nothing on either side knows. `b` was asked
+   the withheld read, ran the program its answer is, and emitted a completion under a token whose asking
+   instance no longer exists — no flow, no register, no engine. This zone is holding it because this zone is
+   the only thing left that can; the engine's own delivery entry would take it (engine_host_answer walks the
+   registers of an instance whose session is closed and finds the entry still there, writes the value onto it,
+   and nothing will ever read it) or, once the instance is torn down, there is nowhere to deliver it at all. */
+if (!orphanCompletions.length)
+  fail('the peer produced no completion for the read that was parked on — either the withheld read never ' +
+       'reached the peer, or the peer did not run the program its answer is, and in both cases phase 4 parked ' +
+       'a flow that was not actually suspended at a cross-instance read');
+console.log(`orphaned peer completions after the park: ${orphanCompletions.length} — ${orphanCompletions.join(' ')}`);
+/* AND THE RESUMED FLOW RE-ISSUES THE READ, which is the cold tier's whole claim about the replies a host owes:
+   the residue names the ARMS the flow took, so re-running the document under them re-issues the request and it
+   is answered with TODAY's value (§Time-travel-resume). A resumed session that asked nothing would mean the
+   suspended flow's path did not replay to the point it was suspended at, which is a dropped flow wearing the
+   name of a successful park. */
+if (!resumedReads.length)
+  fail('the resumed instance asked the peer nothing — the flow that was parked AT a cross-instance read did ' +
+       'not replay to that read, so the park lost it. A recipe is a replay (solver/cold.h): the request is ' +
+       'not carried across, it is re-issued by the code that issued it the first time');
+/* THE ONE THAT FAILS, AND IT IS THE FINDING. A WorldId is (document, serial): the DOCUMENT name is stable
+   across a park by requirement — the routing above depends on it — and the SERIAL counts from 1 in every
+   session (world.c's world_registry_init). So the resumed session hands the peer the same names the session
+   that ended handed it, and the peer keys segments on the head of a vector it received: world_segment finds
+   the existing entry and answers the resumed flow out of a dead flow's timeline. Nothing on either side can
+   tell — the ancestry is identical too — so there is no assert in the engine that can catch it, which is why
+   this one lives out here where the two sessions are both visible.
+   WHAT IT NAMES: a world's name must carry the SESSION, in the residue that already crosses the tier, or the
+   parking instance must tell every peer it reached that those names are dead — which is world_release's
+   missing caller (world.c names it at the allocation that has no ceiling). Either one, not both. */
+if (reusedWorlds.length)
+  fail(`the resumed session put ${reusedWorlds.length} world name(s) on the wire that the session that ended ` +
+       `had already sent: ${reusedWorlds.join(' ')}. A WorldId's serial counts from 1 in every session while ` +
+       'the document name is stable by requirement, so the peer — which never left memory — already holds a ' +
+       'segment keyed on each of them, and answers the resumed flow under the timeline of a flow that no ' +
+       'longer exists. Two timelines wearing one name, across sessions. Build the session component of a world ' +
+       'name (the residue is what crosses the tier and can carry it), or the park-time notice that gives ' +
+       'world_release its missing caller');
 console.log('[route] OK — two instances, every routed record delivered, ancestry-forked segments: ' + forked +
-            `, cross-agent reads answered: ${readsAnswered}, w.closed read back: ${closedReports[0]}`);
+            `, cross-agent reads answered: ${readsAnswered}, w.closed read back: ${closedReports[0]}` +
+            `, parked and resumed across ${residue.length} bytes of residue`);

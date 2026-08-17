@@ -1141,6 +1141,24 @@ void remote_object_free(JSContext *ctx)
 {
     uint32_t i;
     int k;
+    /* AN EXPORT ID IS AN IDENTITY IN THIS SESSION'S TABLE, AND A PARKED INSTANCE COMES BACK AS A NEW ONE. A
+       name is `<doc>:<id>` and `id` is this table's index+1, minted from 1 by every session; the DOCUMENT name
+       is stable across a park by construction, because routing needs it to be. So an instance that pages its
+       frontier out and resumes re-mints the same ids for whatever its replay happens to export first, while a
+       peer that outlived the park — which is the ordinary case, since Level-1 eviction gives up ONE document's
+       engine — still holds `o<doc>:<id>` for the objects of the session that ended. That name then resolves,
+       in range and with nothing to say so, to a DIFFERENT object: `w.document === w.document` across the park
+       is answered by two unrelated objects and remote_op.c's own "never lent" check passes.
+       The mechanism is the one the world namespace needs for the same reason (solver/world.h): an identity
+       minted per session must carry the session, or the exporting instance must tell every peer that the names
+       it lent are dead before it leaves memory. Until one of those exists, an instance with live exports may
+       not park. */
+    DCHECK(!engine_frontier_paged() || g_exports_n == 0,
+           "this agent PARKED its frontier while peers hold names for objects it lent — an export id is an "
+           "index into this session's table and the resumed session mints from 1 again, so every name a peer "
+           "still holds resolves to a different object of the new session and `===` answers wrong with nothing "
+           "to say so. Build the session component of an exported name, or the park-time notice that tells "
+           "each peer its references into this document are gone");
     for (i = 0; i < g_exports_n; i++) JS_FreeValue(ctx, g_exports[i].v);
     free(g_exports);
     g_exports = NULL;
