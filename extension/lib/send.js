@@ -484,13 +484,28 @@ async function executeSendRequest(documentId, msg) {
       documentId,
     );
   } catch (err) {
+    /* AN INVARIANT ABORT IS NOT A FAILED REQUEST. `pageContextSend` and the `pageContextFetch` under it each
+       DCHECK that the caller named an HTTP method, and a DCHECK is a throw on this side (extension/check.js);
+       without this line a broken relay contract would be reported to the reviewer as `fetch_exception`, i.e.
+       as the server or the network having refused — the one reading in which the user has no reason to look
+       at this extension. Everything else a relay throw can be is still handled as the catch intends. */
+    RETHROW_FATAL(err);
     return { error: `fetch_exception: ${err.message}`, timing: Date.now() - startTime };
   }
 
   const timing = Date.now() - startTime;
 
-  if (!resp || resp.error) {
-    return { error: resp?.error || "fetch_failed: no response", timing };
+  /* THE RELAY ALWAYS ANSWERS WITH AN OBJECT. lib/schema.js's `pageContextFetch` returns {error} for a bad
+     URL, {error} for an unreachable content script, and the content script's own reply otherwise — there is
+     no arm on which it resolves undefined. `resp?.error || "fetch_failed: no response"` therefore carried a
+     third case that cannot happen, and a `?.` over a guaranteed object is how a relay that started
+     answering nothing would be reported as a request that simply failed. */
+  DCHECK(resp && typeof resp === "object",
+         "the page-context relay resolved without a response object — lib/schema.js's pageContextFetch " +
+         "answers {error} on every failure arm, so an absent object is that relay broken rather than a " +
+         "request the page refused");
+  if (resp.error) {
+    return { error: resp.error, timing };
   }
 
   // Decode response

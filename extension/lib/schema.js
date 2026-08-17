@@ -431,7 +431,11 @@ async function pageContextFetch(tabId, url, opts, documentId) {
     } catch (e) {
       /* Page-context fetch failed (tab closed, content script not injected,
          frame removed, etc.). Capture the underlying reason so the caller
-         sees more than "content script unreachable". */
+         sees more than "content script unreachable". An invariant abort travels ON through it first
+         (extension/check.js): this catch's whole job is to turn a throw into `relay_failed`, which is the
+         answer every caller reads as "the page could not be reached", and a DCHECK arriving here would be
+         reported as exactly that — a broken contract in this zone presented as an unreachable tab. */
+      RETHROW_FATAL(e);
       _pageFetchErr = e && e.message || String(e);
       console.debug("[brain] page-context fetch relay failed:", _pageFetchErr, "tabId=" + tabId + " url=" + url);
     }
