@@ -301,38 +301,29 @@ void flow_release(JSContext *ctx, Flow *f) {
            "a flow was released holding WORK — a parked continuation, a suspended frame, queued reactions or "
            "replies the host still owed it — and it was never written to the cold tier, so nothing replays it "
            "and every one of those is a work item the ONE frontier just dropped");
-    /* AND THE PARK IS NOT DROPPED HERE ANY MORE, BECAUSE THE SLOT DOES NOT BORROW — IT OWNS. Three lines
-       nulled these fields under the claim that "`opaque` is an activation reachable from the frame chain
-       released just below, so what goes is the intention to resume it and not the memory." That claim is false
-       at every one of the three sites that park, and each of them says so where it takes its reference:
-         quickjs.c js_async_func_resume   `JS_REF_COUNT(s)++;  the slot holds a reference until the resume
-                                           releases it`                       — release that ref
-         quickjs.c js_async_gen_resume    `js_dup(JS_MKPTR(JS_TAG_OBJECT, s->generator));  the park keeps the
-                                           suspended body alive`              — JS_FreeValue the generator
-         quickjs.c the reaction park      a JSReactionFlow the resume consumes — reaction_flow_free(ctx, rf)
-       The ONLY thing that discharges any of them is `fn(ctx, opaque)` actually running (JS_ResumeParkedFlow);
-       there is no API that disposes of a parked continuation without resuming it. So nulling the fields drops
-       the sole owning reference, and the activation — with `fs.tramp_top`, its whole heap call chain — is
-       unreachable memory. That is the 4 surviving frames flow_registry_free counts, reached through the flow
-       this probe names: `frame=0 park=1 paged=1`, a flow whose chain was never under `frame` at all.
+    /* AND THE PARK IS RELEASED HERE, BECAUSE THE SLOT OWNS IT. Three lines used to null these fields under
+       the claim that "`opaque` is an activation reachable from the frame chain released just below, so what
+       goes is the intention to resume it and not the memory." That was false at every one of the three sites
+       that park — each takes a reference and only the resume gives it back — and false by construction for the
+       flow this leak was found through, whose `frame` was NULL, so there was no chain below it to be reachable
+       from. The disposer now rides the park (quickjs.h's JSFlowParkFreeFn) and each site states its own
+       release next to where it takes it, so this line calls a function rather than knowing three shapes.
        `paged` DOES NOT EXCUSE IT, and conflating the two debts is how this survived. The assert above is about
        a dropped WORK ITEM, and the recipe genuinely does replay a paged flow's continuation — that argument is
-       sound and unchanged. It says nothing whatever about the MEMORY the old continuation still holds here,
-       which no recipe frees and no GC walk can see.
-       WHAT TO BUILD: the park records its DISPOSER beside its resume fn, at JS_ParkFlow, so each site states
-       how its own reference is released next to where it takes it — the same rule §State-isolation states for
-       a host record's layout and its finalizer. Then this line calls it and the pointers go. A disposer
-       dispatched here by comparing `fn` against the three known functions is the banned shape: a pointer table
-       that must be edited every time a fourth site parks, and silently wrong until someone notices. */
-    DCHECK(f->park_fn == NULL,
-           "a flow was released holding a PARKED CONTINUATION — the park slot OWNS a reference (each of the "
-           "three park sites takes one and only the resume releases it), so this drops the last reference to "
-           "an activation and its whole heap call chain. Being PAGED excuses the dropped work item, never the "
-           "leaked memory. Build the park's disposer: record it beside the resume fn at JS_ParkFlow so each "
-           "site states how its own reference is released");
+       sound and unchanged. It says nothing about the MEMORY the old continuation still holds here, which no
+       recipe frees and no gc_obj_list walk can see, because neither the activation nor its TrampFrames are GC
+       objects. That was 4 surviving frames at flow_registry_free's census with nothing naming the owner. */
+    DCHECK(!f->park_fn == !f->park_free,
+           "a flow holds a parked continuation with no disposer, or a disposer with nothing parked — the pair "
+           "is stored together at the switch out and required at the park itself, so one without the other is "
+           "a park assembled outside JS_TakeParkedFlow");
+    if (f->park_fn) {
+        ((JSFlowParkFreeFn *)f->park_free)((JSContext *)f->park_ctx, f->park_opaque);
+        f->park_ctx = NULL; f->park_fn = NULL; f->park_free = NULL; f->park_opaque = NULL;
+    }
     DCHECK(f->park_ctx == NULL && f->park_opaque == NULL,
-           "a flow holds half a park — the three fields are written and taken together (JS_TakeParkedFlow), so "
-           "one set without the others means a park was assembled outside that pair");
+           "a flow holds half a park — the fields are written and taken together (JS_TakeParkedFlow), so one "
+           "set without the others means a park was assembled outside that pair");
     /* `frame` is the JS_FlowNew handle holding this flow's whole heap-frame chain — every activation, closure
        and local it is suspended across — so one left behind retains the entire realm, and the runtime's leak
        walk reports it as a Window, a context and seventeen hundred anonymous Functions with nothing naming the

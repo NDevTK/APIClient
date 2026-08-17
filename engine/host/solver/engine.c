@@ -3123,9 +3123,9 @@ static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot it
        async activation of THIS flow, under THIS flow's heap. Left in the runtime it would be resumed by
        whichever flow the scheduler picked next — against the wrong delta — or, if that flow parked too, hit
        JS_ParkFlow's one-slot assertion, which is exactly what the smoke test was aborting on. */
-    { JSContext *pc; JSFlowParkFn *pf; void *po;
-      if (JS_TakeParkedFlow(JS_GetRuntime(ctx), &pc, &pf, &po)) {
-          f->park_ctx = pc; f->park_fn = (void *)pf; f->park_opaque = po;
+    { JSContext *pc; JSFlowParkFn *pf; JSFlowParkFreeFn *pd; void *po;
+      if (JS_TakeParkedFlow(JS_GetRuntime(ctx), &pc, &pf, &pd, &po)) {
+          f->park_ctx = pc; f->park_fn = (void *)pf; f->park_free = (void *)pd; f->park_opaque = po;
       } }
     f->dec_blob = decide_suspend();
     f->pin_blob = concolic_pins_suspend();
@@ -3138,8 +3138,9 @@ static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot it
 }
 
 static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply its delta + solver state */
-    JS_PutParkedFlow(JS_GetRuntime(ctx), (JSContext *)f->park_ctx, (JSFlowParkFn *)f->park_fn, f->park_opaque);
-    f->park_ctx = NULL; f->park_fn = NULL; f->park_opaque = NULL;
+    JS_PutParkedFlow(JS_GetRuntime(ctx), (JSContext *)f->park_ctx, (JSFlowParkFn *)f->park_fn,
+                     (JSFlowParkFreeFn *)f->park_free, f->park_opaque);
+    f->park_ctx = NULL; f->park_fn = NULL; f->park_free = NULL; f->park_opaque = NULL;
     if (!f->delta) f->delta = cow_delta_new();
     cow_set_current((CowDelta *)f->delta);
     cow_apply(ctx, (CowDelta *)f->delta);

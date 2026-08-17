@@ -229,7 +229,13 @@ typedef struct Flow {
        flow's timeline and resumes under THIS flow's delta, so leaving it in the runtime while a sibling runs
        would either resume it against the wrong heap or drop it outright. Empty (park_fn NULL) for a flow with
        nothing parked, which is every flow that has not preempted inside a reaction. */
-    void *park_ctx; void *park_fn; void *park_opaque;
+    /* …AND THE DISPOSER THAT RELEASES IT WITHOUT RUNNING IT (quickjs.h's JSFlowParkFreeFn), which is the field
+       that makes this a reference the flow OWNS rather than one it merely remembers. The slot's continuation is
+       kept alive by a reference the park took and only the resume gives back, so a flow that is torn down or
+       PAGED OUT — where a recipe replays the work and frees none of the memory — has to give it back itself.
+       Carried beside the other three because they are one park: taken together at the switch out, put back
+       together at the switch in, and released together at flow_release. */
+    void *park_ctx; void *park_fn; void *park_free; void *park_opaque;
     /* A ROUTED CROSS-DOCUMENT DELIVERY — the record the trusted zone handed this instance, and the SENDER's
        origin, which only that zone may stamp (SECURITY.md: an origin the untrusted engine computed for a
        foreign message is a forgery every `event.origin` check in every bundle would then trust). A delivery is
