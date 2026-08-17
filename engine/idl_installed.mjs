@@ -1262,27 +1262,54 @@ export function loadEnvironment(root) {
         if (src) tarrow(src, key("", f.name, "@return"), null);
       }
       for (const p of f.params) tarrow(paramKey(f.name, p), tagKey(path, f, p, -1), null);
-      const CALL_RE = /\b([A-Za-z_]\w*)\s*\(/g;
-      let cm;
-      while ((cm = CALL_RE.exec(f.body))) {
-        const callee = cm[1];
-        const params = byName.get(callee);
-        if (!params || forms.has(callee) || callee === f.name) continue;
-        if (IFACE_SEEDS.some((s) => s.fn === callee) || callee === IFACE_OBJECT.fn) continue;
-        const open = f.body.indexOf("(", cm.index);
+      const argEdges = (callees, open, site) => {
         const end = matchAt(f.body, open);
-        if (end < 0) continue;
+        if (end < 0) return;
         const args = splitTop(f.body.slice(open + 1, end - 1));
         /* A CONDITIONAL CALL CARRIES ITS CONDITION. The object a shared installer is handed under
            `if (!strcmp(HTML_IFACE[i].iface, "HTMLAnchorElement") || …)` is not every prototype the loop walks,
            it is those two — so hyperlink.c's twelve members reach HTMLAnchorElement and HTMLAreaElement and
            nothing else, which neither the old file-granular audit nor a plain "conditional, give up" could say. */
-        const guard = guardAt(f.body, plainOf(f), cm.index);
-        args.forEach((a, k) => {
-          const v = stripDup(a);
-          if (k < params.length && named(v))
-            tarrow(at(v, cm.index), paramKey(callee, params[k]), guard ? { only: guard.only } : null);
-        });
+        const guard = guardAt(f.body, plainOf(f), site);
+        for (const callee of callees) {
+          const params = byName.get(callee);
+          if (!params) continue;
+          args.forEach((a, k) => {
+            const v = stripDup(a);
+            if (k < params.length && named(v))
+              tarrow(at(v, site), paramKey(callee, params[k]), guard ? { only: guard.only } : null);
+          });
+        }
+      };
+      const CALL_RE = /\b([A-Za-z_]\w*)\s*\(/g;
+      let cm;
+      while ((cm = CALL_RE.exec(f.body))) {
+        const callee = cm[1];
+        if (!byName.has(callee) || forms.has(callee) || callee === f.name) continue;
+        if (IFACE_SEEDS.some((s) => s.fn === callee) || callee === IFACE_OBJECT.fn) continue;
+        argEdges([callee], f.body.indexOf("(", cm.index), cm.index);
+      }
+      /* A CALL THROUGH A TABLE OF FUNCTION POINTERS IS A CALL TO EVERY FUNCTION THAT COLUMN HOLDS, and until
+         this edge existed it was a call to NOTHING — the callee is not an identifier, so the direct edge above
+         never matched and the arguments reached no parameter. That one gap is where the [Global] fact died:
+         `PLATFORM[i].install(ctx, global, doc)` is how every per-realm component in this engine is installed,
+         so `global` — which carries Window through §3.7.3's [Global] rule, `JS_SetGlobalClass` and the class's
+         prototype slot — reached the `g` of `i_window`, `i_timer`, `i_bar_prop` and 119 others as an untagged
+         object. Every member Window installs ON the global was therefore UNATTRIBUTED: the ninety event handler
+         IDL attributes, `opener`, `closed`, `top`, `parent`, `setTimeout`, `structuredClone`, `matchMedia`,
+         `getComputedStyle`, `requestAnimationFrame` — the largest interface in the engine, attributed to
+         nothing, and its ABSENT list inflated by every one of them.
+         The column is read the same way every other table in this file is, and it is the FORWARD direction
+         only: the callee's parameter is the union of what its callers pass, which is what a function-pointer
+         column means. A column this cannot resolve makes no edge, exactly as before. */
+      const IND_CALL_RE = /\b([A-Za-z_]\w*)\s*\[[^\]]*\]\s*\.\s*([A-Za-z_]\w*)\s*\(/g;
+      let im;
+      while ((im = IND_CALL_RE.exec(f.body))) {
+        const cells = R.column(im[1], im[2]);
+        if (!cells) continue;
+        const names = [...new Set(cells.map((c) => stripCast(c).trim())
+          .filter((c) => /^[A-Za-z_]\w*$/.test(c) && byName.has(c) && c !== f.name))];
+        if (names.length) argEdges(names, im.index + im[0].length - 1, im.index);
       }
     }
   }
