@@ -602,7 +602,12 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     }
     const keysForService = collectKeysForService(tab, service, url.hostname);
     if (apiKey && !keysForService.includes(apiKey)) keysForService.push(apiKey);
-    fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url);
+    /* THE SEED'S METHOD TRAVELS WITH THE SEED. The tail of that call may fall back to the req2proto error
+       probe, which is a POST of a deliberately-malformed body, so it may only probe a seed the page itself
+       POSTed — and this is the only frame that knows: `msg.method` sits beside `msg.url` here and is lost
+       everywhere below. Passing the address without it is what sent a malformed POST to an endpoint the page
+       had only GET'd. `_seedIsProbeable` aborts on the absence rather than guessing. */
+    fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url, msg.method);
   }
 
   // Error-based service-info probe (lib/req2proto.js; README "Error-Based Schema

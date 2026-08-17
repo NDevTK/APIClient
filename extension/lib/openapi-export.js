@@ -189,7 +189,15 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
                 ...(pDef._defaultValue != null ? { default: pDef._defaultValue } : {}),
                 ...(pDef._range ? { minimum: pDef._range.min, maximum: pDef._range.max } : {}),
               };
-              const loc = pDef.location || "query";
+              /* NO DEFAULT. `endpoint.c` emits a `location` per param and `learn.js` writes it onto every
+                 parameters entry, so an absent one means a record older than that producer — a stale IDB
+                 entry, which must say so rather than be exported as a query param it may not be. */
+              DCHECK(pDef.location === "path" || pDef.location === "query" || pDef.location === "body" ||
+                     pDef.location === "form" || pDef.location === "formData",
+                     "a discovery parameter reached the OpenAPI export with location " + pDef.location +
+                     " — endpoint.c states path/query/body and openapi-import.js writes p.in; an absent one is " +
+                     "a record persisted before that producer existed");
+              const loc = pDef.location;
               if (loc === "body" || loc === "form" || loc === "formData") {
                 // Form-body params → accumulate into requestBody schema.
                 formBodyProps[paramName] = paramSchema;

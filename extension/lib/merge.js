@@ -48,7 +48,7 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
     for (var fc = 0; fc < analysis.fetchCallSites.length; fc++) {
       var callSite = analysis.fetchCallSites[fc];
       /* THE CALL-SITE CONTRACT, ASSERTED WHERE IT ARRIVES. endpoint.c's `endpoint_json_array` writes exactly
-         four keys per record — method, url, params[{name,validValues[]}], and headers ONLY when it observed
+         four keys per record — method, url, params[{name,location,validValues[]}], and headers ONLY when it observed
          one — so those are the fields this loop and learnFromAstCallSite may read, and each one is guaranteed
          rather than defaulted. `params` is always present (possibly empty), which is why the `|| []` that
          stood at each use is gone: an absent array here would mean the engine's serializer changed shape, and

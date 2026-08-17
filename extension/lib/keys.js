@@ -63,6 +63,11 @@ function extractKeysFromText(documentId, text, sourceUrl, sourceContext) {
 
         const keyData = tab.apiKeys.get(key);
         keyData.lastSeen = Date.now();
+        /* THE COUNT WAS INITIALISED AND NEVER INCREMENTED. Nothing in the extension raised it: this file set it
+           to 0, merge.js maxed two zeroes, three DCHECKs asserted its type, and the popup's "N req" badge fell
+           back to the size of the ENDPOINT set — so it displayed a real number about the wrong thing. This is
+           the one place a key is observed in a request, so it is the one place that can count. */
+        keyData.requestCount++;
         if (url) {
           keyData.services.add(service);
           keyData.hosts.add(url.hostname);
