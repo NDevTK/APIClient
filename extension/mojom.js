@@ -210,26 +210,46 @@
       { ordinal: 7, name: "GetPending",
         params: [],
         reply: [
-          { name: "urls", type: "string",
-            why: "the addresses flows are parked on, newline-joined, \"\" for none — every owed list this ABI " +
-                 "answers crosses that way, so an empty list is the empty string and never a NULL pointer " +
-                 "turned into the four characters \"null\" and then into one bogus record" },
+          { name: "requests", type: "string",
+            why: "the REQUESTS flows are parked on — one `METHOD<TAB>URL` line each, newline-joined, \"\" for " +
+                 "none, deduped by the PAIR. The field was `urls` and the list was addresses alone, which is a " +
+                 "request named by half of itself: a page that issues a GET and a POST to one address parks " +
+                 "two, and both settled with whichever body the zone fetched first. TAB can occur in neither " +
+                 "half — URL Standard §4.4 URL parsing has the basic URL parser remove every ASCII tab or " +
+                 "newline from its input before anything else, and Fetch §2.2.1 Methods makes a method a byte " +
+                 "sequence matching the method token production, whose tchar (RFC 9110 §5.6.2 Tokens) is " +
+                 "VCHAR-only and excludes HTAB. It is the grammar GetHostRequests already answers in, and an " +
+                 "empty list is the empty string and never a NULL pointer turned into the four characters " +
+                 "\"null\" and then into one bogus record" },
           WORKING_SET] },
 
       { ordinal: 8, name: "GetChunks",
         params: [],
         reply: [
           { name: "urls", type: "string",
-            why: "the module loader's owed chunk addresses, on GetPending's rule. A fetch whose body is " +
-                 "JAVASCRIPT is always fetched AND executed — the lazy-chunk surface CLAUDE.md calls the " +
-                 "headline moat — so a record dropped here is an endpoint set nobody ever sees" },
+            why: "the addresses the module loader is loading CODE from — a CLASSIFICATION of the GetPending " +
+                 "list and not a second owed list, which is why it is still addresses and carries no method. " +
+                 "Every one was recorded by module_load at the moment it PARKED the load, so each is already a " +
+                 "GetPending line; fetching it a second time and providing it again answers a request that " +
+                 "carries a reply, which is engine_provide's answered-twice DFAIL. What it decides is the CORB " +
+                 "class — a body that becomes executable code is fetched `as:\"script\"` (SECURITY.md " +
+                 "§Network), and a cross-origin HTML/JSON body must never be read as code. A record dropped " +
+                 "here is a lazy chunk fetched as data, and CLAUDE.md calls that surface the headline moat" },
           WORKING_SET] },
 
       { ordinal: 9, name: "Provide",
         params: [
+          { name: "method", type: "string",
+            why: "the METHOD half of the request this answers, which GetPending named first on the line. The " +
+                 "engine's pending register is keyed on the PAIR, so a reply carrying the address alone lands " +
+                 "in `method` at the C entry with every later operand shifted — which is why qjs_provide " +
+                 "DCHECKs the method's presence and engine_provide asserts the token production rather than " +
+                 "matching nothing in silence. It is the request's " +
+                 "identity and not a hint: the answer to a GET is not the answer to a POST of one address" },
           { name: "url", type: "string",
-            why: "the address this reply answers, matched against what a flow parked on — the engine's own " +
-                 "qjs_provide DFAILs on one nothing is parked on, which is what an invented record produces" },
+            why: "the TARGET half of the same request, matched with the method against what a flow parked on " +
+                 "— the engine's own qjs_provide DFAILs on a pair nothing is parked on, which is what an " +
+                 "invented record produces" },
           { name: "reply", type: "string",
             why: "the reply's METADATA as JSON, so it carries its type: a bare string could not say `null` for " +
                  "Fetch §5.6's network error without it being the four characters \"null\", and could not " +

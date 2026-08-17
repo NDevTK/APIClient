@@ -831,7 +831,29 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
      defect — a UTF-8 decode run in the zone that owns SOP/CORS and owns no semantics, before HTML §8.1.4.2's
      own decode could look at the charset the response declared. So the record travels as text and the bytes
      travel as bytes, copied straight into the engine's linear memory. */
-  const fetched = async (u, asScript) => {
+  /* THE REQUEST IS THE PAIR — `method` is half of what the flow parked on, not a hint about the address. It
+     arrives already normalized (Fetch §2.2.1 Methods, "normalize a method"), so `GET` is exactly the set this
+     zone can perform, HEAD included: a HEAD answered with a GET's body is the same substitution.
+     A REQUEST THIS ZONE CANNOT ISSUE IS REFUSED BEFORE THE CALL AND NEVER DOWNGRADED. safeFetch hardcodes
+     `method:"GET"` and reads neither `opts.method` nor `opts.body` (SECURITY.md §Network, "GET only, enforced by
+     ABSENCE"), so fetching a POST's address as a GET and providing those bytes under the POST's key would be
+     the defect this seam's method was added to close, with the pairing now CORRECT: the reply would match the
+     request it names and still be a response the server never gave for it. That is the wrong answer moved one
+     zone up. Nothing state-changing is issued, which is the rule this preserves rather than relaxes.
+     THE REFUSAL IS §5.6 Fetch methods' NETWORK ERROR, WHICH ON THIS SEAM IS SPELLED `null` — the same refusal
+     fetchedXhr makes, in this seam's own grammar rather than in the XHR seam's. There the record always crosses
+     and `status: 0` with no bytes leaves the response the network error §3 starts it as, so `blocked-method:<M>`
+     rides along as a diagnostic that xml_http_request.c's xhr_take_reply returns before ever reading. HERE the
+     record IS the page's Response: core/fetch's delivery rejects with the TypeError only for the JSON `null`,
+     and ANY object is built into a Response, so a status-0 record would RESOLVE `fetch()` with a status no
+     server returns — a reply this zone fabricated. `if (r.status === 0) return null` below already says exactly
+     that about every other refusal safeFetch makes (blocked-scheme, blocked-cors-credentialed, CORB). */
+  const fetched = async (method, u, asScript) => {
+    DCHECK(typeof method === "string" && method !== "",
+           "a pending request reached the chokepoint with no method — GetPending answers `METHOD<TAB>URL` and " +
+           "the pair is what the flow parked on, so a request whose method is unknown can be neither refused " +
+           "nor issued");
+    if (method !== "GET") return null;
     if (!canFetch || hasHole(u)) return null;
     try {
       const abs = new URL(u, msg.sourceUrl).href;
@@ -1212,26 +1234,61 @@ function engineWeight(eng) {
    for bytes that MOVE is `mojo_base.mojom.BigBuffer`. So a move is a second declared byte type, not a flag on
    this call — and it must be, because `Init`'s document is a parameter of the same spelling whose bytes this
    zone RETAINS. One type meaning two ownerships is exactly what a validator cannot check. */
-async function engineProvide(eng, url, rep) {
+/* AND IT IS DELIVERED AGAINST THE REQUEST, WHICH IS THE PAIR. `qjs_provide` takes the method first, in the
+   order a request line states them (RFC 9112 §3 Request Line), because the engine's pending register is keyed
+   on both halves: a delivery named by the address alone settled whichever request was parked on that address
+   first, so a page issuing a GET and a POST to one address had them collect each other's bodies. */
+async function engineProvide(eng, method, url, rep) {
   DCHECK(rep === null || (rep && typeof rep === "object" && rep.meta && rep.bytes instanceof Uint8Array),
          "`fetched` answered neither §5.6's network error (null) nor a reply — a reply is its JSON metadata " +
          "and its BYTES together, and a record arriving without one of the two is half a response");
-  await eng.r.renderer.provide(url, JSON.stringify(rep === null ? null : rep.meta),
+  await eng.r.renderer.provide(method, url, JSON.stringify(rep === null ? null : rep.meta),
                                rep === null ? null : rep.bytes);
 }
-async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
+/* ONE LINE, SPLIT IN ONE PLACE — the mirror of the engine's own `engine_pending_split`, which exists because
+   three C hosts each finding the TAB for themselves is three places for the grammar to drift; a fourth host in
+   another language is not an exception to that. The delimiter is unambiguous by two specs and neither half can
+   contain one: URL Standard §4.4 URL parsing has the basic URL parser remove every ASCII tab or newline from
+   its input before anything else, and Fetch §2.2.1 Methods makes a method a byte sequence matching the method
+   token production, whose tchar (RFC 9110 §5.6.2 Tokens) is VCHAR-only and excludes HTAB.
+   IT IS A `CHECK` AND THE ENGINE'S SPLITTER IS ONE FOR THE SAME REASON: the release path has no defined answer.
+   A line this splitter cannot take apart is delivered against a method nobody asked for — the wrong answer this
+   whole seam exists to make impossible — and NEVER against an assumed `GET`, which is the one guess that looks
+   right for as long as the page issues nothing else. */
+function pendingRequest(line) {
+  const tab = line.indexOf("\t");
+  CHECK(tab > 0 && tab < line.length - 1,
+        "content.mojom.Renderer.GetPending answered a line that is not `METHOD<TAB>URL`: `" + line + "` — the " +
+        "engine joins the pair and this zone must deliver against both halves, so a line missing one is a " +
+        "reply keyed on a request nothing parked on");
+  return { method: line.slice(0, tab), url: line.slice(tab + 1) };
+}
+async function engineServiceFetch(eng) {   // one round: answer every parked REQUEST, then the engine is hot again
   /* THE REPLY'S METADATA CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer
      does. A bare string could not say `null` for a network error without it being the four characters "null",
      and could not carry the URL list, the status or the headers at all. Its BODY crosses as BYTES beside it,
      because JSON can say none of the 256 values a byte has without first running an algorithm over them, and
      the algorithm this zone used to run (Fetch §5.2's `text()`, a UTF-8 decode) destroyed exactly the evidence
      HTML §8.1.4.2's classic-script decode exists to read. */
-  const replies = owedList("GetPending", (await eng.r.renderer.getPending()).urls);
-  for (const u of replies)
-    await engineProvide(eng, u, await eng.fetched(u, false));
-  const chunks = owedList("GetChunks", (await eng.r.renderer.getChunks()).urls);
-  for (const u of chunks)
-    await engineProvide(eng, u, await eng.fetched(u, true));
+  /* THE CHUNK LIST CLASSIFIES THE PENDING LIST, IT DOES NOT ADD TO IT — so it is read FIRST and answered never.
+     Every address the module loader reports was recorded by `module_load` at the moment it PARKED the load
+     (engine_pending_module_url, which states its own `GET`), so each is already a GetPending line; fetching it
+     again and providing it a second time answers a request that already carries a reply, which is
+     engine_provide's answered-twice DFAIL — a live abort on every dynamic `import()` for as long as this loop
+     provided both lists. What the list decides is the CORB class: a body that becomes executable code is
+     fetched `as:"script"` so a cross-origin HTML/JSON body is never read as code (SECURITY.md §Network), and
+     that is a property of the REQUEST — Fetch §2.2.5 Requests gives a request a destination — which belongs on
+     the pending line beside the method, after which this list has nothing left to say. Until it is there, the
+     register keeps a specifier after its load settled, so a later PLAIN fetch of that same address is classified
+     as code: strictly a CORB narrowing (a cross-origin non-JS body is refused where a browser would have read
+     it as data), and the residual that the destination is being read out of a second list instead of off the
+     request. */
+  const asScript = new Set(owedList("GetChunks", (await eng.r.renderer.getChunks()).urls));
+  const requests = owedList("GetPending", (await eng.r.renderer.getPending()).requests);
+  for (const line of requests) {
+    const { method, url } = pendingRequest(line);
+    await engineProvide(eng, method, url, await eng.fetched(method, url, asScript.has(url)));
+  }
   await engineServiceHostRequests(eng);
 }
 /* EVERY OWED LIST CROSSES THE SAME WAY — newline-joined records, or "" for none — so it is SPLIT in one place
