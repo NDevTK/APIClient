@@ -398,7 +398,7 @@ const QJS_ABI = ["qjs_init", "qjs_join", "qjs_bundle_id", "qjs_begin", "qjs_step
                  "qjs_pending", "qjs_chunks", "qjs_provide", "qjs_top_weight", "qjs_set_yield_floor",
                  "qjs_request_park", "qjs_emit_partial",
                  "qjs_host_requests", "qjs_host_answer", "qjs_host_notices", "qjs_route",
-                 "qjs_perform", "qjs_host_answer_remote"];
+                 "qjs_perform", "qjs_host_answer_remote", "qjs_world_gone"];
 
 /* THE LIST IS THE ABI, SO THE ENTRY POINT AND THE LIST ARE ONE FACT AND ARE CHECKED AGAINST EACH OTHER. Both
    directions are a real defect and neither has a symptom at build time: an entry main.c defines and this omits

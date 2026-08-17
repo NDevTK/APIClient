@@ -359,6 +359,21 @@
                  "not `undefined`, it is a relay that lost the peer's answer, and the engine's own decoder " +
                  "says so at the other end" }],
         reply: [WORKING_SET] },
+
+      { ordinal: 20, name: "WorldGone",
+        params: [
+          { name: "world", type: "string",
+            why: "the name of a world ANOTHER instance has finished with — its flow left that instance's " +
+                 "frontier, or its whole session parked into a generation that will never mint again. This " +
+                 "instance holds a COW segment for every foreign world that ever reached it (solver/world.h), " +
+                 "materialized on arrival and released only when told, so without this record an instance that " +
+                 "answered anything holds a foreign flow's state for the rest of its process and can never " +
+                 "park. It carries no target document and no sender origin, and both absences are the design: " +
+                 "the sending engine does not track which peers a flow reached — releasing a world with no " +
+                 "segment is a no-op, so tracking it would be state kept only to avoid one — which is why this " +
+                 "zone BROADCASTS it, and nothing on the receiving side runs page code, so there is no " +
+                 "`event.origin` for a stamp to be the truth of" }],
+        reply: [WORKING_SET] },
     ],
   });
 

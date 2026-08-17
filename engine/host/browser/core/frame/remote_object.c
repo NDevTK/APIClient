@@ -136,8 +136,9 @@ JSValueConst remote_object_by_id(uint32_t session, uint32_t id)
               "the export table died with that session and this one mints its ids from 1 again, so the name "
               "resolves in range to an unrelated object and `===` answers wrong. Build what carries an export "
               "across a park: an exported object is state the RECIPE has to name (solver/cold.h), or the park "
-              "must tell each peer that its references into this document are gone — which is the same notice "
-              "world_release is missing a caller for (solver/world.h)");
+              "must tell each peer that its references into this document are gone — the second is the EXPORT "
+              "sibling of the world death the park already announces (world_session_gone, solver/world.h), and "
+              "it is a different record because a world names a TIMELINE and an export names an OBJECT");
         return JS_UNDEFINED;
     }
     if (id == 0 || id > g_exports_n) return JS_UNDEFINED;

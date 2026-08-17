@@ -1509,6 +1509,31 @@ async function hostNotice(eng, line) {
     await to.asker.r.renderer.hostAnswerRemote(to.req, line.slice(_t2 + 1));
     return;
   }
+  /* `world.gone <world>` — a world of THIS instance is finished with: the flow holding it left the frontier, or
+     the whole session parked into a generation that will never mint again. Every peer that ever received a
+     delivery or an operation from that world materialized a COW segment keyed on it (solver/world.h) and holds
+     it until told — so this record is the only thing that ever removes one, and without it an instance that
+     answered anything carries a foreign flow's state for the rest of its process and can never park at all
+     (its own cold_park refuses, correctly: a foreign segment has no recipe of ours).
+     BROADCAST, WHICH IS THE DESIGN AND NOT THIS ZONE BEING COARSE. The sending engine deliberately does not
+     record which peers a flow reached: releasing a world with no segment here is a NO-OP, so tracking it would
+     be state kept only to avoid one. The record therefore names no target document, and only this zone knows
+     what the other instances are — which is this notice's whole reason to be a notice.
+     A BOOTING INSTANCE IS SKIPPED AS A POSITIVE STATEMENT, not as a default: a segment is materialized by a
+     routed delivery or a performed operation, and both branches above WAIT for `_readyP` before they hand an
+     instance either, so an instance that has not finished booting has never been given a foreign world to hold.
+     The engine says the same thing from its side — qjs_world_gone asserts the frontier was seeded. */
+  if (f[0] === "world.gone") {
+    DCHECK(f.length >= 2 && !!f[1],
+           "a world.gone notice carried no world name — world_parse answers out of whatever the receiving " +
+           "instance last parsed, so an empty one releases a segment belonging to a live peer's timeline");
+    for (const peer of _pool) {
+      if (peer === eng) continue;
+      if (peer.state !== "hot" && peer.state !== "fetching") continue;
+      await peer.r.renderer.worldGone(f[1]);
+    }
+    return;
+  }
   DFAIL("an engine emitted a notice with an op this zone does not act on — the engine's half is built, so the " +
         "host's half is the unbuilt one: `" + f[0] + "`");
 }

@@ -332,14 +332,22 @@ void flow_release(JSContext *ctx, Flow *f) {
         free(f->jobs[k].argv);
     }
     free(f->jobs); f->jobs = NULL; f->njob = 0; f->jobcap = 0;
+    /* AND ITS WORLD DIES WITH IT, WHICH IS THE ONE THING A RELEASE OWES SOMEBODY ELSE'S INSTANCE. Every other
+       line above gives back memory this process owns; this one is the only state a released flow leaves in
+       ANOTHER heap. A peer that has ever been posted to or read by this flow holds a COW segment keyed on its
+       world, materialized on arrival and released only when told — so a flow that leaves the frontier with no
+       announcement is a segment that peer carries for the rest of its process, and a peer holding one cannot
+       park at all (cold.c refuses it, correctly: a foreign segment has no recipe of ours). The ancestors whose
+       last live descendant this flow was die with it, which is why this is a list and not a name. */
+    {
+        const char *const *gone;
+        int n = world_flow_gone(f->world, &gone);
+        engine_notify_worlds_gone(ctx, gone, n);
+    }
     flow_remove(ctx, f);
 }
 
 void flow_registry_free(JSContext *ctx) {
-    /* THE WORLD NAMESPACE GOES DOWN WITH THE FRONTIER, for the reason it came up with it. Any segment this
-       instance still holds for a PEER's world is a foreign flow's state in this document — nothing else is
-       going to free it, and it is malloc'd, so the runtime's GC walk would never name it. */
-    world_registry_free(ctx);
     /* A FLOW LEFT IN THE FRONTIER IS THE ORDINARY CASE, NOT AN ERROR: the session closes over its survivors by
        design (engine_sched_step's exhausted path leaves every host-owed flow alive, and in the product a parked
        flow OUTLIVES the session entirely). So this is the teardown for a flow that never finished, and it is
@@ -348,6 +356,13 @@ void flow_registry_free(JSContext *ctx) {
        the drift was invisible until a leak walk named a Window nobody owned. */
     while (g_flows_n) flow_release(ctx, g_flows[0]);
     free(g_flows); g_flows = NULL; g_flows_cap = 0;
+    /* AND THE WORLD NAMESPACE GOES DOWN AFTER THEM, WHICH IS THE ORDER RATHER THAN A DETAIL. It came up with
+       the frontier and it outlives it by exactly one step, because releasing a flow ANNOUNCES the death of the
+       world it held — the registry is what names that world, so freeing it first left every release walking a
+       table that had already gone. Any segment this instance still holds for a PEER's world is then a foreign
+       flow's state in this document: nothing else is going to free it, and it is malloc'd, so the runtime's GC
+       walk would never name it. */
+    world_registry_free(ctx);
     /* NOT ONE HEAP CALL FRAME AND NOT ONE STEP MACHINE MAY OUTLIVE THE FRONTIER, and this is the only point in
        the program where that is a decidable question. A TrampFrame and a suspended builtin's state are the two
        largest things in the @HEAP line's `unattributed` residual, they are invisible to the runtime's own

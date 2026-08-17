@@ -88,7 +88,8 @@ void world_registry_free(JSContext *ctx);
  * not offer, while the residue crosses that boundary by construction. A generation is the same argument the
  * pair above already rests on: disjoint by construction, no allocator, no lock, no round trip. The notice is
  * still owed for a DIFFERENT reason — a peer holding a segment for a session that will never resume is a LEAK
- * — and that is world_release's missing caller, named where the segment table has no ceiling.
+ * — and that is world_session_gone below, announced INSIDE the park step because the flows themselves are
+ * released by the teardown that follows, after the host has drained its last notices.
  *
  * WHERE IT COMES FROM. A park is the ONLY thing that makes a document name outlive a session: a document
  * loaded afresh is named by the host from what the browser minted for THAT load, so a fresh instance's
@@ -241,14 +242,43 @@ void world_segment_stats(int *materialized, int *forked);
  * process. The first park that fixture ever succeeded in taking therefore aborted on a peer it does not have,
  * naming the cross-instance park (a large piece of work with the offscreen route in it) as the thing to build
  * next. A count that only ever rises cannot answer a question whose answer can fall, so they are two names and
- * neither is a parameter of the other.
- * `engine/route.mjs`, where a peer really exists, is unaffected either way: nothing there releases a world —
- * `world_release` still has no caller outside a self-test — so its two numbers coincide, which is precisely why
- * the substitution survived. */
+ * neither is a parameter of the other. The two coincided in every host there had ever been, because the
+ * operation that makes them differ had no caller; it has one now, so `held` far below `made` is the ordinary
+ * reading of a seam whose senders have finished, and `held == made` is a peer every one of whose senders is
+ * still running. */
 int world_segments_held(void);
 
-/* The world is gone (its flow finished, or was dropped): release this instance's segment. Releasing a world
-   with no segment is not an error — a world that never wrote here never had one. */
+/* WHOSE LIFETIME A FOREIGN SEGMENT HAS, AND THE TWO DEATHS THAT END IT.
+ *
+ * A segment is materialized by the RECEIVING instance, keyed on the SENDING flow's world, and it must survive
+ * every later arrival that could name that world: the world itself (a flow posts twice), or any DESCENDANT of
+ * it, since world_segment materializes a child by FORKING the nearest ancestor present. So the segment for `w`
+ * is reachable exactly while some live flow of the minting instance has `w` on its world chain — `w` itself, or
+ * `w` as a retired fork point above it. Only the MINTING instance can know that, which is why the release is a
+ * notice and not a decision the holder takes.
+ *
+ * A LIVE FLOW'S WORLD IS NEVER RETIRED (world_mint_child retires the fork point and mints a child for BOTH
+ * arms), so the chain is decidable from two facts per minted row and no walk: whether a live flow HOLDS it, and
+ * how many of its children are still live. `w` dies when the flow holding it leaves the frontier, and every
+ * ancestor whose LAST live descendant it was dies with it — one collapse up the chain, no refcount on the
+ * segment, no ceiling on anything.
+ *
+ * BOTH RETURN THE NAMES A PEER MAY BE HOLDING A SEGMENT FOR — the ones that actually CROSSED — written in
+ * world_serialize's own field grammar and borrowed until the next call. A world whose death has been announced
+ * is no longer `sent`, so no death is announced twice and the two entry points cannot double-count. The caller
+ * announces them (engine_notify_worlds_gone), because a notice is the host's line and not the registry's. */
+int world_flow_gone(WorldId w, const char *const **names);
+
+/* …AND THE SESSION'S OWN DEATH, which is not the sum of the flow deaths above. A park writes the frontier out
+   as RECIPES and the resumed session mints in a disjoint generation (world_session), so every name this session
+   ever put on the wire is unusable from that instant — while the peer that never left memory still holds a
+   segment for each of them. Announced at the PARK and not at the teardown that follows it, because by the
+   teardown the host has drained its last notices. */
+int world_session_gone(const char *const **names);
+
+/* The world is gone: release this instance's segment. Releasing a world with no segment is not an error — a
+   world that never wrote here never had one, and the sender deliberately does not track which peers a flow
+   reached, so a death is BROADCAST and this no-op is what makes that free. */
 void world_release(JSContext *ctx, WorldId w);
 
 #endif

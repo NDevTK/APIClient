@@ -719,6 +719,56 @@ void engine_host_notify(JSContext *ctx, const char *op) {
     g_notices[g_notices_n] = 0;
 }
 
+/* THE DEATH OF A WORLD, ANNOUNCED — see engine.h. One notice per name, written HERE and nowhere else: two
+   spellings of this record would be two peers releasing different things, which is the same sentence
+   world_serialize carries about the vector it writes. */
+void engine_notify_worlds_gone(JSContext *ctx, const char *const *names, int n)
+{
+    int i;
+
+    DCHECK(n == 0 || names != NULL, "worlds were announced dead by a list that is not there");
+    for (i = 0; i < n; i++) {
+        /* "world.gone" + TAB + the name + NUL. Sized from the name for world_gone_push's reason: a document
+           name nests one component per navigable depth, so a constant here is a cap on the frame tree. */
+        size_t cap = strlen(names[i]) + 12;
+        char *rec = malloc(cap);
+        CHECK(rec != NULL, "engine: OOM announcing a world's death — a peer never told holds that world's "
+                           "segment for the rest of its process, and cannot park while it does");
+        snprintf(rec, cap, "world.gone\t%s", names[i]);
+        engine_host_notify(ctx, rec);
+        free(rec);
+    }
+}
+
+/* THE INBOUND HALF OF IT — see engine.h. It is deliberately NOT engine_route: a delivery becomes a work item of
+   every live timeline and a death is the end of one, so there is nothing to seed, no sender origin to stamp
+   (nothing here runs page code) and no target document (the zone broadcasts, because the sender does not track
+   which peers a flow reached). */
+void engine_world_gone(JSContext *ctx, const char *world)
+{
+    WorldId w;
+    const WorldId *anc;
+    int n_anc;
+
+    DCHECK(world != NULL && *world,
+           "a world-gone notice carried no name — world_parse would answer out of whatever this instance last "
+           "parsed, and the segment released would be a live peer's timeline");
+    n_anc = world_parse(world, &w, &anc);
+    (void)anc;
+    /* A DEATH NAMES ONE WORLD. An ancestor is alive exactly while any descendant of it is, so a chain here
+       would release the very segments a still-running sibling arm's next arrival forks from — silently, since
+       the peer would then materialize an empty one and the arm would read a document missing its own writes. */
+    DCHECK(n_anc == 0,
+           "a world-gone notice carried an ANCESTRY — a death names ONE world, and its ancestors are alive "
+           "exactly while any descendant is; releasing them here drops the segments a live sibling arm's next "
+           "arrival is told to fork from");
+    DCHECK(!world_doc_hosted(w.doc),
+           "a world-gone notice came back to the instance that minted the world — a local flow's world is the "
+           "flow's own and this instance has never held a foreign segment for it, so the zone broadcast a "
+           "death to its own sender");
+    world_release(ctx, w);
+}
+
 /* THE INBOUND HALF OF THE ONE-WAY LINE — a record the trusted zone routed to THIS instance because it holds the
    document the record names. It is the exact text the sending instance emitted as a notice, plus the SENDER's
    ORIGIN, which only that zone may stamp (SECURITY.md: an origin the untrusted engine computed for a foreign
@@ -3508,6 +3558,17 @@ static int engine_sched_slice(void) {
     if (g_park_req) {
         if (cur) { flow_switch_out(ctx, cur); cur = NULL; }
         cold_park();
+        /* AND EVERY WORLD THIS SESSION EVER PUT ON THE WIRE IS DEAD TO ITS PEERS — announced HERE, between the
+           park and the close, because this is the last point at which a notice of ours is still drained. The
+           frontier is recipes from the line above and a resumed session mints in a disjoint generation
+           (world.h), so no name this session sent will ever be used again, while the peer that never left
+           memory still holds a segment for each of them. The flows themselves are released by the teardown the
+           host takes after this returns, and they find nothing left to announce. */
+        {
+            const char *const *gone;
+            int n_gone = world_session_gone(&gone);
+            engine_notify_worlds_gone(ctx, gone, n_gone);
+        }
         g_park_req = 0;
         g_parked = 1;
         g_sess_cur = NULL;

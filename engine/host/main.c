@@ -1062,6 +1062,20 @@ QJS_EXPORT void qjs_route(const char *record, const char *sender_origin)
     engine_route(g_ctx, record, sender_origin);
 }
 
+/* THE THIRD RECORD ON THAT LINE, AND THE ONLY ONE THAT SEEDS NOTHING: a peer saying one of ITS worlds is gone,
+ * so the COW segment this instance materialized for that world can go with it. It carries no target document
+ * and no sender origin, and both absences are the design rather than an omission — the sending engine does not
+ * track which peers a flow reached (releasing a world with no segment here is a no-op, so tracking it would be
+ * state kept only to avoid one), which is why the trusted zone BROADCASTS this to every instance but the
+ * sender; and nothing here runs page code, so there is no `event.origin` for a stamp to be the truth of.
+ * `world` is the name VERBATIM as the emitting instance wrote it, in world_serialize's own field grammar. */
+QJS_EXPORT void qjs_world_gone(const char *world)
+{
+    DCHECK(g_begun, "a world's death was announced to an engine whose frontier was never seeded — a foreign "
+                    "segment is materialized by a delivery or an operation, and neither can have arrived");
+    engine_world_gone(g_ctx, world);
+}
+
 /* AND THE ONE THAT IS ASKED. `qjs_route` hands this instance a one-way delivery and returns void;
  * `qjs_host_answer` is the trusted zone answering a request it computed ITSELF. Neither of them is a peer
  * PERFORMING an operation, which is the whole of the cross-instance seam's other direction — and its absence is

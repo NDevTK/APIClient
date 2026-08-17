@@ -22,11 +22,23 @@
  *     branches rather than with the fork depth at birth — thousands of fields on a page whose boot flow forks
  *     freely, past the 512-byte record every sender writes into. Filtering is not a size optimisation: it is
  *     what keeps the chain O(this flow's cross-instance history), which is the only part of it that carries
- *     information. */
+ *     information.
+ *   - `held` AND `live_kids` — the two facts a DEATH is decided from, and they are two rather than one because
+ *     a world is reachable at a peer for two different reasons. `held` is "a live flow's world is this one",
+ *     true from the mint and false the instant either the flow leaves the frontier or a fork retires it (a
+ *     fork mints a child for BOTH arms, so a live flow's world is never a retired one). `live_kids` is how
+ *     many of its children are still live, which is what makes a RETIRED world reachable: world_segment
+ *     materializes a descendant by FORKING the nearest ancestor present, so an ancestor with a live
+ *     descendant is a segment some future arrival will fork. A world is dead when neither holds, and its
+ *     death releases one from its parent — the collapse in world_flow_gone, which is O(depth) and never a
+ *     refcount on the segment itself. */
 typedef struct {
-    WorldId parent;   /* WORLD_NONE for a root */
-    bool    sent;     /* has crossed the seam as the head of a vector, so a peer may hold a segment for it */
-    bool    forked;   /* a child was minted from it: it is a retired fork point and names no flow */
+    WorldId  parent;    /* WORLD_NONE for a root */
+    bool     sent;      /* a peer may hold a segment keyed by it: it crossed as the head of a vector, and its
+                           death has not been announced yet */
+    bool     forked;    /* a child was minted from it: it is a retired fork point and names no flow */
+    bool     held;      /* a live flow's world is this one */
+    uint32_t live_kids; /* children that are still live */
 } MintedWorld;
 
 /* A SEGMENT this instance holds for a world minted somewhere ELSE. Sparse — only worlds that actually reached
@@ -151,6 +163,7 @@ uint32_t world_mint_doc(uint32_t parent)
 }
 
 static void world_segment_counts_reset(void);   /* defined with the counters it clears */
+static void world_gone_reset(void);             /* defined with the buffer it empties */
 
 static MintedWorld *g_minted;
 static uint32_t     g_minted_n, g_minted_cap;
@@ -165,6 +178,11 @@ static int             g_segs_n, g_segs_cap;
    array had room for. They grow and are freed with the registry. */
 static WorldId *g_anc;      static int g_anc_n, g_anc_cap;
 static WorldId *g_parsed;   static int g_parsed_cap;
+/* AND THE THIRD, WHICH IS THE OUTBOUND HALF OF A DEATH. A collapse can free a whole chain at once and a park
+   frees every world a session ever sent, so the count is the session's history and not a number a caller can
+   state — the same reason neither buffer above takes a capacity. Each entry is owned here and freed at the
+   start of the next call, which is what makes the borrow window in world.h a statement rather than a hope. */
+static char **g_gone;       static int g_gone_n, g_gone_cap;
 
 void world_registry_init(const char *doc_name)
 {
@@ -227,6 +245,8 @@ void world_registry_free(JSContext *ctx)
        that runs several documents in one process would otherwise carry one instance's scratch into the next. */
     free(g_anc);    g_anc = NULL;    g_anc_n = g_anc_cap = 0;
     free(g_parsed); g_parsed = NULL; g_parsed_cap = 0;
+    world_gone_reset();
+    free(g_gone);   g_gone = NULL;   g_gone_cap = 0;
     for (i = 0; i < (int)g_docs_n; i++) free(g_docs[i].name);
     free(g_docs);
     g_docs = NULL;
@@ -254,11 +274,28 @@ static WorldId mint(WorldId parent)
     }
     memset(&g_minted[g_minted_n], 0, sizeof g_minted[g_minted_n]);
     g_minted[g_minted_n].parent = parent;
+    /* MINTED FOR A FLOW, ALWAYS — mint() is reached from flow_add and from the fork's re-mint of the arm that
+       keeps running, and nothing else may mint one. So a row is born HELD, and world_flow_gone is the only
+       thing that clears it without retiring the row. */
+    g_minted[g_minted_n].held = true;
     g_minted_n++;
     /* THE PARENT IS RETIRED BY ITS FIRST CHILD. Said here rather than in world_mint_child because this is the
        one place a fork edge is recorded, and the fact is about the EDGE: a world with a child is a world some
        flow branched at, and both arms of that branch are children of it (world.h). A root has no parent. */
-    if (!world_is_none(parent)) g_minted[parent.serial - 1].forked = true;
+    if (!world_is_none(parent)) {
+        MintedWorld *p = &g_minted[parent.serial - 1];
+        /* A DEAD WORLD CANNOT BE BRANCHED AT. The flow doing the branching holds `parent`, so this is the same
+           statement world_flow_gone makes from the other side, asserted where the edge is built: a fork off a
+           world whose death was already announced would hand every peer a child whose nearest ancestor is a
+           segment they have already released. */
+        DCHECK(p->held || p->live_kids > 0,
+               "a world was forked from a DEAD one — the flow that branched does not hold it and no descendant "
+               "of it is live, so its death has already been announced and every peer has released the segment "
+               "this child's ancestry tells them to fork");
+        p->forked = true;
+        p->held = false;   /* retired: it names no flow, and both arms of the branch are children of it */
+        p->live_kids++;
+    }
 
     w.doc = g_doc;
     /* THE GENERATION IS STAMPED HERE and nowhere else, for the reason the document is: a name is composed at
@@ -337,6 +374,16 @@ static int world_ancestry(WorldId w, WorldId **out)
            "a RETIRED FORK POINT was serialized as a flow's world — a fork mints a child for BOTH arms and "
            "leaves this name naming neither, so whatever holds it stopped existing at that branch, and the peer "
            "would key a segment on a timeline that ended");
+    /* AND A DEAD WORLD IS NEVER READ AGAIN, which is the invariant the release exists inside. A world whose
+       flow has left the frontier had its death ANNOUNCED to every peer (world_flow_gone), so a peer has
+       released the segment this name keys — and serializing it again would make that peer materialize a
+       SECOND, empty segment under a name it has been told is gone, silently losing every write the first one
+       held. It is a different failure from the retired one above and so a different assert: retired means the
+       flow branched, this means the flow ended. */
+    DCHECK(g_minted[w.serial - 1].held,
+           "a world NO LIVE FLOW HOLDS was serialized — the flow that held it left the frontier, so its death "
+           "has been announced and every peer has released its segment; a vector naming it now makes them "
+           "materialize a fresh empty one under a name that is gone");
     /* AND THIS WORLD HAS NOW CROSSED, which is the fact the filter below reads. Recorded at the one point a
        vector is produced, so a world can only be called `sent` by having been sent. */
     g_minted[w.serial - 1].sent = true;
@@ -349,6 +396,14 @@ static int world_ancestry(WorldId w, WorldId **out)
         DCHECK(g_minted[w.serial - 1].forked,
                "an ANCESTOR of a world is not a retired fork point — a world becomes a parent only by being "
                "forked, so this chain was built by something that is not mint()");
+        /* …AND IT IS ALIVE, which is what makes it safe to name. An ancestor of a live world has a live
+           descendant BY CONSTRUCTION — the one this chain is being walked for — so a dead one here means the
+           collapse in world_flow_gone released a link it should not have, and the peer is about to be told to
+           fork a segment it has already dropped. */
+        DCHECK(g_minted[w.serial - 1].live_kids > 0,
+               "an ANCESTOR named in a world vector is DEAD — the world being serialized is its descendant, so "
+               "it has a live descendant by construction; a dead one means a death was announced for a world "
+               "still on a live flow's chain and the peer has released the segment this vector forks from");
         /* A WORLD THAT NEVER CROSSED CANNOT BE HELD BY ANY PEER, so naming it would put a field in the vector
            that every reader scans past. Dropping it loses nothing: world_segment keys its table on the HEAD of
            a vector it received, and a head is a world this instance called `sent`. */
@@ -364,9 +419,20 @@ static int world_ancestry(WorldId w, WorldId **out)
     return g_anc_n;
 }
 
-/* See world.h. The DOCUMENT is named rather than numbered because a `uint32_t doc` is this instance's handle
-   into its own table and means a different document in a peer's — the same reason every cross-instance request
-   carries world_doc_name. */
+/* ONE FIELD OF THE WIRE FORM — "<document name>:<generation>:<serial>" — AND THE ONE PLACE IT IS WRITTEN. The
+   head of a vector, each of its ancestors and the name a DEATH announces all go through here, so a world has
+   exactly one spelling; the alternative is the defect world_parse's own comment names from the other side, two
+   readers of one grammar being two grammars. The DOCUMENT is named rather than numbered because a `uint32_t
+   doc` is this instance's handle into its own table and means a different document in a peer's. */
+static int world_name_write(WorldId w, char *dst, size_t cap)
+{
+    int n = snprintf(dst, cap, "%s:%u:%u", world_doc_name(w.doc), w.session, w.serial);
+    CHECK(n > 0 && (size_t)n < cap, "a world NAME did not fit its buffer — a truncated name is a different "
+                                    "world, so the peer keys a segment on a timeline nobody is in");
+    return n;
+}
+
+/* See world.h. */
 int world_serialize(WorldId w, char *dst, size_t cap)
 {
     WorldId *anc;
@@ -374,16 +440,13 @@ int world_serialize(WorldId w, char *dst, size_t cap)
 
     DCHECK(dst != NULL && cap > 0, "a world was serialized into no buffer");
     n_anc = world_ancestry(w, &anc);
-    n = snprintf(dst, cap, "%s:%u:%u", world_doc_name(w.doc), w.session, w.serial);
-    CHECK(n > 0 && (size_t)n < cap, "the world vector did not fit its buffer — a truncated vector makes the "
-                                    "peer fork a more distant ancestor and silently lose the nearer writes");
+    n = world_name_write(w, dst, cap);
     for (k = 0; k < n_anc; k++) {
-        int m = snprintf(dst + n, cap - (size_t)n, ",%s:%u:%u",
-                         world_doc_name(anc[k].doc), anc[k].session, anc[k].serial);
-        CHECK(m > 0 && (size_t)(n + m) < cap,
+        CHECK((size_t)n + 1 < cap,
               "the world vector did not fit its buffer — a truncated vector makes the peer fork a more distant "
               "ancestor and silently lose the nearer writes");
-        n += m;
+        dst[n++] = ',';
+        n += world_name_write(anc[k], dst + n, cap - (size_t)n);
     }
     return n;
 }
@@ -535,21 +598,14 @@ CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int 
     if (g_segs_n == g_segs_cap) {
         int cap = g_segs_cap ? g_segs_cap * 2 : 16;
         ForeignSegment *g = realloc(g_segs, (size_t)cap * sizeof *g);
-        /* THE CEILING THIS TABLE HAS, NAMED WHERE IT IS HIT. One segment per foreign world that ever reached
-           this instance, and world_release — the operation that would drop one — has no caller: nothing tells a
-           peer that a sending flow has finished, so every arm of every sender's fork that posts leaves a
-           segment here for the life of the instance. A reader standing at this allocation needs to know that,
-           because "OOM" alone sends them looking at the page. And the GENERATION multiplies it rather than
-           relieving it: a sender that parks and resumes mints in a namespace disjoint from its last, which is
-           the point, so every one of its resumed flows lands BESIDE the dead session's segment instead of on
-           top of it. That is the correct trade — a leak against an answer from a timeline that ended — and it
-           is what makes the release the next thing to build rather than an eventual tidy-up: a flow that
-           finishes, and a session that parks, announce their worlds to the peers they may have reached,
-           exactly as they announce a document they created. */
-        CHECK(g != NULL, "world registry: OOM growing the segment table — one segment per foreign world that "
-                         "has ever reached this instance, per SESSION of the sender, and none is ever "
-                         "released: build the sender-side notice that tells a peer a world is gone, so "
-                         "world_release has a caller");
+        /* WHAT THIS TABLE IS SIZED BY, NAMED WHERE THE ALLOCATION IS. One entry per foreign world that has a
+           LIVE flow behind it — a sender announces each of its worlds as it dies and the announcement is what
+           removes the entry (world.h) — so the length here is the peers' live cross-instance frontier, per
+           SESSION of the sender, and not the history of everything that ever arrived. A reader standing at
+           this allocation needs that, because "OOM" alone sends them looking at the page. */
+        CHECK(g != NULL, "world registry: OOM growing the segment table — one entry per foreign world with a "
+                         "live flow behind it, per SESSION of the sender; a dropped entry silently reverts "
+                         "another document's writes for that flow");
         g_segs = g;
         g_segs_cap = cap;
     }
@@ -560,12 +616,124 @@ CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int 
     return d;
 }
 
+static void world_gone_push(WorldId w)
+{
+    /* SIZED FROM THE NAME, never from a fixed buffer: a document name is "<root>.<n>" nested one component per
+       navigable depth over whatever the host called the root, so any constant here is a cap on the frame tree.
+       The rest of a field is two colons, two full-width uint32 decimals and the NUL — 2 + 20 + 1 = 23 — and
+       world_name_write's own CHECK is what makes that arithmetic checkable rather than eyeballed. */
+    const char *dn = world_doc_name(w.doc);
+    size_t cap = strlen(dn) + 23;
+    char *s = malloc(cap);
+
+    CHECK(s != NULL, "world registry: OOM naming a world that has died — a death no peer is told about is a "
+                     "segment that instance holds for the rest of its process, for a flow that is gone");
+    world_name_write(w, s, cap);
+    if (g_gone_n == g_gone_cap) {
+        int c = g_gone_cap ? g_gone_cap * 2 : 16;
+        char **g = realloc(g_gone, (size_t)c * sizeof *g);
+        CHECK(g != NULL, "world registry: OOM collecting the worlds that have died");
+        g_gone = g;
+        g_gone_cap = c;
+    }
+    g_gone[g_gone_n++] = s;
+    /* AND IT IS NO LONGER SENT, which is what `sent` means: a peer MAY hold a segment keyed by this name. Once
+       the death is on its way, none does. It is what makes the two entry points below unable to announce one
+       world twice — a park announces every live sent world, and the teardown that follows it then finds
+       nothing left to say. */
+    g_minted[w.serial - 1].sent = false;
+}
+
+static void world_gone_reset(void)
+{
+    int i;
+    for (i = 0; i < g_gone_n; i++) free(g_gone[i]);
+    g_gone_n = 0;
+}
+
+/* See world.h. */
+int world_flow_gone(WorldId w, const char *const **names)
+{
+    DCHECK(names != NULL, "the worlds a departing flow killed were asked for into nothing");
+    DCHECK(w.doc == g_doc, "a flow of ANOTHER document left this frontier — a world is minted by the instance "
+                           "that created the flow, so a flow here holds a world named by this document");
+    DCHECK(w.session == g_session,
+           "a flow holding a world of a PREVIOUS session left this frontier — the fork edges below are this "
+           "session's table, so the collapse would walk one session's chain under another session's name");
+    DCHECK(w.serial != 0 && w.serial <= g_minted_n, "a flow held a world never minted here");
+    world_gone_reset();
+
+    DCHECK(g_minted[w.serial - 1].held,
+           "the world of a departing flow is not HELD — either the flow's world was retired under it (a fork "
+           "retires the fork point and re-mints BOTH arms, so a live flow never holds a retired name) or this "
+           "flow has already been released once and the collapse below would free a second link off its "
+           "ancestors' counts");
+    g_minted[w.serial - 1].held = false;
+
+    /* THE COLLAPSE. A world dies when no flow holds it and no child of it is live; its death releases exactly
+       one link from its parent, which may then die too. It runs up the chain and stops at the first ancestor
+       that is still alive — which is the ordinary case, since the other arm of the branch is usually still
+       running — so this is O(the dead prefix) and not a walk of the table. */
+    for (;;) {
+        MintedWorld *m = &g_minted[w.serial - 1];
+        WorldId parent;
+
+        if (m->held || m->live_kids > 0) break;
+        if (m->sent) world_gone_push(w);
+        parent = m->parent;
+        if (world_is_none(parent)) break;
+        DCHECK(g_minted[parent.serial - 1].live_kids > 0,
+               "a dying world's parent has no live children to lose — the child being collapsed IS one of "
+               "them, so the count and the edges disagree and some other descendant's death has already been "
+               "announced twice");
+        g_minted[parent.serial - 1].live_kids--;
+        w = parent;
+    }
+    *names = (const char *const *)g_gone;
+    return g_gone_n;
+}
+
+/* See world.h. */
+int world_session_gone(const char *const **names)
+{
+    uint32_t i;
+
+    DCHECK(names != NULL, "the worlds a parked session killed were asked for into nothing");
+    DCHECK(g_doc != 0, "a session announced its worlds before world_registry_init named its document");
+    world_gone_reset();
+    /* EVERY WORLD THAT CROSSED, whatever its liveness here: a park makes the whole GENERATION unusable, so a
+       world with live flows behind it is exactly as unreachable as one whose flow finished. `held` and
+       `live_kids` are deliberately left alone — the flows still exist until the teardown, and their own
+       release then finds nothing left to announce because world_gone_push cleared `sent`. */
+    for (i = 0; i < g_minted_n; i++) {
+        if (!g_minted[i].sent) continue;
+        {
+            WorldId w;
+            w.doc = g_doc;
+            w.session = g_session;
+            w.serial = i + 1;
+            world_gone_push(w);
+        }
+    }
+    *names = (const char *const *)g_gone;
+    return g_gone_n;
+}
+
 void world_release(JSContext *ctx, WorldId w)
 {
-    ForeignSegment *s = find_segment(w);
+    ForeignSegment *s;
 
+    /* THE SAME STATEMENT world_segment MAKES AT THE OTHER END: this table holds FOREIGN worlds only. A local
+       flow's delta is the flow's own, so a release naming one would be a peer claiming a timeline of this
+       document had ended — which nothing but this instance can know. */
+    DCHECK(w.doc != g_doc, "a world minted in THIS document was released as a foreign one — a local flow's "
+                           "delta belongs to the flow, and this table has never held it");
+    DCHECK(!world_is_none(w), "the NONE world was released");
+    s = find_segment(w);
     /* A WORLD THAT NEVER WROTE HERE NEVER HAD A SEGMENT, and the sender cannot know which peers a flow reached
-       — it would have to track that to avoid telling one, which is state kept only to avoid a no-op. */
+       — it would have to track that to avoid telling one, which is state kept only to avoid a no-op. It is
+       also what makes the BROADCAST the trusted zone performs free: every instance but the one holding a
+       segment does nothing. */
     if (!s) return;
     cow_delta_release(ctx, s->delta);
     *s = g_segs[--g_segs_n];

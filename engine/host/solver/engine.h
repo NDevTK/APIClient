@@ -358,6 +358,21 @@ const char *engine_host_requests(void);
 void        engine_host_notify(JSContext *ctx, const char *op);
 /* The notices posted since the last call, newline-joined, DRAINED by the call. "" when there are none. */
 const char *engine_host_notices(void);
+
+/* THE DEATH OF A WORLD, ANNOUNCED — `world.gone<TAB><world name>`, one notice per name, and the ONE writer of
+   that record. The names come from world_flow_gone (a flow left the frontier) or world_session_gone (the whole
+   frontier parked); both are lists, because a world's death frees every ancestor whose last live descendant it
+   was. It is a notice and not a routed delivery for the reason the create is one: nothing waits on it, so a
+   flow that parks or is outranked never has to un-send it.
+   BROADCAST BY THE TRUSTED ZONE. The sending engine does not track which peers a flow reached — that would be
+   state kept only to avoid a no-op, and releasing a world with no segment IS a no-op (world.h) — so the record
+   carries no target document and the zone hands it to every instance but this one. */
+void        engine_notify_worlds_gone(JSContext *ctx, const char *const *names, int n);
+
+/* …AND THE INBOUND HALF OF IT: a peer says one of ITS worlds is gone, so the segment this instance holds for
+   that world can go. The third record on the one-way line, beside a routed delivery and a performed operation,
+   and the only one that seeds nothing — a death is not work, it is the end of some. */
+void engine_world_gone(JSContext *ctx, const char *world);
 /* THE INBOUND HALF: a record another instance emitted as a notice, routed HERE by the trusted zone because this
    instance holds the document it names, with the SENDER'S ORIGIN stamped by that zone (the untrusted engine may
    not compute one for a foreign message — SECURITY.md).

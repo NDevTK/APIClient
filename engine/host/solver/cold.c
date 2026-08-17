@@ -559,8 +559,8 @@ void cold_park(void)
            reader standing here has to decide between "a peer really is here" and "the counter is answering
            about something else", and `held` alone cannot say: with `made` beside it, held=0 is impossible to
            reach, held=4/made=4 is a live peer, and a held that is far below made is a seam that materialized
-           and released — which is what a self-test does and what a finished sender's world will do once
-           world_release has a caller. */
+           and released — which is what a self-test does, and what every sender whose flows have finished now
+           does, since a world announces its own death (solver/world.h). */
         int held = world_segments_held(), made = 0;
         char why[512];
 

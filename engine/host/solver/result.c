@@ -181,11 +181,13 @@ char *result_json(JSContext *ctx) {
            world_segment_counts_reset lowers — while every reader's prose described the LIVE table (route.mjs:
            "how many foreign worlds hold a segment here"). They agree exactly until world_release runs, which is
            the one event the number exists to make visible, so the field was at its most wrong precisely when it
-           mattered. cold.c's park hook had already worked this out and prints both, in the words this comment
-           owes it: "held alone cannot say: with made beside it, held=0 is impossible to reach, held=4/made=4 is
-           a live peer, and a held that is far below made is a seam that materialized and released". So both
-           cross the seam, each named for the number it is, and `world_segments_held`'s own DCHECK (a table
-           larger than its history was grown by something that is not world.c) rides along with them. */
+           mattered — and world_release now has a caller on every sender's flow death, so the two diverge in
+           every run with a peer in it rather than in none. cold.c's park hook had already worked this out and
+           prints both, in the words this comment owes it: "held alone cannot say: with made beside it, held=0
+           is impossible to reach, held=4/made=4 is a live peer, and a held that is far below made is a seam
+           that materialized and released". So both cross the seam, each named for the number it is, and
+           `world_segments_held`'s own DCHECK (a table larger than its history was grown by something that is
+           not world.c) rides along with them. */
         int held = world_segments_held(), made = 0, segf = 0;
         int m;
         world_segment_stats(&made, &segf);

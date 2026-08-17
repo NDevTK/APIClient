@@ -189,6 +189,12 @@ let resumeOwed = true;
    is still ASKED, deliberately: the question is what becomes of a peer's IN-FLIGHT turn when the instance that
    asked pages out, and a read that was never put to the peer would not have one. */
 let withholdReads = false;
+/* EVERY WORLD DEATH THAT CROSSED. A segment a peer materialized is a foreign flow's state living in its heap,
+   and until this record existed nothing ever removed one — so an instance that had answered anything held every
+   sender's timeline for the rest of its process and could not park at all (its own cold_park refuses it). This
+   is what makes `held` fall below `made` in the counters printed at the bottom, which is the only way a release
+   is observable from out here. */
+const worldDeaths = [];
 /* Every record this zone could not route because no instance holds the document it names. Collected rather
    than logged: an unroutable operation parks its asker forever, so it is a failure and not a note. */
 const routeFailures = [];
@@ -270,6 +276,16 @@ async function service(e) {
        sequence, and this zone hands one over rather than a string it decoded first. */
     e.answer(id, { csp: null }, HTML_B);
   }
+  await drainNotices(e);
+  return r !== 0;
+}
+
+/* THE ONE-WAY NOTICES, DRAINED — factored out of the step because the PARK takes its last one outside a step.
+   A park announces every world this session ever put on the wire (solver/world.h) and then the instance is torn
+   down, so a drain that only ever ran inside `service` would lose exactly the notices that say the dead
+   session's segments can go — the leak this seam's counters exist to make visible, lost in the one place it is
+   measurable. */
+async function drainNotices(e) {
   for (const n of e.str('qjs_host_notices').split('\n').filter(Boolean)) {
     const f = n.split('\t');
     console.log(`  [${e.docId}] notice: ${f[0]} ${f.slice(1, 3).join(' ')}`);
@@ -290,9 +306,21 @@ async function service(e) {
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
        minted. Held rather than delivered here: the asker is another instance and this loop is inside its step. */
     else if (f[0] === 'remoteop.answer') answers.set(f[1], f.slice(2).join('\t'));
+    /* A WORLD OF THIS INSTANCE IS GONE — its flow left the frontier, or the whole session parked — so every
+       peer holding a COW segment keyed on that name can drop it. BROADCAST, and that is the design rather than
+       this driver being lazy: the sending engine deliberately does not record which peers a flow reached,
+       because releasing a world with no segment is a no-op and tracking it would be state kept only to avoid
+       one. Only the zone knows what the other instances are, which is this record's whole reason to exist. */
+    else if (f[0] === 'world.gone') {
+      if (f.length < 2 || !f[1]) fail(`a world.gone notice carried no world name: ${n}`);
+      worldDeaths.push(f[1]);
+      for (const peer of engines) {
+        if (peer === e) continue;
+        peer.M.ccall('qjs_world_gone', 'void', ['number'], [peer.cs(f[1])]);
+      }
+    }
     else throw new Error('a notice this host does not act on: ' + f[0]);
   }
-  return r !== 0;
 }
 
 /* THE ROOT DOCUMENT IS ITS OWN TOP-LEVEL TRAVERSABLE, so its environment's top-level creation URL is its
@@ -364,6 +392,12 @@ parked.M.ccall('qjs_request_park', 'void', [], []);
 const parkStep = parked.M.ccall('qjs_step', 'number', [], []);
 const residue = JSON.parse(parked.str('qjs_result'))._park.join(';');
 console.log(`\nphase 4: park step answered ${parkStep}, residue ${residue.length} bytes: ${residue}`);
+/* THE PARK'S OWN NOTICES, TAKEN BEFORE THE INSTANCE GOES. Every world this session ever sent is unusable from
+   the park onward — the resumed session mints in a disjoint generation — and `b`, which never left memory,
+   holds a segment for each of them. This is the last moment anything can say so. */
+const deathsAtPark = worldDeaths.length;
+await drainNotices(parked);
+console.log(`phase 4: the park announced ${worldDeaths.length - deathsAtPark} world death(s) to the peer`);
 parked.M.ccall('qjs_teardown', 'void', [], []);
 /* THE ORPHANS ARE COUNTED BEFORE THE RESUMED INSTANCE CAN ADD ANY. A completion held here names a token of the
    instance that has just gone: `b` computed it under the asking flow's world, and there is no longer a flow,
@@ -500,16 +534,25 @@ if (!resumedReads.length)
    the peer would answer each resumed flow out of a dead flow's timeline. The ancestry would match too, so no
    assert in either engine could catch it. The generation rides the residue (solver/cold.h's 'g' record) and
    world_session_resume mints above it, so a name from the ended session is now unresolvable rather than
-   wrongly resolvable. What remains owed is the LEAK, not the collision: nothing tells a peer a world is gone,
-   so world_release still has no caller and the dead session's segments stay. */
+   wrongly resolvable. The LEAK that used to remain owed beside it is the record above: the park announces every
+   world this session sent, `b` releases the segment it held for each, and the counters below are where that is
+   visible — `held` falling below `made` is world_release running, and it could never happen before. */
 if (reusedWorlds.length)
   fail(`the resumed session put ${reusedWorlds.length} world name(s) on the wire that the session that ended ` +
        `had already sent: ${reusedWorlds.join(' ')}. A WorldId's serial counts from 1 in every session while ` +
        'the document name is stable by requirement, so the peer — which never left memory — already holds a ' +
        'segment keyed on each of them, and answers the resumed flow under the timeline of a flow that no ' +
        'longer exists. Two timelines wearing one name, across sessions. Build the session component of a world ' +
-       'name (the residue is what crosses the tier and can carry it), or the park-time notice that gives ' +
-       'world_release its missing caller');
+       'name — the residue is what crosses the tier and can carry it');
+/* A SEAM THAT MATERIALIZED AND NEVER RELEASED IS THE STATE THIS RECORD WAS BUILT FOR, so a run in which no
+   world ever died is a run in which the reclamation did not happen — which reads identically to the tree before
+   it existed, and is exactly the shape "a mechanism nobody can see run is one that has never run" names. */
+if (!worldDeaths.length)
+  fail('no world death crossed this seam. `a` ran its flows out and then PARKED its whole frontier, so both ' +
+       'announcements were due (a flow leaving the frontier, and a session whose generation is now dead) — ' +
+       'and with neither, every segment `b` materialized is a foreign flow\'s state it holds for the rest of ' +
+       'its process, and `b` can never park while it does (solver/cold.c refuses it)');
+console.log(`world deaths announced: ${worldDeaths.length} — ${worldDeaths.join(' ')}`);
 console.log('[route] OK — two instances, every routed record delivered, ancestry-forked segments: ' + forked +
             `, cross-agent reads answered: ${readsAnswered}, w.closed read back: ${closedReports[0]}` +
             `, parked and resumed across ${residue.length} bytes of residue`);
