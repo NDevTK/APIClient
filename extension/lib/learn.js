@@ -5,6 +5,51 @@
 // extractInterfaceName/calculateMethodMetadata from lib/grouping.js, protobuf/discovery libs) at call-time.
 // The Passive Learning feature, just relocated out of the brain.
 
+/* THE ONE HEADER VOCABULARY, IN THE ONE PLACE THAT SPEAKS IT.
+   endpoint.c emits an endpoint's headers as a flat name -> STRING record and says what a value means:
+   "a concrete one is the literal the code computed, and an unknown one is its SHAPE (`{state}.token`),
+   which is what marks it as a runtime value the reviewer must supply." The doc model and the Send panel
+   speak a different vocabulary for the same fact — {kind:"literal"|"opaque", value} — because the popup
+   renders a literal read-only and an opaque as an input to paste a runtime token into, and because a
+   literal must SUPERSEDE an opaque on merge rather than first-write-wins.
+
+   It is a function because there are two consumers and there were two translations: this file translated,
+   and lib/merge.js put the ENGINE's raw record on the flat endpoint entry untranslated. Both feed
+   popup-form.js's one reader, which tests `hv.kind === "literal"` — so every endpoint-sourced header
+   failed that test, rendered as "dynamic — paste runtime value", and was DROPPED by the auto-attach loop
+   that skips `hv.kind !== "literal"`. A replay of an endpoint whose Authorization the engine had actually
+   computed went out without it. One translation, at the boundary, for both.
+
+   A `{hole}` in the value is the shape marker (concolic.c's own rendering), so it is what decides the kind. */
+function astHeaderRecord(headers) {
+  DCHECK(headers && typeof headers === "object" && !Array.isArray(headers) && Object.keys(headers).length,
+         "astHeaderRecord was handed something that is not a non-empty header record — endpoint.c omits the " +
+         "`headers` key entirely when it observed none, so the caller must read that absence as 'nothing was " +
+         "observed' and never call here with an empty or absent one");
+  const out = {};
+  for (const hk in headers) {
+    const hv = headers[hk];
+    DCHECK(typeof hv === "string",
+           "an @H header value is not a string — endpoint.c writes name -> string, so a structured value here " +
+           "is that serializer having changed shape under a reader that would classify it as an opaque header");
+    out[hk] = { kind: /\{[^}]*\}/.test(hv) ? "opaque" : "literal", value: hv };
+  }
+  return out;
+}
+
+/* WHAT `learnFromAstCallSite` HANDS BACK, AS TWO POSITIVE STATEMENTS RATHER THAN A NULLABLE ONE.
+   `entry` is the service (discovery doc) the call site was filed under, and `method` is the method record
+   the call site's values were merged into — the object holding this endpoint's parameters, each with its
+   `location` and its `_astValidValues`. `method: null` is a STATEMENT: the URL was dynamic, so a service
+   exists but no method could be registered against it; `entry: null` says the site is not a learnable
+   endpoint at all (an unreached @T candidate, or inline content).
+
+   It returns the method because the caller PERSISTS its path-param examples onto the flat endpoint record,
+   and the caller must not have to find the method again: re-deriving it from (verb, path, origin) would be
+   this file's naming rules restated in lib/merge.js, and the first time they disagreed the caller would
+   quietly persist nothing — which is the failure this whole pass exists to remove. */
+const _NOT_LEARNABLE = Object.freeze({ entry: null, method: null });
+
 function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // Takes the DocData object directly (not documentId) so a TRANSIENT view
   // (_emptyDocView, documentId=null) can carry a globalStore-only merge for a
@@ -16,7 +61,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // structural candidates / focusedView review items, never as a
   // learnable endpoint — resolving null through new URL() fabricates a
   // bogus "/null" path (origin + String(null)). Skip cleanly.
-  if (callSite.url == null || callSite.url === "") return null;
+  if (callSite.url == null || callSite.url === "") return _NOT_LEARNABLE;
 
   // Resolve URL. Dynamic / unresolvable → register service-level only,
   // no synthetic method entry (would confuse the reviewer with made-up
@@ -26,7 +71,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // endpoints — they're content embedded in the bundle. Skip them so
   // the service list doesn't accumulate empty-host records with
   // garbled paths.
-  if (/^(data|blob|about|javascript):/i.test(callSite.url)) return null;
+  if (/^(data|blob|about|javascript):/i.test(callSite.url)) return _NOT_LEARNABLE;
   // Relative URLs resolve against the DOCUMENT's own url at runtime, NOT the
   // script's host. Cross-origin-hosted scripts (e.g. Reddit serves its
   // shreddit bundle from www.redditstatic.com but it fetches against
@@ -42,7 +87,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       csUrl = /^https?:\/\//i.test(callSite.url)
         ? new URL(callSite.url)
         : new URL(callSite.url, _baseForRel);
-    } catch (_) { return null; }
+    } catch (_) { return _NOT_LEARNABLE; }
   }
 
   // Classification at AST-time is an OPEN question — we don't have a
@@ -89,7 +134,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   const doc = docEntry.doc;
   if (!doc.resources.learned) doc.resources.learned = { methods: {} };
 
-  if (!csUrl) return docEntry;   // dynamic-URL case: docEntry exists, no method
+  if (!csUrl) return { entry: docEntry, method: null };   // dynamic URL: the service exists, no method to register against
 
   // Method name + collision handling — mirrors learnFromRequest.
   const { methodName: baseMethodName } = calculateMethodMetadata(csUrl, interfaceName);
@@ -127,34 +172,33 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       origin: csUrl.origin,
       _astSourceScript: scriptUrl || null,
       _astInferred: true,
-      _astCallSites: [],
     };
   }
   const m = probedMethod || doc.resources.learned.methods[methodName];
-  if (m && !m.origin) m.origin = csUrl.origin;
-  // Record every AST call site that registered this method. Dedup by
-  // script + line so the same call doesn't accumulate on repeat scans.
-  // Reviewer uses these to click through to the JS location each
-  // endpoint was discovered in — facts about where the code lives.
-  if (m) {
-    if (!Array.isArray(m._astCallSites)) m._astCallSites = [];
-    const cs = {
-      script: scriptUrl || null,
-      line: callSite.loc ? callSite.loc.line : null,
-      column: callSite.loc ? callSite.loc.column : null,
-      enclosingFunction: callSite.enclosingFunction || null,
-    };
-    const key = `${cs.script}:${cs.line}:${cs.column}`;
-    const alreadySeen = m._astCallSites.some(x => `${x.script}:${x.line}:${x.column}` === key);
-    if (!alreadySeen) m._astCallSites.push(cs);
-  }
+  DCHECK(m && typeof m === "object",
+         "learnFromAstCallSite reached its param merge with no method — the block above either found the " +
+         "verb-matched probed entry or created the learned one, so an absent method here means that " +
+         "get-or-create stopped covering a case and every value this call site computed has nowhere to land");
+  if (!m.origin) m.origin = csUrl.origin;
+
+  /* `_astCallSites` IS GONE, AND SO IS THE SOURCE LOCATION IT WAS MADE OF. It recorded one entry per call
+     site as {script, line, column, enclosingFunction}, keyed and deduped on `line:column`, and its comment
+     said the reviewer clicks through to the JS location. endpoint.c emits `method`, `url`, `params` and
+     (when observed) `headers`; there is no `loc` and no `enclosingFunction` anywhere in engine/host, so
+     every entry ever pushed was {script, null, null, null} and the dedup key was the constant
+     "<script>:null:null" — one entry per method, carrying the script this file already stores as
+     `_astSourceScript`. Nothing read the array: grep finds no consumer in the extension, the popup or the
+     harness. A write-only record of a location nobody produced is not provenance, so it goes rather than
+     being defaulted into looking like one. If click-through is wanted, the engine has to carry the site's
+     position on the endpoint record first. */
 
   // Type inference helper: pick from the first valid value's runtime type.
-  // Not a guess — this is the literal AST observed. Default "string" when
-  // no observations (neutral; no false precision).
-  const _inferType = (validValues, defaultValue) => {
-    const sample = Array.isArray(validValues) && validValues.length ? validValues[0]
-      : (defaultValue !== undefined ? defaultValue : null);
+  // Not a guess — this is the literal the forced execution computed. Default "string" when there are no
+  // observations (neutral; no false precision). It takes ONLY validValues: the engine's param record is
+  // {name, validValues} and has never carried a `defaultValue`, so the second argument this read was a
+  // permanent `undefined` deciding a branch that could not be taken.
+  const _inferType = (validValues) => {
+    const sample = Array.isArray(validValues) && validValues.length ? validValues[0] : null;
     if (sample == null) return "string";
     if (typeof sample === "number") return "number";
     if (typeof sample === "boolean") return "boolean";
@@ -167,7 +211,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // a form-scan-created param whose initial pickExampleValue ran BEFORE
   // any AST values were added would stay frozen at "type-default" even
   // though tier-3 (ast-constraint) is now satisfied.
-  const _mergeAstValues = (target, validValues, defaultValue) => {
+  const _mergeAstValues = (target, validValues) => {
     let merged = false;
     if (Array.isArray(validValues) && validValues.length) {
       const prev = Array.isArray(target._astValidValues) ? target._astValidValues.slice() : [];
@@ -183,10 +227,9 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
         target._detectedEnum = true;
       }
     }
-    if (defaultValue !== undefined) {
-      if (target._astDefault !== defaultValue) merged = true;
-      target._astDefault = defaultValue;
-    }
+    /* NO `_astDefault`. It was written from `p.defaultValue` — a field the engine's param record does not
+       have — and read by nothing but the line that wrote it, so the pair was a self-consistent record of
+       an observation that never occurred. */
     if (merged) {
       const ex = pickExampleValue(target, null);
       if (ex) {
@@ -205,48 +248,36 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     }
   };
 
-  // Query params — direct registration.
-  if (callSite.params) {
-    for (const p of callSite.params) {
-      if ((p.location || "query") !== "query") continue;
-      if (!m.parameters[p.name]) {
-        m.parameters[p.name] = {
-          type: _inferType(p.validValues, p.defaultValue),
-          location: "query",
-          description: "Learned from AST fetch call site",
-          _astInferred: true,
-        };
-      }
-      _mergeAstValues(m.parameters[p.name], p.validValues, p.defaultValue);
-    }
-  }
+  /* THE ENGINE'S @H PARAMS ARE QUERY PARAMS, AND THAT IS THE WHOLE SET. endpoint.c's `parse_url` splits the
+     endpoint's display URL at `?` and turns the query string into the param records; the PATH keeps its
+     unknown segments inline as `{hole}` shapes and no param is minted for them. So a record is
+     {name, validValues} with no `location`, and the three blocks that stood here — query, path, body —
+     each opened with `(p.location || "query") !== <kind>`, which is the defect class exactly: a default over
+     a field the producer never writes, deciding a branch. Every param took the "query" arm; the path arm and
+     the body arm have never run, and both looked live.
 
-  // Path params — the {name} segments __feUrlShape recovered from an
-  // opaque path interpolation (e.g. /settings/avatars/{id}, where id is
-  // real attacker/server input the bundle interpolated). Registered as
-  // location:"path" (required — it IS the path) so the reviewer sees the
-  // templated segment as a real parameter; value stays opaque (no
-  // example) until real traffic or replay fills it.
-  if (callSite.params) {
-    for (const p of callSite.params) {
-      if ((p.location || "query") !== "path") continue;
-      if (!m.parameters[p.name]) {
-        m.parameters[p.name] = {
-          type: _inferType(p.validValues, p.defaultValue),
-          location: "path",
-          required: true,
-          description: "Learned from AST fetch call site (path template)",
-          _astInferred: true,
-        };
-      }
-      // Real declared name from the page's source map (e.g. minified `e` →
-      // `owner`), for display; the param key stays the minified name so URL
-      // substitution still matches the `{e}` hole.
-      if (p._sourceMapName && !m.parameters[p.name]._sourceMapName) {
-        m.parameters[p.name]._sourceMapName = p._sourceMapName;
-      }
-      _mergeAstValues(m.parameters[p.name], p.validValues, p.defaultValue);
+     What went with them, and where the capability actually lives:
+       - PATH params: the templated-method reconcile below is the real producer — it aligns a concrete live
+         path against a `{hole}` template and records the concrete segment as that hole's example value,
+         which is the "learn the real value" surface those 26 lines described but could not reach. The
+         `_sourceMapName` display name went too: nothing in engine/host has ever emitted one, so the
+         minified-to-declared rename it promised (`e` → `owner`) has never once been applied.
+       - BODY params: the engine has no request-body surface at all — `endpoint_record` takes a method, a
+         URL and headers. Until it carries one, `doc.schemas[…Request]` has no AST producer, and a consumer
+         standing ready for it is indistinguishable from one that works. */
+  for (const p of callSite.params) {
+    DCHECK(p && typeof p.name === "string" && Array.isArray(p.validValues),
+           "an @H param is not {name, validValues[]} — endpoint.c writes exactly those two keys per param, " +
+           "and a param that arrives without them takes every learned example value out of this method");
+    if (!m.parameters[p.name]) {
+      m.parameters[p.name] = {
+        type: _inferType(p.validValues),
+        location: "query",
+        description: "Learned from AST fetch call site",
+        _astInferred: true,
+      };
     }
+    _mergeAstValues(m.parameters[p.name], p.validValues);
   }
 
   // Reverse cross-doc reconcile: if THIS method is templated ({hole} path
@@ -262,7 +293,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // method's origin host == this host, and the dup must be concrete at >=1
   // hole (else it IS this template, not a distinct concrete record) — so
   // distinct endpoints are never merged.
-  if (m && typeof m.path === "string" && m.path.indexOf("{") >= 0) {
+  if (typeof m.path === "string" && m.path.indexOf("{") >= 0) {
     const _tSegs = m.path.split("/").filter(Boolean);
     const _hostname = csUrl.hostname;
     for (const [, _de] of tab.discoveryDocs) {
@@ -292,7 +323,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
             if (!_hole) continue;   // generic {} hole -> the ENGINE's shape/concrete collapse owns its path-param
                                     // example (arg{i}); creating m.parameters[""] here made a duplicate empty-name @path param.
             if (!m.parameters[_hole]) m.parameters[_hole] = { type: "string", location: "path", required: true, description: "Learned (concrete value from live traffic)" };
-            _mergeAstValues(m.parameters[_hole], [_val], _val);
+            _mergeAstValues(m.parameters[_hole], [_val]);
           }
           if (_cm.parameters) for (const _pn in _cm.parameters) { if (!m.parameters[_pn]) m.parameters[_pn] = _cm.parameters[_pn]; }
           if (_cm.response && !m.response) m.response = _cm.response;
@@ -304,121 +335,40 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     }
   }
 
-  // Body params — build a direct AST schema (no synthetic JSON round-trip).
-  const bodyParams = (callSite.params || []).filter(p => (p.location || "query") === "body");
-  if (bodyParams.length) {
-    const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Request`;
-    if (!doc.schemas[schemaName]) {
-      doc.schemas[schemaName] = { id: schemaName, type: "object", properties: {}, _astInferred: true };
-    }
-    const schema = doc.schemas[schemaName];
-    if (!schema.properties) schema.properties = {};
-    for (const bp of bodyParams) {
-      if (!schema.properties[bp.name]) {
-        schema.properties[bp.name] = {
-          type: _inferType(bp.validValues, bp.defaultValue),
-          _astInferred: true,
-        };
-      }
-      _mergeAstValues(schema.properties[bp.name], bp.validValues, bp.defaultValue);
-    }
-    if (!m.request) m.request = { $ref: schemaName };
-  }
-
-  // Record content-type when AST captured it and the method hasn't seen
-  // a real request-time content type yet. Real traffic overrides.
-  if (callSite.headers && typeof callSite.headers === "object") {
-    // AST-captured required headers: the SET the bundle actually attached at
-    // the host edge (fetch init.headers / XHR setRequestHeader), each entry
-    // {kind:"literal",value}|{kind:"opaque"} (older format: bare string).
-    const ctEntry = callSite.headers["content-type"] || callSite.headers["Content-Type"];
-    const ct = ctEntry && (typeof ctEntry === "string" ? ctEntry : ctEntry.value);
-    if (ct && (!m.contentTypes || m.contentTypes.length === 0)) {
-      m.contentTypes = [ct];
+  // Record content-type when the forced execution captured one and the method hasn't seen a real
+  // request-time content type yet. Real traffic overrides.
+  if (callSite.headers !== undefined) {
+    const _rh = astHeaderRecord(callSite.headers);
+    const ctEntry = _rh["content-type"] || _rh["Content-Type"];
+    if (ctEntry && (!m.contentTypes || m.contentTypes.length === 0)) {
+      m.contentTypes = [ctEntry.value];
     }
     // Store the full set per-endpoint as transport metadata (NOT body params),
     // so the Send panel can show "this endpoint needs header X". A literal
     // supersedes an earlier opaque for the same header; real traffic refines.
     if (!m.requiredHeaders) m.requiredHeaders = {};
-    for (const hk in callSite.headers) {
-      const hv = callSite.headers[hk];
-      // A value with a {hole} is a SHAPE (from a symbolic flow); a hole-free value is CONCRETE (a concolic
-      // flow computed the real token/key). Classify holes as "opaque" so the CONCRETE value supersedes the
-      // shape on merge (consistent with param example values) instead of first-write-wins.
-      const norm = (typeof hv === "string") ? { kind: /\{[a-z]*\}/.test(hv) ? "opaque" : "literal", value: hv } : hv;
-      if (!norm || !norm.kind) continue;
+    for (const hk in _rh) {
       const prev = m.requiredHeaders[hk];
-      if (!prev || (prev.kind === "opaque" && norm.kind === "literal")) m.requiredHeaders[hk] = norm;
+      if (!prev || (prev.kind === "opaque" && _rh[hk].kind === "literal")) m.requiredHeaders[hk] = _rh[hk];
     }
   }
 
-  // (Request body @BODY -> params[location:body] feeds the doc.schemas[…Request] builder above — the SINGLE
-  //  request-body surface the Send panel + OpenAPI export read. No endpoint-entry copy; that was dead.)
+  /* NO REQUEST-BODY SURFACE REACHES THIS FILE, AND TWO READERS PRETENDED OTHERWISE.
+     `endpoint_record` takes (method, url, headers) — the engine has no body record at all — so the
+     `doc.schemas[…Request]` builder that stood above (fed by params whose `location` was "body") and the
+     BINARY body decoder that stood here were both reading fields with no producer anywhere in engine/host:
+     `callSite.bodyBinary` (hex/byteLength/protocol) is written by nothing, and `p.location` by nothing.
 
-  // Binary body: hostedge.bodyShape captured the full byte sequence + the
-  // worker's magic-byte sniffer classified the wire format (protobuf,
-  // grpc-web, gzip, zlib, json, bytes). For protobuf/grpc-web, decode via
-  // lib/protobuf.js (pbDecodeRaw) so each field becomes a body param named
-  // f<num>:<wire> with its concrete value as the example. Real wire-format
-  // bytes, real values — not a name guess. (#7 protocol classification)
-  if (callSite.bodyBinary && typeof callSite.bodyBinary.hex === "string" && typeof self.pbDecodeRaw === "function") {
-    const bb = callSite.bodyBinary;
-    m.bodyBinary = { byteLength: bb.byteLength | 0, protocol: bb.protocol || "bytes" };
-    let pbBytes = null;
-    if (bb.protocol === "protobuf") {
-      pbBytes = _hexToBytes(bb.hex);
-    } else if (bb.protocol === "grpc-web" && bb.hex.length >= 10) {
-      // gRPC-Web frame = 1-byte flag + 4-byte BE length + payload. The
-      // payload is the protobuf message; strip the 5-byte header.
-      pbBytes = _hexToBytes(bb.hex.slice(10));
-    }
-    if (pbBytes && pbBytes.length > 0) {
-      try {
-        const fields = self.pbDecodeRaw(pbBytes);
-        for (const f of fields) {
-          // Field name as `f<num>` (wire format has no names; the .proto
-          // descriptor would map it but we don't have one at AST time).
-          // Wire-type tag suffixes the param name so the reviewer sees
-          // what kind of value lives there (`varint` vs `len` vs `i32`).
-          const wireTag = f.wire === 0 ? "varint" :
-                          f.wire === 1 ? "i64" :
-                          f.wire === 2 ? "len" :
-                          f.wire === 5 ? "i32" : ("w" + f.wire);
-          const pname = "f" + f.field + ":" + wireTag;
-          let example;
-          if (f.wire === 0) {
-            example = String(f.data);
-          } else if (f.wire === 2 && f.data instanceof Uint8Array) {
-            // LEN: could be a string or a nested message. Try UTF-8 decode;
-            // if the bytes look like a printable string, that's the value.
-            // Otherwise emit hex so the bytes are still visible.
-            let asString = "";
-            try { asString = new TextDecoder("utf-8", { fatal: true }).decode(f.data); }
-            catch (_) { asString = ""; }
-            example = asString || ("0x" + Array.from(f.data).map(b => (b < 16 ? "0" : "") + b.toString(16)).join(""));
-          } else if (f.data instanceof Uint8Array) {
-            example = "0x" + Array.from(f.data).map(b => (b < 16 ? "0" : "") + b.toString(16)).join("");
-          } else {
-            example = String(f.data);
-          }
-          // Reuse the same param map the JSON body path uses so the popup
-          // renders binary fields alongside textual ones uniformly.
-          const existing = m.parameters && m.parameters[pname];
-          if (!m.parameters) m.parameters = {};
-          if (!existing) {
-            m.parameters[pname] = { location: "body", _astValidValues: new Set([example]), _astInferred: true };
-          } else if (existing._astValidValues) {
-            existing._astValidValues.add(example);
-          }
-        }
-      } catch (e) {
-        /* pbDecodeRaw rejected — surface so a malformed protobuf body is
-           visible (not silently dropped). The bytes stay on m.bodyBinary
-           for the popup to inspect raw. */
-        console.warn("[brain] protobuf decode failed:", e && e.message || e, "url=" + callSite.url);
-      }
-    }
-  }
+     The binary block is the more instructive one. It was 60 lines that classified a protobuf/gRPC-Web frame,
+     stripped the 5-byte gRPC header, ran lib/protobuf.js's `pbDecodeRaw` and turned each wire field into a
+     `f<num>:<wire>` body param with its decoded value — a real capability, written against an input that has
+     never arrived once. Its guard `typeof self.pbDecodeRaw === "function"` is the reason it never even
+     threw: two conditions ANDed, either of which could be the false one, and nothing distinguishes "no
+     binary body on this endpoint" from "no binary body has ever been possible". It is deleted rather than
+     kept ready, because the decode belongs beside the bytes: when endpoint.c carries a request body, the
+     shape it carries decides how it is read, and lib/protobuf.js is still here to read it with.
+
+     (It was this file's only caller of offscreen-brain.js's `_hexToBytes`, which is now unused there.) */
 
   // Apply example-value picker so the Send form has prefills even
   // before any real traffic hits — pickExampleValue's `ast-constraint`
@@ -426,7 +376,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // also walks any body-schema props we created with _astInferred:true.
   applyStatsToMethod(m, doc);
 
-  return docEntry;
+  return { entry: docEntry, method: m };
 }
 
 // Find an existing method whose TEMPLATED path matches this concrete request

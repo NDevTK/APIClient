@@ -9,18 +9,6 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
     var sourceHost = "";
     try { sourceHost = new URL(analysis.sourceUrl).hostname; } catch (_) {}
 
-    // Find matching discovery doc for this host (optional — endpoint registration works without it)
-    var doc = null;
-    var matchedSvc = null;
-    tab.discoveryDocs.forEach(function(entry, svc) {
-      if (entry.doc && svc.includes(sourceHost)) { doc = entry.doc; matchedSvc = svc; }
-    });
-    if (!doc) {
-      globalStore.discoveryDocs.forEach(function(entry, svc) {
-        if (entry.doc && svc.includes(sourceHost)) { doc = entry.doc; matchedSvc = svc; }
-      });
-    }
-
     /* NO probeResults RELAY OFF THE ENGINE RESULT. `tab.probeResults` is written by the two systems that
        actually probe — lib/req2proto.js through lib/discovery-probe.js and lib/response-decode.js — and the
        engine has no such record to relay: it never issues a request, so it never receives a rejection to read
@@ -28,121 +16,29 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
        the engine emitted, which made an engine that had learned nothing indistinguishable from a broken
        bridge. */
 
-    // Proto field/enum merge — requires a matching doc
-    if (doc) {
-      console.debug("[AST:merge] Matched doc %s for host=%s", matchedSvc, sourceHost);
+    /* WHAT AN ANALYSIS DOCUMENT ACTUALLY CONTAINS, AND WHY THREE MERGE PASSES ARE GONE. solver/result.c
+       composes the engine's one @RESULT document in ONE snprintf and it has TWELVE fields: fetchCallSites,
+       securitySinks, pageErrors, the eight cost counters, and _park. Every OTHER name on the object this
+       function receives is a host-side constant written by bridge.js's `linesToAnalysis` — its own comment
+       calls them "sibling fields the brain reads unconditionally, present + empty so it never throws".
 
-      // Merge proto field maps: match by field number to existing schema properties
-      if (analysis.protoFieldMaps.length && doc.schemas) {
-        var fieldMapMatches = 0;
-        var fieldMapUnmatched = [];
-        var matchedFieldNums = new Set();
-        for (var schemaName in doc.schemas) {
-          var schema = doc.schemas[schemaName];
-          if (!schema.properties) continue;
-          for (var propName in schema.properties) {
-            var prop = schema.properties[propName];
-            if (!prop["x-field-number"]) continue;
-            for (var fm = 0; fm < analysis.protoFieldMaps.length; fm++) {
-              var fieldMap = analysis.protoFieldMaps[fm];
-              if (fieldMap.fieldNumber === prop["x-field-number"] && !prop.customName) {
-                prop._astName = fieldMap.fieldName;
-                prop._astAccessor = fieldMap.accessorName;
-                fieldMapMatches++;
-                matchedFieldNums.add(fieldMap.fieldNumber);
-                console.debug("[AST:merge] Field #%d → %s.%s renamed to '%s'", fieldMap.fieldNumber, schemaName, propName, fieldMap.fieldName);
-              }
-            }
-          }
-        }
-        for (var fmu = 0; fmu < analysis.protoFieldMaps.length; fmu++) {
-          if (!matchedFieldNums.has(analysis.protoFieldMaps[fmu].fieldNumber)) {
-            fieldMapUnmatched.push("#" + analysis.protoFieldMaps[fmu].fieldNumber + "=" + analysis.protoFieldMaps[fmu].fieldName);
-          }
-        }
-        console.debug("[AST:merge] Field maps: %d matched, %d unmatched [%s]", fieldMapMatches, fieldMapUnmatched.length,
-          fieldMapUnmatched.slice(0, 10).join(", ") + (fieldMapUnmatched.length > 10 ? ", ..." : ""));
-      }
+       So `protoFieldMaps`, `protoEnums` and `sourceMapTypes` were three merge passes reading `[]` on every
+       run this project has ever done, and `domEndpoints` was a fourth. They are the defect class in its
+       purest form: not a wrong value but a plausible one — a `.length` of zero is what a page with no proto
+       schema and no source map ALSO looks like, so 170 lines of matching machinery reported "0 matched, 0
+       unmatched" forever and nothing could tell that apart from working. Deleted rather than DCHECK'd,
+       because a capability's absence belongs in the engine that does not have it, not in a consumer standing
+       ready for output that has no producer: field-number/enum/TypeScript enrichment and a DOM-attribute
+       endpoint scan are things `engine/host/solver/endpoint.c` would have to emit before anything here can
+       merge them, and when it does, the merge is written against what it emits.
 
-      // Merge proto enums: enrich existing enum-type fields
-      if (analysis.protoEnums.length && doc.schemas) {
-        var enumMatches = 0;
-        for (var eName in doc.schemas) {
-          var eSchema = doc.schemas[eName];
-          if (!eSchema.properties) continue;
-          for (var ePropName in eSchema.properties) {
-            var eProp = eSchema.properties[ePropName];
-            if (eProp.enum && !eProp.customEnum) {
-              for (var pe = 0; pe < analysis.protoEnums.length; pe++) {
-                var protoEnum = analysis.protoEnums[pe];
-                if (!protoEnum.isReverseMap) {
-                  var enumKeys = Object.keys(protoEnum.values);
-                  if (enumKeys.length === eProp.enum.length) {
-                    eProp._astEnum = protoEnum.values;
-                    enumMatches++;
-                    console.debug("[AST:merge] Enum matched: %s.%s ← {%s} (%d values)", eName, ePropName,
-                      enumKeys.slice(0, 5).join(", ") + (enumKeys.length > 5 ? ", ..." : ""), enumKeys.length);
-                    break;
-                  }
-                }
-              }
-            }
-          }
-        }
-        if (analysis.protoEnums.length > enumMatches) {
-          console.debug("[AST:merge] %d/%d proto enums unmatched (no schema field with same value count)", analysis.protoEnums.length - enumMatches, analysis.protoEnums.length);
-        }
-      }
-      // Note: bundle-wide value constraints (analysis.valueConstraints) are
-      // NOT merged into params by name. That was a heuristic — any switch/
-      // case on a variable named `q` anywhere in the bundle would attach
-      // its values to every method's `q` param, including unrelated
-      // form-scan-derived ones. Real-world FP: stackoverflow's `/search` q
-      // received `["&", "read", "write", 0]` from an unrelated module.
-      // Per-call-site values flow through learnFromAstCallSite →
-      // _mergeAstValues from `callSite.params[i].validValues`, which is
-      // structurally tied to the specific fetch site.
-      // Merge sourceMap TypeScript types: enrich VDD parameters with type info from original sources
-      if (analysis.sourceMapTypes && analysis.sourceMapTypes.length) {
-        var typeMatches = 0;
-        var tsMethods = doc.resources && doc.resources.learned ? doc.resources.learned.methods || {} : {};
-        for (var _tmName in tsMethods) {
-          var _tmMethod = tsMethods[_tmName];
-          if (!_tmMethod.parameters) continue;
-          for (var _tpName in _tmMethod.parameters) {
-            var _tpParam = _tmMethod.parameters[_tpName];
-            if (_tpParam._tsType) continue; // already enriched
-            for (var _sti = 0; _sti < analysis.sourceMapTypes.length; _sti++) {
-              var _smType = analysis.sourceMapTypes[_sti];
-              for (var _stf = 0; _stf < _smType.fields.length; _stf++) {
-                if (_smType.fields[_stf].name === _tpName) {
-                  _tpParam._tsType = _smType.fields[_stf].type;
-                  _tpParam._tsInterface = _smType.name;
-                  _tpParam._tsOptional = _smType.fields[_stf].optional || false;
-                  if (!_tpParam.type) _tpParam.type = _smType.fields[_stf].type;
-                  typeMatches++;
-                  break;
-                }
-              }
-              if (_tpParam._tsType) break;
-            }
-          }
-        }
-        // Note: proto-field-map enrichment from TypeScript .pb.ts interfaces
-        // was removed. The previous heuristics — fuzzy field-count tolerance
-        // (Math.abs(diff) <= 2) and source-filename pattern matching
-        // (/\.pb\.|_pb\.|proto/i) — both violated CLAUDE.md (magic-number
-        // cap + framework-specific naming). Proto field maps work by field
-        // ID without TS-name enrichment; if field-name learning is needed
-        // it must come from a structural signal (e.g. the .proto definition
-        // file via sourcemap, or AST extraction of the message class).
-        if (typeMatches > 0) {
-          console.debug("[AST:merge] TypeScript type enrichment: %d matches", typeMatches);
-        }
-      }
-    } else {
-      console.debug("[AST:merge] No doc for host=%s — registering endpoints only (script: %s)", sourceHost, analysis.sourceUrl);
-    }
+       Their one live consequence went with them: the discovery-doc lookup that opened this loop existed ONLY
+       to give those passes a `doc.schemas` to walk. Endpoint registration below never used it.
+
+       (Bundle-wide `valueConstraints` was already NOT merged, and for a second reason worth keeping: matching
+       constraints to params BY NAME is a heuristic — a switch on a variable named `q` anywhere in a bundle
+       attached its cases to every method's `q`. Per-call-site values reach the model through
+       learnFromAstCallSite ← `callSite.params[i].validValues`, which is structurally tied to the one site.) */
 
     // Register AST-observed fetch call sites as methods on their services.
     // Uses learnFromAstCallSite (direct fact-based registration), NOT the
@@ -151,6 +47,15 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
     var newEndpoints = 0;
     for (var fc = 0; fc < analysis.fetchCallSites.length; fc++) {
       var callSite = analysis.fetchCallSites[fc];
+      /* THE CALL-SITE CONTRACT, ASSERTED WHERE IT ARRIVES. endpoint.c's `endpoint_json_array` writes exactly
+         four keys per record — method, url, params[{name,validValues[]}], and headers ONLY when it observed
+         one — so those are the fields this loop and learnFromAstCallSite may read, and each one is guaranteed
+         rather than defaulted. `params` is always present (possibly empty), which is why the `|| []` that
+         stood at each use is gone: an absent array here would mean the engine's serializer changed shape, and
+         that must crash rather than register every endpoint of the run as parameterless. */
+      DCHECK(callSite && typeof callSite === "object", "a fetchCallSites entry is not an object — endpoint.c emits one JSON object per deduped endpoint");
+      DCHECK(typeof callSite.method === "string" && callSite.method, "a fetchCallSites entry carries no method — endpoint_record takes it as a required argument, so an absent one is the @H serializer broken");
+      DCHECK(Array.isArray(callSite.params), "a fetchCallSites entry carries no params array — endpoint.c writes \"params\":[…] for every endpoint (empty when the URL had no query), so its absence is the query surface arriving as nothing");
       try {
         // Structural @T candidate (url:null — unreached site, value
         // unresolved): surfaced via focusedView/structuralCandidates, not
@@ -186,11 +91,15 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
           interfaceName = extractInterfaceName(csUrl);
         }
 
-        var _astDocEntry = learnFromAstCallSite(tab, interfaceName, callSite, analysis.sourceUrl);
+        var _learned = learnFromAstCallSite(tab, interfaceName, callSite, analysis.sourceUrl);
+        DCHECK(_learned && typeof _learned === "object" && "entry" in _learned && "method" in _learned,
+               "learnFromAstCallSite did not answer with its {entry, method} pair — both halves are read " +
+               "below and a missing one silently files this endpoint under the wrong service or drops the " +
+               "path-param examples it just learned");
         // Refine interfaceName for endpoint registration if the call site
         // got promoted to a prefix bucket via observed-prefix clustering.
-        if (_astDocEntry && _astDocEntry.doc && _astDocEntry.doc.name) {
-          interfaceName = _astDocEntry.doc.name;
+        if (_learned.entry && _learned.entry.doc && _learned.entry.doc.name) {
+          interfaceName = _learned.entry.doc.name;
         }
 
         // Register endpoint for popup display — separate concern from
@@ -203,8 +112,15 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
         // template ({id}) instead of %7Bid%7D — used for BOTH the dedup key
         // and the stored path so they stay consistent.
         var _csPath = _decHoles(csUrl.pathname);
+        /* THE DYNAMIC KEY NO LONGER NAMES A FUNCTION, because nothing has ever named one. This term read
+           `callSite.enclosingFunction || "anon"`, and endpoint.c emits no such field — every dynamic endpoint
+           this project has keyed since the engine took over @H has been keyed on the literal "anon", so the
+           term distinguished nothing while reading like the one thing that would tell two dynamic sites in
+           one bundle apart. The index `fc` is what actually separates them. (Keys already carrying " anon "
+           in a persisted store do not match the new shape and re-register once, which is correct: they are
+           records of an identity that was never real.) */
         var epKey = isDynamic
-          ? "AST DYN " + bundleId + " " + (callSite.enclosingFunction || "anon") + " " + callSite.method + " " + fc
+          ? "AST DYN " + bundleId + " " + callSite.method + " " + fc
           : "AST " + callSite.method + " " + csUrl.hostname + _csPath;   // include HOST: an endpoint is method+host+path. Path-only collapsed same-path endpoints across DIFFERENT hosts (and across sites in the cumulative store) → lost the moat's "many sites per session" surface. Mirrors the network key (method + hostname + pathname).
         // DEDUP by STRUCTURAL identity: the SAME endpoint driven with opaque-POSITIONAL args ({arg0}, from
         // __hostDrive's JS-side drive) and with NAMED args ({id}, from the grind's declared-name drive) yields
@@ -239,27 +155,50 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
             service: interfaceName,
             source: isDynamic ? "ast_dynamic" : "ast_analysis",
             pageUrl: _epMeta ? _epMeta.url : null,
-            // AST-captured required headers (the SET the bundle attached at the
-            // host edge, per-header literal/opaque) — transport metadata shown
-            // in the Send panel so the endpoint is actually usable.
-            requiredHeaders: (callSite.headers && Object.keys(callSite.headers).length) ? callSite.headers : null,
-            // Concrete PATH-PARAM examples the engine computed (e.g. a reply field `orgId=acme-42` collapsed
-            // into /api/org/{}/members). The rich per-doc method schema carries these, but it is EVICTED after
-            // review, so without persisting them onto the flat endpoint the cumulative moat loses the real
-            // learned values — the whole point of the tool. Carried here so they survive eviction.
+            /* AST-captured required headers (the SET the bundle attached at the host edge, per-header
+               literal/opaque) — transport metadata the Send panel shows so the endpoint is actually usable.
+               ABSENCE IS THE POSITIVE STATEMENT, and endpoint.c states it in those words: it writes the
+               `headers` key ONLY when `e->nh`, because "an endpoint with no learned header must not claim an
+               empty requirement, which reads as 'needs nothing' rather than 'nothing was observed'". So a
+               missing key is "nothing was observed" and becomes null here, and a PRESENT one is asserted to
+               be the non-empty record it can only be. */
+            requiredHeaders: callSite.headers === undefined ? null : astHeaderRecord(callSite.headers),
+            /* THE PATH-PARAM EXAMPLES, FROM THE RECORD THAT ACTUALLY HOLDS THEM. The rich per-doc method
+               schema is EVICTED after review, so without a copy on the flat endpoint the cumulative moat
+               loses the real learned values — the whole point of the tool. This read `callSite.params`
+               filtered by `p.location === "path"`, and endpoint.c's params are the URL's QUERY string with
+               no `location` on them at all, so the filter was empty on every run and this field has been
+               `null` for every endpoint this project has ever recorded — while its comment described the
+               values it was carrying. The producer is the method: lib/learn.js mints a `location:"path"`
+               parameter for each `{hole}` segment and fills its `_astValidValues` from the concrete live
+               request that matched the template, which IS the "orgId=acme-42" case named here. */
             pathParams: (function () {
-              var pp = (callSite.params || []).filter(function (p) { return (p.location === "path") && p.validValues && p.validValues.length; });
-              return pp.length ? pp.map(function (p) { return { name: p.name, values: p.validValues.slice(0, 20) }; }) : null;
+              if (!_learned.method || !_learned.method.parameters) return null;   // dynamic URL: no method, no path template
+              var out = [];
+              for (var _pn in _learned.method.parameters) {
+                var _pd = _learned.method.parameters[_pn];
+                if (!_pd || _pd.location !== "path") continue;
+                var _vals = Array.isArray(_pd._astValidValues) ? _pd._astValidValues : [];
+                if (!_vals.length) continue;   // a templated hole nothing has filled yet is not an example
+                out.push({ name: _pn, values: _vals.slice(0, 20) });
+              }
+              return out.length ? out : null;
             })(),
-            // (Request body: the @BODY params[location:body] feed the discovery method schema, which is the
-            //  SINGLE source the Send panel (schema.requestBody) and OpenAPI export (convertDiscoveryToOpenApi)
-            //  read. An endpoint-entry requestBody copy was DEAD — resolveEndpointSchema never surfaced it — so
-            //  it is deleted, not duplicated here.)
+            /* (No request body on this record, and none in the doc model either: `endpoint_record` takes a
+               method, a URL and headers, so the engine has no body surface to carry. The Send panel's
+               `schema.requestBody` and the OpenAPI export read `doc.schemas[…Request]`, which only an
+               imported or probed description now fills.) */
             firstSeen: Date.now(),
           });
           newEndpoints++;
         }
       } catch (mergeErr) {
+        /* AN INVARIANT ABORT TRAVELS ON THROUGH THIS CATCH. It has a real job — one malformed call site must
+           not cost the other N-1 their registration — but everything it wraps calls into lib/learn.js,
+           lib/grouping.js and lib/schema.js, every one of which DCHECKs its own contract, and a DCHECK is a
+           THROW on this side (extension/check.js). Without this line the loudest assertion in the zone
+           degraded to a console.debug and the run continued as if that endpoint were merely malformed. */
+        RETHROW_FATAL(mergeErr);
         console.debug("[AST:merge] Error processing fetch site %d (%s %s): %s", fc, callSite.method, callSite.url, mergeErr.message || mergeErr);
       }
     }
@@ -268,41 +207,18 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
         analysis.fetchCallSites.length, newEndpoints);
     }
 
-    // DOM-derived endpoints (href/src/action/data-* values from page
-    // markup). Per user directive: "what DOM gets sent in the first
-    // place [is] useful for learning". Surfaced into tab.endpoints
-    // alongside AST-derived ones, with source="dom_html_<kind>" for
-    // origin tracking.
-    var domEps = analysis.domEndpoints || [];
-    for (var dei = 0; dei < domEps.length; dei++) {
-      var domEp = domEps[dei];
-      try {
-        var deBase = (tab && tab.url) || analysis.sourceUrl;
-        if (!deBase) continue;
-        var deResolved = new URL(domEp.url, deBase);
-        if (/^(data|blob|about|javascript):/i.test(deResolved.protocol)) continue;
-        var deKey = "DOM " + (domEp.source || "html") + " " + deResolved.href;
-        if (tab.endpoints.has(deKey)) continue;
-        tab.endpoints.set(deKey, {
-          url: _decHoles(deResolved.href),
-          method: "?",
-          host: deResolved.hostname,
-          path: _decHoles(deResolved.pathname),
-          service: extractInterfaceName(deResolved),
-          source: "dom_" + (domEp.source || "html").replace(/-/g, "_"),
-          pageUrl: deBase,
-          firstSeen: Date.now(),
-        });
-      } catch (e) {
-        /* DOM-endpoint registration failed for one entry — almost always
-           a malformed `url` attribute (relative path the bundle didn't
-           normalize, javascript: handler we didn't filter early enough,
-           etc.). Other entries in the batch still register. Surface
-           so a real DOM-extraction regression on a vendor page is
-           visible instead of disappearing into an empty endpoint list. */
-        console.debug("[brain] DOM endpoint registration failed:", e && e.message || e, "url=" + (domEp && domEp.url), "src=" + (domEp && domEp.source));
-      }
-    }
+    /* THE DOM-ENDPOINT REGISTRATION IS GONE BECAUSE `analysis.domEndpoints` HAS NO PRODUCER. It read
+       `analysis.domEndpoints || []` and registered each entry as a `dom_<source>` endpoint keyed by the
+       resolved href — 35 lines with their own try/catch and their own comment about vendor-page regressions
+       being "visible instead of disappearing into an empty endpoint list", over an array bridge.js writes as
+       the constant `[]`. There is no `domEndpoints` and no `dom_` anything in engine/host: the href/src/
+       action/data-* scan the comment describes is a capability the engine does not have, and the `|| []` is
+       what made its absence look like a page with no such markup.
+
+       (testing/test-spec.js asserts `result.domEndpoints` is populated, in two tests. They are assertions
+       about the same absent capability and they are not this file's to change; they are the record that the
+       scan was intended, and the place to build it is the engine's Lexbor tree, where the attribute values
+       are.) */
 
     /* THE ONE SECURITY MERGE. `!analysis._securityMerged` guarded this, and the flag's other writer was
        lib/analyze.js pre-empting this block to do its own per-script split — a split over `sink.location`,
