@@ -62,8 +62,8 @@ const ROOT = dirname(fileURLToPath(import.meta.url));
  * Flight reader (`engine_provide` already held the reply). Each moved because ITS CONSUMER WAS ALREADY IN C.
  * That is what "takeable" means here, and the derived order says which unit to look inside for the next one.
  * A THIRD MOVE IS NOT IN THAT LIST ANY MORE, AND ITS ABSENCE IS THE CORRECTION. `classifyResponseAsset` went
- * to `browser_process/network/resource_kind.c` on the argument that the trusted zone already called that
- * program, and that argument was about the EDGE and never about whether the capability belonged there.
+ * into the browser process's own C on the argument that the trusted zone already called that program, and
+ * that argument was about the EDGE and never about whether the capability belonged there.
  * CLAUDE.md §Architecture now states the test the edge argument was standing in for: the engine gets what a
  * FLOW needs mid-execution, whose answer must fork and park with the flow. A classification the trusted zone
  * asks once about a captured reply is the other kind, so it is back in lib/discovery.js and is NOT queued.
@@ -136,49 +136,34 @@ const LEDGER = [
          "protocol: `rendererCall`'s id table, `onReply`'s demultiplexer and the `{fn, ret, args, bodies}` " +
          "envelope are deleted, and the instance's HEAPU8 length is a DECLARED reply field of every ABI method " +
          "rather than a field of a transport this file has to hold. What is left is the PROCESS — fork a " +
-         "frame, hand it its program and the primordial pipe, absorb its stdio, adopt the endpoint the browser " +
-         "process transfers back. AND IT IS THE ZYGOTE, which is what stops " +
-         "reason 5 from carrying a decision with it: `rendererCreate(name)` is deleted and the only path that " +
-         "materializes a frame is this file's `content.mojom.Zygote.ForkRenderer` implementation, called BY the " +
-         "browser process. That process holds the registry, mints the routing id and refuses a second renderer " +
-         "for one agent cluster; this file cannot decide, and that process cannot create — a dedicated Worker's " +
-         "global has no `document`. Which is exactly why Chromium's browser process asks a zygote to fork." },
-  { f: "browser-process-host.js", zone: "BRIDGE:1,5",
-    why: "THE TRUSTED SIDE OF THE BROWSER PROCESS — renderer-host.js's counterpart, facing the other way. It " +
-         "provisions extension/browser-process.js as a dedicated module Worker (its own realm, its own module " +
-         "instance, its own thread, and no HEAPU8 held over it by anybody), accepts its Mojo invitation, and " +
-         "holds the Remotes this document reaches it through: the CORB and classification decisions " +
-         "safe-fetch.js and response-decode.js take, and the RendererHost the pool asks for an instance. That " +
-         "is reason 1 (the fetch chokepoint's own check) reached through reason 5 (loading the WASM), which is " +
-         "why the row names both. WHAT IT DOES NOT HOLD is the decision: §7 and Chromium's CORB analyzer are C " +
-         "in another program, and what stays on this side is the ORIGIN COMPARISON alone, because SECURITY.md " +
-         "makes the same-origin principal the browser's `MessageSender.origin` and forbids re-deriving it from " +
-         "a URL. A browser-stated boolean crosses; no URL and no principal ever do. WHAT LEFT THIS FILE is the " +
-         "transport: `bpCall`'s request-id table, `onReply`'s demultiplexer, the `op` list and this side's copy " +
-         "of three header-shape rules are deleted, and `mojo.Connection` plus three `bindInterface` calls " +
-         "stand where they were." },
-  { f: "browser-process.js", zone: "BRIDGE:5",
-    why: "THE BROWSER PROCESS's own bootstrap, and the whole of the JS inside that boundary: instantiate the " +
-         "module, place a resource header in ITS linear memory, call the named entry, post the record back. " +
-         "It is the same role renderer.html's bootstrap plays for a renderer and it is measured the same way " +
-         "— a line here that decided anything would be the logic this boundary exists to delete. IT SERVED " +
-         "TWO SNIFFING ENTRIES AND NO LONGER DOES: `bp_corb_check` and `bp_classify` relayed WHATWG MIME " +
-         "Sniffing §7 and an asset classifier into C that had been transliterated out of JavaScript that was " +
-         "shipping, and CLAUDE.md §Architecture now rules on that by name — \"TYPE SNIFFING STAYS IN " +
-         "JAVASCRIPT, in `safeFetch`, where SECURITY.md puts it\". What is left is the registry. THE ROW " +
-         "USED TO END BY DEFENDING THE RENDERER REGISTRY AS STATE THIS FILE MAY HOLD — \"the one piece of " +
-         "STATE in this program and not a semantic the engine could own\" — and that sentence was the excuse " +
-         "shape this gate exists to catch. A `Map` from agent cluster key to routing id, a `_nextRoutingId++`, " +
-         "three counters and a duplicate check are computation over a string and an integer: nothing in it " +
-         "needs a `document`, a `postMessage` or a `Worker`, which is the whole test for whether a bridge edge " +
-         "is irreducible. It is `engine/host/browser_process/renderer/registry.c` now, with SECURITY.md's " +
-         "one-instance-per-`(browsing-context group, origin)` refusal as a `CHECK` rather than a `DCHECK` whose " +
-         "release path overwrote the entry. WHAT REMAINS IS THE ONE LINE THAT CANNOT BE C: " +
-         "`content.mojom.Zygote.ForkRenderer`. A dedicated Worker's global has no `document`, so this process " +
-         "can ORDER a renderer materialized and can never materialize one — the same shape as `safeFetch`, " +
-         "where the capability is another zone's and the decision is not. It carries an integer C minted out " +
-         "and hands the pipe-or-reason straight back in. The transport under all of it is mojo.js; the " +
-         "`{v,id,op}` records this file used to build are deleted with it." },
+         "frame, hand it its program and the primordial pipe, absorb its stdio, bind two interfaces on it. " +
+         "AND IT STILL CANNOT DECIDE THAT A RENDERER SHOULD EXIST, which is what stops reason 5 from carrying " +
+         "a decision with it: `rendererCreate(name)` is deleted, `rendererLaunch` asks " +
+         "render-process-host.js first, and this file mints no routing id of its own. That inversion was a " +
+         "dedicated Worker holding the registry in WASM and ordering this file back over " +
+         "`content.mojom.Zygote`; the Worker is deleted with the C, because the offscreen wrote its program " +
+         "and a pipe that separates a Map from its only caller is a boundary that isolates nothing. Deleting " +
+         "it also closed a window: registration and frame creation are one turn now, so the registry can no " +
+         "longer name a renderer this document holds no frame for." },
+  { f: "render-process-host.js", zone: "BRIDGE:5",
+    why: "THE RENDERER REGISTRY — which agent clusters have a renderer, what routing id each was given, and " +
+         "SECURITY.md's refusal of a second one for a cluster that already has one. IT IS A BRIDGE ROW AND " +
+         "NOT A LOGIC ROW, AND THE DISTINCTION IS THE ONE CLAUDE.md ADDED WHEN IT DELETED THE MIGRATION " +
+         "MANDATE. This IS logic — a Map, a counter and four transitions — and it does not belong in the " +
+         "engine, because the test is not where a thing sits but what needs it: the engine owns what a FLOW " +
+         "needs mid-execution, whose answer must fork per arm and park with the flow. This is decided ONCE, " +
+         "BETWEEN flows, in the trusted zone, by reason 5's owner (nothing may build an instance except " +
+         "through it). IT WAS 364 LINES OF C IN A SECOND WASM PROGRAM FOR ONE SESSION, and the " +
+         "reason it came back is the whole argument: this component arbitrates between renderers of DIFFERENT " +
+         "ORIGINS, so a memory-corruption bug in it is a cross-origin boundary failure. The privileged " +
+         "component is the one that must be memory-safe; the renderer is C because it runs attacker code and " +
+         "is confined by an opaque origin, Site Isolation and the WASM sandbox. WHAT DID NOT COME BACK AS IT " +
+         "WAS: the duplicate-cluster refusal was a DCHECK whose release path OVERWROTE the map entry — one " +
+         "renderer's registration silently replaced by another's, so the first's termination would free the " +
+         "second's cluster — and it is a CHECK, fatal in every build, with the table's whole arithmetic " +
+         "asserted after every mutation and before every read. THE 364-LINE C IS WHAT THE COST LOOKS LIKE: a " +
+         "hand-grown table, hand-grown JSON, two insertion sorts, a realloc loop and a malloc/HEAPU8/free " +
+         "marshalling of the cluster key, to answer `map.has(k)`." },
   { f: "lib/safe-fetch.js", zone: "BRIDGE:1",
     why: "THE network chokepoint. SOP/CORS/PNA/CORB/GET-only cannot live inside the untrusted WASM — " +
          "SECURITY.md §Network. THIS ROW WAS FALSE UNTIL THE BODY BECAME BYTES: the file ended in " +
@@ -299,7 +284,7 @@ const LEDGER = [
          "one is the reason that sentence needs its qualifier. The RSC parser went to the engine at " +
          "engine_provide (`looksLikeRSC` was a body-shape guess §RUN, DON'T MATCH forbids and did not move). " +
          "THE OTHER COMPONENT IS classifyResponseAsset AND IT IS NOT QUEUED AT ALL. It was deleted into " +
-         "browser_process/network/resource_kind.c under the ruling that type checking is safeFetch's job and " +
+         "the browser process's own C under the ruling that type checking is safeFetch's job and " +
          "safeFetch is the only source of sniffing — which is TRUE and is not an argument that reaches this " +
          "function: safeFetch sniffs the bytes IT fetched and stamps the answer on the reply record it hands " +
          "the renderer, and this reads bodies intercept.js captured off the live page, which safeFetch never " +
@@ -313,15 +298,17 @@ const LEDGER = [
 const files = [];
 (function walk(d) {
   for (const e of readdirSync(d, { withFileTypes: true })) {
-    /* `lib/qjs` and `lib/bproc` hold LINKED PROGRAMS, not surface JS — engine/build.mjs emits the renderer's
-       into one and the browser process's into the other, both gitignored — and `icons` holds no JS at all.
+    /* `lib/qjs` holds a LINKED PROGRAM, not surface JS — engine/build.mjs emits the renderer's engine into it,
+       gitignored — and `icons` holds no JS at all. A second output directory was named here for a second
+       program, and it goes with that program: a skip for a directory that cannot exist is the mirror of a row
+       for a file that does not, which this gate fails on by design.
        THE SKIP IS STRUCTURAL AND NOT A FILTER THAT HAPPENS TO WORK: today the collector takes `.js` and
-       emscripten's glue is `.mjs`, so nothing in either directory is collected in any case, and a comment
-       claiming otherwise would be describing a rule this file does not have. What names them here is that a
+       emscripten's glue is `.mjs`, so nothing in that directory is collected in any case, and a comment
+       claiming otherwise would be describing a rule this file does not have. What names it here is that a
        program's output extension is the LINKER'S decision (`-o …mjs` on one line of build.mjs), and a
        classification gate must not depend on it: change that flag and a 100 KB glue file would arrive as a new
        unclassified surface file with a row nobody could honestly write for it. */
-    if (e.name === "qjs" || e.name === "bproc" || e.name === "icons") continue;
+    if (e.name === "qjs" || e.name === "icons") continue;
     const p = join(d, e.name);
     if (e.isDirectory()) walk(p);
     else if (e.name.endsWith(".js")) files.push(relative(ROOT, p).split("\\").join("/"));

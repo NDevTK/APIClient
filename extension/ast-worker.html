@@ -5,7 +5,12 @@
      back to `default-src 'none'` and every renderer frame renderer-host.js creates would have been refused by
      the strictest of the two. It is 'self' and nothing wider: the only address this zone ever frames is
      renderer.html, on this origin. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; frame-src 'self'; connect-src 'self' https: http: data:">
+<!-- `worker-src 'self'` IS GONE WITH THE LAST WORKER THIS DOCUMENT CREATED. browser-process-host.js started
+     extension/browser-process.js as a dedicated module Worker to hold the renderer registry in WASM; the
+     registry is JavaScript in this realm again (render-process-host.js), nothing here calls `new Worker`, and
+     a grant nobody uses is a capability this document is handing itself for no reason. `default-src 'none'`
+     covers workers, so the refusal is now the default rather than an omission. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; frame-src 'self'; connect-src 'self' https: http: data:">
 <!-- The offscreen document hosts the API-learning BRAIN (offscreen-brain.js, the
      former service worker) where it has a stable lifetime + IndexedDB. Its lib/*
      dependencies load first, then the brain — which now ALSO contains the v2 host
@@ -17,11 +22,10 @@
 <!-- MOJO: the IPC primitive, and then the mojom IDL that declares what may cross a process boundary. Loaded
      immediately after check.js because the IDL is VALIDATED as it is declared (an interface with a repeated
      ordinal, a parameter carrying no explanation, or a type this transport cannot serialize aborts here rather
-     than at the first call), and before every component that speaks to another process or implements an
-     interface for one: browser-process-host.js binds three Remotes over the browser process's primordial pipe,
-     renderer-host.js exposes content.mojom.Zygote for that process to order a renderer through. The browser
-     process's own Worker loads the same two files by `import`, because an interface exists only if both ends
-     agree on it and ONE description is what makes that true. -->
+     than at the first call), and before renderer-host.js, which is the one component here that speaks across a
+     process boundary: it hands every renderer frame these same two files as part of its program, because an
+     interface exists only if both ends agree on it and ONE description is what makes that true. There is
+     exactly one boundary left to describe — the untrusted renderer — so there are exactly two interfaces. -->
 <script src="mojo.js"></script>
 <script src="mojom.js"></script>
 <script src="lib/protobuf.js"></script>
@@ -31,13 +35,16 @@
 <script src="lib/openapi-export.js"></script>
 <script src="lib/stats.js"></script>
 <script src="lib/chains.js"></script>
-<!-- THE BROWSER PROCESS's trusted side: provisions extension/browser-process.js as a dedicated module Worker
-     (its own realm, its own WASM instance, its own thread — no HEAPU8 shared with this document) and holds the
-     Remotes for the RENDERER REGISTRY, which is the whole of what that process decides. `worker-src 'self'` in
-     this document's own policy above is what lets the Worker exist at all: policies COMBINE, so the manifest's
-     grant is not enough on its own. (It also relayed two SNIFFING entries; those are deleted — CLAUDE.md
-     §Architecture puts type sniffing in lib/safe-fetch.js, which is loaded below and needs nothing from it.) -->
-<script src="browser-process-host.js"></script>
+<!-- THE RENDERER REGISTRY (Chromium's RenderProcessHost): which agent clusters have a renderer, what routing id
+     each was given, and SECURITY.md's refusal of a second one for a cluster that already has one — a CHECK,
+     fatal in every build. THIS DOCUMENT IS THE BROWSER PROCESS: it owns the network chokepoint below, the
+     routing between instances, and this decision, and it is JavaScript deliberately, because the component
+     that arbitrates between renderers of different ORIGINS is the one a memory bug would breach a
+     cross-origin boundary in. It was a dedicated Worker holding the table in WASM (browser-process.js +
+     browser-process-host.js, both deleted with the C) reached over content.mojom.RendererHost; the offscreen
+     wrote that Worker's program, so the pipe separated a Map from its only caller. Loaded BEFORE
+     renderer-host.js, which asks it before it materializes anything. -->
+<script src="render-process-host.js"></script>
 <!-- THE single external-fetch function (GET only, no cookies, http(s) only). -->
 
 <script src="lib/safe-fetch.js"></script>

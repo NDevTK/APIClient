@@ -469,14 +469,14 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold) {
      engine — a crash record blaming an instance that was never built, for a document that would then be
      reported as analysed and empty.
      AND `rendererLaunch` IS NOT `rendererCreate`. The name changed because the direction did: this pool no
-     longer tells the offscreen to make a renderer, it ASKS THE BROWSER PROCESS for one. That process holds the
-     registry of which agent clusters have an instance, mints the routing id, and ORDERS the offscreen's zygote
-     to materialize the frame — the offscreen cannot decide, and the browser process cannot create (a dedicated
-     Worker's global has no `document`). What comes back is the pipe that process handed over. */
+     longer tells renderer-host.js to make a renderer, it asks for one that THE REGISTRY has decided on.
+     `render-process-host.js` holds which agent clusters have an instance, mints the routing id, and refuses a
+     second for a cluster that already has one — fatally, in every build — and renderer-host.js materializes
+     the frame for the id it is given and can mint none of its own. */
   DCHECK(typeof self.rendererLaunch === "function",
-         "renderer-host.js is not loaded in this zone — it is what asks the browser process for an instance " +
-         "and adopts the pipe it hands back, so without it every document would be reported as a crashed " +
-         "instance rather than as a bridge that is missing half of itself");
+         "renderer-host.js is not loaded in this zone — it is what obtains an instance once the registry has " +
+         "admitted its agent cluster, so without it every document would be reported as a crashed instance " +
+         "rather than as a bridge that is missing half of itself");
   DCHECK(typeof cold === "boolean",
          "an instance was started without saying whether it has a live caller — `_cold` decides at finalize " +
          "whether this document's findings are RETURNED to a requester or MERGED to the moat, and it is a " +
@@ -573,10 +573,10 @@ function engineBootFailed(eng, e) {
          "record and the surviving one will free a frame twice");
   if (i >= 0) _pool.splice(i, 1);
   eng.state = "failed";
-  /* THE FRAME GOES WITH IT. The zygote reclaims its own frame when the boot handshake fails — the browser
-     process learns of that as the fork order's `error` and frees the agent cluster there — so `r` is null
-     exactly when there is nothing to remove; anything that threw after it is this path's to reclaim, and an
-     iframe nobody reaches is a whole WASM instance resident under a document that does not reload. */
+  /* THE FRAME GOES WITH IT. renderer-host.js reclaims its own frame when the boot handshake fails — and frees
+     the agent cluster in the registry on its way out of the launch — so `r` is null exactly when there is
+     nothing to remove; anything that threw after it is this path's to reclaim, and an iframe nobody reaches
+     is a whole WASM instance resident under a document that does not reload. */
   if (eng.r) eng.r.destroy();
   /* ONE INSTANCE FAILING IS ONE CRASH, however many documents were waiting on it — which is why the banner
      fires once here and the RECORD is built per caller. crashResult bundled the two, so answering N joined
@@ -2061,19 +2061,20 @@ self.kickHostPool = _hostKick;
    about ("a host that cannot provision a second instance has not tested the transport").
    IT REPORTS THE FINISHED AS WELL AS THE LIVE, because an empty pool with no frames is what a clean teardown
    and an extension that never ran look like ALIKE — the counters are what tell them apart.
-   AND IT NOW REPORTS WHO DECIDED, WHICH IS A DIFFERENT CLAIM FROM WHO HOLDS. Every renderer is forked on a
-   `content.mojom.RendererHost.CreateRendererForCluster` order and carries a ROUTING ID this document cannot
-   mint, so the browser process's own registry is READ ACROSS THE PIPE and cross-checked against the frames
-   this document has. A probe that only counted frames would read identically whether the browser process
-   decided or the offscreen did — which is exactly the shape of number CLAUDE.md warns about — and the two
-   asserts below are what tell those apart: the ids must match, set for set, and the registry's launch and
-   failure totals must account for every fork order the zygote received.
-   IT IS ASYNC FOR THAT REASON ALONE. The pool half is a synchronous read of this realm; the registry half is
-   another process answering, which is a suspension by construction. */
-self.rendererPoolProbe = async function rendererPoolProbe() {
+   AND IT REPORTS WHO ADMITTED, WHICH IS A DIFFERENT CLAIM FROM WHO HOLDS. Every renderer carries a ROUTING ID
+   that came out of the registry, so that table is read and cross-checked against the frames this document has.
+   A probe that only counted frames would read identically whether the instance had been admitted or merely
+   built — the shape of number CLAUDE.md warns about — and the two asserts below the pool are what tell those
+   apart; what they can and cannot prove now that the registry is a Map in this realm is stated there.
+   IT IS SYNCHRONOUS AGAIN, AND THE PARAGRAPH THAT SAID OTHERWISE IS WHY THAT IS WORTH A LINE. It read "IT IS
+   ASYNC FOR THAT REASON ALONE … the registry half is another process answering, which is a suspension by
+   construction", and that reason went with the Worker. Every field below is a read of this realm, so nothing
+   can interleave between the pool walk and the registry read, and the comparison is a fact rather than two
+   snapshots taken at two moments. */
+self.rendererPoolProbe = function rendererPoolProbe() {
   DCHECK(typeof self.rendererStats === "function",
-         "renderer-host.js is not loaded in this zone — it is what asks the browser process for every engine " +
-         "and adopts its pipe, so without it the pool has no way to obtain an instance at all and this probe " +
+         "renderer-host.js is not loaded in this zone — it is what obtains every engine's frame, so without " +
+         "it the pool has no way to obtain an instance at all and this probe " +
          "would be reporting on an empty document");
   let booting = 0;
   const pool = _pool.map((eng) => {
@@ -2114,17 +2115,17 @@ self.rendererPoolProbe = async function rendererPoolProbe() {
        reported, because engineRecordFacts runs before the record leaves the `booting` state. */
     DCHECK(eng.r && typeof eng.residentBytes === "number" && typeof eng.r.name === "string",
            "a pooled engine is not backed by a renderer that has reported itself — every instance is obtained " +
-           "by rendererLaunch, which does not return until the browser process has answered with the pipe of a " +
-           "frame whose invitation acceptance has already landed, and engineRecordFacts states its working " +
-           "set before the reservation becomes hot");
-    /* THE ROUTING ID IS REPORTED PER ENGINE BECAUSE IT IS THE ONE FIELD THIS ZONE DID NOT PRODUCE. The cluster
-       name is computed here, the doc id is minted here and the heap figure is stated by the frame — but the id
-       came out of the browser process's registry, so it is the evidence of which process decided this instance
-       should exist. */
+           "by rendererLaunch, which does not return until the registry has admitted its agent cluster and the " +
+           "frame's invitation acceptance has landed, and engineRecordFacts states its working set before the " +
+           "reservation becomes hot");
+    /* THE ROUTING ID IS REPORTED PER ENGINE BECAUSE IT IS THE ONE FIELD NEITHER THIS FILE NOR THE FRAME
+       PRODUCED. The cluster name is computed here, the doc id is minted here and the heap figure is stated by
+       the frame — but the id came out of the renderer registry, so it is the evidence that this instance was
+       admitted rather than merely built. */
     DCHECK(typeof eng.r.routingId === "number",
-           "a pooled engine's renderer carries no routing id — an id is minted by the browser process's " +
-           "registry when it decides an agent cluster gets an instance, so an instance without one is a frame " +
-           "this document created for itself");
+           "a pooled engine's renderer carries no routing id — an id is minted by the renderer registry when " +
+           "it decides an agent cluster gets an instance, so an instance without one is a frame this document " +
+           "created for itself");
     return { name: eng.r.name, docId: eng.docId, state: eng.state, framed: !!eng.r.frame.parentNode,
              routingId: eng.r.routingId, heapBytes: eng.residentBytes, topWeight: eng.topWeight,
              cold: !!eng._cold, joined: eng._resolvers.length, joinedDocIds: eng.joinedDocIds.slice() };
@@ -2146,41 +2147,45 @@ self.rendererPoolProbe = async function rendererPoolProbe() {
          _reserveStats.failed + " failed) — the difference is a slot held by a record whose boot is over, " +
          "which blocks admission forever and answers every later arrival for that agent cluster with a wait " +
          "that never ends");
-  /* ── WHO DECIDED. `rendererStats()` is what this document HOLDS; the registry below is what the browser
-     process DECIDED, read over `content.mojom.RendererHost` — another process answering a question about
-     itself, which is the only kind of answer that can distinguish the two.
-     A NULL BROWSER PROCESS IS A POSITIVE STATEMENT AND NOT A DEFAULT: it means nothing in this document has
-     needed one yet (no page fetched, no renderer forked), which is a real state on a freshly restarted
-     extension. It is asserted against the frames, because a renderer that exists while no browser process does
-     is precisely the offscreen having decided for itself. */
+  /* ── WHO DECIDED, AND WHAT THAT STILL PROVES NOW THAT IT IS ONE REALM. `rendererStats()` is what
+     renderer-host.js HOLDS — its `_live` set, itself checked against the DOM on the line above. `getRegistry()`
+     is what render-process-host.js DECIDED — a table keyed by agent cluster, mutated by four transitions, each
+     of which asserts the table's whole arithmetic before it returns.
+     IT NO LONGER SPANS TWO PROGRAMS, AND THAT IS SAID HERE RATHER THAN LEFT TO BE INFERRED. While the registry
+     was a WASM module behind a Worker, an id that table had never minted was evidence in the strongest sense:
+     it came out of another address space. It is a `Map` in this realm now, so this comparison cannot
+     distinguish "the registry decided" from "renderer-host decided and told the registry". What it still
+     proves is everything else, and it is not small: two components keep two independent records of one set,
+     over two different keys (cluster, and object identity beside the DOM), so a frame created without an
+     admission, an admission whose renderer is gone, a transition counted without its slot and a slot freed
+     without its counter are each a disagreement here. What makes the INVERSION hold instead is structural and
+     one line long — `registerRenderer` has exactly one caller, and that caller is the only path in this
+     extension to a renderer frame.
+     THERE IS NO `provisioned` ARM ANY MORE, and its absence is the point: the registry is a module of this
+     document, so it exists from the moment this script has run. The arm it replaces guarded a Worker that
+     might not have been started yet, and an empty registry read through it was indistinguishable from a
+     document that had never asked for a renderer.
+     IT IS SYNCHRONOUS, WHICH IS WHY THE COMPARISON IS A FACT RATHER THAN A RACE. It used to be a mojo call,
+     deliberately on the SAME pipe as `RendererTerminated` so that a termination already posted was processed
+     before this read. In one run-to-completion realm nothing can interleave between the two reads at all. */
   const renderers = self.rendererStats();
-  const bp = self.browserProcessNow();
-  DCHECK(bp !== null || renderers.forked === 0,
-         "this document holds " + renderers.forked + " forked renderer(s) with no live browser process — a " +
-         "renderer is materialized only by a `content.mojom.Zygote.ForkRenderer` order, so one that exists " +
-         "without the process that orders them is a frame this document created on its own authority");
-  let browser = { provisioned: false };
-  if (bp !== null) {
-    const registry = await bp.rendererHost.getRegistry();
-    const child = await bp.childProcess.getMojoStats();
-    /* THE TWO SETS MUST BE THE SAME SET. The registry answers on the SAME pipe as `RendererTerminated`, so a
-       termination this document has already posted is processed before this read — which is why the two are
-       methods of ONE interface (mojo orders within a pipe and nothing across pipes) and why this comparison is
-       a fact rather than a race. */
-    const mine = renderers.routingIds.join(",");
-    DCHECK(registry.routingIds === mine,
-           "the browser process's registry holds renderers [" + registry.routingIds + "] while this document " +
-           "holds frames for [" + mine + "] — the two are one set: an id here that is not there is a frame " +
-           "nothing decided on, and an id there that is not here is an agent cluster refused an instance " +
-           "forever because the renderer holding it is already gone");
-    DCHECK(registry.launched + registry.failed === renderers.forked,
-           "the browser process ordered " + (registry.launched + registry.failed) + " fork(s) (" +
-           registry.launched + " launched, " + registry.failed + " failed) while this document's zygote " +
-           "received " + renderers.forked + " — every renderer frame is materialized by one order and by " +
-           "nothing else, so a difference is a frame created outside that path or an order that never arrived");
-    browser = { provisioned: true, registry: registry, child: child };
-  }
-  return { renderers: renderers, browser: browser, mojo: self.mojo.stats(),
+  DCHECK(!!self.renderProcessHost,
+         "this document holds " + renderers.forked + " forked renderer(s) with no renderer registry in the " +
+         "realm — every routing id comes out of that table, so frames existing without it is a document that " +
+         "materialized renderers on its own authority");
+  const registry = self.renderProcessHost.getRegistry();
+  const mine = renderers.routingIds.join(",");
+  DCHECK(registry.routingIds === mine,
+         "the renderer registry holds renderers [" + registry.routingIds + "] while this document holds " +
+         "frames for [" + mine + "] — the two are one set: an id here that is not there is a frame nothing " +
+         "admitted, and an id there that is not here is an agent cluster refused an instance forever because " +
+         "the renderer holding it is already gone");
+  DCHECK(registry.launched + registry.failed === renderers.forked,
+         "the renderer registry admitted " + (registry.launched + registry.failed) + " renderer(s) (" +
+         registry.launched + " launched, " + registry.failed + " failed) while this document forked " +
+         renderers.forked + " — a frame is materialized by one admission and by nothing else, so a difference " +
+         "is a frame created outside that path or an admission whose fork never began");
+  return { renderers: renderers, registry: registry, mojo: self.mojo.stats(),
            pool: pool, waiting: _waiting.length, residentBytes: _residentBytes(),
            reservations: { made: _reserveStats.made, rooted: _reserveStats.rooted, failed: _reserveStats.failed,
                            booting: booting, inFlight: inFlight, peakBooting: _reserveStats.peakBooting,

@@ -11,28 +11,30 @@
  * per side and free to drift. Here the sentence lives with the DECLARATION, so both ends print the same one and
  * neither can hold a different rule.
  *
- * THE PROCESS TOPOLOGY THESE FIVE DESCRIBE, and it is the one the platform forces rather than one chosen:
+ * THE PROCESS TOPOLOGY THESE TWO DESCRIBE, and it is the one the platform forces rather than one chosen:
  *
- *   • The BROWSER PROCESS is `extension/browser-process.js`, a dedicated Worker of the offscreen document. It
- *     owns what a browser process owns — the renderer REGISTRY, the routing ids, and (in-process, which is a
- *     real Chromium configuration and not a shortcut) the network service's own §7/CORB algorithms.
- *   • It CANNOT create a renderer itself, and that is a fact about the platform: a dedicated Worker's global is
- *     `DedicatedWorkerGlobalScope`, which has no `document` and no DOM, so there is no `createElement` in it.
- *     Chromium's browser process cannot fork a renderer by itself either — on Linux it asks the ZYGOTE, a
- *     helper process holding the state a renderer starts from, to do the fork on its behalf.
- *   • So the OFFSCREEN DOCUMENT is the zygote: `content.mojom.Zygote` is implemented in renderer-host.js and
- *     called BY the browser process. It holds no admission rule, no agent-cluster key and no ranking — it
- *     materializes the frame it is ORDERED to materialize and hands back the pipe. Where the analogy stops is
- *     worth stating: Chromium's zygote is a forked helper and ours is the trusted document that owns the DOM,
- *     which is exactly why it can create a frame when the browser process cannot.
+ *   • The OFFSCREEN DOCUMENT is the BROWSER PROCESS. It owns what a browser process owns — the network
+ *     chokepoint (`lib/safe-fetch.js`), the routing between instances, and the renderer REGISTRY that decides
+ *     which renderers exist and mints their routing ids (`extension/render-process-host.js`, Chromium's
+ *     `RenderProcessHost`). It is the one fully-trusted zone (SECURITY.md), it is the only zone that can
+ *     create a frame, and it is JAVASCRIPT deliberately: it arbitrates between renderers of DIFFERENT
+ *     ORIGINS, so a memory-corruption bug in it would be a cross-origin boundary failure.
  *   • A RENDERER is `extension/renderer.html` in an `<iframe sandbox="allow-scripts">` with no
  *     `allow-same-origin`, so its origin is unique and opaque and Site Isolation may put it in its own OS
  *     process. It runs the untrusted bundle, and `content.mojom.Renderer` is the whole of what it may be asked.
  *
- * AND `content.mojom.ChildProcess` IS IMPLEMENTED BY BOTH CHILDREN, which is what makes it the interface its
- * Chromium name says it is: "how much IPC does that process have open" is a question about a PROCESS, so it is
- * answered identically by the browser process's Worker and by a renderer's frame, and neither answer belongs on
- * an interface either of them happens to serve.
+ * THERE IS EXACTLY ONE PROCESS BOUNDARY HERE, WHICH IS WHY THERE ARE EXACTLY TWO INTERFACES. Three more stood
+ * in this file — `network.mojom.ContentSniffer`, `content.mojom.RendererHost` and `content.mojom.Zygote` —
+ * describing a dedicated Worker that held §7/CORB and the renderer registry in WASM and ordered the offscreen
+ * back to materialize each frame. The offscreen WROTE that Worker's program, so it was never a trust boundary;
+ * type sniffing is `safeFetch`'s again (CLAUDE.md §Architecture) and the registry is a `Map` in this realm, and
+ * a mojom that declared a boundary between a component and its only caller is a description of a topology that
+ * does not exist. A pipe is a PROCESS boundary or it is ceremony.
+ *
+ * AND `content.mojom.ChildProcess` IS THE RENDERER'S, ASKED OF IT AS A PROCESS RATHER THAN AS AN ABI. "How
+ * much IPC does that process have open" is a question about a PROCESS, so it does not belong on an interface
+ * that happens to carry the engine entries — which is also why it survived the deletion of the second child
+ * that used to answer it identically.
  */
 (function (g) {
   "use strict";
@@ -41,92 +43,25 @@
          "extension/mojo.js is not loaded in this realm — the IDL is validated as it is declared, so a mojom " +
          "file that loads first would install interfaces nothing ever checked");
 
-  /* ── network.mojom.ContentSniffer IS GONE, AND THIS IS WHERE IT WAS. It declared `CheckCorb` and
-     `ClassifyResource` over `browser_process/network/{mime_sniff,corb,json_sniff,nosniff,resource_kind}.c`,
-     and both the interface and the C behind it are deleted. CLAUDE.md §Architecture: "TYPE SNIFFING STAYS IN
-     JAVASCRIPT, in `safeFetch`, where SECURITY.md puts it" — the trusted zone is the one that READ the bytes,
-     it answers the question once, and it STAMPS what it decided onto the reply record (`computedType`) so the
-     renderer is told rather than left to derive a second answer. An interface exists only if both ends agree
-     on it, and there is no longer anything on either end for these two to describe. */
-
-  /* ── THE BROWSER PROCESS'S RENDERER REGISTRY. The interface name is Chromium's own for the browser-side
-     object that owns renderer processes. The registry lives behind it and nowhere else: which agent clusters
-     have a renderer, what routing id each was given, and the refusal of a second one for a cluster that
-     already has one — SECURITY.md's one-instance-per-`(browsing-context group, origin)` rule, held by the
-     process whose job it is to hold it rather than by the zone that wants the renderer. */
-  g.mojo.defineInterface({
-    name: "content.mojom.RendererHost",
-    version: 0,
-    methods: [
-      { ordinal: 0, name: "CreateRendererForCluster",
-        params: [
-          { name: "clusterKey", type: "string",
-            why: "SECURITY.md's agent cluster — `(browsing-context group, origin)`, both halves BROWSER-STATED " +
-                 "— which is the unit a renderer IS, so a renderer is asked for by cluster and by nothing else" }],
-        reply: [
-          { name: "routingId", type: "int32",
-            why: "minted by this registry and by nothing else: it is the only name a renderer has, and one the " +
-                 "asking zone could mint for itself would be a renderer this process never decided on" },
-          { name: "pipe", type: "handle<message_pipe>?",
-            why: "the renderer's own pipe, forked by the zygote and RELAYED through this process — null " +
-                 "exactly when `error` is not, because a launch that failed has no pipe rather than a dead one" },
-          { name: "error", type: "string?",
-            why: "a launch that failed is an OUTCOME and not a broken message (a page whose engine aborted its " +
-                 "boot is recorded as a crashed instance), so it is a declared nullable field and never a " +
-                 "rejected pipe; exactly one of `pipe` and `error` is non-null and both ends assert it" }] },
-
-      { ordinal: 1, name: "RendererTerminated",
-        params: [
-          { name: "routingId", type: "int32",
-            why: "the renderer whose frame is gone. It is FIRE-AND-FORGET because a real renderer's death is " +
-                 "OBSERVED rather than acknowledged, and it is a method of THIS interface — not a second one — " +
-                 "so that one pipe orders it against the next CreateRendererForCluster for the same cluster, " +
-                 "which would otherwise be refused as a duplicate of a renderer that no longer exists" }],
-        reply: null },
-
-      { ordinal: 2, name: "GetRegistry",
-        params: [],
-        reply: [
-          { name: "clusters", type: "string",
-            why: "the registered agent cluster keys, comma-joined and sorted, with the key's NUL separator " +
-                 "rendered as `|` so a reader can see it — a diagnostic view of the authority, not a second copy" },
-          { name: "routingIds", type: "string",
-            why: "the live routing ids, comma-joined and sorted, so the asking zone can check the renderers it " +
-                 "holds against the ones this process decided on rather than against its own count" },
-          { name: "live", type: "int32", why: "registered renderers right now" },
-          { name: "launched", type: "int32", why: "forks this registry ordered that produced a renderer" },
-          { name: "terminated", type: "int32", why: "renderers this registry has been told are gone" },
-          { name: "failed", type: "int32", why: "forks this registry ordered whose renderer did not boot" },
-          { name: "nextRoutingId", type: "int32",
-            why: "the next id this registry will mint — the counter is here, so a renderer's id is evidence of " +
-                 "which process created it" }] },
-    ],
-  });
-
-  /* ── THE ZYGOTE, implemented in the OFFSCREEN and called by the browser process. This is the inversion: the
-     only code path in this extension that materializes a renderer frame is the implementation of this method,
-     so a renderer exists if and only if the browser process ordered one. */
-  g.mojo.defineInterface({
-    name: "content.mojom.Zygote",
-    version: 0,
-    methods: [
-      { ordinal: 0, name: "ForkRenderer",
-        params: [
-          { name: "routingId", type: "int32",
-            why: "the id the browser process minted for this renderer — the zygote does not allocate it, " +
-                 "because allocating it is deciding, and deciding is what this call is obeying" },
-          { name: "clusterKey", type: "string",
-            why: "the agent cluster this renderer IS, carried so the frame can be identified in the document " +
-                 "(its title) and so the pool's own name for the instance can be checked against the browser's" }],
-        reply: [
-          { name: "pipe", type: "handle<message_pipe>?",
-            why: "the renderer's pipe, TRANSFERRED — which is why this is a real pipe pass and not a clone: " +
-                 "the zygote is detached from it here and gets it back only from the browser process, so the " +
-                 "endpoint the pool ends up calling on provably travelled through the deciding process" },
-          { name: "error", type: "string?",
-            why: "the engine's own abort or a frame that never booted; null exactly when `pipe` is not" }] },
-    ],
-  });
+  /* ── THREE INTERFACES STOOD HERE AND ALL THREE ARE DELETED, WHICH IS ONE RULING APPLIED TWICE.
+     `network.mojom.ContentSniffer` declared `CheckCorb` and `ClassifyResource` over that program's MIME
+     Sniffing, CORB, JSON-sniff, nosniff and resource-kind units; `content.mojom.RendererHost` declared the
+     renderer REGISTRY over its registry unit; `content.mojom.Zygote` was the
+     offscreen's half of the fork order those two needed, because the program holding them was a dedicated
+     Worker and a dedicated Worker's global has no `document` to create a frame with.
+     CLAUDE.md §Architecture settles the first: "TYPE SNIFFING STAYS IN JAVASCRIPT, in `safeFetch`, where
+     SECURITY.md puts it" — the trusted zone READ the bytes, it answers once, and it STAMPS what it decided
+     onto the reply record (`computedType`) so the renderer is told rather than left to derive a second answer.
+     The same test settles the second: what belongs in the engine is what a FLOW needs mid-execution, whose
+     answer must fork and park with the flow, and a `Map` from an agent cluster key to an integer forks with
+     nothing and parks with nothing. It is `extension/render-process-host.js` — and the component whose whole
+     job is to arbitrate between renderers of different ORIGINS is the one that most needs to be memory-safe.
+     AND THE THIRD GOES BECAUSE THE OTHER TWO DID. A zygote exists to obey a process that cannot create a
+     frame; with nothing left in that process, `Zygote` and `RendererHost` were a pipe between a component and
+     its only caller, in one realm, on one thread — three thread hops per renderer, an admission decision that
+     could suspend between its check and its write, and a MessagePort detached and re-adopted so that "the
+     endpoint travelled through the deciding process" would be a true sentence. An interface exists only if
+     both ends agree on it, and there are no longer two ends. */
 
   /* ────────────────────────────────────────────────────────────────────────────────────────────────────────
      THE RENDERER — the engine ABI, TYPED. This is the channel that carries nearly all of this extension's IPC

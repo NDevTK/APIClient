@@ -31,12 +31,14 @@ const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge
    and a list with build output in front of it is not a list.
    `--list-include-roots` answers WHERE ITS HEADERS COME FROM, for the same reason and to the same rule: the
    compiler is handed these roots and nobody else may restate them. gate_revision.mjs's dangling-include check
-   had its own copy of the list — four roots, hand-written — and the browser process's `-I BPROC_DIR` made that
-   copy wrong the day it landed, so the check declared a revision that BUILDS to be one that "cannot be built by
+   had its own copy of the list — four roots, hand-written — and a second program's extra `-I` made that copy
+   wrong the day it landed, so the check declared a revision that BUILDS to be one that "cannot be built by
    anyone who checks it out". A confident false red is worse than a silent miss: it is the phantom §Testing
-   describes, and the next real dangling include arrives in a report nobody believes. The answer is per SOURCE
-   SET and not a flat union, because a union would ACCEPT a renderer unit including "renderer/registry.h" — a
-   header its compiler is never given — and that is precisely the include this check exists to catch. */
+   describes, and the next real dangling include arrives in a report nobody believes. The answer stays a LIST
+   OF SOURCE SETS rather than a flat union even while there is one set, because that is what stops the check
+   answering "fine" to a unit including a header its own compiler is never given — which is precisely the
+   include it exists to catch — and a shape that degenerates the moment the program count drops to one is a
+   shape that has to be rebuilt the moment it rises again. */
 const LIST_SOURCES = process.argv.includes("--list-sources");
 const LIST_INCLUDE_ROOTS = process.argv.includes("--list-include-roots");
 
@@ -144,42 +146,29 @@ const SOLVER = (f) => join(HOST, "solver", f);     // the Time-Travel Solver (th
 /* THE TWO ENTRIES, NAMED — they are alternatives at the LINK and identical everywhere else, which is the whole
    reason both can be verified for the price of one. test_forced.c owns main() and runs on load; main.c owns the
    qjs_* ABI the bridge drives through ccall and must not run on load.
-   A THIRD ENTRY STOOD HERE AND WAS DELETED, AND THE REASON IS WHAT SHAPES THE ONE BELOW. It was a "trusted"
-   program linked out of its own source subtree so that MIME Sniffing §7 would not link into the renderer, and
-   A SEPARATE LINK IS NOT A PROCESS BOUNDARY: every object in THIS list was offered to every link, so the two
-   artifacts were built from the same objects and the trusted one was in fact built from the whole engine and
-   was the LARGER of the two — the 0.04 MB against 6.60 MB was wasm-ld dead-stripping, not isolation. Both
-   Modules instantiated in the offscreen's own realm with the host holding an exported HEAPU8 over each, so
-   nothing about the link kept either out of the other's memory. A real boundary is a REALM the host cannot
-   reach into: for the untrusted renderer that is a sandboxed opaque-origin frame (extension/renderer.html +
-   extension/renderer-host.js), and for the trusted browser process it is a dedicated WORKER
-   (extension/browser-process.js) — see BPROC_SOURCES below and browser_process/renderer/registry.h. */
+   THERE HAVE TWICE BEEN THREE, AND BOTH THIRDS ARE GONE FOR TWO DIFFERENT REASONS WORTH KEEPING APART. The
+   first was a "trusted" program linked out of a subtree of THIS list so that MIME Sniffing §7 would not link
+   into the renderer, and A SEPARATE LINK IS NOT A PROCESS BOUNDARY: every object here was offered to every
+   link, both Modules instantiated in the offscreen's own realm with the host holding an exported HEAPU8 over
+   each, and the "trusted" artifact was in fact the LARGER of the two. The second was a real second program —
+   its own source list, its own objects, its own dedicated Worker — and it went because of WHAT WAS IN IT
+   rather than how it was linked. It held WHATWG MIME Sniffing §7 and Chromium's CORB analyzer, which
+   CLAUDE.md §Architecture rules belong in `extension/lib/safe-fetch.js` where SECURITY.md's threat model
+   puts the CORB gate; and it held the RENDERER REGISTRY, which is a `Map` from an agent cluster key to an
+   integer. Neither is what a FLOW needs mid-execution, which is this project's whole test for what the engine
+   owns — and the registry is the component that arbitrates between renderers of DIFFERENT ORIGINS, so a
+   memory-corruption bug in it is a cross-origin boundary failure and it is the last thing that should be C.
+   It is `extension/render-process-host.js`. There are two programs and both are the renderer's. */
 const ENTRY_SMOKE = join(HOST, "test_forced.c");
 const ENTRY_ABI   = join(HOST, "main.c");
-/* THE THIRD PROGRAM IS BACK AND THE PARAGRAPH ABOVE IS WHY IT IS DIFFERENT THIS TIME. What was deleted was a
-   second link out of THIS list; what is here is a program with its OWN source list, its OWN objects (compiled
-   below into `bp_`-prefixed object files with their own include path) and its OWN runtime — a dedicated Worker
-   of the offscreen document, `extension/browser-process.js`, holding its own realm, its own module instance and
-   its own thread, reachable only by postMessage. The link is not the boundary and never was; the WORKER is, and
-   the link is what keeps the renderer registry out of the renderer's symbol table so a renderer-side caller
-   fails to link rather than aborting at run time. Nothing in SHARED_SOURCES is offered to it, and NOTHING is
-   appended either: `core/mime/mime_type.c` was concatenated here because the sniffing entries computed into a
-   `MimeType`, and those entries are deleted (CLAUDE.md §Architecture puts type sniffing in
-   `extension/lib/safe-fetch.js`). The set is now exactly what the directory holds — a source list that is
-   WALKED and never hand-extended is the same rule SHARED_SOURCES states for itself. */
-const BPROC_DIR = join(HOST, "browser_process");
-const BPROC_SOURCES = walkC(BPROC_DIR).sort();
 
-/* THE HEADER ROOTS EACH SET'S COMPILER IS GIVEN, DECLARED ONCE. CFLAGS and BPCFLAGS below are BUILT from these
-   rather than spelling them again, and `--list-include-roots` reports them, so the compiler, the build and any
-   checker are reading one statement. The two lists differ deliberately: only a browser_process unit is given
-   BPROC_DIR, which is what makes `#include "renderer/registry.h"` legal there and a failure anywhere else.
+/* THE HEADER ROOTS THE COMPILER IS GIVEN, DECLARED ONCE. CFLAGS below is BUILT from these rather than spelling
+   them again, and `--list-include-roots` reports them, so the compiler, the build and any checker are reading
+   one statement.
    Include by FULL path from the host root — a browser component is "core/dom/dom_element.h", a solver component
    "solver/concolic.h" — so a cross-layer include always names its layer and no bare-name shortcut hides one. */
 const ENGINE_INCLUDE_ROOTS = [QJS, HOST, join(HOST, "browser"), LEXBOR_INC];
-const BPROC_INCLUDE_ROOTS = [HOST, join(HOST, "browser"), BPROC_DIR];
 const dashI = (roots) => roots.flatMap((r) => ["-I", r]);
-const BPROC_OUT = join(ENGINE, "..", "extension", "lib", "bproc");
 const SHARED_SOURCES = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
   .map((f) => join(QJS, f))
   .concat([
@@ -198,9 +187,11 @@ const SHARED_SOURCES = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"]
    single entry the `abi` argument selected, and that argument is gone: it chose which of the two programs a run
    produced, and a run now produces both, so nothing is left for it to select. check_recursion.sh shells in here
    for this list, and an answer naming one entry excluded the other from the recursion check too. */
-/* DEDUPED, because core/mime/mime_type.c is in two PROGRAMS and is one FILE — check_recursion.sh reads this
-   list to decide what to analyse, and a file named twice is a unit analysed twice. */
-const sources = [...new Set(SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI], BPROC_SOURCES))];
+/* DEDUPED, because check_recursion.sh reads this list to decide what to analyse and a file named twice is a
+   unit analysed twice. The `new Set` earned itself when core/mime/mime_type.c was in two programs and one
+   file; it stays because the property it guarantees is about this list and not about how many programs
+   happen to exist. */
+const sources = [...new Set(SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI]))];
 
 /* WHAT THE PROGRAM IS, asked rather than copied. check_recursion.sh needs exactly this list — its header says
    "the unit list mirrors engine/build.mjs" — and it was a second copy that had drifted to a THIRD of it: every
@@ -213,20 +204,19 @@ if (LIST_SOURCES) {
   process.exit(0);
 }
 
-/* THE HEADER ROOTS, PER SOURCE SET, EMITTED FROM THE ONE PLACE THAT HANDS THEM TO THE COMPILER. The two sets
-   differ and the difference is the whole point: a browser_process unit is given `-I BPROC_DIR` so it may write
-   `#include "renderer/registry.h"`, and a renderer unit is NOT, so the same line in a renderer file is a build
-   failure that a consumer of this manifest must be able to SEE. Emitting a flat union would answer "fine" to
-   both and turn the check into the diagnostic that always says yes.
+/* THE HEADER ROOTS, PER SOURCE SET, EMITTED FROM THE ONE PLACE THAT HANDS THEM TO THE COMPILER. There is one
+   set today and the shape is still a LIST OF SETS, which is not hedging: a set is a compiler invocation with
+   its own `-I` list, so the day a second program exists again the answer is one more entry rather than a
+   reader that has to learn a new shape — and a flat union, which is what a single set collapses to if anyone
+   "simplifies" it, would answer "fine" to a unit including a header its own compiler is never given, which is
+   exactly the include the consumer of this manifest exists to catch.
    The roots are repo-relative because the consumer resolves them against a git revision rather than a path on
-   this disk, and they are derived from the same CFLAGS/BPCFLAGS arrays the links use rather than restated —
-   this file may not hold a second copy either, or it becomes the thing it is fixing. */
+   this disk, and they are derived from the same CFLAGS array the link uses rather than restated — this file
+   may not hold a second copy either, or it becomes the thing it is fixing. */
 if (LIST_INCLUDE_ROOTS) {
   const rel = (p) => relative(join(ENGINE, ".."), p).split(sep).join("/");
   console.log(JSON.stringify([
-    { name: "engine", roots: ENGINE_INCLUDE_ROOTS.map(rel),
-      sources: sources.filter((f) => !BPROC_SOURCES.includes(f)).map(rel) },
-    { name: "browser_process", roots: BPROC_INCLUDE_ROOTS.map(rel), sources: BPROC_SOURCES.map(rel) },
+    { name: "engine", roots: ENGINE_INCLUDE_ROOTS.map(rel), sources: sources.map(rel) },
   ], null, 1));
   process.exit(0);
 }
@@ -358,14 +348,14 @@ const QJS_ABI = ["qjs_init", "qjs_join", "qjs_bundle_id", "qjs_begin", "qjs_step
    define is `--export=` of a symbol that does not exist, which wasm-ld reports as an undefined export only
    because ERROR_ON_UNDEFINED_SYMBOLS happens to be on. Read from the source rather than restated: `QJS_EXPORT`
    is exactly the marker main.c puts on every ABI body.
-   IT IS A HELPER AGAIN, AND THE PARAGRAPH THAT SAID IT MUST NOT BE IS WHY THIS ONE SAYS SO. That paragraph
-   read "there is ONE ABI … a helper kept for a caller that no longer exists is scaffolding", and it was true of
-   the tree that deleted the second wasm-ld link. There are two PROGRAMS again — the renderer's qjs_* entry and
-   the browser process's bp_* entry, in different source lists, behind a real boundary — so the second caller
-   exists and the reason for a block is gone with it. The check is what must not be per-program: a second copy
-   of these five lines is the hand-maintained list this file spends its length warning about, and the shape it
-   fails in is silence — an entry added to one program's list with the copy for the other left unedited exports
-   nothing and says nothing. */
+   IT IS A HELPER WITH ONE CALLER, WHICH IT HAS BEEN TWICE BEFORE AND IN OPPOSITE DIRECTIONS. It was inlined
+   once on the argument that "a helper kept for a caller that no longer exists is scaffolding", then made a
+   helper again when a second program with its own entry arrived, and that program is deleted. It stays a
+   helper because the argument for inlining it was wrong even when it was true: a second copy of these lines is
+   the hand-maintained list this file spends its length warning about, and the shape it fails in is silence —
+   an entry added to one program's list with the copy for the other left unedited exports nothing and says
+   nothing. A function whose parameters are exactly the four facts that differ per program costs nothing to
+   keep and is what makes the next program's check one line rather than a transcription. */
 function abiCheck(program, entrySrc, marker, prefix, list) {
   const src = readFileSync(entrySrc, "utf8");
   const re = new RegExp(marker + "\\s+[\\w \\t*]+?\\b(" + prefix + "\\w+)\\s*\\(", "g");
@@ -382,19 +372,13 @@ function abiCheck(program, entrySrc, marker, prefix, list) {
   }
 }
 abiCheck("renderer", join(HOST, "main.c"), "QJS_EXPORT", "qjs_", QJS_ABI);
-/* THE BROWSER PROCESS'S ABI, WHICH IS NOW ONE THING: the RENDERER REGISTRY, the state that makes the program a
-   BROWSER PROCESS — which agent clusters have an instance, what routing id each was given, and the refusal of a
-   second instance for one cluster. They were a `Map` and a counter in extension/browser-process.js until this
-   list grew, and the reason that was wrong is the reason this list exists — a decision taken in the bridge is a
-   decision nothing in C can assert. It is enforced by the same call for the same reason: an entry reaching
-   `Module` because EXPORT_KEEPALIVE happens to be on is not an ABI, it is an accident that survives until a
-   setting changes.
-   TWO SNIFFING ENTRIES STOOD IN FRONT OF THESE — `bp_corb_check` and `bp_classify` — and they are deleted with
-   the standards that had been transliterated out of working JavaScript into them. CLAUDE.md §Architecture:
-   "TYPE SNIFFING STAYS IN JAVASCRIPT, in `safeFetch`, where SECURITY.md puts it." */
-const BP_ABI = ["bp_renderer_create", "bp_renderer_launched", "bp_renderer_launch_failed",
-                "bp_renderer_terminated", "bp_registry_snapshot"];
-abiCheck("browser process", join(BPROC_DIR, "main.c"), "BP_EXPORT", "bp_", BP_ABI);
+/* A SECOND ABI LIST STOOD HERE, five entries of a second program, and it is deleted with that program. What
+   it exported was the RENDERER REGISTRY: which agent clusters have an instance, what routing id each was
+   given, and the refusal of a second instance for one cluster. That is `extension/render-process-host.js`
+   again, in the trusted zone, in JavaScript, because the component that arbitrates between renderers of
+   DIFFERENT ORIGINS is the one where a memory bug is a cross-origin boundary failure — and because a `Map`
+   from a string to an integer is not what a FLOW needs mid-execution, which is this build's test for what the
+   engine owns. There is one ABI list again and it is the renderer's. */
 
 /* COMPILE FLAGS AND LINK FLAGS ARE SEPARATED, and that separation is what lets both entries be verified.
    They used to be one list handed to one emcc invocation that compiled and linked together, which forced two
@@ -529,52 +513,6 @@ function link(what, entryObj, ldflags, out) {
 link("smoke", objPath(ENTRY_SMOKE), LDFLAGS_SMOKE, join(OUT, "qjs.js"));
 link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs"));
 
-/* ── THE BROWSER PROCESS ──────────────────────────────────────────────────────────────────────────────────
-   A SECOND PROGRAM, NOT A SECOND LINK OF THE FIRST. Its objects are compiled here, from BPROC_SOURCES only,
-   under `bp_`-prefixed paths so that a file both programs contain (core/mime/mime_type.c) cannot be handed
-   from one compile's cache to the other's link — the include path differs, and an object cache keyed on the
-   source path alone would silently reuse an object built with the wrong `-I`. It links no lexbor, no quickjs
-   and nothing under host/solver or host/browser except the MIME record, which is what makes a renderer-side
-   call to §7 an undefined symbol.
-   IT IS SEQUENTIAL because it is a handful of translation units; the parallel pump above exists for 130. (It
-   said "four" while the set was seven, which is what a count written into prose beside a list that walks a
-   directory always becomes — the set is BPROC_SOURCES and reading it is the only way to know.) */
-{
-  mkdirSync(BPROC_OUT, { recursive: true });
-  const bpObj = (src) => join(OBJDIR, "bp_" + resolve(src).replace(/[\\/:]/g, "_") + ".o");
-  const BPCFLAGS = [
-    ...dashI(BPROC_INCLUDE_ROOTS),   // declared once beside the source sets; "renderer/registry.h" resolves ONLY here
-    "-O1", "-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
-    "-Werror=implicit-function-declaration",
-    "-D_GNU_SOURCE",
-    "-DAPICLIENT_DEV=" + (process.argv.includes("release") ? "0" : "1"),
-  ];
-  for (const src of BPROC_SOURCES) {
-    const obj = bpObj(src);
-    if (!objIsStale(src, obj)) continue;
-    const c = spawnSync(EMCC, [...BPCFLAGS, "-MMD", "-MF", obj.replace(/\.o$/, ".d"), "-c", src, "-o", obj],
-                        { stdio: "inherit", shell: true, cwd: QJS });
-    if (c.status !== 0) { console.error("[build] browser process: " + src + " did not compile"); process.exit(1); }
-  }
-  const l = spawnSync(EMCC, [
-    ...BPROC_SOURCES.map(bpObj),
-    /* THERE IS NO `main()` IN THIS PROGRAM AND THE LINK SAYS SO RATHER THAN LEAVING IT TO BE INFERRED. A
-       browser process is entered by its callers; browser_process/main.c owns the ABI the way host/main.c owns
-       qjs_*, and neither runs on load. emcc would reach the same conclusion on its own (no `_main` in
-       EXPORTED_FUNCTIONS turns EXPECT_MAIN off), and that is precisely the shape the ABI check above refuses to
-       depend on: a property held by the accident of a default is a property the next setting change takes away
-       with no diagnostic. */
-    "--no-entry",
-    "-sALLOW_MEMORY_GROWTH=1",
-    "-sEXPORTED_FUNCTIONS=" + JSON.stringify(BP_ABI.map((f) => "_" + f).concat(["_malloc", "_free"])),
-    "-sEXPORTED_RUNTIME_METHODS=" + JSON.stringify(["ccall", "HEAPU8"]),
-    "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createBrowserProcess", "-sINVOKE_RUN=0",
-    "-o", join(BPROC_OUT, "bproc.mjs"),
-  ], { stdio: "inherit", shell: true, cwd: QJS });
-  if (l.status !== 0) { console.error("[build] browser process LINK FAILED rc=" + l.status); process.exit(l.status || 1); }
-  console.log("[build] OK -> " + join(BPROC_OUT, "bproc.mjs"));
-}
-
 /* THE ARTIFACT RECORDS THE REVISION IT WAS BUILT FROM, because engine/solvergate.mjs runs this file and
    never compiles anything, so without a stamp the only question it could ask about the program was how old
    the FILE was. That answer is wrong in exactly the mode CLAUDE.md §Testing mandates: `git worktree add`
@@ -623,16 +561,13 @@ stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
   console.log("[build] two-instance ABI drive PASS");
 }
 
-/* AND THE BROWSER PROCESS IS DRIVEN TOO, for the reason every other target here is: a program that is only
-   built is the excluded test one layer down. engine/bproc.mjs loads the module just linked and puts the
-   RENDERER REGISTRY's transitions through it — SECURITY.md's one-instance-per-agent-cluster rule, including
-   the two keys that are equal up to `clusterKeyOf`'s NUL separator — so the C is exercised in a process with
-   no browser in it, and the live-Chrome probe is then measuring the WORKER boundary rather than the table. */
-{
-  const t = spawnSync(process.execPath, [join(ENGINE, "bproc.mjs")], { stdio: "inherit", shell: false });
-  if (t.status !== 0) {
-    console.error("[build] the browser-process drive FAILED rc=" + (t.status ?? "signal"));
-    process.exit(t.status || 1);
-  }
-  console.log("[build] browser-process drive PASS");
-}
+/* A THIRD DRIVE STOOD HERE — the driver for the deleted second program, which put the RENDERER REGISTRY's
+   transitions through it — and it is deleted with the program it drove. THE COVERAGE IT HELD IS NAMED RATHER
+   THAN QUIETLY DROPPED, because a gate that vanishes with its subject is only honest if what it was measuring
+   is stated: it exercised the duplicate-cluster refusal, the two keys that are equal up to `clusterKeyOf`'s
+   NUL separator, and the reported-dead-twice and never-minted-id refusals. The registry is
+   `extension/render-process-host.js` now and this build compiles no JavaScript, so those transitions are
+   exercised only where a live renderer takes them: `harness offscreen "return await self.rendererProbe()"`
+   drives register → launched → terminated, and `self.rendererPoolProbe()` cross-checks the table against the
+   frames. The REFUSALS have no caller that fires them. That is a gap in this tree, it is written here so the
+   next reader starts from it, and it is not a reason to keep a driver for a program that does not exist. */

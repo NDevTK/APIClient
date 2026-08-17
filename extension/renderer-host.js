@@ -1,21 +1,27 @@
-/* renderer-host.js — THE ZYGOTE, AND THE TRUSTED SIDE OF EVERY RENDERER FRAME. Chromium's name for the object
- * that owns a renderer and is the only thing that may speak to it is `RenderFrameHost`, and this is that
- * object; it is ALSO the zygote, which is the part that changed. The offscreen — the one trusted zone
- * (SECURITY.md) — materializes a sandboxed frame when the BROWSER PROCESS orders one, hands it the engine
- * program, and relays the qjs_* ABI to it. It holds no analysis logic; every decision that is not "which
- * renderer, and what did it answer" stays on this side of the boundary in bridge.js.
+/* renderer-host.js — THE TRUSTED SIDE OF EVERY RENDERER FRAME. Chromium's name for the object that owns a
+ * frame in a renderer and is the only thing that may speak to it is `RenderFrameHost`, and this is that
+ * object. The offscreen — the one trusted zone (SECURITY.md) — materializes a sandboxed frame, hands it the
+ * engine program, and relays the qjs_* ABI to it. It holds no analysis logic; every decision that is not
+ * "which renderer, and what did it answer" stays on this side of the boundary in bridge.js.
  *
- * WHY THIS FILE IS A ZYGOTE AND NOT A CREATOR. It used to export `rendererCreate(name)`, which bridge.js called
- * whenever its pool wanted an instance: the offscreen decided that a renderer should exist, and the browser
- * process — a program named for owning exactly that decision — was not consulted. Chromium's browser process
- * does not create renderer processes by asking a document to do it, and it does not create them by itself
- * either: on Linux it asks the ZYGOTE, a helper holding the state a renderer starts from, to do the fork on its
- * behalf. The same split is FORCED here rather than chosen. `extension/browser-process.js` is a dedicated
- * Worker, and a dedicated Worker's global is `DedicatedWorkerGlobalScope` — no `document`, no DOM, no
- * `createElement` — so it CANNOT materialize an iframe. It can decide, register, route and order; the offscreen
- * document is the only zone that can obey. So `content.mojom.Zygote` is implemented here, called by the browser
- * process, and it is the ONLY code path in this extension that creates a renderer frame: a renderer exists if
- * and only if the browser process ordered one, and its ROUTING ID was minted there.
+ * IT DOES NOT DECIDE THAT A RENDERER SHOULD EXIST, AND THAT IS STILL TRUE WITH NO PIPE IN IT. It used to
+ * export `rendererCreate(name)`, which bridge.js called whenever its pool wanted an instance — nothing held
+ * the registry, so nothing could refuse. The authority is `extension/render-process-host.js`
+ * (Chromium's `RenderProcessHost`: the browser-side object that owns renderer processes and mints their IDs),
+ * and `rendererLaunch` below asks it before it builds anything. What that inversion cost for one session was
+ * a dedicated Worker holding the table in WASM, ordering this file back over `content.mojom.Zygote` to
+ * materialize each frame; both interfaces are deleted with that Worker, because the offscreen writes the
+ * Worker's program and a pipe that separates a `Map` from its only caller is a boundary that isolates
+ * nothing. What SURVIVES the deletion is the property that mattered: this file cannot mint a routing id, and
+ * `registerRenderer` — whose refusal is a CHECK, fatal in every build — has exactly one caller, which is the
+ * only path in this extension to a renderer frame.
+ *
+ * AND THE DELETION CLOSED A WINDOW RATHER THAN OPENING ONE. Registration and frame creation are now in one
+ * realm and one turn: `rendererLaunch` reads the renderer's program FIRST, then registers, then calls
+ * `rendererFork`, whose whole prologue — the record, `_live.add`, the `appendChild` — runs synchronously
+ * before its first await. So there is no moment in which the registry names a renderer this document holds no
+ * frame for, which is exactly the disagreement `rendererPoolProbe`'s cross-check reports. With the fork order
+ * on a pipe there was such a moment, on every boot, spanning a `fetch` of five files.
  *
  * WHAT THIS BOUNDARY IS FOR. SECURITY.md calls the QuickJS/WASM engine UNTRUSTED because it EXECUTES the
  * attacker bundle, and confines it to "the WASM sandbox + a fixed set of host edges". While every instance is
@@ -28,9 +34,9 @@
  *
  * ONE RENDERER PER ORIGIN-KEYED AGENT CLUSTER, AND THE RULE IS NOT KEPT HERE. SECURITY.md fixes the unit: "One
  * WASM instance per ORIGIN-KEYED AGENT CLUSTER — (browsing-context group, origin)", which `bridge.js`'s
- * `clusterKeyOf` computes off browser-stated facts. This file takes that key as an ARGUMENT of the fork order —
- * it does not compute it, does not admit, does not rank, and no longer even asks whether the cluster already
- * has a renderer, because the registry that can answer that is the browser process's.
+ * `clusterKeyOf` computes off browser-stated facts. This file takes that key as an ARGUMENT — it does not
+ * compute it, does not admit, does not rank, and does not ask whether the cluster already has a renderer,
+ * because the table that can answer that is render-process-host.js's.
  *
  * WHAT CROSSES, AND WHY IT IS SHAPED LIKE THE REST OF THIS ENGINE'S SEAMS. A record of primitives carrying its
  * TYPE, with BYTES BESIDE IT — the discipline `qjs_provide`/`qjs_host_answer` already use, and the reason is
@@ -64,9 +70,11 @@
  * finalize, so moving it would leave the cross-session frontier holding a page that parses to nothing (a
  * detached buffer reads as a zero-length one), while `Provide`'s body is minted by safeFetch per call and has
  * no second reference. Declaring ONE type for both would make one spelling mean two ownerships with nothing on
- * the wire to tell them apart. THE ONE THING THAT IS TRANSFERRED is the renderer's own PIPE, on the way out to
- * the browser process and back, and there transfer is the point: a handle that moves is a handle this zone
- * provably does not hold in between.
+ * the wire to tell them apart. NOTHING IS TRANSFERRED ANYWHERE ON THIS BOUNDARY NOW: the one handle that used
+ * to move was the renderer's own pipe, detached here and re-adopted from the browser process so that "the
+ * endpoint travelled through the deciding process" would be a true sentence. With the deciding process gone
+ * the endpoint travels nowhere, so the detach window — in which `r.port` was null and a post had nothing to
+ * post on — does not exist and neither does the machinery that re-attached it.
  *
  * THE ORIGIN STAMP STAYS THIS ZONE'S. A record arriving from a frame may not state who it is: the frame's
  * `event.origin` is the literal "null" (it is opaque) and everything in the payload is written by the untrusted
@@ -137,56 +145,37 @@
     }
   }
 
-  /* THE PRIMORDIAL PIPE'S TRANSPORT, AND THE ONE THING ABOUT IT THAT IS NOT A ONE-LINER: THE ENDPOINT MOVES.
-     Between answering a fork order and being handed the pipe back by the browser process, this renderer's
-     endpoint is DETACHED here and live nowhere in this document — which is the whole evidence that it
-     travelled — so the transport reads `r.port` at post time rather than closing over one port object, and the
-     Connection's single `listen` callback is re-installed on whatever endpoint is current. A post in that
-     window is a caller reaching for a renderer it has not been given yet, and it says so. */
-  function rendererTransport(r) {
-    return {
-      post: function (rec, xfer) {
-        DCHECK(r.port !== null,
-               "a record was posted to renderer " + r.routingId + " while its pipe was in flight — between " +
-               "the fork order and the browser process handing the endpoint back, this zone provably does not " +
-               "hold it, so there is nothing here to post on");
-        r.port.postMessage(rec, xfer);
-      },
-      listen: function (cb) {
-        r._onwire = cb;
-        rendererAttachPipe(r, r.port);
-      },
-    };
-  }
-  /* AND THE (RE-)ATTACHMENT, in ONE place because it happens twice — at the fork, and again when the endpoint
-     comes back from the browser process — and the second one is where a mistake would be silent: a Connection
-     whose callback was not re-installed is a renderer that answers nothing, with every caller parked forever. */
-  function rendererAttachPipe(r, port) {
+  /* THE PRIMORDIAL PIPE'S TRANSPORT, WHICH IS NOW A ONE-LINER BECAUSE THE ENDPOINT NO LONGER MOVES. It used
+     to read `r.port` at post time and re-install the Connection's read callback on whatever endpoint was
+     current, because between answering a fork order and being handed the pipe back by the browser process the
+     endpoint was detached here and live nowhere in this document. That was the evidence the pipe had
+     travelled through the deciding process; with the decision in this realm there is nothing for it to travel
+     through, so the transport CLOSES OVER the endpoint it was built with — which is what makes "attached
+     without a reader" and "posted into a detached window" unrepresentable rather than asserted. */
+  function rendererTransport(port) {
     DCHECK(port instanceof MessagePort,
-           "a renderer's pipe was attached with something that is not a MessagePort — the endpoint is what the " +
-           "browser process transferred back, and anything else here is a clone of a port rather than the port");
-    DCHECK(r._onwire !== null,
-           "a renderer's pipe was attached before its Connection began listening — the callback is what reads " +
-           "the wire, so an endpoint attached without one delivers every record to nobody");
-    r.port = port;
-    port.onmessage = function (ev) { r._onwire(ev.data); };
+           "a renderer's transport was built over something that is not a MessagePort — the endpoint is one " +
+           "half of the channel this file just created, and anything else here is a clone of a port rather " +
+           "than the port");
+    return {
+      post: function (rec, xfer) { port.postMessage(rec, xfer); },
+      listen: function (cb) { port.onmessage = function (ev) { cb(ev.data); }; },
+    };
   }
 
   /* THE LIVE RENDERERS OF THIS ZONE, AND THE COUNTERS THAT MAKE A CLEAN TEARDOWN DISTINGUISHABLE FROM NOTHING
      EVER HAVING RUN. "no frames and no engines" is what a pool that finalized every instance looks like AND
      what an extension that never provisioned one looks like, which is precisely the shape CLAUDE.md names —
      a number that reads the same whether the mechanism worked or was never reached. So the counters are kept:
-     `forked` rises where a fork ORDER arrives, `provisioned` where a frame is created and `destroyed` where one
-     is removed, and `rendererStats` CHECKS the set against the DOM, so a renderer whose element outlived its
+     `forked` rises where a fork begins, `provisioned` where a frame is created and `destroyed` where one is
+     removed, and `rendererStats` CHECKS the set against the DOM, so a renderer whose element outlived its
      record (or the reverse) is caught here rather than as a slow leak of frames under a document that never
      reloads.
-     `_awaitingAdopt` HOLDS A RENDERER WHOSE PIPE IS IN FLIGHT. Between answering a fork order and being handed
-     the pipe back by the browser process, a renderer has a frame, a booted engine and NO endpoint in this
-     realm — which is the whole evidence that the endpoint travelled. It is a Map and not a field on the record
-     because the thing that comes back names the renderer by its ROUTING ID, which is the browser's name for it
-     and the only one it uses. */
+     `_awaitingAdopt` IS GONE WITH THE PIPE RELAY. It held a renderer that had a frame, a booted engine and NO
+     endpoint in this realm, because the endpoint was in flight between the zygote's reply and the browser
+     process handing it back — a state that existed only to make that journey observable. Nothing travels now,
+     so the state is unrepresentable rather than tracked. */
   var _live = new Set();
-  var _awaitingAdopt = new Map();
   var _forked = 0, _provisioned = 0, _destroyed = 0;
 
   /* THE FRAME GOES, AND NOTHING IS TOLD. There is no free list on the other side and none is wanted: a pointer
@@ -194,9 +183,10 @@
      element is the whole teardown. `qjs_teardown` is a separate ABI call the OWNER makes first — it is the
      engine asking its own runtime to walk gc_obj_list and report leaks, which is a finding, not cleanup.
      THIS HALF IS SPLIT OUT FROM `rendererDestroy` FOR ONE CALLER: a renderer that failed to BOOT is reclaimed
-     while the browser process is still inside the fork order that created it, and its death is reported by that
-     order's `error` reply. Telling the registry twice would free the agent cluster twice — the second time out
-     from under whatever holds it next. */
+     inside the fork that created it, and its death reaches the registry as `rendererLaunchFailed` on the way
+     out. Telling the registry twice would free the agent cluster twice — the second time out from under
+     whatever holds it next — and the two transitions are not interchangeable either: one asserts it is
+     burying a renderer that booted and the other one that never did. */
   function frameTeardown(r) {
     DCHECK(r.conn !== null,
            "a renderer was destroyed before its Connection existed — the frame is created and its invitation " +
@@ -219,23 +209,22 @@
     _destroyed++;
   }
 
-  /* AND A RENDERER THAT LIVED IS ALSO A REGISTRATION IN ANOTHER PROCESS. A real renderer's death is OBSERVED
-     by the browser rather than ordered by it — a child can exit on its own — and here the offscreen owns the
-     frame, so this is the zone that notices. The notice is fire-and-forget for that reason, and it rides the
-     SAME interface as `CreateRendererForCluster` so one pipe orders it against the next request for this agent
-     cluster, which would otherwise be refused as a duplicate of a renderer that no longer exists. */
+  /* AND A RENDERER THAT LIVED IS ALSO A REGISTRATION. A real renderer's death is OBSERVED by the browser
+     rather than ordered by it — a child can exit on its own — and here the offscreen owns the frame, so this
+     is the zone that notices; the registry is where the agent cluster is freed, which is what lets the next
+     request for that cluster be admitted instead of refused as a duplicate of a renderer that no longer
+     exists. IT IS ORDERED BY BEING A CALL. This used to be a fire-and-forget mojo method deliberately placed
+     on the SAME interface as `CreateRendererForCluster`, because Mojo orders messages within a pipe and
+     across none, so a termination could otherwise be overtaken by the next admission for its cluster. A
+     synchronous call in a run-to-completion realm is that ordering and strictly more of it: the cluster is
+     free before this function returns. */
   function rendererDestroy(r) {
-    DCHECK(!_awaitingAdopt.has(r.routingId),
-           "a renderer was destroyed while its pipe was still on its way back from the browser process — the " +
-           "endpoint would be delivered into this realm with nothing left to bind it to, and the record that " +
-           "was waiting for it is gone");
     frameTeardown(r);
-    var bp = self.browserProcessNow();
-    DCHECK(bp !== null,
-           "a renderer was destroyed with no live connection to the browser process — that registry is the only " +
-           "thing that can free this agent cluster, and a termination nobody hears leaves the cluster refused " +
-           "for the life of this document");
-    bp.rendererHost.rendererTerminated(r.routingId);
+    DCHECK(!!self.renderProcessHost,
+           "a renderer was destroyed with no renderer registry in this realm — that table is the only thing " +
+           "that can free this agent cluster, and a termination nobody records leaves the cluster refused for " +
+           "the life of this document");
+    self.renderProcessHost.rendererTerminated(r.routingId);
   }
 
   /* WHAT THIS ZONE IS HOLDING, ASKED FROM OUTSIDE. The DOM is the second opinion and the assert is what makes
@@ -260,32 +249,45 @@
       names.push(r.name);
     });
     return { forked: _forked, provisioned: _provisioned, destroyed: _destroyed, live: _live.size,
-             frames: frames, awaitingAdopt: _awaitingAdopt.size,
+             frames: frames,
              routingIds: ids.sort(function (a, b) { return a - b; }), names: names };
   }
   self.rendererStats = rendererStats;
 
   /* ────────────────────────────────────────────────────────────────────────────────────────────────────────
-     `content.mojom.Zygote` — THE ONLY PATH THAT MATERIALIZES A RENDERER. It is called by the browser process
-     and never from this document, which is what the inversion IS: this function takes the routing id rather
-     than allocating one, takes the agent cluster key rather than computing one, and asks nothing about whether
-     the cluster should have a renderer at all.
+     THE ONLY PATH THAT MATERIALIZES A RENDERER, and it takes the routing id rather than allocating one, takes
+     the agent cluster key rather than computing one, and asks nothing about whether the cluster should have a
+     renderer at all. Its one caller is `rendererLaunch`, which has just registered that id.
+     IT TAKES THE PROGRAM AS AN ARGUMENT, WHICH IS THE WHOLE OF WHY THERE IS NO SUSPENSION IN ITS PROLOGUE.
+     `programOnce()` reads five files off this extension's own origin; awaited HERE it would sit between the
+     registration and `_live.add`, so the registry would name a renderer this document holds no frame for for
+     the length of a fetch — exactly the disagreement `rendererPoolProbe` cross-checks for, on every boot.
+     `rendererLaunch` awaits it before it decides anything, and everything down to the `appendChild` below
+     then runs in the turn that registered.
      THE HANDSHAKE IS THE FRAME'S, NOT `onload`'s. `onload` fires for a document whose script CSP blocked, so it
      would report a renderer that does not exist as ready; the frame's own hello is the proof its bootstrap
      ran. There is no timeout on it: a wall clock here would report a loaded machine as a broken transport
      (§Testing), and the failure it would be covering — a policy that refused the bootstrap — is already
      reported by Chrome, by name, on this document's console.
      ──────────────────────────────────────────────────────────────────────────────────────────────────────── */
-  async function forkRenderer(routingId, clusterKey) {
-    DCHECK(clusterKey !== "",
-           "a fork order named no agent cluster — a renderer IS an agent cluster's instance and the key is how " +
-           "the browser process says which, and how a frame in this document is identified as that instance");
-    DCHECK(!_awaitingAdopt.has(routingId),
-           "the browser process ordered a fork with routing id " + routingId + ", which is already the id of a " +
-           "renderer in this document whose pipe has not come back — an id is minted once per renderer, so a " +
-           "repeat would give two frames one name and the second adoption would bind the wrong one");
+  async function rendererFork(routingId, clusterKey, prog) {
+    /* COUNTED ON THE FIRST LINE, BEFORE ANYTHING THAT CAN THROW, because `_forked` is one side of an
+       ARITHMETIC identity the pool probe asserts: the registry's launches plus its failures must equal the
+       forks this document began. Its caller frees the registry slot on EVERY way out of this function, so a
+       fork that aborted in its own preamble would be counted as a registry failure and not as a fork, and the
+       probe would report the difference as a frame created outside this path. */
     _forked++;
-    var prog = await programOnce();
+    DCHECK(clusterKey !== "",
+           "a fork named no agent cluster — a renderer IS an agent cluster's instance and the key is how the " +
+           "registry says which, and how a frame in this document is identified as that instance");
+    DCHECK(typeof routingId === "number" && routingId > 0,
+           "a fork named no routing id — the id is minted by the renderer registry when it decides this " +
+           "cluster gets an instance, and a frame without one is a renderer this file created on its own " +
+           "authority");
+    DCHECK(!!prog && !!prog.check && !!prog.mojo && !!prog.mojom && !!prog.glue && !!prog.wasm,
+           "a fork was handed an incomplete renderer program — the invitation carries five things a " +
+           "opaque-origin frame can obtain no other way, and one missing is a bootstrap that fails inside the " +
+           "frame with the reason sitting in this realm");
     var f = document.createElement("iframe");
     /* THE SANDBOX ATTRIBUTE IS SET BEFORE THE ADDRESS AND BEFORE INSERTION, because the flags are read when the
        load begins: an `allow-same-origin`-less frame whose attribute lands late is a document that already has
@@ -301,7 +303,7 @@
        needed: it is a DECLARED REPLY FIELD of every `content.mojom.Renderer` method, so every answer carries
        the current one and the caller reads it off the reply it already awaited. */
     var r = { name: clusterKey, routingId: routingId, frame: f, port: null, lines: [],
-              conn: null, renderer: null, childProcess: null, _onwire: null };
+              conn: null, renderer: null, childProcess: null };
     _live.add(r);
     _provisioned++;
     /* DECLARED HERE AND FILLED BY THE PROMISE EXECUTOR ON THE NEXT LINE (which runs synchronously), which is a
@@ -331,7 +333,7 @@
              goes to this frame's window and to nothing else. */
           var ch = new MessageChannel();
           r.port = ch.port1;
-          r.conn = new self.mojo.Connection(rendererTransport(r), {
+          r.conn = new self.mojo.Connection(rendererTransport(ch.port1), {
             role: "parent", name: "renderer " + routingId,
             onStdio: function (lines) { absorbStdio(r, lines); },
             /* AND EVERY ERROR THIS CONNECTION RAISES CARRIES THAT TAIL, because the reason a call failed is
@@ -364,10 +366,17 @@
     r.destroy = function () { rendererDestroy(r); };
     /* A RENDERER THAT DID NOT BOOT IS STILL A FRAME IN THIS DOCUMENT, so the element and its port go first, or
        a caller that retried would accumulate dead renderers under a document that never reloads. The failure
-       travels on as the fork order's `error` — swallowing it would report a page as analysed by an instance
-       that never existed — and it travels as a VALUE rather than a rejection because a page whose engine
-       aborted its boot is a RECORDED outcome (bridge.js's engineBootFailed writes a crash record for it),
-       which is a different thing from this transport being broken. */
+       then TRAVELS ON: swallowing it would report a page as analysed by an instance that never existed.
+       IT LEAVES AS A THROW AND NO LONGER AS A VALUE, AND THAT RECOVERS THE ONE THING THE WIRE DESTROYED. The
+       shape was `{pipe:null, error}` because a mojo call rejects when the TRANSPORT broke, and a page whose
+       engine aborted its boot is a RECORDED outcome rather than a broken pipe — so the two had to be told
+       apart on the wire. The cost was that `error` is a `string?`: this caught error was stringified to its
+       `.message`, crossed as text, and `rendererLaunch` built a FRESH `Error` from it — so `rendererLines`,
+       which the Connection had just attached and which is the only place the engine's own `@WHY` ROOT line
+       survives a rejected boot, was thrown away at the one hop that held it. bridge.js's engineBootFailed
+       reads exactly that field and had never once been given it. The error now travels as itself, and the
+       recorded-vs-invariant split stays where it already was: engineCreate's catch, which writes the crash
+       record and then RETHROW_FATALs. */
     DCHECK(typeof stopListening === "function",
            "the invitation handshake installed no way to stop listening — the executor above runs " +
            "synchronously, so a missing one is a `message` listener that outlives every renderer this document " +
@@ -376,67 +385,55 @@
     catch (e) {
       stopListening();
       frameTeardown(r);
-      RETHROW_FATAL(e);
-      return { pipe: null, error: String((e && e.message) || e) };
+      throw e;
     }
     stopListening();
-    /* AND THE PIPE LEAVES THIS REALM. It is TRANSFERRED to the browser process, which relays it to whoever
-       asked for the renderer — so between this line and `rendererLaunch`'s adoption the endpoint is detached
-       here and live nowhere in this document, which is the property that makes "the browser process handed
-       back the pipe" a fact rather than a description. `r.port` is nulled and the Connection's read callback is
-       deliberately KEPT, so a stray record arriving in that window still reaches the transport's asserts
-       instead of being dropped on a handler that was quietly removed. */
-    var pipe = r.port;
-    r.port = null;
-    _awaitingAdopt.set(routingId, r);
-    return { pipe: pipe, error: null };
-  }
-
-  self.mojo.exposeInterface("content.mojom.Zygote", { forkRenderer: forkRenderer });
-
-  /* ASK THE BROWSER PROCESS FOR A RENDERER, AND ADOPT THE PIPE IT HANDS BACK. This holds no decision at all —
-     it cannot produce a frame, it cannot name one, and everything it returns came out of another process. It
-     exists so there is ONE way to obtain a renderer (bridge.js's pool and the probe below take the same one)
-     rather than two spellings of the same four lines. */
-  async function rendererLaunch(clusterKey) {
-    DCHECK(typeof clusterKey === "string" && clusterKey !== "",
-           "a renderer was asked for with no agent cluster key — a renderer IS a cluster's instance, and the " +
-           "key is the only thing the browser process's registry decides on");
-    var bp = await self.browserProcess();
-    var v = await bp.rendererHost.createRendererForCluster(clusterKey);
-    DCHECK((v.pipe === null) !== (v.error === null),
-           "the browser process answered a renderer launch with both a pipe and an error, or with neither — a " +
-           "renderer that booted has exactly one pipe and one that did not has exactly one reason");
-    if (v.error !== null) {
-      DCHECK(!_awaitingAdopt.has(v.routingId),
-             "a fork that reported an error left its record awaiting adoption — the frame is gone, so the " +
-             "record is a renderer nothing can reach and nothing will ever tear down");
-      throw new Error(v.error);
-    }
-    var r = _awaitingAdopt.get(v.routingId);
-    DCHECK(r !== undefined,
-           "the browser process handed back a pipe for routing id " + v.routingId + ", which no fork order in " +
-           "this document created — a renderer this zone did not fork on the browser's order is one the " +
-           "browser process never decided on, and that inversion is the whole reason this transport exists");
-    if (r === undefined) throw new Error("unforked routing id " + v.routingId);   // release path under the assert
-    _awaitingAdopt.delete(v.routingId);
-    DCHECK(r.name === clusterKey,
-           "the browser process handed back renderer " + v.routingId + " under agent cluster `" + clusterKey +
-           "` while this document forked it as `" + r.name + "` — the two names are one identity, and a " +
-           "routing table that disagrees with the DOM is a document analysed behind the wrong principal");
-    DCHECK(r.port === null,
-           "a renderer's pipe came back while this zone still held one — the endpoint is transferred, so " +
-           "holding one here means it never left and what arrived is a second, unentangled port");
-    rendererAttachPipe(r, v.pipe);
     /* AND THE BROKER, USED ON THE RENDERER BOUNDARY TOO. Two names go out on the primordial pipe and two bound
        pipes come back, which is the whole replacement for a `fn` string naming any qjs_* entry: the ABI is an
        INTERFACE whose every parameter is declared and validated, and "how much IPC does that process have
        open" is a second interface because it is a fact about the PROCESS and not about the ABI.
-       IT IS DONE HERE AND NOT AT THE FORK, because a bind request travels on the primordial pipe and that
-       endpoint spends the fork inside the browser process. This is the first line at which this realm holds it
-       again, which is exactly the property the relay exists to demonstrate. */
+       IT IS DONE HERE, on the line after the invitation was accepted, because this realm has held the
+       endpoint the whole time. It used to be deferred to `rendererLaunch` for one reason — a bind request
+       travels on the primordial pipe, and that endpoint spent the fork inside the browser process — and that
+       reason is gone with the relay. */
     r.renderer = r.conn.bindInterface("content.mojom.Renderer");
     r.childProcess = r.conn.bindInterface("content.mojom.ChildProcess");
+    return r;
+  }
+
+  /* ASK THE REGISTRY FOR A RENDERER, THEN MATERIALIZE THE ONE IT DECIDED ON. This holds no decision at all —
+     it cannot mint an id and it cannot admit a cluster — and it exists so there is ONE way to obtain a
+     renderer (bridge.js's pool and the probe below take the same one) rather than two spellings of the same
+     four lines.
+     THE ORDER OF THESE THREE STATEMENTS IS THE WHOLE CONTRACT. The program is read FIRST, so that nothing
+     between the registration and the frame can suspend. The registration is SECOND, because it is the
+     admission decision and every refusal in it (an empty key, a cluster that already has an instance, an
+     exhausted id space) is a CHECK that must fire before a frame exists to leak. The fork is THIRD and takes
+     the id it was given. */
+  async function rendererLaunch(clusterKey) {
+    DCHECK(typeof clusterKey === "string" && clusterKey !== "",
+           "a renderer was asked for with no agent cluster key — a renderer IS a cluster's instance, and the " +
+           "key is the only thing the renderer registry decides on");
+    DCHECK(!!self.renderProcessHost,
+           "render-process-host.js is not loaded in this zone — it holds SECURITY.md's " +
+           "one-instance-per-agent-cluster rule and mints every routing id, so without it this file would " +
+           "materialize renderers nothing had decided on and refuse none of them");
+    var prog = await programOnce();
+    var routingId = self.renderProcessHost.registerRenderer(clusterKey);
+    var r;
+    try { r = await rendererFork(routingId, clusterKey, prog); }
+    catch (e) {
+      /* THE CLUSTER IS FREED ON EVERY WAY OUT OF THE FORK. `rendererFork` reclaims its own frame, so what is
+         left registered here is a slot whose renderer never booted — and leaving it would refuse this agent
+         cluster a renderer for the life of the document, with nothing anywhere to say why. That is true
+         whether what failed was the page's engine or one of this zone's own invariants, which is why the
+         registry transition is unconditional and this catch re-throws whatever it caught rather than
+         classifying it. The recorded-vs-invariant split is engineCreate's, one frame up, where it already
+         was; making a second one here would be two answers to one question. */
+      self.renderProcessHost.rendererLaunchFailed(routingId);
+      throw e;
+    }
+    self.renderProcessHost.rendererLaunched(routingId);
     return r;
   }
   self.rendererLaunch = rendererLaunch;
@@ -451,10 +448,11 @@
      Lexbor and runs `document_bundle_id`'s <script> scan over the result, and a number computed inside the
      frame comes back. `qjs_init` runs no page script, so nothing here needs the reply/notice edges that are
      still synchronous in bridge.js.
-     AND IT NOW GOES THROUGH THE BROWSER PROCESS, which is the point of an earlier change it reports:
-     `routingId` is a number this document could not have produced, and its presence in
-     `content.mojom.RendererHost`'s own registry is what `rendererPoolProbe` cross-checks.
-     AND THE TYPING IS OBSERVABLE, which is the point of THIS one. `iface`/`ifaceVersion`/`ifaceMethods` are
+     `routingId` IS THE REGISTRY'S AND NOT THIS FILE'S. It is minted by render-process-host.js when it decides
+     the cluster gets an instance, and its presence in that table's own snapshot is what `rendererPoolProbe`
+     cross-checks. That check no longer spans two PROGRAMS — the table is a Map in this realm — so what it
+     proves is stated where it is made, at that probe.
+     AND THE TYPING IS OBSERVABLE, which is the point of the conversion this file reports. `iface`/`ifaceVersion`/`ifaceMethods` are
      read off the bound interface's own descriptor rather than restated here, so they answer "which interface
      is this pipe actually carrying, at which version" — the question a broker that bound the wrong
      implementation would get wrong. `badMessages` is the count of records this TRUSTED zone's validator
@@ -507,14 +505,18 @@
     }
     /* READ AFTER THE TEARDOWN ON PURPOSE: a destroyed renderer's endpoints leave this realm's open set with the
        connection they belonged to, so `mojo` here is what the offscreen holds once this probe's instance is
-       gone — the browser process's three Remotes and nothing of the renderer's. An `endpoints` that kept
-       climbing across probes would be a document reporting its whole history of instances as its live IPC. */
+       gone. THAT IS NOW ZERO, and the number moved for a reason worth reading: it was three — a Remote for
+       `content.mojom.RendererHost`, a Remote for the browser process's `content.mojom.ChildProcess`, and the
+       Receiver that process bound for `content.mojom.Zygote` — and all three were pipes between the offscreen
+       and a Worker whose program the offscreen wrote. The only IPC this document has left is with the peer
+       SECURITY.md calls untrusted, and it has none of it once that peer is gone. An `endpoints` that kept
+       climbing across probes would still be a document reporting its whole history of instances as its live
+       IPC. */
     rec.mojo = self.mojo.stats();
     rec.badMessages = rec.mojo.badMessages;
     rec.lines = r.lines;
     return rec;
   };
 
-  console.debug("[renderer-host] ready (content.mojom.Zygote exposed; self.rendererLaunch + " +
-                "self.rendererProbe installed)");
+  console.debug("[renderer-host] ready (self.rendererLaunch + self.rendererProbe installed)");
 })();
