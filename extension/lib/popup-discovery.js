@@ -59,9 +59,10 @@ function _discServices(pageUrl) {
   const out = new Map();   // service -> { hostname, endpointKeys: [] }
   if (!tabData) return out;
   for (const [k, ep] of Object.entries(tabData.endpoints || {})) {
-    DCHECK(typeof ep.service === "string" && typeof ep.method === "string" && typeof ep.host === "string",
-           "an endpoint record reached the discovery panel without service/method/host — lib/merge.js is the " +
-           "extension's only endpoints.set and writes all three on every record, so one missing them is that " +
+    DCHECK(typeof ep.service === "string" && typeof ep.method === "string" &&
+           typeof ep.host === "string" && typeof ep.path === "string",
+           "an endpoint record reached the discovery panel without service/method/host/path — lib/merge.js is " +
+           "the extension's only endpoints.set and writes all four on every record, so one missing them is that " +
            "producer broken and this panel would probe an address it assembled itself");
     if (!pageUrl || ep.pageUrl !== pageUrl) continue;   // another document learned it — not ours to probe
     let e = out.get(ep.service);
@@ -81,14 +82,17 @@ function _discChangeLine(c) {
     case "param_added":         return "+ param " + c.methodId + "." + c.param;
     case "param_removed":       return "- param " + c.methodId + "." + c.param;
     case "param_type_changed":  return "~ param " + c.methodId + "." + c.param + ": " + c.from + " -> " + c.to;
+    case "param_location_changed":
+      return "~ param " + c.methodId + "." + c.param + " moved: " +
+             String(c.from || "(unstated)") + " -> " + String(c.to || "(unstated)");
     case "param_required":      return "! param " + c.methodId + "." + c.param + " is now required";
     case "schema_added":        return "+ schema " + c.schema;
     case "schema_removed":      return "- schema " + c.schema;
   }
   /* A CHANGE KIND WITH NO SENTENCE IS DRIFT BETWEEN THIS VIEW AND ITS PRODUCER, and the producer is one
-     function (lib/discovery-probe.js `_diffDiscoveryDocs`) emitting exactly the eight above. */
+     function (lib/discovery-probe.js `_diffDiscoveryDocs`) emitting exactly the nine above. */
   DFAIL("a discovery-change record carries a type this panel has no sentence for (" + JSON.stringify(c.type) +
-        ") — _diffDiscoveryDocs emits eight kinds and each one is spelled out here, so a ninth is a producer " +
+        ") — _diffDiscoveryDocs emits nine kinds and each one is spelled out here, so a tenth is a producer " +
         "that grew a record nobody reports");
   return String(c.type);
 }
@@ -158,8 +162,9 @@ function renderDiscoveryPanel() {
         html += ' <span class="badge badge-source">probe is POST-only</span>';
       }
       html += "</div>";
-      html += _discResultHtml(key);
+      html += _discResultHtml(key, ep);
     }
+    html += _discAutoProbesHtml(svc);
     html += "</div>";
   }
 
@@ -167,39 +172,70 @@ function renderDiscoveryPanel() {
   el.innerHTML = html;
 }
 
-// What a probe LEARNED, from the store it was merged into. Nothing rendered these before, so a probe's whole
-// answer — the field map, the canonical service/method, the required scopes — reached no reader.
-function _discResultHtml(endpointKey) {
+/* WHAT A PROBE LEARNED — one renderer per ANSWER SHAPE, because `tab.probeResults` holds two of them under four
+   key spellings and only two of those spellings had a reader. lib/req2proto.js `probeApiEndpoint` answers
+   {fieldCount, fields, metadata, scopes} and is stored under the bare endpoint key (lib/discovery-probe.js
+   `probeEndpoint`, the button below) AND under `auto:<service>::<url>` (`performProbeAndPatch`, the AUTOMATIC
+   probe); `discoverServiceInfo` answers {service, method, scopes, contentTypes} and is stored under
+   `svc:<endpointKey>` (the button) AND under `svcinfo:POST <path>` (lib/response-decode.js's automatic probe).
+   The two the panel skipped are exactly the ones that run with no human watching, which is the state this file
+   exists to end — a probe that fires on every page load and reaches no reader is worse off than one nobody
+   triggers. */
+function _discFieldProbeHtml(label, probe) {
+  DCHECK(typeof probe.fieldCount === "number" && probe.fields && typeof probe.fields === "object",
+         "a req2proto probe result carries no field map — probeApiEndpoint returns {url, timestamp, " +
+         "fieldCount, fields, metadata, scopes, probeDetails} on every path, so one without them is that " +
+         "producer broken and the panel would report a probe that found nothing");
+  const names = Object.values(probe.fields).map((f) => (f.name || "#" + f.number) + ":" + f.type);
+  let html = '<div class="card-meta">' + esc(label) + ": <strong>" + esc(String(probe.fieldCount)) +
+             "</strong> field(s)" + (names.length ? " — <code>" + esc(names.join(", ")) + "</code>" : "") + "</div>";
+  if (probe.metadata && (probe.metadata.service || probe.metadata.method)) {
+    html += '<div class="card-meta">canonical: <code>' +
+            esc(String(probe.metadata.service || "?") + "." + String(probe.metadata.method || "?")) + "</code></div>";
+  }
+  if (probe.scopes && probe.scopes.length) {
+    html += '<div class="card-meta">scopes: <code>' + esc(probe.scopes.join(" ")) + "</code></div>";
+  }
+  return html;
+}
+
+function _discSvcInfoHtml(label, svcInfo) {
+  const bits = [];
+  if (svcInfo.service) bits.push("service " + svcInfo.service);
+  if (svcInfo.method) bits.push("method " + svcInfo.method);
+  if (svcInfo.scopes && svcInfo.scopes.length) bits.push("scopes " + svcInfo.scopes.join(" "));
+  if (svcInfo.contentTypes && svcInfo.contentTypes.length) bits.push("accepts " + svcInfo.contentTypes.join(", "));
+  return '<div class="card-meta">' + esc(label) + ": " +
+         (bits.length ? "<code>" + esc(bits.join(" | ")) + "</code>"
+                      : "the endpoint answered, and its error envelope named no service, method or scope") +
+         "</div>";
+}
+
+// Per ENDPOINT: the two on-demand answers, plus the automatic service-info probe, which lib/response-decode.js
+// keys by the request PATH alone — so the endpoint's own path is what attributes it, and a TEMPLATED endpoint
+// path (`/users/{id}`, what the engine learned) never equals the concrete pathname of the live request that
+// triggered the probe. Those stay unattributed until that key carries the endpoint it was probed for.
+function _discResultHtml(endpointKey, ep) {
   const results = (tabData && tabData.probeResults) || {};
   let html = "";
   const probe = results[endpointKey];
-  if (probe) {
-    DCHECK(typeof probe.fieldCount === "number" && probe.fields && typeof probe.fields === "object",
-           "a req2proto probe result carries no field map — probeApiEndpoint returns {url, timestamp, " +
-           "fieldCount, fields, metadata, scopes, probeDetails} on every path, so one without them is that " +
-           "producer broken and the panel would report a probe that found nothing");
-    const names = Object.values(probe.fields).map((f) => (f.name || "#" + f.number) + ":" + f.type);
-    html += '<div class="card-meta">probe: <strong>' + esc(String(probe.fieldCount)) + '</strong> field(s)' +
-            (names.length ? " — <code>" + esc(names.join(", ")) + "</code>" : "") + "</div>";
-    if (probe.metadata && (probe.metadata.service || probe.metadata.method)) {
-      html += '<div class="card-meta">canonical: <code>' +
-              esc(String(probe.metadata.service || "?") + "." + String(probe.metadata.method || "?")) + "</code></div>";
-    }
-    if (probe.scopes && probe.scopes.length) {
-      html += '<div class="card-meta">scopes: <code>' + esc(probe.scopes.join(" ")) + "</code></div>";
-    }
-  }
+  if (probe) html += _discFieldProbeHtml("probe", probe);
   const svcInfo = results["svc:" + endpointKey];
-  if (svcInfo) {
-    const bits = [];
-    if (svcInfo.service) bits.push("service " + svcInfo.service);
-    if (svcInfo.method) bits.push("method " + svcInfo.method);
-    if (svcInfo.scopes && svcInfo.scopes.length) bits.push("scopes " + svcInfo.scopes.join(" "));
-    if (svcInfo.contentTypes && svcInfo.contentTypes.length) bits.push("accepts " + svcInfo.contentTypes.join(", "));
-    html += '<div class="card-meta">service info: ' +
-            (bits.length ? "<code>" + esc(bits.join(" | ")) + "</code>"
-                         : "the endpoint answered, and its error envelope named no service, method or scope") +
-            "</div>";
+  if (svcInfo) html += _discSvcInfoHtml("service info", svcInfo);
+  const autoSvcInfo = results["svcinfo:POST " + ep.path];
+  if (autoSvcInfo) html += _discSvcInfoHtml("service info (automatic)", autoSvcInfo);
+  return html;
+}
+
+// Per SERVICE: the automatic field probes, keyed `auto:<service>::<url>` by lib/discovery-probe.js.
+function _discAutoProbesHtml(svc) {
+  const results = (tabData && tabData.probeResults) || {};
+  const prefix = "auto:" + svc + "::";
+  let html = "";
+  for (const k of Object.keys(results).sort()) {
+    if (!k.startsWith(prefix)) continue;
+    html += '<div class="card-meta">automatic probe of <code>' + esc(k.slice(prefix.length)) + "</code></div>" +
+            _discFieldProbeHtml("learned", results[k]);
   }
   return html;
 }
