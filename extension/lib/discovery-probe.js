@@ -577,4 +577,21 @@ async function probeEndpoint(documentId, endpointKey) {
 // Host+path of POST URLs already error-probed by discoverServiceInfo (the
 // automatic service-info probe below). Module-global so it dedupes across
 // documents/tabs; resets on offscreen reload (a re-probe is harmless).
+//
+// THIS IS THE `one-per-endpoint` RULE, NOT A SOLVER BOUND, AND THE DISTINCTION IS WHY IT SURVIVES A
+// SECTION THAT BANS SEEN-SETS BY NAME. §NO BOUNDS governs the FRONTIER — flows, exploration, and the
+// principle that only EMITTED OUTPUT proves a flow is done, because shared state means byte-identical
+// args can still progress. Nothing here is a flow. This gates whether the trusted zone puts a
+// deliberately-malformed POST ON THE WIRE to a third-party API, and §Attacker sources states the rule
+// for exactly that and states it the other way: "Each active fetch is made FROM the document that
+// learned the endpoint, CORS-bounded both ways, one-per-endpoint (no method is universally safe — GET
+// can mutate via /logout, /delete?id=), never a blind sweep." Without this set, `handleResponseBody`
+// probes on EVERY captured POST — the blind sweep that sentence forbids, aimed at somebody else's
+// server. Deleting it does not widen the search; the probe's answer is a property of the SERVER, not
+// of any path through the page, so a second identical probe cannot learn what the first did not.
+//
+// It has been read the other way once already and that is why this comment is here: the commit that
+// moved this file into C cited the set as one of three defects it was deleting, under §NO BOUNDS. The
+// C it produced had no entry that could issue a credentialed POST at all, so what actually shipped was
+// not an unbounded probe but no probe.
 const _svcInfoProbedUrls = new Set();

@@ -10,14 +10,17 @@
  * is a place where twenty of them are written down in full.
  *
  * WHY IT IS THE ENGINE'S, AND WHY NOW. It was `parseMultipartBatchRequest` in
- * `extension/lib/protocol-parsers.js` — a row on `extension/jsaudit.mjs`'s queue — and it is the ONE
+ * `extension/lib/protocol-parsers.js` — where a JS copy still runs, over a different input — and it is the ONE
  * capability in that file whose consumer already exists in C. Everything else there (protobuf/JSPB trees,
  * gRPC-Web frames, SSE, NDJSON, GraphQL, batchexecute) decodes a body into a SCHEMA, and schema inference is
  * `moat_schema.c`'s, which is not written; this one decodes a body into an ADDRESS, and `solver/endpoint.c`
- * has taken addresses since before this file existed. THAT is the ledger's rule paid out, and it is worth
- * stating in the form the ledger itself now carries rather than the one this paragraph used to: not "callees
- * before callers", which is the clause that put a leaf codec at the head of a queue nobody could take, but
- * THE CAPABILITY WHOSE CONSUMER IS ALREADY IN C MOVES, whatever file it happens to sit in.
+ * has taken addresses since before this file existed. THE TEST IS THE INPUT, NOT THE LANGUAGE: this decodes a
+ * body THE ENGINE'S OWN `fetch()` composed, mid-flow, where the answer must fork per arm and park with the
+ * flow. The JS copy stayed because it is handed a different input — bodies `intercept.js` captured off live
+ * traffic, and bodies the user edits in the popup's multipart panel — and two inputs are not one duplicated
+ * algorithm. (This paragraph used to derive the same conclusion from a MIGRATION QUEUE's ordering rule; that
+ * queue, `extension/jsaudit.mjs`, is deleted, because the only trajectory it could have had was a migration
+ * CLAUDE.md §Architecture now forbids.)
  *
  * WHERE IT IS CALLED FROM. `core/fetch/fetch.c`, on the line that already records the outer request's own
  * endpoint — the one point that holds the request's header list, the extracted body bytes and §5.1's body
