@@ -271,7 +271,48 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       The directory holds helper scripts and no testharness document, so it adds ten runnable
                       files and no test of its own. */
                    "wai-aria/scripts",
+                   /* `/service-workers/service-worker/resources/test-helpers.sub.js` is named by five
+                      webmessaging files — three broadcastchannel documents and two message-channels scripts —
+                      and by five of the back-forward-cache tests this gate now runs. Checked out to BE USED; it
+                      contributes no test of its own. */
                    "service-workers/service-worker/resources"];
+
+/* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
+   file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
+   own level too: 265 test files sat in this checkout, collected by nothing, while the census at the foot of this
+   file printed the number every run and named no decision about a single one. A count nobody acts on is the
+   excluded-test failure this gate exists to catch, one level out from the corpus.
+   AN ENTRY HERE ADDS NOTHING TO THE CHECKOUT — that is the whole difference from a WPT_PATHS entry, which pulls
+   the SUBTREE as well. At the pinned revision those subtrees are `html/semantics` 3970 files,
+   `service-workers/service-worker` 766, `fetch/api` 284 and `wai-aria` 273 (234 of them under `manual/`).
+   Running an own level costs none of that, and each subtree stays absent — every unlisted path's standing
+   statement, which is untested rather than passing.
+   NOTHING IS PREDICTED HERE ABOUT WHAT THEY SCORE. Not one of these files has ever been run in this tree, so a
+   sentence claiming which capability they will name would be a guess sitting where the next reader takes it for
+   a fact. What each abort NAMES is the work queue, and it is read off the run.
+   BOTH DIRECTIONS ARE ASSERTED. An entry whose own level holds no test file fails this gate — a reason that
+   outlives the absence it describes lies about the tree — and so does a test file on disk that NEITHER list
+   accounts for, which is what makes silence impossible rather than merely discouraged. */
+const WPT_OWN_LEVEL = [
+  /* The standard's own `idlharness.https.any.js`, for a standard five WPT_PATHS entries already measure — the
+     FileAPI/streams/webidl/IndexedDB shape a fifth time. Its unlisted subtree is basic/, cors/, redirect/,
+     policies/, credentials/ and crashtests/: 121 files, and a decision for whoever takes it. */
+  "fetch/api",
+  /* `interfaces.html` and `rellist-feature-detection.html`. Naming the standard instead collects 3970 files
+     across forms, embedded content and tabular data. */
+  "html/semantics",
+  /* The twelve files at back-forward-cache's own level, on disk because their own `resources` is listed above —
+     five files under IndexedDB, fs and webmessaging name its helpers. Its unlisted sibling directories are
+     broadcastchannel/ and eligibility/. */
+  "html/browsers/browsing-the-web/back-forward-cache",
+  /* `accessibility_properties_basic.tentative.html` and `idlharness.window.js`, on disk because
+     `wai-aria/scripts` is listed for shadow-dom/reference-target. */
+  "wai-aria",
+  /* The standard's own `idlharness.https.any.js`, and the 247 test files at service-worker's own level — the
+     largest population this gate had on disk and did not run. Its five subdirectories
+     (ServiceWorkerGlobalScope/, multi-globals/, navigation-preload/, tentative/ and the listed resources/) are
+     otherwise not on disk and are claimed by nothing here. */
+  "service-workers", "service-workers/service-worker"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
@@ -347,6 +388,28 @@ function corpusIdentity() {
     console.error(`[wpt] the corpus has no ${missing.join(", ")} — the pinned revision ${WPT_REV} does not ` +
                   "contain it, so this gate would report a total that silently excludes it");
     process.exit(1);
+  }
+  /* AN OWN-LEVEL ENTRY IS ON DISK ONLY BECAUSE A LISTED PATH BELOW IT PUT IT THERE, so that puller is part of the
+     entry's contract: remove the puller and the entry stops collecting anything, which is an excluded test
+     wearing a green row. Asked here beside the same question for WPT_PATHS — is this the corpus the gate says it
+     measures — and the overlap check with it, because a directory in both lists would be run twice and counted
+     twice. */
+  for (const d of WPT_OWN_LEVEL) {
+    const over = WPT_PATHS.find((p) => d === p || d.startsWith(p + "/"));
+    if (over) {
+      console.error(`[wpt] ${d} is in WPT_OWN_LEVEL and also under the WPT_PATHS entry ${over}, so its files ` +
+                    "would be walked twice and the total would count them twice");
+      process.exit(1);
+    }
+    if (!WPT_PATHS.some((p) => p.startsWith(d + "/"))) {
+      console.error(`[wpt] ${d} is in WPT_OWN_LEVEL with no WPT_PATHS entry below it — nothing checks its own ` +
+                    "level out, so the entry names files that are not there");
+      process.exit(1);
+    }
+    if (!existsSync(join(WPT, d))) {
+      console.error(`[wpt] the corpus has no ${d}, whose own level this gate runs`);
+      process.exit(1);
+    }
   }
 }
 
@@ -512,6 +575,29 @@ function collect(dir, out) {
   }
   return out;
 }
+/* ONE LEVEL, NO RECURSION — a WPT_OWN_LEVEL entry's subtree is not in the checkout and is not this gate's, so
+   descending would either find nothing or find a listed path's files a second time. `testKind` still answers what
+   is a test, so this shares that one rule with the walk rather than restating it. */
+function collectOwnLevel(dir, out) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) continue;
+    const p = join(dir, e.name);
+    if (testKind(relative(WPT, p).split(sep).join("/"))) out.push(p);
+  }
+  return out;
+}
+/* COLLECTED ONCE. The emptiness check and the run set are the same fact, and computing them twice is how they
+   come to disagree. An entry that collects nothing is a decision about a directory that is not there — the
+   stale-claim failure, in a list whose whole job is to say what is measured. */
+const g_ownLevel = new Map(WPT_OWN_LEVEL.map((d) => [d, collectOwnLevel(join(WPT, d), [])]));
+for (const [d, found] of g_ownLevel) {
+  if (!found.length) {
+    console.error(`[wpt] ${d} is in WPT_OWN_LEVEL and its own level holds no test file — the entry reads as a ` +
+                  "decision and measures nothing");
+    process.exit(1);
+  }
+}
+
 const arg = process.argv[2] || "";
 /* A NO-ARGUMENT RUN IS EVERY PATH THAT IS CHECKED OUT, not one hard-coded directory. It said "fetch", so
    widening WPT_PATHS to `url` checked the corpus out and then never ran it — the gate reported the same number
@@ -521,7 +607,12 @@ const root = arg ? join(WPT, arg) : WPT;
 /* A SINGLE-FILE ARGUMENT IS WHATEVER NAMES A FILE, not whatever matches an extension this file lists. The
    extensions decide what a WALK collects; naming one path is an explicit instruction and needs no vote. */
 const argIsFile = Boolean(arg) && existsSync(root) && !statSync(root).isDirectory();
+/* AN ARGUMENT NAMING AN OWN-LEVEL AREA IS THAT AREA, which is its own level and not its subtree. The argument
+   selects WHAT to measure; the two lists above decide what each area IS, and re-deciding it here would make
+   `wpt.mjs html/semantics` a different set of files from the same area in a full run. */
+const argOwnLevel = g_ownLevel.get(arg.replace(/\/+$/, ""));
 const files = argIsFile ? [root]
+            : argOwnLevel ? [...argOwnLevel].sort()
             : arg ? collect(root, []).sort()
             /* A PATH WITH A LISTED ANCESTOR IS NOT WALKED TWICE. `dom/nodes` is listed so that its 331 files
                get a row of their own; `dom` is listed because ten test files live at that directory's own level
@@ -533,8 +624,9 @@ const files = argIsFile ? [root]
                matched none of them, so its support documents were counted as this gate's tests.
                `nameIsNonTest` answers for the FILE, so a listed support path now simply collects nothing and
                needs no name here. */
-            : WPT_PATHS.filter((p) => !WPT_PATHS.some((q) => p.startsWith(q + "/")))
-                       .flatMap((p) => collect(join(WPT, p), [])).sort();
+            : [...WPT_PATHS.filter((p) => !WPT_PATHS.some((q) => p.startsWith(q + "/")))
+                           .flatMap((p) => collect(join(WPT, p), [])),
+               ...[...g_ownLevel.values()].flat()].sort();
 if (!files.length) { console.error(`[wpt] no test files under ${root}`); process.exit(1); }
 
 /* A `// META:` BLOCK IS PARSED ONCE, HERE — sourcefile.py's `script_metadata`. It is the leading run of comment
@@ -702,12 +794,16 @@ const cc = spawnSync("clang", ["-O1", "-Wno-unknown-warning-option", "-Wno-unuse
 if (cc.status !== 0) { console.error("[wpt] runner build FAILED\n" + (cc.stderr || "")); process.exit(1); }
 
 
-/* The AREA a file belongs to: the checked-out path it lives under, which is what WPT_PATHS names — the LONGEST
-   such path, so that a standard listed alongside its components reports at the component. */
+/* The AREA a file belongs to: the checked-out path it lives under, which is what the two lists name — the LONGEST
+   such path, so that a standard listed alongside its components reports at the component.
+   BOTH LISTS, because an own-level area is an area: `service-workers/service-worker`'s 247 files would otherwise
+   fall back to the first path segment and report inside `service-workers` beside that standard's one file, which
+   is the folded number this gate reports per area to avoid. */
+const AREA_PATHS = [...WPT_PATHS, ...WPT_OWN_LEVEL];
 const areas = new Map();
 function byArea(rel) {
-  const p = WPT_PATHS.filter((d) => rel === d || rel.startsWith(d + "/"))
-                     .reduce((a, b) => (b.length > a.length ? b : a), rel.split("/")[0]);
+  const p = AREA_PATHS.filter((d) => rel === d || rel.startsWith(d + "/"))
+                      .reduce((a, b) => (b.length > a.length ? b : a), rel.split("/")[0]);
   let a = areas.get(p);
   if (!a) areas.set(p, (a = { name: p, expected: 0, done: 0, runs: 0, pass: 0, fail: 0, aborted: 0,
                               unread: 0, lines: [] }));
@@ -833,6 +929,9 @@ async function substituted(dep) {
 }
 
 let pass = 0, fail = 0, aborted = 0, unread = 0;
+/* THE CENSUS BELOW IS A VERDICT, so it needs a home outside its own block: a test file on disk that neither list
+   accounts for is an excluded test, and an excluded test is a failure — not a row a reader may skip. */
+let g_undecided = 0;
 
 console.log("\n==================== web-platform-tests ====================");
 for (const { file: f, kind, variant } of runs) {
@@ -1044,24 +1143,26 @@ console.log("  ---- summary");
   }
 }
 
-/* AND WHAT IS SITTING IN THE CHECKOUT THAT NOTHING RAN. A sparse checkout in CONE MODE gives you the files of
-   every directory on the path to a listed one, so naming `service-workers/service-worker/resources` as a
-   support path also puts 249 service-worker TESTS on disk, and naming `FileAPI/blob` put ten FileAPI tests one
-   level up. They were present, walked by nothing, counted by nothing, and NOTHING SAID SO — which is this
-   gate's own version of the defect it exists to catch, one level out from the corpus.
-   It is not fixed by running them: a directory this list does not name is honestly untested, and that is the
-   statement WPT_PATHS is for. It is fixed by NAMING them, every run, with counts. Then widening the list is a
-   decision someone makes, rather than a discovery someone eventually stumbles into.
-   AND A COUNT IS NOT A CENSUS. "573 test files" was one number for two populations that call for opposite
-   decisions, and reading it told you neither. One population is a STANDARD THIS GATE ALREADY MEASURES whose own
-   level no entry names — `webidl/idlharness.any.js` beside the listed `webidl/ecmascript-binding` — which is
-   exactly the defect FileAPI and streams already had twice, and the answer is always to name the standard. The
-   other is CONE-MODE COLLATERAL: `service-workers/service-worker/resources` is listed because two webmessaging
-   tests name a helper in it, and cone mode then puts 249 ServiceWorker tests on disk that nothing asked for.
-   Those two look identical in a tally by directory, so this reports WHICH LISTED ENTRY dragged each group in.
-   A group whose puller is a SUPPORT path is collateral; a group with no puller is a standard nobody named. */
+/* AND WHAT IS SITTING IN THE CHECKOUT THAT NOTHING RAN — WHICH IS NOW A FAILURE, NOT A ROW. A sparse checkout in
+   CONE MODE gives you the files of every directory on the path to a listed one, so naming
+   `service-workers/service-worker/resources` as a support path also puts 247 service-worker TESTS on disk, and
+   naming `FileAPI/blob` put ten FileAPI tests one level up. They were present, walked by nothing, counted by
+   nothing, and NOTHING SAID SO — this gate's own version of the defect it exists to catch, one level out from the
+   corpus.
+   PRINTING THE COUNT WAS THE HALF-FIX, AND THIS PARAGRAPH USED TO ARGUE IT WAS THE WHOLE ONE. It said naming them
+   with counts made widening the list "a decision someone makes rather than a discovery someone stumbles into" —
+   and then 265 files sat here for as long as that sentence did, because a count carries no decision and nothing
+   made anyone take one. The decision is now the mechanism: a file on disk is either RUN — WPT_PATHS for a
+   subtree, WPT_OWN_LEVEL for a level cone mode has already materialized, which costs no checkout — or it fails
+   this gate by name. Both populations this census used to distinguish are decided the same way and the
+   distinction is still what tells you WHICH: a group whose puller is a SUPPORT path is collateral, and a group
+   with no puller is a standard nobody named (`webidl/idlharness.any.js` beside the listed
+   `webidl/ecmascript-binding` was that, twice, for FileAPI and streams). So the puller is still printed, and the
+   number to read is ZERO. */
 {
-  const named = (rel) => WPT_PATHS.some((d) => rel === d || rel.startsWith(d + "/"));
+  const named = (rel) => WPT_PATHS.some((d) => rel === d || rel.startsWith(d + "/")) ||
+    /* RUN BY AN OWN-LEVEL ENTRY: directly in that directory, which is exactly what `collectOwnLevel` walks. */
+    WPT_OWN_LEVEL.some((d) => rel.startsWith(d + "/") && !rel.slice(d.length + 1).includes("/"));
   /* WHICH ENTRY PUT THIS DIRECTORY ON DISK. Cone mode checks out every file of every directory ON THE PATH to a
      listed one, so a stray file's puller is any listed entry that lives BELOW its directory. */
   const pullerOf = (dir) => WPT_PATHS.filter((d) => d.startsWith(dir + "/")).sort()[0];
@@ -1077,11 +1178,18 @@ console.log("  ---- summary");
     stray.set(k, (stray.get(k) || 0) + 1);
   }
   const total = [...stray.values()].reduce((a, b) => a + b, 0);
-  console.log(`  ---- checked out and named by no WPT_PATHS entry, so run by nothing: ${total} test file(s)`);
-  for (const [k, n] of [...stray.entries()].sort((a, b) => b[1] - a[1])) {
-    const puller = pullerOf(k);
-    console.log(`       ${String(n).padStart(4)}  ${k}` +
-                (puller ? `   (on disk as an ancestor of the listed ${puller})` : "   (NAMED BY NOTHING)"));
+  g_undecided = total;
+  if (!total) {
+    console.log("  ---- every test file in the checkout is named by WPT_PATHS or WPT_OWN_LEVEL");
+  } else {
+    console.log(`  ---- UNDECIDED — ${total} test file(s) are checked out and run by nothing. Each needs a ` +
+                "decision at WPT_PATHS: list the directory to check out and run its subtree, or list it in " +
+                "WPT_OWN_LEVEL to run the level cone mode already materialized. This FAILS the gate.");
+    for (const [k, n] of [...stray.entries()].sort((a, b) => b[1] - a[1])) {
+      const puller = pullerOf(k);
+      console.log(`       ${String(n).padStart(4)}  ${k}` +
+                  (puller ? `   (on disk as an ancestor of the listed ${puller})` : "   (NAMED BY NOTHING)"));
+    }
   }
 }
 
@@ -1143,6 +1251,7 @@ for (const l of revisionLines(REV_AT_START)) console.log(l);
                     : "[rev] the engine did not move during this run");
 }
 console.log(`  files ${files.length}   runs ${runs.length}   subtests ${pass + fail}   pass ${pass}` +
-            `   fail ${fail}   aborted-runs ${aborted}   unreadable-runs ${unread}`);
+            `   fail ${fail}   aborted-runs ${aborted}   unreadable-runs ${unread}` +
+            `   undecided-files ${g_undecided}`);
 console.log("===========================================================");
-process.exit(fail || aborted || unread ? 1 : 0);
+process.exit(fail || aborted || unread || g_undecided ? 1 : 0);
