@@ -4007,10 +4007,14 @@ int main(int argc, char **argv) {
             : "FAIL: the cross-session round trip did not exercise the tier — read the 0 rows above and the "
               "@COLDPARK/@COLDRESUME census beside them");
     else
+    /* THE SENTENCE NAMES NO STATEMENT, and that is the correction the derived selector forces on it. It read
+       "@S eval + innerHTML + location + a REAL Location source", which is the FULL document's list — the
+       minimal one has no `location.hash` sink at all, so under --min the PASS line was naming two rows that
+       were never selected. What is true of both is the table: every statement THIS document makes, answered. */
     printf("%s\n", h_ok
-        ? "PASS: @H merge AND @S eval + innerHTML + location + a REAL Location source — fired where the source's"
-          " transform permits, parked where it does not"
-        : "FAIL: @H or @S incorrect");
+        ? "PASS: every statement this document makes has been answered — the @H row above is which, and the "
+          "residue left over is real and parked (@COLDPARK, and `_park` in the result document)"
+        : "FAIL: a statement this document makes went unanswered — the 0 rows above name which");
 
     free(js);
     /* THE PLATFORM'S OWN LIST, UNDONE — see main.c's teardown: one call, whatever this browser declared. */
