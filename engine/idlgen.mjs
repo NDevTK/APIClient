@@ -374,7 +374,9 @@ const INTERFACES = {
      hash ABSENT while they were installed and passing their spec tests. A false ABSENT is the audit lying in
      the direction that buries the real ones in noise. */
   HTMLAnchorElement:   [...HTML_BASE, "core/html/hyperlink.c"],
-  HTMLScriptElement:   [...HTML_BASE],
+  /* §4.12.1's `async` is installed onto HTMLScriptElement's prototype by its own component, beside the `force
+     async` boolean its steps read — for the same reason HTMLStyleElement's row names html_style_element.c. */
+  HTMLScriptElement:   [...HTML_BASE, "core/html/html_script.c"],
   HTMLImageElement:    [...HTML_BASE],
   /* §4.8.5's navigable members are their own component, for the same reason the hyperlink mixin's are. */
   HTMLIFrameElement:   [...HTML_BASE, "core/html/html_iframe.c"],

@@ -34,6 +34,7 @@
 #include "core/html/declarative_shadow.h"
 #include "core/html/media_element.h"
 #include "core/html/html_style_element.h"
+#include "core/html/html_script.h"   /* §4.12.1.1's `force async`: the stamp every parser makes */
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/mutation_observer.h"
@@ -2670,6 +2671,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* HTML tree construction produces attributes in the NULL namespace; lexbor stamps them with the element's
        namespace instead, and only here — on the tree the parse just built — are the two distinguishable. */
     dom_attr_normalize_parsed(lxb_dom_interface_node(dom));
+    /* HTML §4.12.1.1's `force async` — "set to false by the HTML parser and the XML parser on script elements
+       they insert". A lexbor parse has no per-token hook, so the parser's stamp happens on the tree it built,
+       here, before the document's first script can read `async`. NOT inert: a document parse's scripts run. It
+       is BEFORE the declarative-shadow conversion because that moves a `<template>`'s contents into a shadow
+       root, and a `<script>` among them belongs to the tree it ends up in. */
+    html_script_parsed(ctx, lxb_dom_interface_node(dom), /*inert*/false);
     /* HTML §13.2.6.4.4's template start tag, for the SAME tree and the same reason: `<template
        shadowrootmode>` attaches a shadow root to its parent DURING tree construction, and a lexbor parse has
        no such step — so the parsed tree's declarative shadow roots are attached here, before the document's

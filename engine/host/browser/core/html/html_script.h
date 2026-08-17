@@ -25,19 +25,33 @@
  * published — the same store DOM §4.9's custom element state uses (core/html/custom_elements.c), and for the
  * same two reasons: nothing outside can reach a key the page cannot mint, and the write is an ordinary
  * property write, so the heap COW captures it and one flow's marked script is not another flow's. ABSENT MEANS
- * FALSE, which is §4.12.1's own initial value, so the reader never allocates a wrapper to learn a default —
- * an element the parser never marked is one nothing has written, and node_wrap_peek answers for it without
- * minting anything.
+ * FALSE *for `already started`*, which is §4.12.1's own initial value for that flag, so the reader never
+ * allocates a wrapper to learn a default — an element the parser never marked is one nothing has written, and
+ * node_wrap_peek answers for it without minting anything. The other flag's initial value is the other one, and
+ * its reader answers absent accordingly; see below.
  *
- * WHAT IS NOT HERE. `parser document` (and with it `parser-inserted`, and §4.12.1's `force async`) is the
- * OTHER half of §13.2.6.4.4's stamp, and it has no reader in this engine yet: its readers are the script HTML
- * element post-connection steps' step 1 ("if insertedNode is parser-inserted, then return") and §13.2.6.4.8's
- * `</script>` handling, and both belong to a DOCUMENT parser that prepares its own scripts — which this engine
- * does not have, because its document parse completes before any script runs and its scripts are collected
- * afterwards by core/loader/document_scripts.c. A flag written by nobody and read by nobody is a stub; this
- * file holds exactly the one that all three of its call sites use. */
+ * WHAT IS NOT HERE. `parser document` (and with it `parser-inserted`) is the OTHER half of §13.2.6.4.4's stamp,
+ * and it has no reader in this engine: its readers are the script HTML element post-connection steps' step 1
+ * ("if insertedNode is parser-inserted, then return") and §13.2.6.4.8's `</script>` handling, and both belong to
+ * a DOCUMENT parser that prepares its own scripts — which this engine does not have, because its document parse
+ * completes before any script runs and its scripts are collected afterwards by core/loader/document_scripts.c.
+ * A flag written by nobody and read by nobody is a stub.
+ *
+ * `force async` IS HERE NOW, AND IT IS THE SECOND FLAG BECAUSE IT GAINED THE TWO READERS THE OTHER STILL LACKS.
+ * §4.12.1.1: "A script element has a force async boolean, INITIALLY TRUE. It is set to false by the HTML parser
+ * and the XML parser on script elements they insert, and when the element gets an async content attribute
+ * added." Its readers are §4.12.1's destination branch — "if el has an async attribute or el's force async is
+ * true", the test that puts an element in the `set of scripts that will execute as soon as possible` rather than
+ * in the `list of scripts that will execute in order as soon as possible` — and the `async` IDL getter, whose
+ * step 1 is "if this's force async is true, then return true". Without it `s = createElement('script'); s.async
+ * = false; s.src = u` was an UNORDERED script: the setter is the whole of how a page asks for in-order lazy
+ * loading, and it wrote nothing this engine read, so the two chunks a bundler emits in a fixed order ran in
+ * whichever order the network answered. The flag's initial value is TRUE, so absence cannot mean false the way
+ * `already started`'s does — an element nothing has written is one whose force async is true. */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_HTML_SCRIPT_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_HTML_SCRIPT_H
+
+#include <stdbool.h>
 
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
@@ -48,14 +62,21 @@
 void html_script_init(JSContext *ctx);
 void html_script_free(JSRuntime *rt);
 
-/* HTML §13.2.6.4.4's `script` start tag under §13.2.4.5's INERT scripting mode, applied to the tree a fragment
-   parse produced: every `script` element in `root`'s subtree gets `already started` true.
+/* WHAT A PARSER STAMPS ON THE `script` ELEMENTS IT INSERTS, applied to the tree the parse produced. Two stamps
+   and they are not the same population, which is why one walk takes the mode rather than two walking the tree:
+     ALWAYS — §4.12.1.1's `force async` is "set to false by the HTML parser and the XML parser on script
+   elements they insert". Every parse, document and fragment alike, and it is what makes a parsed `<script>`
+   with no `async` attribute answer `async` FALSE — without it the boolean's initial true would answer true for
+   every element in the page's markup.
+     `inert` — §13.2.6.4.4's `script` start tag under §13.2.4.5's INERT scripting mode, which §13.4 makes the
+   default of every FRAGMENT parse: "set the script element's already started to true (fragment case)". A
+   DOCUMENT parse's scripts run, so it passes false.
    IT RUNS AT THE PARSE BOUNDARY rather than at each start tag because the tree builder is lexbor's and not
    this engine's — the same boundary, and for the same reason, as dom_attr_normalize_parsed's namespace
    correction, which is the statement immediately before it. That substitution is unobservable and is so
-   because of something this engine asserts elsewhere: a fragment parse runs NO page code, so nothing can look
-   at a `script` element between the start tag that created it and the end of the parse that produced it. */
-void html_script_parsed_inert(JSContext *ctx, lxb_dom_node_t *root);
+   because of something this engine asserts elsewhere: a parse runs NO page code, so nothing can look at a
+   `script` element between the start tag that created it and the end of the parse that produced it. */
+void html_script_parsed(JSContext *ctx, lxb_dom_node_t *root, bool inert);
 
 /* HTML §4.12.1 "prepare the script element", reached from DOM §4.2.3's insertion steps. `el` is any inserted
    element; one that is not a `script` returns having done nothing, because the caller is a walk over every
@@ -71,5 +92,24 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el);
    says it survives. `src` and `copy` may be any node kind; a pair that is not two `script` elements is a
    no-op, for the same reason the preparation above tolerates one. */
 void html_script_cloned(JSContext *ctx, lxb_dom_node_t *src, lxb_dom_node_t *copy);
+
+/* HTML §4.12.1's `async` IDL attribute — the getter that reads `force async` and the setter that CLEARS it.
+   It is not a [Reflect]ed boolean and was declared as one, which got both directions wrong at once: the getter
+   answered the attribute's presence where the spec answers `force async || attribute present`, so a freshly
+   created element read `false` while its force async was true; and the setter merely removed an absent
+   attribute, so `s.async = false` — the one line whose entire purpose is to move the element into the ordered
+   ASAP list — changed nothing at all. Handed the prototype by core/html/html_element.c for the same reason
+   §4.2.6's `disabled` is: that file owns the table of which interface a tag wears, this one owns the state the
+   member answers from. */
+void html_script_install(JSContext *ctx, JSValueConst proto);
+
+/* §4.12.1's "when an async attribute is added to a script element el, the user agent must set el's force async
+   to false", as one of §4.9's ATTRIBUTE CHANGE STEPS — registered on core/dom/element.c's element_attr_changed
+   beside media_element_attr_changed, and there rather than in the `async` setter for the same reason: `s.async =
+   true`, `s.setAttribute('async','')` and `s.attributes.async.value = ''` are one write of one attribute, and a
+   setter-side call answers for the first spelling only. `val` is the operation's input, because "ADDED" is a
+   rule about the change: removing the attribute does not set the flag back. */
+void html_script_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
+                              const char *val);
 
 #endif

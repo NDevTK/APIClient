@@ -142,9 +142,15 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
             return ds;
         }
     }
-    /* Each executable script becomes its OWN entry in document order — never concatenated, so its top-level
-       let/const stays script-scoped. An EXTERNAL one takes its position with only a URL; the scheduler parks the
-       flow there and the host's reply fills the slot. A data block (json/importmap) is parsed, never run. */
+    /* Each executable script becomes its OWN entry — never concatenated, so its top-level let/const stays
+       script-scoped. An EXTERNAL one takes its position with only a URL; the scheduler parks the flow there and
+       the host's reply fills the slot. A data block (json/importmap) is parsed, never run.
+       THE OUTER LOOP IS §13.2.7's, AND THE INNER ONE IS THE TREE'S — one pass per rank over the elements in
+       document order, which is a stable sort by rank without a sort: within one of the standard's milestones the
+       document's own order is kept, and a `defer`red or `async` script written between two inline ones lands
+       after both. It is three walks of a `<script>` list and not one because the alternative is a permutation
+       array every reader would then have to apply. */
+    for (int rank = 0; rank < SCRIPT_RUN_RANK_N; rank++)
     for (int i = 0; i < c.n; i++) {
         lxb_dom_element_t *el = c.els[i];
         size_t sl = 0;
@@ -158,6 +164,14 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
            they are facts about this scan and not defaults it picks. An element a SCRIPT inserted goes through
            html_script.c's half of §4.12.1 instead, where neither is true. */
         sc = script_block_schedule(el, ty, /*parser_inserted*/true, /*force_async*/false);
+        if (script_sched_run_rank(sc) != rank) continue;
+        /* …WHICH IS WHY RANK 2 HOLDS ONLY THE SET HERE. The `list of scripts that will execute in order as soon
+           as possible` is reached by an element that is NOT parser-inserted, and every element of this scan is,
+           so a row of that list means the schedule was read off something a parse did not build. */
+        DCHECK(sc != SCRIPT_SCHED_IN_ORDER_ASAP,
+               "a parsed document's script inventory holds a member of the `list of scripts that will execute "
+               "in order as soon as possible` — §4.12.1 reaches that list only for an element with a null "
+               "parser document, and this scan states the parser inserted every element it walks");
         if (has_src) {
             /* §4.12.1's src BRANCH is entered on the ATTRIBUTE, and its second step is `src` being the empty
                string: "queue an element task … to fire an event named error at el, and return". So the element

@@ -1291,7 +1291,7 @@ static void media_load_algorithm(JSContext *ctx, JSValueConst el, JSValueConst s
  * which is the chokepoint below. A PARSER-created one is created with its attributes inside lexbor — HTML
  * §13.2.6.1's "create an element for a token" ends by appending "each attribute in the given token to element"
  * — and lexbor's tree builder has no per-token hook, so this engine takes the parse BOUNDARY, which is the
- * seam dom_attr_normalize_parsed, html_script_parsed_inert and declarative_shadow_parsed already stand at and
+ * seam dom_attr_normalize_parsed, html_script_parsed and declarative_shadow_parsed already stand at and
  * is unobservable for their reason: no page code runs between the start tag that created the element and the
  * end of the parse that produced it. */
 

@@ -52,6 +52,7 @@
 #include "core/html/domparser.h"
 #include "core/html/html_parse.h"      /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/html/html_style_element.h"
+#include "core/html/html_script.h"   /* §4.12.1.1's `force async`: the stamp every parser makes */
 #include "core/html/media_element.h"
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
@@ -200,8 +201,12 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
          So a `<template shadowrootmode>` stays a `<template>`, which core/dom/document.c states by name.
        - §13.2.6.4.4's INERT script marking is NOT run either, and that is the spec from the other direction:
          "already started" is set for the FRAGMENT case, and this is a document parse. A `<script>` moved out of
-         a DOMParser document into a live one therefore runs, exactly as it does in a browser. */
+         a DOMParser document into a live one therefore runs, exactly as it does in a browser. What IS run is
+         §4.12.1.1's other parser stamp, `force async` — that one is unconditional ("set to false by the HTML
+         parser … on script elements they insert") and says nothing about a scripting mode, so the `<script>`
+         that gets moved out carries the same flag it would have carried in any other document. */
     dom_attr_normalize_parsed(root);
+    html_script_parsed(ctx, root, /*inert*/false);
     html_style_element_parsed(ctx, root);
     media_element_parsed(ctx, root);
     return doc;

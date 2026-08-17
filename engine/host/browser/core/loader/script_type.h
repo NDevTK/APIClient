@@ -79,4 +79,25 @@ static inline int script_sched_is_ordered(ScriptSchedule s)
     return s != SCRIPT_SCHED_ASAP;
 }
 
+/* HTML §13.2.7 "The end" — THE ORDER A DOCUMENT RUNS ITS SCRIPT QUEUES IN, as a rank over the schedules above.
+ * §4.12.1 says which queue an element joins; this says when that queue runs, and the two together are the
+ * document's program order. The three ranks are the standard's own steps and not a preference:
+ *   0  PARSE POSITION — an inline classic script ("immediately execute the script element") and the `pending
+ *      parsing-blocking script`, which §13.2.6.4.8 'The "text" insertion mode' blocks the tokenizer for.
+ *   1  "While the list of scripts that will execute when the document has finished parsing is not empty …
+ *      execute the script element given by the first script in the list" — after the parse, before
+ *      DOMContentLoaded.
+ *   2  "Spin the event loop until the set of scripts that will execute as soon as possible AND the list of
+ *      scripts that will execute in order as soon as possible are empty" — before the load event. §13.2.7 waits
+ *      for the two together and orders NEITHER against the other, so they share one rank; telling them apart is
+ *      `sched`'s job and not the rank's, because what differs is whether the element holds a POSITION
+ *      (script_sched_is_ordered) rather than when its queue is due. */
+static inline int script_sched_run_rank(ScriptSchedule s)
+{
+    if (s == SCRIPT_SCHED_WHEN_PARSED)                                return 1;
+    if (s == SCRIPT_SCHED_IN_ORDER_ASAP || s == SCRIPT_SCHED_ASAP)    return 2;
+    return 0;
+}
+#define SCRIPT_RUN_RANK_N 3
+
 #endif

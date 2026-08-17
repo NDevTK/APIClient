@@ -40,6 +40,7 @@
 #include "core/html/hyperlink.h"
 #include "core/html/html_iframe.h"
 #include "core/html/html_style_element.h"
+#include "core/html/html_script.h"
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
 #include "core/dom/slot.h"
@@ -91,11 +92,15 @@ static const ElReflect R_LINK[] = {
     { "integrity", "integrity", REFLECT_STRING }, { "referrerPolicy", "referrerpolicy", REFLECT_STRING },
     { "disabled", "disabled", REFLECT_BOOL },
 };
+/* NO `async` HERE. §4.12.1 defines its getter and setter steps over the element's `force async` boolean and not
+   over the attribute — the getter answers true for an element that has no `async` attribute at all, and the
+   setter's step 1 CLEARS that flag whatever value it is given — so a boolean reflection answers a different
+   question in both directions. core/html/html_script.c owns it, beside the flag. */
 static const ElReflect R_SCRIPT[] = {
     { "src", "src", REFLECT_STRING }, { "type", "type", REFLECT_STRING },
     { "integrity", "integrity", REFLECT_STRING }, { "crossOrigin", "crossorigin", REFLECT_STRING },
     { "referrerPolicy", "referrerpolicy", REFLECT_STRING },
-    { "async", "async", REFLECT_BOOL }, { "defer", "defer", REFLECT_BOOL },
+    { "defer", "defer", REFLECT_BOOL },
     { "noModule", "nomodule", REFLECT_BOOL },
 };
 static const ElReflect R_IMG[] = {
@@ -535,6 +540,10 @@ void html_element_install_protos(JSContext *ctx)
            wears, that one owns the algorithm that decides whether there is a sheet to answer with. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLStyleElement"))
             html_style_element_install(ctx, p);
+        /* §4.12.1's `async`, which reads and writes the element's `force async` boolean rather than mirroring
+           an attribute — handed the prototype for the reason §4.2.6's `disabled` is. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLScriptElement"))
+            html_script_install(ctx, p);
         /* THE `[SameObject] readonly attribute DOMTokenList` REFLECTIONS, each on the interface whose IDL
            declares it. They are not reflections in R_* above because those produce a STRING: `link.rel` is the
            attribute's value and `link.relList` is §7.1's token list over the same attribute, and a page uses

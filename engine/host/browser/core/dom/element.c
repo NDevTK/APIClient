@@ -904,7 +904,7 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
            BEFORE ANY NODE IS PLACED, which is what makes the substitution of one walk for a per-start-tag
            stamp unobservable: this parse runs no page code, so nothing can look at a `script` element between
            the start tag that created it and this statement. */
-        html_script_parsed_inert(ctx, s->frag);
+        html_script_parsed(ctx, s->frag, /*inert*/true);
         /* HTML §13.2.6.4.4's template start tag, over the fragment this parse just built — the same seam the
            document's parse runs it at, and the reason §13.4 takes `allowDeclarativeShadowRoots` at all.
            THE TOPMOST ELEMENT IS NONE. The step's third condition names "the topmost element in the stack of
@@ -1546,16 +1546,22 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
 {
     lxb_dom_element_t *el = element_of_value(this_val);
     JSValue nv, r;
-    size_t vl = 0;
 
     DCHECK(magic >= 0 && magic < g_reflect_n,
            "a reflected property was declared with a magic the registry does not name");
     if (!el) return g_reflect[magic].kind == REFLECT_BOOL ? JS_FALSE : JS_NewStringLen(ctx, "", 0);
     /* §2.2.1 a BOOLEAN reflection is the attribute's PRESENCE, not its value — `<input disabled>` and
-       `<input disabled="false">` are both disabled, and a string reflection here would report "false". */
+       `<input disabled="false">` are both disabled, and a string reflection here would report "false".
+       ASKED OF THE ATTRIBUTE LIST, because `get_attribute` answers NULL for an attribute whose VALUE is absent
+       and that is the usual spelling of every one of these: lexbor's tree construction only calls
+       `attr_set_value_wo_copy` when the token carried a `value_begin`, so `<input disabled>` has
+       `attr->value == NULL` and a presence test written over the returned pointer reported FALSE for exactly
+       the markup the attribute exists to express. It read the one case it must not miss as the absent one, for
+       every boolean reflection in the table above; core/loader/document_scripts.c had to make the same
+       correction for `<script defer>` and says so at its own reader. */
     if (g_reflect[magic].kind == REFLECT_BOOL)
-        return JS_NewBool(ctx, lxb_dom_element_get_attribute(el, (const lxb_char_t *)g_reflect[magic].attr,
-                                                             strlen(g_reflect[magic].attr), &vl) != NULL);
+        return JS_NewBool(ctx, lxb_dom_element_has_attribute(el, (const lxb_char_t *)g_reflect[magic].attr,
+                                                             strlen(g_reflect[magic].attr)));
     nv = JS_NewString(ctx, g_reflect[magic].attr);
     r = js_el_get_attribute(ctx, this_val, 1, (JSValueConst *)&nv, 0);   /* a real string already: the reflected NAME is the engine's */
     JS_FreeValue(ctx, nv);
@@ -2059,6 +2065,10 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        answers for one of them — see core/html/media_element.c. The NEW value goes with it: "(Removing the src
        attribute does not do this)" is a question about the change and not about the element. */
     media_element_attr_changed(rctx, el, ns, local, val);
+    /* HTML §4.12.1's `async` change step: "when an async attribute is added to a script element el, the user
+       agent must set el's force async to false". Here for the reason `src` above is: a content attribute has
+       more than one spelling, and the IDL setter answers for one of them. */
+    html_script_attr_changed(rctx, el, ns, local, val);
 }
 
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)

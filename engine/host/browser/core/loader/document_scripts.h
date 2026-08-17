@@ -29,13 +29,22 @@ ScriptSchedule script_block_schedule(lxb_dom_element_t *el, ScriptType ty, bool 
    bodies), a pure DOM scan that runs NO script. The frontier key the host reads synchronously. */
 unsigned document_bundle_id(lxb_html_document_t *dom);
 
-/* The document's OWN executable scripts IN DOCUMENT ORDER, each its own program body — NEVER concatenated (that
-   would leak per-<script> let/const scope and cannot represent scripts loaded later). Entry i is EITHER inline
-   (bodies[i] is its text, srcs[i] NULL) OR external (srcs[i] is its URL, bodies[i] NULL until the host supplies
-   it). External scripts used to be skipped outright, with a comment calling the fetch "later" — which meant a
-   real page's own bundle, always a <script src>, was never run at all: the engine explored whatever inline glue
-   the page happened to have and reported that as the page's surface. They occupy their POSITION here because
-   classic scripts run in document order, and an external one between two inline ones must not be reordered.
+/* The document's OWN executable scripts IN THE ORDER THE DOCUMENT RUNS THEM, each its own program body — NEVER
+   concatenated (that would leak per-<script> let/const scope and cannot represent scripts loaded later). Entry i
+   is EITHER inline (bodies[i] is its text, srcs[i] NULL) OR external (srcs[i] is its URL, bodies[i] NULL until
+   the host supplies it). External scripts used to be skipped outright, with a comment calling the fetch "later"
+   — which meant a real page's own bundle, always a <script src>, was never run at all: the engine explored
+   whatever inline glue the page happened to have and reported that as the page's surface. They occupy their
+   POSITION here because classic scripts run in that order, and an external one between two inline ones must not
+   be reordered.
+   THE ORDER IS §13.2.7's AND NOT THE TREE'S, and it is stated HERE because every consumer of this table RUNS
+   it and none of them wants document order. It used to be document order with `sched` beside it for the
+   consumer to sort by, and only one consumer ever did: the three hosts hand this table straight to the
+   scheduler, which walks it as a flat sequence — so a `defer`red script ran at its parse position and an
+   `async` external BLOCKED the inline script written after it, on the root document of every page this product
+   analyses. A column three callers must remember to apply is a column two of them will drop (the same drift
+   that left script seeding in one host of three), so the run order is the producer's answer and the schedule
+   stays for the one question the order does not answer — see script_sched_run_rank and script_sched_is_ordered.
    `types[i]` is entry i's HTML §4.12.1 type — CLASSIC or MODULE, never a non-executing one — and it is what
    decides which of §8.1.4.4's two algorithms runs it ("run a classic script", which produces a COMPLETION, vs
    "run a module script", which produces a PROMISE). It is here rather than recomputed at the compile because
@@ -43,7 +52,10 @@ unsigned document_bundle_id(lxb_html_document_t *dom);
    is behind it, and a kind recomputed from the TEXT would be a guess about a fact the DOM already stated.
    `sched[i]` is entry i's §4.12.1 SCHEDULE (script_type.h), here by the same argument and for the ORDER rather
    than the algorithm: a consumer holding only "external" cannot tell a parser-blocking script — which every
-   later script in the document waits for — from an `async` one, which nothing waits for.
+   later script in the document waits for — from an `async` one, which nothing waits for. With the rows already
+   in run order, what it still decides is whether an entry holds a POSITION at all: a member of the ASAP SET has
+   none (§13.2.7 waits for that set only before the load event), so a seam that can express "park on this and
+   run it whenever it arrives" reads `sched` to do so.
    Caller frees via doc_scripts_free. */
 typedef struct { char **bodies; char **srcs; ScriptType *types; ScriptSchedule *sched; int n; } DocScripts;
 DocScripts document_exec_scripts(lxb_html_document_t *dom);
