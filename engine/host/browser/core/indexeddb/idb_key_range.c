@@ -41,8 +41,10 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/indexeddb/idb_key.h"
+#include "core/indexeddb/idb_key_array.h"
 #include "core/indexeddb/idb_key_range.h"
 #include "core/realm.h"
 #include "solver/cow.h"
@@ -67,9 +69,10 @@ static int g_id_upper_bound = -1;
 static int g_id_bound       = -1;
 static int g_id_includes    = -1;
 
-/* WHICH OF THE TWO BOUNDS A MEMBER MEANS. `lowerBound` and `upperBound` are one algorithm with the bounds
-   swapped, and `lower`/`upper` and `lowerOpen`/`upperOpen` are one getter each — so the side is a magic rather
-   than a second copy of a body that could drift from its twin. */
+/* WHICH OF THE TWO BOUNDS A GETTER MEANS. `lower`/`upper` and `lowerOpen`/`upperOpen` are one getter each — so
+   the side is a magic rather than a second copy of a body that could drift from its twin. The two CONSTRUCTION
+   methods that are also one algorithm with the bounds swapped are magic'd by RANGE_M_* below, which numbers the
+   four one-key members rather than the two bounds. */
 enum { IDB_SIDE_LOWER = 0, IDB_SIDE_UPPER };
 
 static IdbRangeData *range_of(JSValueConst v)
@@ -195,70 +198,217 @@ bool idb_key_range_contains(JSContext *ctx, JSValueConst range, JSValueConst key
     return range_contains(ctx, r, key);
 }
 
-/* ---- §4.7's four static construction methods --------------------------------------------------------------- */
+/* ---- §4.7's four static construction methods, and `includes` ----------------------------------------------- */
 
-/* "The only(value) method steps are: let key be the result of converting a value to a key with value. Rethrow
-   any exceptions. If key is 'invalid value' or 'invalid type', throw a 'DataError' DOMException. Create and
-   return a new key range containing only key."
-   §2.9: "A key range containing only key has both lower bound and upper bound EQUAL TO key" — one key on both
-   sides, and both open flags false, which is what makes `only(k).includes(k)` true. */
-static JSValue js_range_only(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* ALL FIVE ARE MACHINES, BECAUSE §7.4 IS ONE. Every one of them begins "let key be the result of converting a
+ * value to a key with <argument>", and where that argument is an Array exotic object the conversion's steps are
+ * the PAGE'S OWN CODE — one `? Get` per element over a structure the page sized and nested. So each member
+ * declares §7.4's stage block (core/indexeddb/idb_key_array.h) and drives one walk.
+ *
+ * FOUR OF THEM SHARE ONE DECLARATION, which is what a magic is for: `only`, `lowerBound`, `upperBound` and
+ * `includes` are one conversion followed by an O(1) tail, and four copies of the same six-stage block would be
+ * four places for §7.4's rest points to drift apart. `bound` has its own, because it converts TWO values and
+ * the ORDER of its two refusals is observable. */
+
+/* WHICH OF THE FOUR ONE-ARGUMENT MEMBERS a shared invocation is. Its own enumeration rather than IDB_SIDE_*,
+   because that one names §2.9's two BOUNDS and two of these members name neither. */
+enum { RANGE_M_ONLY = 0, RANGE_M_LOWER_BOUND, RANGE_M_UPPER_BOUND, RANGE_M_INCLUDES };
+
+#define RG1_STAGES(X) \
+    X(RG1_CONVERT, "Indexed Database §4.7 only / lowerBound / upperBound / includes step 1 (let key be the " \
+                   "result of converting a value to a key with this member's one argument)") \
+    IDB_KEY_ARRAY_ALGO_STAGES(X, RG1_K, "Indexed Database §4.7 only / lowerBound / upperBound / includes step 1") \
+    X(RG1_TAKE,    "Indexed Database §4.7 only / lowerBound / upperBound / includes steps 3-4 — ONE O(1) " \
+                   "engine action: an \"invalid value\" or \"invalid type\" key is a DataError, and otherwise " \
+                   "the member's own answer is built (step 2's rethrow is the conversion's own abrupt " \
+                   "completion and rests nowhere)")
+enum { IDL_STEP_STAGE_BASE(RG1_STAGES) RG1_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RG1_STEPS[] = { RG1_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+#define RGB_STAGES(X) \
+    X(RGB_LOWER, "Indexed Database §4.7 bound step 1 (let lowerKey be the result of converting a value to a " \
+                 "key with lower)") \
+    IDB_KEY_ARRAY_ALGO_STAGES(X, RGB_L, "Indexed Database §4.7 bound step 1") \
+    X(RGB_TOOK_LOWER, "Indexed Database §4.7 bound steps 3-4 — ONE O(1) engine action: an invalid lowerKey is " \
+                      "a DataError, and upper's conversion begins") \
+    IDB_KEY_ARRAY_ALGO_STAGES(X, RGB_U, "Indexed Database §4.7 bound step 4") \
+    X(RGB_TOOK_UPPER, "Indexed Database §4.7 bound step 6 (if upperKey is \"invalid value\" or \"invalid " \
+                      "type\", throw a DataError)") \
+    X(RGB_BUILD, "Indexed Database §4.7 bound steps 7-8 — ONE O(1) engine action beside §2.4's own compare: a " \
+                 "lowerKey greater than upperKey is a DataError, and otherwise the key range is created")
+enum { IDL_STEP_STAGE_BASE(RGB_STAGES) RGB_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RGB_STEPS[] = { RGB_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct { IdbKeyWalk w; } IdbRange1State;
+typedef struct { IdbKeyWalk w; JSValue lo, hi; } IdbRangeBoundState;
+
+static void js_range_one_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    JSValue key;
-
-    (void)this_val; (void)argc; (void)magic;
-    if (idb_key_from_value(ctx, argv[0], &key) < 0) return JS_EXCEPTION;
-    return idb_key_range_new(ctx, JS_DupValue(ctx, key), key, false, false);
+    idb_key_walk_visit(ctx, &((IdbRange1State *)st)->w, v);
 }
 
-/* "The lowerBound(lower, open) method steps ... create and return a new key range with lower bound set to
-   lowerKey, lower open flag set to open, upper bound set to null, and upper open flag set to TRUE" — and the
-   mirror for upperBound, whose LOWER open flag is the one set to true. The flag on the absent side is not
-   cosmetic: §2.9's membership test reads it only when the bound is non-null, and §2.10's cursor iteration
-   compares ranges, so a range that states the standard's value is a range that answers those the same way. */
-static JSValue js_range_one_bound(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+static void js_range_bound_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    JSValue key;
-    bool open;
+    IdbRangeBoundState *s = st;
 
-    (void)this_val;
-    DCHECK(magic == IDB_SIDE_LOWER || magic == IDB_SIDE_UPPER,
-           "an IDBKeyRange bound constructor was declared with a magic naming neither of §2.9's two bounds");
-    if (idb_key_from_value(ctx, argv[0], &key) < 0) return JS_EXCEPTION;
-    /* `optional boolean open = false`: the declaration converted a value the page passed, and an absent
-       argument IS the IDL's default, which is what ToBoolean of an absent one already answers. */
-    open = argc > 1 && JS_ToBool(ctx, argv[1]);
-    if (magic == IDB_SIDE_LOWER)
-        return idb_key_range_new(ctx, key, JS_NULL, open, true);
-    return idb_key_range_new(ctx, JS_NULL, key, true, open);
+    idb_key_walk_visit(ctx, &s->w, v);
+    v->val(ctx, &s->lo);
+    v->val(ctx, &s->hi);
 }
 
-/* "The bound(lower, upper, lowerOpen, upperOpen) method steps are: [convert lower, throw DataError if invalid;
-   convert upper, throw DataError if invalid;] if lowerKey is GREATER THAN upperKey, throw a 'DataError'
-   DOMException; create and return a new key range ..."
+/* "The only(value) method steps are: [convert; rethrow; DataError if invalid;] create and return a new key range
+ *  containing only key."
+ * "The lowerBound(lower, open) method steps are: ... create and return a new key range with lower bound set to
+ *  lowerKey, lower open flag set to open, upper bound set to null, and upper open flag set to TRUE" — and the
+ *  mirror for upperBound, whose LOWER open flag is the one set to true. The flag on the absent side is not
+ *  cosmetic: §2.9's membership test reads it only when the bound is non-null, and §2.10's cursor iteration
+ *  compares ranges, so a range that states the standard's value answers those the same way.
+ * "The includes(key) method steps are: ... return true if k is in this range, and false otherwise."
+ * §2.9: "A key range containing only key has both lower bound and upper bound EQUAL TO key" — one key on both
+ * sides, and both open flags false, which is what makes `only(k).includes(k)` true. */
+static int js_range_one_key(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdbRange1State *s = st;
+    int magic = idl_step_magic(hdr);
+
+    STEP_DISPATCH(RG1_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(RG1_CONVERT);
+        JS_FreeValue(ctx, cb_result);
+        DCHECK(magic >= RANGE_M_ONLY && magic <= RANGE_M_INCLUDES,
+               "an IDBKeyRange one-key member was declared with a magic naming none of §4.7's four");
+        /* `includes` is the only one of the four with a receiver, and Web IDL §3.7.5's brand check is asked
+           before its step 1 — a page tells that TypeError apart from `false`. */
+        if (magic == RANGE_M_INCLUDES && !range_here(ctx, hdr->this_val))
+            return JS_STEP_ABRUPT;
+        idb_key_walk_start(ctx, hdr, &s->w, argv[0], RG1_K_LENGTH, RG1_TAKE);
+        return JS_STEP_YIELD;
+
+    /* STEP 1's conversion, whose six rest points are this member's. Named individually for the reason
+       core/dom/node.c names `clone a node`'s: a stage added to the algorithm does not compile until it has an
+       arm here, where a negation or a partial list would silently route it into a neighbour. */
+    STEP_ARM(RG1_K_LENGTH);
+    STEP_ARM(RG1_K_BEGIN);
+    STEP_ARM(RG1_K_HOP);
+    STEP_ARM(RG1_K_ENTRY);
+    STEP_ARM(RG1_K_SUBKEY);
+    STEP_ARM(RG1_K_LEAVE);
+        return idb_key_walk_run(ctx, hdr, &s->w, cb_result, RG1_K_LENGTH, out_cb, out_argc);
+
+    STEP_ARM(RG1_TAKE);
+    {
+        JSValue key;
+        bool open;
+
+        JS_FreeValue(ctx, cb_result);
+        if (idb_key_walk_take(ctx, &s->w, &key) < 0) return JS_STEP_ABRUPT;   /* STEP 3 */
+        switch (magic) {                                                      /* STEP 4 */
+        case RANGE_M_ONLY:
+            *presult = idb_key_range_new(ctx, JS_DupValue(ctx, key), key, false, false);
+            return JS_STEP_DONE;
+        case RANGE_M_LOWER_BOUND:
+        case RANGE_M_UPPER_BOUND:
+            /* `optional boolean open = false`: the declaration converted a value the page passed, and an absent
+               argument IS the IDL's default, which is what ToBoolean of an absent one already answers. */
+            open = argc > 1 && JS_ToBool(ctx, argv[1]);
+            if (magic == RANGE_M_LOWER_BOUND)
+                *presult = idb_key_range_new(ctx, key, JS_NULL, open, true);
+            else
+                *presult = idb_key_range_new(ctx, JS_NULL, key, true, open);
+            return JS_STEP_DONE;
+        default: {
+            /* STEP 4 is asked of `this` AFTER the conversion, which is where the standard asks it — a fact
+               about the range and not about the operation, so it is read here rather than carried. */
+            IdbRangeData *r = range_here(ctx, hdr->this_val);
+            bool in;
+
+            if (!r) { JS_FreeValue(ctx, key); return JS_STEP_ABRUPT; }
+            in = range_contains(ctx, r, key);
+            JS_FreeValue(ctx, key);
+            *presult = JS_NewBool(ctx, in);
+            return JS_STEP_DONE;
+        }
+        }
+    }
+}
+
+/* "The bound(lower, upper, lowerOpen, upperOpen) method steps are: [convert lower, rethrow, DataError if
+   invalid;] [the same for upper;] if lowerKey is GREATER THAN upperKey, throw a 'DataError' DOMException; create
+   and return a new key range ..."
    THE ORDER IS THE SPEC'S AND IS OBSERVABLE: an invalid lower is reported before an invalid upper is even
    looked at, and the greater-than test runs only once both are keys. */
-static JSValue js_range_bound(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+static int js_range_bound(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                          JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
-    JSValue lo, hi;
-    bool lower_open, upper_open;
+    IdbRangeBoundState *s = st;
 
-    (void)this_val; (void)magic;
-    if (idb_key_from_value(ctx, argv[0], &lo) < 0) return JS_EXCEPTION;
-    if (idb_key_from_value(ctx, argv[1], &hi) < 0) {
-        JS_FreeValue(ctx, lo);
-        return JS_EXCEPTION;
-    }
-    if (idb_key_compare(ctx, lo, hi) > 0) {
-        JS_FreeValue(ctx, lo);
-        JS_FreeValue(ctx, hi);
-        JS_ThrowDOMException(ctx, "DataError", "the lower key of an IDBKeyRange is greater than its upper key");
-        return JS_EXCEPTION;
-    }
-    lower_open = argc > 2 && JS_ToBool(ctx, argv[2]);
-    upper_open = argc > 3 && JS_ToBool(ctx, argv[3]);
-    return idb_key_range_new(ctx, lo, hi, lower_open, upper_open);
+    STEP_DISPATCH(RGB_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(RGB_LOWER);
+        JS_FreeValue(ctx, cb_result);
+        s->lo = JS_UNDEFINED;
+        s->hi = JS_UNDEFINED;
+        idb_key_walk_start(ctx, hdr, &s->w, argv[0], RGB_L_LENGTH, RGB_TOOK_LOWER);
+        return JS_STEP_YIELD;
+
+    STEP_ARM(RGB_L_LENGTH);
+    STEP_ARM(RGB_L_BEGIN);
+    STEP_ARM(RGB_L_HOP);
+    STEP_ARM(RGB_L_ENTRY);
+    STEP_ARM(RGB_L_SUBKEY);
+    STEP_ARM(RGB_L_LEAVE);
+        return idb_key_walk_run(ctx, hdr, &s->w, cb_result, RGB_L_LENGTH, out_cb, out_argc);
+
+    STEP_ARM(RGB_TOOK_LOWER);
+        JS_FreeValue(ctx, cb_result);
+        if (idb_key_walk_take(ctx, &s->w, &s->lo) < 0) return JS_STEP_ABRUPT;   /* STEP 3 */
+        idb_key_walk_start(ctx, hdr, &s->w, argv[1], RGB_U_LENGTH, RGB_TOOK_UPPER);   /* STEP 4 */
+        return JS_STEP_YIELD;
+
+    STEP_ARM(RGB_U_LENGTH);
+    STEP_ARM(RGB_U_BEGIN);
+    STEP_ARM(RGB_U_HOP);
+    STEP_ARM(RGB_U_ENTRY);
+    STEP_ARM(RGB_U_SUBKEY);
+    STEP_ARM(RGB_U_LEAVE);
+        return idb_key_walk_run(ctx, hdr, &s->w, cb_result, RGB_U_LENGTH, out_cb, out_argc);
+
+    STEP_ARM(RGB_TOOK_UPPER);
+        JS_FreeValue(ctx, cb_result);
+        if (idb_key_walk_take(ctx, &s->w, &s->hi) < 0) return JS_STEP_ABRUPT;   /* STEP 6 */
+        STEP_GOTO(hdr->stage, RGB_BUILD, &hdr->get_phase, &hdr->desc_phase, NULL);
+        return JS_STEP_YIELD;
+
+    STEP_ARM(RGB_BUILD);
+        JS_FreeValue(ctx, cb_result);
+        if (idb_key_compare(ctx, s->lo, s->hi) > 0) {                           /* STEP 7 */
+            JS_ThrowDOMException(ctx, "DataError",
+                                 "the lower key of an IDBKeyRange is greater than its upper key");
+            return JS_STEP_ABRUPT;
+        }
+        {                                                                       /* STEP 8 */
+            bool lower_open = argc > 2 && JS_ToBool(ctx, argv[2]);
+            bool upper_open = argc > 3 && JS_ToBool(ctx, argv[3]);
+            JSValue lo = s->lo, hi = s->hi;
+
+            s->lo = JS_UNDEFINED;
+            s->hi = JS_UNDEFINED;
+            *presult = idb_key_range_new(ctx, lo, hi, lower_open, upper_open);
+            return JS_STEP_DONE;
+        }
 }
+
+static const IdlStepDecl RANGE_ONE_KEY_STEP = {
+    /* No release: the walk's level stack is idb_key_walk_visit's, and the teardown discharges that one list. */
+    js_range_one_key, sizeof(IdbRange1State), js_range_one_visit, NULL,
+    "Indexed Database §4.7 IDBKeyRange.only / .lowerBound / .upperBound / .includes", RG1_STEPS
+};
+
+static const IdlStepDecl RANGE_BOUND_STEP = {
+    js_range_bound, sizeof(IdbRangeBoundState), js_range_bound_visit, NULL,
+    "Indexed Database §4.7 IDBKeyRange.bound", RGB_STEPS
+};
 
 /* ---- §4.7's instance members --------------------------------------------------------------------------------- */
 
@@ -288,22 +438,7 @@ static JSValue js_range_open_get(JSContext *ctx, JSValueConst this_val, int magi
     return JS_NewBool(ctx, magic == IDB_SIDE_LOWER ? r->lower_open : r->upper_open);
 }
 
-/* "The includes(key) method steps are: let k be the result of converting a value to a key with key. Rethrow any
-   exceptions. If k is 'invalid value' or 'invalid type', throw a 'DataError' DOMException. Return true if k is
-   in this range, and false otherwise." */
-static JSValue js_range_includes(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    IdbRangeData *r = range_here(ctx, this_val);
-    JSValue key;
-    bool in;
-
-    (void)argc; (void)magic;
-    if (!r) return JS_EXCEPTION;
-    if (idb_key_from_value(ctx, argv[0], &key) < 0) return JS_EXCEPTION;
-    in = range_contains(ctx, r, key);
-    JS_FreeValue(ctx, key);
-    return JS_NewBool(ctx, in);
-}
+/* `includes` is a MACHINE and lives with the four §7.4 conversions above, whose declaration it shares. */
 
 /* ---- the declaration and the per-realm install --------------------------------------------------------------- */
 
@@ -352,13 +487,16 @@ void idb_key_range_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_range_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_range_class, &d) == 0,
           "IDBKeyRange: the class could not be declared");
-    g_id_only        = idl_method_id(ctx, ONE_ANY,    1, js_range_only,      0);
-    g_id_lower_bound = idl_method_id(ctx, ANY_OPEN,   2, js_range_one_bound, IDB_SIDE_LOWER);
+    g_id_only        = idl_method_id_step(ctx, ONE_ANY,    1, NULL, 0, &RANGE_ONE_KEY_STEP, RANGE_M_ONLY);
+    g_id_lower_bound = idl_method_id_step(ctx, ANY_OPEN,   2, NULL, 0, &RANGE_ONE_KEY_STEP,
+                                         RANGE_M_LOWER_BOUND);
     idl_optional_from(1);
-    g_id_upper_bound = idl_method_id(ctx, ANY_OPEN,   2, js_range_one_bound, IDB_SIDE_UPPER);
+    g_id_upper_bound = idl_method_id_step(ctx, ANY_OPEN,   2, NULL, 0, &RANGE_ONE_KEY_STEP,
+                                         RANGE_M_UPPER_BOUND);
     idl_optional_from(1);
-    g_id_bound       = idl_method_id(ctx, BOUND_ARGS, 4, js_range_bound,     0);
+    g_id_bound       = idl_method_id_step(ctx, BOUND_ARGS, 4, NULL, 0, &RANGE_BOUND_STEP, 0);
     idl_optional_from(2);
-    g_id_includes    = idl_method_id(ctx, ONE_ANY,    1, js_range_includes,  0);
+    g_id_includes    = idl_method_id_step(ctx, ONE_ANY,    1, NULL, 0, &RANGE_ONE_KEY_STEP,
+                                         RANGE_M_INCLUDES);
     realm_declare_intrinsic(idb_key_range_install_realm);
 }

@@ -24,6 +24,8 @@
  * with, stored under, or handed back to the page as. Reading one back must not force a branch, which is why
  * the comparison below takes a concolic's EXAMPLE rather than testing what the concolic IS. */
 #include <math.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -52,6 +54,23 @@ static const char *const IDB_TYPE_NAME[] = { "number", "date", "string", "binary
 #define IDB_RANK_N ((int)(sizeof IDB_TYPE_NAME / sizeof IDB_TYPE_NAME[0]))
 
 /* ---- the key record --------------------------------------------------------------------------------------- */
+
+/* THE LENGTH OF ONE OF THIS FILE'S OWN LISTS — an array key's value, which is §2.4's "a list of other keys" and
+   is a plain Array this component built. It runs none of the page's code. */
+static uint32_t idb_key_list_len(JSContext *ctx, JSValueConst list)
+{
+    JSValue len = JS_GetPropertyStr(ctx, list, "length");
+    uint32_t n = 0;
+    int r;
+
+    DCHECK(!JS_IsException(len), "reading the length of an array key's list of subkeys threw — it is a plain "
+                                 "Array this component built and has no getters to run");
+    r = JS_ToUint32(ctx, &n, len);
+    DCHECK(r >= 0, "an array key's list of subkeys had a length that is not a number");
+    (void)r;
+    JS_FreeValue(ctx, len);
+    return n;
+}
 
 /* A NEW KEY. Every constructor goes through it so a key cannot exist with a type this file does not know, and
    `value` is CONSUMED. */
@@ -146,58 +165,19 @@ static IdbKeyResult idb_key_from_buffer_source(JSContext *ctx, JSValueConst inpu
     return IDB_KEY_OK;
 }
 
-/* §7.4's CONCOLIC ARM, which the standard does not have because a browser has no unknown values and this engine
- * does. A page keys its records by what it read from the address, from a message, from a reply — so the value
- * arriving here is routinely one whose DOMAIN is unknown and whose EXAMPLE is a real string or number. §7.4
- * decides the key's TYPE by asking what the value IS, and asking that of a concolic answers "an object", which
- * would make every attacker-derived key a "DataError" and take the whole surface out of reach.
- *
- * So the TYPE is decided from the example — that is what the example is for — and the VALUE the key carries is
- * the CONCOLIC ITSELF wherever §2.4's value for that type is a primitive the concolic can stand in for (number
- * and string). Nothing is de-tainted: the key hands that same value back through §7.3, compares through its
- * example, and reaches a sink carrying the fact that an attacker chose it.
- *
- * A DATE's value is its [[DateValue]] and a BINARY key's is a copied byte sequence, so neither is a place a
- * concolic can ride; those two take the concrete value out of the example, which is the honest limit of a value
- * model in which a Date is a Date. */
-static IdbKeyResult idb_key_from_concolic(JSContext *ctx, JSValueConst input, JSValue *pkey)
+JSValue idb_key_new_array(JSContext *ctx, JSValue keys)
 {
-    JSValue ex = concolic_example(ctx, input);
-    IdbKeyResult r;
-
-    if (JS_IsUndefined(ex)) {
-        JS_FreeValue(ctx, ex);
-        /* TWO STATES WEAR THIS SHAPE and neither is built. A concolic with NO example yet is a value whose
-           §7.4 answer is not decidable at all — it is a key on one arm and a "DataError" on the other, so the
-           step must FORK and explore both, which is the flow the solver owes here. A concolic whose example
-           genuinely IS `undefined` has a decided answer ("invalid type"), and concolic_example reports the two
-           identically, so the fork cannot be written without an accessor that tells them apart. */
-        DFAIL("Indexed Database §7.4 reached a concolic with no EXAMPLE: whether it is a valid key is undecided, "
-              "so the step must FORK a key arm and an invalid arm rather than answer one of them — and "
-              "concolic_example cannot yet distinguish an absent example from an `undefined` one, which is the "
-              "accessor that fork needs first");
-        return IDB_KEY_INVALID_TYPE;
-    }
-    r = idb_key_convert(ctx, ex, pkey);
-    JS_FreeValue(ctx, ex);
-    if (r == IDB_KEY_OK) {
-        int rank = idb_key_rank(ctx, *pkey);
-
-        if (rank == IDB_RANK_NUMBER || rank == IDB_RANK_STRING)
-            JS_SetPropertyStr(ctx, *pkey, IDB_KEY_VALUE, JS_DupValue(ctx, input));
-    }
-    return r;
+    DCHECK(JS_IsArray(keys), "§7.4 step 6's \"a new array key with value keys\" was given something that is not "
+                             "a list of keys — §2.4's value for type array is \"a list of other keys\", and "
+                             "this engine's list is a plain Array");
+    return idb_key_new(ctx, IDB_RANK_ARRAY, keys);
 }
 
-IdbKeyResult idb_key_convert(JSContext *ctx, JSValueConst input, JSValue *pkey)
+/* §7.4's ARMS THAT ARE NOT THE ARRAY ONE, over a value that is not a concolic. Each is decided by asking what
+   the value IS and answers in one O(1) engine action, which is exactly why they are a call and the array arm is
+   a walk. */
+static IdbKeyResult idb_key_concrete_arm(JSContext *ctx, JSValueConst input, JSValue *pkey, JSValue *parray)
 {
-    *pkey = JS_UNDEFINED;
-
-    /* THE CONCOLIC ARM COMES FIRST because a concolic is an OBJECT: every test below would answer "no" for one
-       and it would fall out of the bottom as "invalid type". */
-    if (concolic_is(input))
-        return idb_key_from_concolic(ctx, input, pkey);
-
     /* "If Type(input) is Number: if input is NaN then return 'invalid value'; otherwise return a new key with
        type number and value input." Type(input) is Number and not "is a Number object", so `new Number(1)` is
        NOT a key — which is what a page's `store.get(new Number(1))` must fail on. */
@@ -230,17 +210,97 @@ IdbKeyResult idb_key_convert(JSContext *ctx, JSValueConst input, JSValue *pkey)
     if (JS_IsArrayBuffer(input) || JS_GetTypedArrayType(input) >= 0 || JS_IsDataView(input))
         return idb_key_from_buffer_source(ctx, input, pkey);
     /* "If input is an Array exotic object" — a Proxy is not one, which is why the engine's own test is the
-       right one here and `Array.isArray`'s proxy-piercing behaviour would be the wrong one. */
+       right one here and `Array.isArray`'s proxy-piercing behaviour would be the wrong one. The arm's own steps
+       run the PAGE'S code, so they are not answered here: the array is handed back and core/indexeddb/
+       idb_key_array.h's walk performs them inside whichever member is running. */
     if (JS_IsArray(input)) {
-        DFAIL("Indexed Database §7.4's ARRAY arm is not built. Its steps are ToLength(Get(input, \"length\")), "
-              "then one HasOwnProperty and one Get per element, then a recursive conversion of each — every one "
-              "of which is the PAGE'S code (an index accessor, a length getter), so it is a declared step "
-              "machine carrying §7.4's own `seen` set as a STACK OF CURSORS the way IDL_SEQUENCE_STRING_OR_DICT "
-              "does, and never a C walk. Build it before any member that takes a compound key, and give §7.3 "
-              "and §2.4's array arms their bodies in the same diff");
-        return IDB_KEY_INVALID_TYPE;
+        *parray = JS_DupValue(ctx, input);
+        return IDB_KEY_ARRAY;
     }
     return IDB_KEY_INVALID_TYPE;   /* "Otherwise: return 'invalid type'." */
+}
+
+/* §7.4's CONCOLIC ARM, which the standard does not have because a browser has no unknown values and this engine
+ * does. A page keys its records by what it read from the address, from a message, from a reply — so the value
+ * arriving here is routinely one whose DOMAIN is unknown and whose EXAMPLE is a real string or number. §7.4
+ * decides the key's TYPE by asking what the value IS, and asking that of a concolic answers "an object", which
+ * would make every attacker-derived key a "DataError" and take the whole surface out of reach.
+ *
+ * So the TYPE is decided from the example — that is what the example is for — and the VALUE the key carries is
+ * the CONCOLIC ITSELF wherever §2.4's value for that type is a primitive the concolic can stand in for (number
+ * and string). Nothing is de-tainted: the key hands that same value back through §7.3, compares through its
+ * example, and reaches a sink carrying the fact that an attacker chose it.
+ *
+ * A DATE's value is its [[DateValue]], a BINARY key's is a copied byte sequence and an ARRAY key's is a list of
+ * other keys, so none of the three is a place a concolic can ride; those take the concrete value out of the
+ * example, which is the honest limit of a value model in which a Date is a Date. An array EXAMPLE still yields
+ * a real array key whose SUBKEYS carry whatever concolics its elements were, which is where the taint stays.
+ *
+ * THE UNWRAP IS A LOOP AND NOT A RECURSIVE CALL. It was a call into the entry below, which is a C cycle, and
+ * engine/check_recursion.mjs counts those over the whole program; asking the same question of the example in a
+ * loop says the same thing with no frame. */
+IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *pkey, JSValue *parray)
+{
+    JSValueConst v = input;
+    JSValue held = JS_UNDEFINED;      /* the example standing in for a concolic (owned) */
+    IdbKeyResult res;
+
+    *pkey = JS_UNDEFINED;
+    *parray = JS_UNDEFINED;
+
+    /* THE CONCOLIC ARM COMES FIRST because a concolic is an OBJECT: every test in the arm above would answer
+       "no" for one and it would fall out of the bottom as "invalid type". */
+    while (concolic_is(v)) {
+        JSValue ex = concolic_example(ctx, v);
+
+        if (JS_IsUndefined(ex)) {
+            JS_FreeValue(ctx, ex);
+            JS_FreeValue(ctx, held);
+            /* TWO STATES WEAR THIS SHAPE and neither is built. A concolic with NO example yet is a value whose
+               §7.4 answer is not decidable at all — it is a key on one arm and a "DataError" on the other, so
+               the step must FORK and explore both, which is the flow the solver owes here. A concolic whose
+               example genuinely IS `undefined` has a decided answer ("invalid type"), and concolic_example
+               reports the two identically, so the fork cannot be written without an accessor that tells them
+               apart. */
+            DFAIL("Indexed Database §7.4 reached a concolic with no EXAMPLE: whether it is a valid key is "
+                  "undecided, so the step must FORK a key arm and an invalid arm rather than answer one of "
+                  "them — and concolic_example cannot yet distinguish an absent example from an `undefined` "
+                  "one, which is the accessor that fork needs first");
+            return IDB_KEY_INVALID_TYPE;
+        }
+        JS_FreeValue(ctx, held);
+        held = ex;
+        v = held;
+    }
+    res = idb_key_concrete_arm(ctx, v, pkey, parray);
+    if (res == IDB_KEY_OK && concolic_is(input)) {
+        int rank = idb_key_rank(ctx, *pkey);
+
+        if (rank == IDB_RANK_NUMBER || rank == IDB_RANK_STRING)
+            JS_SetPropertyStr(ctx, *pkey, IDB_KEY_VALUE, JS_DupValue(ctx, input));
+    }
+    JS_FreeValue(ctx, held);
+    return res;
+}
+
+IdbKeyResult idb_key_convert(JSContext *ctx, JSValueConst input, JSValue *pkey)
+{
+    JSValue arr = JS_UNDEFINED;
+    IdbKeyResult r = idb_key_convert_here(ctx, input, pkey, &arr);
+
+    if (r != IDB_KEY_ARRAY)
+        return r;
+    JS_FreeValue(ctx, arr);
+    /* THE C ENTRY REACHED §7.4's ARRAY ARM, whose steps are the page's own code and which therefore exists in
+       exactly one form: the parkable walk in core/indexeddb/idb_key_array.h. There is nothing to fall back to
+       and this is not a fallback — it is the call site that has not been converted yet, named. */
+    DFAIL("Indexed Database §7.4's ARRAY arm reached idb_key_convert's C entry, which has no flow under it to "
+          "run the page's index accessors on. Route this call site through idb_key_array.h's walk the way §4.3's "
+          "cmp and §4.7's IDBKeyRange members do — declare the algorithm's stage block with "
+          "IDB_KEY_ARRAY_ALGO_STAGES, embed an IdbKeyWalk, chain idb_key_walk_visit into the member's visit. The "
+          "sites still standing here are §4.5's `add or put` key argument, §4.5's `get`/`getKey`/`delete`/"
+          "`count` through idb_key_range_from_value, and §7.1's extract-a-key");
+    return IDB_KEY_INVALID_TYPE;
 }
 
 int idb_key_from_value(JSContext *ctx, JSValueConst input, JSValue *pkey)
@@ -252,9 +312,12 @@ int idb_key_from_value(JSContext *ctx, JSValueConst input, JSValue *pkey)
 
 /* ---- §7.3's CONVERT A KEY TO A VALUE ----------------------------------------------------------------------- */
 
-JSValue idb_key_to_value(JSContext *ctx, JSValueConst key)
+/* §7.3's FOUR ARMS THAT ARE NOT THE ARRAY ONE, over a key whose rank the caller has already read. Factored out
+   so that neither the array walk nor the entry below is on a call CYCLE with the other — a leaf both of them
+   reach, rather than an entry the walk calls back into, which engine/check_recursion.mjs would report over the
+   whole program as C recursion whatever its actual depth. */
+static JSValue idb_key_scalar_to_value(JSContext *ctx, int rank, JSValueConst key)
 {
-    int rank = idb_key_rank(ctx, key);
     JSValue v = idb_key_value(ctx, key), out;
 
     switch (rank) {
@@ -295,11 +358,107 @@ JSValue idb_key_to_value(JSContext *ctx, JSValueConst key)
     }
     default:
         JS_FreeValue(ctx, v);
-        DFAIL("Indexed Database §7.3's ARRAY arm is not built, because §7.4's is not: no array key can exist "
-              "for it to convert. Its steps are an Array construction and one recursive conversion plus one "
-              "CreateDataProperty per subkey, and it lands with §7.4's step machine");
+        DFAIL("Indexed Database §7.3's scalar conversion was asked for the ARRAY rank, whose steps build an "
+              "Array and are the walk below — the entry routes the two apart and is the only caller of either");
         return JS_UNDEFINED;
     }
+}
+
+/* §7.3's ARRAY ARM, AS A WALK OVER AN EXPLICIT STACK.
+ *
+ * "Let array be the result of executing the ECMAScript Array constructor with no arguments … let len be value's
+ * size … while index is less than len: let entry be the result of converting a key to a value with value[index];
+ * let status be CreateDataProperty(array, index, entry); assert: status is true … return array."
+ *
+ * NOT C RECURSION, and not as a matter of style: an array key's DEPTH is whatever the page nested, so a C frame
+ * per level is a stack whose height the page picks, and engine/check_recursion.mjs reports one over the whole
+ * program. A level holds exactly what the recursive call would have — the subkey list, the Array being filled,
+ * and ONE cursor into both, because keys[index] becomes array[index].
+ *
+ * IT IS NOT A STEP MACHINE, WHICH IS A STATEMENT ABOUT THESE STEPS AND NOT A CONCESSION. Every one of them is an
+ * engine action over data the ENGINE owns: §7.4 refused anything that was not a key, so an array key's subkeys
+ * are key records this component built, and a fresh Array's CreateDataProperty is an ordinary define. There is
+ * no page code here to give a flow base to, exactly as there is none in the string and byte-sequence
+ * comparisons below. The Array it returns is unreachable until the caller hands it back, so nothing can observe
+ * it half-built. */
+static JSValue idb_array_to_value(JSContext *ctx, JSValueConst key)
+{
+    typedef struct { JSValue keys, out; uint32_t n, i; } Level;
+    Level *st = NULL;
+    int sp = 0, cap = 0;
+    /* THE LIST A LEVEL IS ABOUT TO BE PUSHED FOR — the whole of the descent, and JS_UNDEFINED when there is
+       none, which an array key's value can never be. */
+    JSValue pending = idb_key_value(ctx, key);
+
+    for (;;) {
+        Level *f;
+
+        if (!JS_IsUndefined(pending)) {
+            if (sp == cap) {
+                int want = cap ? cap * 2 : 4;
+                Level *a = realloc(st, sizeof(Level) * (size_t)want);
+
+                CHECK(a != NULL, "IndexedDB: §7.3's array arm could not grow its level stack — the nesting is "
+                                 "the key's own, and a dropped level would hand the page an array with a "
+                                 "subkey missing from it");
+                st = a;
+                cap = want;
+            }
+            f = &st[sp++];
+            f->keys = pending;
+            pending = JS_UNDEFINED;
+            f->out = JS_NewArray(ctx);
+            CHECK(!JS_IsException(f->out), "IndexedDB: §7.3's Array could not be allocated");
+            f->n = idb_key_list_len(ctx, f->keys);
+            f->i = 0;
+            continue;
+        }
+        f = &st[sp - 1];
+        if (f->i < f->n) {
+            JSValue sub = JS_GetPropertyUint32(ctx, f->keys, f->i);
+            int srank = idb_key_rank(ctx, sub);
+
+            /* A SUBKEY THAT IS ITSELF AN ARRAY KEY is the recursive call, which is a descent on the next turn. */
+            if (srank == IDB_RANK_ARRAY) {
+                pending = idb_key_value(ctx, sub);
+                JS_FreeValue(ctx, sub);
+                continue;
+            }
+            {
+                JSValue entry = idb_key_scalar_to_value(ctx, srank, sub);
+
+                JS_FreeValue(ctx, sub);
+                CHECK(JS_DefinePropertyValueUint32(ctx, f->out, f->i, entry, JS_PROP_C_W_E) >= 0,
+                      "IndexedDB: §7.3's CreateDataProperty on its own fresh Array failed");
+            }
+            f->i++;
+            continue;
+        }
+        /* THE LEVEL IS FULL: its Array is this algorithm's answer, or the parent's next entry. */
+        {
+            JSValue done = f->out;
+
+            JS_FreeValue(ctx, f->keys);
+            sp--;
+            if (sp == 0) {
+                free(st);
+                return done;
+            }
+            f = &st[sp - 1];
+            CHECK(JS_DefinePropertyValueUint32(ctx, f->out, f->i, done, JS_PROP_C_W_E) >= 0,
+                  "IndexedDB: §7.3's CreateDataProperty on its own fresh Array failed");
+            f->i++;
+        }
+    }
+}
+
+JSValue idb_key_to_value(JSContext *ctx, JSValueConst key)
+{
+    int rank = idb_key_rank(ctx, key);
+
+    if (rank == IDB_RANK_ARRAY)
+        return idb_array_to_value(ctx, key);
+    return idb_key_scalar_to_value(ctx, rank, key);
 }
 
 /* ---- §2.4's COMPARE TWO KEYS -------------------------------------------------------------------------------- */
@@ -359,20 +518,16 @@ static int idb_binary_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
     return alen < blen ? -1 : 1;
 }
 
-int idb_key_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
+/* §2.4's FOUR ARMS THAT ARE NOT THE ARRAY ONE, over two keys of the same rank. Factored out for the reason
+   §7.3's scalar arms are: it is the leaf both the array walk and the entry reach, so neither is on a call cycle
+   with the other. */
+static int idb_key_scalar_compare(JSContext *ctx, int rank, JSValueConst a, JSValueConst b)
 {
-    int ra = idb_key_rank(ctx, a), rb = idb_key_rank(ctx, b);
-    JSValue ha, hb, va, vb;
+    JSValue ha = idb_key_value(ctx, a), hb = idb_key_value(ctx, b);
+    JSValue va = idb_concrete(ctx, ha), vb = idb_concrete(ctx, hb);
     int r;
 
-    /* "If ta does not equal tb" — the cascade, as the rank the five types are declared in. */
-    if (ra != rb) return ra > rb ? 1 : -1;
-
-    ha = idb_key_value(ctx, a);
-    hb = idb_key_value(ctx, b);
-    va = idb_concrete(ctx, ha);
-    vb = idb_concrete(ctx, hb);
-    switch (ra) {
+    switch (rank) {
     /* "number / date: if va is greater than vb, then return 1; if va is less than vb, then return -1; return
        0." One arm for both, which is the standard's own — a date key's value IS an unrestricted double. */
     case IDB_RANK_NUMBER:
@@ -392,9 +547,9 @@ int idb_key_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
         break;
     default:
         r = 0;
-        DFAIL("Indexed Database §2.4's ARRAY arm is not built, because §7.4's is not: no array key can exist "
-              "for it to order. Its steps are a recursive compare of each subkey up to the shorter list's "
-              "size, then the sizes, and it lands with §7.4's step machine");
+        DFAIL("Indexed Database §2.4's scalar compare was asked for the ARRAY rank, whose steps walk two lists "
+              "of subkeys and are the walk below — the entry routes the two apart and is the only caller of "
+              "either");
         break;
     }
     JS_FreeValue(ctx, va);
@@ -402,4 +557,99 @@ int idb_key_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
     JS_FreeValue(ctx, ha);
     JS_FreeValue(ctx, hb);
     return r;
+}
+
+/* §2.4's ARRAY ARM, AS A WALK OVER AN EXPLICIT STACK.
+ *
+ * "Let length be the lesser of va's size and vb's size. Let i be 0. While i is less than length: let c be the
+ * result of recursively comparing two keys with va[i] and vb[i]; if c is not 0, return c; increase i by 1. If
+ * va's size is greater than vb's size, then return 1. If va's size is less than vb's size, then return -1.
+ * Return 0."
+ *
+ * A LEVEL IS THE RECURSIVE CALL, for §7.3's reason: the depth is the page's, so a C frame per level is a stack
+ * whose height the page picks. The propagation is what the shape has to get right — a non-zero c returns from
+ * EVERY level at once ("if c is not 0, return c"), so a decided answer abandons the whole stack, while a level
+ * that runs out of subkeys with everything equal falls through to the SIZES and only a 0 there pops. */
+static int idb_array_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    typedef struct { JSValue la, lb; uint32_t na, nb, n, i; } Level;
+    Level *st = NULL;
+    int sp = 0, cap = 0, r = 0;
+    JSValue pa = idb_key_value(ctx, a), pb = idb_key_value(ctx, b);   /* the pair a level is pushed for */
+    bool decided = false;
+
+    while (!decided) {
+        Level *f;
+
+        if (!JS_IsUndefined(pa)) {
+            if (sp == cap) {
+                int want = cap ? cap * 2 : 4;
+                Level *g = realloc(st, sizeof(Level) * (size_t)want);
+
+                CHECK(g != NULL, "IndexedDB: §2.4's array arm could not grow its level stack — the nesting is "
+                                 "the keys' own, and a dropped level would order two records by a prefix");
+                st = g;
+                cap = want;
+            }
+            f = &st[sp++];
+            f->la = pa;
+            f->lb = pb;
+            pa = pb = JS_UNDEFINED;
+            f->na = idb_key_list_len(ctx, f->la);
+            f->nb = idb_key_list_len(ctx, f->lb);
+            f->n = f->na < f->nb ? f->na : f->nb;
+            f->i = 0;
+            continue;
+        }
+        f = &st[sp - 1];
+        if (f->i < f->n) {
+            JSValue ka = JS_GetPropertyUint32(ctx, f->la, f->i), kb = JS_GetPropertyUint32(ctx, f->lb, f->i);
+            int rka = idb_key_rank(ctx, ka), rkb = idb_key_rank(ctx, kb);
+
+            f->i++;
+            if (rka != rkb) {
+                r = rka > rkb ? 1 : -1;      /* §2.4's cascade, at the subkey */
+                decided = true;
+            } else if (rka == IDB_RANK_ARRAY) {
+                pa = idb_key_value(ctx, ka);
+                pb = idb_key_value(ctx, kb);
+            } else if ((r = idb_key_scalar_compare(ctx, rka, ka, kb)) != 0) {
+                decided = true;
+            }
+            JS_FreeValue(ctx, ka);
+            JS_FreeValue(ctx, kb);
+            continue;
+        }
+        /* Every subkey up to the shorter list's size compared equal, so the SIZES decide this level. */
+        if (f->na != f->nb) {
+            r = f->na > f->nb ? 1 : -1;
+            decided = true;
+            continue;
+        }
+        JS_FreeValue(ctx, f->la);
+        JS_FreeValue(ctx, f->lb);
+        sp--;
+        if (sp == 0)
+            break;                            /* "return 0" — the two keys are equal */
+    }
+    /* A DECIDED ANSWER ABANDONS EVERY LEVEL, which is what "return c" from inside the recursion means. */
+    while (sp > 0) {
+        JS_FreeValue(ctx, st[sp - 1].la);
+        JS_FreeValue(ctx, st[sp - 1].lb);
+        sp--;
+    }
+    JS_FreeValue(ctx, pa);
+    JS_FreeValue(ctx, pb);
+    free(st);
+    return r;
+}
+
+int idb_key_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
+{
+    int ra = idb_key_rank(ctx, a), rb = idb_key_rank(ctx, b);
+
+    /* "If ta does not equal tb" — the cascade, as the rank the five types are declared in. */
+    if (ra != rb) return ra > rb ? 1 : -1;
+    if (ra == IDB_RANK_ARRAY) return idb_array_compare(ctx, a, b);
+    return idb_key_scalar_compare(ctx, ra, a, b);
 }

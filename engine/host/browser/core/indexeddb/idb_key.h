@@ -12,8 +12,27 @@
  * (§7.1 maps both to `invalid`, §7.4's own array arm maps both to "invalid value"), and the day one does, the
  * distinction is restored in the ANSWER rather than reconstructed by a caller from an exception name.
  *
+ * IDB_KEY_ARRAY IS NOT ONE OF §7.4's ANSWERS — it is this engine's fourth, and it is not a refusal. §7.4's array
+ * arm runs the PAGE'S OWN CODE (an own array index may be an accessor, and step 5.3 is a `? Get`), so it exists
+ * in exactly one form: the parkable walk in core/indexeddb/idb_key_array.h. `idb_key_convert_here` therefore
+ * answers every OTHER arm and hands the array BACK for that walk to perform. Only that function returns it; the
+ * plain-C entry below crashes on it, naming the call site to convert.
+ *
  * *pkey is OWNED on IDB_KEY_OK and JS_UNDEFINED otherwise. */
-typedef enum { IDB_KEY_OK = 0, IDB_KEY_INVALID_VALUE, IDB_KEY_INVALID_TYPE } IdbKeyResult;
+typedef enum { IDB_KEY_OK = 0, IDB_KEY_INVALID_VALUE, IDB_KEY_INVALID_TYPE, IDB_KEY_ARRAY } IdbKeyResult;
+
+/* §7.4's ARMS THAT RUN NONE OF THE PAGE'S CODE — Number, Date, String, a buffer source, this engine's concolic,
+   and "otherwise". Each is one O(1) engine action, which is why they are a call. On IDB_KEY_ARRAY `*parray` is
+   the OWNED Array exotic object whose conversion is the walk's; it is JS_UNDEFINED on every other answer. */
+IdbKeyResult idb_key_convert_here(JSContext *ctx, JSValueConst input, JSValue *pkey, JSValue *parray);
+
+/* §7.4 STEP 6's "a new array key with value keys" — §2.4's value for type array being "a list of other keys",
+   which this engine holds as a plain Array of key records. `keys` is CONSUMED. It is here rather than in the
+   walk because a key record is this file's own shape and there is one constructor for one. */
+JSValue idb_key_new_array(JSContext *ctx, JSValue keys);
+
+/* §7.4 FOR A CALLER WITH NO FLOW UNDER IT. It answers the arms above and CRASHES on an Array, naming the member
+   to route through the walk — there is no second implementation of the array arm for it to fall back to. */
 IdbKeyResult idb_key_convert(JSContext *ctx, JSValueConst input, JSValue *pkey);
 
 /* THE SAME CONVERSION FOLLOWED BY THE STEP EVERY §4 MEMBER THAT TAKES A KEY PERFORMS. §4.3's `cmp`, §4.7's

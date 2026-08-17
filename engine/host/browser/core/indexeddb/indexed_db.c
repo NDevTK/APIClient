@@ -38,8 +38,10 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/indexeddb/idb_key.h"
+#include "core/indexeddb/idb_key_array.h"
 #include "core/indexeddb/idb_open.h"
 #include "core/indexeddb/indexed_db.h"
 #include "core/dom/document.h"
@@ -63,28 +65,105 @@ static bool factory_brand(JSContext *ctx, JSValueConst this_val)
 }
 
 /* "The cmp(first, second) method steps are: let a be the result of converting a value to a key with first.
-   Rethrow any exceptions. If a is 'invalid value' or 'invalid type', throw a 'DataError' DOMException. Let b be
-   [the same for second]. Return the results of comparing two keys with a and b."
-   THE ORDER IS OBSERVABLE: `cmp(undefined, undefined)` reports the FIRST argument's DataError, and a body that
-   converted both before testing either would report the second's. */
-static JSValue js_idb_cmp(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+ * Rethrow any exceptions. If a is 'invalid value' or 'invalid type', throw a 'DataError' DOMException. Let b be
+ * [the same for second]. Return the results of comparing two keys with a and b."
+ *
+ * THE ORDER IS OBSERVABLE: `cmp(undefined, undefined)` reports the FIRST argument's DataError, and a body that
+ * converted both before testing either would report the second's.
+ *
+ * A MACHINE, because §7.4 IS ONE. `cmp([1, 2], [1, 3])` converts two Array exotic objects, and that arm's steps
+ * are the page's own code — one `? Get` per element, on a structure the page sized and nested. So each of this
+ * member's two conversions declares §7.4's stage block and drives one walk, and the SECOND reuses the record the
+ * first left at rest. */
+#define CMP_STAGES(X) \
+    X(CMP_FIRST,  "Indexed Database §4.3 cmp step 1 (let a be the result of converting a value to a key with " \
+                  "first)") \
+    IDB_KEY_ARRAY_ALGO_STAGES(X, CMP_A, "Indexed Database §4.3 cmp step 1") \
+    X(CMP_TOOK_A, "Indexed Database §4.3 cmp steps 3-4 — ONE O(1) engine action: an `a` that is \"invalid " \
+                  "value\" or \"invalid type\" is a DataError, and b's conversion begins (step 2's rethrow is " \
+                  "the conversion's own abrupt completion and rests nowhere)") \
+    IDB_KEY_ARRAY_ALGO_STAGES(X, CMP_B, "Indexed Database §4.3 cmp step 4") \
+    X(CMP_TOOK_B, "Indexed Database §4.3 cmp step 6 (if b is \"invalid value\" or \"invalid type\", throw a " \
+                  "DataError)") \
+    X(CMP_RETURN, "Indexed Database §4.3 cmp step 7 (return the results of comparing two keys with a and b)")
+enum { IDL_STEP_STAGE_BASE(CMP_STAGES) CMP_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CMP_STEPS[] = { CMP_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    IdbKeyWalk w;      /* §7.4 in flight — one record, used for `first` and then for `second` */
+    JSValue    a, b;   /* the two keys (owned) */
+} IdbCmpState;
+
+static void js_idb_cmp_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    JSValue a, b;
+    IdbCmpState *s = st;
+
+    idb_key_walk_visit(ctx, &s->w, v);
+    v->val(ctx, &s->a);
+    v->val(ctx, &s->b);
+}
+
+static int js_idb_cmp(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                      JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdbCmpState *s = st;
     int r;
 
-    (void)argc; (void)magic;
-    if (!factory_brand(ctx, this_val)) return JS_EXCEPTION;
-    if (idb_key_from_value(ctx, argv[0], &a) < 0) return JS_EXCEPTION;
-    if (idb_key_from_value(ctx, argv[1], &b) < 0) {
-        JS_FreeValue(ctx, a);
-        return JS_EXCEPTION;
-    }
-    r = idb_key_compare(ctx, a, b);
-    JS_FreeValue(ctx, a);
-    JS_FreeValue(ctx, b);
-    DCHECK(r >= -1 && r <= 1, "§2.4's compare two keys answered something that is not -1, 0 or 1");
-    return JS_NewInt32(ctx, r);   /* `short cmp(...)` — the three values the algorithm returns */
+    (void)argc;
+    STEP_DISPATCH(CMP_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(CMP_FIRST);
+        JS_FreeValue(ctx, cb_result);
+        s->a = JS_UNDEFINED;
+        s->b = JS_UNDEFINED;
+        if (!factory_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
+        idb_key_walk_start(ctx, hdr, &s->w, argv[0], CMP_A_LENGTH, CMP_TOOK_A);
+        return JS_STEP_YIELD;
+
+    /* STEP 1's conversion, whose six rest points are this member's. Named individually for the reason
+       core/dom/node.c names `clone a node`'s: a stage added to the algorithm does not compile until it has an
+       arm here, where a negation or a partial list would silently route it into a neighbour. */
+    STEP_ARM(CMP_A_LENGTH);
+    STEP_ARM(CMP_A_BEGIN);
+    STEP_ARM(CMP_A_HOP);
+    STEP_ARM(CMP_A_ENTRY);
+    STEP_ARM(CMP_A_SUBKEY);
+    STEP_ARM(CMP_A_LEAVE);
+        return idb_key_walk_run(ctx, hdr, &s->w, cb_result, CMP_A_LENGTH, out_cb, out_argc);
+
+    STEP_ARM(CMP_TOOK_A);
+        JS_FreeValue(ctx, cb_result);
+        if (idb_key_walk_take(ctx, &s->w, &s->a) < 0) return JS_STEP_ABRUPT;   /* STEP 3 */
+        idb_key_walk_start(ctx, hdr, &s->w, argv[1], CMP_B_LENGTH, CMP_TOOK_B);   /* STEP 4 */
+        return JS_STEP_YIELD;
+
+    STEP_ARM(CMP_B_LENGTH);
+    STEP_ARM(CMP_B_BEGIN);
+    STEP_ARM(CMP_B_HOP);
+    STEP_ARM(CMP_B_ENTRY);
+    STEP_ARM(CMP_B_SUBKEY);
+    STEP_ARM(CMP_B_LEAVE);
+        return idb_key_walk_run(ctx, hdr, &s->w, cb_result, CMP_B_LENGTH, out_cb, out_argc);
+
+    STEP_ARM(CMP_TOOK_B);
+        JS_FreeValue(ctx, cb_result);
+        if (idb_key_walk_take(ctx, &s->w, &s->b) < 0) return JS_STEP_ABRUPT;   /* STEP 6 */
+        STEP_GOTO(hdr->stage, CMP_RETURN, &hdr->get_phase, &hdr->desc_phase, NULL);
+        return JS_STEP_YIELD;
+
+    STEP_ARM(CMP_RETURN);
+        JS_FreeValue(ctx, cb_result);
+        r = idb_key_compare(ctx, s->a, s->b);                                  /* STEP 7 */
+        DCHECK(r >= -1 && r <= 1, "§2.4's compare two keys answered something that is not -1, 0 or 1");
+        *presult = JS_NewInt32(ctx, r);   /* `short cmp(...)` — the three values the algorithm returns */
+        return JS_STEP_DONE;
 }
+
+static const IdlStepDecl CMP_STEP = {
+    /* No release: the walk's level stack is idb_key_walk_visit's, and the teardown discharges that one list. */
+    js_idb_cmp, sizeof(IdbCmpState), js_idb_cmp_visit, NULL,
+    "Indexed Database §4.3 IDBFactory.cmp", CMP_STEPS
+};
 
 /* "The open(name, version) method steps are: if version is 0 (zero), throw a TypeError. Let environment be
    this's relevant settings object. Let storageKey be the result of running obtain a storage key given
@@ -183,7 +262,7 @@ void indexed_db_init(JSContext *ctx)
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_factory_class, &d) == 0,
           "IDBFactory: the per-realm prototype slot could not be declared");
     g_obj_slot = realm_value_declare(ctx, "Indexed Database §4.3 the realm's IDBFactory");
-    g_id_cmp = idl_method_id(ctx, CMP_ARGS, 2, js_idb_cmp, 0);
+    g_id_cmp = idl_method_id_step(ctx, CMP_ARGS, 2, NULL, 0, &CMP_STEP, 0);
     /* `open(DOMString name, optional [EnforceRange] unsigned long long version)`, as the composition
        core/streams/readable_stream.c states the same extended attribute with: the DECLARATION performs
        §3.2.7's ToNumber — which is the page's `valueOf` and therefore has to be a request rather than a read
