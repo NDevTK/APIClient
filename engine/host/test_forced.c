@@ -4092,7 +4092,6 @@ int main(int argc, char **argv) {
     form_data_free(ctx);        /* URLSearchParams.prototype */
     response_free(ctx);
     request_free(ctx);   /* Response.prototype — one object, held for the runtime's life */
-    idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     navigable_free(ctx);
     /* navigator (and Permissions §6 + §3.2's store with it), storage_manager and screen are ROWS on
        core/platform.h's release column now, run by the platform_agent_free above. §3.2's store is two live
@@ -4112,13 +4111,19 @@ int main(int argc, char **argv) {
     /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
        these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
     solver_agent_free(ctx);
+    /* AFTER THE FRONTIER, because a flow parked inside an IDL member reads this pool at its teardown — this
+       line was above navigable_free, where the pool was already gone by the time flow_registry_free released
+       the residue. idl_args_free asserts the ordering. */
+    idl_args_free(ctx);   /* the dictionary member atoms the declaration pool interned */
     JS_RunGC(rt);   /* collect flow-local garbage from the runs before teardown */
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
     /* AFTER JS_FreeRuntime, and it is the one teardown line whose ORDER is part of its meaning: what
        this releases is part of a step DEFINITION, which JS_RegisterStepDef borrows and requires to
        outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
-       unfinished machine by the step it rests at. */
+       unfinished machine by the step it rests at. The IDL pool's BLOCKS are the same obligation: each holds
+       the definition the runtime borrowed. */
+    idl_args_pool_free();
     idl_async_iter_free();
     return h_ok ? 0 : 1;
 }

@@ -791,7 +791,6 @@ QJS_EXPORT void qjs_teardown(void)
     form_data_free(g_ctx);        /* URLSearchParams.prototype */
     response_free(g_ctx);
     request_free(g_ctx);   /* Response.prototype — one object, held for the runtime's life */
-    idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
     navigable_free(g_ctx);
     /* navigator (and Permissions §6 + §3.2's store with it), storage_manager and screen are ROWS on
        core/platform.h's release column now, run by the platform_agent_free above. §3.2's store is two live
@@ -813,6 +812,10 @@ QJS_EXPORT void qjs_teardown(void)
     /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
        these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
     solver_agent_free(g_ctx);
+    /* AFTER THE FRONTIER, because a flow parked inside an IDL member reads this pool at its teardown — this
+       line was above navigable_free, where the pool was already gone by the time flow_registry_free released
+       the residue. idl_args_free asserts the ordering. */
+    idl_args_free(g_ctx);   /* the dictionary member atoms the declaration pool interned */
     /* THE WORLD REGISTRY IS NOT NAMED HERE, AND WAS NOT BEING FREED A SECOND TIME BY ACCIDENT EITHER — it was,
        and the redundancy is what made a hand-written list read as correct. flow_registry_free has released it
        since the world namespace came up with the frontier, and says so at its own first line; this call was a
@@ -828,7 +831,9 @@ QJS_EXPORT void qjs_teardown(void)
     /* AFTER JS_FreeRuntime, and it is the one teardown line whose ORDER is part of its meaning: what
        this releases is part of a step DEFINITION, which JS_RegisterStepDef borrows and requires to
        outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
-       unfinished machine by the step it rests at. */
+       unfinished machine by the step it rests at. The IDL pool's BLOCKS are the same obligation: each holds
+       the definition the runtime borrowed. */
+    idl_args_pool_free();
     idl_async_iter_free();
     /* EVERY DOCUMENT OF THIS AGENT, AND THE JOINED ONES FIRST — not for their own sake but for the ARENAS'.
        core/dom/node_heap.h puts every node's storage on the AGENT's heap, and the arenas are destroyed with

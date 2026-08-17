@@ -592,8 +592,14 @@ void idl_args_seal(void);
    REALM, which is the same bug twice. Asked at the install because that is where the member's NAME is. */
 bool idl_declared_before_seal(int stepid);
 
-/* Release what the pool interned — the dictionary member atoms — and the pool's blocks. */
+/* RELEASE, IN TWO HALVES WITH TWO DIFFERENT LIFETIMES — see idl_args.c, where the split is argued.
+   `idl_args_free` gives back what the pool INTERNED (the dictionary member atoms), so it needs a live runtime,
+   and it asserts that no step machine is live: a flow parked inside an IDL member reads this pool at its
+   teardown, so the FRONTIER must be released first.
+   `idl_args_pool_free` gives back the pool's BLOCKS, and each one holds a JSTrampStepDef that JS_RegisterStepDef
+   borrowed and requires to outlive the runtime — so it runs AFTER JS_FreeRuntime, beside idl_async_iter_free. */
 void idl_args_free(JSContext *ctx);
+void idl_args_pool_free(void);
 
 /* A SETTER's body, run once the assigned value has been converted. A setter is delivered differently from a
    method — one value, no argument vector — so it declares separately rather than being squeezed into the

@@ -2880,27 +2880,47 @@ void idl_members_excluded(JSContext *ctx, JSValueConst proto, const char *iface,
 #endif
 }
 
-/* The pool interns one atom per dictionary member, for the runtime's life — release them with it. */
+/* THE POOL IS RELEASED IN TWO HALVES, BECAUSE THE TWO THINGS IT HOLDS HAVE DIFFERENT LIFETIMES and one call
+ * could only ever get one of them right. It was one call, it ran BEFORE the frontier and before the runtime in
+ * two of the three hosts, and both halves were wrong there at once:
+ *
+ *   the ATOMS are the RUNTIME's — JS_FreeAtom needs a live runtime, and JS_FreeRuntime's own atom walk reports
+ *   one still held — so they go back while the runtime lives;
+ *
+ *   the BLOCKS are the RUNTIME's CREDITOR. Each holds the JSTrampStepDef that JS_RegisterStepDef BORROWED
+ *   ("must outlive the runtime — static data, as the engine's own are"): every live machine names it through
+ *   `hdr.def`, tramp_step_state_free_1 reads `def->fini` and `def->visit` through it to tear the machine down,
+ *   and JS_FreeRuntime's [stepleak] census reads `def->steps` and `def->algorithm` to name each machine nobody
+ *   finished. Freeing the blocks first is therefore a use-after-free of the runtime's own table, and it was
+ *   reached the moment the smoke fixture ended with a real parked residue: a flow suspended inside an IDL
+ *   member was released by flow_registry_free with the pool already gone, `idl_args_result` ran through the
+ *   freed definition, and the ONLY thing that said so was the range assert at its first line finding g_n == 0.
+ *   The three hosts disagreed about the order — the WPT runner had solver_agent_free FIRST and was correct by
+ *   accident of position — which is exactly how a hand-copied teardown hides a contract violation.
+ *
+ * The ORDER between them is not prose either: the atom half asserts that no machine is live, so a host that
+ * releases the pool with a flow still parked inside a member aborts AT THE RELEASE naming that, and the block
+ * half asserts the atom half has run. */
 void idl_args_free(JSContext *ctx)
 {
     int i, k;
+
+    /* NO MACHINE MAY BE LIVE WHEN THIS POOL STARTS GOING BACK. Every live step state — an IDL member's or any
+       other — names a definition this pool may own and reads it at its teardown, so "the frontier is gone"
+       (flow_registry_free asserts the same count for the same reason) is the precondition for touching the
+       pool at all, and it is the ONE ordering statement a host has to get right. It is asked of the runtime the
+       POOL's definitions were registered with rather than of the caller's realm: a host that declared no member
+       has no definition anyone can be resting against, and it may not have a realm either. */
+    DCHECK(g_rt == NULL || JS_StepMachineCount(g_rt) == 0,
+           "the IDL member pool was released with STEP MACHINES still live — a flow parked inside an IDL member "
+           "reads this pool at its teardown (its definition through hdr.def, its member through hdr.arg), so the "
+           "pool must go back AFTER the frontier that holds those flows: release solver_agent_free first");
     for (i = 0; i < g_n; i++) {
         for (k = 0; k < idl_member(i)->dict_n; k++)
             JS_FreeAtom(ctx, idl_member(i)->dict_atoms[k]);
         free(idl_member(i)->dict_atoms);
         idl_member(i)->dict_atoms = NULL;
-        /* The declared type list, copied at the declaration and owned for the runtime's life — the third thing
-           this pool allocates per member, and it is freed here beside the other two. */
-        free(idl_member(i)->types);
-        idl_member(i)->types = NULL;
-        /* §3.6 step 14.2's declared defaults — the strings themselves are the declaring component's statics;
-           the array naming them is this pool's, allocated by the first default a member declared. */
-        free(idl_member(i)->arg_dflts);
-        idl_member(i)->arg_dflts = NULL;
-        /* The joined stage labels — the strings themselves are statics belonging to the member and to this
-           file; the array that names them is this pool's. */
-        free((void *)idl_member(i)->steps);
-        idl_member(i)->steps = NULL;
+        idl_member(i)->dict_n = 0;
     }
     /* And the NESTED dictionaries' names, interned once per declaration rather than once per member — the same
        runtime-lifetime atoms, released with the runtime. */
@@ -2912,12 +2932,50 @@ void idl_args_free(JSContext *ctx)
     free(g_dicts);
     g_dicts = NULL;
     g_ndicts = 0;
+    /* AND THE RUNTIME IS DONE WITH THIS POOL, which is the statement the block half rests on. */
+    g_rt = NULL;
+}
+
+/* THE BLOCKS, AFTER JS_FreeRuntime — see above, and idl_async_iter_free, which is released beside this one for
+   exactly the same reason. The member records and their definitions go together because they are allocated
+   together and indexed identically. */
+void idl_args_pool_free(void)
+{
+    int i;
+
+    DCHECK(g_rt == NULL,
+           "the IDL member pool's BLOCKS were released before its atoms were — the atom release is what states "
+           "the runtime is done with this pool, and each block holds a JSTrampStepDef the runtime borrowed and "
+           "requires to outlive it");
+    for (i = 0; i < g_n; i++) {
+        DCHECK(idl_member(i)->dict_atoms == NULL,
+               "an IDL member still holds interned dictionary names at the pool's block release — the atoms are "
+               "the runtime's half and there is no runtime left to give them back to");
+        /* The declared type list, copied at the declaration and owned for the runtime's life — the third thing
+           this pool allocates per member, and it is freed here beside the other two. */
+        free(idl_member(i)->types);
+        idl_member(i)->types = NULL;
+        /* §3.6 step 14.2's declared defaults — the strings themselves are the declaring component's statics;
+           the array naming them is this pool's, allocated by the first default a member declared. */
+        free(idl_member(i)->arg_dflts);
+        idl_member(i)->arg_dflts = NULL;
+        /* The joined stage labels — the strings themselves are statics belonging to the member and to this
+           file; the array that names them is this pool's, and it is part of the BORROWED definition. */
+        free((void *)idl_member(i)->steps);
+        idl_member(i)->steps = NULL;
+    }
     for (i = 0; i < g_nchunks; i++)
         free(g_chunks[i]);
     free(g_chunks);
     g_chunks = NULL;
     g_nchunks = 0;
     g_n = 0;
-    g_rt = NULL;
+    /* THE STEP-ID MAP, which no release had ever named. It is malloc'd and holds no JSValue, so it was
+       invisible to both of JS_FreeRuntime's censuses and visible only to LeakSanitizer — and a next agent in
+       this process would have read the previous one's member indices out of it. */
+    free(g_step2mem);
+    g_step2mem = NULL;
+    g_step2mem_cap = 0;
     g_sealed = false;
+    g_sealed_at = 0;
 }

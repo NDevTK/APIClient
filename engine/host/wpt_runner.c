@@ -1961,6 +1961,8 @@ int main(int argc, char **argv)
        XMLHttpRequest line at all, so §5's ProgressEvent slot Symbol leaked in every file it ran. */
     encoding_free(ctx);
     text_stream_free(ctx);
+    /* AFTER THE FRONTIER (solver_agent_free above), because a flow parked inside an IDL member reads this pool
+       at its teardown — the position this runner already had, and the one idl_args_free now asserts. */
     idl_args_free(ctx);
     /* THE CHILD DOCUMENTS THIS FILE CREATED. A child is a PROCESS: closing its pipes ends its serve loop and
        waitpid reaps it. Without this each file left one zombie per <iframe> and per popup for the whole run —
@@ -1971,7 +1973,9 @@ int main(int argc, char **argv)
     /* AFTER JS_FreeRuntime, and it is the one teardown line whose ORDER is part of its meaning: what
        this releases is part of a step DEFINITION, which JS_RegisterStepDef borrows and requires to
        outlive the runtime — JS_FreeRuntime's own [stepleak] report reads `def->steps` to name each
-       unfinished machine by the step it rests at. */
+       unfinished machine by the step it rests at. The IDL pool's BLOCKS are the same obligation: each holds
+       the definition the runtime borrowed. */
+    idl_args_pool_free();
     idl_async_iter_free();
     return failed ? 1 : 0;
 }

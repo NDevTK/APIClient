@@ -212,7 +212,9 @@ JSValue idl_async_iter_end(JSContext *ctx);
 
 /* RELEASE what the DECLARATIONS allocated — the joined stage-label arrays, one pair per declared interface,
    held for the agent's life because the definitions BORROW them (JS_RegisterStepDef's contract) and freed with
-   it, exactly as idl_args_free releases the pool's own join. The declarations themselves are the AGENT's, so
+   it, exactly as idl_args_pool_free releases the pool's own join — and from the same place in the teardown,
+   AFTER JS_FreeRuntime, which is what that contract asks for. It named idl_args_free, which ran before the
+   runtime and before the frontier: the parity was with a call that was violating the contract. The declarations themselves are the AGENT's, so
    this puts the table back where it was before the first one: a next agent in this process declares again, and
    §2.5.10's end-of-iteration class is re-declared with its runtime rather than kept as an id no live runtime
    has a class for. */
