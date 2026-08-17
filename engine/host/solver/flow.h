@@ -9,7 +9,10 @@
  *
  * The WFQ orders flows by an anytime-bandit priority: accumulated emitted VALUE + a UCB optimism bonus
  * (∝ 1/(1 + service) so a never-run flow is never starved) − CPU aging (a monopolizer that burns CPU without
- * emitting sinks below productive+unrun flows). ORDER-only: it never drops a work item. */
+ * emitting sinks below productive+unrun flows). ORDER-only: it never drops a work item.
+ * THE MONOPOLIZER IS A FORK CHAIN, NOT A FLOW, which is why `cpu` is charged up the fork tree: an arm that burns
+ * the document and departs is one of N names one exploration wears, and billing the name lets the chain age
+ * forever without sinking. See the `cpu`/`born`/`acct` fields and flow.c's FlowAcct. */
 #ifndef ENGINE_HOST_SOLVER_FLOW_H
 #define ENGINE_HOST_SOLVER_FLOW_H
 
@@ -28,6 +31,13 @@
    itself; a job the host TOOK has to carry it too, or a destroyed document's reactions stay queued and run
    against a Document whose browsing context is null. BORROWED: the agent owns its realms. */
 typedef struct { JSContext *ctx; JSJobFunc *fn; int argc; JSValue *argv; int task; } FlowJob;
+
+/* A NODE OF THE FORK TREE, AND THE ONLY THING IN A FLOW THAT OUTLIVES IT. It exists for one sentence: the thread
+   time a DEPARTING flow burned has to reach the flow that FORKED it, because §scheduler prices the aging term
+   against a monopolizer and a fork chain is one monopolizer wearing N names. OPAQUE here on purpose — a rank
+   input has exactly one reader (flow.c's flow_weight), and a field nothing outside can spell is a field no other
+   subsystem can grow a second ranking out of. See flow.c for the refcounting and the charge. */
+typedef struct FlowAcct FlowAcct;
 
 /* WHAT ONE STEP OF A FLOW ANSWERED. OWED is not a third kind of flow — it is the same flow reporting that the
    work it has left belongs to the host, so the scheduler can tell an exhausted frontier from a waiting one
@@ -66,8 +76,24 @@ typedef struct Flow {
        exchange is stated once, at FLOW_AGE_RATE.
        int64 rather than long because `long` is 32 bits in wasm: 2147 seconds of unproductive CPU would overflow
        it, and a NEGATIVE cpu makes the monopolizer the highest-ranked flow in the frontier — the exact failure
-       this term exists to prevent, arriving silently after 36 minutes. */
+       this term exists to prevent, arriving silently after 36 minutes.
+       AND IT IS THE CHAIN'S SERVICE, NOT ONLY THIS FLOW'S OWN, which is the other half of whether the term works
+       and was the other half of why it did not. A flow that DEPARTS hands what it burned to the flow that forked
+       it, because a fork chain is one monopolizer wearing N names: quickjs.c's unknown-length walk forks a "stop
+       at n" arm per position, each arm runs the rest of the document and finishes, and with the charge billed to
+       the arm the seconds went to flows that ceased to exist while the walker was charged for the per-position
+       ask alone. Measured: 22 of 26 probe rows flat at 0 from sample 16 of 113, each waiting on a sibling the
+       family outranked for the whole run. See flow.c's FlowAcct and acct_charge_departed. */
     int64_t cpu;
+    /* WHAT THIS FLOW INHERITED — the value of `cpu` at the instant it was FORKED (0 for a from-baseline flow, and
+       reset to 0 by an emission along with `cpu` itself). It is the ONE thing that keeps the chain's charge exact:
+       what a departing flow owes upward is `cpu - born`, the service it burned BEYOND the prefix its ancestors'
+       own `cpu` already records, so every microsecond of thread time is charged to the chain exactly once. */
+    int64_t born;
+    /* THIS FLOW'S PLACE IN THE FORK TREE — minted with the flow, attached under its parent's by
+       flow_fork_inherit, and refcounted so it outlives the flow whenever something below it can still be
+       charged. It is what makes `cpu` above reachable after this Flow is freed; see flow.c. */
+    FlowAcct *acct;
 
     /* INTERLEAVING STATE — persisted while this flow is PAUSED so the scheduler can run another flow and come
        back. A flow is preempted mid-execution (cooperative quantum) and resumed byte-identically; its COW
@@ -332,7 +358,8 @@ void  flow_credit_emit(double v);   /* a NEW @H/@S from the running flow: raise 
 /* CHARGE THE RUNNING FLOW FOR THE THREAD TIME A STEP JUST BURNED, in MICROSECONDS — the same currency as the
    reward above, which is the only reason the aging term can ever outweigh it. Charged AFTER the step, because
    the quantity is not known before it, and by the scheduler alone (it is the only caller that holds both ends
-   of the interval). Never a step count: see the `cpu` field. */
+   of the interval). Never a step count: see the `cpu` field. NOT the only charge on it — a flow that LEAVES the
+   frontier hands what it burned to the flow that forked it, which is what makes the term price a fork CHAIN. */
 void  flow_age_running(int64_t us);
 
 /* THE FORKED SIBLING TAKES OVER ITS PARENT'S ACCOUNT — both terms of the rank, at the instant of the branch.
@@ -342,7 +369,11 @@ void  flow_age_running(int64_t us);
    sibling then outranked every flow that had ever had a turn, so the frontier could only be entered and never
    drained. Called by the fork and by nothing else; a from-baseline flow (the first flow, a candidate session,
    a cold resume) keeps the zeros, which is what makes ITS bonus mean what it says. Asserts that a fork is
-   RANK-NEUTRAL — see the reasoning at the definition. */
+   RANK-NEUTRAL — see the reasoning at the definition.
+   IT ALSO RECORDS THE FORK EDGE, and the two halves are one statement. Inheriting says where the arm ENTERS the
+   queue; the edge says where the thread time it goes on to burn ENDS UP, and for an arm that runs the rest of the
+   document and finishes the answer used to be nowhere. A fork chain is charged as one monopolizer because it
+   enters as one flow's continuation. */
 void  flow_fork_inherit(Flow *sib, const Flow *parent);
 
 /* RELEASE A FLOW THE SCHEDULER IS NOT SWITCHED INTO — the ONE teardown for a member of the frontier, and the
