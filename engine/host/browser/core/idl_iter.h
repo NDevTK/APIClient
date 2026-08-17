@@ -1,4 +1,4 @@
-/* DRIVING AN ES ITERABLE AS A SEQUENCE OF REQUESTS — Web IDL §3.2.20's `sequence<T>` conversion. See idl_iter.c. */
+/* DRIVING AN ES ITERABLE AS A SEQUENCE OF REQUESTS — Web IDL §3.2.21's `sequence<T>` conversion. See idl_iter.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_IDL_ITER_H
 #define ENGINE_HOST_BROWSER_CORE_IDL_ITER_H
 #include <stdbool.h>
@@ -49,10 +49,10 @@ void iter_cursor_release(JSContext *ctx, IterCursor *c);
 int  iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst src,
                      JSValue in, JSValue **out_cb, int *out_argc);
 
-/* ECMAScript's GetIteratorFromMethod — the entry Web IDL §3.2.25 step 12.2 reaches this protocol through, and
+/* ECMAScript's GetIteratorFromMethod — the entry Web IDL §3.2.25 step 11.2 reaches this protocol through, and
    a SECOND entry rather than a flag on the first, because the two differ in who performed the @@iterator read.
    A union whose member types include a sequence chooses its arm with ? GetMethod(V, %Symbol.iterator%) and
-   then hands §3.2.20's "create a sequence from an iterable" THAT method. Reading @@iterator again here would be
+   then hands §3.2.21.1's "create a sequence from an iterable" THAT method. Reading @@iterator again here would be
    a second [[Get]] the page can SEE — a Proxy `get` trap counts them, and an accessor may answer a different
    function the second time, so the sequence would be built by an iterator the union never inspected. The cursor
    therefore starts at the CALL of the method it is planted with.
@@ -61,11 +61,11 @@ int  iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst s
    asserts the decision rather than repeating it. */
 void iter_cursor_init_from_method(JSContext *ctx, IterCursor *c, JSValue method);
 
-/* WEB IDL §3.2.21's `record<K, V>` CONVERSION, as the same shape of cursor. It is [[OwnPropertyKeys]] followed
+/* WEB IDL §3.2.23's `record<K, V>` CONVERSION, as the same shape of cursor. It is [[OwnPropertyKeys]] followed
    by a [[GetOwnProperty]] and a [[Get]] per key — on a Proxy those are the page's `ownKeys`, `getOwnPropertyDescriptor`
    and `get` traps, so every one of them is a request. Shared for the same reason the iterable cursor is:
    `new Headers({a:1})` and `new URLSearchParams({a:1})` are one algorithm.
-   `key_ok` runs on the key BEFORE the value's [[Get]] is issued, because §3.2.21 step 5.2 converts the key
+   `key_ok` runs on the key BEFORE the value's [[Get]] is issued, because §3.2.23 step 4.2.1 converts the key
    first and a record of {a:"b", "\uFFFF":"d"} must therefore perform five operations and not six. It runs none
    of the page's code (the key is already a String or a Symbol); return -1 with a throw live to stop. */
 typedef struct {

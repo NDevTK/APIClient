@@ -744,7 +744,7 @@ static int ops_stage_enter(JSContext *ctx, JSObsState *s, JSValue *pcb, JSValue 
 
     if (op == OP_WHEN) {
         /* `when(DOMString type, optional ObservableEventListenerOptions options = {})`. Both members are read
-           with [[Get]] in Web IDL §3.2.18's LEXICOGRAPHIC order — capture, then passive — and `passive` has NO
+           with [[Get]] in Web IDL §3.2.17's LEXICOGRAPHIC order — capture, then passive — and `passive` has NO
            default, so its ABSENCE is a third state the listener record must carry. */
         static const char *const MEMBERS[2] = { "capture", "passive" };
         JSValueConst options = step_arg(&s->hdr, 1);
@@ -800,7 +800,7 @@ static int ops_stage_enter(JSContext *ctx, JSObsState *s, JSValue *pcb, JSValue 
 
     if (op == OP_INSPECT) {
         /* `optional ObservableInspectorUnion inspectorUnion = {}`: a callable IS the next handler; an object
-           is an ObservableInspector whose five members Web IDL §3.2.18 reads in LEXICOGRAPHIC order. */
+           is an ObservableInspector whose five members Web IDL §3.2.17 reads in LEXICOGRAPHIC order. */
         static const char *const MEMBERS[5] = { "abort", "complete", "error", "next", "subscribe" };
         JSValueConst u = step_arg(&s->hdr, 0);
 

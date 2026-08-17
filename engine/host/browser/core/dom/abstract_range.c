@@ -212,7 +212,7 @@ static JSValue js_static_range_ctor(JSContext *ctx, JSValueConst this_val, int a
     return obj;
 }
 
-/* §5.4's `StaticRangeInit`, in LEXICOGRAPHIC order — §3.2.18 reads a dictionary's members that way and the page
+/* §5.4's `StaticRangeInit`, in LEXICOGRAPHIC order — Web IDL §3.2.17 reads a dictionary's members that way and the page
    observes which getter runs first. All four are `required`, which is part of the type. */
 static const IdlDictMember STATIC_RANGE_INIT[] = {
     { "endContainer",   IDL_INTERFACE,      true },

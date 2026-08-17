@@ -1769,7 +1769,7 @@ static const JSTrampStepDef js_byobreq_defs[2] = { BQ_DEF(BQ_RESPOND), BQ_DEF(BQ
 #define BR_STAGES(X) \
     X(BR_START, "Streams §4.5 read(view, options) — Web IDL §3.7.5's brand and §3.2.25's ArrayBufferView, " \
                 "before the dictionary is read") \
-    X(BR_MIN, "Web IDL §3.2.18 (ReadableStreamBYOBReaderReadOptions[\"min\"] — the [[Get]] is the page's code)") \
+    X(BR_MIN, "Web IDL §3.2.17 (ReadableStreamBYOBReaderReadOptions[\"min\"] — the [[Get]] is the page's code)") \
     X(BR_MINNUM, "Web IDL §3.2.4.8 ([EnforceRange] unsigned long long min — ToNumber is the page's code)") \
     X(BR_INTO, "Streams §4.5 read() steps 1-11 and §4.9.5's ReadableByteStreamControllerPullInto") \
     X(BR_EMPTYVIEW, "Streams §4.9.5 ReadableByteStreamControllerPullInto's closed branch (constructing the " \
@@ -1877,7 +1877,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     }
 
     if (s->hdr.stage == BR_MIN) {
-        /* §3.2.18's dictionary conversion, which is a [[Get]] of `min` and then §3.2.4.8's coercion — both the
+        /* Web IDL §3.2.17's dictionary conversion, which is a [[Get]] of `min` and then §3.2.4.8's coercion — both the
            page's code, and both BEFORE §4.5's own steps 1-8. */
         if (JS_IsUndefined(opts) || JS_IsNull(opts)) {
             STEP_GOTO(s->hdr.stage, BR_INTO, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);

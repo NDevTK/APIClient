@@ -131,7 +131,7 @@ static JSValue js_request_animation_frame(JSContext *ctx, JSValueConst this_val,
            "requestAnimationFrame reached its body with no callback — §3.6 step 5 throws for a call short of "
            "a member's REQUIRED arguments, and that throw is the declaration's");
     DCHECK(JS_IsFunction(ctx, argv[0]),
-           "requestAnimationFrame's callback reached the body uncoerced — §3.2.22's brand check belongs to "
+           "requestAnimationFrame's callback reached the body uncoerced — Web IDL §3.2.19's brand check belongs to "
            "the declaration (IDL_CALLBACK), and a body that re-tests it is a second answer to one question");
     st = af_store(ctx);
     nv = JS_GetProperty(ctx, st, g_atom_next);

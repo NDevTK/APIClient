@@ -711,7 +711,7 @@ static const IdlStepDecl js_blob_ctor_decl = {
 /* ---- install ---------------------------------------------------------------------------------------------- */
 
 static const char *const BLOB_ENDINGS[] = { "transparent", "native", NULL };
-/* LEXICOGRAPHIC, because §3.2.18 reads a dictionary's members in that order and not in the order the IDL writes
+/* LEXICOGRAPHIC, because Web IDL §3.2.17 reads a dictionary's members in that order and not in the order the IDL writes
    them — `new Blob([], {get endings(){…}, get type(){…}})` observes which getter runs first, and BlobPropertyBag
    declares `type` before `endings`. The declaration machinery asserts the order rather than trusting it. */
 static const IdlDictMember BLOB_OPTIONS[] = {
@@ -719,7 +719,7 @@ static const IdlDictMember BLOB_OPTIONS[] = {
     { "type",    IDL_DOMSTRING },
 };
 
-/* §4's `dictionary FilePropertyBag : BlobPropertyBag`. §3.2.18 reads the INHERITED members first — endings and
+/* §4's `dictionary FilePropertyBag : BlobPropertyBag`. Web IDL §3.2.17 reads the INHERITED members first — endings and
    type, sorted among themselves — and only then the derived dictionary's own, which is why `lastModified` comes
    last despite sorting before `type`. The level is what states that. */
 static const IdlDictMember FILE_OPTIONS[] = {

@@ -927,7 +927,7 @@ static int js_mo_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         return JS_ThrowTypeError(ctx, "MutationObserver requires a callback"), -1;
     DCHECK(JS_IsFunction(ctx, argv[0]),
            "MutationObserver's callback reached the body unconverted — §4.3.1 declares it a MutationCallback, "
-           "and Web IDL §3.2.22's brand test is what makes a non-callable a TypeError before step 1");
+           "and Web IDL §3.2.19's brand test is what makes a non-callable a TypeError before step 1");
     proto = JS_GetClassProto(ctx, g_mo_class);
     DCHECK(!JS_IsNull(proto), "a MutationObserver was constructed in a realm that never ran its install");
     obj = JS_NewObjectProtoClass(ctx, proto, g_mo_class);

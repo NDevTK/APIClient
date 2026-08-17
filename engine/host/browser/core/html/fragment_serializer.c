@@ -330,7 +330,7 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             JSValueConst options = argc > 0 ? argv[0] : JS_UNDEFINED;
 
             /* Both of §8.5's members, as the declaration converted them: the iterator protocol behind
-               `shadowRoots` ran during the DICTIONARY's conversion, in the order §3.2.18 reads it, and what is
+               `shadowRoots` ran during the DICTIONARY's conversion, in the order Web IDL §3.2.17 reads it, and what is
                here is its result. */
             s->shadow_roots = idl_dict_get(ctx, options, "shadowRoots");
             s->serializable_shadow_roots = idl_dict_bool(ctx, options, "serializableShadowRoots");
@@ -484,10 +484,10 @@ const IdlStepDecl *fragment_serializer_decl(void)
 
 /* ---- declaration and installation ------------------------------------------------------------------------ */
 
-/* §8.5's `dictionary GetHTMLOptions`. Web IDL §3.2.18 reads a dictionary's members LEXICOGRAPHICALLY, which
+/* §8.5's `dictionary GetHTMLOptions`. Web IDL §3.2.17 reads a dictionary's members LEXICOGRAPHICALLY, which
    for these two is also their declaration order. `shadowRoots` is `sequence<ShadowRoot>`, and it is the
    DECLARATION that runs §3.2.21's iterator protocol over it — the page's iterator, its `next`, and every
-   `done`/`value` read park this machine on the element they are on, in the order §3.2.18 states, which a body
+   `done`/`value` read park this machine on the element they are on, in the order Web IDL §3.2.17 states, which a body
    walking the list afterwards could not reproduce. */
 static const IdlDictMember GET_HTML_OPTIONS[] = {
     { "serializableShadowRoots", IDL_BOOLEAN,             false, NULL, 0 },

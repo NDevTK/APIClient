@@ -144,7 +144,7 @@ int iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst sr
 
 
 
-/* ---- §3.2.21's record<K, V> ------------------------------------------------------------------------------ */
+/* ---- §3.2.23's record<K, V> ------------------------------------------------------------------------------ */
 
 enum { RC_KEYS_ASKED = 0, RC_DESC_ASKED, RC_VALUE_ASKED, RC_NEXT_KEY };
 

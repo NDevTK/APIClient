@@ -3583,7 +3583,7 @@ JSValue readable_reader_closed(JSContext *ctx, JSValueConst reader)
     X(RSC_PROTO, "Web IDL §3.7.1 (Get(newTarget, \"prototype\") — what makes " \
                  "`class S extends ReadableStream {}` produce an S)") \
     X(RSC_READ, "Streams §4.2 step 2 (converting underlyingSource to an UnderlyingSource: one [[Get]] per " \
-                "member, in the order Web IDL §3.2.18 reads them)") \
+                "member, in the order Web IDL §3.2.17 reads them)") \
     X(RSC_ALLOC, "Web IDL §3.2.4.8 (UnderlyingSource[\"autoAllocateChunkSize\"] is [EnforceRange] unsigned long " \
                  "long, so its ToNumber runs BEFORE `cancel` is even read)") \
     X(RSC_TYPE, "Streams §4.2 steps 4-5 (underlyingSourceDict[\"type\"]: \"bytes\" picks §4.7's byte " \
@@ -3692,7 +3692,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             if (r < 0) return -1;
             cb_result = JS_UNDEFINED;
             s->member++;
-            /* §3.2.18 converts each member AS IT IS READ, and this one's conversion is ToNumber — the page's
+            /* Web IDL §3.2.17 converts each member AS IT IS READ, and this one's conversion is ToNumber — the page's
                `valueOf`, running before `cancel` is even read. */
             if (s->member == SRC_CANCEL && !JS_IsUndefined(s->src[SRC_CHUNKSIZE]))
                 STEP_GOTO(hdr->stage, RSC_ALLOC, &s->w.phase, &hdr->get_phase, NULL);

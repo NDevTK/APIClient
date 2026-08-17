@@ -214,7 +214,7 @@ static JSValue js_dr_from_rect(JSContext *ctx, JSValueConst this_val, int argc, 
                     dr_value(ctx, idl_dict_get(ctx, init, "height")));
 }
 
-/* §3's `DOMRectInit`, in LEXICOGRAPHIC order — Web IDL §3.2.18 reads a dictionary's members that way and a page
+/* §3's `DOMRectInit`, in LEXICOGRAPHIC order — Web IDL §3.2.17 reads a dictionary's members that way and a page
    with getters on the initialiser observes which one runs first. None is `required`; each carries `= 0`, which
    dr_value applies for the reason stated there. */
 static const IdlDictMember DOM_RECT_INIT[] = {

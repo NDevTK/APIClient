@@ -110,7 +110,7 @@ bool mouse_event_is(JSContext *ctx, JSValueConst v)
     return ok;
 }
 
-/* `short button` — §3.2.5's conversion, whose FIRST half the declaration already performed. Every integer type
+/* `short button` — Web IDL §3.2.4.3's conversion, whose FIRST half the declaration already performed. Every integer type
    in Web IDL is the same arithmetic modulo 2^width; `short` and `unsigned short` are one width and differ only
    in the final fold into the signed range, and the pool declares no `short`, so the member is declared with the
    width it has and folded here. The DCHECK is the contract that makes that exact: what arrives must already be
@@ -118,7 +118,7 @@ bool mouse_event_is(JSContext *ctx, JSValueConst v)
 static int32_t md_button_fold(uint32_t u)
 {
     DCHECK(u <= 0xFFFFu, "`button` reached its fold outside the 16-bit range the declared type produces — the "
-                         "modulo is the declaration's half of §3.2.5 and this is the signed fold that completes "
+                         "modulo is the declaration's half of Web IDL §3.2.4.3 and this is the signed fold that completes "
                          "it");
     return u >= 0x8000u ? (int32_t)u - 0x10000 : (int32_t)u;
 }
@@ -303,7 +303,7 @@ static JSValue js_md_get_modifier_state(JSContext *ctx, JSValueConst this_val, i
  * were, which is what an argument list that does not name them means.
  *
  * `short buttonArg` is declared IDL_UNSIGNED_SHORT and folded, for the reason md_button_fold gives: the pool
- * declares no `short`, and §3.2.5's two halves are the modulo (the declaration's) and the signed fold (this
+ * declares no `short`, and Web IDL §3.2.4.3's two halves are the modulo (the declaration's) and the signed fold (this
  * file's), so the member is declared with the WIDTH it has. */
 static const IdlArgType MD_INIT_MOUSE_ARGS[15] = {
     IDL_DOMSTRING, IDL_BOOLEAN, IDL_BOOLEAN, IDL_ANY /* Window? — ui_event_view_of */, IDL_LONG,
@@ -371,7 +371,7 @@ static JSValue js_md_init_mouse_event(JSContext *ctx, JSValueConst this_val, int
 /* ---- the constructor ----------------------------------------------------------------------------------------
  *
  * `constructor(DOMString type, optional MouseEventInit eventInitDict = {})`. MouseEventInit inherits
- * EventModifierInit inherits UIEventInit inherits EventInit, and §3.2.18 reads the INHERITED members first and
+ * EventModifierInit inherits UIEventInit inherits EventInit, and Web IDL §3.2.17 reads the INHERITED members first and
  * each dictionary's own lexicographically among THEMSELVES — which is the order this list is in, and the order
  * a page pins by throwing from one member's getter. `button` sorts before `cancelable` and `altKey` before
  * `bubbles`, so a single sorted list would read a derived dictionary's members before its base's: THE LEVEL is

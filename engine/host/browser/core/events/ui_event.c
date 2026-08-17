@@ -141,7 +141,7 @@ uint32_t ui_event_dict_u32(JSContext *ctx, JSValueConst init, const char *name)
     return n;
 }
 
-/* `Window?` — Web IDL §3.2.16 over the `view` member and over every legacy initializer's `viewArg`. null and
+/* `Window?` — Web IDL §3.2.15 over the `view` member and over every legacy initializer's `viewArg`. null and
    undefined are the IDL null; a Window (which in this engine is the realm's global, and is also what `window`
    hands a page) crosses as itself; anything else matches the type not at all, which is Web IDL's own TypeError
    and not a rule this file invents. Answers JS_NULL / an owned dup, or JS_EXCEPTION with the throw live. */
@@ -235,7 +235,7 @@ JSValue ui_event_new(JSContext *ctx)
     if (JS_IsException(type))
         return type;
     /* DOM §2.5: creating an event initializes every attribute to its UN-INITIALIZED value and isTrusted to
-       true. §3.2.18 makes every member of an ABSENT dictionary absent, and each of this interface's members
+       true. Web IDL §3.2.17 makes every member of an ABSENT dictionary absent, and each of this interface's members
        defaults to exactly its un-initialized value — so there is one construction path and no second table of
        defaults to disagree with the first. */
     ev = ui_event_new_derived(ctx, ui_event_proto(ctx), type, JS_UNDEFINED, /*trusted*/ true);

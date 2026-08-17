@@ -216,7 +216,7 @@ static JSValue signal_new(JSContext *ctx, JSValue aborted, JSValue reason)
            a signal minted before it exists would have none of them.
            IT WEARS THE CLASS, and that is what makes `AbortSignal` a DECLARABLE type. This was a plain
            JS_NewObjectProto, so the only brand an AbortSignal had was its private slot record — which a body
-           can test and a DECLARATION cannot, since Web IDL's §3.2.16 conversion in core/idl_args.c compares
+           can test and a DECLARATION cannot, since Web IDL's §3.2.15 conversion in core/idl_args.c compares
            class ids. HTML §7.2.6.10.1's `required AbortSignal signal` is a declared dictionary member, so
            without this the type would have had to be re-stated as a hand-written check in NavigateEvent's
            constructor — the exact duplication a declared type exists to remove. The class already existed for
@@ -791,7 +791,7 @@ static JSValue js_sig_static_abort(JSContext *ctx, JSValueConst this_val, int ar
    is its own stage. It was folded into the same stage as the build, which is a rest point inside the page's
    code sharing a number with one after it. */
 #define TIMEOUT_STAGES(X) \
-    X(TIMEOUT_COERCE, "Web IDL §3.2.7 [EnforceRange] unsigned long long (converting `milliseconds`, which runs " \
+    X(TIMEOUT_COERCE, "Web IDL §3.2.4.8 [EnforceRange] unsigned long long (converting `milliseconds`, which runs " \
                       "the page's valueOf)") \
     X(TIMEOUT_BUILD,  "DOM §3.2 AbortSignal.timeout steps 1-4 (a new AbortSignal, its aborted state and its " \
                       "TimeoutError reason)")

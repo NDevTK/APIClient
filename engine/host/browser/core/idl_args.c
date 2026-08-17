@@ -48,7 +48,7 @@
  * WITHOUT [Clamp]: a non-finite value (NaN, ±∞) and a zero are +0; otherwise sign(x)·floor(|x|) taken modulo
  * 2^width, then folded into range if the type is signed. `fmod` is exact for doubles, and above 2^53 a double is
  * already a multiple of a power of two, so the modulo is exact at 64 bits too.
- * WITH [Clamp] (§3.2.4.2): NaN is +0, the value is clamped to the type's range, and then rounded to the NEAREST
+ * WITH [Clamp] (§3.2.4.9): NaN is +0, the value is clamped to the type's range, and then rounded to the NEAREST
  * integer choosing the EVEN one at a half — which is `nearbyint` under the default rounding mode, and is why
  * this is not a truncation. */
 static int64_t idl_int_convert(double x, int width, bool is_signed, bool clamp)
@@ -136,7 +136,7 @@ double idl_unsigned_long_long_of(double x)
 static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
 {
     if (t == IDL_UNRESTRICTED_DOUBLE) return JS_NewFloat64(ctx, x);
-    /* §3.2.6: "if V is NaN, +Infinity or -Infinity, then throw a TypeError". The two call sites below place
+    /* §3.2.7: "if V is NaN, +Infinity or -Infinity, then throw a TypeError". The two call sites below place
        what this returns and check it for the exception, so a restricted double is refused by the TYPE. */
     if (t == IDL_DOUBLE) {
         if (!isfinite(x))
@@ -152,7 +152,7 @@ static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
     return JS_NewInt64(ctx, idl_integer_of(t, x));
 }
 
-/* §3.2.19's ENUMERATION check, over the string ToString produced. Returns -1 with a TypeError live. */
+/* §3.2.18's ENUMERATION check, over the string ToString produced. Returns -1 with a TypeError live. */
 static int idl_enum_check(JSContext *ctx, JSValueConst v, const char *const *values, const char *member)
 {
     const char *s = JS_ToCString(ctx, v);
@@ -248,7 +248,7 @@ typedef struct {
     /* THE NARROWING half of that brand — see idl_iface_narrow. NULL for a member whose interface a class id
        already names exactly, which is most of them. */
     bool     (*iface_narrow)(JSValueConst v);
-    /* §3.2.19's VALUE LIST for this member's IDL_ENUM position — the list IS the type, so a declaration
+    /* §3.2.18's VALUE LIST for this member's IDL_ENUM position — the list IS the type, so a declaration
        carrying one is a declaration stating what it takes. It lived only on IdlDictMember, which is why a
        positional enumeration stood at a DCHECK naming this field as the thing to build; the enumeration
        attribute that needed it is HTML §7.2.5's `scrollRestoration`, whose setter a router calls. NULL for
@@ -579,7 +579,7 @@ typedef struct {
        the positions their declaration lists, which is exactly what the vector holds. */
     JSValue   conv;
     JSValue   vstage;   /* the variadic argument being converted, before it joins `conv` */
-    /* §3.2.20's `sequence<T>` CONVERSION: the ES iterator protocol, whose every step is the page's code — so the
+    /* §3.2.21's `sequence<T>` CONVERSION: the ES iterator protocol, whose every step is the page's code — so the
        cursor and the list it fills are the machine's own state, and the resume comes back to the element it was
        on. The list is a JS Array for the reason `conv` is one: a deep fork byte-copies the state and re-takes
        only what `visit` names, so an owned heap block would be freed twice. */
@@ -933,20 +933,20 @@ static int idl_conv_run(JSContext *ctx, JSIdlArgsState *s, const IdlMember *m, J
 
 /* ---- §3.2.25 OVER `(DOMString or sequence<DOMString>)`: THE ARM, AS A REQUEST -----------------------------
  *
- * The union's member types are a string and a sequence and NOTHING else, so steps 4 through 11 of the
- * conversion name no arm it has and the whole decision is step 12.2 against step 16. Step 12.2 is
+ * The union's member types are a string and a sequence and NOTHING else, so steps 4 through 10 of the
+ * conversion name no arm it has and the whole decision is step 11.2 against step 15. Step 11.2 is
  * `? GetMethod(V, %Symbol.iterator%)`, which is a [[Get]] of the PAGE'S value — so this is a rest point, and
  * which arm it answered has to survive the rest.
  *
- * WHY THE METHOD IS HANDED TO THE CURSOR RATHER THAN RE-READ. §3.2.20's "create a sequence from an iterable"
+ * WHY THE METHOD IS HANDED TO THE CURSOR RATHER THAN RE-READ. §3.2.21.1's "create a sequence from an iterable"
  * takes the iterable AND the method the union already obtained; a cursor that read @@iterator itself would
  * perform the property access twice for one conversion, which a Proxy `get` trap counts and an accessor can
  * answer differently the second time. iter_cursor_init_from_method is that second entry, and it is why the
  * method is never held on this state across a park: it is consumed on the entry that completes the read. */
 enum { IDL_UNI_ASK = 0, IDL_UNI_STRING, IDL_UNI_SEQUENCE };
 
-/* Resolve the union at `v` to the type its arm is: IDL_DOMSTRING (step 16) or IDL_SEQUENCE_DOMSTRING (step
-   12.2, with this machine's cursor already planted on the method the page gave). §3.2.25 step 2's null arm is
+/* Resolve the union at `v` to the type its arm is: IDL_DOMSTRING (step 15) or IDL_SEQUENCE_DOMSTRING (step
+   11.2, with this machine's cursor already planted on the method the page gave). §3.2.25 step 2's null arm is
    the CALLER's — it runs none of the page's code and the two callers place the IDL null in two different
    slots.
    `*pin` is the request answer on the way in and is CLEARED when it was consumed, because a resume that lands
@@ -955,7 +955,7 @@ enum { IDL_UNI_ASK = 0, IDL_UNI_STRING, IDL_UNI_SEQUENCE };
 static int idl_union_seq_arm(JSContext *ctx, JSIdlArgsState *s, JSValueConst v, JSValue *pin,
                              IdlArgType *pout, JSValue **out_cb, int *out_argc)
 {
-    /* Step 12 asks its whole question of an OBJECT; every other value reaches step 16 without a read. */
+    /* Step 11 asks its whole question of an OBJECT; every other value reaches step 15 without a read. */
     if (s->uni_phase == IDL_UNI_ASK && !JS_IsObject(v))
         s->uni_phase = IDL_UNI_STRING;
     if (s->uni_phase == IDL_UNI_ASK) {
@@ -966,7 +966,7 @@ static int idl_union_seq_arm(JSContext *ctx, JSIdlArgsState *s, JSValueConst v, 
         *pin = JS_UNDEFINED;
         if (r > 0) return r;      /* parked INSIDE the page's @@iterator getter or its Proxy trap */
         if (r < 0) return -1;
-        /* ECMAScript's GetMethod, which is the operation §3.2.25 step 12.2 names and not a plain [[Get]]. Its
+        /* ECMAScript's GetMethod, which is the operation §3.2.25 step 11.2 names and not a plain [[Get]]. Its
            three steps after the read are stated ONCE, in idl_iter.c: undefined and null are "there is no
            method" and fall through to the string arm, and anything else that is not callable is a TypeError
            rather than a quiet second arm. The copy that stood here was the same three lines, and the two other
@@ -1427,7 +1427,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            gives an opaque field: yield the opaque itself, never a de-tainting placeholder. */
         /* AN INTERFACE BRAND IS NOT A COERCION, so the pass-through below does not cover it: unknown external
            input is not a platform object, and letting it cross as itself hands the body something node_of
-           answers NULL for. §3.2.16's answer to "this is not a Node" is a TypeError either way, and a
+           answers NULL for. §3.2.15's answer to "this is not a Node" is a TypeError either way, and a
            TypeError de-taints nothing. */
         if (t != IDL_ANY && t != IDL_DICT && t != IDL_DICT_OR_BOOL_FIRST && t != IDL_INTERFACE &&
             concolic_is(a)) {
@@ -1493,7 +1493,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                `required` is part of the TYPE the declaration states. */
             if (JS_IsUndefined(*idl_arg_slot(m, s, s->i)))
                 *idl_arg_slot(m, s, s->i) = JS_NewObject(ctx);
-            /* §3.2.18 step 2: a value that is NOT undefined, null or an Object is a TypeError before any member
+            /* §3.2.17 step 1: a value that is NOT undefined, null or an Object is a TypeError before any member
                is read — `new Blob([], 123)` throws, and reading `123.type` instead answered undefined and built
                a Blob. The union form is exempt because its whole rule is that a non-object IS a member. */
             if (t == IDL_DICT && !JS_IsObject(a) && !JS_IsUndefined(a) && !JS_IsNull(a)) {
@@ -1638,7 +1638,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                             if (r > 0) return r;   /* parked ON THIS ELEMENT; the resume comes back to it */
                             if (r < 0) return JS_STEP_ABRUPT;
                             if (s->seq.done) break;
-                            /* §3.2.16's `object` over a dictionary member — HTML §2.7.6's `transfer`. An
+                            /* §3.2.13's `object` over a dictionary member — HTML §2.7.6's `transfer`. An
                                Object crosses as itself and anything else is a TypeError, which runs none of
                                the page's code, so it is decided here rather than being a rest point. */
                             if (mt == IDL_SEQUENCE_OBJECT) {
@@ -1697,7 +1697,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     }
                 }
                 else if (mt == IDL_INTERFACE) {
-                    /* §3.2.16 on a dictionary member, which is where StaticRangeInit's four live: the brand
+                    /* §3.2.15 on a dictionary member, which is where StaticRangeInit's four live: the brand
                        test is the TYPE's, so the member does not cross as itself and the body performs no
                        check of its own.
                        WHICH CLASS IS THE MEMBER'S OWN WHEN IT STATES ONE. A declaration states one class
@@ -1732,7 +1732,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     if (r < 0) return JS_STEP_ABRUPT;
                     JS_FreeValue(ctx, s->dict_v);
                     s->dict_v = idl_num_of(ctx, mt, num);
-                    if (JS_IsException(s->dict_v)) {   /* §3.2.6's restricted double refused the value */
+                    if (JS_IsException(s->dict_v)) {   /* §3.2.7's restricted double refused the value */
                         s->dict_v = JS_UNDEFINED;
                         return JS_STEP_ABRUPT;
                     }
@@ -1777,7 +1777,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             continue;
         }
 
-        /* §3.2.20's `sequence<T>`: the ES ITERATOR PROTOCOL, and a value that is not an Object is a TypeError
+        /* §3.2.21's `sequence<T>`: the ES ITERATOR PROTOCOL, and a value that is not an Object is a TypeError
            BEFORE anything is read — `new Blob("fail")` throws even though a string is iterable, because the
            check is on the TYPE and not on iterability, and `new Blob(null)` throws for the same reason.
            IT IS CONVERTED HERE AND NOT IN THE BODY, which is the whole point of it being a declared type: Web
@@ -1808,7 +1808,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     if (r > 0) return r;   /* parked ON THIS ELEMENT; the resume comes back to it */
                     if (r < 0) return JS_STEP_ABRUPT;
                     if (s->seq.done) break;
-                    /* §3.2.16's `object`: an Object crosses as ITSELF and anything else is a TypeError. Like
+                    /* §3.2.13's `object`: an Object crosses as ITSELF and anything else is a TypeError. Like
                        the brand test below it runs none of the page's code, so the cursor's next pull follows
                        it in the same step. */
                     if (t == IDL_SEQUENCE_OBJECT) {
@@ -1875,7 +1875,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             goto placed;
         }
 
-        /* §3.2.16's INTERFACE type: the brand test, once, so no body performs it — and a value that is not one
+        /* §3.2.15's INTERFACE type: the brand test, once, so no body performs it — and a value that is not one
            is a TypeError BEFORE the algorithm's step 1, which is what `walker.currentNode = null` asserts. */
         if (t == IDL_INTERFACE) {
             JS_FreeValue(ctx, cb_result);
@@ -1890,7 +1890,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             goto placed;
         }
 
-        /* §3.2.22's NULLABLE CALLBACK INTERFACE: null and undefined are the IDL null, ANY object crosses as
+        /* §3.2.16's NULLABLE CALLBACK INTERFACE: null and undefined are the IDL null, ANY object crosses as
            itself (its operation is read off it by name, so it need not be callable), and a primitive is a
            TypeError. */
         if (t == IDL_CALLBACK_INTERFACE_NULLABLE) {
@@ -1993,7 +1993,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
             *slot = idl_num_of(ctx, t, num);
-            if (JS_IsException(*slot)) {   /* §3.2.6's restricted double refused the value */
+            if (JS_IsException(*slot)) {   /* §3.2.7's restricted double refused the value */
                 *slot = JS_UNDEFINED;
                 return JS_STEP_ABRUPT;
             }
@@ -2011,7 +2011,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         }
         DCHECK(t != IDL_ENUM || m->enum_values != NULL,
                "an ENUMERATION was declared at a positional argument with no value list — the list IS the "
-               "type (§3.2.19), so idl_enum_values must name it beside the declaration");
+               "type (§3.2.18), so idl_enum_values must name it beside the declaration");
         DCHECK(t == IDL_DOMSTRING || t == IDL_BYTESTRING || t == IDL_USVSTRING || t == IDL_ENUM,
                "an IDL argument was declared with a type this machine does not convert");
         r = step_tostring_run(ctx, &s->hdr, a, cb_result, slot, out_cb, out_argc);
@@ -2019,7 +2019,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         if (r > 0) return r;          /* parked ON THIS ARGUMENT; the resume comes back to it */
         if (r < 0) return JS_STEP_ABRUPT;
         if (t == IDL_BYTESTRING && idl_bytestring_check(ctx, *slot) < 0) return JS_STEP_ABRUPT;
-        /* §3.2.19's ENUMERATION, AT A POSITIONAL ARGUMENT — the same check the dictionary path makes, over the
+        /* §3.2.18's ENUMERATION, AT A POSITIONAL ARGUMENT — the same check the dictionary path makes, over the
            string ToString produced, against the list the declaration named. It is here rather than in a body
            because it is part of the TYPE: `history.scrollRestoration = "bogus"` is a TypeError from the
            conversion, before the setter's algorithm runs at all, and a body performing it would be one body's
@@ -2474,7 +2474,7 @@ void idl_iface_brand(JSClassID iface)
     idl_member(g_n - 1)->iface_narrow = NULL;   /* a fresh brand narrows to nothing until the member says so */
 }
 
-/* §3.2.19's ENUMERATION VALUES for the member's IDL_ENUM position — see idl_args.h. Named after the
+/* §3.2.18's ENUMERATION VALUES for the member's IDL_ENUM position — see idl_args.h. Named after the
    declaration, on the member the LAST one made, exactly as idl_iface_brand and idl_optional_from are and for
    the same reason: the id a declaration returns is the RUNTIME's step id, not this pool's index. */
 void idl_enum_values(const char *const *values)
@@ -2482,7 +2482,7 @@ void idl_enum_values(const char *const *values)
     DCHECK(g_n > 0, "an enumeration's value list was declared before any member was");
     DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
     DCHECK(values != NULL && values[0] != NULL,
-           "an enumeration declared an empty value list — every §3.2.19 enumeration has at least one value, and "
+           "an enumeration declared an empty value list — every §3.2.18 enumeration has at least one value, and "
            "a member whose type admits nothing is a member no assignment can satisfy");
     idl_member(g_n - 1)->enum_values = values;
 }
@@ -2542,7 +2542,7 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
                            JS_NewString(ctx, iface), JS_PROP_CONFIGURABLE);
 }
 
-/* §3.2.24's CREATE FROZEN ARRAY — see idl_args.h for why the preventExtensions half alone is not it. */
+/* §3.2.27's CREATE FROZEN ARRAY — see idl_args.h for why the preventExtensions half alone is not it. */
 int idl_freeze_array(JSContext *ctx, JSValueConst arr)
 {
     JSValue len_v;
@@ -2551,7 +2551,7 @@ int idl_freeze_array(JSContext *ctx, JSValueConst arr)
     int r;
 
     DCHECK(JS_IsArray(arr), "idl_freeze_array was handed something that is not an Array — a FrozenArray IS an "
-                            "Array at §3.2.24's integrity level, and freezing anything else here would answer "
+                            "Array at §3.2.27's integrity level, and freezing anything else here would answer "
                             "a different type with the right name on it");
     len_v = JS_GetPropertyStr(ctx, arr, "length");
     if (JS_IsException(len_v)) return -1;

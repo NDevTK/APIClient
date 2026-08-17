@@ -85,7 +85,7 @@ void event_target_set_tree(const EventTargetTree *tree);
    LOOP, and the first site to get either wrong reports a node out of a closed tree to a listener that must not
    see it. */
 JSValue event_target_retarget(JSContext *ctx, JSValueConst a, JSValueConst b);
-/* WEB IDL §3.2.16's `EventTarget?`, over the ONE value DOM §2.2 gives every Event — the associated
+/* WEB IDL §3.2.15's `EventTarget?`, over the ONE value DOM §2.2 gives every Event — the associated
    relatedTarget, which §2.9 step 4 retargets and which MouseEventInit and FocusEventInit each declare a member
    over. It is stated HERE, once, because "does this value implement EventTarget" is this component's question
    and neither event interface's: written out in one of them, the second copy is a brand test a body wrote by

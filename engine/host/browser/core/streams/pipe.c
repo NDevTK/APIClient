@@ -167,7 +167,7 @@ enum {
     X(S_TRANSFORM, "Streams §4.2 pipeThrough(transform, options) steps 2 and 4 (Get(transform, \"writable\") " \
                    "and Get(transform, \"readable\"))") \
     X(S_OPT, "Streams §4.2 pipeTo step 3 / pipeThrough step 3 (the StreamPipeOptions members, read in the " \
-             "lexicographic order Web IDL §3.2.18 converts a dictionary in)") \
+             "lexicographic order Web IDL §3.2.17 converts a dictionary in)") \
     X(S_LOCKS, "Streams §4.2 pipeTo steps 1-2 / pipeThrough steps 1-2 (the two lock checks — a rejected " \
                "promise for pipeTo, a throw for pipeThrough)") \
     X(S_ACQ_READER, "Streams §4.2.4 ReadableStreamPipeTo step 9 (AcquireReadableStreamDefaultReader on the " \

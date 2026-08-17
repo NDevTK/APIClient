@@ -902,7 +902,7 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     }
     if (s->hdr.stage == FETCH_METHOD_STR) {
         /* The member's TYPE is a ByteString, so a non-string method is ToString'd — the page's code, and its
-           OWN step, because §3.2.18 runs it after the [[Get]] that produced the value. It was never converted
+           OWN step, because Web IDL §3.2.17 runs it after the [[Get]] that produced the value. It was never converted
            at all: `fetch(u, {method: {toString(){ return "POST" }}})` went out as a GET. */
         if (!JS_IsUndefined(s->method) && !JS_IsString(s->method)) {
             JSValue str;

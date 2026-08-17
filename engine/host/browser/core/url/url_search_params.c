@@ -348,7 +348,7 @@ static int usp_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
 }
 
 /* Both halves are USVStrings by the time this runs, so what is left is the bytes.
-   `as_record` is §3.2.21's MAP semantics: a record's keys are converted BEFORE they are stored, so two ES keys
+   `as_record` is Web IDL §3.2.23's MAP semantics: a record's keys are converted BEFORE they are stored, so two ES keys
    that convert to the same USVString are ONE entry — it keeps the first's position and takes the last's value.
    `{"\uD835x": "1", "xx": "2", "\uD83Dx": "3"}` is two pairs and not three, because both surrogate keys become
    "\uFFFDx". A sequence has no such rule: `[["a",1],["a",2]]` is two pairs. */
@@ -434,7 +434,7 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                              out_cb, out_argc);
         if (r > 0) return r;
         if (r < 0) return -1;
-        /* §6.2's init is a union with a sequence member, so Web IDL §3.2.25 step 12.2 chooses the arm and it is
+        /* §6.2's init is a union with a sequence member, so Web IDL §3.2.25 step 11.2 chooses the arm and it is
            `? GetMethod(V, %Symbol.iterator%)` — a PRESENT non-callable is a TypeError there, never the record
            arm. `new URLSearchParams({[Symbol.iterator]: 1})` reached that arm and serialized an empty query. */
         r = idl_get_method(ctx, itf, "a URLSearchParams init's @@iterator");

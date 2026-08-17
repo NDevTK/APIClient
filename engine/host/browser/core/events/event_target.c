@@ -1252,7 +1252,7 @@ JSValue event_target_retarget(JSContext *ctx, JSValueConst a, JSValueConst b)
     }
 }
 
-/* WEB IDL §3.2.16's `EventTarget?` — see event_target.h for why the conversion is stated here and once. */
+/* WEB IDL §3.2.15's `EventTarget?` — see event_target.h for why the conversion is stated here and once. */
 JSValue event_target_nullable_of(JSContext *ctx, JSValueConst v, const char *what)
 {
     JSValue p, target;

@@ -116,16 +116,16 @@ const char *permission_feature_aspect(int feature);
 /* THE ASPECT MEMBER'S TYPE, as the only thing about it that differs between features: a NULL-terminated list of
    the values an ENUMERATION admits, whose FIRST entry is the IDL's own default and whose SECOND is the value
    that sets the aspect bit; or NULL where the member is a `boolean X = false` and ToBoolean is the whole
-   conversion. Web IDL §3.2.19 makes a value outside the list a TypeError, which for a promise-returning
+   conversion. Web IDL §3.2.18 makes a value outside the list a TypeError, which for a promise-returning
    operation is a rejection — so the list is part of the TYPE and the conversion must not fall back to
    ToBoolean, under which `{mode:"read"}` and `{mode:"readwrite"}` are the same descriptor. */
 const char *const *permission_feature_aspect_values(int feature);
 /* THE SUBJECT MEMBER — the `required` member whose value identifies WHICH INSTANCE of the feature a descriptor
    is about, or NULL where the descriptor type declares none. §6.2.1 step 5 reads it and a missing one is a
-   TypeError (Web IDL §3.2.18: for a dictionary, `undefined` IS absent); the value itself is opaque to this
+   TypeError (Web IDL §3.2.17: for a dictionary, `undefined` IS absent); the value itself is opaque to this
    component, which is why the feature's own component supplies the test below. */
 const char *permission_feature_subject(int feature);
-/* IS THIS VALUE THE SUBJECT MEMBER'S DECLARED TYPE — Web IDL §3.2.16's brand test, performed by the component
+/* IS THIS VALUE THE SUBJECT MEMBER'S DECLARED TYPE — Web IDL §3.2.15's brand test, performed by the component
    that owns the interface because this one must not learn what a FileSystemHandle is. Declared ONCE PER AGENT
    by that component, from its own `_init`. */
 typedef bool (*PermissionSubjectFn)(JSValueConst v);

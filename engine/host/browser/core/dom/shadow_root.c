@@ -579,7 +579,7 @@ void shadow_root_mark_declarative(JSContext *ctx, JSValueConst sr_wrap)
 static const IdlArgType ATTACH_ARGS[1] = { IDL_DICT };
 static const char *const SR_MODE_VALUES[] = { "open", "closed", NULL };
 static const char *const SR_SLOT_VALUES[] = { "manual", "named", NULL };
-/* ShadowRootInit. Web IDL §3.2.18 reads a dictionary's members LEXICOGRAPHICALLY, not in declaration order —
+/* ShadowRootInit. Web IDL §3.2.17 reads a dictionary's members LEXICOGRAPHICALLY, not in declaration order —
    which for this dictionary is a different order in every position, and is observable the moment a page passes
    an object whose members are getters or a Proxy. `mode` being required does not move it to the front. */
 static const IdlDictMember SHADOW_ROOT_INIT[] = {

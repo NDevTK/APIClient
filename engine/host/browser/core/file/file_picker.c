@@ -874,7 +874,7 @@ static const IdlStepDecl FPK_DECL = {
 
 /* ---- the three option dictionaries -------------------------------------------------------------------------
  *
- * WEB IDL §3.2.18's READ ORDER IS THE DECLARATION'S ORDER: a dictionary's INHERITED members are read first and
+ * WEB IDL §3.2.17's READ ORDER IS THE DECLARATION'S ORDER: a dictionary's INHERITED members are read first and
  * each dictionary's own members LEXICOGRAPHICALLY among themselves. `OpenFilePickerOptions : FilePickerOptions`
  * therefore reads excludeAcceptAllOption, id, startIn, types (the base's four, sorted) and then multiple — an
  * order no single sorted list produces, which is what the `level` column exists to express.

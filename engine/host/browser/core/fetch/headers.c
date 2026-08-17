@@ -832,7 +832,7 @@ void headers_fill_visit(JSContext *ctx, HeadersFill *f, JSStepVisit *v)
     iter_cursor_visit(ctx, &f->inner, v);
 }
 
-/* §3.2.21 step 5.2's `typedKey = key converted to K`, and K is ByteString — run BEFORE the value's [[Get]] is
+/* Web IDL §3.2.23 step 4.2.1's `typedKey = key converted to K`, and K is ByteString — run BEFORE the value's [[Get]] is
    issued, which is what makes a record of {a:"b", "\uFFFF":"d"} five operations and not six. A SYMBOL cannot
    be a ByteString, so an ENUMERABLE symbol key is a TypeError; skipping it was the older, wrong answer. */
 static int headers_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
@@ -883,7 +883,7 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         in = JS_UNDEFINED;
         f->phase = FILL_ITER_ASKED;
     }
-    /* WHICH ARM: Web IDL §3.2.25 step 12.2 picks `sequence<sequence<ByteString>>` over
+    /* WHICH ARM: Web IDL §3.2.25 step 11.2 picks `sequence<sequence<ByteString>>` over
        `record<ByteString, ByteString>` by `? GetMethod(V, %Symbol.iterator%)`, whose [[Get]] is an accessor or a
        Proxy trap away from being the page's code — so it is a request like every other read here. It was
        JS_IsArray, which is a DIFFERENT question: `new Headers(new Map(...))` is iterable and is not an array, so
@@ -965,7 +965,7 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         }
         f->phase = FILL_SEQ_PAIR;
     }
-    /* The RECORD arm is §3.2.21's own cursor — [[OwnPropertyKeys]], then a descriptor and a [[Get]] per key,
+    /* The RECORD arm is Web IDL §3.2.23's own cursor — [[OwnPropertyKeys]], then a descriptor and a [[Get]] per key,
        every one of them a request. It is shared with URLSearchParams because the conversion is Web IDL's and
        not this component's; what stays here is the per-pair half, which is where the ByteString key check, the
        §5.1 guard and the concolic shape live. */
@@ -1028,7 +1028,7 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
                 return -1;   /* §5.1's guard already threw */
             }
             /* §5.1: "Otherwise, object is a record, then for each key → value of object, APPEND (key, value)
-               to headers." §3.2.21's map semantics have ALREADY deduped the record — by its ByteString KEY,
+               to headers." Web IDL §3.2.23's map semantics have ALREADY deduped the record — by its ByteString KEY,
                which is case-SENSITIVE — so the two entries of `{a:"1", A:"2"}` both arrive and both append,
                and `get("a")` combines them into "1, 2". A replace loop stood here matching on the LOWERCASED
                header name, which is a different equivalence than the record's and belongs to no step: it

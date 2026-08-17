@@ -141,7 +141,7 @@ JSValue focus_event_new(JSContext *ctx)
     if (JS_IsException(type))
         return type;
     /* DOM §2.5: every attribute at its un-initialized value, isTrusted true — which an ABSENT dictionary
-       gives, member for member (§3.2.18), so there is one construction path and no second table of defaults.
+       gives, member for member (Web IDL §3.2.17), so there is one construction path and no second table of defaults.
        §3.3.1 states the un-initialized value of `relatedTarget` as null, which is what FocusEventInit's own
        `= null` produces here. */
     ev = focus_event_new_derived(ctx, focus_event_proto(ctx), type, JS_UNDEFINED, /*trusted*/ true);

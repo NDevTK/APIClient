@@ -594,7 +594,7 @@ static JSValue flatten_creation_options(JSContext *ctx, JSValueConst doc_wrap, J
     if (!JS_IsObject(options) || concolic_is(options)) return registry;
     is_v = idl_dict_get(ctx, options, "is");                           /* STEP 3.1 */
     reg_v = idl_dict_get(ctx, options, "customElementRegistry");
-    /* WEB IDL §3.2.16 ON THE MEMBER'S DECLARED TYPE, which is `CustomElementRegistry?`. It runs BEFORE any of
+    /* WEB IDL §3.2.15 ON THE MEMBER'S DECLARED TYPE, which is `CustomElementRegistry?`. It runs BEFORE any of
        the algorithm's own steps because a conversion does, so `{is:"x-y", customElementRegistry:5}` is a
        TypeError and not step 3.2.1's NotSupportedError. It is here rather than in the declaration because the
        class is custom_elements.c's own and this component may not name it — the shape §4.8's attachShadow uses

@@ -173,7 +173,7 @@ enum {
     X(S_CTOR_PROTO, "Web IDL §3.7.1 (Get(newTarget, \"prototype\") — what makes " \
                     "`class T extends TransformStream {}` produce a T)") \
     X(S_TR_READ, "Streams §6.2 step 2 (converting transformer to a Transformer: one [[Get]] per member, in " \
-                 "the order Web IDL §3.2.18 reads them)") \
+                 "the order Web IDL §3.2.17 reads them)") \
     X(S_BUILD, "Streams §6.2 steps 3-11 (the two reserved types, InitializeTransformStream, and " \
                "SetUpTransformStreamDefaultControllerFromTransformer)") \
     X(S_BP_INIT, "Streams §6.4 InitializeTransformStream step 9 (the stream begins under backpressure, so " \

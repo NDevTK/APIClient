@@ -67,7 +67,7 @@ static bool permissions_brand(JSContext *ctx, JSValueConst this_val)
                   "instance of the feature the descriptor is about)")                                          \
     X(PQ_ASPECT, "Permissions §6.2.1 step 5 (converting permissionDesc to the permission descriptor type "      \
                  "rootDesc's name identifies — the one aspect member that type declares)")                     \
-    X(PQ_ASPECT_STR, "Permissions §6.2.1 step 5 (Web IDL §3.2.19's ToString on an aspect member whose type is " \
+    X(PQ_ASPECT_STR, "Permissions §6.2.1 step 5 (Web IDL §3.2.18's ToString on an aspect member whose type is " \
                      "an enumeration)")                                                                        \
     X(PQ_RUN, "Permissions §6.2.1 steps 7-8 (a new promise; create a PermissionStatus with typedDescriptor, "   \
               "run the permission query algorithm, and queue a global task to resolve promise with status)")
@@ -114,7 +114,7 @@ static void pq_visit(JSContext *ctx, void *st, JSStepVisit *v)
 }
 
 /* WHICH STAGE STEP 5's CONVERSION STARTS AT, from the registry row alone. The derived permission descriptor
-   type adds a SUBJECT member, an ASPECT member, both or neither, and §3.2.18's lexicographic order over the
+   type adds a SUBJECT member, an ASPECT member, both or neither, and Web IDL §3.2.17's lexicographic order over the
    derived type's own members puts `handle` before `mode` — so the one type that declares both is read in that
    order and every other type skips straight past what it does not declare. */
 static int pq_after_name(PermQueryState *s)
@@ -221,7 +221,7 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         hdr->stage = PQ_NAME_STR;
     }
     if (hdr->stage == PQ_NAME_STR) {
-        /* WEB IDL §3.2.18: a REQUIRED dictionary member the object does not have is a TypeError, and
+        /* WEB IDL §3.2.17: a REQUIRED dictionary member the object does not have is a TypeError, and
            `undefined` counts as not having it — which is why this is tested before the ToString rather than
            after, where it would become the four characters "undefined" and then an unsupported name. */
         if (JS_IsUndefined(s->name_v)) {
@@ -258,7 +258,7 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
             }
             if (nm) JS_FreeCString(ctx, nm);
         }
-        /* STEP 5's CONVERSION, AND ITS ORDER IS WEB IDL'S. §3.2.18 reads a dictionary's INHERITED members
+        /* STEP 5's CONVERSION, AND ITS ORDER IS WEB IDL'S. §3.2.17 reads a dictionary's INHERITED members
            first — `name`, above — and then the derived type's OWN members LEXICOGRAPHICALLY among themselves,
            so `FileSystemPermissionDescriptor`'s two are read `handle` then `mode`. The derived type adds at
            most a SUBJECT and at most an ASPECT, and a feature whose type is the default `PermissionDescriptor`
@@ -276,7 +276,7 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         if (r > 0) return r;
         if (r < 0) return pq_reject(ctx, s, presult);
         cb_result = JS_UNDEFINED;
-        /* WEB IDL §3.2.18 again: a `required` member the object does not have is a TypeError, and `undefined`
+        /* WEB IDL §3.2.17 again: a `required` member the object does not have is a TypeError, and `undefined`
            IS not having it. */
         if (JS_IsUndefined(s->subject_v)) {
             JS_ThrowTypeError(ctx, "a permission descriptor for '%s' has no `%s`, which its permission "
@@ -284,7 +284,7 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
                               permission_feature_name(s->feature), permission_feature_subject(s->feature));
             return pq_reject(ctx, s, presult);
         }
-        /* §3.2.16's INTERFACE conversion: "a platform object implementing the interface crosses as itself and
+        /* Web IDL §3.2.15's INTERFACE conversion: "a platform object implementing the interface crosses as itself and
            anything else is a TypeError". The brand belongs to the component that owns the interface, which is
            why the registry holds a test rather than a class id. */
         if (!permission_subject_is(s->feature, s->subject_v)) {
@@ -313,7 +313,7 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
             s->aspect_on = (uint8_t)JS_ToBool(ctx, s->aspect_v);
             hdr->stage = PQ_RUN;
         } else {
-            hdr->stage = PQ_ASPECT_STR;    /* §3.2.19's ToString may be the page's, so it rests */
+            hdr->stage = PQ_ASPECT_STR;    /* Web IDL §3.2.18's ToString may be the page's, so it rests */
         }
     }
     if (hdr->stage == PQ_ASPECT_STR) {
@@ -334,7 +334,7 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
             JS_FreeValue(ctx, cb_result);
         }
         cb_result = JS_UNDEFINED;
-        /* §3.2.19: "if S is not one of the enumeration's values, throw a TypeError". Never the default — an
+        /* Web IDL §3.2.18: "if S is not one of the enumeration's values, throw a TypeError". Never the default — an
            unrecognised value is an error, and silently taking `read` for it would answer a question the page
            did not ask. */
         v = JS_ToCString(ctx, s->aspect_v);

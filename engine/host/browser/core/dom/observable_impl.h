@@ -129,8 +129,8 @@ enum {
     X(S_CTOR_PROTO, "Web IDL §3.7.1 (Get(newTarget, \"prototype\") — what makes " \
                     "`class O extends Observable {}` produce an O)") \
     X(S_OBSERVER_READ, "Observable §2.2.1 subscribe step 3 (processing observer: the ObserverUnion's arm, and " \
-                       "a SubscriptionObserver's members read in Web IDL §3.2.18's order)") \
-    X(S_OPTIONS_READ, "Web IDL §3.2.18 (converting SubscribeOptions — the `signal` member's [[Get]])") \
+                       "a SubscriptionObserver's members read in Web IDL §3.2.17's order)") \
+    X(S_OPTIONS_READ, "Web IDL §3.2.17 (converting SubscribeOptions — the `signal` member's [[Get]])") \
     X(S_ATTACH, "Observable §2.2.1 subscribe steps 5-9 (the reused-or-new Subscriber, and what the " \
                 "SubscribeOptions signal registers on it)") \
     X(S_INVOKE, "Observable §2.2.1 subscribe step 10 (invoking the subscribe callback with the Subscriber, " \

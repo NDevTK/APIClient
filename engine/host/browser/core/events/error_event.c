@@ -120,7 +120,7 @@ JSValue error_event_new(JSContext *ctx, const char *type_name, bool cancelable, 
    among itself — which is the order this list is in, and the order a page pins by throwing from one getter. */
 static const IdlArgType EE_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
 /* THE LEVEL IS THE INHERITANCE DEPTH, and it is what makes this list the spec's read order rather than one
-   sorted list: §3.2.18 reads the INHERITED dictionary's members first and each dictionary's own members
+   sorted list: Web IDL §3.2.17 reads the INHERITED dictionary's members first and each dictionary's own members
    lexicographically among THEMSELVES. `colno` sorts before `composed`, so a single sorted list would read
    ErrorEventInit's own member before EventInit's — an order a page pins by throwing from one getter. */
 static const IdlDictMember EE_INIT[] = {

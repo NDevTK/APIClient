@@ -712,7 +712,7 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
 
         case S_OBSERVER_READ: {
             /* §2.2.1 step 3: the ObserverUnion. A callable IS the next steps; an object is a
-               SubscriptionObserver, whose three members Web IDL §3.2.18 reads in LEXICOGRAPHIC order —
+               SubscriptionObserver, whose three members Web IDL §3.2.17 reads in LEXICOGRAPHIC order —
                complete, error, next — and each read is one [[Get]] of the page's. */
             static const char *const MEMBERS[3] = { "complete", "error", "next" };
             JSValueConst observer = step_arg(&s->hdr, 0);

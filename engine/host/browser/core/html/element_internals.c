@@ -113,7 +113,7 @@ static JSAtom g_atom_custom = JS_ATOM_NULL;   /* §4.10.21.1's custom validity e
 /* ---- §4.10.21.1's VALIDITY STATES ----------------------------------------------------------------------------
  * The bit each flag occupies, the `ValidityStateFlags` dictionary member `setValidity` reads it from, and the
  * `ValidityState` attribute that reports it are ONE list: hand-written lists is how `tooShort` ends up set by a
- * dictionary member named `tooLong`. The DICTIONARY's own order is not this one — Web IDL §3.2.18 reads a
+ * dictionary member named `tooLong`. The DICTIONARY's own order is not this one — Web IDL §3.2.17 reads a
  * dictionary's members lexicographically and a page's getter sees it — so that list is stated separately below
  * and is checked against this one.
  * THE LIST ITSELF IS constraint_validation.h's, and this file's copy of it is deleted. §4.10.21.1 defines the
@@ -515,7 +515,7 @@ static JSValue js_internals_set_form_value(JSContext *ctx, JSValueConst this_val
     return JS_UNDEFINED;
 }
 
-/* §4.13.7.3's `ValidityStateFlags` — in LEXICOGRAPHIC order, because Web IDL §3.2.18 reads a dictionary's own
+/* §4.13.7.3's `ValidityStateFlags` — in LEXICOGRAPHIC order, because Web IDL §3.2.17 reads a dictionary's own
    members that way and a page with a getter on the object observes the sequence. */
 static const IdlDictMember EI_VALIDITY_FLAGS[] = {
     { "badInput",         IDL_BOOLEAN },

@@ -77,7 +77,7 @@ bool    abort_signal_aborted(JSContext *ctx, JSValueConst sig);
 bool    abort_signal_is(JSContext *ctx, JSValueConst v);
 /* THE SAME BRAND AS A CLASS, for a DECLARED interface-typed position to be checked by the declaration rather
    than by a body: HTML §7.2.6.10.1's NavigateEventInit carries `required AbortSignal signal`, and IdlDictMember
-   states the class its §3.2.16 conversion brands against. It is the same one fact the predicate above answers —
+   states the class its Web IDL §3.2.15 conversion brands against. It is the same one fact the predicate above answers —
    the class every instance wears — asked in the form the declaration surface takes. */
 JSClassID abort_signal_class(void);
 JSValue abort_signal_reason(JSContext *ctx, JSValueConst sig);   /* dup'd */

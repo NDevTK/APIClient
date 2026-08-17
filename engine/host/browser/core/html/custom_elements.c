@@ -2804,7 +2804,7 @@ void custom_elements_init(JSContext *ctx)
     }
     {
         /* `getName(CustomElementConstructor constructor)` — a callback function type, whose conversion IS a
-           brand check and nothing more (§3.2.22): a non-callable is a TypeError before step 1. */
+           brand check and nothing more (Web IDL §3.2.19): a non-callable is a TypeError before step 1. */
         static const IdlArgType ONE_CB[1] = { IDL_CALLBACK };
         g_id_get_name = idl_method_id(ctx, ONE_CB, 1, js_ce_get_name, 0);
     }

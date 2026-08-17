@@ -1213,7 +1213,7 @@ const IdlStepDecl *element_set_html_decl(void)
 int element_declare_set_html_unsafe(JSContext *ctx, int magic)
 {
     static const IdlArgType SET_HTML_UNSAFE_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
-    /* Web IDL §3.2.18 reads a dictionary's members LEXICOGRAPHICALLY, which for these two is also declaration
+    /* Web IDL §3.2.17 reads a dictionary's members LEXICOGRAPHICALLY, which for these two is also declaration
        order. `sanitizer` is `(Sanitizer or SanitizerConfig or SanitizerPresets)` and is IDL_ANY because none of
        the three types exists yet — the body refuses a stated one by name rather than converting it to
        something it cannot honour. */

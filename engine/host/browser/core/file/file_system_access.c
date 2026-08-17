@@ -72,7 +72,7 @@ static const char *const FS_MODE_VALUES[] = { "read", "readwrite", NULL };
 
 /* ---- the feature's own algorithms, declared into §4's registry ---------------------------------------------- */
 
-/* §3.2.16's BRAND TEST for the descriptor type's `required FileSystemHandle handle`. */
+/* Web IDL §3.2.15's BRAND TEST for the descriptor type's `required FileSystemHandle handle`. */
 static bool fsa_subject_is(JSValueConst v)
 {
     return fs_handle_is(v);

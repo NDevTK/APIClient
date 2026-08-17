@@ -1395,16 +1395,16 @@ static const char *HTML =
        step 9.3 found the request list empty once the `get` handler returned. `_r.result.version` is §4.4's
        version getter over the CONNECTION, which §5.1 step 9 set to the version that was opened. */
     /* AND §2.5's LIST KEY PATH, whose whole observable surface is the `keyPath` getter. `a+b` is §4.5's
-       conversion of the store's list — Web IDL §3.2.24 makes it "a new Array object created as if by the
+       conversion of the store's list — Web IDL §3.2.21 makes it "a new Array object created as if by the
        expression []", so `plain` is the assertion that it is NOT a frozen array: `FrozenArray<T>` is a
        different parameterized type that neither the attribute's declaration (`readonly attribute any keyPath`)
        nor §4.5's prose names. `same` is the note's identity ("it returns the same object instance every time
-       it is inspected"), which §3.2.24 alone does not give since its own steps mint a new Array per
+       it is inspected"), which Web IDL §3.2.21 alone does not give since its own steps mint a new Array per
        conversion. And the SECOND handle, over a transaction the page opens after the upgrade, is the other
        half of that note: `perhandle` says two handles for one store answer with two Arrays, and the `a+b` that
        precedes it says the `push` into the first one reached no object store — "changing the properties of the
        object has no effect on the object store". `transaction('kp')` is also the first time §3.2.25's union
-       takes its STRING arm from a page: a primitive string is not an Object, so §3.2.25 step 12.2's GetMethod
+       takes its STRING arm from a page: a primitive string is not an Object, so §3.2.25 step 11.2's GetMethod
        is never reached and the store name is not iterated into 'k','p'.
        AND §7.1's IN-LINE KEYS, which is a `put` WITH NO KEY AT ALL — the store named it, and §7.1's walk reads
        it out of the value. `7:u-9` is the record coming back out under a key nothing passed: the value went in
@@ -1456,9 +1456,8 @@ static const char *HTML =
     " _o2.onsuccess = function(){ _rec += ':over' + _o2.result; };"
     " var _t = _r.result.createObjectStore('t'); _t.put(location.hash, 1);"
     " var _tg = _t.get(1); _tg.onsuccess = function(){ _tv = _tg.result; };"
-    /* §2.6's INDEX, created into a store whose content is settled — the store is new and no request of this
-       transaction is placed against it, which is the whole of what §4.5's createIndex may do eagerly. The two
-       indexes are the two arms of §6.1 step 5: `by_name` files ONE record whose key is the index key, and
+    /* §2.6's INDEX, created into an EMPTY store — the arm where the population request finds nothing to walk.
+       The two indexes are the two arms of §6.1 step 5: `by_name` files ONE record whose key is the index key, and
        `by_tag` is multiEntry, so an ARRAY key files one record PER SUBKEY — which is what makes `multi2`
        load-bearing, both records carrying tag 'b'. `ref` is §6.3's retrieve-a-referenced-value (the index
        record's value is a store key, and the answer is the record THAT key names), `pk` is §6.3's
@@ -1474,6 +1473,20 @@ static const char *HTML =
     " _n.put({ name: 'bob', tags: ['b', 'c'] }, 2);"
     " var _xg = _x.get('bob'); _xg.onsuccess = function(){ _ix += ':ref' + _xg.result.name; };"
     " var _xk = _x.getKey('bob'); _xk.onsuccess = function(){ _ix += ':pk' + _xk.result; };"
+    /* AND §4.5's NOTE, THE HALF THAT IS NOT A FAILURE — the records go in FIRST and the index is created over
+       a store that already holds them, so the only thing that can make these two retrievals answer is the
+       POPULATION REQUEST walking the store's records through §6.1 step 5. `popben` is §6.3's
+       retrieve-a-referenced-value over a record no `put` ever filed an index entry for, and `back2` is the
+       multiEntry arm doing the same thing — one index record per subkey of a key extracted from a value the
+       store was already holding, both records carrying tag 'x'. Created eagerly, as this file used to, both
+       would answer with an empty index. */
+    " var _pp = _r.result.createObjectStore('pop');"
+    " _pp.put({ name: 'ann', tags: ['x'] }, 1);"
+    " _pp.put({ name: 'ben', tags: ['x', 'y'] }, 2);"
+    " var _px = _pp.createIndex('by_name', 'name');"
+    " var _pm = _pp.createIndex('by_tag', 'tags', { multiEntry: true });"
+    " var _pg = _px.get('ben'); _pg.onsuccess = function(){ _ix += ':pop' + _pg.result.name; };"
+    " var _pc = _pm.count('x'); _pc.onsuccess = function(){ _ix += ':back' + _pc.result; };"
     " var _xc = _mx.count('b');"
     " _xc.onsuccess = function(){ fetch('/api/idbidx?v=' + _ix + ':multi' + _xc.result); }; };"
     "_r.onsuccess = function(){"
@@ -1499,6 +1512,25 @@ static const char *HTML =
     "  _v1.onsuccess = function(){"
     "   fetch('/api/idbrec?v=' + _rec + ':undone' + (_v9.result === undefined ? 'A' : 'LEAKA')"
     "        + (_v1.result === 10 ? 'D' : 'LEAKD') + '&t=' + _tv); }; }; };"
+
+    /* §4.5's WORKED EXAMPLE, IN ITS OWN DATABASE because its whole point is that the UPGRADE TRANSACTION dies:
+       two records queued under one name, then a UNIQUE index over that name. The standard's own words are that
+       "the index's uniqueness constraint does not cause the second request to fail. Instead, the transaction
+       will be aborted when the index is created and the constraint fails." So `ConstraintError` is the
+       TRANSACTION's error (§4.10's getter over what §5.10 step 9.3 aborted with) and NOT any request's — the
+       second `put` succeeded — and the `AbortError` beside it is §5.1 step 10.8's, which is what a page's own
+       `open` reports for an upgrade that aborted. Both halves are load-bearing: the first says the failure was
+       the index creation's, and the second says the open FAILED rather than handing the page a connection to a
+       half-migrated database. */
+    "var _u = indexedDB.open('uniqfix', 1); var _uq = 'NOABORT';"
+    "_u.onupgradeneeded = function(){"
+    " var _us = _u.result.createObjectStore('u');"
+    " _us.put({ name: 'betty' }, 1);"
+    " _us.put({ name: 'betty' }, 2);"
+    " _us.createIndex('by_name', 'name', { unique: true });"
+    " var _ut = _u.transaction;"
+    " _ut.onabort = function(){ _uq = _ut.error.name; }; };"
+    "_u.onerror = function(){ fetch('/api/idbuniq?v=' + _uq + ':' + _u.error.name); };"
     "</script>"
     "</body></html>";
 
@@ -2520,11 +2552,11 @@ static void idb_revert_selftest(JSContext *ctx, JSValueConst conn, JSValueConst 
  * The list arm is the one §2.5 bullet whose rule is not the string rule applied N times: "a NON-EMPTY list
  * containing only strings conforming to the above requirements". So `[]` is refused where `['']` is accepted
  * (the empty STRING is a valid key path, naming the value itself), and a nested list arrives already
- * ToString'd by §3.2.20's sequence conversion — `['multi_array', ['a','b']]` is `['multi_array', 'a,b']` and is
+ * ToString'd by Web IDL §3.2.21's sequence conversion — `['multi_array', ['a','b']]` is `['multi_array', 'a,b']` and is
  * refused for the comma. Every one of these is a WPT case (keypath_invalid, keypath).
  *
  * AND THE CONVERSION IS A COPY, ASSERTED FROM BOTH SIDES: it is not the store's own record (a page handed that
- * could rewrite a live store's key path), and it is not the same Array twice — Web IDL §3.2.24's steps are
+ * could rewrite a live store's key path), and it is not the same Array twice — Web IDL §3.2.21's steps are
  * "let A be a new Array object created as if by the expression []", so the same-instance identity §4.5's note
  * requires belongs to §2.2.1's HANDLE and not to this. It is EXTENSIBLE, which is the executable form of the
  * claim that a sequence is not a FrozenArray. */
@@ -2572,7 +2604,7 @@ static void idb_key_path_selftest(JSContext *ctx, JSValueConst conn, JSValueCons
                             "which is the empty string — WPT's keypath.any.js states what it then means: "
                             "\"[''] uses value as [key]\"");
     idb_selftest_path_valid(ctx, idb_selftest_list(ctx, STRINGIFIED, 2), false,
-                            "a nested list arrives already ToString'd by §3.2.20's sequence conversion, so "
+                            "a nested list arrives already ToString'd by §3.2.21's sequence conversion, so "
                             "['multi_array', ['a','b']] is refused for the COMMA in 'a,b' — a validity that "
                             "looked for nesting instead would accept it");
 
@@ -2583,19 +2615,19 @@ static void idb_key_path_selftest(JSContext *ctx, JSValueConst conn, JSValueCons
     held = idb_object_store_key_path(ctx, store);
     CHECK(JS_IsArray(first) && JS_IsArray(second),
           "§4.5: a list key path is \"converted as ... a sequence<DOMString> (if a list of strings)\", and Web "
-          "IDL §3.2.24 makes that an Array");
+          "IDL §3.2.21 makes that an Array");
     CHECK(JS_VALUE_GET_PTR(first) != JS_VALUE_GET_PTR(held),
           "§4.5's keyPath answered with the object store's OWN record. \"The returned value is not the same "
           "instance that was used when the object store was created\" and \"changing the properties of the "
           "object has no effect on the object store\" — a page holding that record could rewrite the key path "
           "of a live store");
     CHECK(JS_VALUE_GET_PTR(first) != JS_VALUE_GET_PTR(second),
-          "§4.5's conversion answered the SAME Array twice. Web IDL §3.2.24's own steps mint one per "
+          "§4.5's conversion answered the SAME Array twice. Web IDL §3.2.21's own steps mint one per "
           "conversion, so the identity §4.5's note requires (\"the same object instance every time it is "
           "inspected\") is the handle's cache — a conversion that memoised here would hand every handle of "
           "this store one Array, which is the half of that note WPT's idbobjectstore_keyPath denies");
     CHECK(JS_IsExtensible(ctx, first) == 1,
-          "§4.5's keyPath answered a NON-EXTENSIBLE Array. Web IDL §3.2.24 converts a sequence to a plain "
+          "§4.5's keyPath answered a NON-EXTENSIBLE Array. Web IDL §3.2.21 converts a sequence to a plain "
           "Array; `FrozenArray<T>` is a different parameterized type (§3.2.27) that neither this attribute's "
           "declaration (`readonly attribute any keyPath`) nor §4.5's prose names, so freezing it would be a "
           "property of the answer that no sentence of either standard asks for");

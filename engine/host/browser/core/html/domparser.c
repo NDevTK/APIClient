@@ -238,7 +238,7 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
 
     /* The ENUMERATION. The declaration converted it, so a real string here is one of the five — but unknown
        external input crosses as itself (see domparser_concrete), so a concolic `type` reached this body with
-       §3.2.19's membership test never run. Its example decides which parser the page asked for, and an example
+       Web IDL §3.2.18's membership test never run. Its example decides which parser the page asked for, and an example
        that is not one of the five is the TypeError the conversion would have thrown for that string. */
     concrete = domparser_concrete(ctx, argv[1]);
     type = JS_ToCString(ctx, concrete);

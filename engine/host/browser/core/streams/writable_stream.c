@@ -1530,7 +1530,7 @@ enum { SNK_ABORT = 0, SNK_CLOSE, SNK_START, SNK_TYPE, SNK_WRITE, SNK_N };
     X(WSC_PROTO, "Web IDL §3.7.1 (Get(newTarget, \"prototype\") — the read that makes " \
                  "`class S extends WritableStream {}` produce an S)") \
     X(WSC_READ, "Streams §5.2 step 2 (converting underlyingSink to an UnderlyingSink: one [[Get]] per member, " \
-                "in the order Web IDL §3.2.18 reads them)") \
+                "in the order Web IDL §3.2.17 reads them)") \
     X(WSC_BUILD, "Streams §5.2 steps 3-7 (the reserved `type`, InitializeWritableStream, ExtractSizeAlgorithm, " \
                  "ExtractHighWaterMark, and §5.4's SetUpWritableStreamDefaultController up to its step 15)") \
     X(WSC_CALL, "Streams §5.4 SetUpWritableStreamDefaultController step 15 (the start algorithm — the sink's " \

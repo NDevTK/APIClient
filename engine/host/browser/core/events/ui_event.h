@@ -20,7 +20,7 @@ JSValue ui_event_new(JSContext *ctx);
 
 /* §3.2.1's constructor steps with a DERIVED interface's prototype — the Event half and the UIEvent half of
    every interface that inherits this one, so a subclass's constructor adds only its OWN slots. `init` is the
-   CONVERTED init dictionary (JS_UNDEFINED for an un-initialized event: §3.2.18 makes every member of an absent
+   CONVERTED init dictionary (JS_UNDEFINED for an un-initialized event: Web IDL §3.2.17 makes every member of an absent
    dictionary absent, which is exactly the un-initialized value of each attribute). `proto` is CONSUMED,
    exactly as event_new_derived's is and for the same reason — every caller gets it from an owned
    `<Interface>_proto(ctx)`. Returns JS_EXCEPTION with the throw live. */
@@ -69,7 +69,7 @@ bool    ui_event_modifier_state(JSContext *ctx, JSValueConst ev, const char *nam
 JSValue ui_event_get_modifier_state(JSContext *ctx, JSValueConst ev, JSValueConst key_arg);
 
 /* THE SHARED DICTIONARY LEVELS, SPLICED INTO EACH DERIVED DICTIONARY'S LIST RATHER THAN WRITTEN TWICE.
-   §3.2.18 reads the INHERITED members first and each dictionary's own lexicographically among themselves, so a
+   Web IDL §3.2.17 reads the INHERITED members first and each dictionary's own lexicographically among themselves, so a
    member's LEVEL is its inheritance depth — and both dictionaries that derive from EventModifierInit derive
    through the same chain (`MouseEventInit : EventModifierInit : UIEventInit : EventInit`, and KeyboardEventInit
    likewise), which is why the levels below are the same numbers in both. A derived dictionary appends its own

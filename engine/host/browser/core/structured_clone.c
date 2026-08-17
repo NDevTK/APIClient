@@ -407,7 +407,7 @@ int structured_transfer_list(JSContext *ctx, JSValueConst list, JSValue *out)
     for (i = 0; i < n; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, list, i);
         if (JS_IsException(e)) { JS_FreeValue(ctx, arr); return -1; }
-        /* §3.2.16: the element type is `object`, so a non-object is the conversion's TypeError and never a
+        /* Web IDL §3.2.13: the element type is `object`, so a non-object is the conversion's TypeError and never a
            DataCloneError — a page passing `[1]` is a type error about its argument, not a clone failure. */
         if (!JS_IsObject(e)) {
             JS_FreeValue(ctx, e);

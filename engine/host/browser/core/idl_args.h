@@ -53,36 +53,36 @@ typedef enum {
        that need it: `truncate(-1)` is 2**64-1 bytes in a browser (a QuotaExceededError), where the signed
        conversion answers -1 and hands the algorithm a negative size no step of it is written for. */
     IDL_UNSIGNED_LONG_LONG,
-    /* `[Clamp] long long`. The extended attribute REPLACES the modulo with §3.2.4.2: clamp to the type's range
+    /* `[Clamp] long long`. The extended attribute REPLACES the modulo with §3.2.4.9: clamp to the type's range
        and round to the NEAREST integer, choosing the even one at a half. Blob's `slice(start, end)` is the
        member that carries it, and `slice(1.5)` starting at byte 2 rather than byte 1 is the difference. */
     IDL_LONG_LONG_CLAMP,
-    /* `unrestricted double` — §3.2.7. ToNumber and nothing else: NaN and the infinities are VALUES of this
+    /* `unrestricted double` — §3.2.8. ToNumber and nothing else: NaN and the infinities are VALUES of this
        type, which is exactly why QueuingStrategy's `highWaterMark` is declared with it and why the stream's
        own RangeError for a NaN mark has to be the STREAM's check rather than the type's. */
     IDL_UNRESTRICTED_DOUBLE,
-    /* `double` — §3.2.6, and the RESTRICTION is the whole difference from the type above: ToNumber, and then a
+    /* `double` — §3.2.7, and the RESTRICTION is the whole difference from the type above: ToNumber, and then a
        NaN or an infinity is a TypeError rather than a value. HTML §4.8.11.6's `attribute double currentTime`
        is what needs it — `video.currentTime = NaN` throws in every browser, and a member declared
        unrestricted would hand the seek algorithm a position no step of it is written for. The check belongs to
        the TYPE and not to the four setters that share it, for the reason every other row here does. */
     IDL_DOUBLE,
-    /* A CALLBACK FUNCTION type — §3.2.22. The conversion is a brand check and nothing more: a callable crosses
+    /* A CALLBACK FUNCTION type — §3.2.19. The conversion is a brand check and nothing more: a callable crosses
        as itself and anything else is a TypeError. Declared rather than checked in the body because an optional
        member that is absent must NOT be rejected, and every body that wrote that test by hand is a body that
        can get it wrong once. */
     IDL_CALLBACK,
-    /* AN ENUMERATION — §3.2.19. ToString, and then the result must be one of the values the IDL lists or it is
+    /* AN ENUMERATION — §3.2.18. ToString, and then the result must be one of the values the IDL lists or it is
        a TypeError: `new Blob([], {endings: "bogus"})` throws, and an unrecognised value is never silently the
        default. The values are declared beside the member, because they are part of the type. */
     IDL_ENUM,
     /* A NULLABLE ENUMERATION — `NavigationType? navigationType = null`, and the difference from IDL_ENUM is
-       the whole reason it exists. §3.2.19's conversion is ToString-then-membership, and null ToStrings to the
+       the whole reason it exists. §3.2.18's conversion is ToString-then-membership, and null ToStrings to the
        string "null", which no enumeration lists — so a nullable enumeration declared as IDL_ENUM makes the
        IDL's OWN default value a TypeError. The alternative was IDL_ANY plus the rule written out in the body,
        which is the shape the declared types exist to replace and which here would run ToString on the page's
        value from a plain C body: the getter this engine aborts on, in the one place a page controls. So null
-       and undefined are the IDL null and cross as null; anything else is §3.2.19's conversion exactly. */
+       and undefined are the IDL null and cross as null; anything else is §3.2.18's conversion exactly. */
     IDL_ENUM_NULLABLE,
     /* A `(DOMString or Function)` union, which is TimerHandler and nothing else so far: callable crosses as
        itself, anything else is a DOMString. Named for the rule rather than for the member, because the rule is
@@ -90,7 +90,7 @@ typedef enum {
     IDL_STRING_UNLESS_CALLABLE,
     IDL_BOOLEAN,          /* ToBoolean. The conversion runs nothing; the READ that precedes it is the page's */
     /* A `boolean` DICTIONARY MEMBER WITH NO DEFAULT — and the difference from IDL_BOOLEAN is the whole reason
-       it exists. §3.2.18 does not set an absent member at all, so "does not exist" and "exists and is false"
+       it exists. §3.2.17 does not set an absent member at all, so "does not exist" and "exists and is false"
        are two states a dictionary can be in, and DOM §4.3.1's `observe` branches on which: `observe(t,
        {attributeFilter:[]})` sets attributes to true and succeeds, while `observe(t, {attributes:false,
        attributeFilter:[]})` is a TypeError at step 5 — the same filter, the same absence of `true`, opposite
@@ -99,7 +99,7 @@ typedef enum {
        characterDataOldValue) and the two members that DO carry `= false` (childList, subtree) stay
        IDL_BOOLEAN, which is the IDL's own distinction and not a convention. */
     IDL_BOOLEAN_NO_DEFAULT,
-    /* `sequence<DOMString>` — §3.2.20's iterator-protocol conversion with DOMString as the element type.
+    /* `sequence<DOMString>` — §3.2.21's iterator-protocol conversion with DOMString as the element type.
        DOM §4.3.1's `attributeFilter` is the first, and it is a DICTIONARY MEMBER: the iterator protocol is the
        page's code at every step, so a member declared this way parks on the element it is on exactly as an
        argument-position sequence does, rather than being walked from a body after every later member was
@@ -107,7 +107,7 @@ typedef enum {
     IDL_SEQUENCE_DOMSTRING,
     /* `(DOMString or sequence<DOMString>)` — §3.2.25's union, and the FIRST declared type whose ARM IS CHOSEN
        BY THE PAGE'S OWN CODE. Every other union in this list is decided by a brand test or by `JS_IsObject`,
-       neither of which reads anything; this one's step 12.2 is `? GetMethod(V, %Symbol.iterator%)` — one
+       neither of which reads anything; this one's step 11.2 is `? GetMethod(V, %Symbol.iterator%)` — one
        accessor or one Proxy `get` trap away from being a page loop — so the position PARKS on that read exactly
        as it parks on a `toString`, and which arm it resolved to is a resume point of its own.
        THE ORDER IS THE ALGORITHM'S AND IT IS OBSERVABLE. Steps 4 through 11 name no arm this union has (no
@@ -142,7 +142,7 @@ typedef enum {
        rest point. The interface is named by idl_iface_brand / idl_iface_narrow, exactly as IDL_INTERFACE's is:
        one statement of what the type is, whether it appears alone or inside a sequence. */
     IDL_SEQUENCE_INTERFACE,
-    /* `sequence<object>` — §3.2.21's iterator-protocol conversion with §3.2.16's `object` as the element type.
+    /* `sequence<object>` — §3.2.21's iterator-protocol conversion with §3.2.13's `object` as the element type.
        HTML §2.7.6's `StructuredSerializeOptions.transfer` is the first, and it is what `structuredClone`,
        `window.postMessage` and `MessagePort.postMessage` all take.
        IT IS A DECLARED TYPE BECAUSE THE WALK IS THE PAGE'S CODE. structured_clone.c converted it from C with a
@@ -151,7 +151,7 @@ typedef enum {
        `structuredClone(v, {transfer: new Proxy([], …)})` reached the page's `get` trap with nothing under it to
        park. The cursor is the same one every other sequence uses, so the conversion rests on the element it is
        on at whatever depth it is at.
-       The element conversion runs NONE of the page's code — §3.2.16's `object` is "an Object crosses as itself,
+       The element conversion runs NONE of the page's code — §3.2.13's `object` is "an Object crosses as itself,
        anything else is a TypeError" — so, like the interface arm, it is decided between two pulls of the cursor
        rather than being a rest point of its own. */
     IDL_SEQUENCE_OBJECT,
@@ -227,7 +227,7 @@ typedef enum {
        ReadableStream are brand tests beside it, each asked of the component that owns the interface. The body
        learns nothing either way — §5.1's extraction reads the arm back off the value. */
     IDL_BODYINIT_NULLABLE,
-    /* `sequence<BlobPart>` — §3.2.20's iterator-protocol conversion with `(BufferSource or Blob or USVString)`
+    /* `sequence<BlobPart>` — §3.2.21's iterator-protocol conversion with `(BufferSource or Blob or USVString)`
        as the element type. Named for the IDL type it IS, the way IDL_BODYINIT_NULLABLE is: the union's brand
        test lives in the one place the union is stated, and the member that takes it learns nothing.
        IT IS A DECLARED TYPE and not something a body walks, because Web IDL converts arguments LEFT TO RIGHT —
@@ -239,14 +239,14 @@ typedef enum {
        hand it was right twice and wrong the third time, where a plain object reached JS_GetArrayBufferView and
        tripped the engine's own "this is a typed array" assertion. */
     IDL_BUFFERSOURCE,
-    /* AN INTERFACE TYPE — §3.2.16. `Node root`, `Range sourceRange`, `Node currentNode`: a platform object
+    /* AN INTERFACE TYPE — §3.2.15. `Node root`, `Range sourceRange`, `Node currentNode`: a platform object
        implementing the interface crosses as itself and ANYTHING else is a TypeError, thrown before the
        algorithm's step 1. It is a declared type rather than a body's `if` for the reason every other brand test
        here is: `walker.currentNode = null` must throw, and a body that checks by hand is a body that can forget
        to. The class is declared beside it with idl_iface_brand, which is what "implementing the interface"
        means to this engine. */
     IDL_INTERFACE,
-    /* A NULLABLE CALLBACK INTERFACE — §3.2.22. `NodeFilter? filter` is the only shape of it here, and its rule
+    /* A NULLABLE CALLBACK INTERFACE — §3.2.16. `NodeFilter? filter` is the only shape of it here, and its rule
        is not IDL_CALLBACK's: a callback INTERFACE accepts any object (its operation is read off it by name),
        so a non-callable object is valid and only a primitive is a TypeError. null and undefined are the IDL
        null. Declared apart from IDL_CALLBACK because conflating them rejects `{acceptNode(){}}`, which is the
@@ -265,7 +265,7 @@ typedef enum {
    with no `required` written is optional, which is what leaving the field off an initialiser gives. */
 /* `values` is the NULL-terminated list an IDL_ENUM member's IDL lists, and is read by nothing else.
    `level` is WHICH DICTIONARY IN THE INHERITANCE CHAIN declares the member — 0 for the most-derived one's
-   BASE, counting up to the dictionary itself. §3.2.18 reads the INHERITED members first and each dictionary's
+   BASE, counting up to the dictionary itself. §3.2.17 reads the INHERITED members first and each dictionary's
    own members lexicographically among themselves, so `FilePropertyBag : BlobPropertyBag` reads endings, type,
    then lastModified — an order no single sorted list produces, because `lastModified` sorts before `type`.
    Stating the level is what lets the declaration express that AND still be checkable. */
@@ -300,7 +300,7 @@ typedef struct {
     const struct IdlDictDecl *dict;
     IdlDictDefault dflt;
     const char *dflt_str;
-    /* THIS MEMBER'S OWN §3.2.16 INTERFACE CLASS, for a dictionary that declares MORE THAN ONE interface type.
+    /* THIS MEMBER'S OWN §3.2.15 INTERFACE CLASS, for a dictionary that declares MORE THAN ONE interface type.
        `idl_iface_brand` states ONE class per DECLARATION, which is everything a dictionary whose interface-typed
        members are all the same interface needs — StaticRangeInit's two are both Nodes, FormDataEventInit's one
        is a FormData — and it is exactly what HTML §7.2.6.10.1's NavigateEventInit walks past: its four are a
@@ -517,7 +517,7 @@ void idl_iface_brand(JSClassID iface);
    idl_iface_brand and idl_optional_from do. */
 void idl_iface_narrow(bool (*is)(JSValueConst v));
 
-/* DECLARE THE VALUES AN IDL_ENUM POSITION ADMITS — §3.2.19's enumeration, whose value list IS the type. A
+/* DECLARE THE VALUES AN IDL_ENUM POSITION ADMITS — §3.2.18's enumeration, whose value list IS the type. A
    NULL-terminated array of the identifiers the IDL lists, which the conversion checks the string ToString
    produced against and throws a TypeError for anything else.
    IT WAS EXPRESSIBLE ONLY ON A DICTIONARY MEMBER, and the conversion stood at a DCHECK saying so: "an
@@ -648,7 +648,7 @@ int64_t idl_step_total(long *count);
    non-enumerable, configurable. Every interface prototype has one, so every interface calls this. */
 void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface);
 
-/* §3.2.24's CREATE FROZEN ARRAY, over an Array the caller has already filled: SetIntegrityLevel(array, frozen).
+/* §3.2.27's CREATE FROZEN ARRAY, over an Array the caller has already filled: SetIntegrityLevel(array, frozen).
    AN ARRAY IS NOT FROZEN BY PREVENTING EXTENSIONS — it always carries an own `length` and `length` is writable,
    so `Object.isFrozen` answers false afterwards and a page can still truncate the array in place. Every own
    property has to lose writable and configurable, `length` included.

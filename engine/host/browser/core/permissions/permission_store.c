@@ -56,7 +56,7 @@ int permission_state_of(const char *s)
  *     registry states in its own column and their specs confirm by defining no policy-controlled feature.
  *   ASPECT — the ONE member the feature's permission descriptor type declares beyond `name`, or NULL where the
  *     type is the default `PermissionDescriptor`. Most are a `boolean X = false`; File System Access's `mode`
- *     is a two-valued ENUMERATION, which is the same one bit reached through §3.2.19's conversion rather than
+ *     is a two-valued ENUMERATION, which is the same one bit reached through Web IDL §3.2.18's conversion rather than
  *     through ToBoolean, and ASPECT_VALUES is what says which of the two a row is.
  *   ASPECT_VALUES — that enumeration's values, first the IDL's default and second the one that sets the bit;
  *     NULL for a boolean member. Under ToBoolean `{mode:"read"}` and `{mode:"readwrite"}` are one descriptor,
@@ -129,7 +129,7 @@ static const char *const PF_MODE_VALUES[] = { "read", "readwrite", NULL };
        permission descriptor type declares a member that is neither a name nor a boolean —                     \
        `FileSystemPermissionDescriptor : PermissionDescriptor { required FileSystemHandle handle;              \
        FileSystemPermissionMode mode = "read"; }`. `mode` is the ASPECT (a two-valued enumeration rather than a \
-       boolean, which is the same one bit through §3.2.19's conversion instead of ToBoolean) and `handle` is    \
+       boolean, which is the same one bit through §3.2.18's conversion instead of ToBoolean) and `handle` is    \
        the SUBJECT. §4's PARTIAL ORDER is the feature's own fourth permission state constraint read as an       \
        order: "if desc['mode'] is readwrite ... if read state is not granted, this descriptor's permission      \
        state must be equal to read state" says a granted readwrite forces read granted and a denied read        \

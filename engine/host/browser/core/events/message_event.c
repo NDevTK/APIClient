@@ -133,7 +133,7 @@ static JSValue ports_from_sequence(JSContext *ctx, JSValueConst v)
         }
         JS_SetPropertyUint32(ctx, arr, i, e);
     }
-    /* FROZEN, per the FrozenArray type — through the ONE implementation of §3.2.24, because FrozenArray is a
+    /* FROZEN, per the FrozenArray type — through the ONE implementation of Web IDL §3.2.27, because FrozenArray is a
        Web IDL TYPE and not something each member that answers one re-derives. It was written out here, and the
        second member that needed one got only half of it. */
     if (idl_freeze_array(ctx, arr) < 0) { JS_FreeValue(ctx, arr); return JS_EXCEPTION; }
@@ -294,7 +294,7 @@ static JSValue js_me_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "MessageEvent constructor requires a type");
 
-    /* THE DICTIONARY MAY NOT BE THERE AT ALL. `new MessageEvent('m')` passes no second argument, and §3.2.19
+    /* THE DICTIONARY MAY NOT BE THERE AT ALL. `new MessageEvent('m')` passes no second argument, and Web IDL §3.2.17
        says a dictionary with no required members converts from undefined to one where every member is ABSENT —
        so the reads are guarded rather than performed on undefined, which throws. Reading them anyway is how
        the plain one-argument construction — the shape every real dispatch uses — became a TypeError.

@@ -305,7 +305,7 @@ static JSValue js_ke_init_keyboard_event(JSContext *ctx, JSValueConst this_val, 
 /* ---- the constructor ----------------------------------------------------------------------------------------
  *
  * `constructor(DOMString type, optional KeyboardEventInit eventInitDict = {})`. KeyboardEventInit inherits
- * EventModifierInit inherits UIEventInit inherits EventInit, and §3.2.18 reads the INHERITED members first and
+ * EventModifierInit inherits UIEventInit inherits EventInit, and Web IDL §3.2.17 reads the INHERITED members first and
  * each dictionary's own lexicographically among THEMSELVES — which is the order this list is in, and the order
  * a page pins by throwing from one member's getter. §7.3's two legacy members are members of THIS dictionary,
  * so they sort with its own and not after them. The three inherited levels are spliced from ui_event.h. */
