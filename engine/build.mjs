@@ -18,6 +18,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve, relative, sep } from "node:path";
 import { cpus } from "node:os";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { stampArtifact } from "./gate_revision.mjs";
 
@@ -446,7 +447,20 @@ const LDFLAGS_ABI = [
    cache, because it reports a stale binary as a fresh one. */
 const OBJDIR = join(WORK, "obj");
 mkdirSync(OBJDIR, { recursive: true });
-const objPath = (src) => join(OBJDIR, resolve(src).replace(/[\\/:]/g, "_") + ".o");
+/* THE FLAGS ARE PART OF THE OBJECT'S IDENTITY, NOT A THING THE CACHE COMPARES. The comment above says a cache
+   that misses a header edit reports a stale binary as a fresh one; this cache missed a FLAG edit, which is the
+   same defect with a wider blast radius. `CFLAGS` carries `-DAPICLIENT_DEV=0` under `release` and `=1`
+   otherwise — the switch that compiles out every DCHECK — and `objIsStale` compared only mtimes, so
+   `node engine/build.mjs release` after a dev build found every object fresh, relinked the DEV objects, and
+   reported a green release build of a program that was never built. That is §Testing's "a number about
+   NOTHING" in the build system itself, and it is why release mode had to be verified with `-fsyntax-only`
+   rather than by running the target.
+   Hashing the flags into the PATH rather than storing them for comparison is what makes the failure
+   impossible instead of detected: two flag sets are two files, so neither can masquerade as the other and
+   both stay cached across switches. The compiler binary is in the hash for the same reason a header is —
+   changing it changes the output. */
+const FLAG_ID = createHash("sha256").update(EMCC + " " + CFLAGS.join(" ")).digest("hex").slice(0, 12);
+const objPath = (src) => join(OBJDIR, resolve(src).replace(/[\\/:]/g, "_") + "." + FLAG_ID + ".o");
 
 function objIsStale(src, obj) {
   if (!existsSync(obj)) return true;
@@ -480,12 +494,24 @@ if (stale.length) {
         running++;
         const p = spawn(EMCC, [...CFLAGS, "-MMD", "-MF", obj.replace(/\.o$/, ".d"), "-c", src, "-o", obj],
                         { stdio: "inherit", shell: true, cwd: QJS });
-        p.on("exit", (code) => {
-          if (code !== 0) failed++;
+        let settled = false;
+        const settle = (why) => {          /* exit and error are not mutually exclusive; the pump must run once */
+          if (settled) return;
+          settled = true;
+          if (why) { failed++; console.error("[build] FAILED " + src + " — " + why); }
           running--;
           if (next >= stale.length && running === 0) done();
           else pump();
-        });
+        };
+        p.on("exit", (code) => settle(code === 0 ? null : "compiler exited " + code));
+        /* A SPAWN THAT NEVER STARTS MUST BE A FAILED TU, NOT AN UNHANDLED THROW. With no `error` listener node
+           raises the event as an exception, so the build died mid-run with no line naming a source — and
+           `running--` never ran either, so the promise it was inside could not have settled had the throw been
+           caught. Observed twice under fork pressure as `spawn /bin/sh ENOENT`: the machine was saturated, not
+           the code wrong, and the build reported neither. That is the loaded-machine defect §Testing names —
+           an artifact of HOW it ran presented as a fact about WHAT ran — so it is reported as what it is, with
+           the source named. */
+        p.on("error", (e) => settle("could not start the compiler: " + e.message));
       }
       if (next >= stale.length && running === 0) done();
     };
