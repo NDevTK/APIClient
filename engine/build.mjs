@@ -22,6 +22,22 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { stampArtifact } from "./gate_revision.mjs";
 
+/* A RUN THAT NEVER RETURNS IS NOT A VERDICT. Every program this file launches gets the same generous backstop
+   and reports a hang through a DIFFERENT signal than a failure — `.signal` where a failure sets `.status` — so
+   the two can never collapse into one verdict. Declared here because the native targets run ~300 lines before
+   the wasm ones and a `const` below them would be a TDZ throw. */
+const RUN_BACKSTOP_MS = 15 * 60 * 1000;
+function exitHung(label, signal) {
+  let load = "unknown";
+  try { load = readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).join(" "); } catch { /* not linux */ }
+  console.error(`[build] ${label} DID NOT FINISH within ${RUN_BACKSTOP_MS / 60000} min — killed by the harness ` +
+                `backstop (${signal}), NOT a failing run and NOT a passing one.\n` +
+                `[build]   load average at kill: ${load} (on ${cpus().length} cores)\n` +
+                `[build]   Either the machine is saturated, or the fixture's frontier does not drain and the\n` +
+                `[build]   program has no completion condition — a defect in the fixture, not the engine.`);
+  process.exit(2);                    /* distinct from a failing run's exit, on purpose */
+}
+
 const ENGINE = dirname(fileURLToPath(import.meta.url));
 const QJS = join(ENGINE, "qjs");
 const HOST = join(ENGINE, "host");
@@ -297,7 +313,8 @@ if (NATIVE) {
     /* THE SHELF IS EMPTY BEFORE SESSION ONE. A residue left by an earlier run of a DIFFERENT tree would resume
        flows standing on segments this build never wrote — and it would look like a pass. */
     rmSync(store, { force: true });
-    const one = spawnSync(bin, ["--cold-park", store], { stdio: "inherit" });
+    const one = spawnSync(bin, ["--cold-park", store], { stdio: "inherit", timeout: RUN_BACKSTOP_MS });
+    if (one.signal) exitHung("session ONE (--cold-park)", one.signal);
     if (one.status !== 0) {
       console.error("[build] session ONE (--cold-park) reported rc=" + (one.status ?? "signal") +
                     " — read its `@H park-*` rows and the @COLDPARK census: a 0 there names which record kind " +
@@ -305,7 +322,8 @@ if (NATIVE) {
                     "engine/host/test_forced.c.");
       process.exit(one.status || 1);
     }
-    const two = spawnSync(bin, ["--cold-resume", store], { stdio: "inherit" });
+    const two = spawnSync(bin, ["--cold-resume", store], { stdio: "inherit", timeout: RUN_BACKSTOP_MS });
+    if (two.signal) exitHung("session TWO (--cold-resume)", two.signal);
     if (two.status !== 0) {
       console.error("[build] session TWO (--cold-resume) reported rc=" + (two.status ?? "signal") +
                     " — `@RESUMED <n>` and the @COLDRESUME census say what it rebuilt out of the residue; a " +
@@ -317,7 +335,8 @@ if (NATIVE) {
   }
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
      the stream it prints and the report it ends with, and nothing else in the tree produces either. */
-  const t = spawnSync(bin, MIN ? ["--min"] : [], { stdio: "inherit" });
+  const t = spawnSync(bin, MIN ? ["--min"] : [], { stdio: "inherit", timeout: RUN_BACKSTOP_MS });
+  if (t.signal) exitHung("the native run", t.signal);
   if (t.status !== 0) {
     console.error("[build] the native run reported rc=" + (t.status ?? "signal") +
                   " — a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault");
@@ -576,20 +595,9 @@ stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
    named as a hang, with the load average that is the first thing to suspect, and it is NOT reported as a
    failing smoke test. §NO BOUNDS is about the FRONTIER: it forbids the engine capping its own exploration, and
    it has never had anything to say about a harness refusing to wait forever for a process it launched. */
-const RUN_BACKSTOP_MS = 15 * 60 * 1000;
 function runProgram(label, argv) {
   const t = spawnSync(process.execPath, argv, { stdio: "inherit", shell: false, timeout: RUN_BACKSTOP_MS });
-  if (t.signal) {
-    let load = "unknown";
-    try { load = readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).join(" "); } catch { /* not linux */ }
-    console.error(`[build] ${label} DID NOT FINISH within ${RUN_BACKSTOP_MS / 60000} min — killed by the ` +
-                  `harness backstop (${t.signal}), NOT a failing run and NOT a passing one.\n` +
-                  `[build]   load average at kill: ${load} (on ${cpus().length} cores)\n` +
-                  `[build]   Either the machine is saturated, or the fixture's frontier does not drain and the\n` +
-                  `[build]   program has no completion condition — which is a defect in the fixture, not in the\n` +
-                  `[build]   engine, and is the thing to diagnose rather than wait out.`);
-    process.exit(2);                    /* distinct from a failing run's exit, on purpose */
-  }
+  if (t.signal) exitHung(label, t.signal);
   if (t.status !== 0) { console.error(`[build] ${label} FAILED rc=` + (t.status ?? "signal")); process.exit(t.status || 1); }
 }
 
