@@ -3841,10 +3841,20 @@ static int engine_sched_slice(void) {
                transaction that was no longer active — which is what core/indexeddb/idb_object_store.c's
                os_active_across_suspension says in its own words and aborts on. The idempotence argument above
                is untouched: running these steps MORE often than a browser is free, running them EARLIER is not.
-               THE JOB PUMP IS WHY THIS WAS THE ONLY WAY IN — flow_run_one_job is reachable only under
-               `if (!f->frame)`, so a request task's own §5.10 step 9 deactivation can never interleave with a
-               suspended member, and this line was the sole mid-member deactivator in the engine. */
-            if (g_checkpoint_hook && r != FLOW_STEP_DONE && !cur->frame && !flow_has_microtask(cur))
+               THAT STACK HAS TWO REPRESENTATIONS HERE AND `frame` IS ONLY ONE OF THEM — which is why this
+               guard was necessary and NOT sufficient, and the assert above went on firing after it landed.
+               `Flow::frame` is a page SCRIPT's suspended frame chain; a flow that preempts inside JOB-DRIVEN
+               code parks instead (quickjs.h's JS_ParkFlow: "a flow that preempts inside job-driven code parks
+               here"), and `frame` is NULL for the whole of that. Every Indexed Database member that matters
+               runs inside a job — `upgradeneeded`, `success`, `abort` are all event handlers — so the script
+               half of this test never covered them. And the return above is what exposes it: resuming a parked
+               continuation returns from here immediately, and its own comment says the continuation may park
+               AGAIN straight away, so this line was reached with a member suspended between §4.5's "is the
+               transaction active" check and the step that places its request. `JS_HasParkedFlow` is the other
+               half of the same sentence, asked of the runtime because the flow is switched IN here and the
+               slot is its own (JS_TakeParkedFlow/JS_PutParkedFlow carry it across a switch). */
+            if (g_checkpoint_hook && r != FLOW_STEP_DONE && !cur->frame &&
+                !JS_HasParkedFlow(JS_GetRuntime(ctx)) && !flow_has_microtask(cur))
                 g_checkpoint_hook(ctx);
             /* THE CHARGE, AND IT IS CHARGED TO THE FLOW THAT RAN. `flow_age_running` bills whoever the registry
                says is running, and that is only the flow this step advanced while nothing between the switch-in
