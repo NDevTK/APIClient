@@ -77,9 +77,13 @@ const LEDGER = [
          "and no instance can rank the others. THE ROW NO LONGER CLAIMS REASON 5, and that is the whole point " +
          "of the change that took it: this file used to `import(\"./lib/qjs/qjs.mjs\")` and build every " +
          "instance with `createQJS()` in the offscreen's own realm, so it held a Module handle and `HEAPU8` " +
-         "over an UNTRUSTED engine. Loading is renderer-host.js's now, every qjs_* call is an awaited " +
-         "postMessage to a sandboxed opaque-origin frame, and nothing here can address an instance's memory — " +
-         "grep this file for HEAPU8 or createQJS and the only hits are the comments recording that." },
+         "over an UNTRUSTED engine. Loading is renderer-host.js's now, every qjs_* call is an awaited METHOD " +
+         "of `content.mojom.Renderer` — a mojom interface whose every parameter is declared and validated at " +
+         "both ends of a MessagePort to a sandboxed opaque-origin frame — and nothing here can address an " +
+         "instance's memory: grep this file for HEAPU8 or createQJS and the only hits are the comments " +
+         "recording that. The generic `{fn, ret, args, bodies}` relay is deleted with that typing, and so is " +
+         "`engineOwedList`'s ABI-entry-NAME parameter, which was the last place this file identified an engine " +
+         "entry with a string rather than by calling it." },
   { f: "mojo.js", zone: "BRIDGE:1,5",
     why: "THE IPC PRIMITIVE, and it is a bridge for the reason a bridge exists at all: the WASM cannot reach " +
          "`Worker`, `MessagePort` or `postMessage`, which are the only things a process boundary is made of " +
@@ -90,14 +94,24 @@ const LEDGER = [
          "knows the TYPES a method declares and nothing about what any of them mean. What it DELETED is two " +
          "hand-written transports: a request-id table, a demultiplexer, an `op` capability list and an error " +
          "convention, written once per boundary and free to drift, plus two copies of the same three " +
-         "header-shape rules. Those rules now live once, in mojom.js, as the sentence the validator prints." },
+         "header-shape rules. Those rules now live once, in mojom.js, as the sentence the validator prints. " +
+         "BOTH boundaries are converted, and the renderer's was the one that mattered: it was the GENERIC " +
+         "transport — a `fn` string, a `ret` string and a list of shape tags relaying twenty ABI entries with " +
+         "no parameter typed — so the peer SECURITY.md calls UNTRUSTED was the one peer nothing validated " +
+         "while this layer guarded the trusted worker. It is also the only file that can answer how many " +
+         "records this process's validator REFUSED, which is the number a probe reads to say a boundary is " +
+         "healthy and the number that moves the day a renderer sends a shape the mojom does not declare." },
   { f: "mojom.js", zone: "BRIDGE:1,5",
-    why: "THE INTERFACE DEFINITIONS — the `.mojom` file. It is DATA rather than logic: four interfaces, their " +
+    why: "THE INTERFACE DEFINITIONS — the `.mojom` file. It is DATA rather than logic: five interfaces, their " +
          "versions, their methods' ordinals, and each parameter's type beside the sentence that explains that " +
          "type. It is separate from mojo.js for the reason Chromium separates a generated `*.mojom.js` from " +
          "`bindings.js`, and it is loaded by BOTH realms because an interface exists only if both ends agree " +
          "on it — one description, so a skew is a build that packaged two generations rather than a runtime " +
-         "negotiation. The zone follows the transport's: it declares what crosses for reasons 1 and 5." },
+         "negotiation. The zone follows the transport's: it declares what crosses for reasons 1 and 5. The " +
+         "biggest of the five is `content.mojom.Renderer`, the engine ABI: its parameter types are read off " +
+         "main.c's own QJS_EXPORT bodies and its ordinals are build.mjs's QJS_ABI order, so the declaration " +
+         "restates facts rather than designing anything, and all twenty entries are ONE interface because Mojo " +
+         "orders within a pipe and across none — Begin may not overtake Init." },
   { f: "renderer-host.js", zone: "BRIDGE:5",
     why: "LOADING THE WASM IS REASON 5, and this is where that reason stops being a figure of speech. While " +
          "`createQJS()` runs in the offscreen's OWN realm the untrusted engine is confined by convention — the " +
@@ -107,15 +121,18 @@ const LEDGER = [
          "cross-origin to the extension origin and is what lets Site Isolation give it its own renderer " +
          "process. Everything it holds is the load and the relay: it hands the frame check.js, the engine glue " +
          "and the wasm BYTES (an opaque-origin frame can load none of them itself — the manifest's " +
-         "require-corp plus Chromium's CORP/ACAO-for-web-accessible-only rule sees to that), then carries the " +
-         "qjs_* ABI across a MessagePort in `M.ccall`'s own shape. No analysis logic, no policy, no key: the " +
-         "pool that owns the agent-cluster question passes the name in. IT SERVES THE PRODUCT AND NOT A PROBE: " +
-         "bridge.js's engineCreate provisions here, and the sentence above about `createQJS()` running in the " +
-         "offscreen's realm is now history rather than a description of the tree — that path is deleted, so " +
-         "there is one way to build an instance and it is this one. A reply carries three things beside its " +
-         "call id: what the ABI answered, the engine output drained since the last one with the STREAM each " +
-         "line came from, and the instance's HEAPU8 length, which is the Level-1 RAM floor's one input and " +
-         "the one fact the pool cannot read for itself any more. AND IT IS NOW THE ZYGOTE, which is what stops " +
+         "require-corp plus Chromium's CORP/ACAO-for-web-accessible-only rule sees to that — mojo.js and " +
+         "mojom.js go with them, because an interface exists only if both ends load ONE description), then " +
+         "binds `content.mojom.Renderer` on the pipe that comes back. No analysis logic, no policy, no key: " +
+         "the pool that owns the agent-cluster question passes the name in. IT SERVES THE PRODUCT AND NOT A " +
+         "PROBE: bridge.js's engineCreate provisions here, and the sentence above about `createQJS()` running " +
+         "in the offscreen's realm is now history rather than a description of the tree — that path is " +
+         "deleted, so there is one way to build an instance and it is this one. WHAT LEFT THIS FILE is the " +
+         "protocol: `rendererCall`'s id table, `onReply`'s demultiplexer and the `{fn, ret, args, bodies}` " +
+         "envelope are deleted, and the instance's HEAPU8 length is a DECLARED reply field of every ABI method " +
+         "rather than a field of a transport this file has to hold. What is left is the PROCESS — fork a " +
+         "frame, hand it its program and the primordial pipe, absorb its stdio, adopt the endpoint the browser " +
+         "process transfers back. AND IT IS THE ZYGOTE, which is what stops " +
          "reason 5 from carrying a decision with it: `rendererCreate(name)` is deleted and the only path that " +
          "materializes a frame is this file's `content.mojom.Zygote.ForkRenderer` implementation, called BY the " +
          "browser process. That process holds the registry, mints the routing id and refuses a second renderer " +

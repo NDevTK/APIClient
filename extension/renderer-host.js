@@ -37,32 +37,41 @@
  * theirs: JSON (and every text form) can say none of the 256 values a byte has without an algorithm run over
  * them, and the algorithm this zone must never run is a decode. `postMessage` carries both natively — structured
  * clone reproduces a number as a number (so `otherW.length === 0` still distinguishes one from the string "0")
- * and a `Uint8Array` as bytes — so nothing is encoded in transit. A REPLY carries three things beside its call
- * id: what the ABI answered, the engine output drained since the last one (each line tagged with the STREAM it
- * came from, so stderr can be teed live without teeing @H traffic with it), and the instance's WORKING SET,
- * which is the one fact bridge.js's admission needs and cannot read off a Module it no longer holds.
- * THIS ONE IS STILL THE AD-HOC `{op:"call"}` RECORD AND NOT MOJO YET, stated rather than left to be noticed.
- * The browser-process boundary is converted in this diff and its envelope is deleted; this one carries a
- * GENERIC relay of nineteen ABI entries of varying shapes, so converting it is a TYPING job — each qjs_* entry
- * becomes a mojom method with declared parameter types — and doing it in the same diff as the transport itself
- * would be two changes with one failure surface. It is the next step and it is named as one.
+ * and a `Uint8Array` as bytes — so nothing is encoded in transit.
  *
- * TRANSFERABLES ARE NOT USED FOR ABI ARGUMENTS, and that is a decision rather than an omission. Transferring
- * detaches the sender's buffer, which is only sound where this zone provably holds the last reference: the
- * engine PROGRAM is cached here and handed to every renderer, so transferring it would detach it out from under
- * the second one. The place transfer becomes correct is a fetched reply body, whose only consumer is the
- * renderer parked on it — that is a change to make at that call site, with the ownership argument stated there,
- * not a default here. IT IS NOT UNIFORMLY CORRECT EVEN FOR BYTES THIS ZONE FETCHED: §7.4 step 14's document
- * bytes go to `qjs_init` AND are retained by bridge.js as `eng.html`, the cold recipe it writes to IndexedDB on
- * finalize, so transferring those would empty the cross-session frontier's copy of the document — a detached
- * buffer reads as a zero-length one, which is a page that parsed to nothing. THE ONE THING THAT IS TRANSFERRED
- * is the renderer's own PIPE, on the way out to the browser process and back, and there transfer is the point:
- * a handle that moves is a handle this zone provably does not hold in between.
+ * AND THE ENGINE ABI IS NOW A MOJOM INTERFACE, WHICH IS THE CHANGE THIS FILE EXISTS TO REPORT. The record it
+ * used to build was `{v:1,id,op:"call",fn,ret,args,bodies}` — a `fn` string naming any qjs_* entry, a `ret`
+ * string naming its return, and an `args` list of SHAPE TAGS the frame trusted to say how each operand should
+ * be placed — with a hand-written id table, a hand-written demultiplexer (`onReply`) and a hand-written
+ * ok/err convention. Not one parameter had a declared type. That was backwards in exactly the direction
+ * SECURITY.md cares about: the QuickJS/WASM engine is UNTRUSTED because it EXECUTES the attacker bundle, so the
+ * renderer is the one peer whose messages must be assumed hostile — and it was the one peer nothing validated,
+ * while mojo's validator (declared parameter types, ReportBadMessage killing the connection rather than the
+ * call) guarded the TRUSTED worker. `content.mojom.Renderer` declares all twenty entries, mojo.js validates
+ * both directions of every one of them, and `rendererCall`/`onReply` are deleted with the envelope.
+ * WHAT IS LEFT HERE IS THE PROCESS AND NOT THE PROTOCOL: fork a frame when the browser process orders one, hand
+ * it its program and the primordial pipe, absorb its stdio, adopt the pipe that comes back, and bind two
+ * interfaces on it. The instance's WORKING SET is a declared reply field of every method (`workingSetBytes`)
+ * rather than a field of this transport, because it is a fact this file no longer has to know about: bridge.js
+ * reads it off the reply it already awaits, on the line that ranks the engine.
+ *
+ * TRANSFERABLES ARE NOT USED FOR ABI ARGUMENTS, and that is now a property of the mojom's TYPES rather than a
+ * caveat kept here. mojo.js builds a message's transfer list from the declared types — which is what makes
+ * `handle<message_pipe>` a real pipe pass — and Mojo's `array<uint8>` is a COPIED byte sequence; the type for
+ * bytes that MOVE is `mojo_base.mojom.BigBuffer`, a different declaration. So the question is not "should this
+ * call transfer" but "is this parameter's type the one that moves", and the answer differs per parameter:
+ * `Init`'s document is ALSO retained by bridge.js as `eng.html`, the cold recipe it writes to IndexedDB on
+ * finalize, so moving it would leave the cross-session frontier holding a page that parses to nothing (a
+ * detached buffer reads as a zero-length one), while `Provide`'s body is minted by safeFetch per call and has
+ * no second reference. Declaring ONE type for both would make one spelling mean two ownerships with nothing on
+ * the wire to tell them apart. THE ONE THING THAT IS TRANSFERRED is the renderer's own PIPE, on the way out to
+ * the browser process and back, and there transfer is the point: a handle that moves is a handle this zone
+ * provably does not hold in between.
  *
  * THE ORIGIN STAMP STAYS THIS ZONE'S. A record arriving from a frame may not state who it is: the frame's
  * `event.origin` is the literal "null" (it is opaque) and everything in the payload is written by the untrusted
  * side. Identity here is the browser's — `event.source` is the WindowProxy of the frame THIS file created, and
- * once the boot record has handed over a `MessagePort` the channel is point-to-point and there is no source to
+ * once the invitation has handed over a `MessagePort` the channel is point-to-point and there is no source to
  * confuse. SECURITY.md: "identity may be minted by the untrusted side because it is only a name, but ROUTING
  * and the ORIGIN STAMPED ON A DELIVERED MESSAGE are the trusted zone's alone."
  */
@@ -86,31 +95,35 @@
   function programOnce() {
     if (_programP) return _programP;
     _programP = (async function () {
-      var names = ["check.js", "lib/qjs/qjs.mjs", "lib/qjs/qjs.wasm"];
+      /* THE TRANSPORT IS PART OF THE PROGRAM, and it is the SAME BYTES this document loaded by <script src>.
+         mojo.js's own rule is that an interface exists only if both ends agree on it, and one description is
+         what makes that true — so the frame is handed this extension's mojo.js and mojom.js rather than a copy
+         inlined into renderer.html, where a second generation could live. */
+      var names = ["check.js", "mojo.js", "mojom.js", "lib/qjs/qjs.mjs", "lib/qjs/qjs.wasm"];
       var rs = await Promise.all(names.map(function (n) { return fetch(n); }));
       for (var i = 0; i < rs.length; i++)
         CHECK(rs[i].ok, "the trusted zone could not read the renderer's own program off its own origin (" +
-                        names[i] + ") — every renderer is built out of these three and there is no other way " +
+                        names[i] + ") — every renderer is built out of these five and there is no other way " +
                         "to get them into an opaque-origin frame");
       var bufs = await Promise.all(rs.map(function (r) { return r.arrayBuffer(); }));
       return {
         check: new Blob([bufs[0]], { type: "text/javascript" }),
-        glue: new Blob([bufs[1]], { type: "text/javascript" }),
-        wasm: new Uint8Array(bufs[2]),
+        mojo: new Blob([bufs[1]], { type: "text/javascript" }),
+        mojom: new Blob([bufs[2]], { type: "text/javascript" }),
+        glue: new Blob([bufs[3]], { type: "text/javascript" }),
+        wasm: new Uint8Array(bufs[4]),
       };
     })();
     return _programP;
   }
 
-  /* A REPLY. Every one carries the engine's stdout/stderr since the last one — bridge.js reads @RESULT, @E and
-     @WHY out of exactly those lines and a crash's ROOT line is the last @WHY printed before abort(), so lines
-     left in the frame would be a crashed renderer taking its own cause with it. */
-  function onReply(r, m) {
-    DCHECK(m && m.v === 1 && typeof m.id === "number" && Array.isArray(m.out),
-           "a renderer answered with something that is not this transport's reply — a reply is a version, the " +
-           "call id it answers, and the engine output drained with it");
-    for (var i = 0; i < m.out.length; i++) {
-      var ln = m.out[i];
+  /* THE FRAME'S OUTPUT, ABSORBED WHERE IT ARRIVES. Every record a mojo child posts drains its process's stdio
+     with it (mojo.js's second stated divergence), and this is the parent hook that takes it: bridge.js reads
+     @RESULT, @E and @WHY out of exactly these lines and a crash's ROOT line is the last @WHY printed before
+     abort(), so lines left in the frame would be a crashed renderer taking its own cause with it. */
+  function absorbStdio(r, lines) {
+    for (var i = 0; i < lines.length; i++) {
+      var ln = lines[i];
       DCHECK(Array.isArray(ln) && (ln[0] === 1 || ln[0] === 2) && typeof ln[1] === "string",
              "a renderer's output line did not carry the stream it came from — a line crosses as `[fd, text]` " +
              "so the two streams stay in ONE order (the last @WHY before an abort is what names the cause, and " +
@@ -122,61 +135,41 @@
          to be discarded. stdout is NOT teed — a hot engine's @H traffic would bury it. */
       if (ln[0] === 2) console.debug(ln[1]);
     }
-    var w = r._await.get(m.id);
-    DCHECK(w !== undefined,
-           "a renderer answered a call id this zone never made — the id is the whole routing table for an " +
-           "answer, so an unknown one means the frame echoed something other than what it was handed and the " +
-           "call that is actually outstanding will never be resolved");
-    if (!w) return;
-    r._await.delete(m.id);
-    if (m.ok) {
-      /* THE INSTANCE'S WORKING SET, RECORDED WHERE IT ARRIVES. bridge.js's Level-1 admission is the sum of this
-         number over the pool and it used to read `M.HEAPU8.length` off the Module it held; there is no Module
-         on this side any more, so the renderer states it on every reply and the last one is what the pool
-         holds. Asserted rather than defaulted: an absent one is renderer.html having stopped writing it, and
-         the shape that hides is "this instance occupies no memory", which admits another engine against RAM
-         that is already spent. */
-      DCHECK(typeof m.heapBytes === "number",
-             "a renderer answered a call without stating its working set — every successful reply carries " +
-             "HEAPU8.length because a call is the only thing that can grow it, and the trusted zone's RAM " +
-             "floor is the sum of that number across the pool");
-      r.heapBytes = m.heapBytes;
-      w.resolve(m.ret);
-      return;
-    }
-    /* A FAILED CALL IS A REJECTION, because that is the shape the seam it replaces already has: `M.ccall`
-       THROWS when the WASM aborts, and bridge.js's engineCrash is written against that throw. The renderer is
-       dead after one — its linear memory is what aborted — so every later call into it is a bug here, not a
-       second crash there. */
-    r._dead = true;
-    var e = new Error(m.err);
-    e.rendererLines = r.lines.slice(-8);
-    w.reject(e);
   }
 
-  /* ONE ABI CALL, in the shape `M.ccall` has, so the conversion of each of bridge.js's call sites is the word
-     `await` and nothing else. `args` declares each argument's SHAPE (see renderer.html for what each places);
-     `bodies` is the byte list those shapes index, held beside the record so a caller cannot deliver one
-     without the other. */
-  function rendererCall(r, fn, ret, args, bodies) {
-    DCHECK(!r._dead,
-           "an ABI call was made into a renderer that has already aborted — its linear memory is the thing " +
-           "that failed, so this call would be a second crash reported as a first");
-    DCHECK(r.port !== null,
-           "an ABI call was made into a renderer whose pipe is not bound — between the fork order and the " +
-           "browser process handing the pipe back, this zone provably does not hold it, and a call in that " +
-           "window is a caller reaching for a renderer it has not been given yet");
-    DCHECK(typeof fn === "string" && fn.lastIndexOf("qjs_", 0) === 0,
-           "a renderer was asked to call something outside the engine ABI (`" + fn + "`) — build.mjs's " +
-           "QJS_ABI is the whole list and every entry is named qjs_*");
-    DCHECK(ret === null || ret === "number" || ret === "string",
-           "a renderer call declared a return type this transport cannot carry (`" + ret + "`) — the ABI " +
-           "answers a number, a C string, or nothing");
-    DCHECK(Array.isArray(args), "a renderer call carried no argument list");
-    var id = r._next++;
-    var p = new Promise(function (res, rej) { r._await.set(id, { resolve: res, reject: rej }); });
-    r.port.postMessage({ v: 1, id: id, op: "call", fn: fn, ret: ret, args: args, bodies: bodies || [] });
-    return p;
+  /* THE PRIMORDIAL PIPE'S TRANSPORT, AND THE ONE THING ABOUT IT THAT IS NOT A ONE-LINER: THE ENDPOINT MOVES.
+     Between answering a fork order and being handed the pipe back by the browser process, this renderer's
+     endpoint is DETACHED here and live nowhere in this document — which is the whole evidence that it
+     travelled — so the transport reads `r.port` at post time rather than closing over one port object, and the
+     Connection's single `listen` callback is re-installed on whatever endpoint is current. A post in that
+     window is a caller reaching for a renderer it has not been given yet, and it says so. */
+  function rendererTransport(r) {
+    return {
+      post: function (rec, xfer) {
+        DCHECK(r.port !== null,
+               "a record was posted to renderer " + r.routingId + " while its pipe was in flight — between " +
+               "the fork order and the browser process handing the endpoint back, this zone provably does not " +
+               "hold it, so there is nothing here to post on");
+        r.port.postMessage(rec, xfer);
+      },
+      listen: function (cb) {
+        r._onwire = cb;
+        rendererAttachPipe(r, r.port);
+      },
+    };
+  }
+  /* AND THE (RE-)ATTACHMENT, in ONE place because it happens twice — at the fork, and again when the endpoint
+     comes back from the browser process — and the second one is where a mistake would be silent: a Connection
+     whose callback was not re-installed is a renderer that answers nothing, with every caller parked forever. */
+  function rendererAttachPipe(r, port) {
+    DCHECK(port instanceof MessagePort,
+           "a renderer's pipe was attached with something that is not a MessagePort — the endpoint is what the " +
+           "browser process transferred back, and anything else here is a clone of a port rather than the port");
+    DCHECK(r._onwire !== null,
+           "a renderer's pipe was attached before its Connection began listening — the callback is what reads " +
+           "the wire, so an endpoint attached without one delivers every record to nobody");
+    r.port = port;
+    port.onmessage = function (ev) { r._onwire(ev.data); };
   }
 
   /* THE LIVE RENDERERS OF THIS ZONE, AND THE COUNTERS THAT MAKE A CLEAN TEARDOWN DISTINGUISHABLE FROM NOTHING
@@ -205,12 +198,20 @@
      order's `error` reply. Telling the registry twice would free the agent cluster twice — the second time out
      from under whatever holds it next. */
   function frameTeardown(r) {
-    DCHECK(r._await.size === 0,
-           "a renderer was destroyed with " + r._await.size + " call(s) still outstanding — each one is a " +
-           "caller parked on an answer that can no longer be produced, which is silent everywhere");
+    DCHECK(r.conn !== null,
+           "a renderer was destroyed before its Connection existed — the frame is created and its invitation " +
+           "offered in one step, so a record with a frame and no connection is a teardown reaching a renderer " +
+           "this file never finished forking");
+    var owed = r.conn.outstandingCalls();
+    DCHECK(owed === 0,
+           "a renderer was destroyed with " + owed + " call(s) still outstanding — each one is a caller parked " +
+           "on an answer that can no longer be produced, which is silent everywhere");
+    /* THE CONNECTION IS CLOSED AND NOT MERELY ABANDONED, so "this peer is gone" has ONE representation: every
+       later call into it rejects with the reason it was closed rather than posting into a dead port, and this
+       realm's open-endpoint count stops including a pipe nothing can travel on. */
+    r.conn.close("its frame was removed from the offscreen document");
     if (r.port) r.port.close();
     if (r.frame.parentNode) r.frame.parentNode.removeChild(r.frame);
-    r._dead = true;
     DCHECK(_live.has(r),
            "a renderer left this document twice — the second teardown removes an element that is already gone " +
            "and reports a termination the browser process has already recorded");
@@ -295,40 +296,71 @@
     f.setAttribute("title", "renderer " + clusterKey);
     f.setAttribute("src", RENDERER_URL);
     f.style.cssText = "position:absolute;left:0;top:0;width:1px;height:1px;border:0;visibility:hidden";
-    /* `heapBytes` IS NOT IN THIS LITERAL AND MUST NOT BE. There is no number that means "this instance has not
-       said yet" which a consumer would not then have to branch on, and there is no window in which one is
-       needed: the boot reply is the first record to arrive on this port and carries it, and this function does
-       not answer the fork order until that record has landed. onReply is its only writer. */
+    /* NO WORKING-SET FIELD IS IN THIS LITERAL AND NONE MAY BE. There is no number meaning "this instance has
+       not said yet" that a consumer would not then have to branch on, and there is no window in which one is
+       needed: it is a DECLARED REPLY FIELD of every `content.mojom.Renderer` method, so every answer carries
+       the current one and the caller reads it off the reply it already awaited. */
     var r = { name: clusterKey, routingId: routingId, frame: f, port: null, lines: [],
-              _next: 1, _await: new Map(), _dead: false };
+              conn: null, renderer: null, childProcess: null, _onwire: null };
     _live.add(r);
     _provisioned++;
+    /* DECLARED HERE AND FILLED BY THE PROMISE EXECUTOR ON THE NEXT LINE (which runs synchronously), which is a
+       stated hole rather than a placeholder: a no-op stand-in would be a cleanup that silently did nothing if
+       the executor ever stopped installing one, and the listener would then outlive every renderer this
+       document forks. It is asserted where it is used. */
+    var stopListening = null;
     var booted = new Promise(function (resolve, reject) {
-      function onHello(e) {
+      function onFrame(e) {
         /* THE BROWSER-SET IDENTITY, AND THE ONLY ONE THERE IS. The frame's origin is opaque so `event.origin`
            is the literal "null" for every renderer; `event.source` is the WindowProxy of the frame this
-           closure created. Another renderer booting concurrently posts its hello here too and is matched by
-           ITS own listener, so a mismatch is that and not a message to drop on the floor. */
+           closure created. Another renderer booting concurrently posts here too and is matched by ITS own
+           listener, so a mismatch is that and not a message to drop on the floor. */
         if (e.source !== f.contentWindow) return;
-        removeEventListener("message", onHello);
-        /* A DEDICATED CHANNEL FROM HERE ON. The hello is the one message that has to travel window-to-window
-           (there is nothing else yet to travel on); every call after it rides a MessagePort, which is
-           point-to-point by construction — no target origin to state, no source to check, and no other
-           listener on this window can see it. */
-        var ch = new MessageChannel();
-        r.port = ch.port1;
-        ch.port1.onmessage = function (ev) { onReply(r, ev.data); };
-        r._await.set(0, { resolve: resolve, reject: reject });
-        /* "*" IS FORCED: the frame's origin is opaque and postMessage's targetOrigin parses as a URL unless it
-           is "*" or "/", so there is no origin string that names it. It is not a broadcast — the message goes
-           to this frame's window and to nothing else. */
-        e.source.postMessage({ v: 1, id: 0, op: "boot",
-                               check: prog.check, glue: prog.glue, wasm: prog.wasm }, "*", [ch.port2]);
+        var d = e.data;
+        DCHECK(!!d && d.v === 1,
+               "a renderer frame posted a window record that is not this handshake's — the window channel " +
+               "carries exactly two things (the frame's hello, and a refusal from a bootstrap that could not " +
+               "reach the pipe) and everything else in this document's IPC rides a mojo pipe");
+        if (d.hello === 1) {
+          /* THE INVITATION. `mojo::OutgoingInvitation`: creating the child gives the parent ONE primordial
+             pipe and nothing else, and every capability afterwards is brokered onto a pipe of its own. It
+             also carries this process's PROGRAM, which is what a real child gets from the filesystem and an
+             opaque-origin frame can obtain no other way.
+             "*" IS FORCED: the frame's origin is opaque and postMessage's targetOrigin parses as a URL unless
+             it is "*" or "/", so there is no origin string that names it. It is not a broadcast — the message
+             goes to this frame's window and to nothing else. */
+          var ch = new MessageChannel();
+          r.port = ch.port1;
+          r.conn = new self.mojo.Connection(rendererTransport(r), {
+            role: "parent", name: "renderer " + routingId,
+            onStdio: function (lines) { absorbStdio(r, lines); },
+            /* AND EVERY ERROR THIS CONNECTION RAISES CARRIES THAT TAIL, because the reason a call failed is
+               almost never in the exception and almost always in the lines before it: bridge.js's
+               engineBootFailed and engineCrash both scan `rendererLines` backwards for the ROOT @WHY. */
+            decorate: function (err) { err.rendererLines = r.lines.slice(-8); },
+          });
+          r.conn.ready.then(resolve, reject);
+          e.source.postMessage({ v: 1, invitation: 1, check: prog.check, mojo: prog.mojo, mojom: prog.mojom,
+                                 glue: prog.glue, wasm: prog.wasm }, "*", [ch.port2]);
+          return;
+        }
+        /* A BOOTSTRAP THAT NEVER REACHED THE PIPE. It is the one failure a mojo acceptance cannot carry — the
+           program that did not load may BE mojo.js — so it travels on the invitation channel, and without it
+           the parent would park forever on an acceptance that is not coming, which is the one outcome with no
+           symptom anywhere. */
+        DCHECK(typeof d.bootstrapFailed === "string" && Array.isArray(d.out),
+               "a renderer frame posted a refusal that is not one — a bootstrap failure states why it failed " +
+               "and drains the output printed before it, which is the only thing that says what broke");
+        absorbStdio(r, d.out);
+        reject(new Error(d.bootstrapFailed));
       }
-      addEventListener("message", onHello);
+      addEventListener("message", onFrame);
+      /* THE LISTENER OUTLIVES NEITHER OUTCOME. It is removed once the handshake has settled either way rather
+         than inside the hello arm, because the refusal arrives AFTER the hello and a listener taken down at
+         the hello could not hear it. */
+      stopListening = function () { removeEventListener("message", onFrame); };
     });
     (document.body || document.documentElement).appendChild(f);
-    r.call = function (fn, ret, args, bodies) { return rendererCall(r, fn, ret, args, bodies); };
     r.destroy = function () { rendererDestroy(r); };
     /* A RENDERER THAT DID NOT BOOT IS STILL A FRAME IN THIS DOCUMENT, so the element and its port go first, or
        a caller that retried would accumulate dead renderers under a document that never reloads. The failure
@@ -336,18 +368,24 @@
        that never existed — and it travels as a VALUE rather than a rejection because a page whose engine
        aborted its boot is a RECORDED outcome (bridge.js's engineBootFailed writes a crash record for it),
        which is a different thing from this transport being broken. */
+    DCHECK(typeof stopListening === "function",
+           "the invitation handshake installed no way to stop listening — the executor above runs " +
+           "synchronously, so a missing one is a `message` listener that outlives every renderer this document " +
+           "ever forks and answers for a frame that is gone");
     try { await booted; }
     catch (e) {
+      stopListening();
       frameTeardown(r);
       RETHROW_FATAL(e);
       return { pipe: null, error: String((e && e.message) || e) };
     }
+    stopListening();
     /* AND THE PIPE LEAVES THIS REALM. It is TRANSFERRED to the browser process, which relays it to whoever
        asked for the renderer — so between this line and `rendererLaunch`'s adoption the endpoint is detached
        here and live nowhere in this document, which is the property that makes "the browser process handed
-       back the pipe" a fact rather than a description. `r.port` is nulled and `onmessage` is deliberately NOT,
-       so a stray record arriving in that window still reaches an assert instead of being dropped on a handler
-       that was quietly removed. */
+       back the pipe" a fact rather than a description. `r.port` is nulled and the Connection's read callback is
+       deliberately KEPT, so a stray record arriving in that window still reaches the transport's asserts
+       instead of being dropped on a handler that was quietly removed. */
     var pipe = r.port;
     r.port = null;
     _awaitingAdopt.set(routingId, r);
@@ -389,8 +427,16 @@
     DCHECK(r.port === null,
            "a renderer's pipe came back while this zone still held one — the endpoint is transferred, so " +
            "holding one here means it never left and what arrived is a second, unentangled port");
-    r.port = v.pipe;
-    v.pipe.onmessage = function (ev) { onReply(r, ev.data); };
+    rendererAttachPipe(r, v.pipe);
+    /* AND THE BROKER, USED ON THE RENDERER BOUNDARY TOO. Two names go out on the primordial pipe and two bound
+       pipes come back, which is the whole replacement for a `fn` string naming any qjs_* entry: the ABI is an
+       INTERFACE whose every parameter is declared and validated, and "how much IPC does that process have
+       open" is a second interface because it is a fact about the PROCESS and not about the ABI.
+       IT IS DONE HERE AND NOT AT THE FORK, because a bind request travels on the primordial pipe and that
+       endpoint spends the fork inside the browser process. This is the first line at which this realm holds it
+       again, which is exactly the property the relay exists to demonstrate. */
+    r.renderer = r.conn.bindInterface("content.mojom.Renderer");
+    r.childProcess = r.conn.bindInterface("content.mojom.ChildProcess");
     return r;
   }
   self.rendererLaunch = rendererLaunch;
@@ -405,9 +451,18 @@
      Lexbor and runs `document_bundle_id`'s <script> scan over the result, and a number computed inside the
      frame comes back. `qjs_init` runs no page script, so nothing here needs the reply/notice edges that are
      still synchronous in bridge.js.
-     AND IT NOW GOES THROUGH THE BROWSER PROCESS, which is the point of the change it reports: `routingId` is a
-     number this document could not have produced, and its presence in `content.mojom.RendererHost`'s own
-     registry is what `rendererPoolProbe` cross-checks. */
+     AND IT NOW GOES THROUGH THE BROWSER PROCESS, which is the point of an earlier change it reports:
+     `routingId` is a number this document could not have produced, and its presence in
+     `content.mojom.RendererHost`'s own registry is what `rendererPoolProbe` cross-checks.
+     AND THE TYPING IS OBSERVABLE, which is the point of THIS one. `iface`/`ifaceVersion`/`ifaceMethods` are
+     read off the bound interface's own descriptor rather than restated here, so they answer "which interface
+     is this pipe actually carrying, at which version" — the question a broker that bound the wrong
+     implementation would get wrong. `badMessages` is the count of records this TRUSTED zone's validator
+     refused, and it is the number that would move if a renderer ever sent something the mojom does not
+     declare: SECURITY.md makes the renderer the peer whose messages must be assumed hostile, so a healthy run
+     reads 0 and a non-zero is that peer being broken. `child` is the same IPC surface asked of the frame ITSELF
+     over a second brokered pipe, because a transport whose only evidence is that a message arrived is one
+     whose shape nobody can check from outside. */
   self.rendererProbe = async function rendererProbe(html) {
     var ADDR = "https://renderer.probe/app/index.html";
     var doc = typeof html === "string" ? html
@@ -417,22 +472,26 @@
     var r = await rendererLaunch("probe");
     rec.provisioned = true;
     rec.routingId = r.routingId;
+    rec.iface = r.renderer.def.name;
+    rec.ifaceVersion = r.renderer.def.version;
+    rec.ifaceMethods = r.renderer.def.byOrd.size;
     try {
-      rec.initrc = await r.call("qjs_init", "number",
-        [{ t: "cbytes", i: 0 },        /* the document, as BYTES — qjs_init strlen()s a NUL-terminated pointer */
-         { t: "cstr", v: ADDR },       /* §4.4's document address, which the engine derives the origin from */
-         { t: "cstr", v: "probe" },    /* the name this agent's root document is known by */
-         { t: "cstr", v: "" },         /* the response's header field lines: this document had no response */
-         { t: "cstr", v: ADDR }],      /* §8.1.3.1's top-level creation URL — a root document is its own */
-        [new TextEncoder().encode(doc)]);
-      rec.bundleId = ((await r.call("qjs_bundle_id", "number", [], [])) >>> 0).toString(36);
-      /* THE WORKING SET THE FRAME STATED, which is the fact bridge.js's RAM floor is summed out of. A probe
-         that never looked at it would leave the pool's one non-ABI input unexercised. */
-      rec.heapBytes = r.heapBytes;
+      /* THE DOCUMENT CROSSES AS BYTES — `Init`'s `array<uint8>`, which is what `qjs_init` takes (a
+         NUL-terminated pointer it strlen()s). The four strings beside it are §4.4's address, the name this
+         agent's root document is known by, the response's header field lines (empty: this document had no
+         response) and §8.1.3.1's top-level creation URL, which for a root document is its own. */
+      var v = await r.renderer.init(new TextEncoder().encode(doc), ADDR, "probe", "", ADDR);
+      rec.initrc = v.rc;
+      var b = await r.renderer.getBundleId();
+      rec.bundleId = (b.bundleId >>> 0).toString(36);
+      /* THE WORKING SET THE FRAME STATED, read off the reply that carried it — the fact bridge.js's RAM floor
+         is summed out of. A probe that never looked at it would leave the pool's one non-ABI input untested. */
+      rec.heapBytes = b.workingSetBytes;
+      rec.child = await r.childProcess.getMojoStats();
       /* AND THE TEARDOWN, because it is the call that makes the runtime walk gc_obj_list and report a leaked
          GC object as a failure. A probe that provisioned an instance and walked away from it would be
          measuring the transport with the one check that judges the instance switched off. */
-      await r.call("qjs_teardown", null, [], []);
+      await r.renderer.teardown();
       rec.torndown = true;
     } catch (e) {
       /* AN ENGINE ABORT IS A RECORDED OUTCOME AND A HOST INVARIANT FAILURE IS NOT — the same split
@@ -446,6 +505,12 @@
     } finally {
       r.destroy();
     }
+    /* READ AFTER THE TEARDOWN ON PURPOSE: a destroyed renderer's endpoints leave this realm's open set with the
+       connection they belonged to, so `mojo` here is what the offscreen holds once this probe's instance is
+       gone — the browser process's three Remotes and nothing of the renderer's. An `endpoints` that kept
+       climbing across probes would be a document reporting its whole history of instances as its live IPC. */
+    rec.mojo = self.mojo.stats();
+    rec.badMessages = rec.mojo.badMessages;
     rec.lines = r.lines;
     return rec;
   };

@@ -14,8 +14,9 @@
  * exported view of an untrusted instance's whole linear memory, and two instances in one realm were a
  * NAMESPACE. Every instance is now a RENDERER — renderer-host.js provisions it in an
  * `<iframe sandbox="allow-scripts">` whose unique opaque origin is cross-origin to the extension origin, which
- * is what lets Site Isolation put it in its own renderer process — and every qjs_* call is an `await`ed
- * `rendererCall` over a MessagePort. The in-realm path is DELETED rather than kept beside it: while both
+ * is what lets Site Isolation put it in its own renderer process — and every qjs_* call is an `await`ed method
+ * of `content.mojom.Renderer`, a mojom interface whose every parameter is declared and validated at both ends
+ * of a MessagePort. The in-realm path is DELETED rather than kept beside it: while both
  * existed the sandboxed one served nothing and the boundary was a claim about a path production did not take.
  * The consequence to hold on to is that EVERY ABI call is now a suspension point at which another engine's
  * round can interleave, so anything that was atomic because it was two ccalls in a row is atomic here only if
@@ -672,40 +673,56 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
   /* qjs_init ANSWERS, and this discarded the answer. Its C body is a wall of CHECKs whose failures abort the
      instance, so the only value it can return is 0 — which is exactly why reading it costs nothing and why a
      non-zero would be an entry that started reporting a failure this zone was not listening for. */
-  /* qjs_init TAKES THE DOCUMENT AS A NUL-TERMINATED C STRING and `strlen`s it, so a document whose bytes
-     contain a 0x00 is parsed truncated at it — silently, with the rest of the page simply absent. HTML
-     §13.2.5's tokenizer has a rule for that byte (it emits U+FFFD), which is the proof it is a byte a document
-     may legitimately contain. What to build is the LENGTH beside the pointer, the way qjs_provide now carries
-     one, and with it §13.2.3.2's encoding sniffing algorithm so that the document's own encoding is decided by
-     the engine rather than assumed to be UTF-8. */
-  DCHECK(!(html instanceof Uint8Array) || html.indexOf(0) < 0,
-         "a fetched document's bytes contain a 0x00 and qjs_init takes a NUL-terminated C string — the parse " +
-         "would stop there and the rest of the document would be absent with nothing to say so. Give qjs_init " +
-         "a LENGTH beside the pointer (qjs_provide now carries one) and run HTML §13.2.3.2's encoding " +
-         "sniffing over those bytes in the engine");
-  /* THE DOCUMENT CROSSES AS WHAT IT ALREADY IS, and the two shapes differ in what the browser already did:
-     content.js ships a SERIALIZED DOM (the renderer parsed the response and this is its characters, so the
-     `cstr` shape encodes them to UTF-8 in the frame), while a child navigable's document is the response's own
-     BYTES off safeFetch and the `cbytes` shape places them unchanged. Decoding the second into a string on the
-     way would be this zone running HTML §13.2.3.2's encoding sniffing — badly, as UTF-8.
+  /* THE DOCUMENT CROSSES AS BYTES, ONE SHAPE, because `qjs_init` takes one thing: a NUL-terminated byte
+     sequence it `strlen`s. It used to cross as EITHER — content.js ships a SERIALIZED DOM (the renderer parsed
+     the response and this is its characters) while a child navigable's document is the response's own BYTES off
+     safeFetch — and the UNTRUSTED frame was the zone that ran the UTF-8 encode on the first of those.
+     `content.mojom.Renderer.Init` declares `array<uint8>`, so the encode happens HERE, in the zone that already
+     holds the characters. It is an encode and never a decode, which is the direction that matters: decoding the
+     BYTES into a string on the way would be this zone running HTML §13.2.3.2's encoding sniffing, badly, as
+     UTF-8.
+     THE TWO SHAPES ARE ASSERTED RATHER THAN DEFAULTED PAST. `html || ""` stood here, and it turned "the
+     producer handed over no document at all" into a page that parses to nothing — a successful analysis of an
+     empty document, which reads exactly like a page with no endpoints and no sinks.
      NOT TRANSFERRED, and the ownership argument is the reason rather than caution: these bytes are ALSO
      retained by this zone as `eng.html`, which finish() writes to IndexedDB as the cold recipe's copy of the
-     document, so detaching the buffer here would leave the cross-session frontier holding a page that parses
-     to nothing. The reply bodies in engineProvide are the site where the argument comes out the other way. */
-  const _docBytes = html instanceof Uint8Array;
-  const _initrc = await rend.call("qjs_init", "number",
-    [_docBytes ? { t: "cbytes", i: 0 } : { t: "cstr", v: html || "" },
-     { t: "cstr", v: (msg && msg.sourceUrl) || "" },
-     { t: "cstr", v: eng.docId },
-     { t: "cstr", v: _headers },
-     { t: "cstr", v: _tlu }],
-    _docBytes ? [html] : []);
-  DCHECK(_initrc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
-                        "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
+     document, so moving the buffer here would leave the cross-session frontier holding a page that parses to
+     nothing. mojom.js states why that is a property of the declared TYPE rather than a flag on this call. */
+  DCHECK(html instanceof Uint8Array || typeof html === "string",
+         "a document reached qjs_init as neither a byte sequence nor characters — content.js ships the " +
+         "renderer's serialized DOM and safeFetch ships a response body, so anything else is a producer that " +
+         "stopped producing a document, with nothing downstream to notice but an empty finding set");
+  const _doc = html instanceof Uint8Array ? html : new TextEncoder().encode(html);
+  /* THE SAME NUL, NOW ASSERTED OVER BOTH SHAPES — which the byte-only form of this check could not do: a
+     STRING document containing U+0000 encodes to a 0x00 and truncated the parse there just as silently, and
+     that half was unasserted. HTML §13.2.5's tokenizer has a rule for that byte (it emits U+FFFD), which is
+     the proof it is a byte a document may legitimately contain. What to build is the LENGTH beside the
+     pointer, the way qjs_provide already carries one, and with it §13.2.3.2's encoding sniffing algorithm so
+     that the document's own encoding is decided by the engine rather than assumed to be UTF-8. */
+  DCHECK(_doc.indexOf(0) < 0,
+         "a document's bytes contain a 0x00 and qjs_init takes a NUL-terminated C string — the parse would " +
+         "stop there and the rest of the document would be absent with nothing to say so. Give qjs_init a " +
+         "LENGTH beside the pointer (qjs_provide now carries one) and run HTML §13.2.3.2's encoding sniffing " +
+         "over those bytes in the engine");
+  /* AND THE ADDRESS IS ASSERTED RATHER THAN DEFAULTED TOO, for the reason the line below it already proves:
+     `(msg && msg.sourceUrl) || ""` stood here, and `originOf("")` is `""` — a frontier key every unidentifiable
+     document would share, so one page's parked residue would resume inside another's engine. The engine's own
+     entry CHECKs that this address parses, so an empty one has always aborted; it aborted one call later, in
+     the process that was handed the hole rather than in the zone that made it. */
+  DCHECK(!!msg && typeof msg.sourceUrl === "string" && msg.sourceUrl !== "",
+         "a document reached qjs_init with no address — §4.4's document address is what the engine derives " +
+         "this document's ORIGIN from (§4.7's serialization, its own url.c) and what every relative URL the " +
+         "bundle builds resolves against, so a document without one is analysed behind no principal at all");
+  const _init = await rend.renderer.init(_doc, msg.sourceUrl, eng.docId, _headers, _tlu);
+  DCHECK(_init.rc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
+                         "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
   /* NEVER 0 — document_bundle_id folds an empty scan to 1 precisely so that a 0 cannot mean two things. A 0
      here would key every unidentifiable document to the SAME frontier entry, so one page's parked residue
      would resume in another's engine. */
-  const _bidRaw = (await rend.call("qjs_bundle_id", "number", [], [])) >>> 0;
+  /* `>>> 0` BECAUSE THE WIRE CARRIES AN i32. `qjs_bundle_id` returns a C `unsigned` and the wasm hands it back
+     signed, which is what the mojom declares (`int32 bundleId`) rather than hiding behind a type the wire does
+     not have — so the reinterpretation is the READER'S, on the line that needs the unsigned value. */
+  const _bidRaw = (await rend.renderer.getBundleId()).bundleId >>> 0;
   DCHECK(_bidRaw !== 0, "the engine answered a bundle id of 0 — document_bundle_id never returns one, and a 0 " +
                         "collides every document's frontier key with every other's");
   const _bid = _bidRaw.toString(36);
@@ -719,7 +736,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
   const prior = persist ? await frontierGet(fkey) : null;
   // PHASE 2 — seed the frontier (fresh, or resume parked recipes). The host sets a VALUE yield-floor per
   // step (the runner-up engine's weight), so this engine yields when it's outranked — no fixed slice.
-  await rend.call("qjs_begin", null, [{ t: "string", v: (prior && prior.recipes) ? prior.recipes : "" }], []);
+  await rend.renderer.begin((prior && prior.recipes) ? prior.recipes : "");
   // DEV-ONLY verification hook (a real page never carries this query param): force the RAM-pressure park so
   // the cross-session round trip (park recipes -> IDB -> restart-keep -> resume) is VERIFIABLE without a 512MB
   // working set. Keyed off the URL (flows reliably through msg.sourceUrl to here, unlike a cross-context
@@ -984,24 +1001,27 @@ async function engineJoin(eng, msg, docName, topLevelUrl) {
          "one credentialed-read principal; the engine's own CHECK aborts on it, and this zone computed the " +
          "cluster key that sent it here");
   const html = msg.pageHtml;
-  const _docBytes = html instanceof Uint8Array;
+  /* THE SAME ONE SHAPE THE ROOT'S DOCUMENT TAKES, and for the same reason: `content.mojom.Renderer.Join`
+     declares `array<uint8>` because `qjs_join` has main.c's byte-identical signature, so the two operations
+     take ONE contract and a change to what a document arrives with reaches both. */
+  DCHECK(html instanceof Uint8Array || typeof html === "string",
+         "a joined document arrived as neither a byte sequence nor characters — a child navigable's document " +
+         "is safeFetch's response body and a reported one is the renderer's serialized DOM, so anything else " +
+         "is a document this agent would hold as nothing at all");
+  const _doc = html instanceof Uint8Array ? html : new TextEncoder().encode(html);
   /* THE SAME NUL THE ROOT'S DOCUMENT IS ASSERTED FOR, and for the same reason: qjs_join strlen()s the bytes,
      so a document carrying a 0x00 is parsed truncated at it with the rest simply absent. HTML §13.2.5's
      tokenizer has a rule for that byte, which is the proof a document may legitimately contain one. */
-  DCHECK(!_docBytes || html.indexOf(0) < 0,
+  DCHECK(_doc.indexOf(0) < 0,
          "a joined document's bytes contain a 0x00 and qjs_join takes a NUL-terminated C string — the parse " +
          "would stop there and the rest of the document would be absent with nothing to say so. Give qjs_join " +
          "a LENGTH beside the pointer (qjs_provide now carries one) and run HTML §13.2.3.2's encoding " +
          "sniffing over those bytes in the engine");
-  const rc = await eng.r.call("qjs_join", "number",
-    [_docBytes ? { t: "cbytes", i: 0 } : { t: "cstr", v: html || "" },
-     { t: "cstr", v: msg.sourceUrl },
-     { t: "cstr", v: docName },
-     { t: "cstr", v: responseFieldLines(msg.responseHeaders) },
-     { t: "cstr", v: topLevelUrl }],
-    _docBytes ? [html] : []);
-  DCHECK(rc === 0, "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
-                   "every precondition and aborts, so a non-zero return is a contract that changed");
+  const _join = await eng.r.renderer.join(_doc, msg.sourceUrl, docName,
+                                          responseFieldLines(msg.responseHeaders), topLevelUrl);
+  DCHECK(_join.rc === 0,
+         "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
+         "every precondition and aborts, so a non-zero return is a contract that changed");
   /* THE NAME ENTERS THE ROUTING TABLE ONLY ONCE THE ENGINE HOLDS IT. Between the call and this line the
      document is one this zone would answer for and the instance would not, which is the direction that is
      safe: a delivery in that window is refused by the post branch's assert rather than routed into an agent
@@ -1047,20 +1067,22 @@ async function engineRecordFacts(eng) {
      THE RANKING NEEDS NO ARM FOR IT. `-Infinity < x` is true for every real weight, so a drained engine sorts
      last by arithmetic rather than by a branch, and the step that follows retires it through the DONE path it
      was always going to take. */
-  const w = +(await eng.r.call("qjs_top_weight", "number", [], []));
+  const _rank = await eng.r.renderer.getTopWeight();
+  const w = _rank.weight;
   DCHECK(Number.isFinite(w) || w === -Infinity,
          "the engine answered a top-flow weight of " + w + " — a weight is either a finite number or the " +
          "-Infinity that says its frontier holds no runnable flow, and NaN or +Infinity is neither: every " +
          "Level-1 ranking comparison against a NaN is false, so the pool would pick by array order and call " +
          "it value-of-information");
   eng.topWeight = w;
-  /* THE WORKING SET AS THE FRAME LAST STATED IT, WHICH IS AS OF THE CALL ABOVE. There is no HEAPU8 in this
-     realm to read — that is the whole point of the boundary — so renderer.html reports `HEAPU8.length` on every
-     successful reply and renderer-host.js records the newest on the renderer. The reply just awaited is
-     therefore the freshest statement that exists, and no extra round trip could improve on it: a call is the
-     only thing that can grow that memory. WASM memory is a whole number of 64 KiB pages by definition, so
-     anything else is not the view over this instance's memory. */
-  const b = eng.r.heapBytes;
+  /* THE WORKING SET AS THE FRAME STATED IT ON THE VERY CALL ABOVE, read off that call's own reply. There is no
+     HEAPU8 in this realm to read — that is the whole point of the boundary — so `workingSetBytes` is a DECLARED
+     REPLY FIELD of every `content.mojom.Renderer` method, validated by the transport at both ends. Taking it
+     from the reply just awaited is the freshest statement that exists and no extra round trip could improve on
+     it: a call is the only thing that can grow that memory, so the moment a call answers is the moment the
+     number changed. WASM memory is a whole number of 64 KiB pages by definition, so anything else is not the
+     view over this instance's memory. */
+  const b = _rank.workingSetBytes;
   DCHECK(Number.isInteger(b) && b > 0 && b % 65536 === 0,
          "an instance reported a working set that is not a whole number of WASM pages (" + b + ") — HEAPU8 is " +
          "the view over the entire linear memory, which is allocated and grown in 64 KiB pages, so a length " +
@@ -1095,25 +1117,26 @@ function engineWeight(eng) {
    or `{meta, bytes}`.
    THE PLACEMENT MOVED INTO THE FRAME AND `engineBodyBytes` IS DELETED WITH IT. It malloc'd into `M.HEAPU8`,
    handed qjs_provide a [ptr, len] pair and freed the block afterwards — the exact algorithm renderer.html's
-   `body` argument shape now performs, on the only side of the boundary that can address that memory, with the
+   `bytes-pair` placement now performs, on the only side of the boundary that can address that memory, with the
    same "one extra byte so a zero-length body still has an address of its own" and the same `null` meaning THIS
    ANSWER CARRIES NO BODY AT ALL. Keeping a copy here would have been a second placement over a heap this realm
    no longer has a view of.
-   TRANSFERABLE, AND DELIBERATELY NOT TRANSFERRED YET. renderer-host.js names this as the site where detaching
-   is sound — safeFetch mints these bytes per call and this delivery is their only consumer, so nothing in this
-   realm holds a second reference the way `eng.html` does for a document load. What stops it being taken here
-   is that `bodies` is one list shared by every argument shape, so `rendererCall` would have to carry a transfer
-   list that names WHICH entries are owned; that is a change to the transport's contract and it belongs in the
-   diff that measures the copy, not smuggled into this one. */
+   THESE BYTES ARE THE ONES WHOSE OWNERSHIP WOULD ALLOW A MOVE, AND THE REASON THEY ARE STILL COPIED CHANGED.
+   safeFetch mints them per call and this delivery is their only consumer, so nothing in this realm holds a
+   second reference the way `eng.html` does for a document load — the ownership argument is sound. What used to
+   stop it was the transport: `bodies` was one list shared by every argument shape, so the relay would have had
+   to carry a transfer list naming WHICH entries were owned. That reason is gone with the envelope, and the one
+   that stands is stronger. mojo.js builds a message's transfer list from the DECLARED TYPES, which is what
+   makes `handle<message_pipe>` a real pipe pass, and Mojo's `array<uint8>` is a copied byte sequence; the type
+   for bytes that MOVE is `mojo_base.mojom.BigBuffer`. So a move is a second declared byte type, not a flag on
+   this call — and it must be, because `Init`'s document is a parameter of the same spelling whose bytes this
+   zone RETAINS. One type meaning two ownerships is exactly what a validator cannot check. */
 async function engineProvide(eng, url, rep) {
   DCHECK(rep === null || (rep && typeof rep === "object" && rep.meta && rep.bytes instanceof Uint8Array),
          "`fetched` answered neither §5.6's network error (null) nor a reply — a reply is its JSON metadata " +
          "and its BYTES together, and a record arriving without one of the two is half a response");
-  await eng.r.call("qjs_provide", null,
-    [{ t: "string", v: url },
-     { t: "string", v: JSON.stringify(rep === null ? null : rep.meta) },
-     { t: "body", i: 0 }],
-    [rep === null ? null : rep.bytes]);
+  await eng.r.renderer.provide(url, JSON.stringify(rep === null ? null : rep.meta),
+                               rep === null ? null : rep.bytes);
 }
 async function engineServiceFetch(eng) {   // one round: resolve every pending reply/chunk, then the engine is hot again
   /* THE REPLY'S METADATA CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer
@@ -1122,23 +1145,26 @@ async function engineServiceFetch(eng) {   // one round: resolve every pending r
      because JSON can say none of the 256 values a byte has without first running an algorithm over them, and
      the algorithm this zone used to run (Fetch §5.2's `text()`, a UTF-8 decode) destroyed exactly the evidence
      HTML §8.1.4.2's classic-script decode exists to read. */
-  const replies = await engineOwedList(eng, "qjs_pending");
+  const replies = owedList("GetPending", (await eng.r.renderer.getPending()).urls);
   for (const u of replies)
     await engineProvide(eng, u, await eng.fetched(u, false));
-  const chunks = await engineOwedList(eng, "qjs_chunks");
+  const chunks = owedList("GetChunks", (await eng.r.renderer.getChunks()).urls);
   for (const u of chunks)
     await engineProvide(eng, u, await eng.fetched(u, true));
   await engineServiceHostRequests(eng);
 }
-/* EVERY OWED LIST CROSSES THE SAME WAY — newline-joined records, or "" for none — so it is read in one place
-   that says so. `String(x)` on its own would turn a NULL pointer (an entry answering before its list exists)
-   into the four characters "null" and then into one bogus record: a URL nothing is parked on, which the
-   engine's own qjs_provide DFAILs on one call later, naming the wrong side. */
-async function engineOwedList(eng, entry) {
-  const s = await eng.r.call(entry, "string", [], []);
-  DCHECK(typeof s === "string", entry + " answered with something that is not text — every owed list crosses " +
-                                "as newline-joined records and an empty list is the empty string");
-  return String(s == null ? "" : s).split("\n").filter(Boolean);
+/* EVERY OWED LIST CROSSES THE SAME WAY — newline-joined records, or "" for none — so it is SPLIT in one place
+   that says so. IT NO LONGER MAKES THE CALL, and that is the typing: it used to take an ABI entry NAME and
+   relay it through a generic `fn` string, which is precisely the shape that let a caller ask for anything and
+   let nothing check the answer. The caller now names the method and mojom declares the reply's type, so the
+   `String(x == null ? "" : x)` this function opened with is gone with it — a NULL pointer becoming the four
+   characters "null" and then one bogus record (a URL nothing is parked on, which the engine's own qjs_provide
+   DFAILs on one call later, naming the wrong side) is a shape the validator refuses before it arrives. */
+function owedList(method, s) {
+  DCHECK(typeof s === "string",
+         "content.mojom.Renderer." + method + " answered with something that is not text — every owed list " +
+         "crosses as newline-joined records and an empty list is the empty string");
+  return s.split("\n").filter(Boolean);
 }
 
 /* THE INSTANCE HOLDING A DOCUMENT, by exact name. A child's name is PREFIXED by its creator's ("<creator>.<n>")
@@ -1313,8 +1339,7 @@ async function hostNotice(eng, line) {
     CHECK(!!eng.origin, "a cross-document message was posted by an instance with no recorded principal — only " +
                         "the trusted zone may state a sender's origin, and this one has none to state; carry " +
                         "the document's browser-stated origin into the cold recipe so a resumed instance keeps it");
-    await target.r.call("qjs_route", null,
-      [{ t: "string", v: line }, { t: "string", v: stampOrigin(eng.origin) }], []);
+    await target.r.renderer.route(line, stampOrigin(eng.origin));
     return;
   }
   /* `remoteop.answer <token> <completion>` — a COMPLETION this instance produced for an operation it was asked
@@ -1342,8 +1367,7 @@ async function hostNotice(eng, line) {
                     "`undefined`, it is a relay that lost the peer's completion, and the engine's own decoder " +
                     "says so at the other end");
     if (!to || _t2 < 0) return;
-    await to.asker.r.call("qjs_host_answer_remote", null,
-      [{ t: "number", v: to.req }, { t: "string", v: line.slice(_t2 + 1) }], []);
+    await to.asker.r.renderer.hostAnswerRemote(to.req, line.slice(_t2 + 1));
     return;
   }
   DFAIL("an engine emitted a notice with an op this zone does not act on — the engine's half is built, so the " +
@@ -1360,7 +1384,7 @@ async function engineServiceHostRequests(eng) {
   // nothing runs and a message nothing delivers, with every later read through them parked forever. They were
   // being read and discarded. Handled IN ORDER and one at a time: a page opens a window and posts to it in the
   // same turn, so the create must have finished provisioning before the post that names it is routed.
-  for (const line of await engineOwedList(eng, "qjs_host_notices"))
+  for (const line of owedList("GetHostNotices", (await eng.r.renderer.getHostNotices()).notices))
     await hostNotice(eng, line);
   // ONE BRANCH, AND ONLY BECAUSE THIS ZONE CAN GENUINELY ANSWER IT. The rule that deleted every other branch
   // stands: a loop that walks the owed requests is a place to be tempted into GUESSING an answer, which is what
@@ -1372,7 +1396,7 @@ async function engineServiceHostRequests(eng) {
   // AND IT HAS TO BE ANSWERED, not merely answerable. A flow parked on a request this host never satisfies
   // leaves the engine stalled forever, and the step loop above has no other reason to stop — the same shape the
   // WPT pump was spinning on. Answering is what lets a navigation finish.
-  const reqs = await engineOwedList(eng, "qjs_host_requests");
+  const reqs = owedList("GetHostRequests", (await eng.r.renderer.getHostRequests()).requests);
   for (const line of reqs) {
     /* `id<TAB>op`, which engine_host_requests writes with a snprintf of a counter it CHECKs against wrapping.
        `if (tab < 0) continue` dropped a record that did not have that shape — and dropping it is the one
@@ -1426,8 +1450,7 @@ async function engineServiceHostRequests(eng) {
          unanswered request is re-reported by qjs_host_requests on every step, so a round that started the ask
          and recorded it afterwards would let the next round see the same id unrecorded and perform the peer's
          operation — a program, with the page's own side effects — a second time. */
-      await holder.r.call("qjs_perform", null,
-        [{ t: "string", v: token }, { t: "string", v: op }], []);
+      await holder.r.renderer.perform(token, op);
       continue;
     }
     // XHR §3.5.6's fetch is the SECOND thing this zone can genuinely answer, and for the identical reason: it
@@ -1448,7 +1471,7 @@ async function engineServiceHostRequests(eng) {
     const r = await eng.fetchedDocument(op.slice("document.fetch\t".length));
     // JSON, because the answer carries its TYPE across this seam: a null body is a load that did not load, and
     // the string "null" is a one-word document. The BODY is not in that JSON — a Document is parsed from a
-    // BYTE SEQUENCE, and this seam carries one (renderer.html's `body` argument shape).
+    // BYTE SEQUENCE, and this seam carries one (HostAnswer's `array<uint8>?` body).
     await engineAnswer(eng, id, { csp: r.csp }, r.bytes);
   }
 }
@@ -1459,10 +1482,7 @@ async function engineServiceHostRequests(eng) {
    NORMAL completion — this zone fetched bytes rather than running another instance's program, so it has
    nothing to have thrown in. */
 async function engineAnswer(eng, id, meta, bytes) {
-  await eng.r.call("qjs_host_answer", null,
-    [{ t: "number", v: id }, { t: "string", v: JSON.stringify(meta) }, { t: "number", v: 0 },
-     { t: "body", i: 0 }],
-    [bytes]);
+  await eng.r.renderer.hostAnswer(id, JSON.stringify(meta), 0, bytes);
 }
 async function engineFinalize(eng) {
   /* ASK THE ENGINE FOR ITS RESULT — the ABI entry that exists for exactly this and had NO CALLER anywhere in
@@ -1477,12 +1497,12 @@ async function engineFinalize(eng) {
   if (!eng._crashed) {
     let json = null;
     /* AN ENGINE ABORT IS A RECORDED OUTCOME AND A HOST INVARIANT FAILURE IS NOT, which every catch around an
-       ABI call now has to say out loud: a rendererCall rejects for BOTH — the frame's own abort travels as the
-       rejection engineCrash is written against, and renderer-host.js's asserts (a call into a renderer that
-       already died, a reply naming a call id this zone never made) travel as apiclientFatal. Reporting the
-       second as the engine's crash would blame the instance for this zone's broken contract, and would discard
-       a page's findings for it. */
-    try { json = await eng.r.call("qjs_result", "string", [], []); }
+       ABI call now has to say out loud: an ABI call rejects for BOTH — the frame's own abort travels as the
+       rejection engineCrash is written against, and this zone's own contract failures (a call made into a
+       renderer whose connection is dead, a record the mojo validator refused) travel as apiclientFatal.
+       Reporting the second as the engine's crash would blame the instance for this zone's broken contract, and
+       would discard a page's findings for it. */
+    try { json = (await eng.r.renderer.getResult()).result; }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "result", e); }
     if (!eng._crashed) {
       DCHECK(typeof json === "string" && json.length > 0,
@@ -1507,7 +1527,7 @@ async function engineFinalize(eng) {
      the only thing that reclaims an instance — a Module was collected once nothing referenced it, an iframe
      left in this document is not. */
   if (!eng._crashed) {
-    try { await eng.r.call("qjs_teardown", null, [], []); }
+    try { await eng.r.renderer.teardown(); }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "teardown", e); }
   }
   eng.r.destroy();
@@ -1748,14 +1768,14 @@ const _hostOps = {
     DCHECK(Number.isFinite(floor) || floor === -Infinity,
            "the pool set a yield floor that is not a number — the engine compares its top flow's weight " +
            "against it, and a NaN floor makes every comparison false so the flow never yields");
-    await eng.r.call("qjs_set_yield_floor", null, [{ t: "number", v: floor }], []);
+    await eng.r.renderer.setYieldFloor(floor);
   },
   underPressure: () => _residentBytes() >= HOT_RAM_BUDGET,   // summed live wasm memory over the working-set floor
   /* THE COLD-TIER PARK, whose engine half is an unbuilt capability that says so: qjs_request_park is a bare
      DFAIL naming the serializer to write. The catch here swallowed exactly that — the abort a DFAIL exists to
      produce was turned into a no-op, so the host went on believing it had evicted an engine that never parked
      and the missing capability had no symptom at all. It is the forcing function; it is not caught. */
-  requestPark: async (eng) => { await eng.r.call("qjs_request_park", null, [], []); },
+  requestPark: async (eng) => { await eng.r.renderer.requestPark(); },
   /* INCREMENTAL MERGE (coarse cadence): snapshot a HOT engine's current findings + merge to the cumulative
      moat WITHOUT waiting for a finalize that an unbounded engine never reaches. First sight starts the clock,
      so short analyses (finalize before PARTIAL_MS) never pay for it. qjs_emit_partial appends a fresh @RESULT
@@ -1770,7 +1790,7 @@ const _hostOps = {
        is now one of two: renderer-host's own asserts reject the same way and are this zone's contract, not the
        instance's. The line scan below only runs once this has answered, because the @RESULT it prints rides
        that reply. */
-    try { await eng.r.call("qjs_emit_partial", null, [], []); }
+    try { await eng.r.renderer.emitPartial(); }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "partial", e); return; }
     let idx = -1;
     for (let i = eng.lines.length - 1; i >= 0; i--) if (String(eng.lines[i]).startsWith("@RESULT ")) { idx = i; break; }
@@ -1795,7 +1815,7 @@ const _hostOps = {
   },
   step: async (eng) => {
     let st;
-    try { st = await eng.r.call("qjs_step", "number", [], []); }
+    try { st = (await eng.r.renderer.step()).code; }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "step", e); return 0; }   // crashed instance -> finalize (loud), don't keep stepping a dead engine
     /* THE ROUND ENDS HERE, so the re-rank that follows reads what THIS step left behind: the frontier it
        advanced and the linear memory it grew. A crashed instance is never asked — its memory is the thing that
@@ -2076,10 +2096,16 @@ self.rendererPoolProbe = async function rendererPoolProbe() {
                heapBytes: null, topWeight: null, cold: !!eng._cold, joined: eng._resolvers.length,
                joinedDocIds: eng.joinedDocIds.slice() };
     }
-    DCHECK(eng.r && typeof eng.r.heapBytes === "number" && typeof eng.r.name === "string",
+    /* THE WORKING SET IS READ WHERE THE POOL RECORDED IT AND NOT OFF THE RENDERER, which is what the typing
+       moved: `workingSetBytes` is a declared reply field of every ABI method, so engineRecordFacts takes it
+       from the reply it already awaited and there is no second copy on the transport for this to disagree
+       with. The invariant is unchanged and is the same one `_residentBytes` sums against — a live engine has
+       reported, because engineRecordFacts runs before the record leaves the `booting` state. */
+    DCHECK(eng.r && typeof eng.residentBytes === "number" && typeof eng.r.name === "string",
            "a pooled engine is not backed by a renderer that has reported itself — every instance is obtained " +
            "by rendererLaunch, which does not return until the browser process has answered with the pipe of a " +
-           "frame whose boot record has already landed");
+           "frame whose invitation acceptance has already landed, and engineRecordFacts states its working " +
+           "set before the reservation becomes hot");
     /* THE ROUTING ID IS REPORTED PER ENGINE BECAUSE IT IS THE ONE FIELD THIS ZONE DID NOT PRODUCE. The cluster
        name is computed here, the doc id is minted here and the heap figure is stated by the frame — but the id
        came out of the browser process's registry, so it is the evidence of which process decided this instance
@@ -2089,7 +2115,7 @@ self.rendererPoolProbe = async function rendererPoolProbe() {
            "registry when it decides an agent cluster gets an instance, so an instance without one is a frame " +
            "this document created for itself");
     return { name: eng.r.name, docId: eng.docId, state: eng.state, framed: !!eng.r.frame.parentNode,
-             routingId: eng.r.routingId, heapBytes: eng.r.heapBytes, topWeight: eng.topWeight,
+             routingId: eng.r.routingId, heapBytes: eng.residentBytes, topWeight: eng.topWeight,
              cold: !!eng._cold, joined: eng._resolvers.length, joinedDocIds: eng.joinedDocIds.slice() };
   });
   /* NO RESERVATION OUTLIVES ITS PROVISIONING, ASSERTED AS ARITHMETIC RATHER THAN LOOKED FOR. A reservation is

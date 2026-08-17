@@ -9,6 +9,12 @@
  * one problem is the dual system CLAUDE.md forbids: every capability a boundary gains is a new `op` hand-written
  * on both sides, and every omission is silent. Mojo's answer is that a boundary carries no capability list at
  * all — it carries ONE brokered request, `GetInterface(name)`, and everything else rides a pipe of its own.
+ * BOTH are gone now, and the second one is why the first was worth doing. The renderer envelope was the GENERIC
+ * one — a `fn` string, a `ret` string, an `args` list of shape tags and a `bodies` list those tags indexed —
+ * which relayed the whole twenty-entry qjs_* ABI without declaring a single parameter's type, so the peer whose
+ * messages SECURITY.md says must be assumed hostile was the one peer nothing validated. `content.mojom.Renderer`
+ * declares every one of those parameters, and the validator that already killed the connection on a malformed
+ * record from the TRUSTED worker now stands where the threat is.
  *
  * THE MAPPING, CONCEPT BY CONCEPT, and every row is a thing this platform actually has:
  *
@@ -59,7 +65,13 @@
  * yet": the one pair of messages whose relative order is load-bearing — `RendererTerminated` for an agent
  * cluster and the next `CreateRendererForCluster` for that same cluster, which would otherwise be refused as a
  * duplicate — are two METHODS OF ONE INTERFACE, so one pipe already orders them. Nothing else in mojom.js has a
- * cross-interface ordering requirement. The day one does, it is an associated interface and not a sleep.
+ * cross-interface ordering requirement, and the renderer's is the case that shows why: `Init`, `Begin`, `Step`,
+ * `Provide` and `Teardown` are a STRICTLY ORDERED sequence — the engine's own entries assert it (`qjs_begin`
+ * aborts if `qjs_init` did not build the context, `qjs_step` if the frontier was never seeded) — and they are
+ * ordered for free because they are twenty methods of ONE interface on ONE pipe. Splitting the ABI into several
+ * interfaces by theme would have been the readable choice and would have made that ordering an unstated
+ * assumption across pipes Mojo explicitly does not order.
+ * The day a real cross-interface requirement appears, it is an associated interface and not a sleep.
  * A HANDLER THAT SUSPENDS DOES NOT BLOCK THE PIPE, which is also Mojo's behaviour: `CreateRendererForCluster`
  * awaits a fork order to the other process, and a `GetRegistry` behind it is answered while that await is
  * outstanding. That is why the registry entry is taken BEFORE the first await, the same discipline 94c5998e
@@ -81,7 +93,20 @@
     if (t === "string?") return v === null || typeof v === "string";
     if (t === "bool")    return typeof v === "boolean";
     if (t === "int32")   return typeof v === "number" && (v | 0) === v;
-    if (t === "array<uint8>") return v instanceof Uint8Array;
+    /* `double` IS THE IEEE-754 TYPE AND THEREFORE CARRIES THE NON-FINITE VALUES, which is the whole reason a
+       flow weight is declared as one rather than as an int32 with a sentinel beside it. `engine_top_weight` is
+       `flow_best() ? flow_weight(b) : -1.0/0.0`, so -Infinity is the engine's own vocabulary for a frontier
+       holding no runnable flow, and a transport that refused it is exactly the defect 355a03d2 fixed one layer
+       up: every drained engine aborted its round, was destroyed and re-provisioned, 43279 times in one page
+       load. WHICH non-finite values are meaningful is the consumer's rule and not this layer's — bridge.js
+       narrows to {finite, -Infinity} at the read, where the vocabulary is known — so all a type check may say
+       here is that a double is a double. */
+    if (t === "double")  return typeof v === "number";
+    if (t === "array<uint8>")  return v instanceof Uint8Array;
+    /* AND ITS NULLABLE FORM IS A POSITIVE STATEMENT, never an omission: `null` is "this answer carries no body
+       at all" — Fetch §5.6's network error, a load that did not load — which a zero-length byte sequence is
+       not, because a 204 has a body of no bytes and a failure has no body. */
+    if (t === "array<uint8>?") return v === null || v instanceof Uint8Array;
     if (t === "handle<message_pipe>")  return v instanceof MessagePort;
     if (t === "handle<message_pipe>?") return v === null || v instanceof MessagePort;
     DFAIL("a mojom declaration named a type this bindings layer does not carry: `" + t + "` — the type list is " +
@@ -175,6 +200,18 @@
     return def;
   }
 
+  /* ── THE BAD-MESSAGE COUNT, WHICH IS THE ONE NUMBER A VALIDATOR OWES THE OUTSIDE. A validation failure kills
+     the connection (see `_crash`), so from inside there is nothing left to ask; from OUTSIDE, "how many records
+     did this process's validator refuse" is what tells a healthy boundary from one whose peer is sending shapes
+     the mojom does not declare. It reads 0 in every healthy run, and the direction it protects is the one
+     SECURITY.md names: the UNTRUSTED renderer is the peer whose messages must be assumed hostile, so the count
+     that matters is the one taken in the TRUSTED zone.
+     IT COUNTS VALIDATION AND NOT EVERY CRASH, and the two are told apart by WHERE the throw came from: a record
+     that failed a declared type is the PEER being broken, while an implementation that threw while serving a
+     well-formed call is THIS process being broken (for a renderer, a WASM abort — a recorded outcome, not a bad
+     message). Both kill the connection, exactly as Mojo's ReportBadMessage does; only the first is counted. */
+  var _rejected = 0;
+
   function interfaceOf(name) {
     var d = _defs.get(name);
     DCHECK(d !== undefined,
@@ -214,7 +251,8 @@
     _endpoints.forEach(function (h) {
       (h.kind === "remote" ? remotes : receivers).push(h.def.name + "@" + h.def.version);
     });
-    return { remotes: remotes.sort(), receivers: receivers.sort(), endpoints: _endpoints.size };
+    return { remotes: remotes.sort(), receivers: receivers.sort(), endpoints: _endpoints.size,
+             badMessages: _rejected };
   }
 
   /* ── THE CALLER END. One JS method per mojom method, named by Chromium's JS-binding rule, taking the
@@ -288,7 +326,9 @@
       var rec = {};
       for (var i = 0; i < m.reply.length; i++) rec[m.reply[i].name] = env.a[i];
       w.resolve(rec);
-    } catch (e) { this.conn._crash(e); }
+      /* EVERYTHING ABOVE IS VALIDATION — a Remote runs no implementation, so a throw on this path is always the
+         peer having sent a record this interface does not declare, and `resolve` runs no reaction here. */
+    } catch (e) { _rejected++; this.conn._crash(e); }
   };
 
   /* ── THE IMPLEMENTATION END. An impl method returns the reply as an object keyed by the declared names, or a
@@ -310,6 +350,11 @@
 
   Receiver.prototype._onmessage = function (env) {
     var self_ = this;
+    /* THE LINE THAT SPLITS "THE PEER IS BROKEN" FROM "THIS PROCESS IS BROKEN". Everything before the dispatch
+       reads the INCOMING record, so a throw there is a bad message and is counted as one; everything from the
+       dispatch on is this process's own implementation, whose failure is its own. Both still kill the
+       connection — a bad message is not an error return — and only the classification differs. */
+    var validating = true;
     try {
       DCHECK(!!env && env.w === WIRE && typeof env.i === "string" && typeof env.o === "number" &&
              typeof env.r === "number" && typeof env.f === "number" && Array.isArray(env.a),
@@ -330,6 +375,7 @@
              "the caller of " + m.iface + "." + m.name + " disagrees with the mojom about whether it answers — " +
              "one side would park on a reply the other will never send, or send one nobody is waiting for");
       checkValues("a call to " + m.iface + "." + m.name, m.params, env.a);
+      validating = false;
       var ret = this.impl[m.js].apply(this.impl, env.a);
       if (m.reply === null) {
         DCHECK(ret === undefined,
@@ -352,7 +398,7 @@
         self_.port.postMessage(self_.conn._envelope({ w: WIRE, i: m.iface, o: m.ordinal, r: env.r,
                                                       f: F_IS_RESPONSE, a: vals }), xfer);
       }, function (e) { self_.conn._crash(e); });
-    } catch (e) { this.conn._crash(e); }
+    } catch (e) { if (validating) _rejected++; this.conn._crash(e); }
   };
 
   /* ── THE CONNECTION: one peer process, reached over the primordial pipe the platform's process creation
@@ -480,7 +526,9 @@
       }
       DFAIL("the primordial pipe to " + this.name + " carried a record kind it does not serve: `" + m.k + "` — " +
             "a capability is an INTERFACE brokered onto its own pipe, never a new kind here");
-    } catch (e) { this._crash(e); }
+      /* THE PRIMORDIAL PIPE RUNS NO IMPLEMENTATION EITHER — an acceptance, a bind and an abort are all records
+         this READS — so a throw here is the peer, and it is counted with the rest. */
+    } catch (e) { _rejected++; this._crash(e); }
   };
 
   Connection.prototype._onbind = function (m) {
@@ -511,6 +559,12 @@
     this.deadReason = reason;
     var self_ = this;
     this._endpoints.forEach(function (h) {
+      /* AND THE ENDPOINT LEAVES THE REALM'S OPEN SET WITH THE CONNECTION IT BELONGED TO. `stats().endpoints` is
+         "open pipe endpoints in this process", and a dead connection's are not open — nothing may be sent on
+         them and nothing can arrive. This was invisible while the only peer was a SINGLETON worker that never
+         dies; a renderer is provisioned and destroyed per agent cluster, so a count that only ever rose would
+         report a document's whole history of instances as its current IPC surface. */
+      _endpoints.delete(h);
       if (h.kind !== "remote") return;
       h._await.forEach(function (w) {
         var e = new Error(reason);
@@ -524,6 +578,28 @@
       this._decorate(e2);
       this._readyRej(e2);   /* a no-op once ready has resolved */
     }
+  };
+
+  /* AN ORDERLY SHUTDOWN, WHICH IS A DIFFERENT EVENT FROM A DEATH AND REACHES THE SAME STATE. A peer this
+     process deliberately tears down — a renderer frame removed from the document — is not a peer that broke,
+     but everything true afterwards is identical: no call may be made into it, no reply can arrive from it, and
+     both must SAY so rather than posting into a closed port. It is `mojo::Remote::reset` at the scale of a
+     connection, and it exists so that "this peer is gone" has ONE representation instead of a second `_dead`
+     flag kept beside it by whoever owns the process. */
+  Connection.prototype.close = function (reason) {
+    DCHECK(typeof reason === "string" && reason !== "",
+           "a connection to " + this.name + " was closed with no reason — the reason is what every later call " +
+           "into it prints, and `undefined` names neither who closed it nor why");
+    this._die(this.name + " was closed: " + reason);
+  };
+
+  /* THE CALLS THIS CONNECTION IS STILL WAITING ON, summed across its Remotes. It is asked by the owner of the
+     PROCESS at teardown: a peer torn down with a call outstanding is a caller parked on an answer that can no
+     longer be produced, which is silent everywhere. */
+  Connection.prototype.outstandingCalls = function () {
+    var n = 0;
+    this._endpoints.forEach(function (h) { if (h.kind === "remote") n += h._await.size; });
+    return n;
   };
 
   /* A BROKEN MESSAGE IS THE PEER BEING BROKEN, so it kills the connection rather than returning an error — Mojo
@@ -540,6 +616,12 @@
   g.mojo = {
     defineInterface: defineInterface,
     exposeInterface: exposeInterface,
+    /* THE DESCRIPTION ITSELF, READABLE. An implementation built by WALKING the interface's own method list —
+       rather than by writing one property per method and hoping the two lists stay equal — is how a mojom
+       method that gained no binding crashes at its own process naming itself, instead of reaching a peer as a
+       TypeError inside a message handler, which reaches nobody: the caller stays parked on a reply that is
+       never coming. It is the same descriptor `Remote`/`Receiver` validate against, so there is one of it. */
+    interfaceOf: interfaceOf,
     Connection: Connection,
     stats: stats,
   };
