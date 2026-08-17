@@ -541,18 +541,30 @@ async function probeEndpoint(documentId, endpointKey) {
   const ep = tab.endpoints.get(endpointKey);
   if (!ep || ep.method !== "POST") return null;
 
-  // Pass the API key the same way it was originally sent (URL param vs header).
   // Cookie, Origin, Referer are handled by the browser via the content script relay.
   const headers = {};
   const probeUrl = new URL(ep.url);
   probeUrl.searchParams.delete("key");
 
-  if (ep.apiKey) {
-    if (ep.apiKeySource === "url") {
-      probeUrl.searchParams.set("key", ep.apiKey);
-    } else {
-      headers["X-Goog-Api-Key"] = ep.apiKey;
-    }
+  /* THE FIFTH COPY OF A DEAD PAIR. `if (ep.apiKey) { ep.apiKeySource === "url" ? … : X-Goog-Api-Key }` stood
+     here and neither name exists on an endpoint record — lib/merge.js is the only `endpoints.set` and writes
+     {url, method, host, path, service, source, pageUrl, requiredHeaders, pathParams, firstSeen}. Both reads
+     were undefined on every endpoint, so this probe went out with no key while looking like it chose where to
+     put one. Same producer and same rule as DISCOVER_SERVICE: collectKeysForService finds the key, lib/keys.js
+     recorded WHERE it was seen, and a key with no observed injection point gets none invented — a guessed
+     X-Goog-Api-Key on a third-party host is a fabricated request, not a probe. */
+  const _svc = ep.service || extractInterfaceName(new URL(ep.url));
+  const _keys = collectKeysForService(tab, _svc, probeUrl.hostname);
+  if (_keys.length) {
+    const _k = _keys[0];
+    const _e = tab.apiKeys.get(_k);
+    DCHECK(!!_e, "a key collectKeysForService returned is not in this document's key map — it reads exactly " +
+                 "that map, so a miss is the two disagreeing about what was learned");
+    DCHECK(typeof _e.source === "string",
+           "an API-key entry carries no source — lib/keys.js stamps the context every key was matched in, and " +
+           "without it there is no observed place to put this key back");
+    if (_e.source === "url") probeUrl.searchParams.set("key", _k);
+    else if (_e.source.startsWith("header:")) headers[_e.source.slice("header:".length)] = _k;
   }
 
   const fetchFn = makePageFetchFn(tabId, documentId);
