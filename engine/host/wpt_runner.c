@@ -186,18 +186,60 @@ static const char WPT_PROLOGUE[] =
     "};\n";
 
 
-/* THE EPILOGUE. testharness.js hands its results to a completion callback and, outside a browser, needs to be
-   TOLD the page is done — there is no load event here. Both are three lines of the harness's own public API
-   rather than anything reimplemented. */
-static const char WPT_EPILOGUE[] =
-    "add_completion_callback(function (tests, status) {\n"
-    "  for (var i = 0; i < tests.length; i++) {\n"
-    "    var t = tests[i];\n"
-    "    print('@WPT ' + JSON.stringify({ name: t.name, status: t.status, message: t.message }));\n"
+/* THE REPORT — WPT'S OWN VENDOR HOOK, AT WPT'S OWN POSITION, and both halves of that are the fix.
+ *
+ * WHAT WAS WRONG. The whole report hung off ONE completion callback appended at the END of the run, after the
+ * test and after every `// META: script=` the test names. testharness.js's notify_complete is a bare
+ * `forEach(this.all_done_callbacks, callback)` with no containment, so the FIRST of those callbacks that throws
+ * takes every later one with it — and `phase` is already COMPLETE by then, so nothing retries. A corpus helper
+ * that registers a completion callback therefore DELETED this gate's entire report for the file: no @WPT lines,
+ * no @WPTDONE, a clean exit, and a driver that could only say "0 reported subtest(s)".
+ * It is not hypothetical and it is not one file. `IndexedDB/resources/support.js` opens with an
+ * add_completion_callback that closes each test's database and calls `indexedDB.deleteDatabase` — which is
+ * honestly ABSENT in this engine (core/indexeddb/indexed_db.c says so by name), so it is a TypeError. Nineteen
+ * IndexedDB files were destroyed exactly that way: the fifteen `idbcursor*` files that use `createdb`, plus
+ * cursor-overloads, value, abort-in-initial-upgradeneeded and close-in-upgradeneeded — every IDB file whose
+ * open succeeded far enough for support.js to record a `db` on the test. Those files RAN, their subtests had
+ * real results naming real gaps, the harness COMPLETED, and the last statement of the run threw the answer away.
+ *
+ * SO THE REPORT GOES WHERE WPT PUTS IT. Every testharness document loads `/resources/testharnessreport.js`
+ * immediately after `/resources/testharness.js`, and that file exists for exactly this — "vendors to implement
+ * code needed to integrate testharness.js tests with their own test systems", via add_result_callback and
+ * add_completion_callback. Registered there, this runner's callbacks are FIRST in every list, so no helper the
+ * test loads can reach them, and the position is the corpus's own convention rather than this file's guess.
+ *
+ * AND IT STREAMS, for the reason the driver's own area rows stream: a report that exists only at completion is a
+ * report you do not get from a file that never completes. A subtest is printed when its RESULT is known, and a
+ * subtest is announced when it is REGISTERED — so "0 subtests reported" and "0 subtests existing" stop being the
+ * same output. What the completion callback still owns is the ones the harness forced COMPLETE without a result
+ * (its own timeout path does that) and the file-level verdict. `i` is the harness's own `tests` index, which is
+ * what makes a re-announced or re-reported subtest one fact rather than two. */
+static const char WPT_REPORT[] =
+    "(function () {\n"
+    "  var announced = [], reported = [];\n"
+    "  function emit(t) {\n"
+    "    reported[t.index] = 1;\n"
+    "    print('@WPT ' + JSON.stringify({ i: t.index, name: t.name, status: t.status, message: t.message }));\n"
     "  }\n"
-    "  print('@WPTDONE ' + JSON.stringify({ status: status.status, message: status.message,\n"
-    "                                       count: tests.length }));\n"
-    "});\n"
+    "  add_test_state_callback(function (t) {\n"
+    /* The harness notifies test state at PUSH and again when the test STARTS. One line per subtest, because a
+       corpus file can hold ninety thousand of them and this output is read through a fixed buffer. */
+    "    if (announced[t.index]) return;\n"
+    "    announced[t.index] = 1;\n"
+    "    print('@WPTSTART ' + JSON.stringify({ i: t.index, name: t.name }));\n"
+    "  });\n"
+    "  add_result_callback(emit);\n"
+    "  add_completion_callback(function (tests, status) {\n"
+    "    for (var i = 0; i < tests.length; i++) if (!reported[tests[i].index]) emit(tests[i]);\n"
+    "    print('@WPTDONE ' + JSON.stringify({ status: status.status, message: status.message,\n"
+    "                                         count: tests.length }));\n"
+    "  });\n"
+    "})();\n";
+
+/* THE EPILOGUE. Outside a browser testharness has to be TOLD the page is done — one line of the harness's own
+   public API. It is all that is left here: the REPORT moved to where WPT's own vendor hook goes, because being
+   the last thing registered is what let a corpus helper delete it. */
+static const char WPT_EPILOGUE[] =
     "done();\n";
 
 /* ---- THE CORPUS AS THIS HOST'S NETWORK ------------------------------------------------------------------
@@ -1069,6 +1111,42 @@ static void wpt_program(char *body, const char *name, ScriptType type)
     g_prog_n++;
 }
 
+/* THE REPORT'S POSITION, ASKED OF THE PROGRAM SEQUENCE RATHER THAN OF THE MODE. It goes immediately after
+   `/resources/testharness.js` — the slot WPT's own testharnessreport.js occupies — and that is ONE rule for a
+   document (whose <script src> the corpus wrote) and for a `.any.js` (whose harness the driver passes as
+   argv[1]). Two branches computing the same position is how the two come to disagree about it.
+   A SEQUENCE WITH NO HARNESS IN IT IS REPORTED, NOT CRASHED: the two ways to reach that are a document whose
+   `<script src>` 404'd — already printed above and already the driver's ABORT — and a file named on the command
+   line that is not a testharness test at all. Neither is a missing capability, so neither is a DCHECK; what
+   would be wrong is running the file with no report hook and letting it look like a file with no subtests. */
+static void wpt_insert_report(void)
+{
+    static const char TAIL[] = "/resources/testharness.js";
+    size_t m = sizeof TAIL - 1;
+    int at = -1, k;
+
+    for (k = 0; k < g_prog_n; k++) {
+        size_t n = strlen(g_prog_srcs[k]);
+        if (n >= m && !strcmp(g_prog_srcs[k] + n - m, TAIL)) { at = k + 1; break; }
+    }
+    if (at < 0) {
+        fprintf(report_out(), "@WPTERR %s: no %s among this document's programs, so the runner's report hook "
+                              "could not be installed and nothing would report this file's subtests\n",
+                g_test_url, TAIL);
+        return;
+    }
+    wpt_program(strdup(WPT_REPORT), "<wpt-report>", SCRIPT_TYPE_CLASSIC);
+    {   /* appended, then rotated into place — one slot, three parallel arrays */
+        char *body = g_prog_bodies[g_prog_n - 1], *src = g_prog_srcs[g_prog_n - 1];
+        ScriptType t = g_prog_types[g_prog_n - 1];
+        size_t move = (size_t)(g_prog_n - 1 - at);
+        memmove(g_prog_bodies + at + 1, g_prog_bodies + at, move * sizeof *g_prog_bodies);
+        memmove(g_prog_srcs + at + 1, g_prog_srcs + at, move * sizeof *g_prog_srcs);
+        memmove(g_prog_types + at + 1, g_prog_types + at, move * sizeof *g_prog_types);
+        g_prog_bodies[at] = body; g_prog_srcs[at] = src; g_prog_types[at] = t;
+    }
+}
+
 
 /* ONE GET against the corpus server, resolved against the running document's address. */
 /* `pheaders`, when given, receives the RESPONSE'S WHOLE HEADER LIST rather than one header out of it — the
@@ -1754,9 +1832,14 @@ int main(int argc, char **argv)
                 wpt_program(src, g_test_url, SCRIPT_TYPE_CLASSIC);
             }
         }
-        /* THE EPILOGUE IS A PROGRAM OF THIS DOCUMENT LIKE THE REST — testharness.js hands its results to a
-           completion callback and, outside a browser, has to be TOLD the page is done. */
-        if (!failed) wpt_program(strdup(WPT_EPILOGUE), "<wpt-epilogue>", SCRIPT_TYPE_CLASSIC);
+        /* THE REPORT AND THE EPILOGUE ARE PROGRAMS OF THIS DOCUMENT LIKE THE REST, and they are two rather than
+           one: the report registers where WPT's own vendor hook goes (immediately after testharness.js, so no
+           helper the test loads can be ahead of it), and the epilogue tells the harness the page is done, which
+           can only be the last thing that runs. */
+        if (!failed) {
+            wpt_insert_report();
+            wpt_program(strdup(WPT_EPILOGUE), "<wpt-epilogue>", SCRIPT_TYPE_CLASSIC);
+        }
     }
 
     /* THE ONE SCHEDULER, over this document's programs. What stood here was a fabricated flow — one member

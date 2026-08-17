@@ -1085,11 +1085,26 @@ for (const { file: f, kind, variant } of runs) {
       failures.push(`  ABORT  ${rel}\n         a <script src> the corpus does not serve: ${noscript[1]}`);
       continue;
     }
-    let filePass = 0, fileFail = 0;
+    /* WHAT THE RUNNER STREAMED, AND IT IS TWO POPULATIONS BECAUSE THE DIFFERENCE BETWEEN THEM IS THE DIAGNOSIS.
+       `@WPTSTART` is a subtest testharness REGISTERED; `@WPT` is one whose RESULT is known. Registered-minus-
+       resolved is exactly "the subtests this run left hanging", which is the sentence the no-@WPTDONE report used
+       to have no way to write.
+       BOTH ARE KEYED ON THE HARNESS'S OWN `tests` INDEX, which is what makes a subtest seen twice one subtest —
+       the harness notifies test state at PUSH and again at START, and the completion callback re-emits any
+       subtest forced complete without a result. Keying on the NAME would also fold two DIFFERENT subtests that
+       share one, which the harness itself reports as an error and this gate must not hide. */
+    const started = new Map(), settled = new Map();
+    const keyOf = (t) => (typeof t.i === "number" ? "#" + t.i : "@" + t.name);
     for (const line of out.split("\n")) {
+      const s = line.match(/^@WPTSTART (\{.*\})$/);
+      if (s) { let t; try { t = JSON.parse(s[1]); } catch { continue; } started.set(keyOf(t), t.name); continue; }
       const m = line.match(/^@WPT (\{.*\})$/);
       if (!m) continue;
       let t; try { t = JSON.parse(m[1]); } catch { continue; }
+      settled.set(keyOf(t), t);
+    }
+    let filePass = 0, fileFail = 0;
+    for (const t of settled.values()) {
       if (t.status === 0) { filePass++; }
       else { fileFail++; failures.push(`  FAIL   ${rel} :: ${t.name}\n         ${(t.message || "").slice(0, 200)}`); }
     }
@@ -1099,16 +1114,66 @@ for (const { file: f, kind, variant } of runs) {
       failures.push(`  ERROR  ${rel}\n         ${err[1].slice(0, 200)}`);
       continue;
     }
-    /* A FILE THAT NEVER COMPLETED IS NOT A FILE WITH NOTHING IN IT. testharness reports through its completion
-       callback, so a run that ends without @WPTDONE — an async test that never settles, a harness that never
-       reached all_done — emitted no @WPT lines at all and contributed ZERO to every column. It read as though the
-       file held no tests, which is the same silent truncation as leaving a directory out of the checkout: the
-       number goes down and nothing says why. It is counted and NAMED. */
+    /* A FILE THAT NEVER COMPLETED IS NOT A FILE WITH NOTHING IN IT — and the two used to read alike, which is a
+       number about nothing. testharness reports through its completion callback, so a run that ends without
+       @WPTDONE contributed ZERO to every column and looked exactly like a file that asserts nothing.
+       IT IS NOW SPLIT BY CAUSE, because "no @WPTDONE" is at least four different pieces of work and they are not
+       the same finding: a subtest awaiting something that never settles is an ENGINE gap and the message NAMES
+       the subtests, which is what names the awaited thing; every subtest settled and still no completion is the
+       harness's completion path not reaching this runner's hook, which is THIS gate's bug; nothing registered at
+       all with a throw on the way is the FILE failing before it had a test, and the throw is the report. The
+       fourth — a queued completion callback that never got a turn — cannot arrive here silently: the scheduler
+       DCHECKs that no flow holds a job when it declares the frontier exhausted, so it aborts by name instead. */
     if (!abortedHere && !/^@WPTDONE /m.test(out)) {
       aborted++; area.aborted++;
-      failures.push(`  ABORT  ${rel}\n         the harness never completed — no @WPTDONE, so its ` +
-                    `${filePass + fileFail} reported subtest(s) are not the whole file`);
+      const hanging = [...started.keys()].filter((k) => !settled.has(k)).map((k) => started.get(k));
+      const cause =
+        hanging.length
+          ? `${settled.size} of ${started.size} subtest(s) reached a result; ${hanging.length} never did, so ` +
+            `something they await never settled: ${hanging.slice(0, 8).map((n) => JSON.stringify(n)).join(", ")}` +
+            (hanging.length > 8 ? `, +${hanging.length - 8} more` : "")
+        : started.size
+          ? `all ${started.size} of its subtest(s) reached a result and the harness STILL never completed — ` +
+            "testharness's completion path did not reach this runner's report hook, which is this gate's own bug"
+        : err
+          ? `it registered no subtest at all and threw on the way: ${err[1].slice(0, 200)}`
+          : "it registered no subtest and never completed — testharness.js itself never ran, or the report hook " +
+            "is not installed in this run's programs";
+      failures.push(`  ABORT  ${rel}\n         the harness never completed — no @WPTDONE. ${cause}`);
       continue;
+    }
+    /* THE FILE-LEVEL VERDICT, WHICH THIS DRIVER USED TO PARSE AND THROW AWAY. @WPTDONE carries testharness's own
+       harness status and it is not always OK: ERROR is an uncaught exception, a duplicate subtest name, a failing
+       `cleanup` or `done()` called with no test defined; TIMEOUT is the file's own 10 s harness timeout firing.
+       Matching only the PRESENCE of the line reported every one of those as a clean file — a file whose report
+       the harness itself calls untrustworthy, counted green. It is a real result about the file (the file ran),
+       so it is a FAIL rather than an abort, and it is counted.
+       ASKED OF THE LINE, NOT OF `abortedHere`: a file can abort AFTER the harness completed — a teardown leak is
+       the usual one — and that file's harness status is as real as any other's. */
+    {
+      const d = out.match(/^@WPTDONE (\{.*\})$/m);
+      let h = null;
+      if (d) { try { h = JSON.parse(d[1]); } catch { h = null; } }
+      if (d && !h) {
+        aborted++; area.aborted++;
+        failures.push(`  ABORT  ${rel}\n         @WPTDONE carried no readable JSON: ${d[1].slice(0, 200)}`);
+        continue;
+      }
+      const NAME = { 0: "OK", 1: "ERROR", 2: "TIMEOUT", 3: "PRECONDITION_FAILED" };
+      if (h && h.status !== 0) {
+        fileFail++;
+        failures.push(`  FAIL   ${rel} :: <harness>\n         testharness status ` +
+                      `${NAME[h.status] || h.status}: ${(h.message || "").slice(0, 200)}`);
+      }
+      /* `count` IS HOW MANY SUBTESTS THE HARNESS HOLDS, cross-checked because losing a line is the one failure
+         mode a streamed report adds and it would make every number above wrong. Not asked of a file that
+         ABORTED: a process killed between two @WPT lines really does hold more than arrived, and the abort
+         line already says so. */
+      if (h && !abortedHere && h.count !== settled.size) {
+        fileFail++;
+        failures.push(`  FAIL   ${rel} :: <harness>\n         the harness holds ${h.count} subtest(s) and ` +
+                      `${settled.size} reached this driver — the report and the run disagree about the file`);
+      }
     }
     pass += filePass;
     fail += fileFail;
