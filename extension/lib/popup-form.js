@@ -70,10 +70,10 @@ function buildFormFields(schema, initialData = null) {
           name,
           {
             name: param.name, // Pass the name (which might be an alias)
-            // Show the source-map-resolved real name (e.g. `e`→`owner`) as the
-            // label; the field key (first arg) stays the minified name so URL
-            // path substitution still matches the `{e}` hole.
-            displayName: param._sourceMapName || undefined,
+            /* NO `displayName` FROM `param._sourceMapName`. It promised the minified-to-declared rename
+               (`e` → `owner`) on this label and nothing has ever written the field — no engine emits a
+               source-map name — so the rename has never been applied to a parameter. `displayName` itself is
+               real and stays: lib/popup-gql.js writes it for a GraphQL alias, which createFieldInput renders. */
             type:
               param.type === "integer"
                 ? "int32"
@@ -90,7 +90,9 @@ function buildFormFields(schema, initialData = null) {
             location: param.location,
             parentSchema: "params",
             _astValidValues: param._astValidValues || null,
-            _astValueSource: param._astValueSource || null,
+            /* NO `_astValueSource`. lib/send.js stopped projecting it (its only writer wrote it onto its own
+               path-param entries, and nothing ever rendered it), so this line carried undefined into the
+               field def and no reader looked. */
             _detectedEnum: param._detectedEnum || false,
             _defaultValue: param._defaultValue ?? null,
             _defaultConfidence: param._defaultConfidence ?? null,

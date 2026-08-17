@@ -69,19 +69,34 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       const headers = {};
       const discoverUrl = new URL(ep.url);
       discoverUrl.searchParams.delete("key");
-      if (ep.apiKey) {
-        if (ep.apiKeySource === "url") {
-          discoverUrl.searchParams.set("key", ep.apiKey);
-        } else {
-          headers["X-Goog-Api-Key"] = ep.apiKey;
-        }
+      const svc = ep.service || extractInterfaceName(new URL(ep.url));
+      /* THE KEY COMES FROM THE KEY STORE, AND ITS INJECTION POINT IS THE ONE IT WAS OBSERVED IN. `if (ep.apiKey)
+         { ep.apiKeySource === "url" ? … : X-Goog-Api-Key }` stood here and NEITHER name exists on an endpoint
+         record: lib/merge.js is the extension's only `endpoints.set` and writes {url, method, host, path,
+         service, source, pageUrl, requiredHeaders, pathParams, firstSeen}. Both reads were undefined on every
+         endpoint, so the probe went out with no key while looking like it was choosing where to put one.
+         collectKeysForService is the real producer (the search lib/send.js uses), and lib/keys.js records WHERE
+         each key was seen — "url" or "header:<name>". A key seen only in a response body has no observed
+         injection point and none is invented: a guessed `X-Goog-Api-Key` on a third-party host is a Google
+         header the server does not recognise, which is a fabricated request, not a probe. */
+      const _svcKeys = collectKeysForService(tab, svc, discoverUrl.hostname);
+      if (_svcKeys.length) {
+        const _k = _svcKeys[0];
+        const _kEntry = tab.apiKeys.get(_k);
+        DCHECK(!!_kEntry, "a key collectKeysForService returned is not in this document's key map — it reads " +
+                          "exactly that map, so a miss is the two disagreeing about what was learned");
+        DCHECK(typeof _kEntry.source === "string",
+               "an API-key entry carries no source — lib/keys.js stamps the context every key was matched in " +
+               "('url', 'header:<name>', 'response_body'), and without it there is no observed place to put " +
+               "this key back and the probe would have to invent one");
+        if (_kEntry.source === "url") discoverUrl.searchParams.set("key", _k);
+        else if (_kEntry.source.startsWith("header:")) headers[_kEntry.source.slice("header:".length)] = _k;
       }
       const fetchFn = makePageFetchFn(tab.tabId, tab.documentId);
       discoverServiceInfo(discoverUrl.toString(), headers, { fetchFn }).then(
         (result) => {
           tab.probeResults.set(`svc:${msg.endpointKey}`, result);
           if (result.scopes?.length) {
-            const svc = ep.service || extractInterfaceName(new URL(ep.url));
             tab.scopes.set(svc, result.scopes);
           }
           mergeToGlobal(tab);
@@ -98,13 +113,18 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       /* THE HOSTNAME IS ONE THE PAGE ACTUALLY REACHED, NEVER `${service}.googleapis.com`. That fallback was
          here and it invented an address no code computed — §RUN, DON'T MATCH — so a service with no learned
          endpoint would have sent this zone probing a host the bundle never named. A caller that names neither
-         a hostname nor an endpoint has nothing to discover. */
-      const ep = tab.endpoints.values().next().value;
-      const hostname = msg.hostname || ep?.host || null;
+         a hostname nor an endpoint has nothing to discover.
+         AND IT IS A HOST OF *THIS* SERVICE. `tab.endpoints.values().next().value` took whichever endpoint the
+         map happened to hold first, of any service, so a caller naming a service the document knows would be
+         answered with an unrelated service's host — one arbitrary record standing in for the named one. */
+      let ep = null;
+      for (const _e of tab.endpoints.values()) { if (_e.service === msg.service) { ep = _e; break; } }
+      const hostname = msg.hostname || (ep && ep.host) || null;
       if (!hostname) { sendResponse(null); return; }
       const apiKeys = collectKeysForService(tab, msg.service, hostname);
+      /* NO `ep.apiKey` LIMB. An endpoint record has no such field (lib/merge.js, its only producer, writes
+         none), so it added undefined to the candidate list on every call. */
       if (msg.apiKey && !apiKeys.includes(msg.apiKey)) apiKeys.push(msg.apiKey);
-      if (ep?.apiKey && !apiKeys.includes(ep.apiKey)) apiKeys.push(ep.apiKey);
       fetchDiscoveryForService(tab.documentId, msg.service, hostname, apiKeys).then(
         () => {
           sendResponse(serializeTabData(tab));
@@ -128,9 +148,13 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
                "and continuing to the wipe with engines still running repopulates the store as it is emptied");
         // 2. Global findings + the persisted gapiStore (cleared inside clearGlobalStore).
         await clearGlobalStore();
-        // 3. All in-memory request logs + per-tab working state, so the next
-        //    navigation starts from a genuinely empty slate.
-        state.docs.clear();
+        /* 3. Every LEARNED fact in the per-document views + the in-memory logs, so the next navigation starts
+              from a genuinely empty slate. `state.docs.clear()` stood here: it also deleted the BROWSER-STATED
+              IDENTITY of documents that are still open, and identity is what every learner resolves its writes
+              through — the first request after a Clear would arrive for an unregistered document, which is a
+              DCHECK. `_clearDocLearning` empties the learned half and keeps the fact half (offscreen-brain.js). */
+        _clearDocLearning();
+        globalRequestLog = [];
         _scriptBuffers.clear();
         _wsConnState.clear();
         sendResponse({ ok: true });
@@ -165,8 +189,8 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       // filters by tab purely in the UI). A tab is "closed" only once ALL its
       // documents are; title/url come from the main-frame document.
       // Count from the GLOBAL log (grouped by tabId); enrich title/url/closed
-      // from the tab's live documents (an evicted doc leaves its log entries
-      // but no identity, so that tab degrades to "Tab N").
+      // from the tab's documents (a tab whose documents predate this offscreen
+      // leaves its log entries but no identity, so it degrades to "Tab N").
       const _byTab = new Map();
       for (const r of globalRequestLog) {
         if (r.tabId == null) continue;

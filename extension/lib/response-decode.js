@@ -390,9 +390,9 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
   /* WHAT THIS RESPONSE IS, ANSWERED WHERE IT IS READ. This was hoisted to the top of the function to be an
      `await` on the browser process, and the hoist was load-bearing FOR THAT SHAPE: from `_docForLearning` to
      the last `notifyPopup` this function runs synchronously — it holds a DocData by reference while
-     learnFromRequest looks the same document up again by id, and `_evictReviewedDoc` can delete it — so a
-     suspension in the middle would write one response into two records. The call is SYNCHRONOUS again, so
-     there is no suspension to place and the classification belongs beside its two readers.
+     learnFromRequest looks the same document up again by id — so a suspension in the middle could write one
+     response into two records. The call is SYNCHRONOUS again, so there is no suspension to place and the
+     classification belongs beside its two readers.
      THE CLASSIFIER IS lib/discovery.js's, AND IT IS NOT A SECOND SNIFFER. safeFetch is the only source of
      sniffing for the bytes SAFEFETCH FETCHED, and it stamps its answer on the reply record it hands the
      renderer. These bytes are not those: intercept.js captured them off the live page and relayed them here,

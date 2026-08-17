@@ -59,9 +59,9 @@ const state = {
 };
 
 // GLOBAL network/PostMessage/MessageChannel traffic stream. The request log is
-// NOT per-document: a document is evicted from `state.docs` once its grind
-// completes (_maybeEvictReviewedDoc), but its captured traffic must survive that
-// eviction. So the log is ONE global array; each entry carries {tabId,
+// NOT per-document: it spans tabs and outlives any one document's analysis, and
+// the popup's network view filters it rather than owning it.
+// So the log is ONE global array; each entry carries {tabId,
 // documentId, frameId} metadata for the popup's tab/frame filtering +
 // interaction (BUILD/SEND off a log entry). It is a session view
 // (offscreen-lifetime, NOT persisted to IDB — the per-service schemas in
@@ -74,9 +74,9 @@ const state = {
 const MAX_REQUEST_LOG_ENTRIES = 2000;
 let globalRequestLog = [];
 // Push a captured traffic entry onto the global log, stamping the {tabId,
-// documentId, frameId} filter metadata from the SENDER (not state.docs — the
-// doc may already be evicted, and a log push must never re-create it). Newest
-// first; oldest trimmed at the cap.
+// documentId, frameId} filter metadata from the SENDER (the browser's answer for
+// THIS message, never a lookup that could name another document). Newest first;
+// oldest trimmed at the cap.
 function _pushGlobalLog(entry, tabId, documentId, frameId) {
   entry.tabId = tabId != null ? tabId : null;
   entry.documentId = documentId || null;
@@ -87,44 +87,41 @@ function _pushGlobalLog(entry, tabId, documentId, frameId) {
 
 const _wsConnState = new Map(); // documentId → Map<wsId, { url, readyState }>
 
-// -- Review-completion eviction ---------------------------------------------
-// A document whose analysis has COMPLETED (its ONE forced-exec run merged to
-// globalStore, its frontier residue parked to IDB via frontierPut) is dropped
-// from in-memory state.docs to keep RAM bounded across a long many-site session.
-// Its learnings live in globalStore (the moat) + globalRequestLog (traffic); its
-// unfinished exploration lives in the GLOBAL frontier (replay recipes), resumed by
-// the host WFQ — not by holding the doc's transient buffer in RAM. Navigate-away
-// never forces eviction; a doc is evictable once analysed and not re-analysing.
-// The sweep is debounced so it runs after the merge has settled.
-var _evictSweepTimer = null;
-function _scheduleEvictSweep() {
-  if (_evictSweepTimer) return;
-  _evictSweepTimer = setTimeout(function () { _evictSweepTimer = null; _evictReviewedDocs(); }, 1000);
+/* -- Review-completion RECLAIM ------------------------------------------------
+   THE ANALYSIS OWNS THE BUFFER; THE DOCUMENT OWNS ITSELF. This swept `state.docs.delete(documentId)` the
+   moment a document's forced-exec run returned, which un-registered a document that was still OPEN and still
+   firing requests. Every learner resolves its writes through `_docForLearning(documentId)` and that lookup
+   then missed, so from ~a second after page load — the entire lifetime of the page — every key, endpoint,
+   schema and probe result learned from live traffic was written into a throwaway object and dropped, and the
+   automatic req2proto probe went out with `tabId: null` and came back `relay_failed`. The eviction was aimed
+   at the BIG state (the combined page source), and that is the only thing reclaimed here.
+   A DocData is small (identity + the maps this document's own view holds, all of which are already merged
+   into globalStore) and it lives exactly as long as `_docOrigins`' entry for the same document does — the
+   offscreen's session. `_wsConnState` is the LIVE document's, never the analysis's, and was dropped here too:
+   a page whose run has returned still has its WebSockets open and the message console still routes to them. */
+var _reclaimSweepTimer = null;
+function _scheduleEvictSweep() {   // name kept: lib/merge.js posts here at the end of every merge
+  if (_reclaimSweepTimer) return;
+  _reclaimSweepTimer = setTimeout(function () { _reclaimSweepTimer = null; _reclaimReviewedDocs(); }, 1000);
 }
-function _evictReviewedDocs() {
-  var gone = [];
+function _reclaimReviewedDocs() {
+  var n = 0;
   state.docs.forEach(function (doc, documentId) {
-    /* Reviewed = its forced-exec run produced results (merged to globalStore). The parked frontier (IDB
-       recipes) carries any residue. There is no second condition: `_astResults`/`_astError` are written by
-       the ONE analysis when its engine finalizes, so a document holding either is a document whose dispatch
-       has already returned. The `!_analysisInflight.has(documentId)` that stood beside this asked a
-       per-document in-flight REGISTER the same question its own result slots already answer, and that
-       register was half of the second scheduler this file no longer has. */
-    var reviewed = doc && (doc._astResults || doc._astError);
-    if (reviewed) gone.push(documentId);
+    /* Reviewed = its forced-exec run has RETURNED (`_astResults`/`_astError` are written by the ONE analysis
+       when its engine finalizes). `_reclaimed` is what keeps this from re-running over the same document on
+       every later merge — it is the reclaim's own record, not a second answer to "did the run return". */
+    if (doc._reclaimed || !(doc._astResults || doc._astError)) return;
+    _reclaimReviewedDoc(documentId, doc);
+    n++;
   });
-  for (var i = 0; i < gone.length; i++) _evictReviewedDoc(gone[i]);
-  if (gone.length) console.debug("[evict] dropped %d reviewed document(s) from state.docs", gone.length);
+  if (n) console.debug("[reclaim] freed the page source of %d reviewed document(s)", n);
 }
-function _evictReviewedDoc(documentId) {
-  // Drop the per-document analysis state + its BIG transient buffer (the combined
-  // source) + transient side-maps. NEVER touch globalRequestLog (the log is
-  // global) or _docOrigins (the credentialed-read principal stays; late same-doc
-  // traffic is routed to globalStore-only by _docForLearning, never resurrecting).
-  state.docs.delete(documentId);
+function _reclaimReviewedDoc(documentId, doc) {
+  // The combined page source, in the two places it is held. Nothing reads either after the run returns: a
+  // re-delivered CONTENT_HTML writes both again before it dispatches.
   _scriptBuffers.delete(documentId);
-  _wsConnState.delete(documentId);
-  _contentPings.delete(documentId);
+  doc._pageHtml = null;
+  doc._reclaimed = true;
 }
 
 // Shape/template holes ({}, {id}) survive new URL().href/.pathname as %7B..%7D (the WHATWG path
@@ -318,6 +315,36 @@ function getDoc(documentId) {
   return state.docs.get(documentId);
 }
 
+/* THE BIN, ON THE PER-DOCUMENT VIEWS: empty every LEARNED map and drop every analysis slot, and KEEP the
+   browser-stated identity. `state.docs.clear()` stood in the CLEAR_TAB handler, and with registration now
+   load-bearing that would delete the identity of documents that are still open and still sending traffic — the
+   next request from one of them would then reach `_docForLearning` unregistered, which is a DCHECK, reporting
+   the user's own Clear as a broken invariant. Identity is not learned DATA: it is what the browser said about a
+   document that exists, and Clear does not un-say it. What Clear must remove is everything we inferred, and
+   that is exactly the list below (the `delete`s rather than `= null` matter: lib/serialize.js distinguishes an
+   ABSENT `_resolverErrors` — "the engine recorded nothing" — from a present one of the wrong shape, which it
+   asserts on). A document whose page source is dropped here also loses its `_reclaimed` mark, so a re-delivered
+   CONTENT_HTML is reclaimed again in its own right. */
+function _clearDocLearning() {
+  state.docs.forEach(function (doc) {
+    doc.apiKeys = new Map();
+    doc.endpoints = new Map();
+    doc.authContext = null;
+    doc.discoveryDocs = new Map();
+    doc.probeResults = new Map();
+    doc.scopes = new Map();
+    doc._valueIndex = createValueIndex();
+    doc._pageHtml = null;
+    doc._reclaimed = false;
+    delete doc._responseHeaders;
+    delete doc._astResults;
+    delete doc._astError;
+    delete doc._securityFindings;
+    delete doc._resolverErrors;
+    delete doc._epNorm;
+  });
+}
+
 // All live documents belonging to a browser tab — for AGGREGATE/UI views only
 // (the network/log tab filters by tab purely at the UI level). tabId is a field.
 function docsForTab(tabId) {
@@ -340,11 +367,12 @@ function _docFromMsg(msg) {
   return (msg && msg.documentId && state.docs.get(msg.documentId)) || null;
 }
 
-// A transient (unstored) empty DocData. Views that should still surface the
-// GLOBAL cumulative moat when no specific document matches — the popup opened
-// over a tab with no analyzed page — pass this to serializeTabData, which
-// overlays globalStore onto it (preserving the pre-refactor "always show the
-// cumulative learnings" behavior). NEVER stored in state.docs.
+/* A transient (unstored) empty DocData — A READ-ONLY OVERLAY BASE, NEVER A PLACE TO LEARN INTO. Two callers:
+   GET_STATE, so the popup opened over a tab with no analysed document still shows the GLOBAL cumulative moat
+   (serializeTabData overlays globalStore onto it), and the frontier merge, which fills one and hands it
+   straight to mergeToGlobal in the same statement. Anything that WRITES to one and does not itself merge it
+   is writing into an object that is discarded on return — which is what `_docForLearning` used to hand every
+   learner in the extension. NEVER stored in state.docs. */
 function _emptyDocView() {
   return {
     documentId: null, tabId: null, frameId: 0, origin: "", url: "", title: "", closed: false,
@@ -398,15 +426,30 @@ function _driveGlobalFrontierBurst() {   // idle nudge: kick the ONE pool to re-
   try { self.kickHostPool(); } catch (e) { if (self.APICLIENT_DEV) throw e; }   // a THROW from the pool is a real bug -> dev-loud
 }
 
-// The DocData a network-capture learner writes into. A live document -> its
-// stored DocData (per-document view + global merge). An evicted (grind-
-// complete) or not-yet-created document -> a TRANSIENT view that merges to
-// globalStore ONLY, so post-eviction traffic still enriches the cumulative moat
-// WITHOUT resurrecting a null-identity doc in state.docs (mirrors the gone-doc
-// deep merge). NEVER use getDoc on the passive-traffic path: it would re-create
-// the very doc eviction just removed.
+/* THE DocData A LEARNER WRITES INTO, AND IT IS ALWAYS A REGISTERED ONE. Every learning path in the extension
+   (lib/learn.js, lib/keys.js, lib/response-decode.js, lib/discovery-probe.js, lib/send.js) takes a documentId
+   and resolves it HERE, several of them more than once per message — so an answer that is not the one stored
+   object is not merely a lost write, it is several DIFFERENT objects for one message, one of which the caller
+   happens to merge and the rest of which vanish.
+   `|| _emptyDocView()` stood at the end of this line and made that the normal case for every document whose
+   analysis had returned. It is a DCHECK now: a learner is reached from a message a LIVE document sent, and
+   `handleContentMessage` registers the document off the browser's own facts before any of them runs, so an
+   unregistered one here is that registration broken and not a state to carry on from. */
 function _docForLearning(documentId) {
-  return (documentId && state.docs.get(documentId)) || _emptyDocView();
+  var doc = documentId ? state.docs.get(documentId) : null;
+  DCHECK(!!documentId,
+         "a learner was handed no documentId — it is the only stable per-document identity, and without it " +
+         "there is no view to write into and no principal to fetch as");
+  DCHECK(!!doc,
+         "a learner ran against a document that is not registered (" + documentId + ") — handleContentMessage " +
+         "registers every document that sends a message, so everything this call is about to learn (keys, " +
+         "endpoints, schemas, probe results) has nowhere to land and the page-context relay has no tab to " +
+         "route to");
+  DCHECK(!doc || doc.tabId != null,
+         "a registered document carries no tabId — the browser states it on every content message and the " +
+         "page-context relay (req2proto probes, discovery fetches) routes by it, so a null one is every " +
+         "active-discovery request failing with relay_failed");
+  return doc;
 }
 
 // Find a captured channel entry (WS/PM/MC) in the GLOBAL log. The popup
@@ -758,10 +801,10 @@ async function _dispatchDocument(docKey) {
     analysis.fetchCallSites.length, analysis.securitySinks.length, analysis.resolverErrors.length);
 
   /* MERGED UNCONDITIONALLY. A `hasFindings` gate stood here and RETURNED before all four lines below when the
-     engine emitted no endpoint and no sink — so `tab._astResults` was never written, and `_evictReviewedDocs`
-     reads exactly that slot to decide a document's run has returned. A page with nothing to find was therefore
-     pinned in `state.docs` forever, holding its buffer, and the one case that produces no symptom is again the
-     one that was broken. "The engine found nothing" is a RESULT and is recorded as one. */
+     engine emitted no endpoint and no sink — so `tab._astResults` was never written, and the reclaim sweep
+     reads exactly that slot to decide a document's run has returned. A page with nothing to find therefore
+     held its page source forever, and the one case that produces no symptom is again the one that was broken.
+     "The engine found nothing" is a RESULT and is recorded as one. */
   tab._astResults = [analysis];
   mergeASTResultsIntoVDD(tab, [analysis], tabId);
   mergeToGlobal(tab);
@@ -858,30 +901,27 @@ function handleContentMessage(msg, sender) {
     console.debug("[brain:content] %s dropped — no sender.documentId (cannot document-scope; fail closed)", msg && msg.type);
     return;
   }
-  // Stamp THIS document's identity on its DocData. `origin` is the MessageSender
-  // principal (via _senderOrigin, which also populates _docOrigins) — NEVER
-  // url-derived. `url` is the document's OWN url (display + relative TARGET base),
-  // NOT the tab's top-page url. tabId/frameId are routing/UI fields only.
-  // Always track the requesting frame security principal (populates _docOrigins
-  // via _senderOrigin; a mixed-origin buffer fails closed). CONTENT_HTML is the
-  // analysis trigger and (re)creates this document DocData; every other message
-  // is passive traffic that must NOT create or resurrect a doc -- a doc evicted
-  // on grind-completion stays evicted (its log is global + sender-tagged, and the
-  // learners route to globalStore-only via _docForLearning). getDoc (create) ONLY
-  // for CONTENT_HTML; otherwise refresh identity if the doc still lives.
-  /* ONE MINT PER MESSAGE, and the DocData is stamped from it rather than from `sender` a field at a time.
-     `if (sender.url) doc.url = sender.url` stood here, which is a guarded assign past a broken invariant: a
-     content message with no address left the DocData holding the PREVIOUS document's url at this key, and that
-     url is the private-network principal. The mint asserts instead. */
+  /* A MESSAGE IS A DOCUMENT ANNOUNCING ITSELF, SO THIS IS WHERE IT IS REGISTERED — every type, not just
+     CONTENT_HTML. `state.docs.get` for everything else stood here, guarded by `if (doc)`, on the reasoning
+     that passive traffic must not "resurrect" a document the review sweep had dropped. But the sweep dropped
+     documents that were still open (it now reclaims their page source and leaves them registered), and what
+     the guard actually did was route every learner below to a throwaway view. There is nothing to resurrect:
+     a DocData is identity plus this document's own view of what has been learned, the learned half is already
+     in globalStore, and getDoc mints an empty one. CONTENT_HTML remains the ANALYSIS trigger — a distinct
+     thing from being registered.
+     ONE MINT PER MESSAGE, and the DocData is stamped from it rather than from `sender` a field at a time.
+     `if (sender.url) doc.url = sender.url` stood here too, which is a guarded assign past a broken invariant:
+     a content message with no address left the DocData holding the PREVIOUS document's url at this key, and
+     that url is the private-network principal. The mint asserts instead. `origin` is the MessageSender
+     principal (via _senderOrigin, which also populates _docOrigins) — NEVER url-derived; `url` is the
+     document's OWN address, NOT the tab's top-page url; tabId/frameId are routing/UI fields only. */
   const _facts = _browserFacts(sender);
-  const doc = (msg.type === "CONTENT_HTML") ? getDoc(documentId) : state.docs.get(documentId);
-  if (doc) {
-    doc.tabId = _facts.tabId;
-    doc.frameId = _facts.frameId;
-    doc.url = _facts.url;
-    doc.origin = _facts.origin;
-    if (sender.tab.title) doc.title = sender.tab.title;   // UI label; the browser legitimately has none yet
-  }
+  const doc = getDoc(documentId);
+  doc.tabId = _facts.tabId;
+  doc.frameId = _facts.frameId;
+  doc.url = _facts.url;
+  doc.origin = _facts.origin;
+  if (sender.tab.title) doc.title = sender.tab.title;   // UI label; the browser legitimately has none yet
 
   // RESPONSE_BODY comes from intercept.js via content.js relay
   if (msg.type === "RESPONSE_BODY") {
@@ -920,13 +960,6 @@ function handleContentMessage(msg, sender) {
     return;
   }
 
-  if (msg.type === "CONTENT_PING") {
-    var arr = _contentPings.get(documentId);
-    if (!arr) { arr = []; _contentPings.set(documentId, arr); }
-    arr.push({ at: msg.at || Date.now(), pageUrl: msg.pageUrl || null });
-    return;
-  }
-
   if (msg.type === "CONTENT_HTML") {
     // ONE MESSAGE PER DOCUMENT. The engine (Lexbor) parses this HTML and runs EVERY
     // script in document order in one realm — inline directly, external <script src>
@@ -939,6 +972,7 @@ function handleContentMessage(msg, sender) {
     // reply-seed) is THIS document's own origin/url, from the browser-provided sender.
     doc._pageHtml = String(msg.html || "");
     doc._responseHeaders = msg.responseHeaders || {};   // real navigation response headers (CSP, Content-Type) — same-origin fetch(location.href), so all readable
+    doc._reclaimed = false;   // a re-delivered document holds a page source again, so the reclaim owes it one more pass
     var _dk = documentId;
     var _buf = _scriptBuffers.get(_dk);
     if (!_buf) { _buf = {}; _scriptBuffers.set(_dk, _buf); }
@@ -1147,22 +1181,16 @@ async function buildExportRequest(msg) {
     headers["Content-Type"] = msg.contentType;
   }
 
-  // API key: user override → endpoint → auto. GLOBAL — the endpoint is keyed in
-  // the cumulative store, not per-tab/document.
-  const ep = msg.endpointKey ? globalStore.endpoints.get(msg.endpointKey) : null;
-  if (msg.apiKeyOverride) {
-    if (!msg.apiKeyOverride.disabled && msg.apiKeyOverride.key) {
-      if (msg.apiKeyOverride.source === "url") {
-        parsedUrl.searchParams.set("key", msg.apiKeyOverride.key);
-      } else {
-        headers["X-Goog-Api-Key"] = msg.apiKeyOverride.key;
-      }
-    }
-  } else if (ep?.apiKey) {
-    if (ep.apiKeySource === "url") {
-      parsedUrl.searchParams.set("key", ep.apiKey);
+  /* API key: the user's explicit choice from the Send panel's key selector, which the popup posts with every
+     export. THERE IS NO ENDPOINT ARM. `else if (ep?.apiKey) { ep.apiKeySource === "url" ? … }` stood here and
+     neither field exists on an endpoint record — lib/merge.js, the extension's only `endpoints.set`, writes
+     {url, method, host, path, service, source, pageUrl, requiredHeaders, pathParams, firstSeen} — so the arm
+     could not fire and the whole `ep` lookup existed to feed it. */
+  if (msg.apiKeyOverride && !msg.apiKeyOverride.disabled && msg.apiKeyOverride.key) {
+    if (msg.apiKeyOverride.source === "url") {
+      parsedUrl.searchParams.set("key", msg.apiKeyOverride.key);
     } else {
-      headers["X-Goog-Api-Key"] = ep.apiKey;
+      headers["X-Goog-Api-Key"] = msg.apiKeyOverride.key;
     }
   }
 
@@ -1292,14 +1320,16 @@ async function buildExportRequest(msg) {
 }
 
 const EXTENSION_ORIGIN = `chrome-extension://${chrome.runtime.id}`;
+/* NO `CONTENT_PING`. The type was admitted here and handled above by appending {at, pageUrl} to a per-document
+   array that NOTHING has ever read — and no content script has ever sent one, so it was a liveness channel
+   with neither end. A document's liveness is answered by webNavigation.getAllFrames (GET_FRAMES), which is the
+   browser's answer rather than a page's claim about itself. */
 const CONTENT_TYPES = new Set([
   "CONTENT_HTML",
-  "CONTENT_PING",
   "CONTENT_FORM_SUBMIT",
   "RESPONSE_BODY",
   "PROBE_HIT",
 ]);
-const _contentPings = new Map();  // documentId -> [{ at, pageUrl }, ...]
 
 // The brain runs in the OFFSCREEN document and receives messages DIRECTLY:
 // chrome.runtime.sendMessage broadcasts to every extension context, so both our
@@ -1421,11 +1451,9 @@ function _onTabRemoved(tabId) {
     d.closedAt = Date.now();
     _wsConnState.delete(d.documentId);
   }
-  // The per-document script buffers are NOT freed on tab close: each document's
-  // combined source backs a resumable/background deep grind that keeps learning
-  // the closed tab's API surface (and resumes across sessions) without
-  // revisiting the page. They are reclaimed only by the 🗑️ bin hard-reset
-  // (_scriptBuffers.clear in CLEAR_TAB). Keyed by documentId, never tabId.
+  // A tab close frees NOTHING else. The document's own analysis buffer is freed by the review reclaim (when
+  // its run returns), not by the tab going away, and the cross-session continuation of a closed tab's learning
+  // is the GLOBAL frontier's parked recipes rather than a page source held in RAM. Keyed by documentId.
 }
 
 // ─── Send Request: Schema Resolution ─────────────────────────────────────────

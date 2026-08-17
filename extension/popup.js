@@ -276,6 +276,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("btn-clear").addEventListener("click", clearState);
 
+  // Discovery panel (lib/popup-discovery.js): one delegated click path for the three active-discovery probes.
+  initDiscoveryPanel();
+
   /* NO SETTINGS PANEL WIRING. Its two controls (yield throttle, analyzer workers) reached
      SET_ANALYSIS_OPTS, which the bridge answered "unknown type" to while every sender on the path wrapped
      the call in a catch — so the sliders moved, the value was persisted to IDB, and nothing whatsoever
@@ -805,6 +808,9 @@ async function loadState() {
   DCHECK(Array.isArray(engineRuns),
          "GET_ENGINE_RUNS did not answer with an array — the offscreen slices it straight off bridge.js's " +
          "_engineLog, so anything else is that command not reaching the offscreen document at all");
+  // The recorded API drift (lib/popup-discovery.js). Fetched only when it has not been read yet or an action
+  // just re-fetched a document — a re-render never needs it again, and it is the whole history, not a window.
+  if (discoveryChanges === null) await loadDiscoveryChanges();
   await loadRequestLog();
   render();
   _refreshSendEnabled();   // readiness may have changed (pin became live / stale / not-ready)
@@ -819,6 +825,7 @@ async function clearState() {
   // frontierClear empties it — so the next loadState will fetch the same records back. That is a real gap in
   // the Clear contract ("delete ALL extension data") and it is bridge.js's to close, not this view's to hide.
   engineRuns = null;
+  discoveryChanges = null;   // the drift history is part of "delete ALL extension data"
   _lastKeysFp = _lastSecFp = _lastLogFp = _lastSendFp = "";
   render();
 }
@@ -893,6 +900,7 @@ function render() {
   renderSendPanel();
   renderFrameSelector();
   renderResponsePanel();
+  renderDiscoveryPanel();
   populateTabFilter();
 }
 
@@ -1006,8 +1014,19 @@ function renderDataPanel() {
       const eps = info.endpoints || [];
       const reqCount = info.requestCount || eps.length || 0;
 
+      /* THE KEY'S TYPE, UNDEFAULTED. `info.name || "API Key"` stood in the label and it CONCEALED a real
+         defect for as long as it shipped: four components copied an API-key record field-by-field and two of
+         them dropped `name`, so every key that crossed a merge or a save/load lost the type lib/keys.js had
+         matched ("GitHub Token", "JWT", "Stripe Key") — and the loss rendered as a plausible generic label on
+         exactly the keys that matter most, the ones carried across tabs and sessions. One projection writes it
+         now (lib/serialize.js serializeApiKeyEntry, called by both writers), so the absence of a name is that
+         projection broken and must crash here rather than print a word no producer emitted. */
+      DCHECK(typeof info.name === "string" && info.name !== "",
+             "an API key reached the popup with no type name — lib/keys.js stamps the matched pattern's name " +
+             "on every key it records and serializeApiKeyEntry is the one projection that carries it, so a " +
+             "missing one is a copier dropping the field again (or a record stored before it was carried)");
       html += `<div class="card">
-        <div class="card-label">${esc(info.name || "API Key")} ${info.source === "page_source" ? '<span class="badge badge-source">page source</span>' : '<span class="badge badge-source">network</span>'}
+        <div class="card-label">${esc(info.name)} ${info.source === "page_source" ? '<span class="badge badge-source">page source</span>' : '<span class="badge badge-source">network</span>'}
           ${reqCount > 0 ? `<span class="badge badge-status">${esc(String(reqCount))} req</span>` : ""}
         </div>
         <div class="card-value">${esc(key)}</div>

@@ -29,6 +29,7 @@
       <button class="tab" data-panel="send">Send</button>
       <button class="tab" data-panel="security">Vulns</button>
       <button class="tab" data-panel="data">Keys</button>
+      <button class="tab" data-panel="discovery">Discovery</button>
     </nav>
 
     <!-- Security Panel -->
@@ -59,6 +60,14 @@
 
       <div class="empty" id="data-empty">No data captured yet.</div>
       <div id="data-keys"></div>
+    </section>
+
+    <!-- Discovery Panel — ACTIVE discovery (CLAUDE.md §Attacker sources: REQUIRED, not optional). The four
+         offscreen commands behind it (FETCH_DISCOVERY, PROBE_ENDPOINT, DISCOVER_SERVICE, GET_DISCOVERY_CHANGES)
+         all had handlers and no sender, so the req2proto error-probe and the recorded API drift were
+         unreachable from the shipped UI. lib/popup-discovery.js renders and drives this. -->
+    <section id="panel-discovery" class="panel">
+      <div id="discovery-body"></div>
     </section>
 
     <!-- Send Panel -->
@@ -200,6 +209,7 @@
     <script src="lib/popup-reqlog.js"></script>
     <script src="lib/popup-security.js"></script>
     <script src="lib/popup-send.js"></script>
+    <script src="lib/popup-discovery.js"></script>
     <!-- The popup is a bridge EDGE (it renders the engine's result), so per CLAUDE.md §Architecture it gets
          the same DCHECK mechanism the offscreen has: a malformed/drifted engine record crashes LOUD where it
          is read, instead of a card quietly rendering less than it claims. Loaded before popup.js; every

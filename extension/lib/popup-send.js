@@ -160,33 +160,15 @@ function renderMethodDropdown() {
             else if (origin === "unused+fired") tag = " [in bundle + fired]";
             else if (origin === "fired") tag = " [fired only]";
             else tag = " [declared, never fired]";
-            // Substitute source-map-resolved param names into the displayed id
-            // (e.g. `github.com.{e}_{a}_issues_preheat_index` →
-            // `github.com.{owner}_{repo}_issues_preheat_index`) so the reviewer
-            // can read the endpoint without having to open the param panel to
-            // decode minified single-letter holes. The underlying option value
-            // and URL-substitution key stay minified to match the engine's
-            // `${e}` hole — only the human-visible textContent is rewritten.
-            //
-            // Parse the id with a regex-by-hole-name so we only rewrite at
-            // declared hole positions, not arbitrary `{e}` substrings — a
-            // string-level replace would also rewrite if a longer path
-            // template happened to contain `{e}` in another context. The path
-            // param is matched as a whole bracketed token bound by either
-            // start/end of string or the `.` / `_` separators that the method
-            // id uses for `/` (so `{eee}` doesn't get its inner `{e}` touched).
-            let displayId = m.id;
-            if (m.parameters) {
-              for (const pName in m.parameters) {
-                const p = m.parameters[pName];
-                if (p && p._sourceMapName && p.location === "path" && pName !== p._sourceMapName) {
-                  const esc = pName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-                  const re = new RegExp("(^|[._/])\\{" + esc + "\\}(?=$|[._/])", "g");
-                  displayId = displayId.replace(re, "$1{" + p._sourceMapName + "}");
-                }
-              }
-            }
-            opt.textContent = `[${m.httpMethod}] ${displayId}${tag}`;
+            /* THE METHOD ID AS THE STORE HOLDS IT. A rewrite stood here that substituted a declared name
+               recovered from the page's source map into each `{hole}` of the displayed id (`{e}` → `{owner}`)
+               — reading `p._sourceMapName` and `p.location === "path"`. Neither name has a producer: nothing
+               in engine/host has ever emitted a source-map name, and lib/learn.js writes every @H param with
+               `location: "query"` because endpoint.c mints params only out of the query string. So the loop
+               could not fire on any parameter of any method, and it read as a working feature.
+               If the rename is wanted it is the ENGINE's to emit beside the param it renames — a view cannot
+               recover a declared name from a minified one. */
+            opt.textContent = `[${m.httpMethod}] ${m.id}${tag}`;
             opt.dataset.method = m.httpMethod;
             opt.dataset.isVirtual = "true";
             opt.dataset.svc = svcName;
