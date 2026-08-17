@@ -327,7 +327,17 @@ function collectTables(masked, typedefs, into) {
     }
     const typeText = masked.slice(s, m.index);
     let fields = null;
-    const inlineStruct = typeText.lastIndexOf("struct");
+    /* `struct` AS A WORD. This was `lastIndexOf("struct")`, a SUBSTRING search, and platform.c contains
+       `i_structured_clone(…) { (void)d; structured_clone_install(c, g); }` a few lines above its table — so the
+       match landed inside an IDENTIFIER, the next `{` after it was a thunk's BODY, and PLATFORM's field list
+       was read as ["d", null] out of `(void)d; page_reveal_install(c, g);`. Every column of that table then
+       resolved to nothing, which is where the [Global] fact died: `PLATFORM[i].install(ctx, global, doc)` names
+       the 72 functions every per-realm component is installed by, so Window's ninety handler attributes,
+       `opener`, `closed`, `top`, `setTimeout`, `structuredClone` and `matchMedia` were all UNATTRIBUTED and all
+       counted ABSENT. A table whose type is a real inline `struct { … }` still matches, because that is a
+       keyword and this now asks for one. */
+    let inlineStruct = -1;
+    for (const sm of typeText.matchAll(/\bstruct\b/g)) inlineStruct = sm.index;
     if (inlineStruct >= 0 && typeText.indexOf("{", inlineStruct) >= 0) {
       const so = typeText.indexOf("{", inlineStruct);
       const se = matchAt(typeText, so);
