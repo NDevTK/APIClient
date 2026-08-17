@@ -31,7 +31,19 @@ function buildFormFields(schema, initialData = null) {
     const hsec = el("div", "form-section");
     let hh = '<div class="form-section-label">Required Headers <span class="card-meta">(learned)</span></div>';
     for (const [hn, hv] of Object.entries(_rh)) {
-      if (hv && hv.kind === "literal") {
+      /* THE HEADER VOCABULARY IS ASSERTED, NOT PATTERN-MATCHED. `hv.kind === "literal"` on an untranslated
+         value is FALSE rather than an error, so the header renders as "dynamic — paste runtime value" and the
+         auto-attach loop below drops it — a value the engine actually COMPUTED, shown as one it could not.
+         That is not hypothetical: lib/learn.js records it happening, because merge.js put endpoint.c's flat
+         name -> STRING record on the endpoint entry untranslated while this reader spoke {kind, value}. One
+         translation now exists (`astHeaderRecord`, at the boundary, for both producers), so a value reaching
+         here in the other vocabulary is that boundary being bypassed again and it says so. */
+      DCHECK(!!hv && (hv.kind === "literal" || hv.kind === "opaque") && typeof hv.value === "string",
+             "a learned required header reached the Send panel in the wrong vocabulary (" + hn + " = "
+             + JSON.stringify(hv) + ") — lib/learn.js `astHeaderRecord` translates endpoint.c's flat "
+             + "name -> string record into {kind:\"literal\"|\"opaque\", value} for BOTH producers, so anything "
+             + "else here bypassed it, and this panel would show a header the engine computed as one it could not");
+      if (hv.kind === "literal") {
         /* Literal: read-only display. sendRequest auto-attaches the
            value from currentSchema.method.requiredHeaders so the user
            doesn't need to retype it. */
@@ -936,7 +948,17 @@ async function sendRequest() {
   if (_learnedRH && typeof _learnedRH === "object") {
     const _userKeysLc = new Set(Object.keys(headers).map(k => k.toLowerCase()));
     for (const [hn, hv] of Object.entries(_learnedRH)) {
-      if (!hv || hv.kind !== "literal" || typeof hv.value !== "string") continue;
+      /* The SAME assert as the renderer above, because this is the half with teeth: a value in the wrong
+         vocabulary was silently `continue`d here, so the replay went out WITHOUT a header the engine had
+         computed and the endpoint looked broken. Skipping an OPAQUE header is a real decision — the analyzer
+         could not compute it and the reviewer pastes it into the input the renderer made — so that arm stays;
+         what is gone is the arm that treated an unrecognised SHAPE as an opaque header. */
+      DCHECK(!!hv && (hv.kind === "literal" || hv.kind === "opaque") && typeof hv.value === "string",
+             "a learned required header reached the send builder in the wrong vocabulary (" + hn + " = "
+             + JSON.stringify(hv) + ") — lib/learn.js `astHeaderRecord` is the one translation of endpoint.c's "
+             + "flat name -> string record, and a value that bypassed it is dropped here, so the replay goes "
+             + "out missing a header the engine had already computed");
+      if (hv.kind !== "literal") continue;               // opaque: the reviewer's input supplies it below
       if (_userKeysLc.has(hn.toLowerCase())) continue;   // user form-row override wins
       headers[hn] = hv.value;
     }
