@@ -446,10 +446,29 @@ function readCorpus(p) {
 /* `null` — NOT `false` — WHEN THE FILE CANNOT BE READ, because "this is not a testharness test" is a claim about
    its CONTENT and there is no content to make it from. The caller propagates the third answer rather than
    collapsing it into the negative one. */
+/* A `<script src>` SPELLED INSIDE A SCRIPT'S OWN TEXT IS NOT AN ELEMENT, and until this stripped it the
+   pattern above was structural in shape and textual in fact. HTML §13.2.5.4 script data state: once the
+   tokenizer is inside a `script` element the content is TEXT, so markup written there becomes an element only
+   if something later parses it. `html/semantics/scripting-1/the-script-element/execution-timing/102.html` is
+   the worked example and it is not an edge case — it `document.write`s a whole harness document, so the bytes
+   contain a literal `<script src='/resources/testharness.js'>` that no parser ever sees as an element at parse
+   time. sourcefile.py parses and says "not a test"; this gate matched the substring and said TEST; and because
+   the collector-vs-sourcefile.py disagreement is a HARD FAIL, that one file made `node engine/wpt.mjs` exit 1
+   for EVERY path, so the browser half had no WPT gate at all while each run still printed a clean revision
+   banner above the refusal.
+   The strip is the same correction twice, and this file's own header already names it: a comment that NAMES
+   the harness, and now a script that WRITES it. Both are content the parser does not read as markup, so both
+   come out before the question is asked — the opening tag is kept, because the opening tag is the thing being
+   matched. This mirrors `codeOnly()`'s rule for JS: strip what is not code before reading it as code. */
+function markupOnly(src) {
+  return src.replace(/<!--[\s\S]*?-->/g, "")
+            .replace(/(<(?:[A-Za-z][\w.-]*:)?script\b[^>]*>)[\s\S]*?<\/(?:[A-Za-z][\w.-]*:)?script\s*>/gi, "$1");
+}
 function isTestDocument(p) {
   const src = readCorpus(p);
   return src === null ? null
-       : /<(?:[A-Za-z][\w.-]*:)?script[^>]*\ssrc\s*=\s*(["']?)\/resources\/testharness\.js\1[\s/>]/i.test(src);
+       : /<(?:[A-Za-z][\w.-]*:)?script[^>]*\ssrc\s*=\s*(["']?)\/resources\/testharness\.js\1[\s/>]/i
+           .test(markupOnly(src));
 }
 /* WHAT KIND OF TEST A FILE IS, or null when it is not one. The order is sourcefile.py's `manifest_items`
    cascade, and the order is load-bearing: every NAME-based type is asked BEFORE the content, so a file that
