@@ -646,7 +646,19 @@ static const JSTrampStepDef media_task_def = {
     .steps = MEDIA_TASK_STEPS
 };
 
-/* QUEUE ONE. `events` and `promises` are CONSUMED. */
+/* QUEUE ONE. `events` and `promises` are CONSUMED.
+ *
+ * IT IS A TASK, WHICH IS WHAT §4.8.11 SAYS IT IS: "to QUEUE A MEDIA ELEMENT TASK with a media element element
+ * and a series of steps steps, QUEUE AN ELEMENT TASK on the media element's media element event task source
+ * given element and steps". Every one of the twenty-odd sites in §4.8.11.5 through §4.8.11.16 that fires
+ * `loadstart`, `progress`, `suspend`, `canplay`, `playing`, `pause`, `error` — and every one that settles a
+ * pending play promise — reaches this function through that sentence, so the whole of this element's
+ * observable event stream sat on the MICROTASK queue. That is a different position in HTML §8.1.7's event
+ * loop and not a smaller one: a microtask runs inside the enqueuing flow's own checkpoint, so a `pause()` in a
+ * script fired `pause` at the element BEFORE a `setTimeout(f,0)` that had already expired and before a message
+ * already delivered — and, worse for the pair of them, before the `play()` promise settlement that §4.8.11.8
+ * queues as a task of its own. §8.1.7's two queues exist so that cannot happen, and core/frame/navigable.c
+ * states the same rule at §7.2.5.1's load. */
 static void media_queue_task(JSContext *ctx, JSValueConst el, JSValue events, JSValue promises, int action)
 {
     JSValueConst argv[4];
@@ -662,7 +674,7 @@ static void media_queue_task(JSContext *ctx, JSValueConst el, JSValue events, JS
     argv[1] = events;
     argv[2] = promises;
     argv[3] = act;
-    JS_EnqueueCallJob(ctx, fn, 4, argv);
+    JS_EnqueueCallTask(ctx, fn, 4, argv);   /* §4.8.11: the media element event task source */
     JS_FreeValue(ctx, fn);
     JS_FreeValue(ctx, events);
     JS_FreeValue(ctx, promises);
@@ -1166,12 +1178,43 @@ static const JSTrampStepDef media_select_def = {
  * from the second. With step 1 inside the enqueued job the network state was still NETWORK_EMPTY when the
  * second child arrived, and one element would have run two resource selection algorithms over one tree —
  * §scheduler's double-load, arriving for the same reason it always does: a step that became a work item was
- * read at the wrong time. */
+ * read at the wrong time.
+ *
+ * AND THE JOB IS A MICROTASK, WHICH IS THE ONE THING ABOUT THIS FUNCTION THAT MUST NOT BE "CORRECTED". Step 4
+ * is "AWAIT A STABLE STATE, allowing the task that invoked this algorithm to continue", and HTML §8.1.7.3
+ * defines that in one sentence: "when an algorithm running in parallel is to AWAIT A STABLE STATE, the user
+ * agent must QUEUE A MICROTASK that runs the following steps". It is not §4.8.11's media element task source —
+ * that source is media_queue_task above, and it IS a task. The two are one algorithm apart and they are
+ * different queues, so making this one a task would run the synchronous section behind every task already
+ * standing (an expired timer, a delivered message) instead of at the next checkpoint, and `loadstart` would
+ * reach the page after them rather than before. */
 static void media_invoke_selection(JSContext *ctx, JSValueConst el)
 {
     JSValue fn, st = media_state(ctx, el);
 
     DCHECK(g_select_stepid >= 0, "§4.8.11.5 was invoked before its machine was registered");
+    /* §4.8.11.5's OWN FIRST SENTENCE IS AN INVARIANT: "this algorithm is ALWAYS INVOKED AS PART OF A TASK". A
+       flow generation of 0 is this engine's spelling of "no flow is running at all" (quickjs.c's g_flow_gen),
+       so it is exactly the statement that there is no task — and the microtask step 4 queues then has no
+       timeline to belong to. It is reachable from ONE call site: media_element_parsed's walk over the tree the
+       parser built, run from document_install, which this engine performs in qjs_init while the frontier is
+       seeded in qjs_begin. §4.8.11.2 — "if a media element is CREATED WITH A SRC ATTRIBUTE, the user agent must
+       IMMEDIATELY invoke the media element's resource selection algorithm" — makes every `<video src>` and
+       `<audio src>` in a page's own markup arrive there, so this is a whole class of page and not an edge.
+       WHAT TO BUILD, and it is NOT a task at this line: engine/qjs's js_enqueue_platform_call routes an
+       ownerless callback to the runtime's baseline_call_list only when `is_task`, on the stated ground that "a
+       microtask is queued by RUNNING script and therefore always has a flow to own it". §8.1.7.3's
+       await-a-stable-state is the counterexample — the USER AGENT queues that microtask, from an algorithm
+       running IN PARALLEL, while it is creating a Document — so the baseline list must take a microtask too.
+       The entry already carries `is_task`, so js_adopt_baseline_calls hands the first flow the same queue the
+       enqueue named and nothing about the ordering changes; what has to go is the routing condition and the
+       DCHECK inside the adoption loop that asserts the list holds tasks only. */
+    DCHECK(JS_FlowGen() != 0,
+           "HTML §4.8.11.5's resource selection algorithm was invoked with NO FLOW RUNNING, and its own first "
+           "paragraph says it is always invoked as part of a task — so step 4's await-a-stable-state MICROTASK "
+           "has no timeline to belong to and lands on quickjs's global job list, which this engine never "
+           "drains: a `<video src>`/`<audio src>` in a document's initial markup, invoked by §4.8.11.2's "
+           "created-with-a-src rule from document_install before qjs_begin seeds the frontier");
     st_set_int(ctx, st, "networkState", NETWORK_NO_SOURCE);   /* step 1 */
     st_set_bool(ctx, st, "showPoster", true);                 /* step 2 */
     /* A new run of the algorithm is not the run that parked at step 14's children mode waiting step, so the

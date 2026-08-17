@@ -227,7 +227,7 @@ static void dialog_queue_toggle_task(JSContext *ctx, JSValueConst element, const
     if (JS_GetOwnSlot(ctx, &pending, element, g_atom_tracker) > 0) {
         JS_FreeValue(ctx, pending);
         DFAIL("§4.11.4 queue a dialog toggle event task step 1.2 must REMOVE the pending toggle task from its "
-              "task queue, and this engine's job queue has no handle to remove one by (JS_EnqueueCallJob "
+              "task queue, and this engine's job queue has no handle to remove one by (JS_EnqueueCallTask "
               "returns nothing) — build a removable queued element task, then carry the tracker's old state "
               "onto this one and let the removed task go");
     }
@@ -245,7 +245,12 @@ static void dialog_queue_toggle_task(JSContext *ctx, JSValueConst element, const
     argv[1] = ov;
     argv[2] = nv;
     argv[3] = source;
-    JS_EnqueueCallJob(ctx, fn, 4, argv);
+    /* Step 2 is "QUEUE AN ELEMENT TASK GIVEN THE DOM MANIPULATION TASK SOURCE and element to run the following
+       steps", so it is a task and it was a microtask — a different position in HTML §8.1.7's event loop and
+       not a smaller one. `showModal()` fires `toggle` and a microtask ran it inside the calling script's own
+       checkpoint, ahead of every task already standing (an expired timer, a delivered message) and ahead of
+       the `beforetoggle` half of any OTHER element queued before it. */
+    JS_EnqueueCallTask(ctx, fn, 4, argv);   /* §4.11.4: the DOM manipulation task source */
     /* Step 3: "set element's dialog toggle task tracker to a struct with task set to the just-queued task and
        old state set to oldState". The OLD STATE is the field anything reads back; the task is the job just
        enqueued, which is the half step 1.2 above cannot yet name. */

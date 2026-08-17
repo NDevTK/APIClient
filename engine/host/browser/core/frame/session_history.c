@@ -1469,7 +1469,16 @@ void session_history_traverse_by_delta(JSContext *ctx, int32_t delta)
     CHECK(!JS_IsException(fn), "the history traversal job's callee could not be allocated");
     d = JS_NewInt32(ctx, delta);
     argv[0] = d;
-    JS_EnqueueCallJob(ctx, fn, 1, argv);
+    /* IT IS NOT A MICROTASK, AND THE SPEC DOES NOT LEAVE THAT OPEN. §7.4.3 step 4 is "APPEND THE FOLLOWING
+       SESSION HISTORY TRAVERSAL STEPS TO TRAVERSABLE", and §7.4.1.3 defines that queue as a session history
+       traversal PARALLEL QUEUE — "very similar to a parallel queue", run in parallel — whose every observable
+       effect is then queued back onto the event loop as a global task on the navigation and traversal task
+       source (§7.4.6.1's apply the history step). This engine collapses the parallel queue and the tasks it
+       posts into the one work item below, so the position that item must hold is the TASK one: as a microtask
+       it ran inside the calling script's own checkpoint, so `history.back()` fired `popstate` before a timer
+       that had already expired and before a message already delivered — a traversal completing inside the
+       turn that requested it, which no browser does and which §8.1.7's two queues exist to forbid. */
+    JS_EnqueueCallTask(ctx, fn, 1, argv);   /* §7.4.1.3's session history traversal queue */
     JS_FreeValue(ctx, d);
     JS_FreeValue(ctx, fn);
 }
