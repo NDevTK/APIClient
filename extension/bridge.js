@@ -277,16 +277,73 @@ function clusterKeyOf(msg) {
    persists the UNFINISHED frontier as compact replay recipes, keyed by origin+bundle-hash (a changed
    bundle invalidates stale orphan indices). A parked frontier resumes next visit/session -> ONE
    continuous attention across sessions, extracting more breadth each time until fully explored. */
+/* THE STORE VERSION IS THE ENTRY GRAMMAR'S VERSION, and the upgrade transaction is where a grammar change is
+   executed (IndexedDB §5.7 "Upgrading a database", §2.7.3 "Upgrade transactions"). v2 added `responseHeaders`
+   (see frontierDoc); a v1 entry cannot state the response its document was created from, so it cannot be
+   resumed into the environment it parked in and is DELETED here rather than resumed under a policy container
+   nobody delivered. A one-time grammar change, not a frontier reset — and not a default either, which is the
+   alternative it replaces: `|| {}` at the read would resume every v1 entry as a page whose server sent no CSP. */
 function idbOpen() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open("apiclient-frontier", 1);
-    r.onupgradeneeded = () => { r.result.createObjectStore("frontier"); };
+    const r = indexedDB.open("apiclient-frontier", 2);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (db.objectStoreNames.contains("frontier")) db.deleteObjectStore("frontier");
+      db.createObjectStore("frontier");
+    };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
-/* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, topLevelUrl, html, code,
-   recipes: "idx,dec;...", emit, visits, ts, credentialed }. Rehydration re-runs (html,code) + resumes
-   recipes -- so a parked flow on ANY site can be advanced later, even when that page isn't open. */
+/* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, topLevelUrl, origin,
+   responseHeaders, html, code, recipes: "idx,dec;...", emit, visits, ts, credentialed }. Rehydration re-runs
+   (html,code) + resumes recipes -- so a parked flow on ANY site can be advanced later, even when that page
+   isn't open. */
+/* THE DOCUMENT HALF OF A COLD-TIER ENTRY, WITH ONE SPELLER FOR BOTH DIRECTIONS. solver/cold.h's recipe is the
+   FLOWS — the arms each parked flow took — and those arms replay INSIDE a document, so the entry must also
+   carry the document they replay in. That is exactly what `qjs_init` takes: its bytes, its URL (DOM §4.5
+   "Interface Document"), the top-level creation URL of HTML §8.1.3.1 "Environments", its browser-stated
+   principal, and the RESPONSE HEADER LIST that HTML §7.1.7 "Policy containers" makes this Document's policy
+   container (the CSP list, plus §7.1.3 "Cross-origin
+   opener policies" and §7.1.4 "Cross-origin embedder policies"; §7.1.2 "Origin-keyed agent clusters" reads
+   `Origin-Agent-Cluster` out of the same list). None of it is derivable from any of the rest.
+   THE MISMATCH THIS CLOSES IS STRUCTURAL, not one field's. `responseHeaders` was asserted at the engine
+   boundary and never parked, so every rehydration reached qjs_init with none and aborted before its document
+   had a policy container — the ONE continuous cross-session frontier dead in a dev build, 104 admissions and
+   202 crash banners, and the park still reporting that it had stored a resumable residue. A field the engine
+   asserts could be added at one end alone because the two ends were two object literals; now the store's
+   writer and its reader go through this, so a field written by neither crashes at the park rather than at the
+   resume a session later. NOTHING IS DEFAULTED: `{}` is the honest header list of a response that carried no
+   headers, so substituting it for a producer that stated none turns a CSP-protected page into an unprotected
+   one, and "CSP does not block this sink" is then a reported exploit that is not real. */
+function frontierDoc(e, when) {
+  DCHECK(e && typeof e === "object",
+         "a cold-tier entry " + when + " as no record at all — the entry IS the parked document, so there is " +
+         "nothing to resume the recipe's flows inside of");
+  DCHECK(typeof e.sourceUrl === "string" && e.sourceUrl !== "",
+         "a cold-tier entry " + when + " with no document URL — DOM §4.5 \"Interface Document\" gives every " +
+         "Document one, the engine derives this document's principal from it, and every relative URL the " +
+         "bundle builds resolves against it");
+  DCHECK(typeof e.topLevelUrl === "string" && e.topLevelUrl !== "",
+         "a cold-tier entry " + when + " with no top-level creation URL — HTML §8.1.3.1 \"Environments\" " +
+         "defines it and §8.1.3.5 \"Secure contexts\" reads it, so the flows would resume against a different " +
+         "set of Web IDL §3.3.13 \"[SecureContext]\" members than they parked against; the engine refuses an " +
+         "empty one one call later, in the process handed the hole rather than in the zone that made it");
+  DCHECK(typeof e.origin === "string",
+         "a cold-tier entry " + when + " with no principal — it is browser-stated, this zone cannot re-derive " +
+         "it from the address (a sandboxed document's address lies about it), and a resumed instance that " +
+         "posts a cross-document message must stamp the origin the parked one had");
+  DCHECK(e.responseHeaders && typeof e.responseHeaders === "object",
+         "a cold-tier entry " + when + " with no response header list — HTML §7.1.7 \"Policy containers\" " +
+         "makes those headers this Document's policy container, so the parked flows would resume under a " +
+         "policy nobody delivered and every @S verdict on them would be decided against it");
+  DCHECK(e.html instanceof Uint8Array || typeof e.html === "string",
+         "a cold-tier entry " + when + " as neither a byte sequence nor characters — the parked document " +
+         "would rebuild as a page that parses to nothing, which reads as an origin whose flows found nothing");
+  DCHECK(typeof e.code === "string",
+         "a cold-tier entry " + when + " with no script inventory — it is the empty string when the document " +
+         "carries its own scripts, which is a different thing from absent");
+  return e;
+}
 /* THE COLD TIER'S THREE EDGES, AND WHAT THEIR ERRORS USED TO MEAN. Each was `catch (_) { return <empty> }`
    plus an `onerror` that RESOLVED with an empty answer, so an IndexedDB that refused a read reported the same
    thing an unvisited origin reports — no parked frontier — and an IndexedDB that refused a WRITE reported
@@ -307,6 +364,7 @@ async function frontierGet(key) {
   } catch (e) { RETHROW_FATAL(e); frontierFail("read", e); return null; }
 }
 async function frontierPut(key, entry) {
+  if (entry && entry.recipes) frontierDoc(entry, "was written");   // before the edge: the grammar, not the storage
   try {
     const db = await idbOpen();
     await new Promise((res, rej) => { const s = db.transaction("frontier", "readwrite").objectStore("frontier"); const t = (entry && entry.recipes) ? s.put(entry, key) : s.delete(key); t.onsuccess = () => res(); t.onerror = () => rej(t.error); });
@@ -1940,27 +1998,35 @@ const _hostOps = {
       cold.sort((a, b) => frontierWeight(b) - frontierWeight(a));   // one global value order
       for (const c of cold) {
         if (!_admissionHasHeadroom()) break;
+        /* THE WHOLE PARKED DOCUMENT COMES BACK THROUGH ONE READER, and the recipe's flows resume inside it.
+           `frontierDoc` is the same shape the park wrote, asserted the same way in the other direction, so
+           the field the tier was missing (`responseHeaders` — the policy container) cannot go missing again
+           from one end only. */
+        const doc = frontierDoc(c, "came back from the cold tier");
         /* THE PRINCIPAL RESUMES WITH THE RECIPE. A parked flow's world is only the same world if the
            document it resumes into is the same PRINCIPAL — and this zone cannot re-derive one from
-           c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. A recipe
-           written before this field carries "", and the stamp site refuses to deliver a message for it
-           rather than inventing one. */
+           c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. The stamp
+           site refuses to deliver a message for an empty one rather than inventing one. */
         /* A RESUMED RECIPE IS A CLUSTER OF ONE, and its GROUP says so rather than borrowing a tab's. The
            browsing-context group it parked in is gone — the tab was closed, or the session was — so there is
            no live document it may share a heap with, and the frontier key (origin|bundle, already unique per
            recipe and never equal to a tab id) is the honest name for the group it resumes into. That is also
-           what lets the origin half stay "" for a recipe written before the principal was part of one: an
-           empty half of a key whose other half is unique collides with nothing, so nothing is invented. */
-        const msg = { type: "AST_ANALYZE", pageHtml: c.html, code: c.code, sourceUrl: c.sourceUrl,
-                      origin: c.origin || "", groupId: "cold:" + c.key,
-                      topLevelUrl: c.topLevelUrl, credentialed: c.credentialed, persist: true };
+           what lets the origin half stay "" for a recipe whose principal is empty: an empty half of a key
+           whose other half is unique collides with nothing, so nothing is invented. */
+        const msg = { type: "AST_ANALYZE", pageHtml: doc.html, code: doc.code, sourceUrl: doc.sourceUrl,
+                      origin: doc.origin, groupId: "cold:" + c.key,
+                      responseHeaders: doc.responseHeaders,
+                      topLevelUrl: doc.topLevelUrl, credentialed: c.credentialed, persist: true };
         /* THE `try {} catch` AROUND THIS IS GONE WITH THE REPORTING IT DID. A rehydration whose engine ABORTS
            is now bannered by engineBootFailed, at the reservation, together with the pool slot it releases —
            one place on every creation path rather than one arm per call site. What was left in the catch was
            an invariant abort, which `RETHROW_FATAL` was already rethrowing, so the arm could only ever have
            caught something it immediately gave back. A rehydrated cold recipe always participates in the
            frontier and never has a caller, which is the `cold` argument. */
-        await engineCreate(c.code || "", c.html || "", msg, true, null, null, true)._readyP;
+        /* THE STORED DOCUMENT IS PASSED AS IT WAS PARKED. `c.html || ""` stood here and it defeated
+           engineRoot's own assert: an entry carrying no document became a page that parses to nothing, which
+           reads as an origin whose parked flows found nothing rather than one that was never rebuilt. */
+        await engineCreate(doc.code, doc.html, msg, true, null, null, true)._readyP;
       }
     }
   },
@@ -1986,8 +2052,11 @@ const _hostOps = {
         /* AND SO IS THE PRINCIPAL, for the same reason one step down: the origin is browser-stated, this zone
            cannot re-derive it from the address (a sandboxed document's address lies about it), and a resumed
            instance that posts a cross-document message must stamp the origin the parked one had. */
+        /* AND SO IS THE RESPONSE HEADER LIST — the same argument one step further out, and the one field a
+           CSP-blocked sink verdict is decided against. It is the list engineRoot already relayed to qjs_init,
+           carried verbatim; this zone never re-derives it, because no header is re-derivable from an address. */
         key: result._fkey, sourceUrl: eng.msg.sourceUrl, topLevelUrl: eng.msg.topLevelUrl, origin: eng.origin,
-        html: eng.html, code: eng.code,
+        responseHeaders: eng.msg.responseHeaders, html: eng.html, code: eng.code,
         /* `_park` AND `fetchCallSites` ARE GUARANTEED BY `linesToAnalysis` ON BOTH ARMS — asserted off the
            engine document when there is one, the host's own empty when the caller said there would not be —
            so a `|| []` here cannot fire. What it CAN do is exactly what this file has already been burnt by

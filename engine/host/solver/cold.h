@@ -118,7 +118,15 @@ void cold_census(ColdCensus *out);
  *                                 PoC an observation rather than an inherited claim.
  *
  * Ordinals are dense and ascending in EMISSION order, and a base is always emitted before anything that names
- * it, so the rebuild is one forward pass with nothing to patch up. */
+ * it, so the rebuild is one forward pass with nothing to patch up.
+ *
+ * A RECIPE IS HALF OF THE STORED ENTRY, AND THE OTHER HALF IS THE HOST'S. These arms replay INSIDE a document,
+ * so a resume needs the document they replay in — its bytes, its address, its top-level creation URL, its
+ * browser-stated principal and its RESPONSE HEADER LIST, which is HTML §7.1.7 "Policy containers" and is what
+ * qjs_init takes beside the arms qjs_begin takes. None of those is derivable from the others, none of them may
+ * be defaulted, and the host that stores the recipe stores them with it (extension/bridge.js's frontier entry;
+ * the fixture's second spawn re-states them). A stored entry short of one is a document that resumes into an
+ * environment its flows never ran in — the header list was the one that was missing. */
 
 /* WRITE ONE FLOW'S RECIPE INTO THE PARK DOCUMENT — the primitive, and the unit a PARTIAL self-park is made of
    (§scheduler: "an engine self-parks its residue to the IDB cold tier under pressure"). The flow must be one
