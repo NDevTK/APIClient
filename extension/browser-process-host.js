@@ -1,6 +1,7 @@
 /* browser-process-host.js — THE TRUSTED SIDE OF THE BROWSER PROCESS. `renderer-host.js` is the same object for
  * the untrusted renderer, and this is its counterpart: the offscreen — the one fully-trusted zone
- * (SECURITY.md) — provisions the network service's Worker and relays one operation to it.
+ * (SECURITY.md) — provisions the browser process's Worker, accepts its Mojo invitation, and holds the Remotes
+ * every other component in this document reaches it through.
  *
  * WHAT THIS BOUNDARY IS FOR, AND WHY IT IS A WORKER. SECURITY.md puts every analyzer-driven request through
  * `safeFetch`, and one of that chokepoint's guarantees reads BYTES: CORB must refuse a cross-origin HTML/JSON
@@ -14,6 +15,13 @@
  * thread. Nobody holds a `HEAPU8` over it — which is precisely what a second wasm-ld link out of one object set
  * could never say, and why that attempt was deleted rather than kept.
  *
+ * THE TRANSPORT IS MOJO NOW, and the `{v:1,id,op:"corb"}` records this file used to build are DELETED with it.
+ * `bpCall` was a hand-written request-id table, `onReply` was a hand-written demultiplexer, `op` was a
+ * hand-written capability list and `checkHeaderFacts` was this side's copy of three rules the far side also
+ * held a copy of. Every one of those has a name in Mojo — `Remote`, `Receiver`, an interface broker, and a
+ * mojom parameter type — so extension/mojo.js holds the machinery, extension/mojom.js holds the IDL, and what
+ * is left here is provisioning, the two shipped entries, and the probe.
+ *
  * WHAT STAYS ON THIS SIDE, DELIBERATELY. The ORIGIN COMPARISON. SECURITY.md makes the same-origin principal the
  * requesting frame's `MessageSender.origin` — browser-set, opaque-unique, "NEVER re-parsed from a URL" — so
  * what crosses to the browser process is a browser-stated BOOLEAN, exactly as a delivered cross-document
@@ -21,9 +29,11 @@
  * principal and no way to invent either.
  *
  * ONE PROCESS FOR THE WHOLE OFFSCREEN, not one per document. A renderer is per agent cluster because it IS that
- * cluster's heap; a network service holds no per-document state at all — every entry it serves is a pure
- * function of its arguments — so a second one would be a second copy of a table, and the thing that keeps two
- * pages' fetches from contaminating each other is that the principal travels PER CALL, which it does.
+ * cluster's heap; the network service holds no per-document state at all — every entry it serves is a pure
+ * function of its arguments — and the RENDERER REGISTRY that process also holds is per-document by definition:
+ * a registry split across two processes would be two authorities answering "does this agent cluster already
+ * have an instance?", and the first disagreement is two heaps behind one principal. What keeps two pages'
+ * fetches from contaminating each other is that the principal travels PER CALL, which it does.
  */
 (function () {
   "use strict";
@@ -37,16 +47,23 @@
   var RESOURCE_HEADER_MAX = 1445;
 
   /* PROVISION-ONCE. The promise itself is the lock: a second caller arriving while the module is still
-     instantiating awaits the same one rather than starting a second worker. There is no timeout on the hello,
-     for renderer-host.js's reason — a wall clock here would report a loaded machine as a broken transport
-     (CLAUDE.md §Testing), and the failure it would be covering (a policy that refused the worker) is already
-     reported by Chrome, by name, on this document's console.
+     instantiating awaits the same one rather than starting a second worker. There is no timeout on the
+     invitation, for renderer-host.js's reason — a wall clock here would report a loaded machine as a broken
+     transport (CLAUDE.md §Testing), and the failure it would be covering (a policy that refused the worker) is
+     already reported by Chrome, by name, on this document's console.
      A REJECTION IS STICKY, AND THAT IS THE FAIL-CLOSED DIRECTION. A browser process that did not load leaves a
      rejected promise here forever, so every later script fetch rejects out of safeFetch's CORB gate with the
      same reason rather than retrying into a state where nothing judges the body. Re-provisioning on demand
-     would turn "the network service is missing" into an intermittent condition, which is the one shape a
+     would turn "the browser process is missing" into an intermittent condition, which is the one shape a
      security gate must never have. */
   var _bpP = null;
+  /* AND THE RESOLVED HANDLE IS ALSO HELD SYNCHRONOUSLY, for one caller that cannot await: a renderer's
+     TERMINATION notice. `rendererDestroy` removes a frame on a synchronous path (hostClear drops the whole
+     pool; a failed boot reclaims its own frame), and the browser process's registry is the only thing that can
+     free that agent cluster. A renderer exists only because that process created it, so by the time anything
+     can be destroyed this is non-null — which is asserted at that call rather than defaulted past. */
+  var _bpNow = null;
+
   function browserProcessOnce() {
     if (_bpP) return _bpP;
     _bpP = new Promise(function (resolve, reject) {
@@ -56,89 +73,66 @@
          `require-corp` has nothing to refuse — COEP constrains CROSS-origin subresources, and the offscreen
          document's own policy carries `worker-src 'self'`. */
       var w = new Worker(WORKER_URL, { type: "module" });
-      var bp = { worker: w, lines: [], _next: 1, _await: new Map(), _dead: false };
-      /* A WORKER THAT FAILED TO LOAD ITS SCRIPT REPORTS HERE AND NOWHERE ELSE. Without this the boot promise
-         would never settle and every caller would park forever on an answer that is not coming — the one
+      var bp = { worker: w, lines: [], conn: null, sniffer: null, rendererHost: null, childProcess: null };
+      /* A WORKER THAT FAILED TO LOAD ITS SCRIPT REPORTS HERE AND NOWHERE ELSE. Without this the invitation
+         would never be accepted and every caller would park forever on an answer that is not coming — the one
          outcome with no symptom anywhere. */
       w.onerror = function (e) {
-        bp._dead = true;
         reject(new Error("the browser process's worker did not load: " + ((e && e.message) || "(no message)")));
       };
-      w.onmessage = function (ev) {
-        var m = ev.data;
-        if (m && m.hello === 1) {
-          DCHECK(m.v === 1 && typeof m.ok === "boolean" && Array.isArray(m.out),
-                 "the browser process's hello is not this transport's — it is a version, whether the module " +
-                 "instantiated, and the output drained with it");
-          for (var i = 0; i < m.out.length; i++) bp.lines.push(String(m.out[i]));
-          if (m.ok) { resolve(bp); return; }
-          bp._dead = true;
-          reject(new Error("the browser process did not instantiate its module: " + m.err));
-          return;
-        }
-        onReply(bp, m);
-      };
+      /* THE PRIMORDIAL PIPE IS THE WORKER HANDLE ITSELF, which is exactly what `mojo::OutgoingInvitation` gives
+         a freshly launched child: one pipe and nothing else. Every capability rides a pipe brokered over it. */
+      bp.conn = new self.mojo.Connection(
+        { post: function (m, xfer) { w.postMessage(m, xfer); },
+          listen: function (cb) { w.onmessage = function (e) { cb(e.data); }; } },
+        { role: "parent", name: "the browser process",
+          /* THE CHILD'S OUTPUT, ABSORBED WHERE IT ARRIVES. A crash's ROOT line is the last `@WHY` printed
+             before abort(), and lines left in the worker would be a crashed browser process taking its own
+             cause with it. stderr is teed live to this document's console — the same tee renderer-host.js
+             performs, and for the same reason: a native diagnostic is capturable while the run is happening
+             (`harness diag`) instead of only in a record that is about to be discarded. */
+          onStdio: function (lines) {
+            for (var i = 0; i < lines.length; i++) {
+              var ln = lines[i];
+              DCHECK(Array.isArray(ln) && (ln[0] === 1 || ln[0] === 2) && typeof ln[1] === "string",
+                     "the browser process's output line did not carry the stream it came from — a line crosses " +
+                     "as `[fd, text]` so the two streams stay in ONE order (the last @WHY before an abort is " +
+                     "what names the cause) while stderr alone is teed live");
+              bp.lines.push(ln[1]);
+              if (ln[0] === 2) console.debug(ln[1]);
+            }
+          },
+          /* AND EVERY ERROR THIS CONNECTION RAISES CARRIES THAT TAIL, because the reason a call failed is
+             almost never in the exception and almost always in the eight lines before it. */
+          decorate: function (err) { err.browserProcessLines = bp.lines.slice(-8); } });
+      bp.conn.ready.then(function () {
+        /* THE BROKER, USED. Three names go out on the primordial pipe and three bound pipes come back — which
+           is the whole replacement for a hardcoded `op` list, and is why a fourth capability is a fourth
+           interface rather than a fourth arm of two switch statements. */
+        bp.sniffer = bp.conn.bindInterface("network.mojom.ContentSniffer");
+        bp.rendererHost = bp.conn.bindInterface("content.mojom.RendererHost");
+        bp.childProcess = bp.conn.bindInterface("content.mojom.ChildProcess");
+        _bpNow = bp;
+        resolve(bp);
+      }, reject);
     });
     return _bpP;
   }
+  self.browserProcess = browserProcessOnce;
+  self.browserProcessNow = function browserProcessNow() { return _bpNow; };
 
-  /* A REPLY. Every one carries the module's stdout/stderr since the last one, for renderer-host.js's reason: a
-     crash's ROOT line is the last `@WHY` printed before abort(), and lines left in the worker would be a
-     crashed browser process taking its own cause with it. */
-  function onReply(bp, m) {
-    DCHECK(m && m.v === 1 && typeof m.id === "number" && Array.isArray(m.out),
-           "the browser process answered with something that is not this transport's reply — a reply is a " +
-           "version, the call id it answers, and the output drained with it");
-    for (var i = 0; i < m.out.length; i++) bp.lines.push(String(m.out[i]));
-    var wt = bp._await.get(m.id);
-    DCHECK(wt !== undefined,
-           "the browser process answered a call id this zone never made — the id is the whole routing table " +
-           "for an answer, so an unknown one means the worker echoed something other than what it was handed " +
-           "and the call that is actually outstanding will never be resolved");
-    if (!wt) return;
-    bp._await.delete(m.id);
-    if (m.ok) { wt.resolve(m.ret); return; }
-    /* A FAILED CALL IS A REJECTION, and the process is dead after one: what failed is its linear memory. */
-    bp._dead = true;
-    var e = new Error(m.err);
-    e.browserProcessLines = bp.lines.slice(-8);
-    wt.reject(e);
-  }
-
-  function bpCall(bp, rec) {
-    DCHECK(!bp._dead,
-           "a call was made into a browser process that has already aborted — its linear memory is the thing " +
-           "that failed, so this call would be a second crash reported as a first");
-    var id = bp._next++;
-    var p = new Promise(function (res, rej) { bp._await.set(id, { resolve: res, reject: rej }); });
-    rec.v = 1;
-    rec.id = id;
-    bp.worker.postMessage(rec);
-    return p;
-  }
-
-  /* THE HEADER FACTS BOTH SHIPPED ENTRIES TAKE, asserted where they are handed over. Each is `string | null`
-     and null is a POSITIVE statement that the response carried no such header — §5.1's "the supplied MIME type
-     is undefined" for the first, Fetch's "values is null" for the second — never an empty string standing in
-     for one, which is a value a server can really send and which means something else.
-     THE SECOND ONE IS THE HEADER AND NOT THE FLAG, deliberately. `noSniff` used to arrive here already decided,
-     which meant Fetch's determine-nosniff lived in lib/safe-fetch.js as an `indexOf("nosniff")` over a
-     lowercased value — a substring test where the standard splits the header and matches its FIRST value, so
-     `foo, nosniff` set the flag and should not have. With a second entry needing the same fact that would have
-     become two copies of one wrong algorithm, so the derivation is now C beside the algorithms it feeds
-     (browser_process/network/nosniff.c) and what this zone hands over is what this zone did: it read a header. */
-  function checkHeaderFacts(what, contentType, xContentTypeOptions, body) {
-    DCHECK(contentType === null || typeof contentType === "string",
-           "the " + what + " gate was handed a Content-Type that is neither a string nor null — an absent " +
-           "header is §5.1's undefined supplied type and says so with null, which is a different input from " +
-           "\"\"");
-    DCHECK(xContentTypeOptions === null || typeof xContentTypeOptions === "string",
-           "the " + what + " gate was handed an X-Content-Type-Options that is neither a string nor null — " +
-           "this boundary carries the VALUE so the standard's own split-and-match runs in one place, and an " +
-           "absent header says so with null exactly as an absent Content-Type does");
+  /* THE ONLY ASSERT LEFT ON THIS SIDE IS THE ONE MOJO CANNOT MAKE, and it is here because it guards a
+     CORRUPTION rather than a type: `slice` is defined on a String too, so a caller that handed over decoded
+     text would produce a plausible shorter string, and mojom's `array<uint8>` would then name the parameter one
+     line after the evidence was destroyed. Every other rule these two entries used to restate — a null
+     Content-Type is §5.1's undefined supplied type and not "", an absent X-Content-Type-Options is null, a
+     browser-stated boolean is not undefined — is DECLARED in mojom.js and asserted by the transport at both
+     ends of the pipe, with the sentence that explains it. */
+  function checkBody(what, body) {
     DCHECK(body instanceof Uint8Array,
-           "the " + what + " gate was handed a body that is not a byte sequence — the decision reads the " +
-           "body, and a string here is a caller having run a decode it does not own");
+           "the " + what + " gate was handed a body that is not a byte sequence — the decision reads the body, " +
+           "a string here is a caller having run a decode it does not own, and the truncation below would turn " +
+           "it into a shorter string that looks like a resource header");
   }
 
   /* THE CORB GATE, called by lib/safe-fetch.js at its `opts.as === "script"` gate. `sameOrigin` is this zone's
@@ -146,47 +140,28 @@
      sequence as the chokepoint read it. */
   self.browserProcessCorb = async function browserProcessCorb(contentType, xContentTypeOptions, sameOrigin,
                                                               body) {
-    checkHeaderFacts("CORB", contentType, xContentTypeOptions, body);
-    DCHECK(typeof sameOrigin === "boolean",
-           "the CORB gate was handed a principal comparison that is not a boolean — it is a comparison the " +
-           "caller MADE, so it may not arrive as undefined");
+    checkBody("CORB", body);
     var bp = await browserProcessOnce();
-    var v = await bpCall(bp, { op: "corb", contentType: contentType,
-                               xContentTypeOptions: xContentTypeOptions, sameOrigin: sameOrigin,
-                               header: body.slice(0, RESOURCE_HEADER_MAX) });
-    DCHECK(v && typeof v.allow === "boolean" && typeof v.computed === "string" && typeof v.reason === "string",
-           "the browser process answered a CORB verdict missing one of its three fields — the decision, §7's " +
-           "computed essence and the rule that decided are written together by corb.c, so a missing one is a " +
-           "producer that stopped writing it and not a value with a default");
-    return v;
+    return await bp.sniffer.checkCorb(contentType, xContentTypeOptions, sameOrigin,
+                                      body.slice(0, RESOURCE_HEADER_MAX));
   };
 
   /* THE CLASSIFICATION GATE, called by lib/response-decode.js for every captured HTTP response. It answers
      what a body is FOR — an asset with no schema in it, or API data to learn from — which is a question about
-     the resource's ACTUAL type and therefore a question about its bytes. That is why it is here and not in the
-     offscreen's own JS: the user's ruling is that type checking is safeFetch's job and the only source of
-     sniffing, and `classifyResponseAsset` in lib/discovery.js was a second source of it — a hand-rolled
-     magic-byte table beside a standard, plus SVG/CSS/WebVTT/HLS/DASH sniffs no standard has. All three of its
-     functions are deleted; the algorithm is browser_process/network/resource_kind.c.
+     the resource's ACTUAL type and therefore a question about its bytes. That is why it is answered there and
+     not in the offscreen's own JS: the user's ruling is that type checking is safeFetch's job and the only
+     source of sniffing, and `classifyResponseAsset` in lib/discovery.js was a second source of it — a
+     hand-rolled magic-byte table beside a standard, plus SVG/CSS/WebVTT/HLS/DASH sniffs no standard has. All
+     three of its functions are deleted; the algorithm is browser_process/network/resource_kind.c.
      `opaque` is Fetch §2.2.6: the response is an opaque filtered response, so its body is null and its header
      list is empty by construction. Only the zone holding the Response can state that, which is why it crosses
      as a fact rather than being inferred from an empty body on the far side. */
   self.browserProcessClassify = async function browserProcessClassify(contentType, xContentTypeOptions, opaque,
                                                                       body) {
-    checkHeaderFacts("classify", contentType, xContentTypeOptions, body);
-    DCHECK(typeof opaque === "boolean",
-           "the classify gate was handed a filtered-response fact that is not a boolean — Fetch §2.2.6 is " +
-           "either true of this response or it is not, and an undefined here would be read as `false` and " +
-           "would learn an unreadable body as an endpoint with no fields");
+    checkBody("classify", body);
     var bp = await browserProcessOnce();
-    var v = await bpCall(bp, { op: "classify", contentType: contentType,
-                               xContentTypeOptions: xContentTypeOptions, opaque: opaque,
-                               header: body.slice(0, RESOURCE_HEADER_MAX) });
-    DCHECK(v && typeof v.asset === "boolean" && typeof v.reason === "string",
-           "the browser process answered a classification missing one of its two fields — the verdict and the " +
-           "rule that decided are written together by resource_kind.c, so a missing one is a producer that " +
-           "stopped writing it and not a value with a default");
-    return v;
+    return await bp.sniffer.classifyResource(contentType, xContentTypeOptions, opaque,
+                                             body.slice(0, RESOURCE_HEADER_MAX));
   };
 
   /* THE BOUNDARY, EXERCISED. SECURITY.md: "A HOST THAT CANNOT PROVISION A SECOND INSTANCE HAS NOT TESTED THE
@@ -201,11 +176,12 @@
      IT GOES THROUGH THE SHIPPED ENTRY, `self.browserProcessCorb`, so what it measures is the path safeFetch
      takes. It does NOT tear the worker down afterwards: this process is a singleton the chokepoint holds, and
      a probe that terminated it would leave the next fetch to provision a second one.
-     AND IT REPORTS WHAT THIS ZONE HOLDS OF THE OTHER PROGRAM, because that is the claim the deleted attempt
-     could not have made and the one a reader cannot check by looking at a build flag. `handleKeys` is the
-     literal key list of the object this file keeps per browser process: a `Module` or a `HEAPU8` in it would be
-     this zone reaching into the other program's linear memory, which is precisely what two wasm-ld links out
-     of one object set gave and what a Worker cannot give. */
+     AND IT REPORTS WHAT EACH SIDE HOLDS OF THE OTHER. `handleKeys` is the literal key list of the object this
+     file keeps per browser process: a `Module` or a `HEAPU8` in it would be this zone reaching into the other
+     program's linear memory, which is precisely what two wasm-ld links out of one object set gave and what a
+     Worker cannot give. `mojo` and `child` are the two halves of the IPC surface — which interfaces each
+     process holds a Remote for, which it implements, and how many pipe endpoints are open — because a transport
+     whose only evidence is that a message arrived is one whose shape nobody can check from outside. */
   self.browserProcessProbe = async function browserProcessProbe() {
     var enc = new TextEncoder();
     var HTML = enc.encode("<!doctype html><html><body><h1>login</h1></body></html>");
@@ -313,9 +289,14 @@
       rec.classify.push({ name: k.name, agree: kok, asset: w.asset, reason: w.reason, want: k.want });
     }
     rec.agree = all;
+    /* THE IPC SURFACE, FROM BOTH ENDS. This document's Remotes and Receivers are read locally; the browser
+       process's are ASKED FOR over a pipe, which is a fourth interface answering a question about itself. */
+    rec.mojo = self.mojo.stats();
+    rec.child = await bp.childProcess.getMojoStats();
     rec.lines = bp.lines;
     return rec;
   };
 
-  console.debug("[browser-process] ready (self.browserProcessCorb + self.browserProcessClassify + self.browserProcessProbe installed)");
+  console.debug("[browser-process] ready (self.browserProcess + self.browserProcessCorb + " +
+                "self.browserProcessClassify + self.browserProcessProbe installed)");
 })();

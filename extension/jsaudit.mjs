@@ -80,6 +80,24 @@ const LEDGER = [
          "over an UNTRUSTED engine. Loading is renderer-host.js's now, every qjs_* call is an awaited " +
          "postMessage to a sandboxed opaque-origin frame, and nothing here can address an instance's memory — " +
          "grep this file for HEAPU8 or createQJS and the only hits are the comments recording that." },
+  { f: "mojo.js", zone: "BRIDGE:1,5",
+    why: "THE IPC PRIMITIVE, and it is a bridge for the reason a bridge exists at all: the WASM cannot reach " +
+         "`Worker`, `MessagePort` or `postMessage`, which are the only things a process boundary is made of " +
+         "here. It carries reason 1 (safeFetch's CORB and classification decisions, taken in the browser " +
+         "process) and reason 5 (a renderer is obtained by ordering one, which is how the engine's WASM comes " +
+         "to be loaded at all), so the row names both. IT HOLDS NO SEMANTIC AND CANNOT: a Remote, a Receiver, " +
+         "an interface broker and a message validator are Chromium's Mojo mapped onto MessagePort — the layer " +
+         "knows the TYPES a method declares and nothing about what any of them mean. What it DELETED is two " +
+         "hand-written transports: a request-id table, a demultiplexer, an `op` capability list and an error " +
+         "convention, written once per boundary and free to drift, plus two copies of the same three " +
+         "header-shape rules. Those rules now live once, in mojom.js, as the sentence the validator prints." },
+  { f: "mojom.js", zone: "BRIDGE:1,5",
+    why: "THE INTERFACE DEFINITIONS — the `.mojom` file. It is DATA rather than logic: four interfaces, their " +
+         "versions, their methods' ordinals, and each parameter's type beside the sentence that explains that " +
+         "type. It is separate from mojo.js for the reason Chromium separates a generated `*.mojom.js` from " +
+         "`bindings.js`, and it is loaded by BOTH realms because an interface exists only if both ends agree " +
+         "on it — one description, so a skew is a build that packaged two generations rather than a runtime " +
+         "negotiation. The zone follows the transport's: it declares what crosses for reasons 1 and 5." },
   { f: "renderer-host.js", zone: "BRIDGE:5",
     why: "LOADING THE WASM IS REASON 5, and this is where that reason stops being a figure of speech. While " +
          "`createQJS()` runs in the offscreen's OWN realm the untrusted engine is confined by convention — the " +
@@ -97,17 +115,26 @@ const LEDGER = [
          "there is one way to build an instance and it is this one. A reply carries three things beside its " +
          "call id: what the ABI answered, the engine output drained since the last one with the STREAM each " +
          "line came from, and the instance's HEAPU8 length, which is the Level-1 RAM floor's one input and " +
-         "the one fact the pool cannot read for itself any more." },
+         "the one fact the pool cannot read for itself any more. AND IT IS NOW THE ZYGOTE, which is what stops " +
+         "reason 5 from carrying a decision with it: `rendererCreate(name)` is deleted and the only path that " +
+         "materializes a frame is this file's `content.mojom.Zygote.ForkRenderer` implementation, called BY the " +
+         "browser process. That process holds the registry, mints the routing id and refuses a second renderer " +
+         "for one agent cluster; this file cannot decide, and that process cannot create — a dedicated Worker's " +
+         "global has no `document`. Which is exactly why Chromium's browser process asks a zygote to fork." },
   { f: "browser-process-host.js", zone: "BRIDGE:1,5",
     why: "THE TRUSTED SIDE OF THE BROWSER PROCESS — renderer-host.js's counterpart, facing the other way. It " +
          "provisions extension/browser-process.js as a dedicated module Worker (its own realm, its own module " +
-         "instance, its own thread, and no HEAPU8 held over it by anybody) and relays ONE operation to it: the " +
-         "CORB decision safe-fetch.js takes at its `opts.as === \"script\"` gate. That is reason 1 (the fetch " +
-         "chokepoint's own check) reached through reason 5 (loading the WASM), which is why the row names " +
-         "both. WHAT IT DOES NOT HOLD is the decision: §7 and Chromium's CORB analyzer are C in another " +
-         "program, and what stays on this side is the ORIGIN COMPARISON alone, because SECURITY.md makes the " +
-         "same-origin principal the browser's `MessageSender.origin` and forbids re-deriving it from a URL. A " +
-         "browser-stated boolean crosses; no URL and no principal ever do." },
+         "instance, its own thread, and no HEAPU8 held over it by anybody), accepts its Mojo invitation, and " +
+         "holds the Remotes this document reaches it through: the CORB and classification decisions " +
+         "safe-fetch.js and response-decode.js take, and the RendererHost the pool asks for an instance. That " +
+         "is reason 1 (the fetch chokepoint's own check) reached through reason 5 (loading the WASM), which is " +
+         "why the row names both. WHAT IT DOES NOT HOLD is the decision: §7 and Chromium's CORB analyzer are C " +
+         "in another program, and what stays on this side is the ORIGIN COMPARISON alone, because SECURITY.md " +
+         "makes the same-origin principal the browser's `MessageSender.origin` and forbids re-deriving it from " +
+         "a URL. A browser-stated boolean crosses; no URL and no principal ever do. WHAT LEFT THIS FILE is the " +
+         "transport: `bpCall`'s request-id table, `onReply`'s demultiplexer, the `op` list and this side's copy " +
+         "of three header-shape rules are deleted, and `mojo.Connection` plus three `bindInterface` calls " +
+         "stand where they were." },
   { f: "browser-process.js", zone: "BRIDGE:5",
     why: "THE BROWSER PROCESS's own bootstrap, and the whole of the JS inside that boundary: instantiate the " +
          "module, place a resource header in ITS linear memory, call the named entry, post the record back. " +
@@ -117,7 +144,14 @@ const LEDGER = [
          "MEASUREMENT MOVED ONCE, in the right direction: `noSniff` used to arrive as a boolean, which meant " +
          "Fetch's determine-nosniff was being computed in lib/safe-fetch.js as a substring test. Both entries " +
          "now take the HEADER VALUE and network/nosniff.c decides what it means, so this file relays two " +
-         "header values, two browser-stated facts and a byte sequence, and interprets none of them." },
+         "header values, two browser-stated facts and a byte sequence, and interprets none of them. IT ALSO " +
+         "HOLDS THE RENDERER REGISTRY, which is the one piece of STATE in this program and is not a semantic " +
+         "the engine could own: which agent clusters have an instance, what routing id each was given, and the " +
+         "refusal of a second one — SECURITY.md's own one-instance-per-`(browsing-context group, origin)` rule, " +
+         "held by the process a browser holds it in. It is here rather than in the offscreen because a registry " +
+         "split across two zones is two authorities, and the first time they disagree the result is two heaps " +
+         "behind one principal. The transport under all of it is mojo.js; the `{v,id,op}` records this file " +
+         "used to build are deleted with it." },
   { f: "lib/safe-fetch.js", zone: "BRIDGE:1",
     why: "THE network chokepoint. SOP/CORS/PNA/CORB/GET-only cannot live inside the untrusted WASM — " +
          "SECURITY.md §Network. THIS ROW WAS FALSE UNTIL THE BODY BECAME BYTES: the file ended in " +

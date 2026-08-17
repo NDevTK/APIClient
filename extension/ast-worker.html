@@ -14,6 +14,16 @@
 <!-- DCHECK/CHECK: the JS mirror of engine/host/check.h, loaded FIRST so every component can fail hard on a
      violated invariant (dev) exactly like the C engine — the confidence + isolation-testability substrate. -->
 <script src="check.js"></script>
+<!-- MOJO: the IPC primitive, and then the mojom IDL that declares what may cross a process boundary. Loaded
+     immediately after check.js because the IDL is VALIDATED as it is declared (an interface with a repeated
+     ordinal, a parameter carrying no explanation, or a type this transport cannot serialize aborts here rather
+     than at the first call), and before every component that speaks to another process or implements an
+     interface for one: browser-process-host.js binds three Remotes over the browser process's primordial pipe,
+     renderer-host.js exposes content.mojom.Zygote for that process to order a renderer through. The browser
+     process's own Worker loads the same two files by `import`, because an interface exists only if both ends
+     agree on it and ONE description is what makes that true. -->
+<script src="mojo.js"></script>
+<script src="mojom.js"></script>
 <script src="lib/protobuf.js"></script>
 <script src="lib/protocol-parsers.js"></script>
 <script src="lib/discovery.js"></script>
