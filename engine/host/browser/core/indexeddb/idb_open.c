@@ -10,10 +10,10 @@
  *            queued database tasks and this algorithm's own continuation is queued behind them. That is the
  *            same discharge idb_request.c makes for §5.6 step 5.1 and idb_transaction.c for §5.4 step 2.1, so
  *            it is a REST POINT inside one machine and not a hand-off.
- *   step 10.6 "wait until all connections in openConnections are closed" — satisfied by the PAGE calling
+ *   step 10.5 "wait until all connections in openConnections are closed" — satisfied by the PAGE calling
  *            `close()`, or by the last transaction of an already-close-pending connection finishing. Nothing
  *            the queue can order.
- *   step 10.7's own last step, §5.7 step 10 "wait for transaction to finish" — satisfied by the upgrade
+ *   step 10.6's own last step, §5.7 step 10 "wait for transaction to finish" — satisfied by the upgrade
  *            transaction's commit or abort task, which fires `complete` or `abort` at the page first.
  *
  * A machine RESTS at a stage and is resumed by the SCHEDULER; it cannot be resumed by an event that has not
@@ -63,11 +63,16 @@
 #define E_CONNECTION   "connection"       /* §5.1 step 8's `connection`, JS_NULL until then */
 #define E_OPEN_CONNS   "openConnections"  /* §5.1 step 10.1's set, snapshotted where the step computes it */
 #define E_CURSOR       "cursor"           /* which of them step 10.2 is standing on */
+/* THE CONNECTION step 10.2's SELECTION PICKED, held across the fire that follows it — JS_NULL between turns.
+   It is on the entry rather than in a C local because the fire is a SUSPENSION: the stage that holds it is
+   re-entered with its request's answer, and re-deriving the target there would re-run the very filter the fire
+   has just invalidated. See OPN_STAGES. */
+#define E_TARGET       "versionChangeTarget"
 #define E_OLD_VERSION  "oldVersion"       /* §5.7 step 7's `old version`, fired at step 9.5 */
-#define E_BLOCKED      "blockedFired"     /* whether step 10.5 has already fired `blocked` */
+#define E_BLOCKED      "blockedFired"     /* whether step 10.4 has already fired `blocked` */
 
 static JSValue g_queues = JS_UNDEFINED;   /* §2.8.2: name -> Array of entries, in arrival order */
-/* THE ENTRIES PARKED AT STEP 10.6. A list rather than a walk over every queue's head, because what wakes them
+/* THE ENTRIES PARKED AT STEP 10.5. A list rather than a walk over every queue's head, because what wakes them
    is a CONNECTION closing and the question that connection answers is "is any open request waiting on me" —
    asking it of a list of waiters is the question; asking it of every queue would be a search for the answer. */
 static JSValue g_blocked = JS_UNDEFINED;
@@ -259,8 +264,25 @@ static void open_state_start(JSIdbOpenState *s)
     STEP_CB_FOREACH(s->cb, i) s->cb[i] = JS_UNDEFINED;
 }
 
-/* ---- §5.1's OPEN A DATABASE CONNECTION, steps 4 through 10.7 ---------------------------------------------- */
+/* ---- §5.1's OPEN A DATABASE CONNECTION, steps 4 through 10.6 ---------------------------------------------- */
 
+/* THE SELECTION AND THE FIRE ARE TWO STAGES, AND SPLITTING THEM IS THE WHOLE OF WHY step 10.2 IS TWO.
+ *
+ * Both of this machine's fires used to live in the same stage as the walk that DECIDED to fire — and the
+ * decision is a fact about the connections, which is exactly what firing the event CHANGES. Step 10.2's own
+ * NOTE says so: "firing this event might cause one or more of the other objects in openConnections to be
+ * closed, in which case the versionchange event is not fired at those objects." A `versionchange` handler
+ * calling `db.close()` sets the close pending flag on the connection just fired AT, so the resume leg of that
+ * same fire re-walked the filter, SKIPPED that connection, and either collected the previous target's answer as
+ * a different target's or ran off the end of the set and left the stage with `s->phase` at 1 — which is the
+ * two-phase invariant quickjs-step.h's STEP_GOTO states, and it aborted there rather than silently.
+ * Step 10.4's `blocked` fire had the identical shape: `open_still_blocked` is re-evaluated on its own resume
+ * leg, and a handler that closed the connections flips it.
+ *
+ * So the rule this file now follows is §scheduler's: a stage that HOLDS a request does nothing but hold it, and
+ * an operation that becomes a work item takes its INPUTS with it. The selection stage picks the target, records
+ * it on the entry, and holds no cursor; the fire stage reads that one recorded target and reaches the SAME
+ * idb_fire_version_change_event_run on every entry, resume included. */
 #define OPN_STAGES(X) \
     X(OPN_FIND,    "Indexed Database §5.1 steps 4-6 — ONE O(1) engine action: the database named `name` is " \
                    "looked up in this storage key, `version` is defaulted from it, and a database that does " \
@@ -269,19 +291,23 @@ static void open_state_start(JSIdbOpenState *s)
                    "VersionError)") \
     X(OPN_CONNECT, "Indexed Database §5.1 steps 8-9 (let connection be a new connection to db; set " \
                    "connection's version to version)") \
-    X(OPN_VERSIONCHANGE, "Indexed Database §5.1 steps 10.1-10.4, one connection per turn (fire a version " \
-                         "change event named versionchange at each other open connection, and wait for all " \
-                         "of the events to be fired)") \
-    X(OPN_BLOCKED, "Indexed Database §5.1 step 10.5 (if any of the connections in openConnections are still " \
-                   "not closed, fire a version change event named blocked at request)") \
-    X(OPN_WAIT,    "Indexed Database §5.1 step 10.6 (wait until all connections in openConnections are " \
+    X(OPN_VERSIONCHANGE, "Indexed Database §5.1 step 10.2's SELECTION, one connection per turn (the next " \
+                         "entry of openConnections that does not have its close pending flag set)") \
+    X(OPN_VERSIONCHANGE_FIRE, "Indexed Database §5.1 step 10.2's FIRE (fire a version change event named " \
+                              "versionchange at the selected entry with db's version and version); step " \
+                              "10.3's \"wait for all of the events to be fired\" is this walk's own turns") \
+    X(OPN_BLOCKED, "Indexed Database §5.1 step 10.4's DECISION (whether any of the connections in " \
+                   "openConnections are still not closed, asked once with every cursor at rest)") \
+    X(OPN_BLOCKED_FIRE, "Indexed Database §5.1 step 10.4's FIRE (fire a version change event named blocked " \
+                        "at request with db's version and version)") \
+    X(OPN_WAIT,    "Indexed Database §5.1 step 10.5 (wait until all connections in openConnections are " \
                    "closed)") \
-    X(OPN_UPGRADE, "Indexed Database §5.1 step 10.7 (run upgrade a database using connection, version and " \
+    X(OPN_UPGRADE, "Indexed Database §5.1 step 10.6 (run upgrade a database using connection, version and " \
                    "request)")
 enum { OPN_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const OPN_STEPS[] = { OPN_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* §5.1 step 10.6's question, asked of the set step 10.1 snapshotted. A connection that has become closed has
+/* §5.1 step 10.5's question, asked of the set step 10.1 snapshotted. A connection that has become closed has
    left its database's connection set and carries the flag, so this reads the flag rather than re-deriving the
    set — which is the point of snapshotting it: a connection opened AFTER step 10.1 is not one this open is
    waiting for. */
@@ -378,7 +404,7 @@ static int js_idb_open_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         if (db_version < version) {
             /* Step 10.1: "Let openConnections be the set of all connections, EXCEPT connection, associated
                with db." Snapshotted here because that is where the step computes it: a connection opened
-               later is not one this open waits for, and step 10.6 asks about THESE. */
+               later is not one this open waits for, and step 10.5 asks about THESE. */
             JSValue all = idb_database_connections(ctx, db), set = JS_NewArray(ctx);
             uint32_t i, n = open_list_len(ctx, all), k = 0;
 
@@ -403,34 +429,51 @@ static int js_idb_open_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         entry_enqueue(ctx, g_result_stepid, entry);
         return JS_STEP_DONE;
 
+    /* Step 10.2's SELECTION. "For each entry of openConnections that does not have its close pending flag set
+       to true, [fire] a version change event named versionchange at entry with db's version and version." The
+       flag is re-read at each TURN of the walk rather than filtered once, which is what the step's own note
+       requires — "firing this event might cause one or more of the other objects in openConnections to be
+       closed, in which case the versionchange event is not fired at those objects" — and it is re-read HERE,
+       where no request is in flight, rather than on the resume leg of a fire it has already begun.
+       Step 10.3's "wait for all of the events to be fired" is discharged by this walk, whose every turn is a
+       REST POINT — the same discharge idb_request.c makes for §5.6 step 5.1. */
     STEP_ARM(OPN_VERSIONCHANGE);
+        JS_FreeValue(ctx, cb_result);
         {
-            JSValue set = entry_get(ctx, entry, E_OPEN_CONNS), target;
+            JSValue set = entry_get(ctx, entry, E_OPEN_CONNS), target = JS_NULL;
             uint32_t i = (uint32_t)entry_num(ctx, entry, E_CURSOR), n = open_list_len(ctx, set);
 
-            /* Step 10.2: "For each entry of openConnections that does not have its close pending flag set to
-               true, queue a database task to fire a version change event named versionchange at entry with
-               db's version and version." The note is why the flag is re-read at each turn rather than filtered
-               once: "firing this event might cause one or more of the other objects in openConnections to be
-               closed, in which case the versionchange event is not fired at those objects."
-               Step 10.3's "wait for all of the events to be fired" is discharged by this walk, whose every
-               turn is a REST POINT — the same discharge idb_request.c makes for §5.6 step 5.1. */
             while (i < n) {
+                JS_FreeValue(ctx, target);
                 target = JS_GetPropertyUint32(ctx, set, i);
                 DCHECK(idb_connection_is(target), "§5.1 step 10.1's openConnections held something that is "
                                                   "not a connection");
                 if (!idb_connection_close_pending(ctx, target))
                     break;
-                JS_FreeValue(ctx, target);
                 i++;
             }
+            JS_FreeValue(ctx, set);
+            entry_set(ctx, entry, E_CURSOR, JS_NewInt32(ctx, (int32_t)i));
             if (i >= n) {
-                JS_FreeValue(ctx, set);
-                entry_set(ctx, entry, E_CURSOR, JS_NewInt32(ctx, (int32_t)i));
-                JS_FreeValue(ctx, cb_result);
+                JS_FreeValue(ctx, target);
                 STEP_GOTO(s->hdr.stage, OPN_BLOCKED, &s->phase, NULL);
                 return JS_STEP_YIELD;
             }
+            /* THE FIRE'S INPUT, TAKEN WITH IT. The connection this turn fires at is decided here and read back
+               there, because the fire is what makes the decision untrue. */
+            entry_set(ctx, entry, E_TARGET, target);
+            STEP_GOTO(s->hdr.stage, OPN_VERSIONCHANGE_FIRE, &s->phase, NULL);
+            return JS_STEP_YIELD;
+        }
+
+    /* Step 10.2's FIRE, holding that one request and deciding nothing. */
+    STEP_ARM(OPN_VERSIONCHANGE_FIRE);
+        {
+            JSValue target = entry_get(ctx, entry, E_TARGET);
+
+            DCHECK(idb_connection_is(target), "§5.1 step 10.2's fire was entered with no connection selected — "
+                                              "OPN_VERSIONCHANGE records the one it picked and is the only "
+                                              "stage that points here");
             db = entry_get(ctx, entry, E_DB);
             db_version = idb_database_version(ctx, db);
             JS_FreeValue(ctx, db);
@@ -439,25 +482,35 @@ static int js_idb_open_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                                                   db_version, version, /*has_new*/ true, &s->ev, cb_result,
                                                   NULL, out_cb, out_argc);
             JS_FreeValue(ctx, target);
-            JS_FreeValue(ctx, set);
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
             /* The event is this connection's; the next one gets its own, which §4.2 step 1 creates. */
             JS_FreeValue(ctx, s->ev);
             s->ev = JS_UNDEFINED;
-            entry_set(ctx, entry, E_CURSOR, JS_NewInt32(ctx, (int32_t)(i + 1)));
-            return JS_STEP_YIELD;   /* the walk's own rest point, at the same stage */
+            entry_set(ctx, entry, E_TARGET, JS_NULL);
+            entry_set(ctx, entry, E_CURSOR,
+                      JS_NewInt32(ctx, (int32_t)((uint32_t)entry_num(ctx, entry, E_CURSOR) + 1)));
+            STEP_GOTO(s->hdr.stage, OPN_VERSIONCHANGE, &s->phase, NULL);
+            return JS_STEP_YIELD;
         }
 
     STEP_ARM(OPN_BLOCKED);
-        /* Step 10.5: "If any of the connections in openConnections are still not closed, queue a database task
-           to fire a version change event named blocked at request with db's version and version." ONCE — the
-           flag is what stops a second `blocked` when a close arrives and the wait resumes. */
+        /* Step 10.4's DECISION: "If any of the connections in openConnections are still not closed, queue a
+           database task to fire a version change event named blocked at request with db's version and
+           version." ONCE — the flag is what stops a second `blocked` when a close arrives and the wait resumes,
+           and it is SET HERE rather than after the fire, because a `blocked` handler that closes the
+           connections would otherwise flip `open_still_blocked` under the fire's own resume leg. */
+        JS_FreeValue(ctx, cb_result);
         if (!open_still_blocked(ctx, entry) || entry_flag(ctx, entry, E_BLOCKED)) {
-            JS_FreeValue(ctx, cb_result);
             STEP_GOTO(s->hdr.stage, OPN_WAIT, &s->phase, NULL);
             return JS_STEP_YIELD;
         }
+        entry_set(ctx, entry, E_BLOCKED, JS_TRUE);
+        STEP_GOTO(s->hdr.stage, OPN_BLOCKED_FIRE, &s->phase, NULL);
+        return JS_STEP_YIELD;
+
+    /* Step 10.4's FIRE, holding that one request and deciding nothing. */
+    STEP_ARM(OPN_BLOCKED_FIRE);
         req = entry_get(ctx, entry, E_REQUEST);
         db = entry_get(ctx, entry, E_DB);
         db_version = idb_database_version(ctx, db);
@@ -469,7 +522,6 @@ static int js_idb_open_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         JS_FreeValue(ctx, req);
         if (r > 0) return r;
         if (r < 0) return JS_STEP_ABRUPT;
-        entry_set(ctx, entry, E_BLOCKED, JS_TRUE);
         JS_FreeValue(ctx, s->ev);
         s->ev = JS_UNDEFINED;
         STEP_GOTO(s->hdr.stage, OPN_WAIT, &s->phase, NULL);
@@ -477,7 +529,7 @@ static int js_idb_open_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
     STEP_ARM(OPN_WAIT);
         JS_FreeValue(ctx, cb_result);
-        /* Step 10.6: "Wait until all connections in openConnections are closed." THIS is the wait no queue can
+        /* Step 10.5: "Wait until all connections in openConnections are closed." THIS is the wait no queue can
            discharge — a `versionchange` handler that ignores the event leaves its connection open until the
            page decides otherwise. The entry PARKS on the blocked list and idb_open_connection_closed brings it
            back; §5.2's close is the only thing that can, which is what §5.2's own note says. */
@@ -491,8 +543,8 @@ static int js_idb_open_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
     STEP_ARM(OPN_UPGRADE);
         JS_FreeValue(ctx, cb_result);
-        /* Step 10.7: "Run upgrade a database using connection, version and request." §5.7's own step 10 is a
-           wait for the transaction to finish, so it is a machine of its own and steps 10.8-10.9 continue in
+        /* Step 10.6: "Run upgrade a database using connection, version and request." §5.7's own step 10 is a
+           wait for the transaction to finish, so it is a machine of its own and steps 10.7-10.8 continue in
            §4.3's completion task, which idb_open_upgrade_finished enqueues. */
         entry_enqueue(ctx, g_upgrade_stepid, entry);
         return JS_STEP_DONE;
@@ -500,13 +552,13 @@ static int js_idb_open_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
 static const JSTrampStepDef js_idb_open_def = {
     sizeof(JSIdbOpenState), js_idb_open_step, NULL, 0, .visit = js_idb_open_visit,
-    .algorithm = "Indexed Database §5.1's open a database connection, steps 4 through 10.7",
+    .algorithm = "Indexed Database §5.1's open a database connection, steps 4 through 10.6",
     .steps = OPN_STEPS
 };
 
-/* §5.2's rendezvous — a connection has become CLOSED, so every open request parked at step 10.6 asks its own
+/* §5.2's rendezvous — a connection has become CLOSED, so every open request parked at step 10.5 asks its own
    question again. It runs no page code (it reads flags the connection wrote) and it is not a machine, because
-   step 10.6's continuation is step 10.7, which IS one. */
+   step 10.5's continuation is step 10.6, which IS one. */
 static void idb_open_connection_closed(JSContext *ctx, JSValueConst connection)
 {
     uint32_t i, n;
@@ -721,7 +773,7 @@ static void idb_open_upgrade_finished(JSContext *ctx, JSValueConst tx)
            "§2.8.2 says each request runs to completion before the next is processed, so the two disagreeing "
            "means an entry left the queue early");
     JS_FreeValue(ctx, entry_req);
-    /* §5.1 steps 10.8-10.9 and §4.3's completion task, in the one machine that performs them. */
+    /* §5.1 steps 10.7-10.8 and §4.3's completion task, in the one machine that performs them. */
     entry_enqueue(ctx, g_result_stepid, entry);
     JS_FreeValue(ctx, entry);
     JS_FreeValue(ctx, q);
@@ -732,7 +784,7 @@ static void idb_open_upgrade_finished(JSContext *ctx, JSValueConst tx)
     JS_FreeValue(ctx, conn);
 }
 
-/* ---- §5.1 steps 10.8-10.9 and §4.3's COMPLETION TASK -------------------------------------------------------
+/* ---- §5.1 steps 10.7-10.8 and §4.3's COMPLETION TASK -------------------------------------------------------
  *
  * §4.3's own question-box is why these are not §5.9's and §5.10's steps: "there is no transaction associated
  * with the request (at this point), so those steps — which activate an associated transaction before dispatch
@@ -740,7 +792,7 @@ static void idb_open_upgrade_finished(JSContext *ctx, JSValueConst tx)
  * nothing follows it but the queue moving on. */
 
 #define RES_STAGES(X) \
-    X(RES_CHECK,   "Indexed Database §5.1 steps 10.8-10.9 (a connection that was closed, or a request whose " \
+    X(RES_CHECK,   "Indexed Database §5.1 steps 10.7-10.8 (a connection that was closed, or a request whose " \
                    "error is set, is an AbortError — and the second closes the connection first)") \
     X(RES_SETTLE,  "Indexed Database §4.3's open() completion task, steps 1-3 of either arm — ONE O(1) " \
                    "engine action: the request's result or its error is written and its done flag is set") \
@@ -769,14 +821,14 @@ static int js_idb_result_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
         conn = entry_get(ctx, entry, E_CONNECTION);
         err = idb_request_error(ctx, req);
         if (JS_IsNull(err) && idb_connection_is(conn)) {
-            /* Step 10.8: "If connection was closed, return a newly created AbortError DOMException." A
+            /* Step 10.7: "If connection was closed, return a newly created AbortError DOMException." A
                `versionchange` or `upgradeneeded` handler that closed the connection it was handed gets this. */
             if (idb_connection_is_closed(ctx, conn))
                 idb_request_set_error(ctx, req, open_dom_exception(ctx, "AbortError",
                                                                    "the connection was closed during the "
                                                                    "upgrade"));
         } else if (!JS_IsNull(err) && idb_connection_is(conn)) {
-            /* Step 10.9: "If request's error is set, run the steps to close a database connection with
+            /* Step 10.8: "If request's error is set, run the steps to close a database connection with
                connection, return a newly created AbortError DOMException." The connection is closed FIRST —
                an aborted upgrade must not leave one open, or the next open of that name is blocked forever. */
             idb_connection_close(ctx, conn);
@@ -861,7 +913,7 @@ static int js_idb_result_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
 
 static const JSTrampStepDef js_idb_result_def = {
     sizeof(JSIdbOpenState), js_idb_result_step, NULL, 0, .visit = js_idb_open_visit,
-    .algorithm = "Indexed Database §5.1 steps 10.8-10.9 and §4.3's open() completion task",
+    .algorithm = "Indexed Database §5.1 steps 10.7-10.8 and §4.3's open() completion task",
     .steps = RES_STEPS
 };
 
@@ -887,6 +939,7 @@ JSValue idb_open_request(JSContext *ctx, const char *name, double version, bool 
     entry_set(ctx, entry, E_CONNECTION, JS_NULL);
     entry_set(ctx, entry, E_OPEN_CONNS, JS_NewArray(ctx));
     entry_set(ctx, entry, E_CURSOR, JS_NewInt32(ctx, 0));
+    entry_set(ctx, entry, E_TARGET, JS_NULL);
     entry_set(ctx, entry, E_OLD_VERSION, JS_NewFloat64(ctx, 0));
     entry_set(ctx, entry, E_BLOCKED, JS_FALSE);
 
@@ -913,7 +966,7 @@ void idb_open_init(JSContext *ctx)
     g_queues = idl_slots_new(ctx);
     CHECK(!JS_IsException(g_queues), "IndexedDB: §2.8.2's connection queues could not be allocated");
     g_blocked = JS_NewArray(ctx);
-    CHECK(!JS_IsException(g_blocked), "IndexedDB: §5.1 step 10.6's blocked list could not be allocated");
+    CHECK(!JS_IsException(g_blocked), "IndexedDB: §5.1 step 10.5's blocked list could not be allocated");
     g_open_stepid = JS_RegisterStepDef(rt, &js_idb_open_def);
     g_upgrade_stepid = JS_RegisterStepDef(rt, &js_idb_upgrade_def);
     g_result_stepid = JS_RegisterStepDef(rt, &js_idb_result_def);
@@ -922,7 +975,7 @@ void idb_open_init(JSContext *ctx)
     idb_connection_set_closed_hook(idb_open_connection_closed);
     idb_transaction_set_upgrade_finished_hook(idb_open_upgrade_finished);
     agent_state_value("idb_open", &g_queues, "§2.8.2's connection queues, and the declaration latch");
-    agent_state_value("idb_open", &g_blocked, "§5.1 step 10.6's blocked list");
+    agent_state_value("idb_open", &g_blocked, "§5.1 step 10.5's blocked list");
     agent_state_id("idb_open", &g_open_stepid, "§5.1's open machine");
     agent_state_id("idb_open", &g_upgrade_stepid, "§5.1's run-an-upgrade-transaction machine");
     agent_state_id("idb_open", &g_result_stepid, "§5.1's deliver-the-result machine");
