@@ -80,10 +80,12 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
             _exampleValueSource: pDef._exampleValueSource || null,
             // AST-discovered valid values
             _astValidValues: pDef._astValidValues || null,
-            _astValueSource: pDef._astValueSource || null,
-            // Real declared name from the page's source map (e.g. `e`→`owner`)
-            // for display; `name` stays the minified key for URL substitution.
-            _sourceMapName: pDef._sourceMapName || null,
+            /* NO `_sourceMapName` AND NO `_astValueSource`. The first promised a declared name recovered
+               from the page's source map (minified `e` shown as `owner`); nothing in engine/host has ever
+               emitted one and lib/learn.js's copy of it read a field the engine's param record does not
+               have, so the rename has never been applied to any parameter. The second was written in
+               exactly one place — this file, onto its own path-param entries — projected onward by
+               popup-form.js, and rendered by nothing: three hops and no reader. */
           };
         }
       }
@@ -142,9 +144,6 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
       if (!contentTypes.includes(ct)) contentTypes.push(ct);
     }
   }
-  if (ep?.contentType && !contentTypes.includes(ep.contentType)) {
-    contentTypes.push(ep.contentType);
-  }
   if (probeResult?.probeDetails) {
     for (const pd of probeResult.probeDetails) {
       if (
@@ -180,11 +179,14 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
   if (ep && Array.isArray(ep.pathParams) && ep.pathParams.length) {
     parameters = parameters || {};
     for (const pp of ep.pathParams) {
+      DCHECK(pp && typeof pp.name === "string" && Array.isArray(pp.values) && pp.values.length,
+             "an endpoint's pathParams entry is not {name, values[]} with at least one value — lib/merge.js " +
+             "builds it from the method parameters whose location is \"path\" and skips any hole nothing has " +
+             "filled, so an empty one would surface a templated segment as if a value had been learned for it");
       const cur = parameters[pp.name] || { name: pp.name, type: "string", location: "path", required: true, description: "AST-learned path segment" };
       const vals = (cur._astValidValues || []).slice();
-      for (const val of (pp.values || [])) if (vals.indexOf(val) < 0) vals.push(val);
+      for (const val of pp.values) if (vals.indexOf(val) < 0) vals.push(val);
       cur._astValidValues = vals;
-      cur._astValueSource = cur._astValueSource || "ast_forced_exec";
       if ((cur._exampleValue === undefined || cur._exampleValue === null) && vals.length) { cur._exampleValue = vals[0]; cur._exampleValueSource = "ast"; }
       parameters[pp.name] = cur;
     }
@@ -200,6 +202,16 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
       : null,
     contentTypes,
     chains,
+    /* WHAT AN ENDPOINT RECORD ACTUALLY HAS. lib/merge.js holds the only `endpoints.set` in the extension and
+       writes {url, method, host, path, service, source, pageUrl, requiredHeaders, pathParams, firstSeen}.
+       Five more names were projected here — apiKey, apiKeySource, origin, referer, contentType — and no
+       producer writes any of them onto an endpoint: lib/response-decode.js does read those four headers off
+       a live request, but it puts them on the REQUEST LOG entry, which is a different record. So the panel
+       has been handed five undefineds per endpoint, and `ep?.apiKey || null` above turned the first into the
+       "no key for this endpoint" answer that sends the resolver down its service-wide key search — the path
+       that actually finds keys, which is why nothing looked wrong.
+       `requiredHeaders` is genuinely optional (merge.js writes null when endpoint.c observed no header), so
+       it passes through as itself rather than through a `||` that would erase the difference. */
     endpoint: ep
       ? {
           url: ep.url,
@@ -207,12 +219,7 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
           host: ep.host,
           path: ep.path,
           service: ep.service,
-          apiKey: ep.apiKey,
-          apiKeySource: ep.apiKeySource,
-          origin: ep.origin,
-          referer: ep.referer,
-          contentType: ep.contentType,
-          requiredHeaders: ep.requiredHeaders || null,
+          requiredHeaders: ep.requiredHeaders,
         }
       : null,
   };
@@ -293,11 +300,11 @@ async function executeSendRequest(documentId, msg) {
     headers["Content-Type"] = msg.contentType;
   }
 
-  // API key: user override → endpoint → service keys → discovery doc key
+  // API key: user override → service keys → discovery doc key. (The endpoint record itself carries no key:
+  // lib/merge.js, its only producer, writes none, so the lookup that stood here was fetching a record to
+  // read two fields off it that do not exist.)
   const tab = _docForLearning(documentId);
   const tabId = (tab && tab.tabId != null) ? tab.tabId : msg.tabId; // Chrome routing for pageContextSend — the doc's tab; fall back to msg.tabId for cross-tab replay
-  const epKey = msg.endpointKey;
-  const ep = epKey ? tab.endpoints.get(epKey) : null;
   let apiKey = null;
   let apiKeySource = "header";
 
@@ -309,10 +316,10 @@ async function executeSendRequest(documentId, msg) {
       apiKey = msg.apiKeyOverride.key || null;
       apiKeySource = msg.apiKeyOverride.source || "header";
     }
-  } else {
-    apiKey = ep?.apiKey || null;
-    apiKeySource = ep?.apiKeySource || "header";
   }
+  /* NO `ep.apiKey` / `ep.apiKeySource` ARM. An endpoint record has neither field (lib/merge.js is its only
+     producer), so this branch read undefined twice and resolved to exactly the initial values above — the
+     service-wide key search below is what has always found the key. */
 
   if (!msg.apiKeyOverride && !apiKey && service) {
     const hostname = parsedUrl.hostname;

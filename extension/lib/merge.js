@@ -358,26 +358,29 @@ function mergeToGlobal(tab) {
       });
     }
   }
+  /* THREE BOOKKEEPING FIELDS ARE GONE FROM THIS LOOP AND THE UNION IS WHAT IS LEFT. `_isNew`,
+     `_firstSeenGlobal` and `lastSeen` were written here and read NOWHERE — not by the popup, not by the
+     serializer, not by the harness — and `lastSeen` was worse than unread: its only writer
+     (lib/response-decode.js) built a key without the "AST " prefix every key in this map carries, so it
+     could never match, and the line here then set the tab entry's lastSeen to Date.now() because the global
+     entry had any, timing the MERGE rather than a sighting. What survives is the one thing this loop is
+     for: the path-param union, so a later paramless re-emit (a re-visit before the concolic reply re-run
+     landed) never DROPS values a prior emit learned — the moat is monotonic. */
   for (const [k, v] of tab.endpoints) {
-    if (!globalStore.endpoints.has(k)) {
-      v._isNew = true;
-      v._firstSeenGlobal = Date.now();
-    } else {
-      var ge = globalStore.endpoints.get(k);
-      if (ge.lastSeen) v.lastSeen = Date.now();
-      if (ge._firstSeenGlobal) v._firstSeenGlobal = ge._firstSeenGlobal;
-      v._isNew = false;
-      // UNION path-param examples so a later paramless re-emit (e.g. a re-visit before the concolic reply
-      // re-run landed) never DROPS values a prior emit learned — the moat is monotonic.
-      if (ge.pathParams || v.pathParams) {
-        var _mp = new Map();
-        for (var _s of [ge.pathParams || [], v.pathParams || []]) for (var _pp of _s) {
+    var ge = globalStore.endpoints.get(k);
+    if (ge && (ge.pathParams || v.pathParams)) {
+      var _mp = new Map();
+      for (var _s of [ge.pathParams, v.pathParams]) {
+        // Absent on a side that has no filled path hole: this file writes null for that, and a record
+        // stored before the field existed carries nothing at all. Both mean "no examples from here".
+        if (!_s) continue;
+        for (var _pp of _s) {
           var _cur = _mp.get(_pp.name) || new Set();
-          for (var _val of (_pp.values || [])) _cur.add(_val);
+          for (var _val of _pp.values) _cur.add(_val);
           _mp.set(_pp.name, _cur);
         }
-        v.pathParams = Array.from(_mp, function (e) { return { name: e[0], values: Array.from(e[1]).slice(0, 20) }; });
       }
+      v.pathParams = Array.from(_mp, function (e) { return { name: e[0], values: Array.from(e[1]).slice(0, 20) }; });
     }
     globalStore.endpoints.set(k, v);
   }

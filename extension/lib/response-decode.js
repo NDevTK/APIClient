@@ -323,10 +323,16 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
     callStack: msg.callStack || null,
   };
 
-  // Update lastSeen on matching endpoint
-  var _epKey = entry.method + " " + url.hostname + url.pathname;
-  var _ep = tab.endpoints.get(_epKey);
-  if (_ep) _ep.lastSeen = Date.now();
+  /* NO `lastSeen` STAMP ON A MATCHING ENDPOINT, BECAUSE THIS LOOKUP COULD NEVER MATCH ONE. It built the key
+     as `method + " " + hostname + pathname` and lib/merge.js — the extension's ONLY `endpoints.set` — mints
+     `"AST " + method + " " + hostname + path`. Every get() therefore missed, and the miss is invisible by
+     construction: `if (_ep)` reads exactly like "this live request hit an endpoint we had not learned",
+     which is a real and common outcome. The field it wanted to write had one reader, in mergeToGlobal, and
+     that reader did not propagate it either — it set the tab entry's lastSeen to Date.now() because the
+     GLOBAL entry had any, which times the merge rather than the sighting. Writer that cannot fire, reader
+     that fabricates: both are gone. "This learned endpoint was observed firing live" is worth having, and
+     when something needs it, it is keyed on the one key format merge.js mints and it records the time of
+     THIS request. */
 
   // Update auth context
   if (authorization || cookie) {
