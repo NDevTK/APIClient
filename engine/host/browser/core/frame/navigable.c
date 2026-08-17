@@ -601,7 +601,22 @@ static int g_nav_load_stepid = -1;
    the OPERATION rather than on the navigable's state — the CREATOR's when §7.4 creates a navigable, the
    INITIATOR's when §7.2.5.1 navigates one. So the caller states it and it travels with the job, which is the
    same sentence as the address travelling: everything about where this load is going belongs to the operation
-   that started it, and nothing about it can be read back off the navigable being loaded. */
+   that started it, and nothing about it can be read back off the navigable being loaded.
+ *
+ * IT IS A TASK ON THE NAVIGATION AND TRAVERSAL TASK SOURCE, WHICH IS WHAT §7.2.5.1 SAYS — "queue a global task
+ * on the navigation and traversal task source" — and it was a MICROTASK, which is a different position in the
+ * event loop and not a smaller one. A microtask runs inside the enqueuing flow's own checkpoint, so a load
+ * jumped ahead of every task already queued (a timer that had expired, a delivered message, an event fire) and
+ * ran before the script that called `open()` had reached its next task; §8.1.7's two queues exist so that
+ * cannot happen, and quickjs.c states the same rule at the queues themselves.
+ * IT IS ALSO WHAT MAKES A DOCUMENT'S OWN MARKUP WORK. §4.8.5's insertion steps run for every `<iframe>` in the
+ * INITIAL MARKUP — at document install, before this agent's frontier is seeded — so this call happens with no
+ * flow to own the callback. A TASK queued with no owner is BASELINE work that the first flow adopts
+ * (quickjs.c's baseline_call_list); a MICROTASK queued with no owner is a should-never-happen, because a
+ * microtask is queued by running script. Queueing this one as a microtask therefore did not merely mis-order
+ * it: it put §7.4 step 14's load on quickjs's global list, which this engine never drains, so every page whose
+ * own markup carried an `<iframe src>` aborted at the first line of the scheduler's session — which asserts
+ * exactly that a job may not already be queued when a session begins. */
 static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const char *addr, const Origin *origin,
                                    const char *inherit_csp, const Origin *inherit_csp_self_origin)
 {
@@ -637,7 +652,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[2] = org;
     argv[3] = csp;
     argv[4] = self;
-    JS_EnqueueCallJob(ctx, fn, 5, argv);
+    JS_EnqueueCallTask(ctx, fn, 5, argv);   /* §7.2.5.1: the navigation and traversal task source */
     JS_FreeValue(ctx, self);
     JS_FreeValue(ctx, csp);
     JS_FreeValue(ctx, org);
