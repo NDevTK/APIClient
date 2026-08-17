@@ -1478,8 +1478,11 @@ function learnFromResponse(documentId, interfaceName, entry) {
      engine now learns it at engine_provide — the one point every reply crosses once — from the reply's
      COMPUTED MIME type rather than from `looksLikeRSC`, a two-line regex over the body that fired whenever the
      Content-Type was empty and the payload looked like a JSON object keyed by digits (§RUN, DON'T MATCH). The
-     SECOND is this file's own duplicate of the moat the engine is taking over (jsaudit step 4), so it goes
-     with the rest of it rather than being re-hosted twice. */
+     SECOND is this file's own moat aggregation, and it STAYS: it reads bodies intercept.js captured off the
+     LIVE page, which the engine never fetched and holds no reply record for, so it is a different input and
+     not a duplicated algorithm. (This cited "jsaudit step 4" — a position in a derived queue, in a gate that
+     is now deleted. A number nothing can be checked against is the stale-`DFAIL` shape exactly, which is why
+     the rule was that nothing outside that file could cite one; three comments cited one anyway.) */
   } else if (isGraphQLUrl(url.href) && mimeType.includes("json")) {
     // GraphQL response: extract data/errors structure
     try {
