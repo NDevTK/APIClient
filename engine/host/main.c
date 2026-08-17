@@ -879,7 +879,7 @@ QJS_EXPORT const char *qjs_pending(void)
    time answers a request that carries one, which is engine_provide's answered-twice DFAIL. What this list is
    FOR is the CORB class — a body that becomes executable code is fetched `as:"script"` — so it classifies the
    pending list rather than duplicating it. That the destination is not on the pending line yet is the same
-   defect the method was: Fetch §2.2.4 makes a request's destination part of the request, and it belongs on that
+   defect the method was: Fetch §2.2.5 Requests makes destination part of the request, and it belongs on that
    line beside the method, after which this entry deletes. */
 QJS_EXPORT const char *qjs_chunks(void)
 {
@@ -895,8 +895,8 @@ QJS_EXPORT const char *qjs_chunks(void)
    followed. The record is `{status, statusText, headers: [[name, value], …], urlList: [url, …]}`, which is the
    SAME record fetch_reply_new builds for the hosts that fetch in C; JSON `null` is a NETWORK ERROR, and the
    delivery machine already rejects with the TypeError §5.6 names.
-   …AND THE BODY CROSSES AS BYTES, BESIDE IT, BECAUSE JSON CANNOT SAY A BYTE SEQUENCE. §2.2.5 makes a response's
-   body one, and the only way to put one in JSON is to run an algorithm over it first — which is exactly the
+   …AND THE BODY CROSSES AS BYTES, BESIDE IT, BECAUSE JSON CANNOT SAY A BYTE SEQUENCE. §2.2.4 Bodies makes a
+   body's source one, and the only way to put one in JSON is to run an algorithm over it first — which is the
    defect: `safe-fetch.js` ran Fetch §5.2's `text()`, "run consume body with this and UTF-8 decode", so a script
    served `charset=windows-1252` reached HTML §8.1.4.2's classic decode already mangled and the label that
    algorithm exists to honour decided nothing. The trusted zone owns SOP/CORS/PNA/CORB and owns no decodes; the
@@ -934,7 +934,7 @@ QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *rep
                   "and a bare body sent through this edge is a host still delivering only bytes");
             v = JS_NULL;
         }
-        /* §2.2.5's BODY ONTO §2.2's RESPONSE, in the component that owns both halves of that record
+        /* §2.2.4 Bodies' BODY ONTO §2.2.6 Responses' RESPONSE, in the component that owns both halves of it
            (core/fetch/fetch.h). A network error is the one arm with nothing to write: it has no response at
            all, so a body arriving with one is a host answering a failure and a payload in one breath. */
         if (JS_IsObject(v))

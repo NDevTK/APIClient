@@ -823,8 +823,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
      and `response.redirected` are — no redirect, ever, for any reply. `null` is a NETWORK ERROR (the engine
      rejects with §5.6's TypeError), which is what a URL this zone must not or cannot fetch honestly is; it is
      NOT an empty 200.
-     THE BODY IS NOT IN THE RECORD, AND THAT IS THE POINT. §2.2.5 makes a response's body a BYTE SEQUENCE, and
-     JSON cannot carry one: `JSON.stringify` on a Uint8Array answers `{"0":72,"1":101,…}` — a plausible record
+     THE BODY IS NOT IN THE RECORD, AND THAT IS THE POINT. §2.2.4 Bodies makes a body's source a BYTE SEQUENCE
+     and JSON cannot carry one: `JSON.stringify` on a Uint8Array answers `{"0":72,"1":101,…}` — a plausible record
      whose body is not the body. The only ways to put bytes in JSON are to encode them (base64: a CODEC on both
      sides to get wrong, 4/3 on the wire for bodies that are whole JS bundles, and a second copy of the
      expanded text held by the parse) or to DECODE them, which is what `resp.text()` was doing and is the whole
@@ -885,7 +885,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
          would already be gone. */
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number",
              "safeFetch answered with something other than its reply record — the engine builds a Response " +
-             "out of this and a page reads status/headers/body off it, and §2.2.5's body is a BYTE SEQUENCE");
+             "out of this and a page reads status/headers/body off it, and §2.2.4's body source is a BYTE " +
+             "SEQUENCE");
       /* §2.2.6's URL list, straight from the chokepoint that performed the fetch. safeFetch always reports at
          least the URL it requested — §4.1's "If internalResponse's URL list is empty, then set it to a clone of
          request's URL list" — and the engine DCHECKs that at both ends, so an empty one is a bug here rather
@@ -1004,8 +1005,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",
              "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
-             "built from it and the page reads status, statusText and every header off that, and §2.2.5's " +
-             "body is a BYTE SEQUENCE");
+             "built from it and the page reads status, statusText and every header off that, and §2.2.4's " +
+             "body source is a BYTE SEQUENCE");
       /* THE BYTES BESIDE THE RECORD, for the reason `fetched` states: §3.6.6's "get a text response" DECODES
          the received bytes with the FINAL encoding, and until those bytes crossed as bytes that algorithm was
          decoding a re-encoding of this zone's own UTF-8 guess. `responseType = "arraybuffer"` handed the page
