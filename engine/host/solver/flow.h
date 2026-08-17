@@ -247,14 +247,23 @@ typedef struct Flow {
        one-way and this one owes an ANSWER. A document's state IS its flows, so `otherW.length` has N answers
        for N timelines — the record is attached to every live flow exactly as a delivery is, and each of them
        answers under its own delta. A channel that carried one answer would silently pick a timeline.
-       THEY ARE THE ARRIVAL SLOT AND NOTHING MORE: both are consumed when the flow turns the record into a
-       program, the record freed and the token MOVED onto that program's row (`dyn_token` above), because from
-       that moment the question and the program are one thing. Which document the operation names is the row's
-       too — it is `dyn_doc`, the field that already says where a program is compiled, and a second copy on the
-       flow was a copy that could be behind (the same reason `flow_dyn_kind` re-derives from the cursor).
-       Both owned; NULL on a flow with no operation waiting to start, which after one step is every flow. */
-    char *perform;
-    char *answer_token;
+       IT IS A FIFO AND NOT A SLOT, because the operations are SEQUENTIAL rather than alternative: the asking
+       side parks on each in turn, so a second one arriving before the first has started is an ordinary second
+       question and not two contradictory askers (which would need a fork, not a queue). A slot made that an
+       abort, and it is on the shortest path there is — route.mjs phase 3 withholds one answer and asks again,
+       and the two records differ only in the asking WORLD.
+       AN ENTRY IS CONSUMED WHEN THE FLOW TURNS IT INTO A PROGRAM: the record has nothing left to say and the
+       token MOVES onto that program's row (`dyn_token` above), because from then on the question and the
+       program are one thing. Which document the operation names is the row's too — `dyn_doc` already says where
+       a queued program is compiled, and a second copy on the flow was a copy that could be behind.
+       A JS ARRAY OF IMMUTABLE [record, token] PAIRS, for the three reasons pending.h gives for the register
+       beside it: the runtime's leak walk cannot see a `char *`, a pair of raw pointers crosses neither a park
+       nor an instance while text does, and a fork that shares the pairs by reference costs one refcount each
+       instead of strdup'ing every byte. The ARRAY is per-flow and must be — each arm starts its own copy of a
+       pending operation and each answers under its own delta, which is the multiplicity §7.2.1 has when a
+       document's state is its flows. JS_UNDEFINED on a flow with nothing outstanding, which is nearly all of
+       them, so the common case stays a tag test. */
+    JSValue perform_q;
 } Flow;
 
 /* `doc_name` is THIS INSTANCE'S DOCUMENT identity, and it is a parameter rather than a separate init call so a
@@ -279,6 +288,19 @@ long flow_created_count(void);
    than runnable — otherwise the scheduler re-enters it immediately and it spins on an answer that cannot
    arrive while it holds the thread. */
 int flow_blocked(const Flow *f);
+
+/* HOW MANY CROSS-AGENT OPERATIONS THIS FLOW HAS BEEN ASKED AND NOT YET STARTED — the length of `perform_q`,
+   asked here rather than read at the call sites so the queue's shape has one reader. 0 for the JS_UNDEFINED an
+   untouched flow carries, which is nearly all of them, so the scheduler's pick stays a tag test. */
+int flow_perform_pending(const Flow *f);
+
+/* DOES THIS FLOW STILL OWE A PEER AN ANSWER — asked of the QUEUE and of the PROGRAM ROWS together, because an
+   operation is in one or the other from the moment it arrives until its program's completion is sent. Both
+   halves are load-bearing and neither alone is the invariant: an entry still queued is a question nobody has
+   performed, and a row still holding a token is a question performed and never answered. Every site that ends
+   a flow reads this, because a token that dies with the flow is a flow in ANOTHER instance suspended at the
+   line that asked, forever, and nothing on this side would ever say so. */
+int flow_owes_answer(const Flow *f);
 
 /* The WFQ priority of a flow (higher = run sooner). Pure function of the flow's reward/aging/visit state. */
 double flow_weight(const Flow *f);

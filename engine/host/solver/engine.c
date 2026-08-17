@@ -493,9 +493,9 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
  * of that is the fork this records for. A peer's document state IS its flows, so a cross-agent operation is
  * performed by every live timeline it has and each one completes with its own answer: `otherW.length` has N
  * answers for N peer timelines and they are all true. It is not hypothetical and it is not the peer host's
- * oversight — engine_sibling_assemble COPIES `answer_token` onto a sibling on purpose, because a branch inside
- * the answering program is a real peer timeline in which the answer differs, so N answers under one token is
- * what that fork was built to produce. Taking the first and asserting on the rest picks a timeline; overwriting
+ * oversight — engine_sibling_assemble gives a sibling the answering program's row, rendezvous token and all
+ * (flow.h's `dyn_token`), on purpose, because a branch inside the answering program is a real peer timeline in
+ * which the answer differs, so N answers under one token is what that fork was built to produce. Taking the first and asserting on the rest picks a timeline; overwriting
  * picks the last, after the machine may already have read the first.
  *
  * SO THE ANSWER IS RECORDED HERE AND THE FORK IS TAKEN IN flow_step, and that split is the whole design. This
@@ -1028,6 +1028,69 @@ static void flow_deliver(JSContext *ctx, Flow *f)
 
 /* ---- ASKED TO PERFORM ONE, WHICH IS THE HALF WITH AN ANSWER ---------------------------------------------- */
 
+/* ─── THE UNSTARTED-OPERATION FIFO (flow.h's perform_q) ──────────────────────────────────────────────────
+ * A JS Array of immutable two-element [record, token] Arrays. Three operations and nothing else, because an
+ * entry is never edited after it is pushed: append at arrival, take from the FRONT at the start, and a fork
+ * gives an arm its own Array naming the same entries. Every mutation runs inside cow_engine_write_begin/end
+ * for the reason pending.h states about the register beside it — this is the SCHEDULER's record about a flow,
+ * the host writes it from outside any flow's delta (engine_perform walks every flow), and a delta that
+ * captured it would truncate an entry away the moment a sibling switched in. */
+static void perform_q_push(JSContext *ctx, Flow *f, const char *record, const char *token) {
+    JSValue e = JS_NewArray(ctx);
+    CHECK(!JS_IsException(e), "engine: OOM allocating a cross-agent operation record — a dropped record is a "
+                              "peer's flow suspended at the read that asked, for the rest of its process");
+    cow_engine_write_begin();
+    JS_SetPropertyUint32(ctx, e, 0, JS_NewString(ctx, record));
+    JS_SetPropertyUint32(ctx, e, 1, JS_NewString(ctx, token));
+    if (!JS_IsObject(f->perform_q)) {
+        JS_FreeValue(ctx, f->perform_q);
+        f->perform_q = JS_NewArray(ctx);
+        CHECK(!JS_IsException(f->perform_q), "engine: OOM allocating a flow's operation queue");
+    }
+    JS_SetPropertyUint32(ctx, f->perform_q, (uint32_t)flow_perform_pending(f), e);
+    cow_engine_write_end();
+}
+
+/* TAKE THE OLDEST, which is what makes this a queue rather than the register's SET. The asking side parks on
+   each operation in turn, so the order they arrived in is the order the answers are expected in; a swap-remove
+   here would answer the second question first and the peer would read one timeline's answers as another's.
+   The entry is OWNED by the caller. */
+static JSValue perform_q_take(JSContext *ctx, Flow *f) {
+    int n = flow_perform_pending(f), i;
+    JSValue e;
+
+    DCHECK(n > 0, "an operation was taken from a flow whose queue is empty — the caller tested the queue to "
+                  "get here, so the two reads have come apart");
+    e = JS_GetPropertyUint32(ctx, f->perform_q, 0);
+    DCHECK(JS_IsObject(e), "a flow's operation queue held something that is not a [record, token] pair");
+    cow_engine_write_begin();
+    for (i = 1; i < n; i++)
+        JS_SetPropertyUint32(ctx, f->perform_q, (uint32_t)(i - 1), JS_GetPropertyUint32(ctx, f->perform_q, (uint32_t)i));
+    JS_SetPropertyStr(ctx, f->perform_q, "length", JS_NewInt32(ctx, n - 1));
+    cow_engine_write_end();
+    return e;
+}
+
+/* THE ARM'S OWN QUEUE — a new Array naming the parent's ENTRIES, for pending_fork's reason exactly: each arm
+   takes an entry when IT starts that operation, so two flows sharing one Array would each see the other's
+   consumption; the entries themselves never change after they are pushed, so they are shared. */
+static JSValue perform_q_fork(JSContext *ctx, JSValueConst q) {
+    JSValue out;
+    int n, i;
+    if (!JS_IsObject(q)) return JS_UNDEFINED;
+    n = 0;
+    { JSValue v = JS_GetPropertyStr(ctx, q, "length"); n = JS_VALUE_GET_INT(v); JS_FreeValue(ctx, v); }
+    out = JS_NewArray(ctx);
+    CHECK(!JS_IsException(out), "engine: OOM forking a flow's operation queue — an arm that lost it runs a "
+                                "peer's operation and tells nobody");
+    cow_engine_write_begin();
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(ctx, out, (uint32_t)i, JS_GetPropertyUint32(ctx, q, (uint32_t)i));
+    cow_engine_write_end();
+    return out;
+}
+
+
 /* engine_route carries a one-way delivery. THIS one is asked, and everything about its shape follows from that.
  *
  * IT IS NOT A REQUEST/RESPONSE PAIR, because a document's state IS its flows. `otherW.length` is the child-
@@ -1103,19 +1166,12 @@ void engine_perform(JSContext *ctx, const char *token, const char *record)
                   "live while that reference exists: build that before this can be answered");
     for (int i = 0; i < n; i++) {
         Flow *f = flow_at(i);
-        /* ONE OUTSTANDING OPERATION PER TIMELINE. A second one arriving before this flow has ANSWERED the first
-           is two questions whose answers are two programs' completions, and this flow has one slot for the
-           token that says which. They are sequential rather than alternative (the asking side parks on each in
-           turn), so the mechanism is a QUEUE per flow — not a fork, which is what two CONTRADICTORY askers
-           would need. The zone that routes them has to be able to ask twice before it can, so this crashes
-           rather than answering the second question with the first one's token. */
-        DCHECK(f->perform == NULL && f->answer_token == NULL,
-               "a second cross-agent operation reached a flow that has not answered its first — an answer is a "
-               "program's completion and this flow holds one token, so the second would be answered under the "
-               "first one's name. Build the per-flow operation QUEUE (they are sequential, not alternative)");
-        f->perform = strdup(record);
-        f->answer_token = strdup(token);
-        CHECK(f->perform && f->answer_token, "engine: OOM attaching a cross-agent operation to a flow");
+        /* APPENDED, BECAUSE THEY ARE SEQUENTIAL. A second operation arriving before this flow has started the
+           first is an ordinary second question — the asking side parks on each in turn — so it goes on the
+           queue behind it, and each is answered under its own token because the token rides the program's row
+           from the moment the operation starts (flow.h). It is not a fork: two CONTRADICTORY askers would need
+           one, and two questions from the same peer in turn do not. */
+        perform_q_push(ctx, f, record, token);
         /* AND IT IS ASKABLE AGAIN — the same sentence as the delivery above, and here it is load-bearing for
            engine_set_referenced: a referenced document's last timeline reports host-owed INSTEAD of finishing,
            precisely so it is waiting when an operation arrives. This is the arrival. Without the clear, the
@@ -1959,6 +2015,12 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        IT delivers. The records do not, because a record never changes after it is pushed except for the
        ANSWER, and an answer is something both arms wait on and both observe. */
     sib->pending = pending_fork(parent->pending);
+    /* …AND THE UNSTARTED OPERATIONS BY THE SAME SENTENCE. The arm is that timeline continued, so a question a
+       peer asked of this document before the branch was asked of the arm too, and it owes an answer of its own
+       under its own delta — which is the multiplicity §7.2.1 has when a document's state is its flows. Same
+       split as the register above and for the same reason: the ARRAY is per-flow (each arm starts its own copy
+       of the operation), the ENTRIES are shared (a [record, token] pair is never edited after it is pushed). */
+    sib->perform_q = perform_q_fork(ctx, parent->perform_q);
     /* AN UNANSWERED SYNCHRONOUS REQUEST IS RE-ISSUED, NEVER INHERITED. Its answer is computed under the ASKING
        FLOW'S WORLD, and the sibling's world is not the parent's from this instant on — two arms of a fork that
        navigated a frame differently must not resolve to one Window. Sharing the id would deliver one answer
@@ -2006,11 +2068,12 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
        question it asked of one timeline. But the ANSWER TOKEN is different in kind: the program that answers is
        the page's own code, so a branch inside it is a real peer timeline in which the answer differs, and the
        sibling must carry the token and answer too (which the assembly does). */
-    DCHECK(parent->perform == NULL && parent->answer_token == NULL,
-           "a flow forked while still holding an unstarted cross-agent operation — the sibling would inherit "
-           "the record and perform the peer's one operation a second time under the same token. The two "
-           "arrival fields are asserted together because they are written and consumed together: a token with "
-           "no record is a question whose program was queued outside flow_perform");
+    /* AN UNSTARTED OPERATION IS INHERITED RATHER THAN REFUSED, and the assert that refused it is gone with the
+       slot it was about. It said the sibling "would perform the peer's one operation a second time under the
+       same token" — which is exactly what the token inheritance below does on purpose for a STARTED one, and
+       for the same reason: the arm is that timeline continued, so it held the question too and owes the peer an
+       answer of its own. N answers under one token is what engine_host_answer records extras for at the other
+       end. The refusal was an artifact of there being one slot, not a rule about operations. */
     dec = g_fork_dec; g_fork_dec = NULL;
     pins = g_fork_pins; g_fork_pins = NULL;
     engine_sibling_assemble(ctx, parent, clone, dec, pins);
@@ -2068,11 +2131,6 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
                "a flow holding a ROUTED DELIVERY got a peer's second answer — the arm is that timeline "
                "continued, so the message that arrived in it arrived in the arm too, and the assembly does not "
                "carry the record. Give the arm its own copy of the record and the trusted zone's origin stamp");
-        DCHECK(f->perform == NULL && f->answer_token == NULL,
-               "a flow holding an UNSTARTED cross-agent operation got a peer's second answer — the arm is that "
-               "timeline continued, so it owes the same peer an answer of its own, and the assembly carries "
-               "only the QUEUE, which an operation that has not started yet is not on. Give the arm the "
-               "arrival record and its token too, exactly as the queue copy already gives it a started one");
 
         /* TAKEN FROM THE PARENT FIRST, so the arm inherits a list that no longer names it: the arm's copy is
            cleared below in any case, and the parent's must not fork over this answer a second time. */
@@ -2186,17 +2244,6 @@ static uint32_t flow_dyn_doc(const Flow *f, int n) {
     return f->dyn_doc[f->script_i - n];
 }
 
-/* DOES THIS FLOW STILL OWE A PEER AN ANSWER — asked of the ARRIVAL slot and of the QUEUE together, because an
-   operation is in one or the other from the moment it lands until its program completes. The teardown asserts
-   read it: a token that dies with the flow is another instance's flow suspended at the line that asked, for
-   good, and after the token moved onto the row a check of the arrival slot alone would have stopped seeing it. */
-static int flow_owes_answer(const Flow *f) {
-    if (f->answer_token) return 1;
-    for (int i = 0; i < f->dyn_n; i++)
-        if (f->dyn_token[i]) return 1;
-    return 0;
-}
-
 void engine_queue_script(uint32_t doc, const char *body) { engine_queue(doc, body, DYN_PAGE_SCRIPT); }
 
 /* …AND ITS EXTERNAL SIBLING, which takes the same position with only an ADDRESS — see DYN_SCRIPT_SRC. The
@@ -2236,7 +2283,9 @@ void engine_queue_javascript_url(uint32_t doc, const char *body) { engine_queue(
    field that says which realm a queued program is compiled in. */
 static void flow_perform(JSContext *ctx, Flow *f)
 {
-    RemoteOp *op = remote_op_parse(f->perform);
+    JSValue e, rv, tv;
+    const char *record, *token;
+    RemoteOp *op;
     WorldId w;
     const WorldId *anc;
     int n_anc;
@@ -2247,10 +2296,19 @@ static void flow_perform(JSContext *ctx, Flow *f)
     DCHECK(flow_running() == f, "a cross-agent operation was performed while another flow was switched in — its "
                                 "operands would be written into that flow's delta and its program would run "
                                 "against that flow's document");
-    DCHECK(f->answer_token != NULL,
-           "a cross-agent operation reached its start with no rendezvous token — the record and the token "
-           "arrive together and are consumed together, so a record without one is an operation whose completion "
-           "could name no question and whose peer would stay suspended at the read that asked");
+    e  = perform_q_take(ctx, f);
+    rv = JS_GetPropertyUint32(ctx, e, 0);
+    tv = JS_GetPropertyUint32(ctx, e, 1);
+    DCHECK(JS_IsString(rv) && JS_IsString(tv),
+           "a queued cross-agent operation is missing its record or its rendezvous token — the pair is written "
+           "in one bracket at arrival and never edited, so half of one is a queue something outside this file "
+           "has written to");
+    record = JS_ToCString(ctx, rv);
+    token  = JS_ToCString(ctx, tv);
+    CHECK(record != NULL && token != NULL,
+          "engine: OOM reading a queued cross-agent operation — a record this instance cannot read is a peer's "
+          "flow suspended at the read that asked, with nothing left that knows what it asked");
+    op = remote_op_parse(record);
     doc = world_doc_intern(remote_op_doc(op));
     rctx = doc_realm(doc);
     n_anc = world_parse(remote_op_worlds(op), &w, &anc);
@@ -2262,14 +2320,23 @@ static void flow_perform(JSContext *ctx, Flow *f)
            "a cross-agent operation ran in the answering flow's timeline alone while the asking world holds "
            "writes in this instance — it answers about a document missing everything the asking flow did here. "
            "Build the join of the two deltas that engine_route names");
-    /* THE RECORD AND THE TOKEN ARE BOTH CONSUMED HERE, and only one of them is freed. The record has become a
-       program and has nothing left to say; the TOKEN moves onto that program's row, because the answer is the
-       program's COMPLETION and the row is what says which completion. Nothing about this operation is left on
-       the flow afterwards, which is what lets the next record land on a flow that is already performing one. */
-    engine_queue_into(f, doc, remote_op_program(rctx, op), DYN_CROSS_AGENT_OP, f->answer_token);
-    f->answer_token = NULL;
+    /* THE ENTRY IS SPENT HERE AND WHAT SURVIVES IT IS THE TOKEN. The record has become a program and has
+       nothing left to say; the token is COPIED out of the queue entry onto that program's row, because the
+       answer is the program's COMPLETION and the row is what says which completion. `strdup` and not a move:
+       the entry is a JS value that a forked ARM may still name, so the row owns a C string of its own and the
+       entry's own reference dies with the JS_FreeValue below. Nothing about this operation is left on the
+       flow, which is what lets the next entry start on a flow that is already performing one. */
+    {
+        char *own = strdup(token);
+        CHECK(own != NULL, "engine: OOM moving a cross-agent operation's rendezvous token onto its program");
+        engine_queue_into(f, doc, remote_op_program(rctx, op), DYN_CROSS_AGENT_OP, own);
+    }
     remote_op_free(op);
-    free(f->perform); f->perform = NULL;
+    JS_FreeCString(ctx, record);
+    JS_FreeCString(ctx, token);
+    JS_FreeValue(ctx, rv);
+    JS_FreeValue(ctx, tv);
+    JS_FreeValue(ctx, e);
 }
 
 /* AND THE COMPLETION, READ WHERE THE SCHEDULER READS ONE. `cv` is what the program completed with — its value,
@@ -2696,7 +2763,7 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             /* AND THE OPERATION A PEER IS PARKED ON, before this flow's own programs for the reason the
                delivery is: it is a work item another agent's flow is suspended at, and it becomes one of THIS
                flow's programs — after which the loop below runs it like any other. */
-            if (f->perform) { g_step_unit = "cross-agent-operation"; flow_perform(ctx, f); return 0; }
+            if (flow_perform_pending(f)) { g_step_unit = "cross-agent-operation"; flow_perform(ctx, f); return 0; }
             if (f->script_i < n) {
                 body = bodies[f->script_i];
                 stype = g_sess_types[f->script_i];
@@ -3102,7 +3169,7 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
                                "with is a message the peer sent and this document never received");
     /* AND THE SAME FOR AN OPERATION, at both ends of it: a record never turned into a program is a question
        nobody performed, and a token never spent is a peer's flow parked at the line that asked, forever. */
-    DCHECK(f->perform == NULL && !flow_owes_answer(f),
+    DCHECK(!flow_owes_answer(f),
            "a flow finished holding a cross-agent operation — either the record was never performed, or its "
            "program's completion was never sent, and either way the flow that ASKED is suspended at the line "
            "that asked it with nothing coming. Asked of the QUEUE as well as the arrival slot, because a "
@@ -3759,8 +3826,25 @@ static int engine_sched_slice(void) {
                deactivated transaction with an empty request list commits, which is a database task), and a
                task enqueued on a flow that has finished is a dropped work item — §scheduler's razor. Nothing
                is left behind either, because the flow's own COW delta carries every transaction it created
-               and unapplies with it. */
-            if (g_checkpoint_hook && r != FLOW_STEP_DONE && !flow_has_microtask(cur))
+               and unapplies with it.
+               AND A FLOW SUSPENDED INSIDE A PROGRAM IS NOT ASKED EITHER — `!cur->frame` — because "the flow has
+               run a unit of work" was the claim above and a PREEMPT is not the end of one: flow_step returns on
+               a back-edge preempt too. HTML §8.1.4.4 Calling scripts states the precondition exactly — clean up
+               after running script performs the checkpoint only "if the JavaScript execution context stack is
+               now EMPTY" — and `Flow::frame` IS that stack here ("the current script's live preemptible frame,
+               NULL between scripts", solver/flow.h). Without it the checkpoint ran at EVERY back-edge, and its
+               one registered consumer is HTML §8.1.7.3 Processing model's "Cleanup Indexed Database
+               transactions" step, whose steps are STATE TRANSITIONS and not observation: deactivate an active
+               transaction, and commit it when its request list is empty. So `db.transaction('s','readwrite')`
+               was deactivated and committed under the very statement that created it, and a member that had
+               already made §4.5's own "is the transaction active" check resumed to place its request against a
+               transaction that was no longer active — which is what core/indexeddb/idb_object_store.c's
+               os_active_across_suspension says in its own words and aborts on. The idempotence argument above
+               is untouched: running these steps MORE often than a browser is free, running them EARLIER is not.
+               THE JOB PUMP IS WHY THIS WAS THE ONLY WAY IN — flow_run_one_job is reachable only under
+               `if (!f->frame)`, so a request task's own §5.10 step 9 deactivation can never interleave with a
+               suspended member, and this line was the sole mid-member deactivator in the engine. */
+            if (g_checkpoint_hook && r != FLOW_STEP_DONE && !cur->frame && !flow_has_microtask(cur))
                 g_checkpoint_hook(ctx);
             /* THE CHARGE, AND IT IS CHARGED TO THE FLOW THAT RAN. `flow_age_running` bills whoever the registry
                says is running, and that is only the flow this step advanced while nothing between the switch-in
@@ -4058,7 +4142,7 @@ static int engine_sched_slice(void) {
            peer's message, dropped, indistinguishable from a page that registered no handler. A flow suspended
            inside a live frame is the shape that reaches here holding one: the delivery is made only where
            flow_step has no frame, so if this fires, the enqueue belongs earlier than that branch. */
-        DCHECK(flow_at(i)->perform == NULL && !flow_owes_answer(flow_at(i)),
+        DCHECK(!flow_owes_answer(flow_at(i)),
                "the frontier was declared exhausted while a live flow still owed a peer the answer to a "
                "cross-agent operation — the asking flow, in another instance, is suspended at the line that "
                "asked and this session is about to end without ever telling it anything");

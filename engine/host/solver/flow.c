@@ -314,6 +314,11 @@ void flow_release(JSContext *ctx, Flow *f) {
     /* the REPLIES it was still owed. Each entry is a request the host never answered; the whole register is one
        JS value, so its resolve capabilities, its reply values and every string in it go with one release. */
     pending_free(ctx, &f->pending);
+    /* THE UNSTARTED OPERATIONS GO WITH IT — one release for the array and every [record, token] pair it names,
+       exactly as the register above. That they are gone at all is asserted by the caller (flow_finish, the
+       pager), because a dropped record is a peer suspended forever and freeing it quietly is how that stays
+       invisible; this is the release, not the check. */
+    JS_FreeValue(ctx, f->perform_q); f->perform_q = JS_UNDEFINED;
     cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
     /* THE HEAD BEFORE THE CHAIN BELOW IT: a head node inserted under a segment's node is that node's child, and
        a child must be freed before the parent it hangs under is freed deep. */
@@ -473,6 +478,9 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
        29550 on this fixture — and the blocked scan the preempt hook runs at every suspend point would then
        have to read a length instead of testing a tag. It is minted by the first push. */
     f->pending = JS_UNDEFINED;
+    /* …AND THE OPERATION QUEUE, empty for the same reason and stated the same way: a peer asks this document
+       nothing at all in most sessions, and JS_UNDEFINED is not what a calloc leaves behind. */
+    f->perform_q = JS_UNDEFINED;
     /* …and the register's own context, named HERE because this is the one point every flow passes through.
        Putting it in each host's setup would be the hand-copied list build.mjs warns about. */
     pending_set_ctx(ctx);
@@ -508,6 +516,33 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
    a second representation of the same fact, and the two drift at exactly the sites (fork, drain, release) that
    are already the hardest to keep in step. The register is short — it is one flow's outstanding requests. */
 int flow_blocked(const Flow *f) { return pending_blocked(f->pending); }
+
+/* THE OPERATION QUEUE'S LENGTH — see flow.h. The context is the pending register's, for the reason that file
+   gives for holding one at all: the callers that matter (the scheduler's pick, the teardown asserts) hold a
+   Flow and nothing else. */
+int flow_perform_pending(const Flow *f) {
+    JSValue v;
+    int n;
+
+    if (!JS_IsObject(f->perform_q)) return 0;
+    v = JS_GetPropertyStr(pending_ctx(), f->perform_q, "length");
+    DCHECK(JS_VALUE_GET_TAG(v) == JS_TAG_INT,
+           "a flow's operation queue has no small-integer length — it is the engine's own Array and nothing "
+           "outside it appends");
+    n = JS_VALUE_GET_INT(v);
+    JS_FreeValue(pending_ctx(), v);
+    return n;
+}
+
+/* …AND WHETHER IT OWES AN ANSWER AT ALL — see flow.h. Scanned rather than counted, exactly as flow_blocked is
+   and for the same reason: a counter is a second representation that drifts at the fork, the start and the
+   answer, which are the three sites hardest to keep in step. */
+int flow_owes_answer(const Flow *f) {
+    if (flow_perform_pending(f) > 0) return 1;
+    for (int i = 0; i < f->dyn_n; i++)
+        if (f->dyn_token[i]) return 1;
+    return 0;
+}
 
 /* THE SERVICE QUANTUM — why the rank moves in steps rather than continuously.
  *
@@ -823,9 +858,9 @@ void flow_remove(JSContext *ctx, Flow *f) {
     DCHECK(f->frame == NULL && f->park_fn == NULL,
            "a flow was removed holding a live frame or a parked continuation — its whole activation chain, and "
            "everything those frames close over, would be retained by a handle nothing will ever free");
-    DCHECK(f->njob == 0 && f->jobs == NULL && JS_IsUndefined(f->pending),
-           "a flow was removed still holding queued jobs or pending host replies — each is a work item on the "
-           "one frontier, and the WFQ may never drop one");
+    DCHECK(f->njob == 0 && f->jobs == NULL && JS_IsUndefined(f->pending) && JS_IsUndefined(f->perform_q),
+           "a flow was removed still holding queued jobs, pending host replies or unstarted cross-agent "
+           "operations — each is a work item on the one frontier, and the WFQ may never drop one");
     DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dyn_doc == NULL && f->dyn_token == NULL &&
            f->dec_blob == NULL && f->pin_blob == NULL,
            "a flow was removed with its lazily-loaded chunk bodies or its suspended decision/pin blobs still "
@@ -834,7 +869,6 @@ void flow_remove(JSContext *ctx, Flow *f) {
         if (g_flows[i] == f) {
             JS_FreeValue(ctx, f->fn);
             free(f->deliver); free(f->deliver_origin);
-            free(f->perform); free(f->answer_token);
             /* THE CANDIDATE IT WAS VERIFYING. Both strings are this flow's own copies, and the only other place
                that frees them is the frontier's teardown — which walks the flows that are STILL THERE, so a
                flow removed here took them with it into nothing. `cand_sink` is static text and is not one. */

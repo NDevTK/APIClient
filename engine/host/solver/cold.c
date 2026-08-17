@@ -471,7 +471,7 @@ void cold_park_flow(Flow *f)
        lose this flow's work: it parks a flow in ANOTHER instance forever, on a completion nothing will ever
        send. The delivery was asserted here and this was not, which is the asymmetry a reader of the pair would
        have to notice for themselves. */
-    DCHECK(f->perform == NULL && f->answer_token == NULL,
+    DCHECK(!flow_owes_answer(f),
            "a flow holding a CROSS-AGENT OPERATION was parked — the record and the rendezvous token are not in "
            "its recipe, so the operation is dropped and the flow that ASKED for it, in another instance, stays "
            "suspended on an answer nothing will ever send. Park it as what it is: the record and the token are "
