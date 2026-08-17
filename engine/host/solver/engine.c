@@ -64,11 +64,10 @@ void engine_set_wrap_stats(void (*fn)(long *n, long *cap))
    does the flow cannot finish, which is what keeps the reply-gated code reachable. */
 void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst value, const FetchRequest *req) {
     Flow *f = flow_running();
-    /* THE URL IS WHAT THIS HOST PARKS ON TODAY. The seam now carries the whole request — method, headers and
-       body — because a host that actually answers one needs them, and the trusted zone this parks for is
-       exactly such a host: `safeFetch` decides SOP/CORS/method/credentials, and it cannot decide about a method
-       it was never told. Recording the rest is the next step here; naming it in the seam is what makes that a
-       change in one place rather than a signature every provider re-invents. */
+    /* THE METHOD AND THE URL ARE THE REQUEST'S IDENTITY, and both are what this park is keyed on: the join
+       lists the PAIR and engine_provide delivers against it (engine.h). The rest of the request — headers and
+       body — rides the record for the host that will issue it: `safeFetch` decides SOP/CORS/method/credentials,
+       and it cannot decide about a method it was never told. */
     const char *url = req ? req->url : NULL;
     JSValue e;
     /* A live fetch is ALWAYS issued from a running flow — both explore and @S verify are the ONE scheduler now
@@ -78,7 +77,15 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
     if (url) pending_set(e, PEND_URL, JS_NewString(ctx, url));
-    /* THE REST OF THE REQUEST, recorded rather than dropped between the seam and the trusted zone. */
+    /* AND THE METHOD IS NOT OPTIONAL WHERE THERE IS AN ADDRESS. Fetch §2.2 Requests: "A request has an
+       associated method (a method). Unless stated otherwise it is `GET`" — so every request HAS one, and a
+       producer that reaches this park without stating it is a component that dropped a field, not a request
+       that lacks one. Answering "assume GET" here is exactly the wrong answer this seam was keyed on the pair
+       to stop: it would file a POST's park under a GET and collect the GET's body. */
+    DCHECK(!url || (req && req->method && *req->method),
+           "a fetch parked on an ADDRESS without stating its METHOD — the reply seam is keyed on the pair "
+           "(engine.h), so an unnamed method would park this request under another one's identity and settle "
+           "it with that request's body. Name the method at the component that built the request");
     if (req && req->method) pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
     if (req && req->headers && req->headers->n > 0) {
         JSValue hl = pending_list_new();
@@ -123,6 +130,10 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
     }
     e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT);
     pending_set(e, PEND_URL, JS_NewString(ctx, url));
+    /* HTML §8.1.4.2 Fetching scripts, "fetch a classic script", creates a potential-CORS request and never sets
+       a method, so it is Fetch §2.2's `GET`. STATED, because the seam is keyed on the pair and a park that does
+       not say is a park the join cannot list. */
+    pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));
     pending_set_int(e, PEND_SCRIPT_I, script_i);
     JS_FreeValue(ctx, e);
 }
@@ -145,6 +156,8 @@ void engine_pending_script_url(JSContext *ctx, const char *url) {
     DCHECK(url != NULL && *url, "a <script src> was parked on with no URL");
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT);
     pending_set(e, PEND_URL, JS_NewString(ctx, url));
+    /* §8.1.4.2's classic script, as at the docscript park above. */
+    pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));
     /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
        chokepoint was entered with is that tree's document — the reply is compiled there rather than in
        whichever realm the session happens to be rooted at. */
@@ -306,10 +319,11 @@ static long g_host_answers_late;
 /* WHAT A SOLD FLOW TOOK WITH IT — the same family as the three above and sitting with them, because every one
  * of these is a fact about a debt the host is carrying and what became of the flow that was owed it; the pager
  * far below is only where the number is WRITTEN. Two counts and not one, because a paged flow owes TWO
- * different debts settled through different doors: a fetch reply is paired by URL against the host's own
- * pending list, and a synchronous request is routed BY ID to a call site. One count for both was a real defect
- * and a silent one — a sold HOSTREQ entry inflated the fetch side, so the very next reply the host genuinely
- * mispaired spent that credit and the assert written to catch it (main.c's provide pairing) said nothing.
+ * different debts settled through different doors: a fetch reply is paired by (method, url) against the
+ * host's own pending list, and a synchronous request is routed BY ID to a call site. One count for both was
+ * a real defect and a silent one — a sold HOSTREQ entry inflated the fetch side, so the very next reply the
+ * host genuinely mispaired spent that credit and the assert written to catch it (main.c's provide pairing)
+ * said nothing.
  * Split at the sale, by kind, so each door consumes only its own.
  *
  * A flow BLOCKED on the host is the cheapest member to page — its recipe re-issues the request in the session
@@ -1053,50 +1067,114 @@ const char *engine_host_notices(void) {
     return drained ? drained : "";
 }
 
-const char *engine_pending_urls(void) {
+/* IS THIS A METHOD — Fetch §2.2.1 Methods, "a byte sequence that matches the method token production", whose
+   production is RFC 9110 §5.6.2 Tokens. Asked of what the HOST hands back at the provide edge, because the one
+   thing a delivery keyed on the pair cannot survive is a key that is not the shape the join emitted: a host
+   that sends an ADDRESS where the method goes matches nothing and settles nobody, which is silent.
+   NOT `#if APICLIENT_DEV`: a DCHECK's condition still has to TYPE-CHECK in release (check.h compiles it to
+   `sizeof(cond)`), so a helper only a DCHECK calls must still be declared there. */
+static inline int method_is_token(const char *m) {
+    static const char TCHAR_EXTRA[] = "!#$%&'*+-.^_`|~";
+    if (!m || !*m) return 0;
+    for (; *m; m++) {
+        unsigned char c = (unsigned char)*m;
+        if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            memchr(TCHAR_EXTRA, c, sizeof TCHAR_EXTRA - 1))
+            continue;
+        return 0;
+    }
+    return 1;
+}
+
+const char *engine_pending_fetches(void) {
     static char *join;
     static size_t cap;
     size_t n_out = 0;
     Flow *f;
 
-    /* ONE PASS AND ONE CONVERSION, for the reason engine_host_requests states. The DEDUP is unchanged: a linear
-       scan over the answer being built, which is the set itself — several flows park on the same URL (a
-       candidate re-fire re-runs the exploring flow's fetches) and engine_provide fills every entry that names
-       it, so listing it twice makes the host provide twice and the second call finds nothing left. */
-    if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the pending URLs"); }
+    /* ONE PASS AND ONE CONVERSION, for the reason engine_host_requests states. The DEDUP IS OVER THE PAIR, which
+       is what makes it a set of REQUESTS: several flows park on the same request (a candidate re-fire re-runs
+       the exploring flow's fetches) and engine_provide fills every entry naming it, so listing it twice makes
+       the host provide twice and the second call finds nothing left. Deduping over the URL alone did the
+       opposite of that and worse — it deleted the POST from a list that already held the GET, so the host never
+       issued it and the engine settled the POST's promise with the GET's body. */
+    if (!join) { cap = 256; join = malloc(cap); CHECK(join, "engine: OOM joining the pending requests"); }
     join[0] = 0;
     for (int k = 0; (f = flow_at(k)) != NULL; k++)
         for (int i = 0, n = pending_count(f->pending); i < n; i++) {
             JSValue pe = pending_entry(f->pending, i);
             JSValue uv = pending_get(pe, PEND_URL);
-            size_t ul = 0;
+            JSValue mv = pending_get(pe, PEND_METHOD);
+            size_t ul = 0, ml = 0;
             const char *u = JS_IsString(uv) ? JS_ToCStringLen(pending_ctx(), &ul, uv) : NULL;
+            const char *m = JS_IsString(mv) ? JS_ToCStringLen(pending_ctx(), &ml, mv) : NULL;
             int skip = (!u || pending_get_int(pe, PEND_HAVE_VALUE));
             if (!skip) {
                 const char *q = join, *stop = join + n_out;
+                /* THE PRODUCER'S HALF, ASSERTED WHERE THE RECORD IS READ rather than where it is written: a park
+                   that named an address and no method is a component that dropped a field, and the host would be
+                   handed a line the split cannot make sense of. */
+                DCHECK(m != NULL,
+                       "an outstanding request carries an ADDRESS and no METHOD — the reply seam is keyed on the "
+                       "pair, so this entry cannot be listed at all. The park that created it must state its "
+                       "method (Fetch §2.2 Requests: unless stated otherwise it is `GET`)");
+                /* AND THE GRAMMAR HOLDS BY CONSTRUCTION, WHICH IS WHY IT IS CHECKED. URL Standard §4.4 URL
+                   parsing removes all ASCII tab or newline from its input, so a serialized URL has neither; a
+                   method is a token and RFC 9110 §5.6.2 Tokens excludes both. An entry that breaks that is a URL
+                   that never went through the parser — a concolic SHAPE carried through as an address — and the
+                   line it makes silently splits into two records the host then fetches. */
+                DCHECK(!memchr(u, '\t', ul) && !memchr(u, '\n', ul),
+                       "an outstanding request's URL holds a TAB or a NEWLINE — URL Standard §4.4 URL parsing "
+                       "removes both from its input, so this string never went through the parser and the joined "
+                       "line splits into records nobody parked on");
+                DCHECK(method_is_token(m),
+                       "an outstanding request's METHOD is not a token — Fetch §2.2.1 Methods, and RFC 9110 "
+                       "§5.6.2 Tokens is the production; the joined line would not split back into the pair");
                 while (q < stop) {
                     const char *e = memchr(q, '\n', (size_t)(stop - q));
                     size_t l = e ? (size_t)(e - q) : (size_t)(stop - q);
-                    if (l == ul && !memcmp(q, u, ul)) { skip = 1; break; }
+                    if (l == ml + 1 + ul && !memcmp(q, m, ml) && q[ml] == '\t' &&
+                        !memcmp(q + ml + 1, u, ul)) { skip = 1; break; }
                     if (!e) break;
                     q = e + 1;
                 }
             }
             if (!skip) {
-                while (n_out + ul + 2 > cap) {
+                while (n_out + ml + ul + 3 > cap) {
                     cap *= 2;
                     join = realloc(join, cap);
-                    CHECK(join, "engine: OOM growing the pending-URL join");
+                    CHECK(join, "engine: OOM growing the pending-request join");
                 }
+                memcpy(join + n_out, m, ml); n_out += ml;
+                join[n_out++] = '\t';
                 memcpy(join + n_out, u, ul); n_out += ul;
                 join[n_out++] = '\n';
                 join[n_out] = 0;
             }
             if (u) JS_FreeCString(pending_ctx(), u);
+            if (m) JS_FreeCString(pending_ctx(), m);
+            JS_FreeValue(pending_ctx(), mv);
             JS_FreeValue(pending_ctx(), uv);
             JS_FreeValue(pending_ctx(), pe);
         }
     return join;
+}
+
+void engine_pending_split(char *line, const char **method, const char **url) {
+    char *tab;
+
+    DCHECK(line && method && url, "a pending line was split with nowhere to put its halves");
+    tab = strchr(line, '\t');
+    /* A `CHECK`, NOT A DCHECK, because the release path has no defined answer: the two halves are what a reply
+       is delivered against, and a line that is not the shape this engine joined would key a delivery on a method
+       nobody asked for — which is the wrong answer this seam exists to make impossible, in the one build where
+       nothing else would say so. */
+    CHECK(tab != NULL,
+          "engine: a host split a pending line that carries no TAB — engine_pending_fetches joins "
+          "`METHOD<TAB>URL` lines and this one is neither half of that");
+    *tab = 0;
+    *method = line;
+    *url = tab + 1;
 }
 
 /* IS ANYTHING OUTSTANDING ON THE WHOLE FRONTIER — the third answer over the same two walks above, and the one
@@ -1104,10 +1182,10 @@ const char *engine_pending_urls(void) {
  *
  * IT USED TO BE A HOST CALLBACK (`engine_set_stall_hook`), justified as "the scheduler holds no idea of what a
  * reply is, and the host holds no idea of what a flow is". That was false in the only direction that matters:
- * the two lists a host would answer from are engine_pending_urls() and engine_host_requests(), which are THIS
+ * the two lists a host would answer from are engine_pending_fetches() and engine_host_requests(), which are THIS
  * FILE's walks of THIS FILE's registers, so every host implemented the hook by restating an engine fact — and
  * a fact restated in three places is a fact three places can get wrong. One of them did. main.c — the SHIPPED
- * host, the one §Testing says is the one that rots — asked `*engine_pending_urls() != '\0'` and never the
+ * host, the one §Testing says is the one that rots — asked `*engine_pending_fetches() != '\0'` and never the
  * synchronous register, while test_forced.c and wpt_runner.c asked both (wpt_runner's own comment spells out
  * why: "a flow parked on either is a flow that has not finished"). So a frontier whose every member was
  * suspended inside a cross-instance read, with no fetch outstanding, reported NOT STALLED to the extension and
@@ -1135,7 +1213,7 @@ int engine_host_owes(void) {
             JS_FreeValue(pending_ctx(), uv);
             JS_FreeValue(pending_ctx(), e);
             DCHECK(tellable,
-                   "a flow is waiting on a register entry the host can never be shown — engine_pending_urls "
+                   "a flow is waiting on a register entry the host can never be shown — engine_pending_fetches "
                    "lists the unanswered entries that carry an ADDRESS and engine_host_requests the unanswered "
                    "SYNCHRONOUS ones, so an entry that is neither makes this report a stall the host is handed "
                    "no record for, and the frontier waits on it for the rest of the session");
@@ -1146,22 +1224,35 @@ int engine_host_owes(void) {
     return 0;
 }
 
-/* Deliver a body for `url` into every flow parked on it. The value lands on the flow's OWN pending entry, so the
-   reaction the resolve enqueues belongs to that flow and to its COW delta — which is why this is here and not in
-   a register beside it. Returns how many entries it filled. */
-int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
-    int n = 0;
-    /* NO METHOD IS READ OFF THE ENTRY HERE, and it used to be. It existed for ONE consumer: an error-derived
-       schema is filed under the endpoint identity `<METHOD> <host><path>`, and this is the one place holding
-       both halves — the URL the host answered and the request record the flow parked. That reader is gone from
-       this engine (extension/lib/req2proto.js issues the probe as the page and reads its own rejection), so
-       the copy went with it: a value collected for nobody is indistinguishable from one that is used. */
+/* Deliver a body for the request `(method, url)` into every flow parked on it. The value lands on the flow's OWN
+   pending entry, so the reaction the resolve enqueues belongs to that flow and to its COW delta — which is why
+   this is here and not in a register beside it. Returns how many entries it filled.
+   THE METHOD IS HALF THE KEY, and this matched on the URL alone. `waiting` was `strcmp(u, url) == 0`, so a page
+   that issued a GET and a POST to one address had the first reply written onto BOTH entries and both promises
+   settled with it: the POST's flow resumed reading a body the server produced for a request it never made, and
+   every @H example, every branch over that body and every @S verdict downstream of it came from that. It is the
+   same correction SECURITY.md §Network records for the XHR seam, made at the seam it names as still open. */
+int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueConst value) {
+    int n = 0, matched = 0;
     DCHECK(url != NULL, "a body was provided for no URL");
+    /* WHAT THE HOST SENDS BACK IS WHAT THE JOIN EMITTED, and the shape is asserted rather than assumed: an
+       absent method is a host that has not been converted to the pair (the JS bridge's `Provide` carries one),
+       and an address in the method's place is the same host with its operands shifted. Both match nothing, and
+       matching nothing is silent — the flow that IS parked simply waits for the rest of the session. */
+    DCHECK(method != NULL,
+           "a reply was provided with NO METHOD — the reply seam is keyed on `(method, url)`; the host that "
+           "fetched it is the only zone that knows which request it answers, and it is handed both halves by "
+           "engine_pending_fetches. A host still sending an address alone has not been converted");
+    DCHECK(method_is_token(method),
+           "a reply was provided with a METHOD that is not a token — Fetch §2.2.1 Methods, RFC 9110 §5.6.2 "
+           "Tokens. A host sending the URL where the method goes has its operands shifted by one");
     for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
         for (int i = 0, m = pending_count(f->pending); i < m; i++) {
             JSValue p = pending_entry(f->pending, i);
             JSValue uv = pending_get(p, PEND_URL);
+            JSValue mv = pending_get(p, PEND_METHOD);
             const char *u = JS_IsString(uv) ? JS_ToCString(ctx, uv) : NULL;
+            const char *pm = JS_IsString(mv) ? JS_ToCString(ctx, mv) : NULL;
             /* TWO QUESTIONS OF TWO DIFFERENT THINGS, and they were one predicate until a fork stopped copying
                records. `waiting` is about the FLOW — its register names this address, so this delivery is an
                event that can change the answer it gave the scheduler. `fill` is about the RECORD — it has no
@@ -1177,9 +1268,14 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
                and names the symptom rather than this line; `pin_and_shape.html` reaches it under three of the
                solver gate's four schedules, its `/api/roles` record having been forked between the two arms of
                the `limit > 5` branch that follows the fetch. */
-            int waiting = u && strcmp(u, url) == 0;
+            /* THE KEY IS THE PAIR. An entry with no method is one no join could have listed, so it cannot be
+               what this reply answers whatever its URL says. */
+            int waiting = u && pm && strcmp(u, url) == 0 && strcmp(pm, method) == 0;
             int fill = waiting && !pending_get_int(p, PEND_HAVE_VALUE);
+            matched += waiting;
             if (u) JS_FreeCString(ctx, u);
+            if (pm) JS_FreeCString(ctx, pm);
+            JS_FreeValue(ctx, mv);
             JS_FreeValue(ctx, uv);
             if (fill) {
                 /* THE PRODUCER'S HALF OF THE CONTRACT THE DRAIN CHECKS, asked HERE so the two together say
@@ -1198,7 +1294,7 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
                     snprintf(why, sizeof why,
                              "a reply with no `urlList` is being written onto a fetch entry — the HOST built "
                              "this record, so the producer is the trusted zone's reply path and not this "
-                             "file's register. url=%s", url);
+                             "file's register. request=%s %s", method, url);
                     DCHECK(JS_IsArray(ul), why);
                     JS_FreeValue(ctx, ul);
                 }
@@ -1236,6 +1332,23 @@ int engine_provide(JSContext *ctx, const char *url, JSValueConst value) {
        rejection a GET happened to provoke under the identity of an endpoint nobody probed. It is
        extension/lib/req2proto.js, which issues the probe as the page. */
     if (n) reply_decode_learn(ctx, url, value);
+    /* A REQUEST ANSWERED TWICE, TOLD APART FROM ONE ANSWERED FOR NOBODY. Every entry naming this request already
+       carries a reply, so this call wrote none — and the two numbers are what make that a different failure
+       from `n == 0` with nothing matched at all, which is the host's pairing being off and is the CALLER's
+       assert (it owns the paged-sale credit that legitimately explains it). This one no credit can excuse: a
+       request leaves the join the moment it is answered, so the host was never shown it a second time. The
+       shape it catches is a host with TWO lists that overlap — the extension's `GetChunks` names URLs that are
+       already parked module loads and would answer each of them again. */
+#if APICLIENT_DEV
+    if (matched && !n) {
+        char why[400];
+        snprintf(why, sizeof why,
+                 "a reply was provided for a request every parked entry has ALREADY been answered for — the "
+                 "join drops a request as soon as it carries a value, so the host is answering one it was shown "
+                 "once, twice. request=%s %s", method, url);
+        DFAIL(why);
+    }
+#endif
     return n;
 }
 /* WHAT KIND OF PROGRAM a queued body is. It is ONE queue because they are one thing — code the page caused to
@@ -1731,8 +1844,8 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     /* THE REPLIES STILL IN FLIGHT ARE INHERITED TOO. A flow that forks while a request is outstanding — a
        fetch whose `.then` has not run, an injected <script src> whose body has not arrived — was leaving the
        sibling with an empty register, so the reply reached exactly one world and everything behind it was
-       silently missing from the other. Both arms wait on the same URL (engine_pending_urls dedups it, and
-       engine_provide fills every entry that names it), and each then delivers on its OWN timeline: the resolve
+       silently missing from the other. Both arms wait on the same REQUEST (engine_pending_fetches dedups the
+       pair, and engine_provide fills every entry naming it), and each delivers on its OWN timeline: the resolve
        function is shared, but its already_resolved latch and the promise's settlement are per-flow state the
        COW delta captures, which is precisely what lets both arms settle one capability. */
     /* THE QUEUED JOBS ARE INHERITED FOR THE SAME REASON THE REPLIES ARE, and their absence was the same bug
@@ -1771,7 +1884,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
         sib->njob = sib->jobcap = parent->njob;
     }
     /* THE ARRAY IS COPIED AND THE RECORDS ARE SHARED. The array has to be per-flow: the host walks EVERY
-       flow's register from outside any flow's delta (engine_provide fills whichever flows parked on a URL,
+       flow's register from outside any flow's delta (engine_provide fills whichever flows parked on a REQUEST,
        engine_host_requests joins what is outstanding across all of them), and each arm removes an entry when
        IT delivers. The records do not, because a record never changes after it is pushed except for the
        ANSWER, and an answer is something both arms wait on and both observe. */
@@ -3079,9 +3192,9 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        shared segment has a second reference by definition — so at this size the release moves nothing in the
        live heap or document and is pure free. */
     /* THE DEBT LEAVES WITH THE FLOW, AND IT IS TWO DEBTS. Counted by KIND rather than whole (see g_paged_owed):
-       a synchronous request is answered by ID at a call site and a fetch reply is paired by URL, so a register
-       counted whole hands the fetch side a credit that belongs to the request side, and the next reply the host
-       genuinely mispairs is excused by it. */
+       a synchronous request is answered by ID at a call site and a fetch reply is paired by (method, url), so
+       a register counted whole hands the fetch side a credit that belongs to the request side, and the next
+       reply the host genuinely mispairs is excused by it. */
     {
         int reqs = pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
         g_paged_reqs  += reqs;
@@ -3682,7 +3795,7 @@ static int engine_sched_slice(void) {
                 /* AND THE MARK IS A CLAIM ABOUT THE HOST, ASSERTED WHERE IT IS MADE. A marked flow leaves the
                    pick until a HOST EVENT clears it, so the mark is only ever true if there is something the
                    host has actually been shown and can still answer: an entry on this flow's register with no
-                   value — which is in engine_pending_urls or engine_host_requests by construction, since both
+                   value — which is in engine_pending_fetches or engine_host_requests by construction, since both
                    walk every flow's register and select exactly the unanswered — or the one case with no entry
                    at all, a document a peer holds a reference into. Anything else is a flow that has left the
                    run queue for good, and NOTHING would say so: `live` still counts it, `blocked` and `owed`
@@ -4008,7 +4121,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                        "answers every record it is handed out of its own tables, so the flow blocked on this "
                        "one is parked at a call site nothing is going to resume, and its whole timeline is lost "
                        "with nothing but a `blocked` count to say which record it was");
-                DCHECK(*engine_pending_urls() == '\0',
+                DCHECK(*engine_pending_fetches() == '\0',
                        "the smoke host paid and a reply is still owed — the same silence one register over: the "
                        "flow that issued this fetch keeps its snapshot and its continuation and is never handed "
                        "the body, so everything the page does behind that reply is missing from the run");

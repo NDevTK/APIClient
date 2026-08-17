@@ -201,7 +201,7 @@ void      cow_set_ctx(JSContext *ctx);
  *
  * The flows' pending register (solver/pending.h) is a JS object graph the SCHEDULER owns: it records what the
  * host still owes ONE flow. The host reads EVERY flow's register from outside any flow's delta — engine_provide
- * fills whichever flows parked on a URL, engine_host_requests joins what is outstanding across all of them, and
+ * fills whichever flows parked on a REQUEST, engine_host_requests joins what is outstanding across all of them, and
  * the preempt hook asks whether the running flow is blocked. If a delta captured those writes, an entry's
  * contents would depend on which delta happened to be applied: an entry appended after a fork would be
  * TRUNCATED away the moment a sibling switched in, and the reply would be delivered into a slot that no longer

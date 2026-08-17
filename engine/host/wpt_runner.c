@@ -270,16 +270,17 @@ static char g_wpt_root[512];
  *
  * A `fetch()` PARKS the flow that issued it (engine_pending_fetch_url): the flow keeps its snapshot, reports
  * itself host-owed, and its continuation resumes with the reply. That register records the WHOLE request —
- * method, headers and body — but the two edges the HOST is offered do not: engine_pending_urls names a URL and
- * engine_provide matches on one. The corpus asks this host for POSTs whose answer depends on the BODY sent
- * (`echo-content.py`) and for probes whose answer is the HEADERS it was given (`inspect-headers.py`), so a URL
- * alone cannot be turned back into the request that was made.
+ * method, headers and body — and the seam the HOST is offered now names TWO of those: engine_pending_fetches
+ * lists `METHOD<TAB>URL` and engine_provide delivers against the pair. The corpus still asks this host for
+ * POSTs whose answer depends on the BODY sent (`echo-content.py`) and for probes whose answer is the HEADERS it
+ * was given (`inspect-headers.py`), and neither is on the line.
  *
- * SO THE HOST KEEPS ITS OWN COPY, keyed by the one thing the seam does name, and CRASHES where that key is not
- * enough: two outstanding requests to one URL that differ in method or body are two questions the seam cannot
- * tell apart, and answering either with the other's reply is a wrong answer with nothing to say so. That is the
- * request-keyed reply seam, named where it bites — make engine_pending_urls a list of REQUESTS with an
- * identity and engine_provide a delivery against that identity, and this table and its assert delete together.
+ * SO THE HOST STILL KEEPS ITS OWN COPY, keyed by the pair the seam does name, and CRASHES where that key is not
+ * enough: two outstanding requests with one method and one URL that differ in BODY are two questions the seam
+ * cannot tell apart, and answering either with the other's reply is a wrong answer with nothing to say so. The
+ * method half of that assert is GONE because the seam carries it — it is the identity now, not a collision.
+ * What remains is the body (and the headers it rides with), and the same argument that moved the method moves
+ * them: the line grows an identity for the whole request, and this table deletes with it.
  * The strings are this runner's copies, because the request the component built is gone by the time the
  * scheduler stalls on it. */
 #define WPT_OWED_MAX 64
@@ -304,21 +305,31 @@ static void wpt_owed_forget(int i)
 
 static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, const FetchRequest *req)
 {
-    const char *method = req->method ? req->method : "GET";
-    const char *url = req->url ? req->url : "";
+    /* BOTH HALVES ARE THE COMPONENT'S TO STATE, and this host used to fill in either. `"GET"` for an unstated
+       method was a real value belonging to some other request — the exact hole the pair seam was built to
+       close — and `""` for an unstated URL parks a flow on an address no host can ever answer. */
+    const char *method = req->method;
+    const char *url = req->url;
     int i;
 
+    DCHECK(method && *method && url && *url,
+           "the wpt provider was owed a request that does not state its METHOD and URL — the reply seam is "
+           "keyed on the pair (solver/engine.h), so a request missing either cannot be listed, fetched or "
+           "delivered. The component that built it must state both");
+
     for (i = 0; i < g_owed_n; i++) {
-        if (strcmp(g_owed[i].url, url)) continue;
+        /* THE TABLE IS KEYED ON WHAT THE SEAM IS KEYED ON — the pair. A GET and a POST to one address are two
+           rows here because they are two lines on the join and two deliveries at the provide. */
+        if (strcmp(g_owed[i].url, url) || strcmp(g_owed[i].method, method)) continue;
         /* THE SAME REQUEST FROM ANOTHER FLOW is the ordinary case — a candidate re-fire re-runs the fetches the
-           exploring flow made, and the frontier answers all of them with one reply. A DIFFERENT request at the
-           same URL is the seam's limit above, and it is fatal rather than first-come-first-served. */
-        DCHECK(!strcmp(g_owed[i].method, method) && g_owed[i].body_len == req->body_len &&
+           exploring flow made, and the frontier answers all of them with one reply. A DIFFERENT BODY under one
+           (method, url) is the seam's remaining limit above, and it is fatal rather than first-come-first-served. */
+        DCHECK(g_owed[i].body_len == req->body_len &&
                (req->body_len == 0 || (g_owed[i].body && req->body &&
                                        !memcmp(g_owed[i].body, req->body, req->body_len))),
-               "two outstanding requests name one URL and differ in method or body — the reply seam names the "
-               "URL alone (engine_pending_urls/engine_provide), so whichever is answered first answers both and "
-               "one flow resumes with the reply to a question it never asked. Build the request-keyed seam");
+               "two outstanding requests share one (method, url) and differ in BODY — the reply seam names the "
+               "pair and not the body, so whichever is answered first answers both and one flow resumes with "
+               "the reply to a question it never asked. Put the whole request's identity on the line");
         /* AND THE PARK, which is what this provider does with the flow: it waits on its own register, exactly
            as it does in the extension. */
         engine_pending_fetch_url(ctx, deliver, value, req);
@@ -527,22 +538,24 @@ static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, Heade
  * lands the reply there, the flow's next step drains it, and the reaction is enqueued on the flow that issued
  * the request. That is the whole reason the park is the product's park.
  *
- * A URL WITH NO RECORD IS A GET THE ENGINE ISSUED FOR CODE, not a default filled in for a missing one: an
- * external document script and a dynamic `import()` park on the same register and each is a
- * GET by construction (engine.h says so at each entry point), so the absence of a request record is a positive
- * statement about which kind of park this is. */
+ * A LINE WITH NO RECORD IN THE TABLE IS A REQUEST THE ENGINE ISSUED FOR CODE — an external document script, an
+ * injected <script src>, a dynamic `import()` — and its METHOD IS ON THE LINE like every other. It used to be
+ * defaulted to "GET" here, which was true and was still the wrong shape: the engine states the method at each
+ * of those parks (engine.c) and the join carries it, so nothing on this side has to know which kind of park a
+ * line came from. What the missing record does mean is that there are no headers and no body to re-send. */
 static int wpt_provide_pending(JSContext *ctx)
 {
     char *list, *p;
     int filled = 0;
 
-    if (!*engine_pending_urls()) return 0;
-    /* THE LIST IS COPIED BEFORE IT IS WALKED: engine_pending_urls answers out of one buffer it reuses, and the
+    if (!*engine_pending_fetches()) return 0;
+    /* THE LIST IS COPIED BEFORE IT IS WALKED: engine_pending_fetches answers out of one buffer it reuses, and the
        provide below re-enters the engine. */
-    list = strdup(engine_pending_urls());
+    list = strdup(engine_pending_fetches());
     CHECK(list != NULL, "wpt: OOM copying the frontier's pending list");
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
+        const char *method, *url;
         FetchRequest req;
         HeaderList rh = { 0 };
         HeaderList none = { 0 };
@@ -553,9 +566,13 @@ static int wpt_provide_pending(JSContext *ctx)
 
         if (!end) break;
         *end = 0;
-        for (i = 0; i < g_owed_n; i++) if (!strcmp(g_owed[i].url, p)) { rec = i; break; }
-        req.method = rec >= 0 ? g_owed[rec].method : "GET";
-        req.url = p;
+        /* SPLIT WHERE IT WAS JOINED, by the engine's own splitter — three hosts each finding the TAB for
+           themselves is three places for the grammar to drift. */
+        engine_pending_split(p, &method, &url);
+        for (i = 0; i < g_owed_n; i++)
+            if (!strcmp(g_owed[i].url, url) && !strcmp(g_owed[i].method, method)) { rec = i; break; }
+        req.method = method;
+        req.url = url;
         req.headers = rec >= 0 ? &g_owed[rec].headers : &none;
         req.body = rec >= 0 ? g_owed[rec].body : NULL;
         req.body_len = rec >= 0 ? g_owed[rec].body_len : 0;
@@ -568,7 +585,7 @@ static int wpt_provide_pending(JSContext *ctx)
             reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1, cty) : JS_NULL;
             free(cty);
         }
-        filled += engine_provide(ctx, p, reply);
+        filled += engine_provide(ctx, method, url, reply);
         JS_FreeValue(ctx, reply);
         header_list_free(&rh);
         free(body);

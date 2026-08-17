@@ -191,7 +191,7 @@ void engine_set_referenced(int referenced);
    (engine_run). The stepping entry answers a stall by returning to its caller, which is what the extension's
    qjs_step does; a one-call driver has no such caller, so a stall with nobody to answer it ended the run — and
    a flow that had issued a request stopped at that request, its continuation never reaching the reply. The
-   provider fills what engine_pending_urls and engine_host_requests name, and answers how many entries it
+   provider fills what engine_pending_fetches and engine_host_requests name, and answers how many entries it
    filled; 0 at a stall ends the run, which is the honest answer to "nobody can supply this".
    IT IS CALLED ONLY ON ENGINE_STEP_STALLED, AND THAT IS A KNOWN DEFECT rather than the design — the extension's
    bridge pulls both registers after EVERY return (main.c folds STALLED into YIELD deliberately), so in the
@@ -381,8 +381,34 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
    instance that minted it, and two peers may ask this one the same number. Nothing runs inside this call. */
 void engine_perform(JSContext *ctx, const char *token, const char *record);
 
-const char *engine_pending_urls(void);                                  /* newline-joined, or "" */
-int engine_provide(JSContext *ctx, const char *url, JSValueConst value); /* entries filled */
+/* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one `METHOD<TAB>URL` line per outstanding request,
+ * newline-terminated, "" for none, DEDUPED BY THE PAIR.
+ *
+ * THE METHOD IS PART OF THE REQUEST'S IDENTITY, and this seam used to answer an ADDRESS ALONE. The register
+ * has carried the method since the day it carried the whole request (PEND_METHOD), and it was dropped at
+ * exactly these two edges: the join listed URLs and engine_provide filled every entry naming the URL. So a page
+ * that issues a GET and a POST to one address had them collect each other's bodies — not a missing feature, a
+ * WRONG ANSWER, and every @H example value, every branch that reads that body and every @S verdict on that path
+ * was derived from a response the page never received. It is the same defect the XHR path was corrected for
+ * (SECURITY.md §Network: "a wrong answer, which is worse than an absent one"), one seam over.
+ *
+ * WHY A TAB, AND WHY THAT IS NOT AN INVENTED DELIMITER. Neither field can contain one. A serialized URL cannot:
+ * URL Standard §4.4 URL parsing removes all ASCII tab or newline from its input before anything else, so no
+ * URL record can hold one and no serialization can produce one. A method cannot: Fetch §2.2.1 Methods says a
+ * method "is a byte sequence that matches the method token production", and RFC 9110 §5.6.2 Tokens excludes
+ * HTAB from tchar. The join ASSERTS both rather than trusting them, and it is the same shape
+ * engine_host_requests already answers in (`id<TAB>op`) — one seam, one grammar.
+ *
+ * The buffer is this function's and is valid until the next call. */
+const char *engine_pending_fetches(void);
+/* ONE LINE, SPLIT WHERE IT WAS JOINED — because three hosts each deriving the pair is three places to get it
+   wrong, which is the hand-copy 59d0e42d abolished. `line` is the host's own mutable copy of one line (no
+   newline); the TAB is overwritten with a NUL and the two halves are handed back pointing into it. */
+void engine_pending_split(char *line, const char **method, const char **url);
+/* DELIVER A BODY FOR ONE REQUEST — keyed on `(method, url)`, which is what the flow parked on. Returns how many
+   entries it filled; 0 with nothing matched is the host's pairing being off (or a sale — engine_take_paged_owed),
+   and it is the CALLER that tells those apart because the caller owns the credit. */
+int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueConst value);
 
 /* Install as JSTimeTravelHooks.gen_fork: a concolic branch inside a synchronously-driven generator body forked
    the flow, and clone_deep_flow built a per-flow gen_data clone. Stash the swap; engine_fork_finalize drains it

@@ -203,7 +203,7 @@ static int hostreq_answer_all(JSContext *ctx);   /* the SYNCHRONOUS half — see
 
 
 static int fixture_provide(JSContext *ctx) {
-    const char *urls = engine_pending_urls();
+    const char *urls = engine_pending_fetches();
     int filled = 0;
     UrlRecord base;
 
@@ -219,15 +219,19 @@ static int fixture_provide(JSContext *ctx) {
         const char *nl = strchr(urls, '\n');
         size_t len = nl ? (size_t)(nl - urls) : strlen(urls);
         char *one = malloc(len + 1);
+        const char *method, *url;
         UrlRecord rec;
         char *abs;
         JSValue reply;
         bool ok;
 
-        CHECK(one, "the fixture could not name the URL it is answering");
+        CHECK(one, "the fixture could not name the request it is answering");
         memcpy(one, urls, len); one[len] = 0;
+        /* THE LINE IS `METHOD<TAB>URL` AND IT IS SPLIT BY THE ENGINE'S OWN SPLITTER — the reply seam is keyed on
+           the pair, so a fixture that answered the whole line as an address would match nothing. */
+        engine_pending_split(one, &method, &url);
         url_record_init(&rec);
-        ok = url_parse(&rec, one, len, &base);
+        ok = url_parse(&rec, url, strlen(url), &base);
         DCHECK(ok, "the fixture was asked for a URL that will not parse even against its document's address");
         abs = ok ? url_serialize(&rec, /*exclude_fragment*/ false) : NULL;
         url_record_free(&rec);
@@ -235,10 +239,20 @@ static int fixture_provide(JSContext *ctx) {
         /* THE ONE REPLY RECORD every host delivers — the same shape the trusted zone stringifies as JSON. */
         /* `application/json` is what this fixture SERVES, stated by the host that serves it — the same
            position the trusted zone is in when it stamps `computedType` on a real reply (fetch.h). */
-        reply = fetch_reply_new(ctx, 200, "OK", NULL, "{\"region\":\"us-west-2\"}",
-                                strlen("{\"region\":\"us-west-2\"}"), (const char *const *)&abs, 1,
-                                "application/json");
-        filled += engine_provide(ctx, one, reply);
+        /* AND IT ECHOES THE METHOD IT WAS ASKED FOR, which is what makes the pair seam OBSERVABLE from inside
+           the page: a real echo endpoint answers a POST differently from a GET, and until this line every reply
+           this fixture served was identical, so a GET's body arriving on a POST's promise looked exactly like
+           the right answer. It rides a HEADER rather than the body deliberately — the body is 22 bytes and two
+           probes read that length back as evidence that arrayBuffer() and bytes() are one byte sequence. */
+        {
+            HeaderList eh = { 0 };
+            header_list_append(&eh, "x-echo-method", method);
+            reply = fetch_reply_new(ctx, 200, "OK", &eh, "{\"region\":\"us-west-2\"}",
+                                    strlen("{\"region\":\"us-west-2\"}"), (const char *const *)&abs, 1,
+                                    "application/json");
+            header_list_free(&eh);
+        }
+        filled += engine_provide(ctx, method, url, reply);
         JS_FreeValue(ctx, reply);
         free(abs);
         free(one);
@@ -1133,6 +1147,15 @@ static const char *HTML =
       " var tag = cfg.admin ? 'bodyADMIN' : 'bodyPUBLIC';"   /* THE FORK — before either arm has read `r` */
       " var v = (await r.json()).region + '-' + tag;"        /* both arms read the SAME reply */
       " fetch('/api/bodyiso?v=' + v); })();"
+    /* TWO METHODS, ONE ADDRESS — the request's IDENTITY, and the one thing no other probe here can see. The
+       reply seam listed URLs and matched on URLs, so this page's two requests were ONE line on the join (the
+       dedup dropped the POST) and ONE delivery filling BOTH entries: the POST's promise settled with the GET's
+       reply and the page read a body the server produced for a request it never made. Every @H value and every
+       @S verdict behind such a line came from that. `g=GET&p=POST` is what the pair-keyed seam produces and
+       `p=GET` is what the URL-keyed one produced, so the two are told apart by the emitted record itself. */
+    "(async function(){ var g = await fetch('/api/echo');"
+      " var p = await fetch('/api/echo', { method: 'POST', body: 'x' });"
+      " fetch('/api/verb?g=v' + g.headers.get('x-echo-method') + '&p=v' + p.headers.get('x-echo-method')); })();"
     /* §5 Headers. The RECORD fill is the conversion `fetch(u, {headers: {...}})` performs, so it is exercised
        through the interface that states it: a record init, then the members that read it back. The list keeps
        PAIRS — two `set-cookie` appends stay two entries and getSetCookie reads both — while `get` combines them
@@ -3251,6 +3274,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        here — which is exactly what it did, as a `body stream already read` page error. */
     int body_iso = (strstr(js, "\"/api/bodyiso\"") && strstr(js, "us-west-2-bodyADMIN") &&
                     strstr(js, "us-west-2-bodyPUBLIC"));
+    /* THE REQUEST'S IDENTITY IS THE PAIR: a GET and a POST of ONE address were listed as one request and
+       answered with one reply, so the POST's promise settled with the GET's. `p` is the method the fixture host
+       ECHOED onto the reply the POST's flow actually received, so `POST` here is the seam delivering each flow
+       the answer to its own question — and the old `p=GET` is exactly the wrong answer this probe exists for.
+       The `v` prefix is what makes the assert about THIS value: a bare `POST` also appears as an endpoint
+       record's own method field, so the probe would pass on a record that says nothing about which reply
+       arrived. `vPOST` can only have come through the header on the POST's own reply. */
+    int verb_key = (strstr(js, "\"/api/verb\"") && strstr(js, "vGET") && strstr(js, "vPOST"));
     /* §5 Headers: the record fill ran (acc), the list keeps repeats (sc=2 with both values), `get` combines
        them (join=k1, k2), `set` replaces them all (set=k3), a name is matched case-insensitively (has=truefalse)
        and an absent header is null rather than "". */
@@ -3685,6 +3716,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE },
         { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE },
+        { "verb-key", verb_key, "/api/echo", SESS_EXPLORE },
         { "hdrs", hdrs, "/api/hdrs?", SESS_EXPLORE },
         { "hdr-proxy", hdrproxy, "/api/hdrproxy", SESS_EXPLORE },
         { "needs-auth", needsauth, "/api/needsauth", SESS_EXPLORE },
@@ -3849,7 +3881,7 @@ static int fixture_have_answers(void) {
  *     solve_candidate_count() > 0 && engine_host_owes()
  * and the second conjunct is FALSE BY CONSTRUCTION at the only point this seam is ever consulted: run_scheduler
  * asks the hook at the TOP of its loop, and the bottom of the previous iteration paid the provider and then
- * asserted, in two DCHECKs of its own, that `engine_pending_urls()` and `engine_host_requests()` are BOTH empty.
+ * asserted, in two DCHECKs of its own, that `engine_pending_fetches()` and `engine_host_requests()` are BOTH empty.
  * engine_host_owes() walks for exactly the entries those two joins list, so it answered 0 every time it was
  * asked, for every document, in every session. Nothing said so: an unsatisfiable predicate and one that is
  * merely not true yet produce the identical run, and the @COLDPARK census reports zeroes for both. That is the

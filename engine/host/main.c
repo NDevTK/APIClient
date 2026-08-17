@@ -605,7 +605,7 @@ QJS_EXPORT unsigned qjs_bundle_id(void)
 }
 
 /* THERE IS NO STALL HOOK HERE ANY MORE, and the one that stood here is why: it answered
-   `*engine_pending_urls() != 0` and never engine_host_requests(), so this host told the scheduler its frontier
+   `*engine_pending_fetches() != 0` and never engine_host_requests(), so this host told the scheduler its frontier
    was EXHAUSTED whenever every member was suspended inside a cross-instance read with no fetch outstanding.
    The scheduler then seeded candidates over those flows and closed the session on top of them. Both C drivers
    asked both registers; the SHIPPED one asked half, which is §Testing's own sentence about which entry point
@@ -709,7 +709,7 @@ QJS_EXPORT void qjs_teardown(void)
        session that resumes it and answered with today's reply — which is exactly what §Time-travel-resume
        means by a resumed flow re-deriving its values from current sources. The assert is about the flow being
        LOST, so it asks whether it was written down, not whether it was answered. */
-    DCHECK(engine_frontier_paged() || *engine_pending_urls() == '\0',
+    DCHECK(engine_frontier_paged() || *engine_pending_fetches() == '\0',
            "qjs_teardown with replies still owed — every flow parked on one is dropped with its continuation. "
            "Provide them, step to DONE, or park the frontier, before ending the session");
     DCHECK(engine_frontier_paged() || *engine_host_requests() == '\0',
@@ -858,16 +858,29 @@ QJS_EXPORT void qjs_teardown(void)
  * engine that reports no pending fetches while a flow is parked on one that never arrives — the protocol would
  * run to completion over the hole and the result would look finished. */
 
+/* WHAT THE TRUSTED ZONE STILL OWES THE FRONTIER, as `METHOD<TAB>URL` lines — the same grammar
+   qjs_host_requests answers in, and the method is there because it is half the request's IDENTITY. This list
+   was addresses alone and the reply edge matched on one, so a page issuing a GET and a POST to one address had
+   both promises settled with whichever the zone fetched first (solver/engine.h states the whole of it). The
+   zone must issue each line with the method it names and hand BOTH halves back to qjs_provide. */
 QJS_EXPORT const char *qjs_pending(void)
 {
     DCHECK(g_begun, "qjs_pending was asked of an engine that never ran");
-    return engine_pending_urls();
+    return engine_pending_fetches();
 }
 
 /* The lazily-loaded SCRIPT URLs — the headline moat surface, and a separate list from qjs_pending only because
    the host fetches them differently (a JS body is executed, a data body is handed back). The script-load edge
    that fills this is core/loader's, and it is the next component: until it exists a page's lazy chunk arrives
-   through fetch like any other URL, which is honest but misses `import()` and an injected <script>. */
+   through fetch like any other URL, which is honest but misses `import()` and an injected <script>.
+   IT IS NOT A SECOND REPLY CHANNEL, AND A HOST THAT ANSWERS IT AS ONE NOW CRASHES SAYING SO. Every address here
+   was recorded by the module loader at the same moment it PARKED the load, so each is already an entry of the
+   pending register with its own method and is already listed by qjs_pending; providing a reply for it a second
+   time answers a request that carries one, which is engine_provide's answered-twice DFAIL. What this list is
+   FOR is the CORB class — a body that becomes executable code is fetched `as:"script"` — so it classifies the
+   pending list rather than duplicating it. That the destination is not on the pending line yet is the same
+   defect the method was: Fetch §2.2.4 makes a request's destination part of the request, and it belongs on that
+   line beside the method, after which this entry deletes. */
 QJS_EXPORT const char *qjs_chunks(void)
 {
     DCHECK(g_begun, "qjs_chunks was asked of an engine that never ran");
@@ -892,10 +905,17 @@ QJS_EXPORT const char *qjs_chunks(void)
    empty one.
    ONE delivery for every parked request. A fetch's reply, the DOCUMENT's own external script and a lazy CHUNK's
    source all settle a park the flow registered before it suspended, and one engine_provide fills every entry
-   naming that URL whatever its kind — so there is ONE record and the kinds read the fields they need. */
-QJS_EXPORT void qjs_provide(const char *url, const char *reply, const char *body, unsigned body_len)
+   naming that REQUEST whatever its kind — so there is ONE record and the kinds read the fields they need. */
+QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *reply, const char *body,
+                            unsigned body_len)
 {
     DCHECK(g_begun, "a reply was provided to an engine that never ran");
+    /* THE REQUEST THIS ANSWERS IS THE PAIR, IN THE ORDER THE JOIN EMITTED IT — a request line, METHOD then
+       target (RFC 9112 §3 Request Line). A zone still calling this with four operands lands its URL in `method`
+       and engine_provide's token assert names exactly that. */
+    DCHECK(method != NULL, "a reply was provided with no METHOD — qjs_pending answers `METHOD<TAB>URL` lines "
+                           "and this entry takes both halves; a host sending the address alone is answering a "
+                           "request it cannot name");
     DCHECK(reply != NULL, "a reply was provided with no text at all — a network error is the JSON `null`, "
                           "which is a value the engine's delivery distinguishes from a reply it never got");
     DCHECK(body != NULL || body_len == 0,
@@ -924,7 +944,7 @@ QJS_EXPORT void qjs_provide(const char *url, const char *reply, const char *body
                    "a NETWORK ERROR arrived carrying bytes — §5.6's network error is a response with no body "
                    "at all, and the delivery machine rejects on it rather than reading one, so these bytes "
                    "name a reply the trusted zone did and did not have at the same time");
-        n = engine_provide(g_ctx, url, v);
+        n = engine_provide(g_ctx, method, url, v);
         JS_FreeValue(g_ctx, v);
         /* NOBODY IS PARKED ON IT, AND THERE ARE NOW TWO WAYS THAT HAPPENS. The one this asserts against is the
            host naming a URL no flow ever asked for — its pending/provide pairing off by one, so the flow that
@@ -933,10 +953,21 @@ QJS_EXPORT void qjs_provide(const char *url, const char *reply, const char *body
            there is to page precisely because its recipe re-issues the request next session and gets today's
            answer. A sale is consumed here, one per reply it made unnecessary, so the assert stays exact for the
            case it exists for instead of aborting on the mechanism working. */
-        if (n == 0 && !engine_take_paged_owed())
-            DFAIL("a reply was provided for a URL no flow is parked on and none was paged out — the host's "
-                  "pending/provide pairing is off, and resolving nothing would leave the flow that IS parked "
-                  "waiting forever");
+        /* THE CONDITION RUNS IN EVERY BUILD AND THE MESSAGE IS BUILT IN NONE BUT DEV — the take CONSUMES a
+           sale, so it is not a DCHECK's side-effect-free condition and cannot live inside one. */
+        if (n == 0 && !engine_take_paged_owed()) {
+#if APICLIENT_DEV
+            /* NAMING BOTH HALVES, because the pairing that can be off is now the PAIR's: a zone that fetched
+               the right address with the wrong verb produces exactly this, and a message naming the URL alone
+               would send the reader to look for a URL that is in fact on the list. */
+            char why[512];
+            snprintf(why, sizeof why,
+                     "a reply was provided for a request no flow is parked on and none was paged out — the "
+                     "host's pending/provide pairing is off, and resolving nothing leaves the flow that IS "
+                     "parked waiting forever. request=%s %s", method, url);
+            DFAIL(why);
+#endif
+        }
     }
 }
 

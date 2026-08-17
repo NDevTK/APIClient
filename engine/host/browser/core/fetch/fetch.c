@@ -689,6 +689,11 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
                    "nobody and the flow could never finish");
             FetchRequest req;
             const char *m = JS_IsUndefined(method) ? NULL : JS_ToCString(ctx, method);
+            /* `GET` IS THE REQUEST'S OWN METHOD, NOT A HOLE FILLED HERE — Fetch §2.2 Requests: "A request has an
+               associated method (a method). Unless stated otherwise it is `GET`." The park is keyed on
+               (method, url) now (solver/engine.h), so this is the one place that can state it and a request that
+               reached the seam unnamed would collect another request's reply. It belongs on the Request record
+               itself, which is where it moves the day §5.4's constructor builds one here. */
             req.method = m ? m : "GET";
             /* THE PARSED URL WHERE THERE IS ONE. `u` survives as the fallback for the two inputs that have no
                parsed form: a concolic's shape, and a relative reference in a document with no address at all

@@ -18,8 +18,8 @@
  *
  * WHY NO DELTA MAY EVER CAPTURE IT. The register is the SCHEDULER's record ABOUT a flow, not state the page
  * can observe, and the host reads EVERY flow's register from outside any flow's delta — engine_provide fills
- * whichever flows parked on a URL, engine_host_requests joins what is outstanding across all of them, and the
- * preempt hook asks whether the running flow is blocked. A COW capture would make an entry's contents depend
+ * whichever flows parked on a REQUEST, engine_host_requests joins what is outstanding across all of them, and
+ * the preempt hook asks whether the running flow is blocked. A COW capture would make an entry's contents depend
  * on which delta happens to be applied: an entry appended after a fork would be TRUNCATED away the moment a
  * sibling switched in, and the reply would be delivered into a slot that no longer exists. So every mutation
  * here runs inside cow_engine_write_begin/end — one place, because every mutation is in this file.
@@ -148,10 +148,11 @@ void pending_free_ctx(JSContext *ctx);
 int  pending_count(JSValueConst reg);
 
 /* HOW MANY OF ONE KIND, and it is a KIND question because a departing flow takes TWO different debts with it
-   and one number cannot say which. A sold flow's fetch replies are paired by URL against the host's own list
-   (engine_take_paged_owed), and its synchronous requests are routed BY ID to a call site — so a register
-   counted whole spends a fetch's credit on a request's departure, and the pairing assert that exists to catch
-   a host naming a URL nobody parked on is then excused by a HOSTREQ that has nothing to do with it. */
+   and one number cannot say which. A sold flow's fetch replies are paired by (method, url) against the
+   host's own list (engine_take_paged_owed), and its synchronous requests are routed BY ID to a call site — so
+   a register counted whole spends a fetch's credit on a request's departure, and the pairing assert that
+   exists to catch a host naming a request nobody parked on is then excused by a HOSTREQ that has nothing to
+   do with it. */
 int  pending_count_kind(JSValueConst reg, int kind);
 
 /* Entry `i`, owned by the caller. */

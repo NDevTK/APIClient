@@ -129,12 +129,14 @@ async function child(docPath, schedName) {
        FETCHED: that is what Fetch §5.2's `text()` was doing in safe-fetch.js, and it is why HTML §8.1.4.2's
        classic-script decode had never once seen the bytes whose charset it exists to honour. The mock body is
        written as source text here, so this is an ENCODE. */
-    const provide = (u, reply, body) => {
+    /* THE REQUEST THIS ANSWERS IS THE PAIR the engine listed — `qjs_pending` answers `METHOD<TAB>URL` lines and
+       the reply is delivered against both halves, so a GET and a POST to one address are two questions here. */
+    const provide = (method, u, reply, body) => {
       const b = new TextEncoder().encode(body);
       const p = M._malloc(b.length + 1);
       M.HEAPU8.set(b, p);
-      try { M.ccall("qjs_provide", "void", ["number", "number", "number", "number"],
-                    [cs(u), cs(JSON.stringify(reply)), p, b.length]); }
+      try { M.ccall("qjs_provide", "void", ["number", "number", "number", "number", "number"],
+                    [cs(method), cs(u), cs(JSON.stringify(reply)), p, b.length]); }
       finally { M._free(p); }
     };
     return { M, cs, str, provide };
@@ -160,11 +162,16 @@ async function child(docPath, schedName) {
     /* ONE PER STEP, LAST FIRST — the whole of the `lastreply` schedule. The list is re-reported every step
        until each entry is filled, so answering the tail each time answers all of them in reverse order. */
     const answer = sched === "lastreply" ? pending.slice(-1) : pending;
-    for (const u of answer) {
+    for (const line of answer) {
+      const tab = line.indexOf("\t");
+      if (tab <= 0)
+        gateFail("a pending line carries no METHOD — qjs_pending answers `METHOD<TAB>URL` lines and the reply " +
+                 "is delivered against both halves");
+      const method = line.slice(0, tab), u = line.slice(tab + 1);
       const reply = { status: 200, statusText: "OK",
                       headers: [["content-type", "application/json"]],
                       urlList: [new URL(u, url).href] };
-      e.provide(u, reply, MOCK_BODY);
+      e.provide(method, u, reply, MOCK_BODY);
     }
   }
 

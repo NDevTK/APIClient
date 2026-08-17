@@ -131,10 +131,12 @@ async function makeEngine(html, url, docId, csp, topLevelUrl, recipes) {
     M.HEAPU8.set(u8, p);
     return [p, u8.length];
   };
-  const provide = (u, reply, body) => {
+  /* KEYED ON THE REQUEST, WHICH IS THE PAIR: `qjs_pending` answers `METHOD<TAB>URL` lines and the delivery
+     matches both halves, so a GET and a POST to one address are two questions with two replies. */
+  const provide = (method, u, reply, body) => {
     const [p, n] = bs(body);
-    try { M.ccall('qjs_provide', 'void', ['number','number','number','number'],
-                  [cs(u), cs(JSON.stringify(reply)), p, n]); }
+    try { M.ccall('qjs_provide', 'void', ['number','number','number','number','number'],
+                  [cs(method), cs(u), cs(JSON.stringify(reply)), p, n]); }
     finally { M._free(p); }
   };
   const answer = (id, meta, body) => {
@@ -195,7 +197,10 @@ const fail = (why) => { console.error('[route] FAILED: ' + why); process.exit(1)
 /* ONE STEP of `e`, then everything the host owes it. Returns false once the engine reports its frontier done. */
 async function service(e) {
   const r = e.M.ccall('qjs_step', 'number', [], []);
-  for (const u of e.str('qjs_pending').split('\n').filter(Boolean)) {
+  for (const line of e.str('qjs_pending').split('\n').filter(Boolean)) {
+    const tab = line.indexOf('\t');
+    if (tab <= 0) fail(`a pending line carries no METHOD: ${line}`);
+    const method = line.slice(0, tab), u = line.slice(tab + 1);
     if (u.includes('/hold')) continue;
     if (u.includes('/resume') && resumeOwed) continue;
     if (u.includes('/got')) { got.push(u); console.log(`  [${e.docId}] DELIVERED: ${u}`); }
@@ -215,7 +220,7 @@ async function service(e) {
     /* THE BODY TRAVELS AS BYTES, beside that JSON and never inside it: §2.2.5 makes a response's body a BYTE
        SEQUENCE, and the only ways to put one in JSON are to encode it or to DECODE it — and a decode run by
        the zone that FETCHED is exactly what left HTML §8.1.4.2's classic-script decode nothing to decode. */
-    e.provide(u, reply, '{}');
+    e.provide(method, u, reply, '{}');
   }
   /* ONE OP IS ANSWERED, exactly as the offscreen answers exactly one: a `document.fetch` is a network fetch this
      zone can genuinely perform. Every other request is left UNANSWERED — the asking flow stays parked with its
