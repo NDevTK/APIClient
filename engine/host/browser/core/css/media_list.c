@@ -77,8 +77,8 @@ static const IdlIndexedDecl ML_INDEXED = { "MediaList", ml_length, ml_item, NULL
 /* ---- §4.2's SERIALIZE A MEDIA QUERY LIST, over the collection ---------------------------------------------- */
 
 /* "If the media query list is empty, then return the empty string. Serialize each media query in the list, in
-   the same order as they appear, and then serialize the list" — a comma-separated list, which CSSOM §3.2's
-   serialize-a-comma-separated-list joins with ", ". Never NULL. */
+   the same order as they appear, and then serialize the list" — a comma-separated list, which CSSOM §2.1's
+   ("Common Serializing Idioms") serialize-a-comma-separated-list joins with ", ". Never NULL. */
 static char *ml_serialize(JSContext *ctx, JSValueConst self)
 {
     uint32_t n = ml_length(ctx, self), i;

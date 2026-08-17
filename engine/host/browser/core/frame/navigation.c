@@ -133,7 +133,7 @@ static void nav_set_current_index(JSContext *ctx, int64_t i)
  * traverse to — so the standard answers `entries()` with the empty list and `currentEntry` with null rather
  * than building wrappers nobody can use.
  *
- * THE OPAQUE-ORIGIN CLAUSE ASKS WHETHER THE ORIGIN IS OPAQUE, which is a different question from §7.2.5.1's
+ * THE OPAQUE-ORIGIN CLAUSE ASKS WHETHER THE ORIGIN IS OPAQUE, which is a different question from §7.2.1's
  * same-origin check and used to be routed through it: while an origin was a serialization, "is this navigable
  * same origin with itself" was false in exactly the case where the origin was opaque, so the wrong predicate
  * gave the right answer. §7.1.1 step 1 says an origin IS same origin with itself, opaque included, so that
@@ -624,7 +624,7 @@ static int js_nav_update_current_entry(JSContext *ctx, JSStepHdr *hdr, void *sta
 
     if (!nav_brand(ctx, hdr->this_val)) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
     DCHECK(argc >= 1, "§7.2.6.6's updateCurrentEntry ran with no argument — `NavigationUpdateCurrentEntryOptions "
-                      "options` is a REQUIRED dictionary argument, so §3.6.2's arity check answered that "
+                      "options` is a REQUIRED dictionary argument, so §3.6's arity check answered that "
                       "before this body was entered");
     {
         JSValue current = nav_current_entry(ctx), she, st_v;

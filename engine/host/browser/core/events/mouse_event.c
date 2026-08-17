@@ -278,7 +278,7 @@ static JSValue js_md_get_modifier_state(JSContext *ctx, JSValueConst this_val, i
     (void)magic;
     if (!mouse_event_is(ctx, this_val))
         return JS_ThrowTypeError(ctx, "MouseEvent.getModifierState called on something that is not one");
-    /* `keyArg` is not optional, so §3.6.2 step 1's check is the DECLARATION's and throws before this runs. */
+    /* `keyArg` is not optional, so §3.6 step 5's check is the DECLARATION's and throws before this runs. */
     DCHECK(argc >= 1, "getModifierState's body ran with no keyArg");
     return ui_event_get_modifier_state(ctx, this_val, argv[0]);
 }
@@ -327,7 +327,7 @@ static JSValue js_md_init_mouse_event(JSContext *ctx, JSValueConst this_val, int
     (void)magic;
     if (!mouse_event_is(ctx, this_val))
         return JS_ThrowTypeError(ctx, "initMouseEvent called on something that is not a MouseEvent");
-    /* Only `typeArg` is required, and §3.6.2 step 1's check for it is the declaration's. */
+    /* Only `typeArg` is required, and §3.6 step 5's check for it is the declaration's. */
     DCHECK(argc >= 1, "initMouseEvent's body ran with no typeArg");
     /* THE TWO UNION-TYPED POSITIONS ARE CONVERSIONS, so they run BEFORE the algorithm's first step and in
        ARGUMENT ORDER — `viewArg` is argument 4 and `relatedTargetArg` argument 15, and a call that gets both
@@ -392,7 +392,7 @@ static JSValue js_md_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     (void)magic;
     if (JS_IsUndefined(this_val))
         return JS_ThrowTypeError(ctx, "constructor MouseEvent requires 'new'");
-    DCHECK(argc >= 1, "the MouseEvent constructor body ran with no type argument — §3.6.2 step 1 is the "
+    DCHECK(argc >= 1, "the MouseEvent constructor body ran with no type argument — §3.6 step 5 is the "
                       "declaration's and throws before any body is entered");
     /* An event the PAGE constructs is untrusted. */
     return mouse_event_new_derived(ctx, mouse_event_proto(ctx), argv[0], argc > 1 ? argv[1] : JS_UNDEFINED,

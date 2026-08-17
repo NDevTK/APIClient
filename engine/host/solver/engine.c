@@ -995,7 +995,7 @@ const char *engine_pending_urls(void) {
  * suspended inside a cross-instance read, with no fetch outstanding, reported NOT STALLED to the extension and
  * to engine/route.mjs: the slice fell straight past the report the host reads, seeded candidates over it and
  * declared the session exhausted, killing every one of those continuations. engine/route.mjs aborts on exactly
- * that, at the `!flow_blocked` assert a few lines past the report — a §7.2.5.1 `w.length` read, which is the
+ * that, at the `!flow_blocked` assert a few lines past the report — a §7.2.1 `w.length` read, which is the
  * one member of the cross-origin twelve that only the peer instance can answer.
  *
  * ASKED OF THE FLOWS, not of the joins, because the joins BUILD TEXT and this needs a yes or no — and because
@@ -1520,7 +1520,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            "into, report its requests as observed endpoints, and be unable to record a fire");
     /* THE ANSWER TOKEN TRAVELS: this sibling resumes the same operation's program from the fork point and
        completes it in its own timeline, so it owes the same peer an answer of its own. That is the multiplicity
-       §7.2.5.1 has when a document's state is its flows — N answers under one token is a thing this fork is
+       §7.2.1 has when a document's state is its flows — N answers under one token is a thing this fork is
        BUILT to produce, and it is what engine_host_answer records extras for at the other end. */
     if (parent->answer_token) {
         sib->answer_token = strdup(parent->answer_token);
@@ -1849,7 +1849,7 @@ void engine_queue_javascript_url(uint32_t doc, const char *body) { engine_queue(
    has no flow base under. Queued with the flow switched in, so the operands the program reads are written into
    THIS flow's delta and no sibling sees them. */
 /* AND IT RUNS IN THE REALM OF THE DOCUMENT THE PEER NAMED. Every operand is installed there and the program is
-   compiled there (flow_step), because that is what the operation IS: §7.2.5.1's member is read of the OTHER
+   compiled there (flow_step), because that is what the operation IS: §7.2.1's member is read of the OTHER
    navigable's active document, and a getter answered out of this instance's root would count the root's child
    navigables and hand them back as the child's. The document is held on the flow as the HANDLE that crossed the
    wire rather than as the JSContext, for the reason every other queued platform datum is a name and not a

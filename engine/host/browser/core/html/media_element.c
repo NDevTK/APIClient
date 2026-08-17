@@ -419,7 +419,7 @@ static JSValue js_ranges_at(JSContext *ctx, JSValueConst this_val, int argc, JSV
     JSValue list = ranges_list(ctx, this_val, magic ? "end" : "start"), pair, out;
     uint32_t i = 0;
 
-    DCHECK(argc >= 1, "TimeRanges.start/end reached its body with no index — §3.6.2 step 1's TypeError for a "
+    DCHECK(argc >= 1, "TimeRanges.start/end reached its body with no index — §3.6 step 5's TypeError for a "
                       "call short of a member's required arguments is the declaration's");
     if (JS_IsException(list)) return list;
     JS_ToUint32(ctx, &i, argv[0]);
@@ -658,7 +658,7 @@ static const JSTrampStepDef media_task_def = {
  * script fired `pause` at the element BEFORE a `setTimeout(f,0)` that had already expired and before a message
  * already delivered — and, worse for the pair of them, before the `play()` promise settlement that §4.8.11.8
  * queues as a task of its own. §8.1.7's two queues exist so that cannot happen, and core/frame/navigable.c
- * states the same rule at §7.2.5.1's load. */
+ * states the same rule at §7.4.2.2's load. */
 static void media_queue_task(JSContext *ctx, JSValueConst el, JSValue events, JSValue promises, int action)
 {
     JSValueConst argv[4];
@@ -1562,7 +1562,7 @@ static JSValue js_media_fast_seek(JSContext *ctx, JSValueConst this_val, int arg
     double to = 0;
 
     (void)magic;
-    DCHECK(argc >= 1, "fastSeek reached its body with no time — §3.6.2 step 1's TypeError is the declaration's");
+    DCHECK(argc >= 1, "fastSeek reached its body with no time — §3.6 step 5's TypeError is the declaration's");
     if (JS_IsException(st)) return st;
     JS_ToFloat64(ctx, &to, argv[0]);
     media_seek(ctx, this_val, st, to);
@@ -1781,7 +1781,7 @@ static JSValue js_media_can_play_type(JSContext *ctx, JSValueConst this_val, int
     JSValue out;
 
     (void)magic;
-    DCHECK(argc >= 1, "canPlayType reached its body with no type — §3.6.2 step 1's TypeError is the "
+    DCHECK(argc >= 1, "canPlayType reached its body with no type — §3.6 step 5's TypeError is the "
                       "declaration's");
     if (!media_is(ctx, this_val))
         return JS_ThrowTypeError(ctx, "canPlayType called on something that is not a media element");

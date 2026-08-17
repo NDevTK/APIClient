@@ -108,7 +108,7 @@ static JSContext *active_realm(JSContext *ctx, JSValueConst proxy)
  * be freed and would be read by nobody. The build that changes this is the one that moves the entries list to
  * the traversable so a destroyed document's entry survives it, and §7.4.6.1's cross-document assertion is what
  * will then be reached by a traversal back to it. What step 8 records — the browsing context is null — is the
- * fact a page reads, through §7.2.5's `closed`. */
+ * fact a page reads, through §7.2.2.1's `closed`. */
 static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
 {
     JSContext *cctx = active_realm(ctx, proxy);
@@ -136,7 +136,7 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
                "queues this walks are not all of them, and whichever one it missed will run page code in a "
                "document whose browsing context is null");
     }
-    /* STEP 8 — the browsing context is null, which is the half of §7.2.5's `closed` that destruction owns. */
+    /* STEP 8 — the browsing context is null, which is the half of §7.2.2.1's `closed` that destruction owns. */
     window_proxy_set_destroyed(ctx, proxy);
 }
 
@@ -268,7 +268,7 @@ typedef struct {
  *
  * THE PARENT LINK IS THE ONE THE PROXY ALREADY HAS. The child does not have to be told who is waiting for it:
  * the navigable it is nested in is exactly that. It is asked for as window_proxy_parent_navigable and NOT as
- * §7.2.5's `parent`, which answers the proxy ITSELF at the top of the tree — a report delivered back to its
+ * §7.2.2.4's `parent`, which answers the proxy ITSELF at the top of the tree — a report delivered back to its
  * own sender. And a navigable that is not itself running this operation is not waiting, which is what makes
  * the report identify the ROOT of the operation rather than being a case the sender has to test for. */
 /* ONE STAGE LIST, EXPANDED ONCE PER ALGORITHM with that algorithm's own step text — the three walks rest at
@@ -617,9 +617,9 @@ static void js_self_destroy_visit(JSContext *ctx, void *st, JSStepVisit *v)
     (void)ctx; (void)st; (void)v;   /* the navigable is the header's argument, and the flow owns those */
 }
 
-/* ---- §7.3's DEFINITELY CLOSE, the task §7.2.5.2 step 6 queues -------------------------------------------------
+/* ---- §7.3's DEFINITELY CLOSE, the task §7.2.2.1 step 6 queues -------------------------------------------------
  *
- * It is its OWN task and not a call, because §7.2.5.2 step 6 queues one — a page that calls `close()` and then
+ * It is its OWN task and not a call, because §7.2.2.1 step 6 queues one — a page that calls `close()` and then
  * reads `closed` on the next line sees true (is closing was set synchronously) while its beforeunload listener
  * has not run yet, and collapsing the two would fire that listener one task early. */
 #define CLOSE_STAGES(X) \
@@ -641,7 +641,7 @@ static int js_close_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     JS_FreeValue(ctx, cb_result);
     DCHECK(s->hdr.stage == CLOSE_DEFINITELY, "definitely close resumed at a stage §7.3 does not have");
     DCHECK(window_proxy_is_top_level(proxy),
-           "§7.3's definitely close was given a navigable that is not a TOP-LEVEL traversable — §7.2.5.2 step "
+           "§7.3's definitely close was given a navigable that is not a TOP-LEVEL traversable — §7.2.2.1 step "
            "2 returns for one, and a frame is closed by removing its container");
 
     /* AND THE ACTIVE DOCUMENT EVERY ONE OF THOSE STEPS READS MAY BE A PEER'S. §7.3.1.6 navigable destruction's
@@ -733,7 +733,7 @@ static int g_self_stepid[LC_OP_N] = { -1, -1, -1 };
 static int g_close_stepid = -1;
 
 /* THEY ARE QUEUED ON THE TASK QUEUE, NOT THE MICROTASK QUEUE, because every one of these algorithms queues a
-   GLOBAL TASK — §7.4.2.4, §7.5.9 and §7.5.10 on the navigation and traversal task source, §7.2.5.2 step 6 on
+   GLOBAL TASK — §7.4.2.4, §7.5.9 and §7.5.10 on the navigation and traversal task source, §7.2.2.1 step 6 on
    the DOM manipulation task source. This engine has one task queue, so what the source decides (the order two
    sources are drained in) is not modelled; what the MICROTASK/task split decides is, and it is the whole reason
    `closed` needed splitting. What a removal changes SYNCHRONOUSLY is the container's slot, so
@@ -809,9 +809,9 @@ static void destroy_a_top_level_traversable(JSContext *ctx, JSValueConst proxy)
     descend_enqueue(ctx, proxy, LC_DESTROY, LC_AFTER_NONE);   /* step 2 */
 }
 
-/* ---- §7.2.5.2's close() --------------------------------------------------------------------------------------
+/* ---- §7.2.2.1's close() --------------------------------------------------------------------------------------
  *
- * §7.2.5.2 step 6's THREE CONJUNCTS, each decided from what this engine models. */
+ * §7.2.2.1 step 6's THREE CONJUNCTS, each decided from what this engine models. */
 
 /* "thisTraversable is SCRIPT-CLOSABLE": a top-level traversable, and either its "is created by web content" is
    true or its session history entries's size is 1. BOTH DISJUNCTS ARE NOW REAL, and the second one stopped
@@ -828,7 +828,7 @@ static bool traversable_is_script_closable(JSContext *ctx, JSValueConst proxy)
     JSContext *tctx;
 
     DCHECK(window_proxy_is_top_level(proxy),
-           "script-closable was asked of a navigable that is not a top-level traversable — §7.2.5.2 step 2 has "
+           "script-closable was asked of a navigable that is not a top-level traversable — §7.2.2.1 step 2 has "
            "already returned for one");
     if (window_proxy_created_by_web_content(proxy)) return true;
     /* AN UNMATERIALIZED NAVIGABLE HAS EXACTLY ONE ENTRY, and that is the computed answer rather than a skip:
@@ -844,7 +844,7 @@ static bool traversable_is_script_closable(JSContext *ctx, JSValueConst proxy)
    directions, and the only tree question it has. STRICT: a navigable is not its own ancestor, which is what
    makes the algorithm's step 1 a separate step from its step 2. The walk is up the PARENT chain rather than
    down, so it costs the depth of one navigable rather than the size of the tree, and it uses the ENGINE
-   spelling of `parent` (JS_UNDEFINED at the top) — §7.2.5's scriptable one answers the navigable ITSELF at the
+   spelling of `parent` (JS_UNDEFINED at the top) — §7.2.2.4's scriptable one answers the navigable ITSELF at the
    top, which would make this loop never terminate. */
 static bool proxy_is_ancestor_of(JSContext *ctx, JSValueConst maybe_ancestor, JSValueConst node)
 {
@@ -864,7 +864,7 @@ static bool proxy_is_ancestor_of(JSContext *ctx, JSValueConst maybe_ancestor, JS
 }
 
 /* HTML §7.4.2.1's "a navigable SOURCE is ALLOWED BY SANDBOXING TO NAVIGATE a second navigable TARGET, given a
- * source snapshot params sourceSnapshotParams", verbatim, for the one caller §7.2.5.2's close() has: source is
+ * source snapshot params sourceSnapshotParams", verbatim, for the one caller §7.2.2.1's close() has: source is
  * the incumbent global object's navigable — this realm's — and target is thisTraversable.
  *
  * THE FLAGS ARE THE SOURCE'S, which is sourceSnapshotParams's "sandboxing flags — sourceDocument's active
@@ -895,7 +895,7 @@ static bool allowed_by_sandboxing_to_navigate(JSContext *ctx, JSValueConst proxy
                           SANDBOX_TOP_LEVEL_NAVIGATION_WITHOUT_USER_ACTIVATION)),
                "§7.4.2.1 steps 3.2-3.3 need sourceSnapshotParams's HAS TRANSIENT ACTIVATION to decide whether "
                "a sandboxed nested document may close its own top-level traversable, and §6.4's transient "
-               "activation is a SUSPENDING read (core/html/user_activation.h) while §7.2.5.2's close() is a "
+               "activation is a SUSPENDING read (core/html/user_activation.h) while §7.2.2.1's close() is a "
                "plain C body — make close() a step machine and take the answer from "
                "user_activation_transient_run, as §7.4.2.4's beforeunload prompt already does");
         return true;                                                        /* step 3.4 */
@@ -922,7 +922,7 @@ void document_lifecycle_window_close(JSContext *ctx, JSValueConst proxy)
 {
     /* STEP 1: thisTraversable is this's navigable — the caller holds the proxy, which IS that navigable, so
        both spellings of close() arrive here having resolved it the same way. */
-    DCHECK(window_proxy_is(proxy), "§7.2.5.2's close() was called on something that is not a WindowProxy");
+    DCHECK(window_proxy_is(proxy), "§7.2.2.1's close() was called on something that is not a WindowProxy");
     if (!window_proxy_is_top_level(proxy)) return;                        /* step 2 */
     if (window_proxy_closing(proxy)) return;                              /* step 3 */
     /* STEPS 4-5 bind the browsing context and snapshot the source snapshot params; both are operands of the

@@ -1,4 +1,4 @@
-/* HTML §7.2.4's Location interface — Blink core/frame. See location.c. */
+/* HTML §7.2.4 "The Location interface" — Blink core/frame. See location.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_LOCATION_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_LOCATION_H
 #include "quickjs.h"
@@ -17,7 +17,7 @@ void location_free(void);
    Location object". OWNED: the caller frees.
    IT IS A FUNCTION AND NOT A PROPERTY READ, because `window.location` is an IDL ACCESSOR now and reading an
    accessor from C is the one thing this interpreter refuses (there is no flow base under a C activation). Two
-   components ask — Document's §3.1.1 `location` and the WindowProxy's §7.2.5 `location` — and both used to
+   components ask — Document's §3.1.1 `location` and the WindowProxy's §7.2.2 `location` — and both used to
    reach through the global with JS_GetPropertyStr, which would abort at the getter. */
 JSValue location_object(JSContext *ctx);
 

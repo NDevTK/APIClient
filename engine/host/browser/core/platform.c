@@ -684,7 +684,7 @@ void platform_agent_init(JSContext *ctx, const PlatformAgent *agent)
     DCHECK(ctx != NULL, "the platform was declared into no realm");
     DCHECK(agent != NULL, "the platform was declared with no agent facts");
     DCHECK(agent->origin != NULL && *agent->origin,
-           "an agent was brought up with no PRINCIPAL — §9.5's named bus is keyed by it and §7.2.5.1 decides "
+           "an agent was brought up with no PRINCIPAL — §9.5's named bus is keyed by it and §7.2.1 decides "
            "remoteness by it, so an agent without one cannot answer either question");
     /* realm_install_intrinsics asserts this too, and asserting it HERE as well is the point: the first realm's
        intrinsics are the LAST thing this function does, so a host that passed nothing would otherwise be told
@@ -700,7 +700,7 @@ void platform_agent_init(JSContext *ctx, const PlatformAgent *agent)
     g_declared_in = JS_GetRuntime(ctx);
     /* THE PRINCIPAL BECOMES A RECORD BEFORE ANY COMPONENT IS DECLARED, and it is not a row on the list because
        it is not a surface: no class, no member, nothing installed into a realm. It is the agent's ORIGIN
-       (core/url/origin.h) — the value §7.2.5.1's filter, §7.3.1's inheritance and Storage's key are all decided
+       (core/url/origin.h) — the value §7.2.1's filter, §7.3.1's inheritance and Storage's key are all decided
        against — and it must exist before the first declaration that asserts it does. ONE adopt per agent is
        also what gives an opaque principal its IDENTITY: the host states "null", and the nonce minted here is
        what every document of this agent then shares. */

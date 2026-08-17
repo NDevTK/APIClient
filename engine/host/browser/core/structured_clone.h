@@ -19,7 +19,7 @@ void structured_clone_free(JSRuntime *rt);
 
 /* StructuredDeserialize(StructuredSerialize(v)) — a deep, cycle-preserving copy in this realm. Every caller in
    the platform that says "a serialized copy" performs this: a MessagePort delivering a message, a window post,
-   §4.9.7's tee with cloneForBranch2. Answers a new owned value, or JS_EXCEPTION with the "DataCloneError"
+   §4.9.1's tee with cloneForBranch2. Answers a new owned value, or JS_EXCEPTION with the "DataCloneError"
    DOMException live for a value §2.7 refuses (a function, a Proxy, a Promise, a platform object). */
 JSValue structured_clone(JSContext *ctx, JSValueConst v);
 

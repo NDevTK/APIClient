@@ -169,7 +169,7 @@ void navigable_init(JSContext *ctx);
 void navigable_install(JSContext *ctx, JSValueConst global, const char *origin);
 
 /* §7.4 STEP 14's NAVIGATE over a navigable that already has an active document — fetch the new document, build
-   the realm its scripts run in, and hand both to §7.2.5.1's replace. Answers the SAME proxy (owned), because a
+   the realm its scripts run in, and hand both to §7.2.3's replace. Answers the SAME proxy (owned), because a
    navigation does not make a new one — that is the whole reason WindowProxy exists — or JS_UNDEFINED when the
    address does not parse, which §7.4 turns into a SyntaxError at the call site. */
 /* EVERY NAVIGABLE OF THIS AGENT, IN TREE ORDER — a container before what it contains, siblings in the tree

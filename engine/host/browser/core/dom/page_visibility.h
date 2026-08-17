@@ -1,6 +1,6 @@
-/* PAGE VISIBILITY — HTML §6.6, `document.visibilityState` and `document.hidden`.
+/* PAGE VISIBILITY — HTML §6.2 "Page visibility", `document.visibilityState` and `document.hidden`.
  *
- * ONE FACT BEHIND TWO MEMBERS, and that is the whole design. §6.6 defines `hidden` as "true if
+ * ONE FACT BEHIND TWO MEMBERS, and that is the whole design. §6.2 defines `hidden` as "true if
  * visibilityState is 'hidden'", so the two are not two pieces of state — one is a comparison over the other.
  * Minting a concolic source for EACH would be the defect CLAUDE.md names most often: one fact answered from
  * two places, so a flow that decided `document.hidden` would learn nothing about `visibilityState === "hidden"`
@@ -25,16 +25,16 @@
 
 #include "quickjs.h"
 
-/* §6.6's two members, onto Document.prototype — called from document_install_proto, like every other
+/* §6.2's two members, onto Document.prototype — called from document_install_proto, like every other
    component that puts something there. */
 /* Declared ONCE PER AGENT, like every other realm value — page_visibility_install then builds this realm's
    record. */
 void page_visibility_init(JSContext *ctx);
 void page_visibility_install(JSContext *ctx, JSValueConst proto);
-/* Reached from document_agent_free — §6.6 is declared by document_init, so it is released by its declarer. */
+/* Reached from document_agent_free — §6.2 is declared by document_init, so it is released by its declarer. */
 void page_visibility_free(void);
 
-/* §6.6's UPDATE THE VISIBILITY STATE. HTML §7.5.9 calls it with "hidden" while unloading a document, between
+/* §6.2's UPDATE THE VISIBILITY STATE. HTML §7.5.9 calls it with "hidden" while unloading a document, between
    the pagehide event and the unload event. A state that is already the new one changes nothing and fires
    nothing, which is the algorithm's own first step; otherwise the state moves and `visibilitychange` is fired
    at the Document, bubbling. */

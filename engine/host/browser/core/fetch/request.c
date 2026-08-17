@@ -1,4 +1,4 @@
-/* THE REQUEST INTERFACE — WHATWG Fetch §5.3.
+/* THE REQUEST INTERFACE — WHATWG Fetch §5.4 "Request class".
  *
  * WHAT IT IS FOR HERE. `fetch(input, init)` takes a `RequestInfo`, which is a Request or a string, so the
  * interface is half of the fetch method's own argument. It is also where two of §5.1's guards become
@@ -27,7 +27,7 @@
 #include "core/realm.h"
 #include "core/url/url.h"
 
-/* §5.3's request, as the fields the interface reports. The enumerated members are stored as their spec strings
+/* §5.4's request, as the fields the interface reports. The enumerated members are stored as their spec strings
    because that is what the attributes return and what `init` supplies — there is no computation on them yet,
    and inventing an enum would be a second spelling to keep in step with the first. */
 typedef struct {
@@ -44,7 +44,7 @@ typedef struct {
     int       keepalive;
     BodyState body;
     JSValue   headers;         /* [SameObject] */
-    /* §5.3: a Request built from a `blob:` URL CAPTURES its blob URL entry, so revoking the URL afterwards
+    /* §5.4: a Request built from a `blob:` URL CAPTURES its blob URL entry, so revoking the URL afterwards
        does not stop that request — the entry is the Request's, not the store's. Without it, the ordinary
        `new Request(u); URL.revokeObjectURL(u); fetch(req)` sequence a page uses to clean up eagerly failed. */
     JSValue blob_entry;
@@ -78,7 +78,7 @@ static void request_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_f
 
 static RequestData *request_of(JSValueConst v) { return JS_GetOpaque(v, g_request_class); }
 
-/* §5.2's `formData()` asks the including interface for its Content-Type, because only it knows where its
+/* §5.4's `formData()` asks the including interface for its Content-Type, because only it knows where its
    headers live. NULL when there is none, which is a body with no form encoding and therefore a TypeError. */
 static char *request_body_mime(JSContext *ctx, JSValueConst v)
 {
@@ -101,7 +101,7 @@ bool request_is(JSValueConst v)
     return g_request_class && JS_GetOpaque(v, g_request_class) != NULL;
 }
 
-/* §5.3's captured blob URL entry, or JS_UNDEFINED — what a fetch of this Request answers from. Borrowed. */
+/* §5.4's captured blob URL entry, or JS_UNDEFINED — what a fetch of this Request answers from. Borrowed. */
 JSValueConst request_blob_entry(JSValueConst v)
 {
     RequestData *d = g_request_class ? JS_GetOpaque(v, g_request_class) : NULL;
@@ -114,7 +114,7 @@ const char *request_url_of(JSValueConst v)
     return d ? d->url : NULL;
 }
 
-/* §5.3 "normalize a method": UPPERCASE for the six HTTP names, and byte-for-byte for anything else — `patch`
+/* §2.2.1's "normalize a method": UPPERCASE for the six HTTP names, and byte-for-byte for anything else — `patch`
    stays lowercase while `post` becomes `POST`, which is the difference a server sees. */
 static char *method_normalize(JSContext *ctx, const char *m)
 {
@@ -125,13 +125,13 @@ static char *method_normalize(JSContext *ctx, const char *m)
     return js_strdup(ctx, m);
 }
 
-/* §5.3's "forbidden method": the three a page may never send, however it spells them. */
+/* §2.2.1's "forbidden method": the three a page may never send, however it spells them. */
 static int method_is_forbidden(const char *m)
 {
     return !strcasecmp(m, "CONNECT") || !strcasecmp(m, "TRACE") || !strcasecmp(m, "TRACK");
 }
 
-/* §5.1's "method": an RFC 7230 token, which is what makes `new Request(u, {method: "G ET"})` a TypeError. */
+/* §2.2.1's "method": an RFC 7230 token, which is what makes `new Request(u, {method: "G ET"})` a TypeError. */
 static int method_is_token(const char *s)
 {
     const unsigned char *p = (const unsigned char *)s;
@@ -147,8 +147,8 @@ static int method_is_token(const char *s)
 
 bool request_method_is_token(const char *m) { return method_is_token(m) != 0; }
 
-/* §5.3 STEP 25 AS ONE OPERATION, because two call sites perform it: this constructor, and `fetch(input, init)`,
-   which runs §5.3 inline over an init it never turns into a Request. fetch() had none of it — no token test, no
+/* §5.4 STEP 25 AS ONE OPERATION, because two call sites perform it: this constructor, and `fetch(input, init)`,
+   which runs §5.4 inline over an init it never turns into a Request. fetch() had none of it — no token test, no
    forbidden-method refusal and no normalization — so `{method:"connect"}` went out and `{method:"post"}` was
    reported on the endpoint surface as a method distinct from POST. Returns the normalized method (the caller
    frees it with js_free) or NULL with a TypeError live. */
@@ -183,7 +183,7 @@ static JSValue js_request_get(JSContext *ctx, JSValueConst this_val, int magic)
     case REQ_REDIRECT:        return JS_NewString(ctx, d->redirect);
     case REQ_INTEGRITY:       return JS_NewString(ctx, d->integrity);
     case REQ_KEEPALIVE:       return JS_NewBool(ctx, d->keepalive != 0);
-    /* §5.3: both are false for a request a script constructed — only a navigation sets them, and there is no
+    /* §5.4: both are false for a request a script constructed — only a navigation sets them, and there is no
        navigation here to set them from. This is a computed answer, not a placeholder. */
     case REQ_IS_RELOAD_NAV:
     case REQ_IS_HISTORY_NAV:  return JS_FALSE;
@@ -193,7 +193,7 @@ static JSValue js_request_get(JSContext *ctx, JSValueConst this_val, int magic)
     }
 }
 
-/* §5.3 clone(). Like Response's, the "unusable" check is SYNCHRONOUS — a page that guards with try/catch sees
+/* §5.4 clone(). Like Response's, the "unusable" check is SYNCHRONOUS — a page that guards with try/catch sees
    the throw where it wrote the catch — and the clone gets its OWN body-used latch, because the point of
    cloning is two independent reads. The headers are a NEW Headers over the same list with the same guard:
    [SameObject] is per request, so `r.clone().headers === r.headers` is false. */
@@ -219,7 +219,7 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
     if (!c) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     c->headers = JS_UNDEFINED;
     JS_SetOpaque(obj, c);
-    /* §5.3 clone copies the request, and its blob URL ENTRY is part of what it is — a clone of a request built
+    /* §5.4 clone copies the request, and its blob URL ENTRY is part of what it is — a clone of a request built
        from a since-revoked URL fetches exactly as the original does. */
     c->blob_entry      = JS_DupValue(ctx, d->blob_entry);
     c->url             = js_strdup(ctx, d->url);
@@ -246,20 +246,20 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
 
 /* ---- the constructor ------------------------------------------------------------------------------------- */
 
-/* WHERE THIS MACHINE RESTS, AS §5.3 NUMBERS IT. The constructor's forty-two steps run the page's code in
+/* WHERE THIS MACHINE RESTS, AS §5.4 NUMBERS IT. The constructor's forty-two steps run the page's code in
    exactly two places — the header fill at step 33 and nothing else before it, and the body extraction at step
    37 — so the stages are the three spans those two points cut it into, and each label says its span. The
    `stage` byte this state carried said none of that: a flow parked here could be described only as "stage 1 of
    something", which is neither a resume point a later build can resolve nor a thing a park can report. */
 #define REQ_CTOR_STAGES(X) \
     X(REQ_CTOR_RECORD = IDL_STEP_FIRST, \
-      "Fetch §5.3 new Request(input, init) steps 5-28 (the request record: its URL from input, then every " \
+      "Fetch §5.4 new Request(input, init) steps 5-28 (the request record: its URL from input, then every " \
       "init member the dictionary conversion has already turned into a value)") \
     X(REQ_CTOR_HEADERS, \
-      "Fetch §5.3 new Request(input, init) steps 31-33 (this's headers, filled from init[\"headers\"] under " \
+      "Fetch §5.4 new Request(input, init) steps 31-33 (this's headers, filled from init[\"headers\"] under " \
       "the guard step 32 chose)") \
     X(REQ_CTOR_BODY, \
-      "Fetch §5.3 new Request(input, init) steps 35-37 (a body on GET or HEAD is a TypeError; extract " \
+      "Fetch §5.4 new Request(input, init) steps 35-37 (a body on GET or HEAD is a TypeError; extract " \
       "init[\"body\"] and set its Content-Type where the header list has none)")
 enum { REQ_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const REQ_CTOR_STEPS[] = { REQ_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -332,7 +332,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         JS_SetOpaque(obj, d);
         s->result = obj;
 
-        /* §5.3 step 2: a STRING input is parsed against the base URL, and a failure is a TypeError. A REQUEST
+        /* §5.4 step 2: a STRING input is parsed against the base URL, and a failure is a TypeError. A REQUEST
            input contributes its URL already parsed, which is why the two arms differ only here. */
         if (from_request) {
             d->url = js_strdup(ctx, from_request);
@@ -353,7 +353,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                 JS_ThrowTypeError(ctx, "the Request input is not a valid URL");
                 return -1;
             }
-            /* §5.3 step 2.2: a URL with credentials is a TypeError — a page may not put a password on the
+            /* §5.4 step 2.2: a URL with credentials is a TypeError — a page may not put a password on the
                wire by writing it into a fetch. */
             if ((rec.username && *rec.username) || (rec.password && *rec.password)) {
                 url_record_free(&rec);
@@ -367,7 +367,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                 char *ser = url_serialize(&rec, false);
                 d->url = js_strdup(ctx, ser);
                 free(ser);
-                /* §5.3: RESOLVE the blob URL now and hold what it named. A page that revokes eagerly —
+                /* §5.4: RESOLVE the blob URL now and hold what it named. A page that revokes eagerly —
                    `const r = new Request(u); URL.revokeObjectURL(u); fetch(r)` — still fetches, because the
                    entry belongs to the request from this moment. The FRAGMENT is not part of the entry's
                    identity, which is why the lookup key excludes it. */
@@ -380,14 +380,14 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             url_record_free(&rec);
         }
 
-        /* THE INIT MEMBERS, IN §5.3'S OWN ORDER — steps 14 through 25. They were applied in the order this
+        /* THE INIT MEMBERS, IN §5.4'S OWN ORDER — steps 14 through 25. They were applied in the order this
            file grew in (method first, then mode, then the rest), and the order decides WHICH TypeError a page
-           sees when two members are bad at once: §5.3 refuses a "navigate" mode at step 17, before it looks at
+           sees when two members are bad at once: §5.4 refuses a "navigate" mode at step 17, before it looks at
            the method at step 25. None of this runs the page's code — the dictionary conversion did that
            already — so the whole span is one stage, and the span is what the label names. */
         d->referrer        = init_str(ctx, init, "referrer", "about:client");        /* step 14 */
         d->referrer_policy = init_str(ctx, init, "referrerPolicy", "");              /* step 15 */
-        /* §5.3 steps 16-18: "navigate" is not a mode a page may ask for. */
+        /* §5.4 steps 16-18: "navigate" is not a mode a page may ask for. */
         d->mode = init_str(ctx, init, "mode", "cors");
         if (!strcmp(d->mode, "navigate")) {
             JS_ThrowTypeError(ctx, "a Request cannot be constructed with mode \"navigate\"");
@@ -395,7 +395,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         }
         d->credentials     = init_str(ctx, init, "credentials", "same-origin");      /* step 19 */
         d->cache           = init_str(ctx, init, "cache", "default");                /* step 20 */
-        /* §5.3 step 21: "only-if-cached" asks the cache to answer without going to the network, which only
+        /* §5.4 step 21: "only-if-cached" asks the cache to answer without going to the network, which only
            means anything for a same-origin request — so any other mode is a TypeError. It was missing, and
            `new Request(u, {cache:"only-if-cached"})` (mode "cors" by step 5.5's fallback) was accepted. */
         if (!strcmp(d->cache, "only-if-cached") && strcmp(d->mode, "same-origin")) {
@@ -409,7 +409,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             d->keepalive = JS_ToBool(ctx, kv);
             JS_FreeValue(ctx, kv);
         }
-        /* §5.3 step 25's method: a token, not a forbidden method, then normalized. */
+        /* §5.4 step 25's method: a token, not a forbidden method, then normalized. */
         {
             JSValue mv = idl_dict_get(ctx, init, "method");
             if (JS_IsUndefined(mv)) {
@@ -423,7 +423,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             }
             JS_FreeValue(ctx, mv);
         }
-        d->destination     = js_strdup(ctx, "");   /* §5.3: a script-constructed request has no destination */
+        d->destination     = js_strdup(ctx, "");   /* §5.4: a script-constructed request has no destination */
         CHECK(d->url && d->method && d->mode && d->credentials && d->cache && d->redirect && d->referrer &&
               d->referrer_policy && d->integrity && d->destination, "request: OOM building a Request");
         headers_fill_init(&s->fill);
@@ -434,7 +434,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     DCHECK(d != NULL, "the Request the constructor allocated stopped being one mid-construction");
 
     if (hdr->stage == REQ_CTOR_HEADERS) {
-        /* §5.3's headers: guard "request", or "request-no-cors" when the mode says so — which is the ONLY way
+        /* §5.4's headers: guard "request", or "request-no-cors" when the mode says so — which is the ONLY way
            either guard becomes observable, since a page's own Headers has guard "none". */
         HeadersGuard guard = !strcmp(d->mode, "no-cors") ? HEADERS_GUARD_REQUEST_NO_CORS
                                                          : HEADERS_GUARD_REQUEST;
@@ -451,9 +451,9 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
     }
 
     DCHECK(hdr->stage == REQ_CTOR_BODY,
-           "the Request constructor was re-entered at a stage §5.3 does not have");
+           "the Request constructor was re-entered at a stage §5.4 does not have");
     JS_FreeValue(ctx, cb_result);
-    /* §5.3: a body on a GET or a HEAD is a TypeError. The extraction itself is §5.1's, which body.c owns —
+    /* §5.4: a body on a GET or a HEAD is a TypeError. The extraction itself is §5.2's, which body.c owns —
        both including interfaces run the same six-armed union, and the Content-Type it produces is set only
        where the header list has none. */
     {
@@ -488,7 +488,7 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
 
 static const IdlStepDecl js_request_ctor_decl = {
     js_request_ctor_step, sizeof(JSRequestCtorState), js_request_ctor_visit, js_request_ctor_release,
-    "Fetch §5.3 new Request(input, init)", REQ_CTOR_STEPS
+    "Fetch §5.4 new Request(input, init)", REQ_CTOR_STEPS
 };
 
 static const JSCFunctionListEntry js_request_proto_funcs[] = {
@@ -515,7 +515,7 @@ void request_init(JSContext *ctx)
     JSClassDef def = { "Request", .finalizer = request_finalizer, .gc_mark = request_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
     /* `constructor(RequestInfo input, optional RequestInit init = {})`. The dictionary's members are listed in
-       the order Web IDL reads them, which is lexicographic and not the order §5.3 uses them in. */
+       the order Web IDL reads them, which is lexicographic and not the order §5.4 uses them in. */
     static const IdlArgType CTOR_ARGS[2] = { IDL_ANY, IDL_DICT };   /* RequestInfo: the machine resolves it */
     static const IdlDictMember REQUEST_INIT[] = {
         { "body",           IDL_BODYINIT_NULLABLE, false },
@@ -543,11 +543,11 @@ void request_init(JSContext *ctx)
     g_request_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, REQUEST_INIT,
                                                (int)(sizeof(REQUEST_INIT) / sizeof(REQUEST_INIT[0])),
                                                &js_request_ctor_decl, 0);
-    idl_optional_from(1);   /* §5.3: `optional RequestInit init = {}` */
+    idl_optional_from(1);   /* §5.4: `optional RequestInit init = {}` */
     realm_declare_intrinsic(request_install_proto);
 }
 
-/* §5.3's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — `url` resolves against the READING realm's API base URL,
+/* §5.4's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — `url` resolves against the READING realm's API base URL,
    so a shared one answers a child document's `new Request("api/x").url` with the parent's address. */
 void request_install_proto(JSContext *ctx)
 {

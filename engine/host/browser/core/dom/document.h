@@ -20,7 +20,7 @@ void document_init(JSContext *ctx);
 /* §3.1.1's prototype for ONE realm — declared into core/realm.h's list. */
 void document_install_proto(JSContext *ctx);
 
-/* `nav_proxy` is §7.2.5.1's ONE WindowProxy for the navigable this realm is the active document of. The
+/* `nav_proxy` is §7.2.3's ONE WindowProxy for the navigable this realm is the active document of. The
    navigable exists before its realm — §7.4 created it and handed its proxy to the page — so the caller that
    owns it passes it in rather than a second one being minted here. */
 /* `csp` is the policy text this document was CREATED with — the `Content-Security-Policy` the response carried,
@@ -78,7 +78,7 @@ const char *document_readiness_of(const lxb_dom_node_t *doc);
 bool document_page_showing(JSContext *ctx);
 void document_page_showing_set(JSContext *ctx, bool showing);
 
-/* §7.2.5.1's ONE WindowProxy for THIS realm's navigable — what `window.closed` reads the navigable's state
+/* §7.2.3's ONE WindowProxy for THIS realm's navigable — what `window.closed` reads the navigable's state
    through and what every message this document posts carries as `source`. BORROWED. It lives on the realm
    because it is one PER realm; a registry keyed by document would be an immortal root holding a proxy for
    every navigable a forced-execution frontier ever created. */

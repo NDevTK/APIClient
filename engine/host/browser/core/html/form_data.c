@@ -721,7 +721,7 @@ static int js_fd_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         }
         form_entry_list_init(&s->entries);
         /* `optional HTMLFormElement form` with no default: an omitted or explicitly-undefined argument is NOT
-           GIVEN (§3.6.2), so this is what "if form is given" reads. Anything else that is not an
+           GIVEN (§3.6), so this is what "if form is given" reads. Anything else that is not an
            HTMLFormElement is Web IDL's TypeError — `new FormData(null)` included, because the position is not
            nullable. */
         if (JS_IsUndefined(form)) {

@@ -131,12 +131,12 @@ static void dr_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 
 /* §3's `= 0`, WHICH THE BODY APPLIES AND WHICH IS STATED HERE ONCE. The constructor's four arguments and
    DOMRectInit's four members carry the same `= 0`, and the two arrive by different routes: an optional argument
-   the page omitted or passed `undefined` for is ABSENT (Web IDL §3.6.2, and idl_args.c hands the body
-   `undefined` to say so), and an absent dictionary member simply is not on the converted dictionary. Both are a
-   PRODUCER'S POSITIVE STATEMENT that the page wrote nothing there, which is exactly what the IDL's default is
-   about — not a hole a `||` fills, since IDL_UNRESTRICTED_DOUBLE never produces `undefined` for a value the page
-   did write. One rule, one place; a numeric default expressible only on dictionary members would leave the
-   positional half restating it. CONSUMES `v`. */
+   the page omitted or passed `undefined` for is ABSENT (Web IDL §3.6 "Overload resolution algorithm", and
+   idl_args.c hands the body `undefined` to say so), and an absent dictionary member simply is not on the
+   converted dictionary. Both are a PRODUCER'S POSITIVE STATEMENT that the page wrote nothing there, which is
+   exactly what the IDL's default is about — not a hole a `||` fills, since IDL_UNRESTRICTED_DOUBLE never
+   produces `undefined` for a value the page did write. One rule, one place; a numeric default expressible
+   only on dictionary members would leave the positional half restating it. CONSUMES `v`. */
 static JSValue dr_value(JSContext *ctx, JSValue v)
 {
     if (JS_IsUndefined(v)) return JS_NewFloat64(ctx, 0.0);
@@ -373,7 +373,7 @@ void dom_rect_init(JSContext *ctx)
     JS_NewClass(JS_GetRuntime(ctx), g_rect_class, &rc);
 
     /* All four constructor arguments are optional, which is what makes `new DOMRect()` a rectangle at the
-       origin rather than Web IDL §3.6.2 step 1's TypeError. */
+       origin rather than Web IDL §3.6 step 5's TypeError. */
     g_id_ctor_ro = idl_method_id(ctx, FOUR, 4, js_dr_ctor, DR_READONLY);
     idl_optional_from(0);
     g_id_ctor_rect = idl_method_id(ctx, FOUR, 4, js_dr_ctor, DR_MUTABLE);

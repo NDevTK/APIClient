@@ -1764,10 +1764,10 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
         return cssd_readonly_throw(ctx);
     }
     DCHECK(argc >= 2, "§6.6.1's setProperty reached its body without the two arguments its IDL requires — the "
-                      "declaration's own §3.6.2 step 1 count is what should have refused the call");
+                      "declaration's own §3.6 step 5 count is what should have refused the call");
     name = JS_ToCString(ctx, argv[0]);
     value = JS_ToCString(ctx, argv[1]);
-    /* §3.6.2's ABSENT OPTIONAL ARGUMENT, in both of its spellings: a call that stopped short of the position
+    /* §3.6's ABSENT OPTIONAL ARGUMENT, in both of its spellings: a call that stopped short of the position
        arrives with a shorter argc, and one that reached it with `undefined` arrives with undefined in the slot —
        "if the argument is optional and its value is undefined, it is absent". This member's IDL writes
        `optional CSSOMString priority = ""`, so absent IS the empty string, which is a POSITIVE statement that

@@ -277,7 +277,7 @@ void document_metadata_init(JSContext *ctx)
     concolic_declare_source(DM_COMPONENT, "document.cookie", " \",;\\", 0, SRC_DELIVER_PLANT);
     concolic_declare_source(DM_COMPONENT, "document.referrer", " \"<>`#", 0, SRC_DELIVER_REFERRING_ADDRESS);
     /* §3.1.1's `attribute USVString cookie` — the only read-write member here, and its type is what performs
-       §3.2.11's scalar value conversion before the body ever sees the string. */
+       §3.2.12's scalar value conversion before the body ever sees the string. */
     g_id_cookie_set = idl_setter_id(ctx, IDL_USVSTRING, false, js_doc_set_cookie, 0);
 }
 

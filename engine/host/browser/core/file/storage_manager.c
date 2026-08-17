@@ -121,7 +121,7 @@ static int sm_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         if (JS_IsException(s->promise)) return -1;
         /* STEP 2's failure: an OPAQUE ORIGIN has no storage key, so there is no bottle map to obtain and the
            document must not reach this agent's filesystem. IT IS THE OPAQUE TEST, ASKED AS ONE. It used to be
-           routed through §7.2.5.1's same-origin check — this document's navigable compared against itself,
+           routed through §7.2.1's same-origin check — this document's navigable compared against itself,
            which was false in exactly the case where the origin serialized to "null" — and that route inverted
            the day an origin became a record: §7.1.1 step 1 makes an origin same origin with ITSELF, opaque
            included, so the check would now pass and a sandboxed document would reach the filesystem. */

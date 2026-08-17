@@ -34,7 +34,7 @@ typedef enum { RS_OP_GET_READER = 0, RS_OP_READ, RS_OP_RELEASE, RS_OP_CANCEL,
                   teed and each side keeps one branch. A host that copied bytes instead gave the clone a body
                   the original's reader could not have produced. */
                RS_OP_TEE,
-               /* §4.9.7 with cloneForBranch2 SET: branch 2 receives a structured clone of each chunk. Fetch's
+               /* §4.9.1 with cloneForBranch2 SET: branch 2 receives a structured clone of each chunk. Fetch's
                   "clone a body" performs this one — a page that reads the original and mutates the chunk must
                   not thereby change what the clone reads. It is not a page-visible member; §4.2's `tee()` is
                   always the plain one. */

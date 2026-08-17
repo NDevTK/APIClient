@@ -155,7 +155,7 @@ void iframe_document_parsed(JSContext *ctx)
     }
 }
 
-/* §7.2.5's DOCUMENT-TREE CHILD NAVIGABLES, in TREE ORDER — the set `window.length` counts and `window[i]`
+/* §7.2.2.2's DOCUMENT-TREE CHILD NAVIGABLES, in TREE ORDER — the set `window.length` counts and `window[i]`
  * indexes. It is a WALK, never a counter kept beside the tree: the set changes on every insertion, every
  * removal and every reparent, and a page reads `length` after doing all three. A count that a mutation forgot
  * to adjust is wrong in exactly the case the spec files test.
@@ -211,7 +211,7 @@ JSValue iframe_child_navigable(JSContext *ctx, int index)
 }
 
 /* §4.8.5 `contentDocument`, and the read that made the cross-agent reference necessary. It is the child
- * navigable's ACTIVE DOCUMENT, filtered by §7.2.5.1's same-origin check — which is the whole of the spec's
+ * navigable's ACTIVE DOCUMENT, filtered by §7.2.1's same-origin check — which is the whole of the spec's
  * text, because a browser has the two documents in one agent cluster and the answer is a pointer.
  *
  * HERE IT IS IN ANOTHER INSTANCE, so the flow SUSPENDS: the peer exports its `document` and answers with the
@@ -219,7 +219,7 @@ JSValue iframe_child_navigable(JSContext *ctx, int index)
  * step machine where `contentWindow` is a plain accessor — a WindowProxy names a NAVIGABLE, which this agent
  * created and knows, and a Document is the peer's object. */
 /* WHERE THIS MACHINE RESTS, AS THE STANDARD NUMBERS IT. §4.8.5's getter is one sentence over §7.3.1's
-   `content document`, whose four steps are: no content navigable → null; its active document; §7.2.5.1's same
+   `content document`, whose four steps are: no content navigable → null; its active document; §7.2.1's same
    origin-domain filter; return it. Steps 1-3 are one stage — they are decided here, and no page code runs
    between them. Step 4 is its OWN stage whenever the document lives in another instance, because that answer
    arrives from a peer's scheduled turn and this flow is parked until it does; the resume point was a request
@@ -229,7 +229,7 @@ JSValue iframe_child_navigable(JSContext *ctx, int index)
    rather than extra rigor. */
 #define CONTENT_DOC_STAGES(X) \
     X(CONTENTDOC_RESOLVE, "HTML §4.8.5 contentDocument → §7.3.1 content document steps 1-3 (the content " \
-                          "navigable's active document, filtered by §7.2.5.1's same origin-domain check)") \
+                          "navigable's active document, filtered by §7.2.1's same origin-domain check)") \
     X(CONTENTDOC_ANSWER,  "HTML §7.3.1 content document step 4 (the answer, from the instance that holds the " \
                           "document)")
 enum { IDL_STEP_STAGE_BASE(CONTENT_DOC_STAGES) CONTENT_DOC_STAGES(JS_STEP_STAGE_ENUM) };

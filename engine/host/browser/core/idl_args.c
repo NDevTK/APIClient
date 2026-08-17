@@ -121,7 +121,7 @@ static bool idl_is_numeric(IdlArgType t)
     return idl_is_integer(t) || t == IDL_UNRESTRICTED_DOUBLE || t == IDL_DOUBLE;
 }
 
-/* §3.2.9's `unsigned long long` AS THE MAGNITUDE IT IS. Public because a conversion that happens OUTSIDE this
+/* §3.2.4.8's `unsigned long long` AS THE MAGNITUDE IT IS. Public because a conversion that happens OUTSIDE this
    machine needs the same answer: File System §2.5's write algorithm reads `position` and `size` off a page
    dictionary with its own request and then converts what it got, and a second copy of this arithmetic is a
    second chance to hand an algorithm a negative size the spec has no step for. */
@@ -144,7 +144,7 @@ static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
         return JS_NewFloat64(ctx, x);
     }
     /* AN `unsigned long long` DOES NOT FIT IN AN int64_t, and the half of its range that does not is exactly
-       the half a page reaches by writing a negative: §3.2.9's conversion of -1 is 2**64-1, which as an int64_t
+       the half a page reaches by writing a negative: §3.2.4.8's conversion of -1 is 2**64-1, which as an int64_t
        is the bit pattern -1 again, so handing it back through JS_NewInt64 would undo the whole conversion. The
        value the member receives is a JS NUMBER either way, and a double holds the magnitude (to the same 53
        bits of precision `Number(2n**64n-1n)` has), so the unsigned type places one. */
@@ -200,7 +200,7 @@ typedef struct {
        freed with the pool. */
     IdlArgType *types;
     int        nargs;      /* how many the IDL lists; a variadic tail repeats the last */
-    /* THE FIRST OPTIONAL ARGUMENT's index. §3.6.2 resolves an `undefined` passed for an optional argument with
+    /* THE FIRST OPTIONAL ARGUMENT's index. §3.6 resolves an `undefined` passed for an optional argument with
        no default as the argument being ABSENT — `new URL("aaa:b", undefined)` is a one-argument call, not a
        call with the base "undefined". Declared per member rather than assumed, because the same undefined at a
        REQUIRED position is the string "undefined" and collapsing the two is wrong in one direction or the
@@ -211,7 +211,7 @@ typedef struct {
     /* §3.6 STEP 14.2's DEFAULT VALUES, one entry per position the IDL lists — see idl_arg_default. NULL for a
        member declaring none, which is nearly all of them; allocated by the first declaration that names one,
        and freed with the pool exactly as `types` is. A position whose entry is IDL_DEFAULT_NONE has no default,
-       which is what §3.6.2's absent rule is for. */
+       which is what §3.6's absent rule is for. */
     IdlArgDefault *arg_dflts;
     int        magic;
     /* An IDL_DICT argument's members, and their names INTERNED at registration. The atom must be live at both
@@ -263,8 +263,8 @@ typedef struct {
    yet begun. Naming them here rather than in each member is the same rule as everything else in this file —
    one declaration, no per-member line to forget — and it is why IDL_STEP_FIRST is 2. */
 static const char *const IDL_PROLOGUE_STEPS[] = {
-    "Web IDL §3.6.2 (the operation's argument count: fewer than the required ones is a TypeError)",
-    "Web IDL §3.6.2 (converting each passed argument to its declared IDL type)",
+    "Web IDL §3.6 (the operation's argument count: fewer than the required ones is a TypeError)",
+    "Web IDL §3.6 (converting each passed argument to its declared IDL type)",
 };
 /* The two are one number seen from two sides — how many stages this machine owns, and where a member's own
    stages begin — so they agree at COMPILE time rather than by a comment asking them to. A member's steps would
@@ -330,7 +330,7 @@ static const char *const *idl_plain_steps(void)
    standards that own those ends, because that is the whole of what runs: a plain member's own body executes
    inside one stage without resting, which is what makes it plain rather than a step machine. */
 #define IDL_PLAIN_ALGORITHM \
-    "Web IDL §3.6.2 (an operation's argument handling), inside HTML §4.13.6's custom element reactions steps"
+    "Web IDL §3.6 (an operation's argument handling), inside HTML §4.13.6's custom element reactions steps"
 
 /* The DOM layer's tree-steps edge — see idl_args.h. NULL until the DOM registers it, which is what the
    platform-less test builds and the pre-DOM boot look like. */
@@ -697,12 +697,12 @@ static const void *idl_body_state_const(const IdlMember *m, const void *st)
 }
 
 /* HOW MANY POSITIONS THE IDL LISTS AS ORDINARY ARGUMENTS. A VARIADIC member's last declared type is the type of
-   "every argument from here on" and not a position of its own, which is why the count differs — and why §3.6.2's
+   "every argument from here on" and not a position of its own, which is why the count differs — and why §3.6's
    absent-optional rule stops there: each value a page passes to a `T...` tail is CONVERTED, so
    `el.append('a', undefined)` appends the text "undefined" rather than skipping an argument. */
 /* IS THIS DECLARED TYPE A DICTIONARY — the plain one and the three unions whose OMITTED arm is one.
  *
- * IT IS ASKED BECAUSE AN OMITTED DICTIONARY ARGUMENT IS NOT AN ABSENT ONE. §3.6.2's rule that an optional
+ * IT IS ASKED BECAUSE AN OMITTED DICTIONARY ARGUMENT IS NOT AN ABSENT ONE. §3.6's rule that an optional
  * argument given `undefined` is absent is about a value type, where the body has to tell "no base" from the
  * base `undefined` — but Web IDL writes `optional D options = {}`, and §3.2.17 converting `undefined` to D
  * yields a dictionary carrying every member's DEFAULT. So the body of such a member sees a dictionary whether
@@ -1215,7 +1215,7 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     return rr;
 }
 
-/* WEB IDL §3.2.10's `ByteString` RANGE, over the UTF-8 the engine hands out. A ByteString's code points are
+/* WEB IDL §3.2.11's `ByteString` RANGE, over the UTF-8 the engine hands out. A ByteString's code points are
    0x00..0xFF and a value outside that is a TypeError — which is the whole of what makes the type different
    from a DOMString, and what makes `new Response("", {statusText: "\u0100"})` throw. It is here rather than
    in whichever component noticed it first because it is a TYPE's rule: Headers' fill needs the same answer for
@@ -1314,7 +1314,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                "a non-variadic member is converting more positions than its declaration lists — the argument "
                "vector in this state's tail is sized from that same `nargs`, so there is nothing behind them");
         {
-            /* §3.6.2 STEP 1: a call with fewer arguments than the member has REQUIRED ones is a TypeError, and
+            /* §3.6 STEP 5: a call with fewer arguments than the member has REQUIRED ones is a TypeError, and
                it is thrown before any conversion runs. `new File()` built a File out of nothing; `new File([])`
                built one with the name "undefined". The count is the same `first_optional` the declaration
                already states, capped at what the IDL lists — a member that never declares an optional position
@@ -1334,7 +1334,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         }
         /* A DECLARED DICTIONARY POSITION IS CONVERTED EVEN WHEN THE PAGE STOPPED SHORT OF IT, because its
            value is the IDL's `= {}` and not the page's — see idl_type_is_dictionary. Every position between
-           is optional (a required one was already a TypeError above) and takes §3.6.2's absent path, so it
+           is optional (a required one was already a TypeError above) and takes §3.6's absent path, so it
            reaches the body as the `undefined` it would have anyway; what changes is only that the dictionary
            behind them exists. A VARIADIC member may not declare one at all, which the conversion asserts. */
         if (!m->variadic) {
@@ -1382,7 +1382,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
 
         if (step4_only_longer) t = IDL_USVSTRING;
 
-        /* §3.6.2: an optional argument given `undefined` is ABSENT, so nothing is converted and the body sees
+        /* §3.6: an optional argument given `undefined` is ABSENT, so nothing is converted and the body sees
            undefined — which is what lets it tell "no base" from the base "undefined". A VARIADIC TAIL is not
            one of those positions (see idl_declared_positions): every value passed to a `T...` is converted.
            OPTIONALITY IS THE SURVIVING ENTRY'S, NOT THE DECLARATION'S. §3.6 step 14 reads it "at index i in the
@@ -1856,10 +1856,10 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     if (r > 0) return r;
                     if (r < 0) return JS_STEP_ABRUPT;
                     /* THE SCALAR VALUE CONVERSION BELONGS TO THE ELEMENT TYPE. `BlobPart`'s string arm is a
-                       USVString, so §3.2.11 replaces its lone surrogates; a `sequence<DOMString>`'s element is
+                       USVString, so §3.2.12 replaces its lone surrogates; a `sequence<DOMString>`'s element is
                        a DOMString and keeps them, which is the whole difference between the two. */
                     if (t != IDL_SEQUENCE_DOMSTRING) {
-                        str = JS_ToScalarValueString(ctx, str);   /* §3.2.11: lone surrogates become U+FFFD */
+                        str = JS_ToScalarValueString(ctx, str);   /* §3.2.12: lone surrogates become U+FFFD */
                         if (JS_IsException(str)) return JS_STEP_ABRUPT;
                     }
                     JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, str);
@@ -2258,10 +2258,10 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
     /* NO OPTIONAL ARGUMENTS, stated in the member's OWN terms: one past its last position. There is nothing
        here to overflow and nothing to keep in step with a ceiling — see idl_optional_from. */
     idl_member(idx)->first_optional = nargs;
-    /* NO DECLARED DEFAULTS, which is what §3.6.2's absent rule is the answer for. The array is allocated by the
+    /* NO DECLARED DEFAULTS, which is what §3.6's absent rule is the answer for. The array is allocated by the
        first idl_arg_default this member makes, so a member with none costs nothing. */
     idl_member(idx)->arg_dflts = NULL;
-    /* HOW MANY THE CALLER MUST PASS. §3.6.2 throws a TypeError before ANY conversion when a call has fewer
+    /* HOW MANY THE CALLER MUST PASS. §3.6 throws a TypeError before ANY conversion when a call has fewer
        arguments than the member has required ones — `new File()` throws rather than building a File with no
        bits. It is the same number `first_optional` already states, capped at what the IDL declares, so a member
        that never calls idl_optional_from requires every argument it listed. */

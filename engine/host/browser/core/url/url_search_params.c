@@ -283,8 +283,8 @@ static const IdlPairIterOps USP_PAIR_OPS = { usp_pair_count, usp_pair_at, "URLSe
                    "TypeError, which is why the walk runs one step past the second)") \
     X(UC_KEY_PAIR, "URL §6.2 initialize step 2 (the next name → value of the record arm: Web IDL §3.2.23's " \
                    "[[OwnPropertyKeys]], descriptor and [[Get]] per key)") \
-    X(UC_PAIR_NAME_STR, "Web IDL §3.2.13 (converting the pair's NAME to a USVString — the page's `toString`)") \
-    X(UC_PAIR_VALUE_STR, "Web IDL §3.2.13 (converting the pair's VALUE to a USVString)") \
+    X(UC_PAIR_NAME_STR, "Web IDL §3.2.12 (converting the pair's NAME to a USVString — the page's `toString`)") \
+    X(UC_PAIR_VALUE_STR, "Web IDL §3.2.12 (converting the pair's VALUE to a USVString)") \
     X(UC_DONE, "URL §6.2 initialize steps 1.2/2/3.2 (the pair is appended to this's list, or the string arm " \
                "has been parsed)")
 /* THE STAGE'S NAME IS THE WHOLE OF WHAT THE X-LIST'S FIRST SLOT MAY BE, and this list wrote `UC_START =
@@ -497,7 +497,7 @@ static int js_usp_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     UC_GOTO(hdr, s, UC_PAIR_NAME_STR);
     return JS_STEP_YIELD;
 
-    /* §3.2.11's USVString conversion for both halves. ToString may be the page's, so each is a request; the
+    /* §3.2.12's USVString conversion for both halves. ToString may be the page's, so each is a request; the
        scalar-value replacement is what makes an unpaired surrogate U+FFFD, and it is the whole of what makes
        the type different from a DOMString. TWO ARMS, ONE BODY, which is what `case A: case B:` is — and it is
        what the `default:` here used to be, with a DCHECK behind it asserting that no OTHER stage had arrived.

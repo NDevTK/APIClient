@@ -1,4 +1,4 @@
-/* BarProp — HTML §7.2.5.3, the six user-interface objects a Window exposes.
+/* BarProp — HTML §7.2.2.5 "Historical browser interface element APIs", the six user-interface objects a Window exposes.
  *
  * WHAT THEY ARE. `window.locationbar`, `menubar`, `personalbar`, `scrollbars`, `statusbar` and `toolbar` each
  * answer a single boolean, `visible`. They are the last surviving trace of a time when a page could ask the
@@ -6,7 +6,7 @@
  * `window.toolbar.visible` to tell a popup from a tab gets a real answer in every browser.
  *
  * WHY THEY ARE NOT A SHRUG. Headless is not valueless: the spec defines what `visible` returns without any
- * screen at all. §7.2.5.3 says each returns true unless the navigable was created by `open()` with features
+ * screen at all. §7.2.2.5 says each returns true unless the navigable was created by `open()` with features
  * that suppressed that bar — so for the top-level navigable this engine hosts, the answer is TRUE, computed
  * from what the navigable IS rather than picked. That is the same reasoning `matchMedia` resolves a default
  * viewport by: the missing piece is a physical device, and the spec's behaviour does not depend on one.
@@ -30,11 +30,11 @@
 static JSClassID g_bar_class;
 static JSRuntime *g_bar_rt;
 
-/* §7.2.5.3: `visible` is true for a navigable whose chrome was not suppressed at creation, and that is now
+/* §7.2.2.5: `visible` is true for a navigable whose chrome was not suppressed at creation, and that is now
    read from the NAVIGABLE — §7.4's features argument decides it, navigable.c records the decision, and this
    answers the negation. It was the constant `true`, which made every popup indistinguishable from a tab: the
    corpus tells the two apart by reading exactly these six, and `allBarProps.every(x => !x)` is how it does it.
-   THE RECORD IS THE BRAND, not the answer. Six independent objects are what §7.2.5.3 declares and what
+   THE RECORD IS THE BRAND, not the answer. Six independent objects are what §7.2.2.5 declares and what
    `window.locationbar !== window.menubar` rests on, but what they answer is one fact about one navigable — so
    the state lives where the fact does and the instance exists to be a distinct object with a class to check. */
 typedef struct { uint8_t unused; } BarProp;
@@ -46,7 +46,7 @@ static void bar_finalizer(JSRuntime *rt, JSValue val)
     free(b);
 }
 
-/* §7.2.5.3's `visible`, answered for THE REALM THE GETTER BELONGS TO.
+/* §7.2.2.5's `visible`, answered for THE REALM THE GETTER BELONGS TO.
  *
  * `ctx` HERE IS THE FUNCTION'S OWN REALM, NOT THE CALLER'S — js_call_c_function does `ctx = p->u.cfunc.realm`
  * before invoking a C function, which is §3.7's rule that every realm gets its own intrinsics doing its job.
@@ -66,7 +66,7 @@ static JSValue js_bar_visible(JSContext *ctx, JSValueConst this_val, int magic)
     (void)magic;
     DCHECK(b != NULL, "BarProp.visible was read off something that is not a BarProp");
     /* THE ANSWER IS THE NAVIGABLE'S, and that is why there is no assert here that the realm's proxy names THIS
-       realm's document. There was one, and it was true only while nothing could navigate: §7.2.5.1's replace
+       realm's document. There was one, and it was true only while nothing could navigate: §7.2.3's replace
        moves the navigable's active document to a new realm while a flow parked in the superseded one keeps
        running, and that flow reading `window.toolbar` is reading a fact about the NAVIGABLE — which has moved
        on — not about the document it is standing in. An assert that fires for a correct read is worse than
@@ -119,7 +119,7 @@ static JSValue bar_prop_new(JSContext *ctx)
 
 void bar_prop_install(JSContext *ctx, JSValueConst global)
 {
-    /* §7.2.5.3's six, in the order the IDL declares them. Each is [Replaceable] — an ACCESSOR that a write
+    /* §7.2.2.5's six, in the order the IDL declares them. Each is [Replaceable] — an ACCESSOR that a write
        REPLACES with a data property (Web IDL §3.7.6), not a writable data property from the start: the two
        differ in what `Object.getOwnPropertyDescriptor(window, "toolbar")` answers before anything writes,
        which is what window-properties.https.html reads. A write is captured by the COW delta like any other. */

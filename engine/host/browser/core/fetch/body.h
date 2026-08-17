@@ -1,4 +1,4 @@
-/* THE BODY MIXIN — WHATWG Fetch §5.2, which both Request and Response include. See body.c. */
+/* THE BODY MIXIN — WHATWG Fetch §5.3 "Body mixin", which both Request and Response include. See body.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FETCH_BODY_H
 #define ENGINE_HOST_BROWSER_CORE_FETCH_BODY_H
 #include <stdbool.h>
@@ -6,10 +6,10 @@
 
 #include "quickjs.h"
 
-/* §5.2's BODY, as the state an including interface holds. `has` is not `len != 0`: the spec distinguishes a
+/* §5.3's BODY, as the state an including interface holds. `has` is not `len != 0`: the spec distinguishes a
    NULL body from an empty one — `new Response()` has the first and `new Response("")` the second — and `.body`
    reports null for exactly one of them. `used` is the single-use latch, which a page's retry path tests. */
-/* `stream` is §5.2's `body`, built ON DEMAND and then held: the attribute answers the SAME stream every time,
+/* `stream` is §5.3's `body`, built ON DEMAND and then held: the attribute answers the SAME stream every time,
    and a second one would give a page two independent readers over one body. JS_UNDEFINED until asked for. */
 typedef struct { char *bytes; size_t len; int used; int has; JSValue stream; } BodyState;
 
@@ -19,14 +19,14 @@ typedef struct { char *bytes; size_t len; int used; int has; JSValue stream; } B
    runtime graph held by one Response. One declaration of what this owns, one release. */
 void body_state_free(JSRuntime *rt, BodyState *b);
 
-/* §5.1's "extract a body" — the ONE implementation of the BodyInit union, for both interfaces that take one.
+/* §5.2's "extract a body" — the ONE implementation of the BodyInit union, for both interfaces that take one.
    `*out_mime` is the arm's own Content-Type (malloc'd) or NULL for an arm that has none; the caller's remaining
-   job is §6.4's "set it only if the header list has none". Returns -1 with a throw live. */
+   job is §5.5's "set it only if the header list has none". Returns -1 with a throw live. */
 int  body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mime);
 /* Copy `len` bytes in, or NULL for the spec's null body. Returns -1 on OOM with an exception live. */
 int  body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len);
 
-/* §5.2's "CLONE A BODY", which is a TEE and nothing else: « out1, out2 » are the result of teeing the source
+/* §2.2.4's "CLONE A BODY", which is a TEE and nothing else: « out1, out2 » are the result of teeing the source
    body's stream, the source keeps out1 and the clone gets out2. Copying the bytes instead is not a cheaper
    spelling of the same thing — after a clone the ORIGINAL's `body` is a different object from the one it was,
    the old one is locked, and a page teeing a response's body depends on exactly that. It also means a body
@@ -42,7 +42,7 @@ int  body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Bod
    `of` returns NULL when the value is not an instance, which is the receiver check every member performs.
    Returns a handle. There is ONE set of reader machines for the whole platform; the handle is what tells them
    which interface the receiver belongs to. */
-/* `mime` is the object's Content-Type as its own header list reports it, or NULL — §5.2's `formData()` reads
+/* `mime` is the object's Content-Type as its own header list reports it, or NULL — §5.3's `formData()` reads
    it to decide which parser the body goes through, and only the including interface knows where its headers
    live. Caller frees. */
 int  body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueConst v),

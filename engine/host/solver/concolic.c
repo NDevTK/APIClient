@@ -722,7 +722,7 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, char *i
 }
 
 /* A COMPARISON-RESULT bool carrying `src <op> tok`, for a component whose IDL member IS a comparison over its
-   own source (HTML §6.6's `document.hidden` is `visibilityState === "hidden"`). It composes the identity the
+   own source (HTML §6.2's `document.hidden` is `visibilityState === "hidden"`). It composes the identity the
    page's own `x === tok` composes for the same source and token, which is what makes the two ONE constraint
    entry — the property page_visibility.h states and now the encoding rather than a coincidence of spelling. */
 JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *tok) {

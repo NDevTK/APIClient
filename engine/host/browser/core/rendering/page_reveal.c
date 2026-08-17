@@ -85,7 +85,7 @@ static JSValue js_pr_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     (void)magic;
     if (JS_IsUndefined(this_val))
         return JS_ThrowTypeError(ctx, "constructor PageRevealEvent requires 'new'");
-    DCHECK(argc >= 1, "PageRevealEvent's constructor reached its body with no type — §3.6.2 step 1's TypeError "
+    DCHECK(argc >= 1, "PageRevealEvent's constructor reached its body with no type — §3.6 step 5's TypeError "
                       "is the declaration's");
     bubbles = idl_dict_bool(ctx, init, "bubbles");
     cancelable = idl_dict_bool(ctx, init, "cancelable");

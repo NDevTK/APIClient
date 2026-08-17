@@ -1,4 +1,4 @@
-/* WindowProxy — HTML §7.2.5.1. See window_proxy.c. */
+/* WindowProxy — HTML §7.2.3 "The WindowProxy exotic object". See window_proxy.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_WINDOW_PROXY_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_WINDOW_PROXY_H
 #include <stdbool.h>
@@ -8,7 +8,7 @@
 #include "core/frame/sandboxing.h"
 #include "core/url/origin.h"
 
-/* The ACCESSOR side of §7.2.5.1's same-origin check is THE AGENT'S OWN ORIGIN, and it is asked of the one
+/* The ACCESSOR side of §7.2.1's same-origin check is THE AGENT'S OWN ORIGIN, and it is asked of the one
    place that holds it (origin_agent) rather than passed in: an instance is an origin-keyed agent cluster, so a
    caller-supplied one could only ever agree or be wrong. */
 void window_proxy_init(JSContext *ctx);
@@ -83,10 +83,10 @@ const char *window_proxy_top_level_url(JSValueConst proxy);
    the instance that holds its documents, and that instance answers §5.1 for them. */
 const Origin *window_proxy_top_level_origin(JSValueConst proxy);
 
-/* §7.4's "popup window is requested" for this navigable — §7.2.5.3's BarProps are the negation of it. */
+/* §7.4's "popup window is requested" for this navigable — §7.2.2.5's BarProps are the negation of it. */
 bool window_proxy_is_popup(JSValueConst proxy);
 
-/* §7.2.5.1's proxy for the realm that is ASKING — `window`, `self`, and the `source` of every message it
+/* §7.2.3's proxy for the realm that is ASKING — `window`, `self`, and the `source` of every message it
    posts. Its realm is this one and is already built, so nothing about it is deferred.
    `name` is the navigable's, and NULL is the host STATING THAT IT DOES NOT KNOW IT — this is the one navigable
    §7.4 did not create, so the browser may have been handed a name by a cross-origin document that set it before
@@ -112,7 +112,7 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name);
    the object this agent already had.
    `name` is the BROWSING CONTEXT's name (the iframe element's `name` attribute, or §7.4's target), NULL for
    none. `parent` is the parent navigable — this instance's own WindowProxy for a child navigable, JS_UNDEFINED
-   for a top-level one — and `opener` is §7.2.5's, JS_NULL when the navigable was not opened by a script. All
+   for a top-level one — and `opener` is §7.2.2.4's, JS_NULL when the navigable was not opened by a script. All
    three describe the navigable at its FIRST ask; a later ask answers with the proxy that already exists,
    because the DOCUMENT is the identity and these are its state. */
 JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *origin, const char *name,
@@ -129,23 +129,23 @@ JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc);
    handing a navigable to another agent) cannot. JS_UNDEFINED when the value is neither. BORROWED. */
 JSValueConst window_proxy_navigable_of(JSContext *ctx, JSValueConst v);
 
-/* §7.2.5.2's IS CLOSING. The proxy a page is holding stays the object it was — the spec files check that it
+/* §7.2.2.1's IS CLOSING. The proxy a page is holding stays the object it was — the spec files check that it
    does — and reports `closed` from here on. Captured into the RUNNING FLOW's delta, so a sibling arm that
    never closed the window still sees it open. Only ever a TOP-LEVEL traversable: ask
-   window_proxy_is_top_level first, which is the early return §7.2.5.2 opens with. */
+   window_proxy_is_top_level first, which is the early return §7.2.2.1 opens with. */
 void window_proxy_set_closing(JSContext *ctx, JSValueConst proxy);
-/* §7.2.5.2 step 3's and §7.3's own step 1's TEST — is closing ALONE, which is not what `closed` answers. A
+/* §7.2.2.1 step 3's and §7.3's own step 1's TEST — is closing ALONE, which is not what `closed` answers. A
    traversable that is closing has not been destroyed yet (its documents are still unloading), and a navigable
    whose document WAS destroyed was never closing at all, so a close path that asked `closed` would refuse to
    close a frame's container's traversable and would re-enter itself for a destroyed one. */
 bool window_proxy_closing(JSValueConst proxy);
 
-/* IS THIS NAVIGABLE A TOP-LEVEL TRAVERSABLE — §7.2.5.2's early return and §7.3's is-closing precondition, one
+/* IS THIS NAVIGABLE A TOP-LEVEL TRAVERSABLE — §7.2.2.1's early return and §7.3's is-closing precondition, one
    fact asked from one place so both spellings of close() make the same test. */
 bool window_proxy_is_top_level(JSValueConst proxy);
 
 /* §7.5.10 STEP 8: this navigable's active document was destroyed, so its browsing context is null — the half
-   of §7.2.5's `closed` that destruction owns, and what §7.5.10 step 5's wait reads off each child navigable.
+   of §7.2.2.1's `closed` that destruction owns, and what §7.5.10 step 5's wait reads off each child navigable.
    Written only by the destroy job (core/frame/document_lifecycle.c). */
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy);
 bool window_proxy_destroyed(JSValueConst proxy);
@@ -171,7 +171,7 @@ void window_proxy_child_wait_set(JSContext *ctx, JSValueConst proxy, int op, uin
 int  window_proxy_child_wait_report(JSContext *ctx, JSValueConst proxy, int op);
 
 /* §7.3.2.2's "browsing context A is FAMILIAR WITH browsing context B", asked as "is the INCUMBENT realm's
-   browsing context familiar with the one `proxy` names" — which is the only form §7.2.5.2 step 6 uses, and the
+   browsing context familiar with the one `proxy` names" — which is the only form §7.2.2.1 step 6 uses, and the
    form in which A is a realm this instance is standing in rather than a second proxy to resolve.
    It is the standard's four-part disjunction over the navigable state this record already holds: same origin;
    A's top-level browsing context IS B; B is auxiliary and A is familiar with B's opener; or an ancestor of B is
@@ -179,11 +179,11 @@ int  window_proxy_child_wait_report(JSContext *ctx, JSValueConst proxy, int op);
    popup this document opened is familiar through its opener even though the origins differ. */
 bool window_proxy_familiar_with(JSContext *ctx, JSValueConst proxy);
 
-/* §7.2.5.1's member surface FOR ONE REALM, so a component that owns one of the cross-origin-accessible members
+/* §7.2.1's member surface FOR ONE REALM, so a component that owns one of the cross-origin-accessible members
    (postMessage) installs it where every proxy of that realm sees it. OWNED: the caller frees. */
 JSValue window_proxy_proto(JSContext *ctx);
 
-/* §7.2.5.1's members on that prototype, built for ONE realm and declared into core/realm.h's list by
+/* §7.2.1's members on that prototype, built for ONE realm and declared into core/realm.h's list by
    window_proxy_init. A LOCAL proxy answers every one by reading its own Window in this turn. A REMOTE one
    answers the NAVIGABLE's own state — window/self/frames/globalThis/parent/top/opener/closed/name, plus
    close() — in this turn too, because the navigable belongs to the instance that created it; only a member that
@@ -191,7 +191,7 @@ JSValue window_proxy_proto(JSContext *ctx);
    member). */
 void window_proxy_install_proto(JSContext *ctx);
 
-/* §7.2.5's `closed` — a fact about the NAVIGABLE, so the Window's getter and the proxy's read the same answer.
+/* §7.2.2.1's `closed` — a fact about the NAVIGABLE, so the Window's getter and the proxy's read the same answer.
    It is the spec's OR: true if the browsing context is null (the destruction ran) or is closing is true.
    Per-flow: captured into the running flow's delta, so a sibling arm that never closed it still sees it open. */
 bool window_proxy_closed(JSContext *ctx, JSValueConst proxy);
@@ -201,7 +201,7 @@ bool window_proxy_closed(JSContext *ctx, JSValueConst proxy);
 bool window_proxy_is(JSValueConst v);
 
 /* THE Web IDL TYPE `WindowProxy`, which is a different question and had only one answer for both. A page's own
-   `window` is a WindowProxy — §7.2.5 says `window`, `self` and `frames` all return one — but in this engine
+   `window` is a WindowProxy — §7.2.2 says `window`, `self` and `frames` all return one — but in this engine
    that object is the realm's GLOBAL, because a navigable's proxy answering for ITSELF would make
    `window === window.parent` false at top level and `frame.contentWindow.parent === window` false (win_or_proxy
    states that mapping once, and this is the same mapping asked as a type test). So the class brand alone
@@ -236,13 +236,13 @@ JSContext *window_proxy_realm(JSContext *ctx, JSValueConst proxy);
    in order to ask is the heap exhaustion navigable.c's deferral exists to avoid. */
 bool window_proxy_materialized(JSValueConst proxy);
 
-/* §7.2.5's `parent`, `top` and `opener` — the NAVIGABLE's, so a Window answers them from the same record its
+/* §7.2.2.4's `parent`, `top` and `opener` — the NAVIGABLE's, so a Window answers them from the same record its
    own WindowProxy does. One navigable, one answer, whether a page reads `parent` or `otherW.parent`. Owned. */
 JSValue window_proxy_parent(JSContext *ctx, JSValueConst proxy);
 /* THE NAVIGABLE THIS ONE IS NESTED IN, for an ENGINE walk rather than for `window.parent`: JS_UNDEFINED at the
    top instead of the proxy itself, because a walk up the tree wants "nothing above this". Owned. */
 JSValue window_proxy_parent_navigable(JSContext *ctx, JSValueConst proxy);
-/* AND §7.2.5's `opener` AS THE NAVIGABLE IT IS, for the same reason: `opener` maps this document's own
+/* AND §7.2.2.4's `opener` AS THE NAVIGABLE IT IS, for the same reason: `opener` maps this document's own
    navigable onto the GLOBAL, which is the right answer for a page reading the member and the wrong one for an
    engine walk — a Window is not a WindowProxy, so a walk handed it asks "is this a proxy", is told no, and
    silently walks nothing. JS_NULL when the navigable was not opened by a script. Owned. */
@@ -255,14 +255,14 @@ JSValue window_proxy_top_of(JSContext *ctx, JSValueConst proxy);
    Window, asks "is this a proxy", is told no, and silently walks NOTHING. Owned. */
 JSValue window_proxy_top_navigable(JSContext *ctx, JSValueConst proxy);
 JSValue window_proxy_opener(JSContext *ctx, JSValueConst proxy);
-/* §7.2.5's `opener` SETTER, null branch: DISOWN the opener — the link is severed on the NAVIGABLE, so every
+/* §7.2.2.4's `opener` SETTER, null branch: DISOWN the opener — the link is severed on the NAVIGABLE, so every
    later read of it (this Window's `opener`, the proxy's) answers null and no own property is defined. It is
    the half of that setter that is not Web IDL's replace-with-a-value, and it is a real state change rather
    than a value assignment, which is why it lives on the navigable. Per-flow: captured into the running flow's
    delta, so a sibling arm that did not disown still has its opener. */
 void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy);
 
-/* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME ORIGIN WITH THIS ONE? §7.2.5.1's check — §7.1.1's SAME ORIGIN over
+/* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME ORIGIN WITH THIS ONE? §7.2.1's check — §7.1.1's SAME ORIGIN over
    two origin RECORDS (core/url/origin.h), so its step 1 is a nonce comparison and an OPAQUE origin is same
    origin with ITSELF and with nothing else. A `data:` document's `about:blank` child is that case, and §7.3.1
    makes the pair on purpose.
@@ -283,7 +283,7 @@ bool window_proxy_same_origin_domain_of(JSContext *ctx, JSValueConst proxy);
 /* IS THIS ENVIRONMENT'S ORIGIN SAME ORIGIN WITH ITS TOP-LEVEL ORIGIN? — the question HTML §4.10.5.4's
    showPicker() step 2, Permissions §5.1 step 4's default 'self' allowlist and File System Access §2.2's and
    §3.1's SecurityError checks each ask of the CURRENT realm, and which each of them had written out for
-   itself: fetch the top-level traversable's navigable and ask §7.2.5.1 of it. Three copies of one sentence is
+   itself: fetch the top-level traversable's navigable and ask §7.2.1 of it. Three copies of one sentence is
    three chances for one case to be read differently.
    A TOP-LEVEL DOCUMENT IS ITS OWN TOP, so the answer is true for one — INCLUDING one whose origin is opaque,
    because §7.1.1 step 1 says an opaque origin is same origin with itself. A caller that also wants the opaque
@@ -303,7 +303,7 @@ const char *window_proxy_name(JSValueConst proxy);
 JSValue window_proxy_name_value(JSContext *ctx, JSValueConst proxy);
 JSValue window_proxy_name_assign(JSContext *ctx, JSValueConst proxy, JSValueConst v);
 
-/* The active document's ORIGIN RECORD, as this flow sees it — what §7.2.5.1's same-origin check reads, and
+/* The active document's ORIGIN RECORD, as this flow sees it — what §7.2.1's same-origin check reads, and
    what a caller asking "is this origin opaque" (Storage's storage key, §7.2.6.3's disabled clause) asks
    origin_is_opaque of. BORROWED: an origin lives for the agent (core/url/origin.h). */
 const Origin *window_proxy_origin(JSValueConst proxy);
@@ -337,7 +337,7 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
    PER FLOW, through the same capture every other read of this record goes through. */
 bool window_proxy_ever_navigated(JSValueConst proxy);
 
-/* HTML §7.3's "IS CREATED BY WEB CONTENT" for a top-level traversable — one of the two disjuncts of §7.2.5.2's
+/* HTML §7.3's "IS CREATED BY WEB CONTENT" for a top-level traversable — one of the two disjuncts of §7.2.2.1's
    SCRIPT-CLOSABLE, and the one that decides whether `w = open(...); w.close()` closes a window whose session
    history has grown past a single entry. True for every navigable §7.4 created (window_proxy_new), false for
    the one the instance started in (window_proxy_new_self), which the host loaded. */

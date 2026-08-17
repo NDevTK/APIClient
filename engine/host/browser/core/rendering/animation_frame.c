@@ -128,7 +128,7 @@ static JSValue js_request_animation_frame(JSContext *ctx, JSValueConst this_val,
 
     (void)this_val; (void)magic;
     DCHECK(argc >= 1,
-           "requestAnimationFrame reached its body with no callback — §3.6.2 step 1 throws for a call short of "
+           "requestAnimationFrame reached its body with no callback — §3.6 step 5 throws for a call short of "
            "a member's REQUIRED arguments, and that throw is the declaration's");
     DCHECK(JS_IsFunction(ctx, argv[0]),
            "requestAnimationFrame's callback reached the body uncoerced — §3.2.22's brand check belongs to "
@@ -164,7 +164,7 @@ static JSValue js_cancel_animation_frame(JSContext *ctx, JSValueConst this_val, 
 
     (void)this_val; (void)magic;
     DCHECK(argc >= 1,
-           "cancelAnimationFrame reached its body with no handle — §3.6.2 step 1's TypeError is the "
+           "cancelAnimationFrame reached its body with no handle — §3.6 step 5's TypeError is the "
            "declaration's, not this body's");
     DCHECK(JS_VALUE_GET_TAG(argv[0]) == JS_TAG_INT || JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(argv[0])),
            "cancelAnimationFrame's `handle` reached the body unconverted — the IDL declaration is what "

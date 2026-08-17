@@ -215,7 +215,7 @@ static JSValue js_ke_get_modifier_state(JSContext *ctx, JSValueConst this_val, i
     (void)magic;
     if (!keyboard_event_is(ctx, this_val))
         return JS_ThrowTypeError(ctx, "KeyboardEvent.getModifierState called on something that is not one");
-    /* `keyArg` is not optional, so §3.6.2 step 1's check is the DECLARATION's and throws before this runs. */
+    /* `keyArg` is not optional, so §3.6 step 5's check is the DECLARATION's and throws before this runs. */
     DCHECK(argc >= 1, "getModifierState's body ran with no keyArg");
     return ui_event_get_modifier_state(ctx, this_val, argv[0]);
 }
@@ -262,7 +262,7 @@ static JSValue js_ke_init_keyboard_event(JSContext *ctx, JSValueConst this_val, 
     (void)magic;
     if (!keyboard_event_is(ctx, this_val))
         return JS_ThrowTypeError(ctx, "initKeyboardEvent called on something that is not a KeyboardEvent");
-    /* Only `typeArg` is required, and §3.6.2 step 1's check for it is the declaration's. */
+    /* Only `typeArg` is required, and §3.6 step 5's check for it is the declaration's. */
     DCHECK(argc >= 1, "initKeyboardEvent's body ran with no typeArg");
     /* `Window?` is a CONVERSION, so it runs — and throws — before the algorithm's first step and before the
        dispatch-flag early return. */
@@ -324,7 +324,7 @@ static JSValue js_ke_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     (void)magic;
     if (JS_IsUndefined(this_val))
         return JS_ThrowTypeError(ctx, "constructor KeyboardEvent requires 'new'");
-    DCHECK(argc >= 1, "the KeyboardEvent constructor body ran with no type argument — §3.6.2 step 1 is the "
+    DCHECK(argc >= 1, "the KeyboardEvent constructor body ran with no type argument — §3.6 step 5 is the "
                       "declaration's and throws before any body is entered");
     /* An event the PAGE constructs is untrusted. */
     return keyboard_event_new_derived(ctx, keyboard_event_proto(ctx), argv[0],

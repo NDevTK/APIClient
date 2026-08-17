@@ -7,7 +7,7 @@
 
 /* Install `fetch` on `global`. Every request forced execution reaches funnels one endpoint into the @H
    surface; the network itself is the trusted bridge's, never this sandbox's. */
-/* §5/§6/§5.3's agent-wide declarations, including the three components' per-realm prototype entries. */
+/* §5.1/§5.5/§5.4's agent-wide declarations, including the three components' per-realm prototype entries. */
 void fetch_init(JSContext *ctx);
 void fetch_install(JSContext *ctx, JSValueConst global);
 /* §5's four interned field names — the agent's, so core/platform.h's release column gives them back. */
@@ -15,7 +15,7 @@ void fetch_free(JSRuntime *rt);
 
 /* THE HOST'S NETWORK, as a seam the browser half takes rather than names.
  *
- * §5.5's `fetch()` is the browser's; WHO actually goes to the network is the host's, and SECURITY.md puts
+ * §5.6's `fetch()` is the browser's; WHO actually goes to the network is the host's, and SECURITY.md puts
  * every byte of it behind a trusted chokepoint the sandbox cannot reach. `owe` is the whole contract: the
  * component has built a Promise<Response> and a `deliver` closure, and it hands the host the URL it must
  * satisfy; the host calls `deliver` with the body when it has one, and the flow cannot finish until it does —
@@ -82,7 +82,7 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
  * on this record, at every producer, and that is not a representation choice — it is a DECODE, run by whoever
  * built the record, before any standard's own decode could run:
  *
- *   • the extension's trusted zone ran Fetch §5.2's `text()` — "run consume body with this and UTF-8 decode" —
+ *   • the extension's trusted zone ran Fetch §5.4's `text()` — "run consume body with this and UTF-8 decode" —
  *     so a script served `charset=windows-1252` arrived already mangled and HTML §8.1.4.2's classic decode
  *     (core/loader/script_fetch.h), whose whole job is to honour that label, was handed the wrong bytes;
  *   • `fetch_reply_new` ran `JS_NewStringLen`, which is quickjs's own UTF-8 decode, so EVERY C host destroyed

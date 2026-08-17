@@ -57,7 +57,7 @@ static MqlData *mql_data(JSContext *ctx, JSValueConst obj)
 /* ---- `matches` ----------------------------------------------------------------------------------------------
  *
  * THE VALUE AND THE ENGINE's OWN READ OF IT ARE core/css/media_query.h's, and they moved there when a SECOND
- * member started asking the same question: CSSOM §7.3's `@media` rule reports whether its condition holds and
+ * member started asking the same question: CSS Conditional §7.3's `@media` rule reports whether its condition holds and
  * the cascade decides whether the rule applies at all, and those are the same fact about the same document as
  * this `matches` is. Two spellings of one source identity fork one predicate twice, so the arm that answered
  * `true` here would have resolved the cascade as though it were false. What stays this file's is §4.2's
@@ -96,7 +96,7 @@ static JSValue js_mql_media(JSContext *ctx, JSValueConst this_val, int magic)
 static JSValue js_mql_add_listener(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     (void)magic;
-    DCHECK(argc >= 1, "MediaQueryList.addListener reached its body with no callback — §3.6.2 step 1's TypeError "
+    DCHECK(argc >= 1, "MediaQueryList.addListener reached its body with no callback — §3.6 step 5's TypeError "
                       "for a missing required argument is the declaration's");
     if (!mql_data(ctx, this_val)) return JS_EXCEPTION;
     /* `EventListener? callback` — a null callback registers nothing, which is what §2.7's own algorithm says. */
@@ -110,7 +110,7 @@ static JSValue js_mql_remove_listener(JSContext *ctx, JSValueConst this_val, int
                                       int magic)
 {
     (void)magic;
-    DCHECK(argc >= 1, "MediaQueryList.removeListener reached its body with no callback — §3.6.2 step 1's "
+    DCHECK(argc >= 1, "MediaQueryList.removeListener reached its body with no callback — §3.6 step 5's "
                       "TypeError is the declaration's");
     if (!mql_data(ctx, this_val)) return JS_EXCEPTION;
     if (!JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0]))
@@ -195,7 +195,7 @@ static JSValue js_ev_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     (void)magic;
     if (JS_IsUndefined(this_val))
         return JS_ThrowTypeError(ctx, "constructor MediaQueryListEvent requires 'new'");
-    DCHECK(argc >= 1, "MediaQueryListEvent's constructor reached its body with no type — §3.6.2 step 1's "
+    DCHECK(argc >= 1, "MediaQueryListEvent's constructor reached its body with no type — §3.6 step 5's "
                       "TypeError is the declaration's");
     type = JS_ToCString(ctx, argv[0]);   /* a real string by now: this cannot reach the page */
     if (!type) return JS_EXCEPTION;
@@ -307,7 +307,7 @@ static JSValue js_match_media(JSContext *ctx, JSValueConst this_val, int argc, J
     const char *q;
 
     (void)this_val; (void)magic;
-    DCHECK(argc >= 1, "matchMedia reached its body with no query — §3.6.2 step 1's TypeError for a call short "
+    DCHECK(argc >= 1, "matchMedia reached its body with no query — §3.6 step 5's TypeError for a call short "
                       "of a member's required arguments is the declaration's");
     DCHECK(JS_IsString(argv[0]) || concolic_is(argv[0]),
            "matchMedia's query reached the body unconverted — §7 declares it CSSOMString and the args machine "

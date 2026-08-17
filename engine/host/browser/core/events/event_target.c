@@ -694,7 +694,7 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
  * The handler map is an own property under a private Symbol, for the reason the listener map is: it makes the
  * handler per-flow for free, so `onclick` assigned in one arm of a fork is invisible to its sibling. */
 #define EVENT_HANDLERS(X)                                                                                     \
-    /* GlobalEventHandlers — HTML §8.1.7.2.1, on Window, Document and Element alike. */                       \
+    /* GlobalEventHandlers — HTML §8.1.8.2.1, on Window, Document and Element alike. */                       \
     X("onabort", EH_GLOBAL | EH_SIGNAL | EH_XHR | EH_IDB_TRANSACTION) X("onauxclick", EH_GLOBAL) X("onbeforeinput", EH_GLOBAL)          \
     X("onbeforematch", EH_GLOBAL) X("onbeforetoggle", EH_GLOBAL) X("onblur", EH_GLOBAL) X("oncancel", EH_GLOBAL)      \
     X("oncanplay", EH_GLOBAL) X("oncanplaythrough", EH_GLOBAL)                          \

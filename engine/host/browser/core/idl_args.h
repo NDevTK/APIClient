@@ -18,11 +18,11 @@ typedef JSValue (*IdlBody)(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 typedef enum {
     IDL_ANY = 0,          /* passed through unconverted (`any`, an interface type, a callback) */
     IDL_DOMSTRING,        /* ToString — the page's toString may run */
-    /* `ByteString`. ToString and then §3.2.10's RANGE: every code point must be 0x00..0xFF, and one above that
+    /* `ByteString`. ToString and then §3.2.11's RANGE: every code point must be 0x00..0xFF, and one above that
        is a TypeError. That range IS the type — `new Response("", {statusText: "\u0100"})` throws — and it is
        stated here so no body has to remember it. */
     IDL_BYTESTRING,
-    /* `USVString`. ToString and then §3.2.11's SCALAR VALUE conversion: every unpaired surrogate becomes
+    /* `USVString`. ToString and then §3.2.12's SCALAR VALUE conversion: every unpaired surrogate becomes
        U+FFFD. That replacement is the whole of what makes the type different from a DOMString, and every
        member of the URL surface takes one. */
     IDL_USVSTRING,
@@ -31,7 +31,7 @@ typedef enum {
        load-bearing: `el.textContent = null` is "replace all with null", which removes the children and adds NO
        Text node, and stringifying it wrote the four characters `null` into the page's DOM instead. */
     IDL_DOMSTRING_NULLABLE,
-    /* `USVString?` — the same null-and-undefined-become-null rule with §3.2.11's scalar value conversion after
+    /* `USVString?` — the same null-and-undefined-become-null rule with §3.2.12's scalar value conversion after
        it. XHR §3.5.1's `optional USVString? username = null` is the member that needs it, and it needs it
        load-bearingly: `open(m, u, false, null)` must leave the parsed URL's username alone, where a
        DOMString-nullable would drop the surrogate replacement and a plain USVString would set it to the four
@@ -118,7 +118,7 @@ typedef enum {
        which is what a browser answers; reading the union as "an object is the sequence" gets that one wrong in
        the direction of a TypeError the spec does not have. And it is GetMethod and NOT Get: undefined and null
        mean there is no method, and a @@iterator that is neither of those and not callable is a TypeError.
-       The element type is a DOMString, so §3.2.11's scalar value conversion does NOT run over it — that is the
+       The element type is a DOMString, so §3.2.12's scalar value conversion does NOT run over it — that is the
        whole of what separates this sequence's elements from `BlobPart`'s. Indexed Database §4.4's
        `transaction(storeNames, …)` is what declares it. */
     IDL_DOMSTRING_OR_SEQUENCE,
@@ -200,7 +200,7 @@ typedef enum {
        takes it (the callback-interface/dictionary/record clause), and everything else falls through to the
        string clause. `postMessage(m, 123)` is therefore the target origin "123", which is a SyntaxError, and
        not an options dictionary with no members.
-       The string arm is a USVString (§3.2.11's scalar value conversion), which is what §9.4.4's IDL writes and
+       The string arm is a USVString (§3.2.12's scalar value conversion), which is what §9.4.4's IDL writes and
        what every other member of the URL surface takes. The dictionary is named beside the member. */
     IDL_USVSTRING_OR_DICT,
     /* A DICTIONARY. Web IDL converts one by READING each declared member IN ORDER and converting each by ITS
@@ -342,19 +342,19 @@ int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody b
 /* §3.2's INTEGER conversion, over the double a ToNumber has already produced — sign(x)·floor(|x|) taken modulo
    the type's width, folded into range if it is signed, with [Clamp] rounding half to even instead. Public
    because a conversion that happens OUTSIDE this machine needs the same arithmetic: Web IDL converts a
-   callback's RETURN VALUE to the operation's declared type, and DOM §6.4's `acceptNode` returns an
+   callback's RETURN VALUE to the operation's declared type, and DOM §6.3's `acceptNode` returns an
    `unsigned short`, so a filter answering 65537 accepts exactly as one answering 1 does. Written a second time
    in the component that needed it, that is a modulo somebody has to remember. */
 int64_t idl_integer_of(IdlArgType t, double x);
 
-/* §3.2.9's `unsigned long long`, as the MAGNITUDE rather than as the int64_t bit pattern the modulo leaves —
+/* §3.2.4.8's `unsigned long long`, as the MAGNITUDE rather than as the int64_t bit pattern the modulo leaves —
    the half of that type's range above 2**63 is exactly the half a page reaches by writing a negative, and an
    int64_t cannot express it. Public for the same reason idl_integer_of is: a conversion performed outside this
    machine (File System §2.5's write algorithm reads its dictionary members with its own request) must not own
    a second copy of the arithmetic. */
 double  idl_unsigned_long_long_of(double x);
 
-/* §3.2.10's ByteString RANGE over UTF-8 bytes: true when every code point is 0x00..0xFF. Public because a
+/* §3.2.11's ByteString RANGE over UTF-8 bytes: true when every code point is 0x00..0xFF. Public because a
    conversion that happens OUTSIDE this machine needs the same answer — Headers' fill converts a record's keys
    itself, one [[Get]] at a time, and the range is the type's rule rather than that component's. */
 bool idl_is_bytestring(const char *utf8, size_t len);
@@ -472,7 +472,7 @@ typedef struct {
        field goes with it. */
     const char *(*unforkable)(const void *state);
 } IdlStepDecl;
-/* DECLARE WHERE THE OPTIONAL ARGUMENTS START. §3.6.2 makes an `undefined` passed for an optional argument with
+/* DECLARE WHERE THE OPTIONAL ARGUMENTS START. §3.6 makes an `undefined` passed for an optional argument with
    no default mean the argument is ABSENT — `new URL("aaa:b", undefined)` is a one-argument call, and
    converting that undefined would give the base URL the string "undefined" and throw. Set after the
    declaration — it names the member the LAST one made, the way idl_method_id_ext sets `variadic`, because the
@@ -487,7 +487,7 @@ void idl_optional_from(int first_optional);
 
 /* §3.6 STEP 14.2'S DEFAULT VALUE AT A POSITIONAL ARGUMENT — the THIRD state at a position, beside "the page
    passed one" and "the argument is absent", and exactly the distinction IdlDictDefault already draws for a
-   dictionary member. §3.6.2's absent rule above is for an optional argument with NO default value; where the
+   dictionary member. §3.6's absent rule above is for an optional argument with NO default value; where the
    IDL writes `= …`, step 14.2 replaces the undefined with THAT value and the body never sees a hole.
    IT WAS NOT EXPRESSIBLE AND THE BODIES PAID FOR IT. Indexed Database §4.4's
    `transaction(storeNames, optional IDBTransactionMode mode = "readonly", …)` is the member that needs it: with
@@ -719,7 +719,7 @@ void idl_install_accessor_unforgeable(JSContext *ctx, JSValueConst target, const
    an accessor the whole time it should be one and never has a getter — nor as a readonly accessor, which
    silently drops the write. Every replaceable member shares one setter; the property NAME rides on the
    function as its data, so there is one implementation and no per-member setter to forget.
-   `idl_install_replaceable_value` is the form for an attribute whose value is FIXED for the realm (§7.2.5.3's
+   `idl_install_replaceable_value` is the form for an attribute whose value is FIXED for the realm (§7.2.2.5's
    BarProps, `frames`, `origin`): the getter answers the value it was given. `value` is CONSUMED. */
 void idl_install_replaceable(JSContext *ctx, JSValueConst target, const char *name,
                              IdlGetter getter, int getter_magic);

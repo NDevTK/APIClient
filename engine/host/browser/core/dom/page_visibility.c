@@ -1,4 +1,5 @@
-/* PAGE VISIBILITY — HTML §6.6. See page_visibility.h for why this is ONE source and one derived comparison. */
+/* PAGE VISIBILITY — HTML §6.2 "Page visibility". See page_visibility.h for why this is ONE source and one
+   derived comparison. */
 #include <string.h>
 
 #include "check.h"
@@ -16,15 +17,15 @@
    the path constraint is built from — a second spelling would be a second fact. */
 #define VIS_SRC "{visibilityState}"
 
-/* §6.6's states. This user agent PRESENTS every document it holds — it computes every step of
+/* §6.2's states. This user agent PRESENTS every document it holds — it computes every step of
    update-the-rendering and omits only the paint, which is the one step with no headless equivalent — so the
-   INITIAL answer is "visible". That is a UA decision the spec asks the UA to make (§6.6's "set the initial
+   INITIAL answer is "visible". That is a UA decision the spec asks the UA to make (§6.2's "set the initial
    visibility state"), not a value invented for want of a display. */
 #define VIS_VISIBLE "visible"
 #define VIS_HIDDEN  "hidden"
 
-/* §6.6's VISIBILITY STATE IS DOCUMENT STATE, and it was a constant. `visibilityState` is not a fact about the
- * user agent that never changes — §6.6 defines "update the visibility state", HTML §7.5.9 CALLS it (unloading a
+/* §6.2's VISIBILITY STATE IS DOCUMENT STATE, and it was a constant. `visibilityState` is not a fact about the
+ * user agent that never changes — §6.2 defines "update the visibility state", HTML §7.5.9 CALLS it (unloading a
  * document sets it to "hidden" between pagehide and unload), and a page that listens for `visibilitychange`
  * gets nothing from a getter that answers the same string for ever. A constant makes the read honest and the
  * WRITE impossible, and the write is half the feature.
@@ -74,12 +75,12 @@ void page_visibility_update(JSContext *ctx, bool hidden)
     JS_SetPropertyStr(ctx, rec, "hidden", JS_NewInt32(ctx, hidden ? 1 : 0));   /* step 2 */
     JS_FreeValue(ctx, rec);
     /* THE PAGE VISIBILITY CHANGE STEPS: `visibilitychange` at the DOCUMENT, bubbling. Queued rather than
-       dispatched inline, because §6.6's caller is an algorithm step and the listeners are the page's code —
+       dispatched inline, because §6.2's caller is an algorithm step and the listeners are the page's code —
        event_target_fire is the queued reach, which is a first-class flow like every other job. */
     event_target_fire(ctx, document_object(ctx), event_new(ctx, "visibilitychange", true, false), JS_UNDEFINED);
 }
 
-/* `readonly attribute boolean hidden` — §6.6 defines it as `visibilityState === "hidden"`, so that is what it
+/* `readonly attribute boolean hidden` — §6.2 defines it as `visibilityState === "hidden"`, so that is what it
    IS here: a comparison over the one source, which keys the same constraint entry a page's own
    `visibilityState === "hidden"` would. The example is the comparison's real answer over the example. */
 static JSValue vis_hidden_value(JSContext *ctx)
@@ -139,34 +140,34 @@ bool page_visibility_hidden(JSContext *ctx)
 
 void page_visibility_init(JSContext *ctx)
 {
-    /* DECLARED ONCE PER AGENT, like every other realm value. The initial state is §6.6's "set the initial
+    /* DECLARED ONCE PER AGENT, like every other realm value. The initial state is §6.2's "set the initial
        visibility state", which for this user agent is "visible".
        NOT `if (g_vis_slot < 0)`. There is one declaration site and document_init reaches it unconditionally, so
        that test could never be true — what it COULD do is hand a second agent the slot id a dead runtime issued,
        which is the shape core/agent_state.h found five inits in and 8987603c deleted. */
-    DCHECK(g_vis_slot < 0, "page_visibility_init ran twice — §6.6's realm slot is declared once per AGENT");
-    g_vis_slot = realm_value_declare(ctx, "the document's §6.6 visibility state");
+    DCHECK(g_vis_slot < 0, "page_visibility_init ran twice — §6.2's realm slot is declared once per AGENT");
+    g_vis_slot = realm_value_declare(ctx, "the document's §6.2 visibility state");
 }
 
-/* RELEASED BY ITS DECLARER — §6.6 is declared from document_init, so document_agent_free gives it back. The
+/* RELEASED BY ITS DECLARER — §6.2 is declared from document_init, so document_agent_free gives it back. The
    RECORDS are the realms', released with their contexts; the slot ID is the agent's, and a release that kept it
    would answer a second agent's first read out of an array a dead runtime sized. */
 void page_visibility_free(void)
 {
-    DCHECK(g_vis_slot >= 0, "§6.6's visibility state was released in an agent that never declared it");
+    DCHECK(g_vis_slot >= 0, "§6.2's visibility state was released in an agent that never declared it");
     g_vis_slot = -1;
 }
 
 void page_visibility_install(JSContext *ctx, JSValueConst proto)
 {
-    /* §6.6's SET THE INITIAL VISIBILITY STATE, run where a realm gets its Document members — one record per
+    /* §6.2's SET THE INITIAL VISIBILITY STATE, run where a realm gets its Document members — one record per
        realm, because the state is one Document's. It is written HERE rather than lazily on the first read: a
        record built on first touch would be built inside whichever flow happened to read first, which is the
        defect CLAUDE.md names for per-realm intrinsics, and it would make one flow's document the baseline for
        every other. */
     JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
 
-    CHECK(!JS_IsException(rec), "page visibility: OOM building a realm's §6.6 visibility state record");
+    CHECK(!JS_IsException(rec), "page visibility: OOM building a realm's §6.2 visibility state record");
     JS_SetPropertyStr(ctx, rec, "hidden", JS_NewInt32(ctx, 0));
     realm_value_set(ctx, g_vis_slot, rec);
 

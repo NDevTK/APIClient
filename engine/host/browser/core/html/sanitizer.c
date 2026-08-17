@@ -923,7 +923,7 @@ static bool san_list_subset(JSContext *ctx, JSValueConst a, JSValueConst b)
     return true;
 }
 
-/* HTML §2.6.6's CUSTOM DATA ATTRIBUTE, as a canonical item: a `data-` name in the null namespace. Stated once
+/* HTML §3.2.6.6's CUSTOM DATA ATTRIBUTE, as a canonical item: a `data-` name in the null namespace. Stated once
    because three of §8.6.2's algorithms and the validity check all ask it. */
 static bool san_item_is_data_attribute(const SanName *nm)
 {
@@ -1320,7 +1320,7 @@ static JSValue js_san_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     (void)magic;
     if (JS_IsUndefined(this_val))
         return JS_ThrowTypeError(ctx, "constructor Sanitizer requires 'new'");
-    /* The argument's IDL default is the PRESET `"default"`, so §3.6.2 leaves an absent one undefined and step
+    /* The argument's IDL default is the PRESET `"default"`, so §3.6 leaves an absent one undefined and step
        1.2 turns it into the built-in safe default configuration — a Sanitizer built with no argument is the
        safe one, and `sanitize` is what removes unsafe on top of it when a SAFE member asked for it. */
     if (argc == 0 || JS_IsUndefined(argv[0]))  cfg = san_default_config(ctx);
@@ -1414,7 +1414,7 @@ static JSValue js_san_set_flag(JSContext *ctx, JSValueConst this_val, int argc, 
     JSValue cur;
 
     if (!r) return JS_EXCEPTION;
-    /* §3.6.2 threw for a call with no argument before this body ran, and the declaration converted what there
+    /* §3.6 threw for a call with no argument before this body ran, and the declaration converted what there
        was — so this is ToBoolean over a value that is already one, or over unknown external input, which
        forks rather than being asserted about. */
     allow = argc > 0 && JS_ToBool(ctx, argv[0]);

@@ -24,7 +24,7 @@
  * reaches, because nothing ever gives it a focus to react to.
  *
  * THE STATE IS PER DOCUMENT AND IT TIME-TRAVELS. Both pieces live in a per-realm record — the shape document.c's
- * readiness, §6.6's visibility state and §6.6.2's focused area already use — so the list is a JS ARRAY and the
+ * readiness, §6.2's visibility state and §6.6.2's focused area already use — so the list is a JS ARRAY and the
  * flag a property on an ordinary object: their mutations are property writes the heap COW captures, which is
  * what makes a flow that inserted an `<input autofocus>` see a candidate its sibling does not, and what carries
  * a half-drained list to the IDB cold tier and back. A malloc'd list of node pointers could do neither. */

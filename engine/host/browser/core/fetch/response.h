@@ -1,4 +1,4 @@
-/* The Response interface — WHATWG Fetch §6. See response.c. */
+/* The Response interface — WHATWG Fetch §5.5 "Response class". See response.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FETCH_RESPONSE_H
 #define ENGINE_HOST_BROWSER_CORE_FETCH_RESPONSE_H
 #include <stddef.h>
@@ -7,7 +7,7 @@
 #include "core/fetch/headers.h"
 
 void    response_init(JSContext *ctx);   /* register the class, its prototype and its machines (install time) */
-void    response_install_proto(JSContext *ctx);   /* §6.4's prototype and serializer, for ONE realm */
+void    response_install_proto(JSContext *ctx);   /* §5.5's prototype and serializer, for ONE realm */
 void    response_install(JSContext *ctx, JSValueConst global);   /* the Response interface object */
 void    response_free(JSContext *ctx);   /* the prototype this component holds */
 /* §2.2.6's URL LIST, from the SERIALIZED URLs a host observed — "a list of zero or more URLs", of which only

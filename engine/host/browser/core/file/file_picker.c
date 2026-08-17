@@ -18,7 +18,7 @@
  * quickjs-step.h now state that the page decides nothing about where this engine may park, because what parks
  * a flow is RAM pressure, a cold-tier eviction, a cross-session resume or a flow that outranks it. Steps 1 and
  * 2 share a stage because they are TWO O(1) engine actions and nothing can park between them. They were ONE,
- * on the reading that an opaque origin is same origin with nothing so §7.2.5.1's comparison decided both —
+ * on the reading that an opaque origin is same origin with nothing so §7.2.1's comparison decided both —
  * which was an artifact of comparing SERIALIZATIONS. §7.1.1 step 1 makes an origin same origin with ITSELF,
  * opaque included, so step 2 says nothing about step 1's case and each is asked as itself (core/url/origin.h).
  * Every other step of these algorithms has a stage of its own.

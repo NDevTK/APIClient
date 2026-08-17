@@ -4,7 +4,7 @@
  * says an origin is "one of the following — an opaque origin: an internal value, with no serialization it can
  * be recreated from (it is serialized as `null` per serialization of an origin), FOR WHICH THE ONLY MEANINGFUL
  * OPERATION IS TESTING FOR EQUALITY; a tuple origin: a tuple consisting of a scheme, a host, a port and a
- * domain". Everything downstream — §7.2.5.1's WindowProxy filter, §7.3.1's `contentDocument`, §7.2.6.3's
+ * domain". Everything downstream — §7.2.1's WindowProxy filter, §7.3.1's `contentDocument`, §7.2.6.3's
  * disabled clause, Storage's storage key, Permissions §5.1 — is defined over that record, and a component
  * holding the SERIALIZATION cannot run the first step of the first algorithm:
  *
@@ -21,7 +21,7 @@
  * about:srcdoc … return sourceOrigin", "if url matches about:blank and sourceOrigin is non-null, then return
  * sourceOrigin", with the standard's own note that these "result in two Documents that end up with the same
  * underlying origin"), so a `data:` document's `about:blank` child is a pair that MUST be same origin and was
- * not: its `contentDocument` was null, every §7.2.5.1 member outside the fixed cross-origin list was a
+ * not: its `contentDocument` was null, every §7.2.1 member outside the fixed cross-origin list was a
  * SecurityError, and — because an instance is an origin-keyed agent cluster — the child was routed to a PEER
  * INSTANCE that no host provisions.
  *
@@ -66,7 +66,7 @@ bool origin_is_opaque(const Origin *o);
 bool origin_same(const Origin *a, const Origin *b);
 
 /* §7.1.1's SAME ORIGIN-DOMAIN, which is a DIFFERENT algorithm and not a laxer spelling of the one above: it is
-   what §7.3.1's `content document` filters `iframe.contentDocument` by, while §7.2.5.1's cross-origin filter
+   what §7.3.1's `content document` filters `iframe.contentDocument` by, while §7.2.1's cross-origin filter
    uses same ORIGIN. The standard prints a five-row table for the pair precisely because they disagree BOTH
    WAYS — equal domains with different ports are same origin-domain and NOT same origin; one side having set a
    domain makes a pair same origin and NOT same origin-domain — so a filter that agreed with same origin for
@@ -160,7 +160,7 @@ const Origin *origin_determine(const UrlRecord *url, bool sandboxed_origin, cons
 
 /* THE AGENT'S ORIGIN — one record for the whole instance, because an instance IS an origin-keyed agent cluster
    (SECURITY.md), so "this document's origin" and "this agent's origin" are one fact. It is the ACCESSOR side of
-   every same-origin check: §7.2.5.1 compares a navigable's origin against it.
+   every same-origin check: §7.2.1 compares a navigable's origin against it.
    ADOPTED ONCE, from the serialization the trusted zone states (platform.c), because the host knows the
    principal and the engine may not invent one. A host that says "null" is stating an OPAQUE origin, and this is
    where that origin's identity is minted — every later reader of it gets THE SAME record, which is the whole

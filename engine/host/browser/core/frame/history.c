@@ -1,4 +1,4 @@
-/* THE History INTERFACE — HTML §7.2.5, the scriptable face of core/frame/session_history.c.
+/* THE History INTERFACE — HTML §7.2.5 "The History interface", the scriptable face of core/frame/session_history.c.
  *
  * THIS IS THE MEMBER EVERY CLIENT-SIDE ROUTER IS BUILT ON. React Router, Vue Router, Angular's Router and every
  * hand-rolled one change route by calling `history.pushState()`; with `history` absent a routing bundle threw on
@@ -313,7 +313,7 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
     /* STEPS 1-2. */
     if (!hist_entry(ctx, hdr->this_val)) { JS_FreeValue(ctx, cb_result); return JS_STEP_ABRUPT; }
     DCHECK(argc >= 2, "pushState/replaceState ran with fewer than its two required arguments — `any data` and "
-                      "`DOMString unused` are both required, so §3.6.2's arity check answered that before this "
+                      "`DOMString unused` are both required, so §3.6's arity check answered that before this "
                       "body was entered");
     /* STEP 3: "let serializedData be StructuredSerializeForStorage(data). Rethrow any exceptions." IT IS FIRST,
        and that order is observable: `history.pushState(function(){}, "", "https://other/")` is a
@@ -489,7 +489,7 @@ static JSValue js_hist_delta_traverse(JSContext *ctx, JSValueConst this_val, int
     case HIST_TRAVERSE_FORWARD: delta = +1; break;
     case HIST_TRAVERSE_GO:
         /* `optional long delta = 0`. An argument the page did not pass, and one it passed as `undefined` —
-           §3.6.2 makes those the same thing for an optional position — is the IDL's declared default, which is
+           §3.6 makes those the same thing for an optional position — is the IDL's declared default, which is
            why `history.go()` and `history.go(undefined)` both reload. Anything it did pass has already been
            through the `long` conversion (ToNumber, then modulo 2^32 signed), so the page's `valueOf` ran on the
            machine and this reads a number. */
@@ -615,7 +615,7 @@ void history_init(JSContext *ctx)
     /* §7.2.5's `undefined go(optional long delta = 0)`, `undefined back()` and `undefined forward()` — one
        algorithm declared three times with the three magics its one body switches on. `back` and `forward` take
        no arguments at all, which is what a declaration of zero says; `go`'s single argument is DECLARED
-       optional, so §3.6.2 hands the body `undefined` for an absent one and the body applies the IDL default. */
+       optional, so §3.6 hands the body `undefined` for an absent one and the body applies the IDL default. */
     {
         static const IdlArgType GO_ARGS[] = { IDL_LONG };
 

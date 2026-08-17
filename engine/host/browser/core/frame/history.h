@@ -1,4 +1,4 @@
-/* THE History INTERFACE — HTML §7.2.5. See history.c. */
+/* THE History INTERFACE — HTML §7.2.5 "The History interface". See history.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_HISTORY_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_HISTORY_H
 

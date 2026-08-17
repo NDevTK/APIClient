@@ -5,7 +5,7 @@
  *   - HTML 9.4.2's MessagePort.postMessage, which delivers a SERIALIZED message — a port that handed the same
  *     object reference to both sides would not be a port, it would be a shared variable.
  *   - HTML 9.4.4's window.postMessage, the same.
- *   - Streams §4.9.7's ReadableStreamTee with cloneForBranch2, which is how Fetch's `response.clone()` gives
+ *   - Streams §4.9.1's ReadableStreamTee with cloneForBranch2, which is how Fetch's `response.clone()` gives
  *     the second branch its own chunk. Fourteen of response-clone's subtests assert exactly that the two
  *     branches deliver DIFFERENT objects with equal contents.
  * It is therefore a subproblem of all three and is built before any of them.
@@ -221,7 +221,7 @@ JSValue structured_deserialize(JSContext *ctx, const StructuredData *in)
 /* THE SAME-TURN, SAME-HEAP COPY — StructuredDeserialize(StructuredSerialize(v)) with nothing between the two
    halves. That is what lets `memory` be seeded with a value that is ITS OWN COPY: the read happens in this turn
    and in this heap, so the leaf the write interned is still the same live symbol when the read resolves it.
-   Its callers are exactly the operations for which that is true — Streams §4.9.7's tee with cloneForBranch2 and
+   Its callers are exactly the operations for which that is true — Streams §4.9.1's tee with cloneForBranch2 and
    Indexed Database's §5.11/§6.2, whose store holds the copy as a live value. */
 JSValue structured_clone(JSContext *ctx, JSValueConst v)
 {
@@ -571,7 +571,7 @@ void structured_with_transfer_free(JSContext *ctx, StructuredWithTransfer *d)
    THE ARGUMENTS ARRIVE CONVERTED. `options` is a dictionary and `options.transfer` a `sequence<object>`, so the
    member read and the whole iterator walk are the page's code — read from C they had no flow base under them,
    which is why the declaration performs them and this body sees a plain engine-built object holding an
-   engine-built array. §3.6.2 step 1's "value is required" is the declaration's too. */
+   engine-built array. §3.6 step 5's "value is required" is the declaration's too. */
 static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                    int magic)
 {
@@ -579,7 +579,7 @@ static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int ar
     JSValue transfer, out, values;
 
     (void)this_val; (void)magic;
-    DCHECK(argc >= 1, "structuredClone ran with no value — §3.6.2 step 1 is the declaration's, and "
+    DCHECK(argc >= 1, "structuredClone ran with no value — §3.6 step 5 is the declaration's, and "
                       "idl_optional_from names position 1 as the first optional one");
     /* §2.7.6's `= []`: an options dictionary with no `transfer` member is a transfer list of nothing. That is
        the IDL's own default and not a hole filled at the reader — an absent member of a dictionary IS the empty

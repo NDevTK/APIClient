@@ -135,7 +135,7 @@ typedef struct Document {
     SandboxFlags         sandbox_flags;
     JSValue              doc_obj;   /* the `document` object — HELD, released by document_free */
     JSValue              win_obj;   /* this document's Window — HELD, and UNDEFINED with no browsing context */
-    /* §7.2.5.1's ONE WindowProxy FOR THIS NAVIGABLE — `window`, `self`, and the `source` of every message this
+    /* §7.2.3's ONE WindowProxy FOR THIS NAVIGABLE — `window`, `self`, and the `source` of every message this
        document posts. It lives on the REALM because that is what it is one of: a page comparing `e.source`
        across two messages must find the same object, and a table keyed by document would be an immortal root
        holding one proxy per navigable a forced-execution frontier ever created — thousands, none collectable.
@@ -1264,7 +1264,7 @@ const char *document_readiness_of(const lxb_dom_node_t *doc)
  * "the end" asserts it is false and sets it true before firing `pageshow`, and §7.5.9 step 9 fires `pagehide`
  * only if it is true, setting it false first.
  *
- * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the shape the readiness above and §6.6's visibility state
+ * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the shape the readiness above and §6.2's visibility state
  * already use, and for the same two reasons: the record is unreachable from the page, so nothing but this
  * component can write the flag; and the write is an ordinary property write, so the heap COW captures it and
  * one arm of a fork can unload its document without touching its sibling's. */
@@ -1826,7 +1826,7 @@ static JSValue js_doc_create_traverser(JSContext *ctx, JSValueConst this_val, in
     DCHECK(node_of(this_val) != NULL, "a traverser factory ran on something that is not a document");
     if (!node_of(root))
         return JS_ThrowTypeError(ctx, "createNodeIterator/createTreeWalker requires a Node root");
-    /* The IDL's defaults. An absent optional argument arrives as undefined, which is what §3.6.2 means by
+    /* The IDL's defaults. An absent optional argument arrives as undefined, which is what §3.6 means by
        absent — so the default is applied here and nowhere else. */
     if (argc > 1 && !JS_IsUndefined(argv[1]) && JS_ToUint32(ctx, &what, argv[1]) < 0)
         return JS_EXCEPTION;
@@ -2123,7 +2123,7 @@ JSValueConst document_window_proxy(JSContext *ctx)
 {
     Document *d = doc_here(ctx);
     DCHECK(!JS_IsUndefined(d->proxy), "this realm's WindowProxy was read before its Document was installed — "
-                                      "§7.2.5.1 gives a navigable ONE, and it is minted with the realm");
+                                      "§7.2.3 gives a navigable ONE, and it is minted with the realm");
     return d->proxy;
 }
 
@@ -2157,7 +2157,7 @@ bool document_fully_active(JSContext *ctx)
         JSValue parent;
         if (window_proxy_closed(ctx, cur)) { ok = false; break; }
         parent = window_proxy_parent(ctx, cur);
-        /* §7.3.1's base case is a TOP-LEVEL traversable, and §7.2.5's `parent` of one is the navigable ITSELF —
+        /* §7.3.1's base case is a TOP-LEVEL traversable, and §7.2.2.4's `parent` of one is the navigable ITSELF —
            so the walk ends when the answer stops moving, or when it is not a navigable's proxy at all (a
            cross-instance parent this agent cannot walk into, which is answered by its own instance). */
         if (!window_proxy_is(parent) ||
@@ -2223,7 +2223,7 @@ void document_init(JSContext *ctx)
     slot_init(ctx);                /* §4.2.2's slots, which only exist inside a §4.8 tree */
     document_type_init(ctx);       /* §4.6, before the parser's doctype is wrapped as a bare Node */
     dom_implementation_init(ctx);  /* §4.5.1, which every document's record builds one of */
-    /* §6.6's visibility state is a DOCUMENT's, and page_visibility_install already runs from
+    /* §6.2's visibility state is a DOCUMENT's, and page_visibility_install already runs from
        document_install_proto below — so its declaration is paired with it HERE rather than copied into each
        host's own init list, which is the hand-picked list CLAUDE.md warns about: three hosts each declaring
        their own is three places for the next component to be missing from one of. */
@@ -2273,7 +2273,7 @@ void document_install_proto(JSContext *ctx)
        from — and `NonElementParentNode`, the same getElementById DocumentFragment includes. */
     node_install_parent_mixin(ctx, proto);
     node_install_nonelement_parent_mixin(ctx, proto);
-    /* HTML §6.6's `visibilityState` and `hidden` — one source and the comparison the spec defines over it. */
+    /* HTML §6.2's `visibilityState` and `hidden` — one source and the comparison the spec defines over it. */
     page_visibility_install(ctx, proto);
     /* HTML §6.6.6's `activeElement` (DocumentOrShadowRoot) and `hasFocus()`, and this realm's INITIAL FOCUSED
        AREA — the viewport, built with the realm so it is baseline rather than whichever flow read first. */
@@ -2558,10 +2558,10 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        written here cannot disagree with anything. Before the no-address return, because a document with no
        address still has a navigable a peer can hold a reference into. */
     world_doc_realm_set(doc_id, ctx);
-    /* §7.2.5.1's ONE WindowProxy FOR THIS NAVIGABLE, minted WITH the realm because that is what it is one of.
+    /* §7.2.3's ONE WindowProxy FOR THIS NAVIGABLE, minted WITH the realm because that is what it is one of.
        Before the early return below: a document with no address still has a navigable, and `window.closed`
        reads the navigable's state through this object. */
-    /* §7.2.5.1: A NAVIGABLE HAS ONE WindowProxy, AND THE NAVIGABLE COMES FIRST. A realm is built for a
+    /* §7.2.3: A NAVIGABLE HAS ONE WindowProxy, AND THE NAVIGABLE COMES FIRST. A realm is built for a
        navigable that already exists — §7.4 created it, named it and handed its proxy to the page — so minting
        one here made a SECOND proxy for a navigable that had one. The consequence is not academic: the second
        carries no parent and no opener, so a child's `parent` answered ITSELF instead of its creator and a
@@ -2569,7 +2569,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        The caller supplies it, because the caller is whoever owns the navigable: the host for the ROOT one it
        named, and §7.4 for every child it created. */
     DCHECK(window_proxy_is(nav_proxy),
-           "a Document was installed for a realm with no navigable — §7.2.5.1's proxy belongs to the navigable "
+           "a Document was installed for a realm with no navigable — §7.2.3's proxy belongs to the navigable "
            "and the navigable exists before its realm, so the caller that owns it passes it in");
     d->proxy = JS_DupValue(ctx, nav_proxy);
     if (!url || !*url)

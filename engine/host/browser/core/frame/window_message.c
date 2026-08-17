@@ -45,7 +45,7 @@
 #include "solver/flow.h"
 #include "solver/world.h"
 
-/* THIS DOCUMENT'S WindowProxy is §7.2.5.1's ONE-per-navigable, and it is READ from where that rule lives
+/* THIS DOCUMENT'S WindowProxy is §7.2.3's ONE-per-navigable, and it is READ from where that rule lives
    rather than cached here: a same-origin child is a second realm in this agent, so a file-scope copy would be
    whichever document installed last and `e.source` from one document would have compared equal to the other's.
    The document handle is the identity, and window_proxy.c owns the mapping. */
@@ -275,7 +275,7 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
     buf = JS_NewArrayBufferCopy(ctx, bytes, len);
     entry = JS_IsException(buf) ? buf : JS_NewArray(ctx);
     CHECK(!JS_IsException(entry), "window message: OOM receiving a routed message");
-    /* §7.2.5.1's proxy for the SENDER, minted remote because that document lives in the instance that sent
+    /* §7.2.3's proxy for the SENDER, minted remote because that document lives in the instance that sent
        this. Its origin is the stamped one — the same value `event.origin` reports, and the value a
        same-origin check inside the peer would be made against. */
     /* THE STAMPED SERIALIZATION BECOMES A RECORD HERE, and it is the peer's own: origin_parse mints a fresh
@@ -420,7 +420,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     DCHECK(JS_IsArray(transfer), "postMessage's transfer list is not the materialized sequence — "
                                  "IDL_SEQUENCE_OBJECT is what §3.2.21 builds, and reading the page's object "
                                  "again here would run its iterator a second time");
-    /* A REAL STRING, so this runs none of the page's code — the ToString §3.2.11 owed happened at the
+    /* A REAL STRING, so this runs none of the page's code — the ToString §3.2.12 owed happened at the
        conversion, on the tramp, where a `toString` could park. */
     to = JS_ToCString(ctx, tov);
     JS_FreeValue(ctx, tov);

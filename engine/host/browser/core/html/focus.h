@@ -15,7 +15,7 @@
 #include "quickjs-step.h"
 
 /* THE AGENT'S HALF: the realm slot §6.6.2's focused area lives in, and the three declared members. Reached from
-   document_init, beside §6.6's visibility state and for the same reason it is paired there rather than copied
+   document_init, beside §6.2's visibility state and for the same reason it is paired there rather than copied
    into each host's init list — the focused area is a DOCUMENT's state and document.c is the one component every
    host that has a Document goes through. */
 void focus_init(JSContext *ctx);

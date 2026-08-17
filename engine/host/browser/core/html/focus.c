@@ -12,7 +12,7 @@
  * engine's purpose is a whole region of the bundle that is never explored.
  *
  * THE STATE IS ONE FACT, AND IT LIVES IN THIS REALM'S BASELINE RECORD — the shape document.c's readiness and
- * §6.6's visibility state already use, for the two reasons stated there: the record is unreachable from the
+ * §6.2's visibility state already use, for the two reasons stated there: the record is unreachable from the
  * page, so nothing but this component can write the focused area; and the write is an ordinary property write,
  * so the heap COW captures it and one arm of a fork can focus its dialog without touching its sibling's. A
  * flow that focuses an element and parks resumes with that element still focused.
@@ -878,7 +878,7 @@ static bool focus_state_init(JSContext *ctx, FocusState *s)
 
 /* §6.6.6's ALLOW FOCUS STEPS, given a Document target.
      "If target is allowed to use the `focus-without-user-activation` feature, return true."  That feature's
-   DEFAULT ALLOWLIST is 'self' (HTML §2.2.3's policy-controlled feature list), so a document is allowed to use
+   DEFAULT ALLOWLIST is 'self' (HTML §2.2's "Policy-controlled features" list), so a document is allowed to use
    it exactly while it is same-origin with the top-level traversable's active document — this engine parses no
    `Permissions-Policy` header and no `allow` attribute, so nothing narrows or widens the default and the
    default IS the answer.

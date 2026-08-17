@@ -165,7 +165,7 @@ static int dsm_has(JSContext *ctx, JSValueConst obj, JSAtom prop)
     return dsm_get_own(ctx, NULL, obj, prop);
 }
 
-/* §3.2.2's SUPPORTED PROPERTY NAMES — what Object.keys(el.dataset) and a for-in see. Every data-* attribute the
+/* §3.2.6.6's SUPPORTED PROPERTY NAMES — what Object.keys(el.dataset) and a for-in see. Every data-* attribute the
    mapping can round-trip, in the order the element holds them. */
 static int dsm_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj)
 {
@@ -285,7 +285,7 @@ void dom_string_map_init(JSContext *ctx)
     realm_declare_intrinsic(dom_string_map_install_proto);
 }
 
-/* §3.2.9's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+/* §3.2.6.6's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
 void dom_string_map_install_proto(JSContext *ctx)
 {
     JSValue proto, prev;

@@ -1450,7 +1450,7 @@ enum { BQ_RESPOND = 0, BQ_RESPOND_VIEW };
 
 #define BQ_STAGES(X) \
     X(BQ_ENTER, "Web IDL §3.7.5 (the ReadableStreamBYOBRequest brand, before either argument is converted)") \
-    X(BQ_NUM, "Web IDL §3.2.9 ([EnforceRange] unsigned long long bytesWritten — ToNumber is the page's code; " \
+    X(BQ_NUM, "Web IDL §3.2.4.8 ([EnforceRange] unsigned long long bytesWritten — ToNumber is the page's code; " \
               "respondWithNewView's ArrayBufferView needs none)") \
     X(BQ_START, "Streams §4.8 respond(bytesWritten) / respondWithNewView(view) steps 1-3 and §4.9.5's " \
                 "ReadableByteStreamControllerRespondInternal, up to its first run of the page's code") \
@@ -1597,7 +1597,7 @@ static int js_byobreq_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     if (s->hdr.stage == BQ_NUM) {
         if (s->hdr.arg == BQ_RESPOND) {
             /* Web IDL converts the argument BEFORE the method's own steps, and `[EnforceRange] unsigned long
-               long` is ToNumber (the page's `valueOf`) and then §3.2.9's range — a fractional, negative,
+               long` is ToNumber (the page's `valueOf`) and then §3.2.4.8's range — a fractional, negative,
                non-finite or too-large value is a TypeError, never a silent clamp. */
             double x = 0;
             r = step_todouble_run(ctx, &s->hdr, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED,
@@ -1770,7 +1770,7 @@ static const JSTrampStepDef js_byobreq_defs[2] = { BQ_DEF(BQ_RESPOND), BQ_DEF(BQ
     X(BR_START, "Streams §4.5 read(view, options) — Web IDL §3.7.5's brand and §3.2.25's ArrayBufferView, " \
                 "before the dictionary is read") \
     X(BR_MIN, "Web IDL §3.2.18 (ReadableStreamBYOBReaderReadOptions[\"min\"] — the [[Get]] is the page's code)") \
-    X(BR_MINNUM, "Web IDL §3.2.9 ([EnforceRange] unsigned long long min — ToNumber is the page's code)") \
+    X(BR_MINNUM, "Web IDL §3.2.4.8 ([EnforceRange] unsigned long long min — ToNumber is the page's code)") \
     X(BR_INTO, "Streams §4.5 read() steps 1-11 and §4.9.5's ReadableByteStreamControllerPullInto") \
     X(BR_EMPTYVIEW, "Streams §4.9.5 ReadableByteStreamControllerPullInto's closed branch (constructing the " \
                     "EMPTY view that gives the caller its memory back — %DataView% is a step machine)") \
@@ -1877,7 +1877,7 @@ static int js_byob_read_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     }
 
     if (s->hdr.stage == BR_MIN) {
-        /* §3.2.18's dictionary conversion, which is a [[Get]] of `min` and then §3.2.9's coercion — both the
+        /* §3.2.18's dictionary conversion, which is a [[Get]] of `min` and then §3.2.4.8's coercion — both the
            page's code, and both BEFORE §4.5's own steps 1-8. */
         if (JS_IsUndefined(opts) || JS_IsNull(opts)) {
             STEP_GOTO(s->hdr.stage, BR_INTO, &s->w.phase, &s->view_phase, &s->hdr.get_phase, NULL);

@@ -1,4 +1,4 @@
-/* THE RESPONSE INTERFACE — WHATWG Fetch §6, over the body the trusted host supplied.
+/* THE RESPONSE INTERFACE — WHATWG Fetch §5.5 "Response class", over the body the trusted host supplied.
  *
  * `fetch()` resolved with the raw body STRING, which meant the shape every real bundle is written in —
  * `fetch(u).then(r => r.json())` — died at `r.json is not a function`, taking with it every endpoint, example
@@ -33,7 +33,7 @@ static int       g_body_handle = -1;
 /* One WASM instance is one document, so the class id and the body readers' step ids below are that runtime's;
    the DCHECK at install is what makes a second one impossible rather than merely unlikely. */
 static JSRuntime *g_response_rt;
-/* %JSON.stringify%, captured per realm at that realm's install. §6.4's "serialize a JavaScript value to JSON
+/* %JSON.stringify%, captured per realm at that realm's install. §5.5's "serialize a JavaScript value to JSON
    bytes" is the ABSTRACT operation, not a property read — a page that replaces `JSON.stringify` does not
    thereby change what `Response.json` does — so the original function object is held rather than looked up per
    call. It is read before any page script runs, off the engine's own builtin, so the capture itself runs
@@ -55,11 +55,11 @@ static JSValue response_json_stringify(JSContext *ctx)
    readers whose entire job is to hand those bytes back — would then have reported as the whole body. There is
    no length a strlen can recover once the buffer is copied, so the length rides the record from the call that
    builds it, and `text()`/`json()` read exactly as far. */
-/* §6.4's RESPONSE, as the spec's fields and not as constants. `ok`/`status`/`statusText`/`type` were literals
+/* §5.5's RESPONSE, as the spec's fields and not as constants. `ok`/`status`/`statusText`/`type` were literals
    here — 200, "OK", "basic" — which was right for the one Response this component could build (the reply the
    trusted host had already fetched) and wrong the moment the page can build one: `new Response("", {status:
    404})` is not 200, and every `if (r.ok)` in a page that constructs its own responses forked the wrong way.
-   The BODY is §5.2's mixin, whose one implementation Request includes too. */
+   The BODY is §5.3's mixin, whose one implementation Request includes too. */
 /* §2.2.6's URL LIST, AND WHY IT IS A JS ARRAY.
  *
  * "A response has an associated URL list (a list of zero or more URLs). Unless stated otherwise, it is « »."
@@ -82,17 +82,17 @@ static JSValue response_json_stringify(JSContext *ctx)
  * "serialized with exclude fragment set to true". */
 typedef struct {
     JSValue url_list;         /* §2.2.6's URL list — an Array of serialized URLs; « » is the empty Array */
-    BodyState body;           /* §5.2's mixin, one implementation shared with Request */
+    BodyState body;           /* §5.3's mixin, one implementation shared with Request */
     int     status;
     char   *status_text;      /* the response's "status message" */
     uint8_t type;             /* RESPONSE_TYPE_* */
-    /* [SameObject]: §6.4 declares `headers` SameObject, so the Headers OBJECT is built once and held here
+    /* [SameObject]: §5.5 declares `headers` SameObject, so the Headers OBJECT is built once and held here
        rather than minted per read — a page that does `const h = r.headers; h.set(...)` must be writing into
        the response's own list, and `r.headers === r.headers` is asserted by wpt directly. */
     JSValue headers;
 } ResponseData;
 
-/* §6.4's response types. "default" is what the CONSTRUCTOR makes; "basic" is a same-origin reply the host
+/* §5.5's response types. "default" is what the CONSTRUCTOR makes; "basic" is a same-origin reply the host
    fetched. The others arrive with CORS and opaque replies, which is where they will be set from. */
 enum { RESPONSE_TYPE_DEFAULT = 0, RESPONSE_TYPE_BASIC, RESPONSE_TYPE_CORS, RESPONSE_TYPE_ERROR,
        RESPONSE_TYPE_OPAQUE, RESPONSE_TYPE_OPAQUEREDIRECT };
@@ -125,8 +125,8 @@ static void response_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
 
 static ResponseData *response_of(JSValueConst v) { return JS_GetOpaque(v, g_response_class); }
 
-/* How §5.2's shared readers find this interface's body. */
-/* §5.2's `formData()` asks the including interface for its Content-Type, because only it knows where its
+/* How §5.3's shared readers find this interface's body. */
+/* §5.3's `formData()` asks the including interface for its Content-Type, because only it knows where its
    headers live. NULL when there is none, which is a body with no form encoding and therefore a TypeError. */
 static char *response_body_mime(JSContext *ctx, JSValueConst v)
 {
@@ -225,7 +225,7 @@ static JSValue response_url_of(JSContext *ctx, ResponseData *d, int64_t *psize)
    two independent reads, so sharing the latch would make the copy unreadable the moment the original was read
    and defeat the only reason the call exists. It does NOT consume this response — `res.clone()` leaves `res`
    readable, which is what the caching layer then does with it. */
-/* IT IS A STEP, because §5.2's "clone a body" is a TEE and a tee is a call of code the page can reach. The two
+/* IT IS A STEP, because §2.2.4's "clone a body" is a TEE and a tee is a call of code the page can reach. The two
    synchronous refusals still happen where the page wrote its try/catch: a locked or disturbed body is a
    TypeError from clone() itself, not a rejected promise, because clone is not a body-consuming method. */
 typedef struct {
@@ -234,13 +234,13 @@ typedef struct {
     JSValue cb[2];     /* step_call_run's buffer: [this, tee] — the tee takes no arguments */
 } JSCloneState;
 
-/* WHERE THIS MACHINE RESTS. §6.4's clone() is three steps and the page's code runs in exactly one of them:
-   step 2's "clone a response" performs §5.2's "clone a body", which is a TEE — a call. */
+/* WHERE THIS MACHINE RESTS. §5.5's clone() is three steps and the page's code runs in exactly one of them:
+   step 2's "clone a response" performs §2.2.4's "clone a body", which is a TEE — a call. */
 #define RESP_CLONE_STAGES(X) \
     X(CL_ENTRY = IDL_STEP_FIRST, \
-      "Fetch §6.4 clone() steps 1-2 (the unusable refusal, then §5.2's clone a response down to its body)") \
-    X(CL_BODY, "Fetch §5.2 clone a body step 1 (tee this's body's stream)") \
-    X(CL_DONE, "Fetch §6.4 clone() step 3 (the Response object for the cloned response)")
+      "Fetch §5.5 clone() steps 1-2 (the unusable refusal, then §2.2.6's clone a response down to its body)") \
+    X(CL_BODY, "Fetch §2.2.4 clone a body step 1 (tee this's body's stream)") \
+    X(CL_DONE, "Fetch §5.5 clone() step 3 (the Response object for the cloned response)")
 enum { RESP_CLONE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const RESP_CLONE_STEPS[] = { RESP_CLONE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -268,7 +268,7 @@ static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
         s->cb[0] = s->cb[1] = JS_UNDEFINED;
         if (!d)
             return JS_ThrowTypeError(ctx, "not a Response"), -1;
-        /* §5.2's "unusable" is DISTURBED **or** LOCKED — a body whose stream a page has taken a reader on
+        /* §5.3's "unusable" is DISTURBED **or** LOCKED — a body whose stream a page has taken a reader on
            cannot be teed, and reporting only the read latch let clone() reach the tee and throw from inside
            it, which is the wrong error at the wrong place. */
         readable_stream_query(d->body.stream, NULL, &locked);
@@ -276,7 +276,7 @@ static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
             return JS_ThrowTypeError(ctx, "cannot clone a Response whose body is disturbed or locked"), -1;
         s->obj = response_alloc(ctx, &c);
         if (JS_IsException(s->obj)) { s->obj = JS_UNDEFINED; return -1; }
-        /* §6.4 clone COPIES the response, so every field goes — a clone that kept only the body reported status
+        /* §5.5 clone COPIES the response, so every field goes — a clone that kept only the body reported status
            200 and type "basic" for a 404 the page had just constructed. The headers are a NEW Headers over the
            same list, because [SameObject] is per response and `r.clone().headers === r.headers` is false. The
            BODY is not among them: it is the tee below, not a copy. */
@@ -286,7 +286,7 @@ static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
         STEP_GOTO(hdr->stage, CL_BODY, &s->phase, NULL);
     }
 
-    DCHECK(hdr->stage == CL_BODY, "Response.clone resumed in a stage §6.4 does not have");
+    DCHECK(hdr->stage == CL_BODY, "Response.clone resumed in a stage §5.5 does not have");
     DCHECK(d != NULL, "a Response stopped being one between two stages of its own clone");
     c = response_of(s->obj);
     DCHECK(c != NULL, "the clone this machine allocated stopped being a Response");
@@ -301,7 +301,7 @@ static int js_response_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int 
 
 static const IdlStepDecl js_response_clone_decl = {
     js_response_clone_step, sizeof(JSCloneState), js_clone_visit, NULL,
-    "Fetch §6.4 Response.clone()", RESP_CLONE_STEPS
+    "Fetch §5.5 Response.clone()", RESP_CLONE_STEPS
 };
 
 static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -310,7 +310,7 @@ static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
     if (!d)
         return JS_ThrowTypeError(ctx, "not a Response");
     switch (magic) {
-    /* §6.4 `ok` IS the 200..299 test, not a flag: a page's `if (r.ok)` and its `if (r.status < 400)` must
+    /* §5.5 `ok` IS the 200..299 test, not a flag: a page's `if (r.ok)` and its `if (r.status < 400)` must
        agree, and they only do when both read the same number. */
     case 0: return JS_NewBool(ctx, d->status >= 200 && d->status <= 299);
     case 1: return JS_NewInt32(ctx, d->status);
@@ -441,32 +441,32 @@ static int response_set(JSContext *ctx, ResponseData *d, JSValueConst url_list, 
     return JS_IsException(d->headers) ? -1 : 0;
 }
 
-/* ---- §6.4's constructor ----------------------------------------------------------------------------------
+/* ---- §5.5's constructor ----------------------------------------------------------------------------------
  *
  * A MACHINE, because both of its arguments run the page's code: the `body` is a `BodyInit?` union whose
  * USVString arm is a ToString the page may define, and `init` is a dictionary whose three members are three
  * [[Get]]s — one Proxy trap away each — followed by the header fill, which is the whole iterator or record
- * protocol over an object the page owns. The declaration converts both; what is left here is §6.4's own steps,
+ * protocol over an object the page owns. The declaration converts both; what is left here is §5.5's own steps,
  * in the order the spec writes them. */
-/* ONE MACHINE FOR THE CONSTRUCTOR AND FOR json(), because §6.4 gives them ONE algorithm: both create a
+/* ONE MACHINE FOR THE CONSTRUCTOR AND FOR json(), because §5.5 gives them ONE algorithm: both create a
    response and then run "initialize a response" over the same init dictionary. They differ in exactly two
    places — where the BODY comes from, and whether `new` is required — and a second machine would have been a
    second copy of the status range check, the reason-phrase check, the header fill and the Content-Type rule.
    The magic says which entry this is. */
 enum { RESP_ENTRY_CTOR = 0, RESP_ENTRY_JSON };
-/* WHERE THIS MACHINE RESTS, ACROSS THE TWO ENTRIES THAT SHARE IT. §6.4's constructor is five steps whose fifth
+/* WHERE THIS MACHINE RESTS, ACROSS THE TWO ENTRIES THAT SHARE IT. §5.5's constructor is five steps whose fifth
    is §5.5's "initialize a response", and json() is five steps whose fourth is the same operation — so the
    stages after the entry are §5.5's, named by that algorithm rather than by whichever member reached it. The
    page's code runs at three of them: json()'s serialization, §5.5 step 5's fill, and nothing else.
-   §6.4 step 4's EXTRACTION is performed at the body stage rather than before step 5, which is where the spec
+   §5.5 step 4's EXTRACTION is performed at the body stage rather than before step 5, which is where the spec
    writes it: nothing between the two can throw or run the page's code, so the two orders are the same
    execution, and the label says where it actually happens. */
 #define RESP_CTOR_STAGES(X) \
     X(RESP_START = IDL_STEP_FIRST, \
-      "Fetch §6.4 new Response(body, init) steps 1-2 (a new response and its Headers; Web IDL §3.7.1's `new` " \
+      "Fetch §5.5 new Response(body, init) steps 1-2 (a new response and its Headers; Web IDL §3.7.1's `new` " \
       "requirement precedes them, and Response.json() enters at the next step instead)") \
     X(RESP_SERIALIZE, \
-      "Fetch §6.4 Response.json(data, init) step 1 (serialize a JavaScript value to JSON bytes — the page's " \
+      "Fetch §5.5 Response.json(data, init) step 1 (serialize a JavaScript value to JSON bytes — the page's " \
       "toJSON, getters and Proxy traps)") \
     X(RESP_INIT, \
       "Fetch §5.5 initialize a response steps 1-4 (the status range, the reason-phrase, and the response's " \
@@ -474,7 +474,7 @@ enum { RESP_ENTRY_CTOR = 0, RESP_ENTRY_JSON };
     X(RESP_HEADERS, \
       "Fetch §5.5 initialize a response step 5 (fill response's headers with init[\"headers\"])") \
     X(RESP_BODY, \
-      "Fetch §5.5 initialize a response step 6 (§6.4 step 4's extraction, the null-body-status refusal, and " \
+      "Fetch §5.5 initialize a response step 6 (§5.5 step 4's extraction, the null-body-status refusal, and " \
       "the Content-Type the extracted type contributes)")
 enum { RESP_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const RESP_CTOR_STEPS[] = { RESP_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -505,14 +505,14 @@ static void js_response_ctor_release(JSContext *ctx, void *st)
     header_list_free(&((JSResponseCtorState *)st)->list);
 }
 
-/* §6.4 "a null body status": the statuses HTTP defines as carrying no body, which a constructed Response may
+/* §5.5 "a null body status": the statuses HTTP defines as carrying no body, which a constructed Response may
    therefore not be given one with. */
 static int response_is_null_body_status(int status)
 {
     return status == 101 || status == 103 || status == 204 || status == 205 || status == 304;
 }
 
-/* §5.1's `reason-phrase` production: HTAB, SP, VCHAR and obs-text — and nothing else, which is what makes
+/* §5.5's `reason-phrase` production: HTAB, SP, VCHAR and obs-text — and nothing else, which is what makes
    `new Response("", {statusText: "\n"})` a TypeError. */
 static int response_status_text_is_valid(const char *s, size_t len)
 {
@@ -548,7 +548,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     }
 
     if (hdr->stage == RESP_SERIALIZE) {
-        /* §6.4 json() step 1: "serialize a JavaScript value to JSON bytes", which is JSON.stringify — the
+        /* §5.5 json() step 1: "serialize a JavaScript value to JSON bytes", which is JSON.stringify — the
            page's `toJSON`, its getters and its Proxy traps, all of it. This engine deleted the C entry to that
            algorithm on purpose, because a C entry beside the step machine would be a second implementation of
            it; the way to run it is the way a page does, as a CALL REQUEST on the tramp where a loop inside a
@@ -564,7 +564,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
         /* stringify answers `undefined` for a value with no JSON form — a function, an undefined, a symbol —
-           and §6.4 makes that a TypeError rather than an empty body. */
+           and §5.5 makes that a TypeError rather than an empty body. */
         if (JS_IsUndefined(s->json)) {
             JS_ThrowTypeError(ctx, "the value has no JSON representation");
             return -1;
@@ -573,7 +573,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     }
 
     if (hdr->stage == RESP_INIT) {
-        /* §6.4 step 1: the RANGE check, after Web IDL's `unsigned short` conversion and never instead of it. */
+        /* §5.5 step 1: the RANGE check, after Web IDL's `unsigned short` conversion and never instead of it. */
         v_status = idl_dict_get(ctx, init, "status");
         status = 200;
         if (!JS_IsUndefined(v_status)) {
@@ -587,7 +587,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             JS_ThrowRangeError(ctx, "a Response status must be in the range 200 to 599");
             return -1;
         }
-        /* §6.4 step 2: statusText must match reason-phrase. */
+        /* §5.5 step 2: statusText must match reason-phrase. */
         v_text = idl_dict_get(ctx, init, "statusText");
         {
             const char *t = NULL;
@@ -605,7 +605,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
                 JS_ThrowTypeError(ctx, "a Response statusText is not a reason-phrase");
                 return -1;
             }
-            /* §6.4 steps 3-6: the response exists now, with its status and its status message. The BODY and
+            /* §5.5 steps 3-6: the response exists now, with its status and its status message. The BODY and
                the HEADERS are the two things still to come, and both may run the page's code. */
             s->result = response_alloc(ctx, &d);
             if (JS_IsException(s->result)) {
@@ -627,7 +627,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     }
 
     if (hdr->stage == RESP_HEADERS) {
-        /* §6.4 step 7: fill the response's headers, which have guard "response" — so a page that puts
+        /* §5.5 step 7: fill the response's headers, which have guard "response" — so a page that puts
            Set-Cookie on a Response it built silently gets nothing, which is the header wpt asserts by name. */
         v_headers = idl_dict_get(ctx, init, "headers");
         r = headers_fill_run(ctx, hdr, &s->fill, v_headers, &s->list, HEADERS_GUARD_RESPONSE,
@@ -645,11 +645,11 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     }
 
     DCHECK(hdr->stage == RESP_BODY,
-           "the Response constructor was re-entered at a stage §6.4 and §5.5 do not have between them");
+           "the Response constructor was re-entered at a stage §5.5 and §5.5 do not have between them");
     JS_FreeValue(ctx, cb_result);
     d = response_of(s->result);
-    /* §6.4 step 8: a non-null body. §5.1's extraction is body.c's — one implementation of the union for both
-       including interfaces — so what is left here is the two things §6.4 itself does: refuse a body on a
+    /* §5.5 step 8: a non-null body. §5.1's extraction is body.c's — one implementation of the union for both
+       including interfaces — so what is left here is the two things §5.5 itself does: refuse a body on a
        null-body status, and set Content-Type when the extraction produced one and the header list has none. */
     if (entry == RESP_ENTRY_JSON || (!JS_IsNull(body) && !JS_IsUndefined(body))) {
         char *mime = NULL;
@@ -659,8 +659,8 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             return -1;
         }
         /* THE TWO SOURCES A BODY COMES FROM, and the only place the two entries differ. The constructor runs
-           §5.1's extraction over the BodyInit union, which decides both the bytes and the type; json() has the
-           bytes already and §6.4 fixes the type at application/json. Everything after this — the null-body
+           §5.2's extraction over the BodyInit union, which decides both the bytes and the type; json() has the
+           bytes already and §5.5 fixes the type at application/json. Everything after this — the null-body
            refusal above and the Content-Type rule below — is the same for both, which is why they are one
            machine. */
         if (entry == RESP_ENTRY_JSON) {
@@ -677,7 +677,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             free(mime);
             return -1;
         }
-        /* §6.4 step 8.2: the extracted body's type is set ONLY when the header list does not already carry
+        /* §5.5 step 8.2: the extracted body's type is set ONLY when the header list does not already carry
            one — an init that named a Content-Type wins over the arm's default. */
         if (mime) {
             const HeaderList *hl = headers_list_of(d->headers);
@@ -693,7 +693,7 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
     return 0;
 }
 
-/* §6.4 error(): "a new response whose type is 'error'". It runs none of the page's code — no arguments, no
+/* §5.5 error(): "a new response whose type is 'error'". It runs none of the page's code — no arguments, no
    init — so it is an ordinary member and not a machine. Its status is 0, which is outside the range the
    CONSTRUCTOR enforces, because that range is the constructor's step and not the response's. */
 static JSValue js_response_error(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -711,7 +711,7 @@ static JSValue js_response_error(JSContext *ctx, JSValueConst this_val, int argc
     return obj;
 }
 
-/* §6.4 redirect(url, status). It runs none of the page's code — the declaration converted the URL to a
+/* §5.5 redirect(url, status). It runs none of the page's code — the declaration converted the URL to a
    USVString and the status to an unsigned short before this was entered — so it is an ordinary member. Its two
    failures are DIFFERENT errors and the spec means them to be: an unparseable URL is a TypeError, a status
    outside the five redirect statuses is a RangeError, and that is how a page tells a bad address from a bad
@@ -750,7 +750,7 @@ static JSValue js_response_redirect(JSContext *ctx, JSValueConst this_val, int a
     url_record_free(&rec);
     obj = response_alloc(ctx, &d);
     if (JS_IsException(obj)) { free(serialized); return obj; }
-    /* §6.4: the response's header list carries Location and its guard is "immutable", so the header is
+    /* §5.5: the response's header list carries Location and its guard is "immutable", so the header is
        appended to the LIST the response is built with — going through the Headers interface afterwards would
        be refused by the guard the same step sets. */
     header_list_append(&hl, "location", serialized);
@@ -771,7 +771,7 @@ static const JSCFunctionListEntry js_response_static_funcs[] = {
 
 static const IdlStepDecl js_response_ctor_decl = {
     js_response_ctor_step, sizeof(JSResponseCtorState), js_response_ctor_visit, js_response_ctor_release,
-    "Fetch §6.4 new Response(body, init) / Response.json(data, init), through §5.5 initialize a response",
+    "Fetch §5.5 new Response(body, init) / Response.json(data, init), through §5.5 initialize a response",
     RESP_CTOR_STEPS
 };
 
@@ -782,7 +782,7 @@ void response_init(JSContext *ctx)
     JSClassDef def = { "Response", .finalizer = response_finalizer, .gc_mark = response_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
     /* `optional BodyInit? body = null, optional ResponseInit init = {}`. The dictionary's members are listed in
-       the order Web IDL reads them, which is lexicographic and not the order §6.4 uses them in. */
+       the order Web IDL reads them, which is lexicographic and not the order §5.5 uses them in. */
     static const IdlArgType CTOR_ARGS[2] = { IDL_BODYINIT_NULLABLE, IDL_DICT };
     /* json()'s `data` is `any` — it crosses unconverted, because JSON.stringify is what looks at it. */
     static const IdlArgType JSON_ARGS[2] = { IDL_ANY, IDL_DICT };
@@ -790,7 +790,7 @@ void response_init(JSContext *ctx)
     static const IdlDictMember RESPONSE_INIT[3] = {
         { "headers",    IDL_ANY,            false },   /* HeadersInit: the union the fill converts */
         { "status",     IDL_UNSIGNED_SHORT, false },
-        { "statusText", IDL_BYTESTRING,     false },   /* the reason-phrase check on top is §6.4's */
+        { "statusText", IDL_BYTESTRING,     false },   /* the reason-phrase check on top is §5.5's */
     };
     int i;
 
@@ -806,19 +806,19 @@ void response_init(JSContext *ctx)
     g_clone_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_response_clone_decl, 0);
     g_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, RESPONSE_INIT, 3, &js_response_ctor_decl,
                                        RESP_ENTRY_CTOR);
-    idl_optional_from(0);   /* §6.4: `constructor(optional BodyInit? body = null, optional ResponseInit init = {})` */
-    /* §6.4's `static Response json(any data, optional ResponseInit init = {})` — the SAME machine under the
+    idl_optional_from(0);   /* §5.5: `constructor(optional BodyInit? body = null, optional ResponseInit init = {})` */
+    /* §5.5's `static Response json(any data, optional ResponseInit init = {})` — the SAME machine under the
        other entry, so "initialize a response" has one implementation. */
     g_json_stepid = idl_method_id_step(ctx, JSON_ARGS, 2, RESPONSE_INIT, 3, &js_response_ctor_decl,
                                        RESP_ENTRY_JSON);
-    idl_optional_from(1);   /* §6.4: `data` is required, `init` is not */
+    idl_optional_from(1);   /* §5.5: `data` is required, `init` is not */
     g_redirect_stepid = idl_method_id(ctx, REDIRECT_ARGS, 2, js_response_redirect, 0);
-    idl_optional_from(1);   /* §6.4: `redirect(USVString url, optional unsigned short status = 302)` */
+    idl_optional_from(1);   /* §5.5: `redirect(USVString url, optional unsigned short status = 302)` */
     g_json_stringify_slot = realm_value_declare(ctx, "%JSON.stringify% (Response.json)");
     realm_declare_intrinsic(response_install_proto);
 }
 
-/* §6.4's INTERFACE PROTOTYPE OBJECT AND ITS SERIALIZER, FOR ONE REALM.
+/* §5.5's INTERFACE PROTOTYPE OBJECT AND ITS SERIALIZER, FOR ONE REALM.
    ONE PROTOTYPE PER REALM, not a copy of the members per instance. They were own properties of each Response,
    which is not what Web IDL describes and is observable three ways: `Response.prototype.text` was absent,
    `delete r.text` removed the method, and every reply paid for eight property installs. */
@@ -836,13 +836,13 @@ void response_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, proto, "Response");
     JS_SetPropertyFunctionList(ctx, proto, js_response_proto_funcs,
                                (int)(sizeof(js_response_proto_funcs) / sizeof(js_response_proto_funcs[0])));
-    /* §5.2's mixin: the four readers and `bodyUsed`, from the one component Request includes too. */
+    /* §5.3's mixin: the four readers and `bodyUsed`, from the one component Request includes too. */
     body_install(ctx, proto, g_body_handle);
-    /* §6.4's clone(), a STEP because cloning a body tees its stream — see js_response_clone_step. */
+    /* §5.5's clone(), a STEP because cloning a body tees its stream — see js_response_clone_step. */
     idl_install_method(ctx, proto, "clone", 0, g_clone_stepid);
     JS_SetClassProto(ctx, g_response_class, proto);
 
-    /* §6.4's serializer, read off THIS realm's builtin before any of its scripts run. */
+    /* §5.5's serializer, read off THIS realm's builtin before any of its scripts run. */
     {
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue json = JS_GetPropertyStr(ctx, global, "JSON");

@@ -217,7 +217,7 @@ static JSValue js_fe_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     (void)magic;
     if (JS_IsUndefined(this_val))
         return JS_ThrowTypeError(ctx, "constructor FocusEvent requires 'new'");
-    DCHECK(argc >= 1, "the FocusEvent constructor body ran with no type argument — §3.6.2 step 1 is the "
+    DCHECK(argc >= 1, "the FocusEvent constructor body ran with no type argument — §3.6 step 5 is the "
                       "declaration's and throws before any body is entered");
     /* An event the PAGE constructs is untrusted. */
     return focus_event_new_derived(ctx, focus_event_proto(ctx), argv[0], argc > 1 ? argv[1] : JS_UNDEFINED,

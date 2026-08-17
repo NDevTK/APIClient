@@ -499,7 +499,7 @@ static JSValue js_internals_set_form_value(JSContext *ctx, JSValueConst this_val
                    form_data_is(argv[0]) ? form_data_clone(ctx, argv[0]) : JS_DupValue(ctx, argv[0]));
     /* Steps 4-6. An OMITTED `state` sets the state to the submission value; a given one is stored (cloned when
        it is a FormData). Omitted is not the same as `null` — `setFormValue(x, null)` stores a null state — and
-       an explicit `undefined` is OMITTED, because Web IDL §3.6.2 treats one passed for an optional argument
+       an explicit `undefined` is OMITTED, because Web IDL §3.6 treats one passed for an optional argument
        with no default as not present. The declaration leaves such a position unconverted, so JS_IsUndefined is
        what "not present" looks like here; argc alone would call `setFormValue(x, undefined)` a two-argument
        call and store undefined as the state. */
@@ -548,7 +548,7 @@ static JSValue js_internals_set_validity(JSContext *ctx, JSValueConst this_val, 
         if (idl_dict_bool(ctx, flags, VALIDITY_FLAG_NAMES[i])) bits |= 1u << i;
     /* Step 3: one or more true flags with no message — or the empty string — is a TypeError, and it is thrown
        BEFORE any flag is written. */
-    have_message = argc > 1 && !JS_IsUndefined(argv[1]);   /* §3.6.2: an explicit undefined is NOT GIVEN */
+    have_message = argc > 1 && !JS_IsUndefined(argv[1]);   /* §3.6: an explicit undefined is NOT GIVEN */
     if (have_message) {
         size_t mlen = 0;
         const char *m = JS_ToCStringLen(ctx, &mlen, argv[1]);   /* already a DOMString: the declaration converted it */

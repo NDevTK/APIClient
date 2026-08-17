@@ -31,7 +31,7 @@ void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrapper);
    document is installed; anything a script appends afterwards goes through the chokepoint instead. */
 void iframe_document_parsed(JSContext *ctx);
 
-/* §7.2.5's DOCUMENT-TREE CHILD NAVIGABLES, in tree order: what `window.length` counts and `window[i]` indexes.
+/* §7.2.2.2's DOCUMENT-TREE CHILD NAVIGABLES, in tree order: what `window.length` counts and `window[i]` indexes.
    Walked from the document tree on every ask, because the set changes with every insertion, removal and
    reparent — and both the tree and the navigables are per-flow, so the answer is this flow's. The nth is
    JS_UNDEFINED when there is no nth. */

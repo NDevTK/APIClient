@@ -56,11 +56,11 @@
 #include "core/idl_args.h"
 #include "solver/cow.h"
 
-/* §7.2.5's `closed` IS THE NAVIGABLE'S, not the Window's — which is why it is not read from a byte here.
+/* §7.2.2.1's `closed` IS THE NAVIGABLE'S, not the Window's — which is why it is not read from a byte here.
    `window.closed` and `iframe.contentWindow.closed` are the SAME fact about the SAME navigable, and a byte in
    this file made them two: closing through one left the other reporting open. The navigable's state lives on
    its WindowProxy (per-flow, captured into the running flow's delta like every other binding it holds), and
-   §7.2.5.1 gives a navigable exactly one proxy — so reading it there is reading the one answer. */
+   §7.2.3 gives a navigable exactly one proxy — so reading it there is reading the one answer. */
 static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)this_val; (void)magic;
@@ -84,7 +84,7 @@ static JSValue js_win_is_secure_context(JSContext *ctx, JSValueConst this_val, i
     return JS_NewBool(ctx, secure_context_is(ctx));
 }
 
-/* §7.2.5.2 `close()`. THE METHOD IS ONE ALGORITHM AND THIS IS ONE OF ITS TWO SPELLINGS — `window.close()` here
+/* §7.2.2.1 `close()`. THE METHOD IS ONE ALGORITHM AND THIS IS ONE OF ITS TWO SPELLINGS — `window.close()` here
    and `w.close()` through the WindowProxy are the same six steps on the same navigable, and each carried a body
    of its own that was step 2's early return and then a single byte: is closing went true and nothing else
    happened. So `closed` reported a closed window over a document that was still running — its beforeunload and
@@ -111,7 +111,7 @@ static JSValue js_win_noeffect(JSContext *ctx, JSValueConst this_val, int argc, 
     return JS_UNDEFINED;
 }
 
-/* §7.2.5's `length`: the number of DOCUMENT-TREE CHILD NAVIGABLES. A GETTER over a real walk, never a stored
+/* §7.2.2.2's `length`: the number of DOCUMENT-TREE CHILD NAVIGABLES. A GETTER over a real walk, never a stored
    number — a page appends a frame, removes it and reads this, and a count something forgot to adjust is wrong
    in exactly that case. It was absent entirely, which is `undefined` rather than 0 and is not the same answer
    for any page that tests it. */
@@ -121,7 +121,7 @@ static JSValue js_win_length(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewInt32(ctx, iframe_child_navigable_count(ctx));
 }
 
-/* §7.2.5's BROWSING-CONTEXT LINKS, each answered by this realm's navigable — see window_proxy.h.
+/* §7.2.2.4's BROWSING-CONTEXT LINKS, each answered by this realm's navigable — see window_proxy.h.
  *
  * The mapping between a window's two spellings — another navigable is its PROXY, this one is the global — is
  * window_proxy.c's `win_or_proxy`, applied by every member that can answer with a navigable. */
@@ -143,7 +143,7 @@ static JSValue js_win_opener(JSContext *ctx, JSValueConst this_val, int magic)
     return window_proxy_opener(ctx, document_window_proxy(ctx));
 }
 
-/* §7.2.5's `opener` SETTER, and it has TWO branches that do different things — which is why it is written out
+/* §7.2.2.4's `opener` SETTER, and it has TWO branches that do different things — which is why it is written out
    here rather than declared [Replaceable].
      null  -> DISOWN: the navigable's opener link is severed, and NO own property is defined. A page writes this
               to cut a popup loose from the document that opened it, and defining an own `null` instead would
@@ -185,13 +185,13 @@ static JSValue js_win_set_name(JSContext *ctx, JSValueConst this_val, JSValueCon
     return window_proxy_name_assign(ctx, document_window_proxy(ctx), val);
 }
 
-/* §7.2.5.1's EXOTIC OWN-PROPERTY BEHAVIOUR — `window[0]`, and why it is not a property anyone sets.
+/* §7.2.2.2's EXOTIC OWN-PROPERTY BEHAVIOUR — `window[0]`, and why it is not a property anyone sets.
  *
  * The global is a LEGACY PLATFORM OBJECT. Its SUPPORTED PROPERTY INDICES are its document-tree child
  * navigables, and `window[i]` is the i-th one's WindowProxy. Materialising those as own data properties would
  * be right until the first frame was appended, removed or moved — the set changes on every tree mutation, and
  * a count or a slot that a mutation forgot to adjust is wrong in exactly the case the spec files test. Exotic
- * behaviour is what §7.2.5.1 describes and what this is: every answer is computed from the tree at the moment
+ * behaviour is what §7.2.2.2 describes and what this is: every answer is computed from the tree at the moment
  * it is asked.
  *
  * THE THREE OPERATIONS ARE NOT SYMMETRIC, and each asymmetry is a spec sentence:
@@ -235,7 +235,7 @@ static int win_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst 
     (void)obj;
     if (!win_supported_index(ctx, prop, &v)) return 0;
     if (!desc) { JS_FreeValue(ctx, v); return 1; }
-    /* §7.2.5.1: { [[Value]]: the child's WindowProxy, [[Writable]]: false, [[Enumerable]]: true,
+    /* §7.2.2.2: { [[Value]]: the child's WindowProxy, [[Writable]]: false, [[Enumerable]]: true,
        [[Configurable]]: true }. */
     desc->flags = JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE;
     desc->getter = JS_UNDEFINED;
@@ -280,7 +280,7 @@ static int win_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, 
     JSPropertyEnum *tab;
 
     (void)obj;
-    /* §7.2.5.1 [[OwnPropertyKeys]] lists the supported indices FIRST, in order. quickjs merges what this
+    /* §7.2.2.2 [[OwnPropertyKeys]] lists the supported indices FIRST, in order. quickjs merges what this
        returns with the object's ordinary keys, so only the indices belong here. */
     tab = n ? js_malloc(ctx, sizeof(*tab) * (size_t)n) : NULL;
     if (n && !tab) return -1;
@@ -305,13 +305,13 @@ static const JSClassExoticMethods WINDOW_EXOTIC = {
 
 static const JSClassDef WINDOW_CLASS = { "Window", NULL, NULL, NULL, &WINDOW_EXOTIC };
 
-/* §7.2.5's INTERFACE PROTOTYPE OBJECT, and the chain it sits in: window -> Window.prototype ->
+/* §7.2.2's INTERFACE PROTOTYPE OBJECT, and the chain it sits in: window -> Window.prototype ->
    EventTarget.prototype -> Object.prototype. The global had Object.prototype directly, so `Window` did not
    exist as a name, `window instanceof EventTarget` was false, and every member of Window was an OWN property
    of the global — which is where Web IDL puts only the [LegacyUnforgeable] ones (`window`, `self`, `location`,
    `top`, `document`). Everything else is declared on the prototype, and a page reads the difference: an
    `assert_own_property` on the wrong object, a descriptor test, a `delete window.closed`.
-   §7.2.5's WindowProperties object sits between Window.prototype and EventTarget.prototype in the real chain
+   §7.2.2's WindowProperties object sits between Window.prototype and EventTarget.prototype in the real chain
    and is what NAMED access (`window.myIframeName`) is declared on. It is not built here, so it is not claimed
    here either: this chain is two links of the three, and the third arrives with named access. */
 
@@ -441,7 +441,7 @@ static JSClassID g_window_props_class;
    and §3.7 gives every realm its own, which is why `frames[0].Window.prototype !== Window.prototype` in a
    browser. So this registers, and window_install builds. */
 static int g_id_close, g_id_blur, g_id_stop;   /* declared once per agent — see window_init */
-static int g_id_opener_set;   /* §7.2.5's `opener` setter, declared with them for the same reason */
+static int g_id_opener_set;   /* §7.2.2.4's `opener` setter, declared with them for the same reason */
 static int g_id_name_set;     /* §7.11's `name` setter — its DOMString conversion is the page's code */
 
 void window_init(JSContext *ctx)
@@ -457,7 +457,7 @@ void window_init(JSContext *ctx)
     /* THE MEMBERS ARE DECLARED HERE AND INSTALLED PER REALM. A declaration builds a pool entry and a member has
        ONE, so declaring inside the install would mint a second entry for the second realm's prototype — which
        is the same shape as a per-wrapper mint and is what the pool's seal asserts against. */
-    bar_prop_init(ctx);   /* §7.2.5.3's BarProp class, one per agent */
+    bar_prop_init(ctx);   /* §7.2.2.5's BarProp class, one per agent */
     g_id_opener_set = idl_setter_id(ctx, IDL_ANY, false, js_win_set_opener, 0);
     g_id_name_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_name, 0);
     g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
@@ -472,11 +472,11 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     DCHECK(JS_IsObject(global), "window_install was given something that is not the global object");
     DCHECK(g_window_class != 0, "window_install ran before window_init registered the Window class");
 
-    /* §7.2.5.1's exotic behaviour comes from the object's CLASS, and the global was created by the context
+    /* §7.2.2.2's exotic behaviour comes from the object's CLASS, and the global was created by the context
        before any host class existed — so it is given one here. It owns no per-object data (no finalizer, no
        gc_mark), which is what makes handing it to an already-built object sound. */
     CHECK(JS_SetGlobalClass(ctx, g_window_class) == 0,
-          "the global object would not take the Window class — §7.2.5.1's indexed access has nowhere to live");
+          "the global object would not take the Window class — §7.2.2.2's indexed access has nowhere to live");
 
     /* THE PROTOTYPE CHAIN, before any member is installed on any of its objects. PER REALM, and held by
        quickjs's own per-context class-prototype slot rather than by a static in this file: a second same-origin
@@ -517,7 +517,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     /* `self` is [Replaceable], not [LegacyUnforgeable] — `window` is the unforgeable one. A page may
        overwrite `self` and the IDL says so; a fixed own value said it could not. */
     idl_install_replaceable_value(ctx, g, "self", JS_DupValue(ctx, global));
-    /* §7.2.5 marks `top` [LegacyUnforgeable] — an OWN property — but its VALUE is the navigable's, and `top`
+    /* §7.2.2.4 marks `top` [LegacyUnforgeable] — an OWN property — but its VALUE is the navigable's, and `top`
        is a WALK of the parent chain, so a grandchild answers with the top-level traversable rather than with
        itself. An own ACCESSOR, not an own value frozen at install time. */
     {
@@ -527,7 +527,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
            Every other JS_DefinePropertyGetSet in this engine (abort.c, idl_args.c, html_element.c) already
            holds the atom in a local and frees it; this was the one call site that did not. */
         JSAtom a = JS_NewAtom(ctx, "top");
-        CHECK(a != JS_ATOM_NULL, "§7.2.5's `top` could not be interned");
+        CHECK(a != JS_ATOM_NULL, "§7.2.2.4's `top` could not be interned");
         JS_DefinePropertyGetSet(ctx, g, a,
                                 JS_NewCFunctionMagic(ctx, (JSCFunctionMagic *)js_win_top, "get top", 0,
                                                      JS_CFUNC_getter_magic, 0),
@@ -535,21 +535,21 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
         JS_FreeAtom(ctx, a);
     }
     idl_install_replaceable_value(ctx, g, "frames", JS_DupValue(ctx, global));   /* [Replaceable] */
-    /* §7.2.5's `parent` and `opener` ARE THE NAVIGABLE'S, so they are read from this realm's own WindowProxy
+    /* §7.2.2.4's `parent` and `opener` ARE THE NAVIGABLE'S, so they are read from this realm's own WindowProxy
        rather than answered here. They were two FIXED values behind two comments explaining why an embedder
        could not exist — "no embedder is reachable from this instance" and "the document was navigated to, not
        opened by a script in another navigable" — and both were true exactly while one instance was one
        document. A §7.4 child realm in this agent HAS a creator, and a popup whose `opener` is null cannot post
        back to the page that opened it, which is the whole of what a popup is for. */
     idl_install_replaceable(ctx, g, "parent", js_win_parent, 0);   /* [Replaceable] readonly */
-    /* `opener` is NOT [Replaceable]: the IDL declares `attribute any opener`, and §7.2.5 gives it setter steps
+    /* `opener` is NOT [Replaceable]: the IDL declares `attribute any opener`, and §7.2.2.4 gives it setter steps
        of its own whose null branch DISOWNS rather than assigns. Its non-null branch is [Replaceable]'s define,
        reached through the same implementation. */
     idl_install_accessor(ctx, g, "opener", js_win_opener, 0, g_id_opener_set);
-    /* §7.2.5.3's six user-interface bars. */
+    /* §7.2.2.5's six user-interface bars. */
     bar_prop_install(ctx, g);
 
-    /* §7.2.5 `frameElement` — the element this navigable is nested THROUGH. A top-level navigable is nested
+    /* §7.2.2.4 `frameElement` — the element this navigable is nested THROUGH. A top-level navigable is nested
        through nothing, so it is null: the real answer for what this is, not a placeholder for one. */
     JS_SetPropertyStr(ctx, g, "frameElement", JS_NULL);
 

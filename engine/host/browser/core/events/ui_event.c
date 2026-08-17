@@ -382,7 +382,7 @@ static JSValue js_ue_init_ui_event(JSContext *ctx, JSValueConst this_val, int ar
     (void)magic;
     if (!ui_event_is(ctx, this_val))
         return JS_ThrowTypeError(ctx, "initUIEvent called on something that is not a UIEvent");
-    /* Only `typeArg` is required, and §3.6.2 step 1's check for it is the declaration's. The other four are
+    /* Only `typeArg` is required, and §3.6 step 5's check for it is the declaration's. The other four are
        optional and genuinely absent when the page passes fewer. */
     DCHECK(argc >= 1, "initUIEvent's body ran with no typeArg");
     view = ui_event_view_of(ctx, argc > 3 ? argv[3] : JS_UNDEFINED);
@@ -409,7 +409,7 @@ static JSValue js_ue_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     (void)magic;
     if (JS_IsUndefined(this_val))
         return JS_ThrowTypeError(ctx, "constructor UIEvent requires 'new'");
-    /* §3.6.2 step 1's required-argument check is the DECLARATION's — it throws before any body is entered, so
+    /* §3.6 step 5's required-argument check is the DECLARATION's — it throws before any body is entered, so
        a body that tested `argc` again would be stating the type system's rule a second time. */
     DCHECK(argc >= 1, "the UIEvent constructor body ran with no type argument");
     /* An event the PAGE constructs is untrusted. */

@@ -71,7 +71,7 @@ JSValue navigation_object(JSContext *ctx);
    Document — not fully active, the initial about:blank, an opaque origin — and it is the FIRST step of both
    §7.2.6.10.4's push/replace/reload wrapper and its inner algorithm, which is why the question leaves this
    file: two derivations of one rule is where the second one goes wrong, and this one would go wrong on the
-   opaque-origin clause, which is asked through §7.2.5.1 rather than by comparing strings. */
+   opaque-origin clause, which is asked through §7.2.1 rather than by comparing strings. */
 bool navigation_entries_and_events_disabled(JSContext *ctx);
 
 /* §7.2.6.8's ONGOING NAVIGATE EVENT — "a NavigateEvent or null, initially null" — of THIS realm's Navigation.

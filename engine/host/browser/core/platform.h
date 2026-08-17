@@ -49,7 +49,7 @@
 
 /* THE AGENT'S FACTS — what a declaration needs that is true of the whole similar-origin window agent. */
 typedef struct {
-    /* The agent's PRINCIPAL. §9.5's named bus is keyed by it and §7.2.5.1's proxy decides remoteness by it. */
+    /* The agent's PRINCIPAL. §9.5's named bus is keyed by it and §7.2.1's proxy decides remoteness by it. */
     const char *origin;
     /* HTML §8.1.3.1's TOP-LEVEL CREATION URL, which §8.1.3.5 reads to decide whether the first realm is a
        SECURE CONTEXT — and Web IDL §3.3.13's members exist or do not by that answer. It is the environment's,
@@ -88,7 +88,7 @@ typedef struct {
        asked. §7.5.1 lists them as two rows of one creation, and this struct is where the pair travels. */
     SandboxFlags         sandbox_flags;
     uint32_t             doc_id; /* the world registry's name for this document */
-    JSValueConst         nav_proxy;   /* §7.2.5.1's ONE WindowProxy for the navigable this is active in */
+    JSValueConst         nav_proxy;   /* §7.2.3's ONE WindowProxy for the navigable this is active in */
 } PlatformDocument;
 
 /* THE AGENT HALF — every component's declaration, once per JSRuntime, in dependency order, ending in the one

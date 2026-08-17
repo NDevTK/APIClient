@@ -122,7 +122,7 @@ static JSValue js_impl_create_doctype(JSContext *ctx, JSValueConst this_val, int
  * an ordinary call — so putting it in the source text would parse the page's data as markup, which is the
  * injection this whole engine exists to find rather than to commit.
  *
- * "IF TITLE IS GIVEN" IS `undefined` MEANING ABSENT, which §3.6.2 says for an optional argument with no
+ * "IF TITLE IS GIVEN" IS `undefined` MEANING ABSENT, which §3.6 says for an optional argument with no
  * default and which the declaration states with idl_optional_from: `createHTMLDocument()` and
  * `createHTMLDocument(undefined)` both leave the head EMPTY, while `createHTMLDocument("")` puts an empty
  * `<title>` in it. */
@@ -300,7 +300,7 @@ void dom_implementation_init(JSContext *ctx)
     {
         static const IdlArgType TITLE[1] = { IDL_DOMSTRING };
         g_id_html_document = idl_method_id(ctx, TITLE, 1, js_impl_create_html_document, 0);
-        /* §3.6.2: an `undefined` for an optional argument with NO DEFAULT means the argument is ABSENT, which
+        /* §3.6: an `undefined` for an optional argument with NO DEFAULT means the argument is ABSENT, which
            is the difference between an empty `<title>` and no head child at all. */
         idl_optional_from(0);
     }

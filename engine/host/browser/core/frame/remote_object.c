@@ -24,7 +24,7 @@
  * because a navigable belongs to the agent that created it and only its ACTIVE DOCUMENT lives in the peer. So
  * it crosses as the five facts that decide which navigable it is (nav_encode) and is resolved on the far side
  * to that agent's own WindowProxy, never lent as `o<doc>:<id>` — see the encoder for what a reference proxy
- * would silently do to postMessage, to §7.2.5.1's cross-origin filter and to `w[0] === w.frames[0]`.
+ * would silently do to postMessage, to §7.2.1's cross-origin filter and to `w[0] === w.frames[0]`.
  *
  * IDENTITY HOLDS ON BOTH SIDES, and neither half is optional. The exporting agent mints ONE id per object, so
  * two asks for the same object answer with the same name; the importing agent keeps ONE reference per (doc,
@@ -354,7 +354,7 @@ static char *dec_b64(const char *b64, size_t *plen)
      DOC     — WHICH navigable. Documents cross by NAME (a `uint32_t doc` is this instance's handle into its
                own table and means a different document in the peer's), and the name is what the receiving
                side resolves FIRST: a name it hosts is its OWN WindowProxy, never a remote one.
-     ORIGIN  — the active document's principal, serialized. §7.2.5.1's whole surface is a filter over it, and a
+     ORIGIN  — the active document's principal, serialized. §7.2.1's whole surface is a filter over it, and a
                proxy minted without one would answer every cross-origin read out of a principal this agent
                invented. "null" is a real answer and resolves to a FRESH opaque origin here, which is correct:
                an opaque origin is same origin with nothing, and two Documents sharing ONE opaque origin share
@@ -364,7 +364,7 @@ static char *dec_b64(const char *b64, size_t *plen)
                window_proxy_for_document takes a parent, and a navigable minted from a bare name answers
                `parent === self` and reports itself a top-level traversable — so `w[0].parent === w` would be
                false and `w[0].close()` would try to close a frame.
-     OPENER  — §7.2.5's, by document name, for the same reason: `opener` is on §7.2.1.3.1's cross-origin list,
+     OPENER  — §7.2.2.4's, by document name, for the same reason: `opener` is on §7.2.1.3.1's cross-origin list,
                so a proxy minted with a hardcoded null answers a READABLE member with a value nothing computed.
    EVERY FIELD IS BASE64 AND TERMINATED BY '.', not separated by one. Terminated, because a field that is
    EMPTY (a top-level navigable's parent) then reads as one rather than as a missing separator; base64,
@@ -433,7 +433,7 @@ static char *nav_encode(JSContext *ctx, JSValueConst nav)
 }
 
 /* A parent or opener slot of an ARRIVING identity: the navigable that document name names, which this agent
-   must already hold. `none` is what the slot's absence means — JS_UNDEFINED for a parent (§7.2.5 makes a
+   must already hold. `none` is what the slot's absence means — JS_UNDEFINED for a parent (§7.2.2.4 makes a
    top-level navigable's `parent` itself) and JS_NULL for an opener. */
 static JSValue nav_slot_resolve(JSContext *ctx, const char *doc_name, JSValue none)
 {
@@ -569,8 +569,8 @@ char *remote_object_encode(JSContext *ctx, JSValueConst v)
      * WHAT WOULD HAPPEN OTHERWISE. `otherW[0]`'s peer-side program answers with a WindowProxy (§7.2.2.2), and
      * the export below would name it `o<doc>:<id>` — so the asking agent would build a REFERENCE PROXY where a
      * WindowProxy belongs. Every consequence of that is silent: `w[0].postMessage(…)` would park a flow on an
-     * `object.apply` instead of running §7.2.5.1's postMessage; `w[0] === w.frames[0]` would be false about one
-     * navigable; §7.2.5.1's cross-origin FILTER would not run at all, because a reference proxy forwards every
+     * `object.apply` instead of running §7.2.1's postMessage; `w[0] === w.frames[0]` would be false about one
+     * navigable; §7.2.1's cross-origin FILTER would not run at all, because a reference proxy forwards every
      * key to the peer and the whole point of the WindowProxy surface is that thirteen names are answerable and
      * the rest are a SecurityError. The two spellings of a window are one navigable (window_proxy.c says so
      * about `parent`, `top` and `closed`), so the Window GLOBAL is refused here on the same line as its proxy —
@@ -771,7 +771,7 @@ static const char *const REF_SET_STEPS[]   = { REF_SET_STAGES(JS_STEP_STAGE_LABE
 static const char *const REF_DEL_STEPS[]   = { REF_DEL_STAGES(JS_STEP_STAGE_LABEL) NULL };
 static const char *const REF_APPLY_STEPS[] = { REF_APPLY_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* §7.2.5.1's read, one agent further out, and its three siblings:
+/* §7.2.1's read, one agent further out, and its three siblings:
      object.get    <doc> <world+ancestry> <id> <key>
      object.set    <doc> <world+ancestry> <id> <key> <value>
      object.delete <doc> <world+ancestry> <id> <key>

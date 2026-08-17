@@ -16,7 +16,7 @@ enum { OP_WPGET, OP_GET, OP_SET, OP_DELETE, OP_APPLY, OP_N };
 /* `need` is the MINIMUM: `object.apply` carries one field per argument and there is no ceiling on how many may
    cross — a bound on the argument count is a bound on which calls this engine can make. */
 static const struct { const char *verb; int need; const char *program; } OPS[OP_N] = {
-    /* §7.2.5.1's member of THIS document's Window, read as the IDL getter it is. `globalThis[k]` and not
+    /* §7.2.1's member of THIS document's Window, read as the IDL getter it is. `globalThis[k]` and not
        `self[k]`: the page may shadow `self`, and the global object is what the standard reads the member of. */
     { "windowproxy.get", 4, "globalThis[__apiclientKey]" },
     /* ECMA-262 10.1.8 — pure syntax, so nothing the page owns is between the operation and its answer. */
@@ -146,7 +146,7 @@ const char *remote_op_program(JSContext *ctx, const RemoteOp *op)
     DCHECK(op != NULL, "the program of a cross-agent operation that was never parsed");
     g = JS_GetGlobalObject(ctx);
     if (op->op == OP_WPGET) {
-        /* THE MEMBER NAME IS NOT AN ENCODED VALUE. §7.2.5.1's list is a fixed twelve of this engine's own
+        /* THE MEMBER NAME IS NOT AN ENCODED VALUE. §7.2.1's list is a fixed twelve of this engine's own
            spelling (window_proxy.c's PROXY_MEMBER), so it crosses as itself. */
         JS_SetPropertyStr(ctx, g, "__apiclientKey", JS_NewString(ctx, op->f[3]));
     } else {

@@ -396,7 +396,7 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
        (HTML's similar-origin window agent), and what the platform surface of a document of THIS build is, is
        this file's answer and nobody else's. */
     navigable_set_realm_builder(engine_child_realm);
-    /* THE ROOT NAVIGABLE IS THIS HOST'S, so its §7.2.5.1 proxy is minted here — one per navigable, made by
+    /* THE ROOT NAVIGABLE IS THIS HOST'S, so its §7.2.3 proxy is minted here — one per navigable, made by
        whoever owns the navigable, which for the root is the host that named it. */
     {
         /* NULL: THIS HOST DOES NOT KNOW THE NAVIGABLE'S NAME. The document was navigated to by the real
@@ -536,7 +536,7 @@ QJS_EXPORT int qjs_join(const char *html, const char *url, const char *doc_id, c
                                     secure_context_url_potentially_trustworthy(top_level_url));
     header_list_free(&response_headers);
 
-    /* THIS AGENT HOLDS IT — said before the realm is built, because §7.2.5.1's mint below asserts it and
+    /* THIS AGENT HOLDS IT — said before the realm is built, because §7.2.3's mint below asserts it and
        because "this agent holds `doc`" is what makes every same-origin read through this document answer in
        this turn instead of suspending on a peer that does not exist. */
     doc = world_doc_intern(doc_id);
@@ -809,7 +809,7 @@ QJS_EXPORT void qjs_teardown(void)
     navigation_history_entry_free(g_ctx);
     window_free(g_ctx);
     remote_object_free(g_ctx);
-    window_proxy_free(g_ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
+    window_proxy_free(g_ctx);   /* the shared §7.2.3 prototype every proxy is chained to */
     /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
        these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
     solver_agent_free(g_ctx);

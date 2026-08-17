@@ -1,4 +1,4 @@
-/* THE LOCATION INTERFACE — HTML §7.2.4, Blink core/frame, and the place the two halves meet.
+/* THE LOCATION INTERFACE — HTML §7.2.4 "The Location interface", Blink core/frame, and the place the two halves meet.
  *
  * Half of it is the PRINCIPAL and is CONCRETE: origin, protocol, host, hostname, port, pathname. A bundle
  * builds its request URLs out of these (`location.origin + "/api/x"`), so a concolic origin would turn every
@@ -62,14 +62,15 @@
 #include "core/url/url.h"
 #include "core/dom/document.h"   /* this realm's address — the one place a document's URL lives */
 
-/* THE MEMBER LIST, IN ONE PLACE, in the order §7.2.4's IDL declares them, and with §7.2.5.1's cross-origin
-   entry for each — read three times (the getter's magic is an index into it, the install walks it, and the
-   cross-origin assertion below reads the third column). */
+/* THE MEMBER LIST, IN ONE PLACE, in the order §7.2.4's IDL declares them, and with the cross-origin entry
+   §7.2.1 "Security infrastructure for Window, WindowProxy, and Location objects" gives each — read three
+   times (the getter's magic is an index into it, the install walks it, and the cross-origin assertion below
+   reads the third column). */
 typedef enum {
-    /* Not on §7.2.5.1's CrossOriginProperties(Location) at all: a cross-origin read is a SecurityError. */
+    /* Not on §7.2.1's CrossOriginProperties(Location) at all: a cross-origin read is a SecurityError. */
     LOC_XO_NONE = 0,
     /* On the list with [[NeedsSetter]] and no [[NeedsGetter]] — a cross-origin document may WRITE this member
-       and may not read it. `href` is the only attribute entry, and it is why §7.2.5.1 lists Location at all:
+       and may not read it. `href` is the only attribute entry, and it is why §7.2.1 lists Location at all:
        `otherW.location.href = url` is how one document navigates another. */
     LOC_XO_SETTER,
 } LocCrossOrigin;
@@ -93,7 +94,7 @@ enum { LOC_MEMBERS(LOC_ENUM_ONE) LOC_N };
 static const char *const LOC_NAME[] = { LOC_MEMBERS(LOC_NAME_ONE) };
 static const LocCrossOrigin LOC_XO[] = { LOC_MEMBERS(LOC_XO_ONE) };
 
-/* §7.2.5.1's CrossOriginProperties(Location), verbatim: « { [[Property]]: "href", [[NeedsSetter]]: true },
+/* §7.2.1's CrossOriginProperties(Location), verbatim: « { [[Property]]: "href", [[NeedsSetter]]: true },
    { [[Property]]: "replace" } ». Those two are what a document of ANOTHER origin may reach; §7.2.4.5 through
    §7.2.4.10 make everything else a SecurityError.
    BOTH OF THEM NAVIGATE, AND NAVIGATION FROM A LOCATION IS NOT BUILT, so this object has no cross-origin
@@ -328,7 +329,7 @@ static void loc_pin_to_primitive(JSContext *ctx, JSValueConst loc)
     JS_FreeValue(ctx, global);
 }
 
-/* §7.2.5.1's list, asserted against the object this realm just built — see LOC_CROSS_ORIGIN_OPERATIONS. */
+/* §7.2.1's list, asserted against the object this realm just built — see LOC_CROSS_ORIGIN_OPERATIONS. */
 static void loc_assert_no_cross_origin_capability(JSContext *ctx, JSValueConst loc)
 {
     size_t i;
@@ -337,7 +338,7 @@ static void loc_assert_no_cross_origin_capability(JSContext *ctx, JSValueConst l
         JSAtom a = JS_NewAtom(ctx, LOC_CROSS_ORIGIN_OPERATIONS[i]);
         int has;
 
-        DCHECK(a != JS_ATOM_NULL, "a §7.2.5.1 cross-origin property name could not be interned");
+        DCHECK(a != JS_ATOM_NULL, "a §7.2.1 cross-origin property name could not be interned");
         has = JS_HasProperty(ctx, loc, a);
         JS_FreeAtom(ctx, a);
         CHECK(has >= 0, "[[HasProperty]] over an engine-built Location runs none of the page's code and has "
@@ -345,7 +346,7 @@ static void loc_assert_no_cross_origin_capability(JSContext *ctx, JSValueConst l
         /* An entry with neither [[NeedsGetter]] nor [[NeedsSetter]] is an OPERATION: §7.2.1.3.4 exposes the
            whole property, so its mere PRESENCE is a surface a cross-origin document can reach. */
         DCHECK(!has,
-               "HTML §7.2.5.1 exposes this Location operation to a document of ANOTHER ORIGIN, and this engine "
+               "HTML §7.2.1 exposes this Location operation to a document of ANOTHER ORIGIN, and this engine "
                "has no cross-origin Location to filter through — window_proxy.c's `location` asserts rather "
                "than handing one across, so shipping the operation makes that assert the only thing standing "
                "between a cross-origin page and an unfiltered Location. BUILD §7.2.4.5-.10's filtered object "
@@ -390,11 +391,11 @@ static void location_install_realm(JSContext *ctx)
            "Location-object navigate" — which is not built, so this build installs none. */
         int setter = -1;
 
-        /* §7.2.5.1's OTHER HALF, at the one site that can change it: the cross-origin list's single attribute
+        /* §7.2.1's OTHER HALF, at the one site that can change it: the cross-origin list's single attribute
            entry exposes href's SETTER and not its getter, so a setter here is the surface a document of
            another origin reaches. */
         DCHECK(setter < 0 || LOC_XO[i] != LOC_XO_SETTER,
-               "HTML §7.2.5.1 exposes this Location member's SETTER to a document of ANOTHER ORIGIN, and this "
+               "HTML §7.2.1 exposes this Location member's SETTER to a document of ANOTHER ORIGIN, and this "
                "engine has no cross-origin Location to filter through — window_proxy.c's `location` asserts "
                "rather than handing one across, so shipping the setter makes that assert the only thing "
                "standing between a cross-origin page and a Location it can navigate. BUILD §7.2.4.5-.10's "

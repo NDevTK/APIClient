@@ -1,4 +1,4 @@
-/* THE BODY MIXIN — WHATWG Fetch §5.2, which BOTH Request and Response include.
+/* THE BODY MIXIN — WHATWG Fetch §5.3 "Body mixin", which BOTH Request and Response include.
  *
  * It lived inside response.c, which is where it was first needed and not where it belongs: `Request` includes
  * the same mixin, so the alternative was a second copy of the single-use latch, the readers and the
@@ -8,7 +8,7 @@
  * WHAT IS LEFT HERE IS WHAT IS FETCH'S. The machine that turns bytes into a settled promise moved to
  * core/byte_reader.c when File API's Blob turned out to define the same three readers: `blob.text()` is
  * `response.text()`, and Fetch is the spec that depends on File API rather than the other way round. What stays
- * is the part no other spec shares — §5.2's "consume body" latch, the Content-Type dispatch `formData()`
+ * is the part no other spec shares — §5.3's "consume body" latch, the Content-Type dispatch `formData()`
  * performs, and the `bodyUsed` attribute. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,7 +77,7 @@ int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
     return 0;
 }
 
-/* §5.2's "clone a body" — the tee, and the reason body.h gives for it being one. */
+/* §2.2.4 "Bodies"' "clone a body" — the tee, and the reason body.h gives for it being one. */
 int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, BodyState *dst, BodyState *src,
                    JSValue in, JSValue **out_cb, int *out_argc)
 {
@@ -85,7 +85,7 @@ int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Body
     int r;
 
     if (*phase == 0) {
-        /* A NULL BODY IS NOT AN EMPTY ONE, and it has no stream to tee — §5.2's clone step is guarded by
+        /* A NULL BODY IS NOT AN EMPTY ONE, and it has no stream to tee — §2.2.4's clone step is guarded by
            "if body is null, return null" and this is that guard. */
         if (!src->has) {
             JS_FreeValue(ctx, in);
@@ -104,7 +104,7 @@ int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Body
         }
     }
     {
-        JSValue op = readable_stream_op(ctx, RS_OP_TEE_CLONE);   /* THIS realm's §4.9.7 tee */
+        JSValue op = readable_stream_op(ctx, RS_OP_TEE_CLONE);   /* THIS realm's §4.9.1 tee */
         r = step_call_run(ctx, phase, cb, cb_cap, op, src->stream, 0, NULL,
                           in, &out, out_cb, out_argc);
         JS_FreeValue(ctx, op);
@@ -129,22 +129,22 @@ int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Body
 
     dst->bytes = NULL;
     dst->len = 0;
-    dst->used = 0;   /* §5.2: the clone gets its OWN single-use latch, which is the whole point of cloning */
+    dst->used = 0;   /* §2.2.4: the clone gets its OWN single-use latch, which is the whole point of cloning */
     dst->has = 1;
     JS_FreeValue(ctx, dst->stream);
     dst->stream = b1;
     return 0;
 }
 
-/* §5.1'S "EXTRACT A BODY", ONCE, for both interfaces that take a BodyInit.
+/* §5.2'S "EXTRACT A BODY", ONCE, for both interfaces that take a BodyInit.
  *
  * It was written twice — in the Response constructor and in the Request one — and each copy knew TWO of the
  * union's six arms: a BufferSource, and everything else stringified. That is why `new Response(blob)` carried
  * the thirteen bytes of "[object Blob]" with a Content-Type of text/plain, and a FormData body carried
  * "[object FormData]". Six arms in one place is the point of a union having one rule.
  *
- * The MIME type is the extraction's second output, not the caller's guess: §5.1 gives each arm its own type or
- * none, and the constructor's only job with it is §6.4's "set Content-Type if the header list has none".
+ * The MIME type is the extraction's second output, not the caller's guess: §5.2 gives each arm its own type or
+ * none, and the constructor's only job with it is §5.5's "set Content-Type if the header list has none".
  * `*out_mime` is malloc'd, or NULL for an arm with no type. Returns -1 with a throw live. */
 int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mime)
 {
@@ -161,7 +161,7 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mim
         const char *btype = NULL;
         const char *bytes = blob_bytes_of(init, &blen, &btype);
         if (bytes) {
-            /* §5.1: a Blob's type IS the Content-Type, and a Blob with no type contributes none — which is why
+            /* §5.2: a Blob's type IS the Content-Type, and a Blob with no type contributes none — which is why
                an empty type must give a NULL mime and not an empty header. */
             if (btype && *btype) *out_mime = strdup(btype);
             return body_state_set(ctx, b, bytes, blen);
@@ -191,10 +191,10 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mim
         size_t n = 0;
         const uint8_t *base = JS_GetArrayBuffer(ctx, &n, (JSValue)init);
         if (!base) return -1;
-        return body_state_set(ctx, b, (const char *)base, n);   /* §5.1: a BufferSource has no type */
+        return body_state_set(ctx, b, (const char *)base, n);   /* §5.2: a BufferSource has no type */
     }
     if (readable_stream_is(init)) {
-        /* §5.1's first arm: the body's stream IS this one. There are no bytes until it is read, and `.body`
+        /* §5.2's first arm: the body's stream IS this one. There are no bytes until it is read, and `.body`
            answers the very stream the page handed in — which is what makes `new Response(rs).body === rs`
            behave and what a page teeing a response's body depends on. A stream has no Content-Type. */
         /* THE ARM'S OWN REFUSAL, which is a step of the extraction and not a caller's guard: "If object is
@@ -278,7 +278,7 @@ static const BodyIface *body_iface_of(JSValueConst v)
 
 static bool body_iface_is(JSValueConst v) { return body_iface_of(v) != NULL; }
 
-/* A MIME type PARAMETER, which §5.2 needs exactly one of: `boundary`. Quoted or a token, and it must follow a
+/* A MIME type PARAMETER, which §5.3 needs exactly one of: `boundary`. Quoted or a token, and it must follow a
    `;` so `boundary` does not match inside a longer parameter name. NULL when absent. */
 static const char *body_mime_param(const char *s, size_t n, const char *key, size_t *out_len)
 {
@@ -306,7 +306,7 @@ static const char *body_mime_param(const char *s, size_t n, const char *key, siz
     return NULL;
 }
 
-/* §5.2 "consume body": the latch is per object and the second read is a TypeError — a page's retry path tests
+/* §5.3 "consume body": the latch is per object and the second read is a TypeError — a page's retry path tests
    exactly that, so answering the body twice would hide the branch it takes. It is the whole of what Fetch's
    read does differently from File API's, which is why the shared machine asks for it rather than holding it.
    THE LATCH IS PER FLOW, TOO. It lives in the including component's class opaque, which no property hook and no
@@ -328,7 +328,7 @@ static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, 
     b = f->of(this_val);
     *pbody = b->bytes ? b->bytes : "";
     *plen  = b->bytes ? b->len : 0;
-    /* A NULL BODY IS NEVER DISTURBED. §5.2's consume returns an empty byte sequence without touching the
+    /* A NULL BODY IS NEVER DISTURBED. §5.3's consume returns an empty byte sequence without touching the
        stream when the body is null, so `new Response()` reads as "" as many times as it is asked and its
        `bodyUsed` stays FALSE — where `new Response("")`, whose body is EMPTY rather than null, latches on the
        first read. The two are the same zero bytes and different objects, which is exactly the distinction
@@ -341,7 +341,7 @@ static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, 
     }
     cow_capture_host_state(ctx, this_val, &b->used, sizeof b->used);
     b->used = 1;
-    /* §5.1's FIRST union arm: a body can BE a ReadableStream, and then there are no bytes to hand back — the
+    /* §5.2's FIRST union arm: a body can BE a ReadableStream, and then there are no bytes to hand back — the
        stream is fully read first. The latch is set either way, because it is set by the CONSUME and not by the
        bytes arriving. */
     if (!b->bytes && !JS_IsUndefined(b->stream) && readable_stream_is(b->stream))
@@ -349,7 +349,7 @@ static int body_take(JSContext *ctx, JSValueConst this_val, const char **pbody, 
     return 0;
 }
 
-/* §5.2's formData(): WHICH PARSER runs is decided by the Content-Type, and a body whose type is neither of the
+/* §5.3's formData(): WHICH PARSER runs is decided by the Content-Type, and a body whose type is neither of the
    two form encodings is a TypeError rather than an empty FormData — a page that calls formData() on a JSON reply
    has a bug, and answering with no entries would hide it. Fetch's own reader, which is why it is declared here
    and not beside the four that every byte sequence answers. */
@@ -375,7 +375,7 @@ static JSValue body_read_form_data(JSContext *ctx, JSValueConst recv, const char
         url_encoded_list_free(&entries);
     } else if (elen == (sizeof("multipart/form-data") - 1) &&
                !strncasecmp(essence, "multipart/form-data", elen)) {
-        /* The BOUNDARY is the Content-Type's own parameter; without one there is nothing to split on and §5.2
+        /* The BOUNDARY is the Content-Type's own parameter; without one there is nothing to split on and §5.3
            says failure, which is the same TypeError a wrong type gives. */
         size_t blen = 0;
         const char *bd = body_mime_param(essence, strlen(essence), "boundary", &blen);
@@ -390,7 +390,7 @@ static JSValue body_read_form_data(JSContext *ctx, JSValueConst recv, const char
     return r;
 }
 
-/* §5.2's READERS. `blob()` is declared here too, and is the same read as `arrayBuffer()` with a Blob around the
+/* §5.3's READERS. `blob()` is declared here too, and is the same read as `arrayBuffer()` with a Blob around the
    bytes — its MIME type comes from the including object's Content-Type, which is why File API cannot declare it
    and Fetch can. */
 static JSValue body_read_blob(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
@@ -446,7 +446,7 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
     return handle;
 }
 
-/* §5.2's `bodyUsed`: the body is non-null AND its stream is DISTURBED. The latch this component sets when a
+/* §5.3's `bodyUsed`: the body is non-null AND its stream is DISTURBED. The latch this component sets when a
    reader consumes the bytes is one way to disturb it; reading the `body` stream directly is the other, and a
    page that does the second and asks the first must be told the truth. */
 static JSValue js_body_get_used(JSContext *ctx, JSValueConst this_val, int magic)
@@ -457,7 +457,7 @@ static JSValue js_body_get_used(JSContext *ctx, JSValueConst this_val, int magic
     return JS_NewBool(ctx, b->used != 0 || readable_stream_disturbed(b->stream));
 }
 
-/* §5.2's `body`. NULL for a null body — which is not an empty one — and otherwise the SAME stream every time,
+/* §5.3's `body`. NULL for a null body — which is not an empty one — and otherwise the SAME stream every time,
    because a second would give the page two independent readers over one byte sequence. */
 static JSValue js_body_get_body(JSContext *ctx, JSValueConst this_val, int magic)
 {

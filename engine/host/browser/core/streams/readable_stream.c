@@ -2266,7 +2266,7 @@ typedef struct {
     uint8_t reading;
     uint8_t read_again;
     uint8_t canceled[2];
-    /* §4.9.7's cloneForBranch2. The public `tee()` never sets it — both branches get the SAME chunk, which is
+    /* §4.9.1's cloneForBranch2. The public `tee()` never sets it — both branches get the SAME chunk, which is
        what the standard says and what a page teeing its own stream expects. Fetch §5.2's "clone a body" DOES:
        `response.clone()` must give the second branch a value the first cannot reach, or a page that mutates
        the chunk it read has changed what the clone will read. Fourteen of response-clone's subtests are
@@ -2324,20 +2324,20 @@ static TeeData *tee_of(JSValueConst v)
     return t;
 }
 
-/* WHERE THIS MACHINE RESTS, AS §4.9.7 NUMBERS IT. One machine over ReadableStreamDefaultTee's pullAlgorithm,
+/* WHERE THIS MACHINE RESTS, AS §4.9.1 NUMBERS IT. One machine over ReadableStreamDefaultTee's pullAlgorithm,
    its two cancelAlgorithms and the read reactions they share. */
 #define TS_STAGES(X) \
-    X(TS_START, "Streams §4.9.7 ReadableStreamDefaultTee (which of pullAlgorithm, cancel1Algorithm, " \
+    X(TS_START, "Streams §4.9.1 ReadableStreamDefaultTee (which of pullAlgorithm, cancel1Algorithm, " \
                 "cancel2Algorithm or a read reaction this entry is)") \
-    X(TS_READ, "Streams §4.9.7 ReadableStreamDefaultTee's pullAlgorithm step 3 (one read through the shared " \
+    X(TS_READ, "Streams §4.9.1 ReadableStreamDefaultTee's pullAlgorithm step 3 (one read through the shared " \
                "reader)") \
-    X(TS_B0, "Streams §4.9.7 ReadableStreamDefaultTee's chunkSteps step 5 (enqueue the chunk into branch 1)") \
-    X(TS_B1, "Streams §4.9.7 ReadableStreamDefaultTee's chunkSteps step 6 (enqueue it into branch 2)") \
-    X(TS_RESOLVE_CANCEL, "Streams §4.9.7 ReadableStreamDefaultTee's cancelAlgorithm step 4.2 (resolve " \
+    X(TS_B0, "Streams §4.9.1 ReadableStreamDefaultTee's chunkSteps step 5 (enqueue the chunk into branch 1)") \
+    X(TS_B1, "Streams §4.9.1 ReadableStreamDefaultTee's chunkSteps step 6 (enqueue it into branch 2)") \
+    X(TS_RESOLVE_CANCEL, "Streams §4.9.1 ReadableStreamDefaultTee's cancelAlgorithm step 4.2 (resolve " \
                          "cancelPromise with the result of cancelling the source)") \
-    X(TS_CANCEL_SOURCE, "Streams §4.9.7 ReadableStreamDefaultTee's cancelAlgorithm step 4.1 " \
+    X(TS_CANCEL_SOURCE, "Streams §4.9.1 ReadableStreamDefaultTee's cancelAlgorithm step 4.1 " \
                         "(ReadableStreamCancel on the source, once BOTH branches have cancelled)") \
-    X(TS_CANCEL_ADOPT, "Streams §4.9.7 ReadableStreamDefaultTee's cancelAlgorithm step 5 (this branch's " \
+    X(TS_CANCEL_ADOPT, "Streams §4.9.1 ReadableStreamDefaultTee's cancelAlgorithm step 5 (this branch's " \
                        "answer is cancelPromise)")
 enum { TS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const TS_STEPS[] = { TS_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -2499,7 +2499,7 @@ again:
             STEP_GOTO(s->hdr.stage, i ? TS_B1 : TS_B0, &s->phase, NULL);
             /* §4.2: a branch the page has already cancelled is not fed, closed or errored. */
             if (s->done != 2 && t->canceled[i]) continue;
-            /* §4.9.7 step 13.2: BRANCH 2 gets a STRUCTURED CLONE of the chunk when the flag is set, and a
+            /* §4.9.1 step 13.2: BRANCH 2 gets a STRUCTURED CLONE of the chunk when the flag is set, and a
                chunk that cannot be cloned errors BOTH branches rather than one — the two are one tee, and
                leaving branch 1 alive with a value branch 2 never got is the split the flag exists to prevent. */
             if (i == 1 && t->clone_for_branch2 && s->done == 0 && !JS_IsUndefined(s->value)) {
@@ -2587,7 +2587,7 @@ again:
 }
 
 #define TEE_DEF(i) { sizeof(JSTeeState), js_tee_step, js_tee_fini, (i), \
-                     .algorithm = "Streams §4.9.7 ReadableStreamDefaultTee's pull, cancel and read reactions", \
+                     .algorithm = "Streams §4.9.1 ReadableStreamDefaultTee's pull, cancel and read reactions", \
                      .steps = TS_STEPS, \
                      .catches_abrupt = 1, .visit = js_tee_visit }
 static const JSTrampStepDef js_tee_defs[TEE_N] = {
@@ -2632,20 +2632,20 @@ static int tee_branch(JSContext *ctx, TeeData *t, JSValueConst tee_v, int i)
     return 0;
 }
 
-/* `clone2` is §4.9.7's cloneForBranch2 — false for §4.2's `tee()`, true for Fetch's clone. It is a PARAMETER
+/* `clone2` is §4.9.1's cloneForBranch2 — false for §4.2's `tee()`, true for Fetch's clone. It is a PARAMETER
    rather than a magic because an IdlStepBody is not handed one, and it is one body rather than two machines
    because the two differ by a single step inside one algorithm. It is read only at stage 0, where the record
    is built, so a resume never re-decides it. */
-/* WHERE THIS MACHINE RESTS. §4.2's `tee()` is one step over §4.9.7's ReadableStreamDefaultTee, whose first
+/* WHERE THIS MACHINE RESTS. §4.2's `tee()` is one step over §4.9.1's ReadableStreamDefaultTee, whose first
    step is acquiring the reader — a call — and whose last is the start promise's two reactions. */
 #define TC_STAGES(X) \
     X(TC_BRAND = IDL_STEP_FIRST, \
-      "Streams §4.9.7 ReadableStreamDefaultTee steps 1-2 (the stream, and the record the five algorithms " \
+      "Streams §4.9.1 ReadableStreamDefaultTee steps 1-2 (the stream, and the record the five algorithms " \
       "share)") \
-    X(TC_READER, "Streams §4.9.7 ReadableStreamDefaultTee step 3 (AcquireReadableStreamDefaultReader)") \
-    X(TC_BUILD, "Streams §4.9.7 ReadableStreamDefaultTee steps 4-17 (the two branches, built with " \
+    X(TC_READER, "Streams §4.9.1 ReadableStreamDefaultTee step 3 (AcquireReadableStreamDefaultReader)") \
+    X(TC_BUILD, "Streams §4.9.1 ReadableStreamDefaultTee steps 4-17 (the two branches, built with " \
                 "CreateReadableStream rather than with the page's `ReadableStream`)") \
-    X(TC_STARTED, "Streams §4.9.7 ReadableStreamDefaultTee step 18 (the reader's `closed` reactions and the " \
+    X(TC_STARTED, "Streams §4.9.1 ReadableStreamDefaultTee step 18 (the reader's `closed` reactions and the " \
                   "two branches, returned as a pair)")
 enum { TC_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const TC_STEPS[] = { TC_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -2671,7 +2671,7 @@ static int tee_call_run(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
             return -1;
         }
         if (readable_byte_ctrl_is(sd->controller))
-            DFAIL("`tee()` on a BYTE stream reached §4.9.7's ReadableStreamDefaultTee — §4.2 performs "
+            DFAIL("`tee()` on a BYTE stream reached §4.9.1's ReadableStreamDefaultTee — §4.2 performs "
                   "ReadableByteStreamTee for one, whose branches are BYTE streams of their own and whose "
                   "reader switches between default and BYOB as the branches are read: build it beside this "
                   "one in readable_byte_stream.c");
@@ -2755,13 +2755,13 @@ static int js_tee_clone_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 
 static const IdlStepDecl js_tee_call_decl = {
     js_tee_call_step, sizeof(JSTeeCallState), js_tee_call_visit, NULL,
-    "Streams §4.2 tee(), through §4.9.7 ReadableStreamDefaultTee", TC_STEPS
+    "Streams §4.2 tee(), through §4.9.1 ReadableStreamDefaultTee", TC_STEPS
 };
 /* THE SAME STATE AND THE SAME VISIT — one struct, one ownership contract, which is what the step-visits gate
    requires and what makes these two declarations of one algorithm rather than two algorithms. */
 static const IdlStepDecl js_tee_clone_decl = {
     js_tee_clone_step, sizeof(JSTeeCallState), js_tee_call_visit, NULL,
-    "Fetch §5.2 clone a body, through §4.9.7 ReadableStreamDefaultTee with cloneForBranch2 set", TC_STEPS
+    "Fetch §5.2 clone a body, through §4.9.1 ReadableStreamDefaultTee with cloneForBranch2 set", TC_STEPS
 };
 
 /* ---- §4.2's `from` --------------------------------------------------------------------------------------------
@@ -2780,20 +2780,20 @@ static const IdlStepDecl js_tee_clone_decl = {
  * reader and pulling only when asked — which `from(array)` with a push during reading observes directly. */
 enum { FROM_PULL = 0, FROM_CANCEL, FROM_NEXT_OK, FROM_RET_OK, FROM_N };
 
-/* WHERE THIS MACHINE RESTS, AS §4.9.6 NUMBERS IT. ReadableStreamFromIterable's pullAlgorithm is one
+/* WHERE THIS MACHINE RESTS, AS §4.9.1 NUMBERS IT. ReadableStreamFromIterable's pullAlgorithm is one
    `nextMethod` call and its cancelAlgorithm is one `return` call, and everything after each is a reaction. */
 #define FS_STAGES(X) \
-    X(FS_START, "Streams §4.9.6 ReadableStreamFromIterable's pullAlgorithm step 1 / cancelAlgorithm steps " \
+    X(FS_START, "Streams §4.9.1 ReadableStreamFromIterable's pullAlgorithm step 1 / cancelAlgorithm steps " \
                 "1-4 (which algorithm this entry is, and the `return` method it must look for)") \
-    X(FS_CALL, "Streams §4.9.6 pullAlgorithm step 2 / cancelAlgorithm step 5 (calling the iterator's `next` " \
+    X(FS_CALL, "Streams §4.9.1 pullAlgorithm step 2 / cancelAlgorithm step 5 (calling the iterator's `next` " \
                "or its `return`)") \
-    X(FS_RESOLVE, "Streams §4.9.6 pullAlgorithm step 3 (PromiseResolve over what `next` answered)") \
-    X(FS_REJECT, "Streams §4.9.6 pullAlgorithm step 3's abrupt completion (a rejected promise for what the " \
+    X(FS_RESOLVE, "Streams §4.9.1 pullAlgorithm step 3 (PromiseResolve over what `next` answered)") \
+    X(FS_REJECT, "Streams §4.9.1 pullAlgorithm step 3's abrupt completion (a rejected promise for what the " \
                  "call threw)") \
-    X(FS_REACT, "Streams §4.9.6 pullAlgorithm step 4 / cancelAlgorithm step 7 (reacting to that promise)") \
-    X(FS_READ_DONE, "Streams §4.9.6 pullAlgorithm step 4.2 (Get(iterResult, \"done\"))") \
-    X(FS_READ_VALUE, "Streams §4.9.6 pullAlgorithm step 4.4 (Get(iterResult, \"value\"))") \
-    X(FS_FEED, "Streams §4.9.6 pullAlgorithm steps 4.3-4.5 (close the controller, or enqueue the value)")
+    X(FS_REACT, "Streams §4.9.1 pullAlgorithm step 4 / cancelAlgorithm step 7 (reacting to that promise)") \
+    X(FS_READ_DONE, "Streams §4.9.1 pullAlgorithm step 4.2 (Get(iterResult, \"done\"))") \
+    X(FS_READ_VALUE, "Streams §4.9.1 pullAlgorithm step 4.4 (Get(iterResult, \"value\"))") \
+    X(FS_FEED, "Streams §4.9.1 pullAlgorithm steps 4.3-4.5 (close the controller, or enqueue the value)")
 enum { FS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FS_STEPS[] = { FS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -3030,7 +3030,7 @@ settle_promise:
 
 #define FROM_DEF(i) { sizeof(JSFromState), js_from_step, js_from_fini, (i), \
                       .catches_abrupt = 1, .visit = js_from_visit, \
-                      .algorithm = "Streams §4.9.6 ReadableStreamFromIterable's pull and cancel algorithms", \
+                      .algorithm = "Streams §4.9.1 ReadableStreamFromIterable's pull and cancel algorithms", \
                       .steps = FS_STEPS }
 static const JSTrampStepDef js_from_defs[FROM_N] = {
     FROM_DEF(FROM_PULL), FROM_DEF(FROM_CANCEL), FROM_DEF(FROM_NEXT_OK), FROM_DEF(FROM_RET_OK),
@@ -3039,7 +3039,7 @@ static const JSTrampStepDef js_from_defs[FROM_N] = {
 
 /* `static ReadableStream from(any asyncIterable)`. A MACHINE for GetIterator(obj, ASYNC): three of its four
    steps are the page's code. */
-/* WHERE THIS MACHINE RESTS. §4.2's `from` is one step over §4.9.6's ReadableStreamFromIterable, whose first
+/* WHERE THIS MACHINE RESTS. §4.2's `from` is one step over §4.9.1's ReadableStreamFromIterable, whose first
    step is GetIterator(asyncIterable, ASYNC) — and three of that operation's four steps are the page's code. */
 #define FC_STAGES(X) \
     X(FC_START = IDL_STEP_FIRST, \
@@ -3050,9 +3050,9 @@ static const JSTrampStepDef js_from_defs[FROM_N] = {
     X(FC_SYNC_CALL, "ECMA-262 7.4.2 GetIterator step 3 (Call(method, obj) for the sync iterator, then " \
                     "27.1.4.1 CreateAsyncFromSyncIterator over it)") \
     X(FC_NEXT, "ECMA-262 7.4.3 GetIteratorDirect step 1 (Get(iterator, \"next\"))") \
-    X(FC_BUILD, "Streams §4.9.6 ReadableStreamFromIterable steps 2-4 (the stream, with the iterator's `next` " \
+    X(FC_BUILD, "Streams §4.9.1 ReadableStreamFromIterable steps 2-4 (the stream, with the iterator's `next` " \
                 "and `return` as its pull and cancel algorithms)") \
-    X(FC_STARTED, "Streams §4.9.6 ReadableStreamFromIterable step 4's startAlgorithm (the start promise's " \
+    X(FC_STARTED, "Streams §4.9.1 ReadableStreamFromIterable step 4's startAlgorithm (the start promise's " \
                   "reactions, attached before the stream is answered)")
 enum { FC_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FC_STEPS[] = { FC_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -3206,7 +3206,7 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 
 static const IdlStepDecl js_from_call_decl = {
     js_from_call_step, sizeof(JSFromCallState), js_from_call_visit, NULL,
-    "Streams §4.2 from(asyncIterable), through §4.9.6 ReadableStreamFromIterable", FC_STEPS
+    "Streams §4.2 from(asyncIterable), through §4.9.1 ReadableStreamFromIterable", FC_STEPS
 };
 
 /* ---- FETCH §5.2's "FULLY READ" ---------------------------------------------------------------------------
@@ -3584,7 +3584,7 @@ JSValue readable_reader_closed(JSContext *ctx, JSValueConst reader)
                  "`class S extends ReadableStream {}` produce an S)") \
     X(RSC_READ, "Streams §4.2 step 2 (converting underlyingSource to an UnderlyingSource: one [[Get]] per " \
                 "member, in the order Web IDL §3.2.18 reads them)") \
-    X(RSC_ALLOC, "Web IDL §3.2.9 (UnderlyingSource[\"autoAllocateChunkSize\"] is [EnforceRange] unsigned long " \
+    X(RSC_ALLOC, "Web IDL §3.2.4.8 (UnderlyingSource[\"autoAllocateChunkSize\"] is [EnforceRange] unsigned long " \
                  "long, so its ToNumber runs BEFORE `cancel` is even read)") \
     X(RSC_TYPE, "Streams §4.2 steps 4-5 (underlyingSourceDict[\"type\"]: \"bytes\" picks §4.7's byte " \
                 "controller and anything else is a TypeError)") \
@@ -3931,7 +3931,7 @@ void readable_stream_init(JSContext *ctx)
             CHECK(g_tee_stepids[i] >= 0, "streams: no step id for a tee operation");
         }
         g_tee_id = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_call_decl, 0);
-        /* §4.9.7 with cloneForBranch2, which is NOT a page-visible member — it is the operation Fetch's "clone
+        /* §4.9.1 with cloneForBranch2, which is NOT a page-visible member — it is the operation Fetch's "clone
            a body" performs, so it is a function object this component hands out and nothing installs. */
         g_tee_clone_id = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_clone_decl, 0);
     }
@@ -3977,7 +3977,7 @@ void readable_stream_init(JSContext *ctx)
     {
         static const char *const FN_NAME[RSF_N] = {
             "reader.read", "reader.releaseLock", "reader.cancel", "ReadableStream.getReader",
-            "ReadableStream.tee", "§4.9.7 cloning tee",
+            "ReadableStream.tee", "§4.9.1 cloning tee",
         };
         static const char *const CTRL_NAME[RS_CTRL_N] = {
             "controller.enqueue", "controller.close", "controller.error",
