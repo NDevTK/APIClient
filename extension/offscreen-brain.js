@@ -890,15 +890,12 @@ function _handleFormSubmit(documentId, msg, tabId, frameId) {
   notifyPopup(tabId);
 }
 
-// Content scripts handle CONTENT_HTML, CONTENT_DOM, CONTENT_FORMS,
-// CONTENT_FORM_SUBMIT, RESPONSE_BODY, and SCRIPT_SOURCE. CONTENT_KEYS
-// / CONTENT_ENDPOINTS were removed — those were heuristic regex
-// scans over HTML text, which is Lexbor's parsing job, and the
-// endpoint heuristic ("url contains /api/" etc.) produced source:
-// page_source entries with no method, no params, no taint info.
-// Now: raw HTML lands in CONTENT_HTML, gets parsed by Lexbor in the
-// worker; real endpoints come from forced execution observing actual
-// fetch/XHR at the host edge.
+/* THE FOUR TYPES `CONTENT_TYPES` ADMITS, AND NOTHING ELSE — the dispatch below is exhaustive over that set
+   and DFAILs past it, so the router's admission and this function's arms cannot drift apart in silence.
+   CONTENT_KEYS / CONTENT_ENDPOINTS were removed (heuristic regex scans over HTML text, which is Lexbor's
+   parsing job); CONTENT_DOM / CONTENT_FORMS / SCRIPT_SOURCE went with the per-script shipping the engine
+   replaced. Raw HTML lands in CONTENT_HTML and the engine parses it; real endpoints come from forced
+   execution observing actual fetch/XHR at the host edge. */
 function handleContentMessage(msg, sender) {
   if (!sender.tab) return;
   const tabId = sender.tab.id;
@@ -938,10 +935,6 @@ function handleContentMessage(msg, sender) {
     handleResponseBody(tabId, msg, sender.frameId, documentId);
     return;
   }
-
-  // (AST_RESUMED / AST_PARTIAL are handled in the onMessage router's
-  // isExtensionPage branch — they originate from the offscreen doc, which has
-  // no sender.tab, so handleContentMessage would have dropped them at the top.)
 
   // PROBE_HIT: a document reports that apiclientsink was called with an active probe marker. Correlating it to
   // a session is only half the question — WHICH DOCUMENT reported it is the other half, and the record is only
@@ -1006,10 +999,11 @@ function handleContentMessage(msg, sender) {
     return;
   }
 
-  /* CONTENT_DOM handler removed: Lexbor in the engine worker parses
-     the same CONTENT_HTML and exposes the spec DOM the bundle reads
-     via document.querySelector / dataset / getAttribute. No
-     parallel content-script DOM snapshot. */
+  /* AN UNMATCHED TYPE IS THE ROUTER AND THIS DISPATCH DISAGREEING, never a message to drop. `CONTENT_TYPES`
+     is the admission set and the four arms above are its arms, so a type reaching here is one added to that
+     set with no handler — which as a silent `return` is a document announcing itself into nothing. */
+  DFAIL("handleContentMessage was handed `" + msg.type + "`, which its dispatch has no arm for — the router " +
+        "admits exactly CONTENT_TYPES, so this type was added to that set without one");
 }
 
 // Popup messages — sender.tab is absent for popup contexts.
@@ -1018,15 +1012,14 @@ function handleContentMessage(msg, sender) {
 
 function _pruneProbeSessions() {
   const now = Date.now();
+  // `createdAt` is the age, and it is the only clock a session has — see startExploitProbe on why there is
+  // no `finishedAt` for this to have preferred.
   for (const [k, s] of _probeSessions) {
-    const age = now - (s.finishedAt || s.createdAt);
-    if (s.status !== "running" && age > PROBE_SESSION_TTL_MS) _probeSessions.delete(k);
+    if (now - s.createdAt > PROBE_SESSION_TTL_MS) _probeSessions.delete(k);
   }
   if (_probeSessions.size > PROBE_SESSION_MAX) {
-    // Drop oldest finished sessions first
     const entries = [...(_probeSessions.entries())]
-      .filter(([, s]) => s.status !== "running")
-      .sort((a, b) => (a[1].finishedAt || a[1].createdAt) - (b[1].finishedAt || b[1].createdAt));
+      .sort((a, b) => a[1].createdAt - b[1].createdAt);
     for (let i = 0; i < entries.length && _probeSessions.size > PROBE_SESSION_MAX; i++) {
       _probeSessions.delete(entries[i][0]);
     }
@@ -1065,7 +1058,6 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
   DCHECK(typeof marker === "string" && marker.length > 0,
          "an @S live-verify was started with no correlation marker — the marker rides INSIDE the payload as "
          + "apiclientsink('<id>') and is the only thing that ties a real Chrome hit back to this session");
-  if (!pageUrl) return { pocJs: null, why: "no page url recorded for this finding — a live delivery navigates the page the sink was observed on" };
   var call = "apiclientsink('" + marker + "')";           // the verifier's proof hook (marker = crypto.randomUUID)
   // The engine's X9 is a bare fire-marker: `onerror=X9`, `javascript:X9`, `';X9()//`. Map every X9 (call or
   // ref form) to the apiclientsink CALL so the real sink, on firing, relays the proof. Its structure (breakout
@@ -1073,6 +1065,14 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
   var payload = String(poc).split("X9()").join(call).split("X9").join(call);
   var context = "engine:" + (sinkName || "?");
   var out = { pocJs: null, payload: payload, context: context, source: source || null };
+  /* EVERY ARM ANSWERS THE FULL RECORD, INCLUDING THIS ONE — it used to return `{pocJs, why}` alone, above the
+     line that builds `payload`, so the one caller's own assert ("it returns {pocJs, payload, context, source}
+     on every arm including the ones it cannot perform") aborted on a finding whose page address was never
+     recorded. The finding's breakout is still real; what is missing is a document to navigate. */
+  if (!pageUrl) {
+    out.why = "no page url recorded for this finding — a live delivery navigates the page the sink was observed on";
+    return out;
+  }
   if (!delivery) {
     // The engine declared no delivery for this source — which is itself the statement, not a missing field:
     // server-injected page state is written by the attacker directly and no component carries or transforms
@@ -1142,6 +1142,9 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
         + "user-file), so "
         + "either a mechanism was added in C without its delivery arm here, or this record did not come from "
         + "solve_json_array");
+  // Release only (the DFAIL above is the dev answer): `why` is stated here too, so the record's shape holds
+  // on every arm and the panel prints the reason rather than an unexplained absent PoC.
+  out.why = "the engine declared the delivery mechanism `" + delivery + "`, which this layer has no arm for.";
   return out;
 }
 function startExploitProbe(msg) {
@@ -1164,10 +1167,19 @@ function startExploitProbe(msg) {
     ? crypto.randomUUID()
     : ("probe-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10));
   const session = {
-    marker, status: "running", pageUrl: pageUrl || null,
+    // `prepared` is the only state a STORED session has ever had — it was written "running" here and
+    // overwritten below before the map ever saw it, so the transition was to nobody. It is stated once, where
+    // it is true, and the state a session would need for a lifecycle it does not have is not invented.
+    marker, status: "prepared", pageUrl: pageUrl || null,
     findingId: findingId || null, sourceUrl: (msg && msg.sourceUrl) || null,
     sinkName: sinkName || null, waitMs: wait,
-    hits: [], createdAt: Date.now(), finishedAt: null, error: null,
+    /* NO `finishedAt` AND NO `error`. Both were written here, to null, and by nothing else ever — this
+       session has no terminal transition: the delivery is performed by the sandboxed page and evidence
+       arrives as PROBE_HIT appends to `hits`, so there is no moment at which a session finishes or fails.
+       Two names that could only ever be null were two `|| null` defaults on the STATUS reply pretending to
+       be a lifecycle, and `error` collided with that reply's own "session not found" error. `createdAt` is
+       the LRU key, which is what `finishedAt || createdAt` was already resolving to on every session. */
+    hits: [], createdAt: Date.now(),
     /* THE DELIVERED DOCUMENT — the whole basis on which a hit can be ATTRIBUTED rather than merely counted.
        Filled from the delivery this zone actually built (never re-derived at hit time: §scheduler's rule that
        an operation becoming a work item takes its inputs WITH it — a PROBE_HIT arrives long after, and reading
@@ -1200,7 +1212,12 @@ function startExploitProbe(msg) {
     // frameId 0 is the BROWSER'S name for the top-level traversable, and window.open creates exactly one.
     session.expect = { url: _poc.targetUrl, origin: _poc.targetOrigin, frameId: 0 };
   }
-  session.status = "prepared";
+  /* THE REASON IS AS REQUIRED AS THE PoC, because one of the two is always the answer: a delivery this layer
+     can perform has a pocJs, and one it cannot has the sentence saying which mechanism and why. An absent
+     both is a session the panel can only render as a broken build. */
+  DCHECK(typeof session.pocJs === "string" ? session.pocWhy === null : typeof session.pocWhy === "string",
+         "a probe session carries neither a PoC nor a reason — buildLiveDelivery states `why` on every arm " +
+         "that answers no pocJs, so this is that record having grown a path that answers neither");
   _probeSessions.set(marker, session);
   return session;
 }

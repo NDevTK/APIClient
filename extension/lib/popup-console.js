@@ -6,8 +6,10 @@
 async function initMsgConsole(req) {
   currentChannelId = req.channelId;
   currentChannelType = req.method; // "WEBSOCKET" or "POSTMESSAGE"
-  // For PM reply: target is the sourceOrigin (who sent to us, we reply back to them)
-  currentTargetOrigin = req.sourceOrigin || null;
+  /* For a PM reply the target is the page-claimed sourceOrigin — who the renderer says sent to us. It is
+     carried VERBATIM, including the empty string the renderer sends when it stated no origin: what an absent
+     one may NOT become is `"*"`, which is what sendConsoleMessage used to substitute. See the refusal there. */
+  currentTargetOrigin = req.sourceOrigin;
   currentChannelFrameId = req.frameId ?? null;
   currentChannelDocumentId = req.documentId ?? null;
   // Bind the channel to the tab that captured it. When logFilter=="all"
@@ -20,12 +22,16 @@ async function initMsgConsole(req) {
   // Dynamic label based on channel type
   const labelEl = document.querySelector("#send-ws-console .ws-label");
   const urlEl = document.getElementById("ws-console-url");
+  // THE ORIGIN PAIR IS THE PAGE'S CLAIM AND SAYS SO \u2014 one statement of that, in popup-reqlog.js, which
+  // carries why (the halves are read in the untrusted renderer, and the browser never stated them).
   if (currentChannelType === "POSTMESSAGE") {
     labelEl.textContent = "postMessage";
-    urlEl.textContent = (req.sourceOrigin || "?") + " \u2192 " + (req.targetOrigin || "?");
+    urlEl.textContent = "page-claimed: " + _claimedOriginPair(req);
+    urlEl.title = PAGE_CLAIMED_ORIGINS_TITLE;
   } else if (currentChannelType === "MSGCHANNEL") {
     labelEl.textContent = "MessageChannel";
-    urlEl.textContent = (req.sourceOrigin || "?") + " \u2192 " + (req.targetOrigin || "?");
+    urlEl.textContent = "page-claimed: " + _claimedOriginPair(req);
+    urlEl.title = PAGE_CLAIMED_ORIGINS_TITLE;
   } else {
     labelEl.textContent = "WebSocket";
     urlEl.textContent = req.url;
@@ -129,6 +135,15 @@ async function refreshMsgConsole() {
   }
 }
 
+/* A REAL TUPLE ORIGIN, which is the only thing HTML §9.3.3 "Posting messages" lets `targetOrigin` be besides
+   `*` and `/` — anything else is parsed as a URL and throws when it does not parse. The opaque origin
+   serializes as `"null"`, does not parse, and is same-origin with NOTHING; the empty string is the renderer
+   having stated none. Both are refusals, not defaults. */
+function _isRealTargetOrigin(o) {
+  if (typeof o !== "string" || o === "" || o === "null") return false;
+  try { return new URL(o).origin === o; } catch (_) { return false; }
+}
+
 async function sendConsoleMessage() {
   const input = document.getElementById("ws-console-input");
   const sendBtn = document.getElementById("ws-console-send");
@@ -142,9 +157,27 @@ async function sendConsoleMessage() {
     const routedTab = currentChannelTabId != null ? currentChannelTabId : currentTabId;
     let msgPayload;
     if (currentChannelType === "POSTMESSAGE") {
+      /* NO `|| "*"`. `targetOrigin` is the one thing that keeps a postMessage from being readable by whatever
+         document the target window holds by the time it lands, and the value here is a page CLAIM that may be
+         the empty string (the renderer stated none) or `"null"` (the sender's origin was opaque, which is
+         same-origin with nothing and can never be a target). Substituting the wildcard turns a missing
+         recipient into EVERY recipient — a human-typed payload broadcast at an origin nobody named. Refuse
+         and say so, which is a state the operator can act on. */
+      if (!_isRealTargetOrigin(currentTargetOrigin)) {
+        const historyEl = document.getElementById("ws-console-history");
+        historyEl.innerHTML +=
+          `<div class="ws-msg ws-msg-error"><span class="ws-msg-dir">error</span> ` +
+          `not sent: this channel's page-claimed source origin is ` +
+          `${esc(currentTargetOrigin === "" ? "(none stated)" : currentTargetOrigin)}, which is not an origin a ` +
+          `reply can be addressed to. A postMessage needs a real target origin; the wildcard would deliver ` +
+          `this payload to whatever document holds that window.</div>`;
+        sendBtn.textContent = "Send Message";
+        await refreshMsgConsole();   // the same tail the sent path takes — it owns the button's state
+        return;
+      }
       msgPayload = {
         type: "PM_SEND_MSG", tabId: routedTab, channelId: currentChannelId,
-        data: data, targetOrigin: currentTargetOrigin || "*",
+        data: data, targetOrigin: currentTargetOrigin,
         documentId: currentChannelDocumentId, frameId: currentChannelFrameId,
       };
     } else if (currentChannelType === "MSGCHANNEL") {

@@ -948,23 +948,37 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
     DCHECK(q && typeof q === "object" && typeof q.url === "string" && q.url,
            "the engine's xhr.send record names no URL — the chokepoint decides SOP, CORS, method and " +
            "credentials, and cannot decide about a request it was never told");
-    if (!q || typeof q.url !== "string") return { meta: { body: null, status: 0, statusText: "", headers: [] }, bytes: null };
-    if (!canFetch) return { meta: { body: null, status: 0, statusText: "", headers: [] }, bytes: null };
+    // Release: the DCHECK above is stripped, and every read below is of a record this proves exists.
+    if (!q || typeof q.url !== "string") return { meta: { status: 0, statusText: "", headers: [] }, bytes: null };
+    /* THE METHOD IS PART OF THE REQUEST'S IDENTITY, so a request whose method this zone cannot issue is
+       REFUSED and never DOWNGRADED. safeFetch hardcodes `method:"GET"` and reads neither `opts.method` nor
+       `opts.body` (SECURITY.md's "GET only, enforced by ABSENCE"), so handing it a POST used to answer the
+       page with the reply to a GET of the same address — a response the server never gave for that request,
+       which every @H example value and every @S verdict downstream is then derived from. A wrong answer is
+       worse than an absent one: `blocked-method:<M>` is the same refusal shape as `blocked-scheme:` and
+       `blocked-cors-credentialed`, and with no bytes beside it the engine's xhr_take_reply leaves the
+       response the network error §3 starts it as, which §3.5.6's "handle errors" turns into the `error`
+       event. Nothing state-changing is issued, which is the rule this preserves rather than relaxes.
+       GET IS THE WHOLE SET, HEAD INCLUDED: a HEAD answered with a GET's body is the same substitution.
+       The method arrives already normalized (Fetch §2.2.1 Methods, "normalize a method", which XHR §3.5.1
+       The open() method runs), so `GET` is exactly the requests this zone can perform. */
+    DCHECK(typeof q.method === "string" && q.method !== "",
+           "the engine's xhr.send record names no method — xhr_request_op writes one on every record, and a " +
+           "request whose method is unknown cannot be refused OR issued");
+    if (q.method !== "GET")
+      return { meta: { status: 0, statusText: "blocked-method:" + q.method, headers: [] }, bytes: null };
+    if (!canFetch) return { meta: { status: 0, statusText: "", headers: [] }, bytes: null };
     try {
       const abs = new URL(q.url, msg.sourceUrl).href;
-      /* @security-finding  THREE OF THESE FOUR ARGUMENTS ARE NOT READ BY THE CHOKEPOINT, AND ITS REFUSAL IS
-         SILENT. safeFetch forces `method:"GET"`, takes credentials only from `opts.credentialed`, and never
-         looks at `body` — which is SECURITY.md's rule holding ("GET only … POST/PUT/DELETE endpoints are
-         RECORDED by forced exec, never issued"), but holding invisibly: a page's `xhr.open("POST", u)` is
-         answered with the reply to a GET of `u`, and the engine models that reply as the POST's. The engine
-         then reasons about a response the server never gave for that request. The chokepoint should REFUSE a
-         non-GET the way it refuses a scheme (a `blocked-method` status the engine turns into §3.5.6's error
-         event), rather than downgrade it — that is a behaviour change to the analysis, so it is named here
-         and not taken silently. `headers` IS read, and comes from the untrusted bundle: within the model
-         (uncredentialed GET to a public host, forbidden header names stripped by the browser), but it is why
-         safeFetch's "analyzer probe headers only" comment is no longer the whole truth. */
-      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, method: q.method, headers: q.headers,
-                                            body: q.body, credentials: q.credentials });
+      /* @security-finding  `headers` COMES FROM THE UNTRUSTED BUNDLE and IS read by the chokepoint: within
+         the model (uncredentialed GET to a public host, forbidden header names stripped by the browser), but
+         it is why safeFetch's "analyzer probe headers only" comment is no longer the whole truth, and it must
+         be re-decided the day credentialed mode is turned on. `q.credentials` is deliberately NOT mapped onto
+         `opts.credentialed`: that flag is the trusted zone's decision to replay a learned GET with the user's
+         cookies, and taking it from the page's `withCredentials` would let the analysed bundle turn credential
+         attachment on for itself. Only what the chokepoint reads is passed, so there is nothing left here for
+         it to drop in silence. */
+      const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, headers: q.headers });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",
              "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
@@ -978,9 +992,12 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
                bytes: r.body };
     } catch (e) {
       /* §3.5.6's "handle errors": a THROWN fetch is the network error that becomes the page's `error` event.
-         An invariant abort is not one and travels on. */
+         An invariant abort is not one and travels on.
+         NO `body` IN THE RECORD. The bytes cross BESIDE the JSON and `bytes: null` is the whole statement that
+         this answer has none; a `body` key inside the record is the second spelling `fetch_reply_set_body`
+         DCHECKs against, and it would abort the day one of these paths carried bytes. */
       RETHROW_FATAL(e);
-      return { meta: { body: null, status: 0, statusText: "", headers: [] }, bytes: null };
+      return { meta: { status: 0, statusText: "", headers: [] }, bytes: null };
     }
   };
   /* THE PRINCIPAL IS BROWSER-STATED, NEVER PARSED OFF THE ADDRESS. This read `originOf(msg.sourceUrl)`, and a

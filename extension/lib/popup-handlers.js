@@ -326,6 +326,14 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       if (tabId == null) return;
       // documentId-ONLY routing (no frameId fallback — reused across navs / origins).
       if (!msg.documentId) { sendResponse({ error: "blocked: no documentId" }); return true; }
+      /* THE WILDCARD IS NOT A TARGET THIS SURFACE SENDS. The send panel refuses a channel whose page-claimed
+         source origin is not a real one (lib/popup-console.js) rather than addressing the reply to `*`, so a
+         `*` or an empty target arriving here is that refusal having been bypassed — and the payload is a
+         human-typed one going into whatever document holds that window. */
+      DCHECK(typeof msg.targetOrigin === "string" && msg.targetOrigin !== "" && msg.targetOrigin !== "*",
+             "PM_SEND_MSG was asked to reply to `" + msg.targetOrigin + "` — a postMessage the operator typed " +
+             "is addressed to ONE origin, and the wildcard delivers it to whichever document the target " +
+             "window holds by the time it lands");
       var _pmOpts = { documentId: msg.documentId };
       swRpc("tabs.sendMessage", tabId, {
         type: "PM_SEND_MSG",
@@ -403,14 +411,22 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       try {
         const session = startExploitProbe(msg);
         // Return the EXACT PoC JS so the popup displays AND the sandbox runs the
-        // one artifact. error surfaces a build failure (e.g. opaque page URL).
+        // one artifact.
         // `pocWhy` is the OTHER answer and it was being dropped here: when the source's engine-declared
         // delivery is one this zone cannot PERFORM (a planted cookie, an attacker-served referrer, a
         // user-supplied file), there is no pocJs and the reason is the whole content of the reply. Without
         // it the popup could only say "no pocJs", which reads as a broken build rather than as the
         // mechanism it actually is.
-        sendResponse({ success: true, sessionId: session.marker, pocJs: session.pocJs || null,
-                       pocWhy: session.pocWhy || null, error: session.error || null });
+        // EXACTLY ONE OF THE TWO IS A STRING — startExploitProbe asserts that pairing where it builds the
+        // session, so the panel never has to ask which half is missing. `error` is NOT on this reply: it
+        // named a session field nothing has ever written, and the catch below owns that name for the one
+        // thing it does mean here (a probe that could not be started at all).
+        DCHECK(typeof session.pocJs === "string" ? session.pocWhy === null : typeof session.pocWhy === "string",
+               "EXPLOIT_PROBE_START has neither a PoC nor a reason to answer with — buildLiveDelivery states " +
+               "one of the two on every arm, so this reply would render as a broken build for a finding whose " +
+               "breakout is fire-verified");
+        sendResponse({ success: true, sessionId: session.marker, pocJs: session.pocJs,
+                       pocWhy: session.pocWhy });
       } catch (e) {
         RETHROW_FATAL(e);   // an invariant abort is never reported as a probe that failed to build
         sendResponse({ error: (e && e.message) || String(e) });
@@ -426,17 +442,34 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       if (!ses) { sendResponse({ error: "session not found or expired" }); return; }
       // NO `executed` FIELD. It was `executed: ses.executed || null` — a default over a name NOTHING has ever
       // written: startExploitProbe builds the session with {marker, status, pageUrl, findingId, sourceUrl,
-      // sinkName, waitMs, hits, createdAt, finishedAt, error} and the only writer after that is PROBE_HIT,
-      // which appends to `hits`. So the field crossed as null on every reply, and the popup read it as a
+      // sinkName, waitMs, hits, createdAt, expect, deliveredDocumentId, pocJs, pocWhy} and the only writer
+      // after that is PROBE_HIT, which appends to `hits`. So the field crossed as null on every reply, and the popup read it as a
       // SECOND source of "did the payload fire" — a whole alternate evidence vocabulary that could never
       // answer. Deleted here and at its reader (lib/popup-security.js), per CLAUDE.md §Architecture: a name
       // read somewhere and written nowhere is a broken contract, and the default is what stops it crashing.
       // `hits` is the one evidence channel and it is a real array on every session.
+      /* `pocJs` IS ASSERTED, NOT DEFAULTED, and `null` is its POSITIVE value: startExploitProbe writes it on
+         every session from buildLiveDelivery's record, and null means the engine's declared delivery is one
+         this zone cannot PERFORM (a planted cookie, an attacker-served referrer, a user-supplied file) — the
+         reason travels as `pocWhy` on the START reply. `|| null` could not tell that from a producer that
+         stopped writing the field.
+         `error` AND `finishedAt` ARE GONE FROM THIS REPLY. Both were `|| null` over session fields written
+         exactly once, to null, and never again by anything: this session has no terminal transition at all,
+         so neither could ever carry a value. `error` was the worse of the two — the reply already uses that
+         name for "session not found or expired" (above), which the poller reads as a reason to keep polling,
+         so a session-level error crossing under it would have been read as an expired session. */
+      DCHECK("pocJs" in ses && (ses.pocJs === null || (typeof ses.pocJs === "string" && ses.pocJs.length > 0)),
+             "a probe session carries no usable pocJs — startExploitProbe writes buildLiveDelivery's answer " +
+             "on every session it stores, so an absent field is that producer having stopped and an empty " +
+             "string is a delivery that was built out of nothing");
+      DCHECK(Array.isArray(ses.hits),
+             "a probe session carries no hits array — it is created with hits:[] and PROBE_HIT only ever " +
+             "appends to it, so its absence is the one evidence channel this reply has being unreadable");
       sendResponse({
         success: true, status: ses.status, marker: ses.marker, pageUrl: ses.pageUrl,
         hits: ses.hits.slice(),
-        pocJs: ses.pocJs || null, error: ses.error || null,
-        startedAt: ses.createdAt, finishedAt: ses.finishedAt || null,
+        pocJs: ses.pocJs,
+        startedAt: ses.createdAt,
       });
       return;
     }

@@ -3,6 +3,28 @@
    _renderVisibleSlice) so a long log stays responsive; renderResponsePanel is the entry. */
 // ─── Response Panel (Request Log) — Virtual Scroll ──────────────────────────
 
+/* AN ORIGIN PAIR ON A postMessage / MessageChannel RECORD IS THE PAGE'S CLAIM, AND IT IS RENDERED AS ONE.
+   Both halves are read off a real MessageEvent — but in `content.js`, inside the RENDERER, which SECURITY.md
+   classes UNTRUSTED ("a compromised renderer controls them"). They do NOT reach the engine (no `sourceOrigin`
+   consumer in bridge.js), so no bundle's `event.origin` check is decided by one and the rule that the engine
+   never gets a forgeable origin is intact. What was wrong is only here: `A → B` printed an untrusted string
+   in the same visual register as a browser-stated fact, which is SECURITY.md's "the sender's origin is
+   stamped by the trusted zone and never taken from the message" broken at the presentation layer.
+   AN EMPTY HALF IS A STATEMENT, NOT A HOLE — response-decode.js stores `msg.sourceOrigin || ""`, so "" is the
+   renderer having sent no origin at all, and `|| "?"` erased the difference between that and an origin the
+   renderer named. */
+const PAGE_CLAIMED_ORIGINS_TITLE =
+  "Page-CLAIMED: read off a MessageEvent inside the page's own renderer, which this extension does not " +
+  "trust. The browser never stated these. Context, not evidence.";
+function _claimedOriginPair(req) {
+  DCHECK(typeof req.sourceOrigin === "string" && typeof req.targetOrigin === "string",
+         "a channel record reached the request log without both origin halves — response-decode.js writes " +
+         "each as a string on every POSTMESSAGE/MSGCHANNEL entry it creates, and the empty string is the " +
+         "renderer having stated none");
+  const half = (o) => (o === "" ? "(none stated)" : o);
+  return half(req.sourceOrigin) + " → " + half(req.targetOrigin);
+}
+
 function _renderLogCard(req, showTabLabel) {
   const hasProto = !!req.decodedBody;
 
@@ -35,7 +57,7 @@ function _renderLogCard(req, showTabLabel) {
     const msgs = req.messages || [];
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
-    const origins = (req.sourceOrigin || "?") + " \u2192 " + (req.targetOrigin || "?");
+    const origins = _claimedOriginPair(req);
     return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(String(req._tabId))}">
     <div class="card-label flex-between">
       <span>
@@ -45,7 +67,7 @@ function _renderLogCard(req, showTabLabel) {
       </span>
       <span class="badge ws-status-open">ACTIVE</span>
     </div>
-    <div class="card-value card-value-mono">${esc(origins)}</div>
+    <div class="card-value card-value-mono" title="${esc(PAGE_CLAIMED_ORIGINS_TITLE)}">page-claimed: ${esc(origins)}</div>
     <div class="card-meta">
       ${req.service ? `Service: <strong>${esc(req.service)}</strong>` : ""}
       <span class="ws-msg-counts">${recvCount} received${sentCount ? ` / ${sentCount} replied` : ""}</span>
@@ -58,7 +80,7 @@ function _renderLogCard(req, showTabLabel) {
     const msgs = req.messages || [];
     const sentCount = msgs.filter((m) => m.dir === "sent").length;
     const recvCount = msgs.filter((m) => m.dir === "recv").length;
-    const origins = (req.sourceOrigin || "?") + " \u2192 " + (req.targetOrigin || "?");
+    const origins = _claimedOriginPair(req);
     return `<div class="card request-card clickable-card mb-8" data-id="${esc(String(req.id))}" data-tab-id="${esc(String(req._tabId))}">
     <div class="card-label flex-between">
       <span>
@@ -68,7 +90,7 @@ function _renderLogCard(req, showTabLabel) {
       </span>
       <span class="badge ws-status-open">ACTIVE</span>
     </div>
-    <div class="card-value card-value-mono">${esc(origins)}</div>
+    <div class="card-value card-value-mono" title="${esc(PAGE_CLAIMED_ORIGINS_TITLE)}">page-claimed: ${esc(origins)}</div>
     <div class="card-meta">
       ${req.service ? `Service: <strong>${esc(req.service)}</strong>` : ""}
       <span class="ws-msg-counts">${recvCount} received${sentCount ? ` / ${sentCount} sent` : ""}</span>

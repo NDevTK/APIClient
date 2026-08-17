@@ -153,13 +153,22 @@ There is no raw `fetch` on any analyzer path. `safeFetch` guarantees, in one aud
   or `opts.body` (grep: no occurrence). Forced execution explores many paths; it never replays a
   state-changing method. A well-designed server does not mutate on GET, so even a credentialed GET replay is
   side-effect-free; POST/PUT/DELETE endpoints are RECORDED by forced exec, never issued.
-  **RESIDUAL — the refusal is SILENT.** `bridge.js:966` hands the chokepoint the page's real
-  `method`/`body`/`credentials` for an XHR and they are dropped without a word, so a page's
-  `xhr.open("POST", u)` is answered with the reply to a *GET* of `u` and the engine models that reply as the
-  POST's. Named at `bridge.js:955`. The fix is a `blocked-method` status the engine turns into §3.5.6's
-  error event — a change to what the analysis reports, so it is stated here rather than taken silently.
+  **THE REFUSAL IS NO LONGER SILENT ON THE XHR PATH, and it is the CALLER's, not the chokepoint's.**
+  `bridge.js` used to hand the chokepoint the page's real `method`/`body`/`credentials` and they were dropped
+  without a word, so `xhr.open("POST", u)` was answered with the reply to a *GET* of `u` and the engine
+  modelled that reply as the POST's — a wrong answer, which is worse than an absent one, and every @H example
+  value and @S verdict downstream of it was derived from a response the server never gave for that request.
+  `fetchedXhr` now refuses a non-GET before the call — `blocked-method:<M>`, the same shape as
+  `blocked-scheme:` — with no bytes beside it, which is the network error §3.5.6's "handle errors" turns into
+  the page's `error` event. It passes ONLY what the chokepoint reads, so there is nothing left for it to drop
+  in silence; `q.credentials` is deliberately not mapped onto `opts.credentialed` (that flag is this zone's
+  decision, never the analysed bundle's). **STILL OPEN on the `fetch()` path**, and it is the same defect one
+  seam over: the pending register carries the method (`PEND_METHOD`) but `engine_pending_urls` joins URLs
+  ALONE and `engine_provide` fills every entry whose URL matches, so a page that issues a GET and a POST to
+  one address has both promises settled with the GET's body. The fix is in the engine — the pending record
+  and the provide key are `(method, url)`, not `url`.
 - **`opts.headers` COMES FROM THE UNTRUSTED BUNDLE on the XHR path** — a correction; `safe-fetch.js`'s own
-  "analyzer probe headers only" comment is no longer the whole truth. `bridge.js:966` forwards the page's
+  "analyzer probe headers only" comment is no longer the whole truth. `fetchedXhr` forwards the page's
   header list. It is within the model (an uncredentialed GET to a public host, with forbidden header names
   stripped by the browser), and it stays within it only because credentialed mode is off: a bundle-chosen
   header list on a cookie-bearing request is a different question and must be re-decided when that lands.
@@ -307,10 +316,15 @@ the honesty mechanism — a label that can't cite a real check is marked as a re
   is vouched for by nothing but the renderer that returned it.
 - **Page-claimed origins in the request log** — `sourceOrigin` / `targetOrigin` on a `PM_RECV` / `MC_OPEN`
   record (`content.js:159`, `:189`) are read off a real `MessageEvent` in the isolated world, so they are
-  browser-stated *in a renderer we do not trust*, and the popup renders them as `A → B` with nothing marking
-  them as claims (`lib/popup-reqlog.js:38`). They do NOT reach the engine (no `sourceOrigin` consumer in
-  `bridge.js`), so the "the engine never gets a forgeable `event.origin`" rule is intact; the residual is a
-  UI that labels an untrusted claim like a fact.
+  browser-stated *in a renderer we do not trust*. They do NOT reach the engine (no `sourceOrigin` consumer in
+  `bridge.js`), so the "the engine never gets a forgeable `event.origin`" rule is intact. The UI half is
+  CLOSED: both renderers print them as `page-claimed: A → B` with the reason on the element
+  (`lib/popup-reqlog.js` `_claimedOriginPair` / `PAGE_CLAIMED_ORIGINS_TITLE`, used by `lib/popup-console.js`),
+  and an empty half prints as `(none stated)` rather than `?`. The send panel no longer *acts* on one it
+  cannot address either: a PM reply whose page-claimed source origin is empty or `"null"` is REFUSED instead
+  of being sent with `targetOrigin: "*"`, which would have delivered an operator-typed payload to whatever
+  document held that window. What remains is that the store still files these records under a claimed origin
+  — a research artifact, like every relayed reply.
 - **`scripting` + MAIN-world injection is an unused privilege held open.** `_PROBE_INJECTORS` and the
   `scripting.exec` RPC arm (`background.js:102`, `:184`) grant arbitrary MAIN-world execution in any tab
   (`world:"MAIN"`, `target.allFrames`) — full same-origin control of every site the user has open — and
