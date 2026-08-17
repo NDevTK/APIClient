@@ -204,7 +204,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el)
        it reaches the @H surface as the shape it is, rather than disappearing. */
     t = dom_cow_attr_taint(el, "src");
     if (!JS_IsUndefined(t)) {
-        endpoint_record(ctx, "GET", t, NULL, 0);
+        endpoint_record(ctx, "GET", t, NULL, 0, NULL);
         return;
     }
     src = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"src", 3, &n_len);

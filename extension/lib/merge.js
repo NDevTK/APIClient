@@ -55,7 +55,7 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
          that must crash rather than register every endpoint of the run as parameterless. */
       DCHECK(callSite && typeof callSite === "object", "a fetchCallSites entry is not an object — endpoint.c emits one JSON object per deduped endpoint");
       DCHECK(typeof callSite.method === "string" && callSite.method, "a fetchCallSites entry carries no method — endpoint_record takes it as a required argument, so an absent one is the @H serializer broken");
-      DCHECK(Array.isArray(callSite.params), "a fetchCallSites entry carries no params array — endpoint.c writes \"params\":[…] for every endpoint (empty when the URL had no query), so its absence is the query surface arriving as nothing");
+      DCHECK(Array.isArray(callSite.params), "a fetchCallSites entry carries no params array — endpoint.c writes \"params\":[…] for every endpoint (empty when the request carried no templated path segment, no query and no readable body), so its absence is the whole parameter surface arriving as nothing");
       try {
         // Structural @T candidate (url:null — unreached site, value
         // unresolved): surfaced via focusedView/structuralCandidates, not
@@ -165,13 +165,14 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
             requiredHeaders: callSite.headers === undefined ? null : astHeaderRecord(callSite.headers),
             /* THE PATH-PARAM EXAMPLES, FROM THE RECORD THAT ACTUALLY HOLDS THEM. The rich per-doc method
                schema is EVICTED after review, so without a copy on the flat endpoint the cumulative moat
-               loses the real learned values — the whole point of the tool. This read `callSite.params`
-               filtered by `p.location === "path"`, and endpoint.c's params are the URL's QUERY string with
-               no `location` on them at all, so the filter was empty on every run and this field has been
-               `null` for every endpoint this project has ever recorded — while its comment described the
-               values it was carrying. The producer is the method: lib/learn.js mints a `location:"path"`
-               parameter for each `{hole}` segment and fills its `_astValidValues` from the concrete live
-               request that matched the template, which IS the "orgId=acme-42" case named here. */
+               loses the real learned values — the whole point of the tool. It reads the METHOD lib/learn.js
+               just registered, which now has TWO producers of a `location:"path"` parameter: endpoint.c
+               emits one per `{hole}` the forced execution interpolated into the address, carrying the
+               segment its concolic example computed, and the templated reconcile below folds in the concrete
+               segment of a live request that matched the template — the "orgId=acme-42" case. (Reading
+               `callSite.params` for `p.location === "path"` directly would work now that the producer states
+               it, and is still the wrong source: the values a live request taught belong to the method and
+               never reach the call-site record.) */
             pathParams: (function () {
               if (!_learned.method || !_learned.method.parameters) return null;   // dynamic URL: no method, no path template
               var out = [];
@@ -184,10 +185,12 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
               }
               return out.length ? out : null;
             })(),
-            /* (No request body on this record, and none in the doc model either: `endpoint_record` takes a
-               method, a URL and headers, so the engine has no body surface to carry. The Send panel's
-               `schema.requestBody` and the OpenAPI export read `doc.schemas[…Request]`, which only an
-               imported or probed description now fills.) */
+            /* (No request body on THIS record. The body surface lands in the doc model: endpoint.c reads the
+               request's own payload and lib/learn.js files its fields as `doc.schemas[…Request]` with
+               `m.request.$ref` pointing at them, which is what lib/send.js's `requestBody` and the OpenAPI
+               export already resolve. A flat copy here would be the eviction argument above applied to the
+               body, and it needs a reader in lib/send.js first — that file projects only the ten fields this
+               `endpoints.set` writes, deliberately.) */
             firstSeen: Date.now(),
           });
           newEndpoints++;

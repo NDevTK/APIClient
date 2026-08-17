@@ -1,6 +1,7 @@
 /* @H endpoint surface — see endpoint.h. Findings are C data; params + values merge in C; emit is C. */
 #include "solver/endpoint.h"
 #include "core/json_buf.h"
+#include "core/mime/mime_type.h"
 #include "solver/concolic.h"
 #include "solver/flow.h"
 #include "check.h"
@@ -8,7 +9,13 @@
 #include <string.h>
 #include <stdio.h>
 
-typedef struct { char *name; char **vals; int nvals, vcap; } Param;   /* validValues merged across same-shape hits */
+/* WHERE THE VALUE LANDED IN THE REQUEST. A reviewer replays a path param by substituting it into the address,
+   a query param by appending it and a body param by encoding it into the payload, so this is not a label on a
+   param — it is half of what the param IS, and two params of the same name in two places are two params. */
+typedef enum { EP_QUERY = 0, EP_PATH, EP_BODY } EpLoc;
+static const char *const ep_loc_name[] = { "query", "path", "body" };
+
+typedef struct { char *name; EpLoc loc; char **vals; int nvals, vcap; } Param;   /* validValues merged across same-shape hits */
 typedef struct { char *name; char *value; } EpHeader;   /* the transport half: what the request must carry */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
                  EpHeader *hdrs; int nh, hcap; } Endpoint;
@@ -66,25 +73,242 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
     return r;
 }
 
-/* a parsed URL: path + query params (name -> value, in query order) */
-typedef struct { char *name; char *val; } KV;
-static void parse_url(const char *disp, char **out_path, KV **out_kv, int *out_n) {
+/* THE PARAMS OF ONE OBSERVED REQUEST, in the order a reviewer meets them: path, then query, then body. Owned
+   until they are merged into the surface. */
+typedef struct { char *name; char *val; EpLoc loc; } KV;
+typedef struct { KV *e; int n, cap; } KvBuf;
+
+static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, size_t vlen, EpLoc loc) {
+    DCHECK(nlen > 0, "an endpoint param was minted with no NAME — a nameless param cannot be substituted back "
+                     "into a request, so every producer here must refuse the unnamed case at its own site "
+                     "rather than emit a record keyed by the empty string");
+    /* WHERE IT LANDED IS ASSERTED AT THE MINT, not read back later. A param whose location is not one of the
+       three is a producer that learned to build a param and not to say what it is, and the consumer's own
+       `p.location || "query"` is what made that unfalsifiable for the whole life of this surface: the path
+       and body branches never ran once, and read as live the entire time. Every site that adds a param
+       passes through here, so there is no way to add one without answering. */
+    DCHECK(loc == EP_QUERY || loc == EP_PATH || loc == EP_BODY,
+           "an endpoint param was minted with no LOCATION — a param the reviewer cannot place is a param "
+           "that cannot be replayed, and a consumer defaulting it reads every one of them as a query param");
+    if (b->n >= b->cap) { b->cap = b->cap ? b->cap * 2 : 8; b->e = realloc(b->e, (size_t)b->cap * sizeof(KV)); CHECK(b->e, "endpoint: OOM params"); }
+    b->e[b->n].name = malloc(nlen + 1); CHECK(b->e[b->n].name, "endpoint: OOM param name");
+    memcpy(b->e[b->n].name, name, nlen); b->e[b->n].name[nlen] = 0;
+    b->e[b->n].val = malloc(vlen + 1); CHECK(b->e[b->n].val, "endpoint: OOM param value");
+    if (vlen) memcpy(b->e[b->n].val, val, vlen);
+    b->e[b->n].val[vlen] = 0;
+    b->e[b->n].loc = loc;
+    b->n++;
+}
+
+static void kv_free(KvBuf *b) {
+    for (int i = 0; i < b->n; i++) { free(b->e[i].name); free(b->e[i].val); }
+    free(b->e); b->e = NULL; b->n = b->cap = 0;
+}
+
+/* `a=1&b=2` — the QUERY STRING's grammar, and `application/x-www-form-urlencoded`'s, which are the same
+   grammar. Nothing is percent-DECODED: §Solver-half puts the codecs in the engine's builtins and forbids the
+   solver hand-rolling one, and a value the page encoded is the value the page sends. */
+static void kv_pairs(KvBuf *b, const char *text, EpLoc loc) {
+    char *dup = strdup(text); CHECK(dup, "endpoint: OOM pair list");
+    for (char *tok = strtok(dup, "&"); tok; tok = strtok(NULL, "&")) {
+        char *eq = strchr(tok, '=');
+        const char *name = tok, *val = "";
+        if (eq) { *eq = 0; val = eq + 1; }
+        if (!name[0]) continue;   /* `&&` / a leading `=`: no name, so no param — see kv_add's assert */
+        kv_add(b, name, strlen(name), val, strlen(val), loc);
+    }
+    free(dup);
+}
+
+/* The path half of a display URL (everything before `?`), malloc'd. */
+static char *url_path_of(const char *disp) {
     const char *q = strchr(disp, '?');
     size_t plen = q ? (size_t)(q - disp) : strlen(disp);
     char *path = malloc(plen + 1); CHECK(path, "endpoint: OOM path"); memcpy(path, disp, plen); path[plen] = 0;
-    KV *kv = NULL; int n = 0, cap = 0;
-    if (q && q[1]) {
-        char *dup = strdup(q + 1); CHECK(dup, "endpoint: OOM query");
-        for (char *tok = strtok(dup, "&"); tok; tok = strtok(NULL, "&")) {
-            char *eq = strchr(tok, '=');
-            const char *name = tok, *val = "";
-            if (eq) { *eq = 0; val = eq + 1; }
-            if (n >= cap) { cap = cap ? cap * 2 : 8; kv = realloc(kv, (size_t)cap * sizeof(KV)); CHECK(kv, "endpoint: OOM kv"); }
-            kv[n].name = strdup(name); kv[n].val = strdup(val); n++;
-        }
-        free(dup);
+    return path;
+}
+
+/* THE CONCRETE URL THE CODE COMPUTED, beside the SHAPE that names its holes — §Solver-half's third member of
+   the triple. `url_display` above answers with the shape and threw this away, which is what left every
+   templated path a row of holes with no value under any of them. NULL means there is none to align against:
+   a concrete URL is its own address and has no holes, and a concolic one that has not computed an example yet
+   is honestly example-free. */
+static char *url_example(JSContext *ctx, JSValueConst url) {
+    JSValue ex;
+    const char *s;
+    char *r;
+
+    if (!concolic_is(url)) return NULL;
+    ex = concolic_example(ctx, url);
+    if (JS_IsUndefined(ex)) { JS_FreeValue(ctx, ex); return NULL; }
+    /* The example is the ADDRESS the interpreter computed, so it is a primitive that converts. An object is
+       the `+` propagation having handed on a wrapper, and a symbol would THROW inside this conversion and
+       leave the exception on a context that has nobody to hand it to — both are this engine's own logic
+       being wrong, which is what a DCHECK asserts and why the conversion below cannot fail except on OOM. */
+    DCHECK(!JS_IsObject(ex) && !JS_IsSymbol(ex),
+           "a URL's concolic EXAMPLE is not a primitive — the example rides the value the interpreter "
+           "actually computed, so a wrapper or a symbol here is that propagation having lost the address");
+    s = JS_ToCString(ctx, ex);
+    CHECK(s, "endpoint: OOM rendering the concrete URL a flow computed");
+    r = strdup(s);
+    CHECK(r, "endpoint: OOM copying the concrete URL a flow computed");
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, ex);
+    return r;
+}
+
+/* DOES THE EXAMPLE'S PATH LINE UP WITH THE SHAPE'S, SEGMENT BY SEGMENT? The alignment is what makes a hole's
+   value a MEASUREMENT rather than a guess, so it is checked and not assumed: the two must have the same
+   segment count and every hole-free segment must be byte-equal. A hole whose value contained a `/` breaks
+   both, and then nothing is aligned and no path param carries an example — which is the honest answer, since
+   this layer cannot know which segments that value spanned. */
+static int path_aligned(const char *shape, const char *ex) {
+    const char *a = shape, *b = ex;
+    for (;;) {
+        const char *ae = strchr(a, '/'), *be = strchr(b, '/');
+        size_t an = ae ? (size_t)(ae - a) : strlen(a);
+        size_t bn = be ? (size_t)(be - b) : strlen(b);
+        if (!memchr(a, '{', an) && (an != bn || memcmp(a, b, an))) return 0;
+        if (!ae != !be) return 0;
+        if (!ae) return 1;
+        a = ae + 1; b = be + 1;
     }
-    *out_path = path; *out_kv = kv; *out_n = n;
+}
+
+/* AN UNKNOWN PATH SEGMENT IS ONE PATH PARAMETER, AND IT IS ATOMIC. `/v1/users/{state}.id/posts` has one, and
+   its value is the whole segment the example holds there — `42`.
+   THE BRACES DO NOT DELIMIT THE UNKNOWN, which is the thing that makes this segment-wide rather than
+   brace-wide, and reading `concolic_exotic_get` is what says so: a member read composes its display as
+   `"%s.%s"` over the parent's, so `state.id` displays as `{state}.id` with the braces around the ROOT SOURCE
+   and the member path trailing OUTSIDE them. Treating `}` as the end of the unknown therefore asks the example
+   segment to end in a literal `.id` that is not in the address at all, and every such hole loses its value.
+   SO THE SEGMENT IS RE-SPELLED AS ONE HOLE — braces stripped from the shape, one pair put around the whole —
+   because the consumer's substitution grammar is `/\{([^}\/]+)\}/` (lib/popup-form.js's applyPathParams) and a
+   name it cannot match is a value the reviewer can fill and the request can never carry. `{state}.id` becomes
+   `{state.id}`: the same bytes, one brace moved, and now substitutable. A literal prefix inside the segment
+   (`u{state}.id`) is folded into the hole rather than split off, because where the literal ends is not
+   something this layer can see and the example carries the whole segment either way.
+   AN UNNAMEABLE HOLE (`{}`, what a concolic with no shape displays as) MINTS NOTHING and keeps its shape in
+   the address — lib/learn.js's own reconcile refuses the same segment for the same reason.
+   Returns the re-spelled path, malloc'd. */
+static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
+    int aligned = ex && path_aligned(shape, ex);
+    const char *a = shape, *b = ex;
+    /* core/json_buf.h's growing byte buffer, appended raw — a fourth private one in this file is the copy its
+       own header says it deleted twice. Nothing here is JSON: the emit quotes this string later. */
+    JsonBuf p = { 0 };
+
+    for (;;) {
+        const char *ae = strchr(a, '/');
+        const char *be = NULL;
+        size_t an = ae ? (size_t)(ae - a) : strlen(a);
+        size_t bn = 0, i, nlen = 0;
+        char *seg, *name;
+
+        if (aligned) { be = strchr(b, '/'); bn = be ? (size_t)(be - b) : strlen(b); }
+        seg = malloc(an + 1); CHECK(seg, "endpoint: OOM copying a path segment");
+        memcpy(seg, a, an); seg[an] = 0;
+        name = malloc(an + 1); CHECK(name, "endpoint: OOM naming a path segment");
+        for (i = 0; i < an; i++) if (seg[i] != '{' && seg[i] != '}') name[nlen++] = seg[i];
+        name[nlen] = 0;
+        if (!strchr(seg, '{') || !nlen) {
+            json_buf_puts(&p, seg);   /* a literal segment, or a `{}` this surface cannot name */
+        } else {
+            /* THE GRAMMAR THE CONSUMER SUBSTITUTES BY, ASSERTED AT THE MINT. Both bytes are stripped above and
+               a segment cannot hold a `/`, so this holds by construction — which is exactly why it is worth
+               asserting: the next producer of a name has to keep it true. */
+            DCHECK(!strpbrk(name, "{}/"),
+                   "a path param's NAME still holds a brace or a slash — the popup substitutes a hole by "
+                   "matching /\\{([^}/]+)\\}/ against this path, so a name outside that grammar names a hole "
+                   "no substitution can find");
+            json_buf_puts(&p, "{"); json_buf_puts(&p, name); json_buf_puts(&p, "}");
+            kv_add(out, name, nlen, aligned ? b : "", aligned ? bn : 0, EP_PATH);
+        }
+        free(seg); free(name);
+        if (!ae) break;
+        json_buf_puts(&p, "/");
+        a = ae + 1;
+        if (aligned) b = be + 1;
+    }
+    return json_buf_take(&p);
+}
+
+/* THE VALUE OF ONE BODY FIELD, as the same STRING vocabulary every other value on this surface speaks: the
+   literal the code computed, or its `{shape}` where the code did not compute one. The parsed value came out
+   of JS_ParseJSON, so it holds no getter and no `toString` of the page's — which is why this conversion
+   cannot run the page's code and cannot throw. A field whose value is an OBJECT or an ARRAY is recorded by
+   NAME with no value: it is a real field of the request, and a nested document is not something a flat
+   name -> string record can carry without inventing a naming convention for its members. */
+static char *body_field_text(JSContext *ctx, JSValueConst v) {
+    const char *s;
+    char *r;
+
+    if (JS_IsObject(v)) return NULL;
+    s = JS_ToCString(ctx, v);
+    /* Every value JS_ParseJSON produces is a primitive or a plain object, and the objects left above, so this
+       conversion runs no page code and can only fail on allocation — which is why it is a CHECK and not a
+       DCHECK: a compiled-out assert here would hand `strdup` a NULL in release. */
+    CHECK(s, "endpoint: OOM rendering a JSON request body's field value");
+    r = strdup(s);
+    CHECK(r, "endpoint: OOM copying a JSON request body's field value");
+    JS_FreeCString(ctx, s);
+    return r;
+}
+
+/* THE REQUEST BODY, READ BACK IN ITS OWN FORMAT. §What-the-tool-produces wants the KEYS AND VALUES a call
+   sends, and half of a POST's are in its payload; without this the surface reported the address of a
+   `POST /v1/users` and nothing whatever about what it posts.
+   The format is decided by the request's own content-type and never by sniffing the bytes: a page that sends
+   JSON says so, and a body this engine has no reader for records no fields rather than a guess at some. */
+static void body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
+    MimeType mt;
+    char *text;
+
+    if (!body || !body->bytes) return;
+    /* §4.4 "parse a MIME type" is the ONE reader of a Content-Type in this engine — never a `strcasecmp`
+       against a literal, which is the C locale's answer where the standard's is ASCII's, and never a private
+       essence split beside the record that already has one. A type that will not parse is §4.4's failure and
+       reads no fields. */
+    mime_type_init(&mt);
+    if (!body->mime || !mime_type_parse(&mt, body->mime, strlen(body->mime))) { mime_type_free(&mt); return; }
+
+    text = malloc(body->len + 1); CHECK(text, "endpoint: OOM request body");
+    memcpy(text, body->bytes, body->len); text[body->len] = 0;
+
+    if (mime_type_is_json(&mt)) {
+        JSValue v = JS_ParseJSON(ctx, text, body->len, "<@H request body>");
+        /* A PAGE MAY SEND BYTES THAT ARE NOT THE JSON ITS HEADER CLAIMS, and that is the page's fact rather
+           than this engine's invariant (§offensive-programming exempts a flow throwing on page/attacker
+           input). The exception is discharged here because it belongs to nobody downstream: no field is
+           recorded, which is the true statement about a body whose fields could not be read. */
+        if (JS_IsException(v)) { JS_FreeValue(ctx, JS_GetException(ctx)); }
+        else if (JS_IsObject(v) && !JS_IsArray(v)) {
+            JSPropertyEnum *tab = NULL;
+            uint32_t n = 0, i;
+            /* A PLAIN OBJECT JS_ParseJSON BUILT, so this walk reaches no trap and no getter: the only way it
+               fails is allocation, which is what a CHECK is for. An `if (ok)` here would turn a body whose
+               fields could not be listed into a body with no fields. */
+            CHECK(JS_GetOwnPropertyNames(ctx, &tab, &n, v, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0,
+                  "endpoint: OOM listing a JSON request body's fields");
+            for (i = 0; i < n; i++) {
+                JSValue pv = JS_GetProperty(ctx, v, tab[i].atom);
+                const char *key = JS_AtomToCString(ctx, tab[i].atom);
+                char *val = body_field_text(ctx, pv);
+                CHECK(key, "endpoint: OOM naming a JSON request body's field");
+                if (key[0]) kv_add(out, key, strlen(key), val ? val : "", val ? strlen(val) : 0, EP_BODY);
+                free(val);
+                JS_FreeCString(ctx, key);
+                JS_FreeValue(ctx, pv);
+            }
+            JS_FreePropertyEnum(ctx, tab, n);
+        }
+        JS_FreeValue(ctx, v);
+    } else if (mt.type && mt.subtype && !strcmp(mt.type, "application") &&
+               !strcmp(mt.subtype, "x-www-form-urlencoded")) {
+        kv_pairs(out, text, EP_BODY);
+    }
+    free(text);
+    mime_type_free(&mt);
 }
 
 static void param_add_val(Param *p, const char *v) {   /* merge a validValue (dedup, skip empty) */
@@ -101,26 +325,40 @@ static void param_add_val(Param *p, const char *v) {   /* merge a validValue (de
    credentials it holds and this engine does not, so nothing here asks it. They are deleted rather than kept:
    a pair of functions computing an answer nobody reads is indistinguishable from a live capability. */
 
-/* an endpoint's IDENTITY is (method, path, param-name-set) — same identity merges param values. */
-static int same_identity(Endpoint *e, const char *method, const char *path, KV *kv, int n) {
-    if (strcmp(e->method, method) || strcmp(e->path, path) || e->np != n) return 0;
-    for (int i = 0; i < n; i++) if (strcmp(e->params[i].name, kv[i].name)) return 0;
+/* an endpoint's IDENTITY is (method, path, param-set) — same identity merges param values. A param's LOCATION
+   is part of it: an `id` the code puts in the path and an `id` it puts in the body are two different things to
+   send, so two requests that agree only on the names are not one endpoint. */
+static int same_identity(Endpoint *e, const char *method, const char *path, const KvBuf *kv) {
+    if (strcmp(e->method, method) || strcmp(e->path, path) || e->np != kv->n) return 0;
+    for (int i = 0; i < kv->n; i++)
+        if (e->params[i].loc != kv->e[i].loc || strcmp(e->params[i].name, kv->e[i].name)) return 0;
     return 1;
 }
 
 void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
-                     const EndpointHeader *hdrs, int nhdrs) {
+                     const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body) {
     if (g_suppress) return;   /* candidate/verify run -> not a real @H endpoint */
     char *disp = url_display(ctx, url);
-    char *path; KV *kv; int n;
-    parse_url(disp, &path, &kv, &n);
-    free(disp);
+    char *ex = url_example(ctx, url);
+    char *shape_path = url_path_of(disp);
+    char *expath = ex ? url_path_of(ex) : NULL;
+    /* PATH, THEN QUERY, THEN BODY — the order a request is written in, and the order the identity above
+       compares in. The path is re-spelled by the scan (see path_scan) and it is the re-spelled one that
+       becomes the endpoint's `url`, because the params are named in ITS grammar and a record whose holes and
+       whose param names disagree is one nothing can replay. The example is aligned against the path only; the
+       query and the body carry the values the display and the bytes already hold. */
+    KvBuf kvb = { 0 };
+    char *path = path_scan(&kvb, shape_path, expath);
+    { const char *q = strchr(disp, '?'); if (q && q[1]) kv_pairs(&kvb, q + 1, EP_QUERY); }
+    body_params(ctx, &kvb, body);
+    free(disp); free(ex); free(expath); free(shape_path);
 
     for (int i = 0; i < g_eps_n; i++) {                 /* merge into an existing same-identity endpoint */
-        if (same_identity(&g_eps[i], method, path, kv, n)) {
-            for (int j = 0; j < n; j++) param_add_val(&g_eps[i].params[j], kv[j].val);
+        if (same_identity(&g_eps[i], method, path, &kvb)) {
+            for (int j = 0; j < kvb.n; j++) param_add_val(&g_eps[i].params[j], kvb.e[j].val);
             /* A REQUIRED HEADER THIS ENDPOINT DID NOT HAVE IS EMITTED OUTPUT, and this path credited the WFQ
-               with nothing for it. An endpoint's IDENTITY is method + path + param NAMES (same_identity), so a
+               with nothing for it. An endpoint's IDENTITY is method + path + param names AND locations
+               (same_identity), so a
                flow that builds a differently-SHAPED request already earns its point below — what reached here
                and went uncounted was a flow that called a known endpoint and revealed that it also wants
                `Authorization`, or a content type, or an API key. §What-the-tool-produces names required headers
@@ -143,8 +381,13 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     Endpoint *e = &g_eps[g_eps_n++];
     memset(e, 0, sizeof *e);
     e->method = strdup(method); e->path = strdup(path);
-    if (n) { e->params = calloc(n, sizeof(Param)); CHECK(e->params, "endpoint: OOM params"); }
-    for (int j = 0; j < n; j++) { e->params[e->np].name = strdup(kv[j].name); param_add_val(&e->params[e->np], kv[j].val); e->np++; }
+    if (kvb.n) { e->params = calloc((size_t)kvb.n, sizeof(Param)); CHECK(e->params, "endpoint: OOM params"); }
+    for (int j = 0; j < kvb.n; j++) {
+        e->params[e->np].name = strdup(kvb.e[j].name);
+        e->params[e->np].loc = kvb.e[j].loc;
+        param_add_val(&e->params[e->np], kvb.e[j].val);
+        e->np++;
+    }
     /* The count is deliberately DROPPED here: every header of a brand-new endpoint is new, and the discovery
        being credited is the ENDPOINT. Crediting both would price one sighting at one point plus one per header
        it happened to carry, which makes a request's header count part of the ranking. */
@@ -152,8 +395,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     flow_credit_emit(1.0);   /* a NEW endpoint: this flow just emitted value-of-information -> WFQ reward */
 done:
     free(path);
-    for (int j = 0; j < n; j++) { free(kv[j].name); free(kv[j].val); }
-    free(kv);
+    kv_free(&kvb);
 }
 
 /* Serialize the @H surface DIRECTLY to a JSON string in C (caller frees) — no JS-object round-trip. The
@@ -171,6 +413,11 @@ char *endpoint_json_array(void) {
         for (int j = 0; j < e->np; j++) {
             if (j) json_buf_puts(&b, ",");
             json_buf_puts(&b, "{\"name\":"); json_buf_str(&b, e->params[j].name);
+            DCHECK(e->params[j].loc == EP_QUERY || e->params[j].loc == EP_PATH || e->params[j].loc == EP_BODY,
+                   "an endpoint param carries a location this surface has no name for — the enum and its "
+                   "name table are read together at exactly this line, so one grown without the other is "
+                   "caught here rather than emitted as a field the consumer cannot classify");
+            json_buf_puts(&b, ",\"location\":"); json_buf_str(&b, ep_loc_name[e->params[j].loc]);
             json_buf_puts(&b, ",\"validValues\":[");
             for (int k = 0; k < e->params[j].nvals; k++) { if (k) json_buf_puts(&b, ","); json_buf_str(&b, e->params[j].vals[k]); }
             json_buf_puts(&b, "]}");

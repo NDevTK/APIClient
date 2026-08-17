@@ -68,7 +68,7 @@ static void record_chunk(JSContext *ctx, const UrlRecord *base, const char *chun
     /* GET, because a chunk is a script the page LOADS — the verb is a fact about what a Flight client
        reference IS, not a default. There is no method parameter anywhere in this file because no caller has a
        second answer to give it. */
-    endpoint_record(ctx, "GET", uv, NULL, 0);
+    endpoint_record(ctx, "GET", uv, NULL, 0, NULL);
     JS_FreeValue(ctx, uv);
     free(abs);
     url_record_free(&u);

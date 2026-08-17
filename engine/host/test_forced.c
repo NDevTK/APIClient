@@ -1212,6 +1212,22 @@ static const char *HTML =
       " 'Authorization': 'Bearer ' + state.token,"
       " 'X-Api-Version': '2024-11-01',"
       " 'Content-Type': 'application/json' } });"
+    /* THE OTHER TWO PLACES A REQUEST CARRIES A VALUE — the PATH and the BODY. The surface named only the query
+       string, so a templated address was one opaque row and a POST's payload was nothing at all; every
+       consumer branched on a `location` field no producer wrote, which is why the path-parameter registration
+       and the whole request-body schema had never run.
+       This row's path hole is SYMBOLIC (server-injected `state`), so the param is named and carries NO example
+       — the record says the code did not compute one rather than inventing a number for it. Its body is real
+       JSON, so `title` and `count` arrive as body params with the literals the code computed. */
+    "fetch('/v1/users/' + state.id + '/posts', { method: 'POST',"
+      " headers: { 'Content-Type': 'application/json' },"
+      " body: JSON.stringify({ title: 'firstPost', count: 3 }) });"
+    /* AND THE ALIGNED EXAMPLE, which is the half a shape alone cannot show. HTML §6.2 "Page visibility"'s
+       state is CONCOLIC (a branch on it still forks both worlds) AND carries the value this document has,
+       so the URL's shape and its computed example line up segment for segment and the path param gets
+       `visible` — a value the code determined, never a solve. The query param beside it proves the three
+       kinds coexist on one record. */
+    "fetch('/v1/vis/' + document.visibilityState + '/reports?deep=1');"
     "(async function(){ var p = new Promise(function(res){ Promise.resolve().then(function(){ res('lazyRegion'); }); }); var c = await p; fetch('/api/lazy?r=' + c); })();"   /* PENDING await: the promise resolves LATER via a microtask (stands in for the network) -> park + resume */
     "var _spr; var _sp = new Promise(function(r){ _spr = r; }); _sp.then(function(v){ fetch('/api/shared?v=' + v); }); _spr(state.beta ? 'shBETA' : 'shSTABLE');"   /* PROBE: _sp created BEFORE the state.beta snapshot fork -> shared; settled per-flow. If promise state is NOT per-flow COW, only ONE value survives (contamination) */
     "if (state.gamma) { delete delObj.k; } fetch('/api/tok?t=' + (delObj.k ? delObj.k : 'wasDeleted'));"   /* DELETE time-travel: the gamma-true flow deletes delObj.k; the gamma-false flow must STILL see keepVAL (the delete is per-flow) */
@@ -3259,6 +3275,21 @@ int main(int argc, char **argv) {
     printf("@RESULT %s\n", js);
 
     int has_uid_param = strstr(js, "\"/api/u\"") && strstr(js, "\"uid\"") && strstr(js, "{state}.id");
+    /* THE PATH AND THE BODY, which this surface could not name at all. The address is RE-SPELLED so its hole
+       is one the popup's `/\{([^}\/]+)\}/` substitution can find — `{state}.id` has its braces around the root
+       source and the member path OUTSIDE them, so the segment becomes `{state.id}` — and the param is that
+       name at location "path" with NO value, because a symbolic server-injected field determined none. */
+    int path_param = strstr(js, "\"/v1/users/{state.id}/posts\"") && strstr(js, "\"name\":\"state.id\"") &&
+                     strstr(js, "\"location\":\"path\"");
+    /* THE BODY'S FIELDS, from the bytes the page composed, with the literals the code computed. */
+    int body_param = strstr(js, "\"name\":\"title\"") && strstr(js, "\"firstPost\"") &&
+                     strstr(js, "\"name\":\"count\"") && strstr(js, "\"location\":\"body\"");
+    /* THE ALIGNED EXAMPLE: the shape's hole and the concolic's concrete URL line up segment for segment, so the
+       path param carries `visible` — the value the document actually has. The query param on the same record is
+       what proves all three locations coexist rather than one overwriting the others. */
+    int path_example = strstr(js, "\"/v1/vis/{hidden|visible}/reports\"") &&
+                       strstr(js, "\"name\":\"hidden|visible\"") && strstr(js, "\"visible\"") &&
+                       strstr(js, "\"name\":\"deep\"");
     int role_admin = strstr(js, "admin") != NULL;
     int role_public = strstr(js, "public") != NULL;
     int data_count = 0; for (const char *p = js; (p = strstr(p, "\"/api/data\"")); p++) data_count++;
@@ -3739,6 +3770,8 @@ int main(int argc, char **argv) {
        fact came from is a probe asserting something about a run that never happened. */
     struct { const char *name; int ok; unsigned char docs; } probes[] = {
         { "uid-param", has_uid_param, 0 }, { "role-admin", role_admin, 0 },
+        { "path-param", path_param, 0 },   { "body-param", body_param, 0 },
+        { "path-example", path_example, 0 },
         { "role-public", role_public, 0 }, { "merged", merged, 0 },
         { "pinned", pinned, 0 },           { "lazy", lazy, 0 },
         { "dom-attr", dom_attr, 0 },       { "dom-node", dom_node, 0 },

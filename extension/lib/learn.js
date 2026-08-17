@@ -250,34 +250,31 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     }
   };
 
-  /* THE ENGINE'S @H PARAMS ARE QUERY PARAMS, AND THAT IS THE WHOLE SET. endpoint.c's `parse_url` splits the
-     endpoint's display URL at `?` and turns the query string into the param records; the PATH keeps its
-     unknown segments inline as `{hole}` shapes and no param is minted for them. So a record is
-     {name, validValues} with no `location`, and the three blocks that stood here — query, path, body —
-     each opened with `(p.location || "query") !== <kind>`, which is the defect class exactly: a default over
-     a field the producer never writes, deciding a branch. Every param took the "query" arm; the path arm and
-     the body arm have never run, and both looked live.
-
-     What went with them, and where the capability actually lives:
-       - PATH params: the templated-method reconcile below is the real producer — it aligns a concrete live
-         path against a `{hole}` template and records the concrete segment as that hole's example value,
-         which is the "learn the real value" surface those 26 lines described but could not reach. The
-         `_sourceMapName` display name went too: nothing in engine/host has ever emitted one, so the
-         minified-to-declared rename it promised (`e` → `owner`) has never once been applied.
-       - BODY params: the engine has no request-body surface at all — `endpoint_record` takes a method, a
-         URL and headers. Until it carries one, `doc.schemas[…Request]` has no AST producer, and a consumer
-         standing ready for it is indistinguishable from one that works. */
+  /* WHERE EACH VALUE LANDED IS THE PRODUCER'S STATEMENT, NEVER THIS FILE'S DEFAULT. endpoint.c writes
+     `location` on every param — "path" for a `{hole}` the code interpolated into the address (its example
+     value aligned out of the concolic's concrete URL), "query" for the display URL's query string, "body"
+     for the fields of the request payload it parsed in the payload's own format. So the three branches are
+     a dispatch over a field that is always present, and a spelling outside the three CRASHES here rather
+     than silently taking the query arm — which is what `(p.location || "query")` did to all three of them.
+     A path param is `required` because it IS the address: the request cannot be replayed without it. */
+  const _bodyParams = [];
   for (const p of callSite.params) {
-    DCHECK(p && typeof p.name === "string" && Array.isArray(p.validValues),
-           "an @H param is not {name, validValues[]} — endpoint.c writes exactly those two keys per param, " +
-           "and a param that arrives without them takes every learned example value out of this method");
+    DCHECK(p && typeof p.name === "string" && Array.isArray(p.validValues) &&
+           (p.location === "path" || p.location === "query" || p.location === "body"),
+           "an @H param is not {name, location, validValues[]} with a location of path/query/body — " +
+           "endpoint.c writes exactly those three keys per param, and a param that arrives without them " +
+           "takes every learned example value out of this method");
+    if (p.location === "body") { _bodyParams.push(p); continue; }
     if (!m.parameters[p.name]) {
       m.parameters[p.name] = {
         type: _inferType(p.validValues),
-        location: "query",
-        description: "Learned from AST fetch call site",
+        location: p.location,
+        description: p.location === "path"
+          ? "Learned from a forced-execution call site (path template)"
+          : "Learned from a forced-execution call site",
         _astInferred: true,
       };
+      if (p.location === "path") m.parameters[p.name].required = true;
     }
     _mergeAstValues(m.parameters[p.name], p.validValues);
   }
@@ -355,22 +352,33 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     }
   }
 
-  /* NO REQUEST-BODY SURFACE REACHES THIS FILE, AND TWO READERS PRETENDED OTHERWISE.
-     `endpoint_record` takes (method, url, headers) — the engine has no body record at all — so the
-     `doc.schemas[…Request]` builder that stood above (fed by params whose `location` was "body") and the
-     BINARY body decoder that stood here were both reading fields with no producer anywhere in engine/host:
-     `callSite.bodyBinary` (hex/byteLength/protocol) is written by nothing, and `p.location` by nothing.
+  /* THE REQUEST BODY'S FIELDS, AS THE METHOD'S REQUEST SCHEMA — what lib/send.js resolves through
+     `m.request.$ref` and what the OpenAPI export writes as `requestBody`. The producer is endpoint.c reading
+     the bytes the page composed in the body's own content-type; each field carries the literal the code
+     computed, or its `{shape}` where it did not.
 
-     The binary block is the more instructive one. It was 60 lines that classified a protobuf/gRPC-Web frame,
-     stripped the 5-byte gRPC header, ran lib/protobuf.js's `pbDecodeRaw` and turned each wire field into a
-     `f<num>:<wire>` body param with its decoded value — a real capability, written against an input that has
-     never arrived once. Its guard `typeof self.pbDecodeRaw === "function"` is the reason it never even
-     threw: two conditions ANDed, either of which could be the false one, and nothing distinguishes "no
-     binary body on this endpoint" from "no binary body has ever been possible". It is deleted rather than
-     kept ready, because the decode belongs beside the bytes: when endpoint.c carries a request body, the
-     shape it carries decides how it is read, and lib/protobuf.js is still here to read it with.
-
-     (It was this file's only caller of offscreen-brain.js's `_hexToBytes`, which is now unused there.) */
+     A BINARY body (protobuf / gRPC-Web) reaches no field here: endpoint.c reads JSON and form-urlencoded, so
+     a protobuf payload records nothing rather than a guess. The decode belongs beside those bytes when they
+     arrive, and lib/protobuf.js is still here to read them with. */
+  if (_bodyParams.length) {
+    const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Request`;
+    DCHECK(doc.schemas && typeof doc.schemas === "object",
+           "a doc reached the request-body schema with no `schemas` map — every docEntry this file creates " +
+           "carries one and an imported description has one, so an absent map means the body fields have " +
+           "nowhere to land and lib/send.js would resolve `m.request.$ref` against nothing");
+    if (!doc.schemas[schemaName]) {
+      doc.schemas[schemaName] = { id: schemaName, type: "object", properties: {}, _astInferred: true };
+    }
+    const schema = doc.schemas[schemaName];
+    if (!schema.properties) schema.properties = {};
+    for (const bp of _bodyParams) {
+      if (!schema.properties[bp.name]) {
+        schema.properties[bp.name] = { type: _inferType(bp.validValues), _astInferred: true };
+      }
+      _mergeAstValues(schema.properties[bp.name], bp.validValues);
+    }
+    if (!m.request) m.request = { $ref: schemaName };
+  }
 
   // Apply example-value picker so the Send form has prefills even
   // before any real traffic hits — pickExampleValue's `ast-constraint`

@@ -1009,6 +1009,17 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
            and not a second representation. The solver must not learn what a HeaderList is. */
         EndpointHeader *eh = NULL;
         int i;
+        /* AND THE BODY, WHICH IS HALF OF WHAT A POST IS. The surface recorded the address of a
+           `POST /v1/users` and nothing about what it posts, so `doc.schemas[…Request]` had no producer at all.
+           The type that governs the read is the one the request will SEND, and Fetch §5.4 "Request class"
+           step 37.4 says which that is: the extracted mime is appended only "if type is non-null and this's
+           headers's header list does not contain `Content-Type`". So the header list wins here for the same
+           reason it wins in `fini`. (§5.4 is this edition's number for the constructor the comments around
+           here call §5.3 — verified against the spec text, not recalled.) */
+        EndpointBody eb;
+        const EndpointBody *ebp = NULL;
+        char *body_ct = NULL;
+        const char *ext_mime = NULL;   /* step 37.4's extracted type, used only where the list names none */
         if (s->hdrs.n) {
             eh = js_malloc(ctx, sizeof(*eh) * (size_t)s->hdrs.n);
             if (!eh) { if (mc) JS_FreeCString(ctx, mc); return fetch_reject_pending(ctx, s); }
@@ -1017,7 +1028,17 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
                 eh[i].value = s->hdrs.e[i].value;
             }
         }
-        endpoint_record(ctx, method, s->url, eh, s->hdrs.n);
+        if (s->body.has && s->body.bytes) {
+            body_ct = header_list_get(&s->hdrs, "content-type");
+            if (!body_ct && !JS_IsUndefined(s->body_mime)) ext_mime = JS_ToCString(ctx, s->body_mime);
+            eb.mime = body_ct ? body_ct : ext_mime;
+            eb.bytes = s->body.bytes;
+            eb.len = s->body.len;
+            ebp = &eb;
+        }
+        endpoint_record(ctx, method, s->url, eh, s->hdrs.n, ebp);
+        if (ext_mime) JS_FreeCString(ctx, ext_mime);
+        free(body_ct);
         js_free(ctx, eh);
     }
     /* AND THE SUB-REQUESTS THE BODY ITSELF NAMES. A batch API takes N calls in ONE request — `POST /batch`

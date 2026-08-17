@@ -778,9 +778,9 @@ static void form_record_request(JSContext *ctx, UrlRecord *action, int method, i
     if (method == FORM_METHOD_POST) {
         ct.name = "Content-Type";
         ct.value = form_enctype_mime(enctype);
-        endpoint_record(ctx, "POST", url, &ct, 1);
+        endpoint_record(ctx, "POST", url, &ct, 1, NULL);
     } else {
-        endpoint_record(ctx, "GET", url, NULL, 0);
+        endpoint_record(ctx, "GET", url, NULL, 0, NULL);
     }
     JS_FreeValue(ctx, url);
     free(serialized);

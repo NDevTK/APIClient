@@ -176,7 +176,7 @@ static void learn_request_message(JSContext *ctx, const char *p, const char *end
     memcpy(target, tgt, t_n); target[t_n] = 0;
 
     uv = JS_NewString(ctx, target);
-    endpoint_record(ctx, method, uv, hb.n ? hb.e : NULL, hb.n);
+    endpoint_record(ctx, method, uv, hb.n ? hb.e : NULL, hb.n, NULL);
     JS_FreeValue(ctx, uv);
 
     free(method);

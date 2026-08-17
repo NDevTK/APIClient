@@ -365,6 +365,19 @@ bool mime_type_is_xml(const MimeType *m)
     return !strcmp(m->subtype, "xml") && (!strcmp(m->type, "text") || !strcmp(m->type, "application"));
 }
 
+/* §4.6 "MIME type groups": "A JSON MIME type is any MIME type whose subtype ends in `+json` or whose essence
+   is `application/json` or `text/json`." The same shape as the XML group above and stated the same way, so
+   `application/vnd.api+json` is in it and a server's `application/jsonish` is not. */
+bool mime_type_is_json(const MimeType *m)
+{
+    size_t n;
+
+    if (!m->type || !m->subtype) return false;
+    n = strlen(m->subtype);
+    if (n > 5 && !strcmp(m->subtype + n - 5, "+json")) return true;
+    return !strcmp(m->subtype, "json") && (!strcmp(m->type, "text") || !strcmp(m->type, "application"));
+}
+
 bool mime_type_is_image(const MimeType *m)
 {
     return m->type && !strcmp(m->type, "image");

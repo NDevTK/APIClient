@@ -38,8 +38,9 @@ const char *mime_type_parameter(const MimeType *m, const char *name);
 /* §4.6's MIME TYPE GROUPS. Only the groups this engine's algorithms branch on are here — each arrives with the
    algorithm that first needs it, and a group nobody calls is a table no gate can audit. XHR §3.6.6's "set a
    document response" tests HTML and XML; solver/reply_decode.c tests image, audio-or-video, font, ZIP-based
-   and archive over the type the HOST computed, to decide whether a reply body has any structure to learn from.
-   The JSON group is still ABSENT — nothing branches on it yet.
+   and archive over the type the HOST computed, to decide whether a reply body has any structure to learn from;
+   solver/endpoint.c tests JSON over a REQUEST's own Content-Type, to decide how to read the body the page
+   composed into the @H surface's fields.
    THE JAVASCRIPT GROUP WENT WHEN ITS CALLERS DID, by this comment's own rule read in the other direction. It
    was written for `browser_process/network/{corb,resource_kind}.c`, and those are deleted — CLAUDE.md
    §Architecture puts type sniffing back in `extension/lib/safe-fetch.js`, whose `_jsMime` is HTML's list on
@@ -47,6 +48,7 @@ const char *mime_type_parameter(const MimeType *m, const char *name);
    be exactly what the first sentence forbids: sixteen essences no gate can audit. */
 bool mime_type_is_html(const MimeType *m);
 bool mime_type_is_xml(const MimeType *m);
+bool mime_type_is_json(const MimeType *m);
 bool mime_type_is_image(const MimeType *m);
 bool mime_type_is_audio_or_video(const MimeType *m);
 bool mime_type_is_font(const MimeType *m);
