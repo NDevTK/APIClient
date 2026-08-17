@@ -39,8 +39,10 @@
            actually is — nothing emitted yet — and never that anything was cleared. -->
       <div class="empty" id="security-empty">
         No sink has been reported for this document yet — <strong>not</strong> a verdict that it is safe.
-        A reached-but-unsolved sink appears under “Reached, search parked”; a fired PoC appears under
-        “Working XSS PoCs”. Neither list being present means neither has been emitted yet.
+        A reached-but-unsolved sink appears under “Reached, search parked”; a candidate that broke out and
+        fired appears under “Breakouts the engine FIRED”, each carrying whether the page’s own CSP or
+        Trusted-Types policy kills that vector on real Chrome. Neither list being present means neither has
+        been emitted yet.
       </div>
       <div id="security-findings"></div>
     </section>

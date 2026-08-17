@@ -878,25 +878,36 @@ function render() {
   populateTabFilter();
 }
 
-// Analyzer gaps for this document. `resolverErrors` is the one field the engine
-// actually reports here (bridge.js linesToAnalysis -> serializeTabData): host
-// calls forced execution REACHED but could not resolve (a fully-opaque URL or
-// method), and host-model gaps (a bundle throw under the host model). Per
-// CLAUDE.md these are P1 to close and MUST be visible, not console-only: they
-// distinguish a reached-but-unresolved endpoint from one never reached at all.
+// THE PAGE'S OWN UNCAUGHT ERRORS, which the engine calls `pageErrors` and this view reaches as
+// `resolverErrors`. The relay is engine result.c `pageErrors` -> bridge.js linesToAnalysis (which renames it,
+// and whose comment records that reading the OTHER name here dropped every one of them) -> offscreen-brain
+// `tab._resolverErrors` -> serialize.js. A script that throws names a capability the engine has not built, so
+// these are P1 and MUST be visible rather than console-only.
+//
+// EVERY FIELD ON A ROW IS WRITTEN ON EVERY ROW, so none of them is defaulted here. bridge.js builds each entry
+// as {context, message, snippet, replyExample} with two non-empty strings, and offscreen-brain copies context
+// and message across verbatim. The `|| "gap"` that stood on `context` was the worse half: "gap" is a label no
+// producer has ever emitted, so a relay that stopped carrying the context would have printed a plausible
+// English word in its place on every row — a fabricated attribution, indistinguishable from a real one.
 function renderDeepStatus() {
   const el = document.getElementById("deep-status");
   if (!el) return;
-  let resolverHtml = "";
-  const rerrs = (tabData && Array.isArray(tabData.resolverErrors)) ? tabData.resolverErrors : [];
-  if (rerrs.length) {
-    const rows = rerrs.map((r) =>
-      `<div class="deep-row" title="${esc(r.message || "")}"><span class="deep-label">${esc((r.context || "gap") + ": " + (r.message || "").slice(0, 140))}</span></div>`
-    ).join("");
-    resolverHtml = `<details class="deep-cross-tab"><summary>Analyzer gaps — reached-but-unresolved / host-model (${rerrs.length})</summary>${rows}</details>`;
-  }
-  if (!resolverHtml) { el.style.display = "none"; return; }
-  el.innerHTML = resolverHtml;
+  // A null tabData is "GET_STATE has not answered yet, or Clear just emptied the view" — a real state, and a
+  // different statement from a tabData whose serializer dropped the array.
+  if (!tabData) { el.style.display = "none"; return; }
+  DCHECK(Array.isArray(tabData.resolverErrors),
+         "GET_STATE answered without a resolverErrors array — serializeTabData writes one on every path " +
+         "(lib/serialize.js), so its absence is that serializer broken and every error the engine recorded " +
+         "while running this page would vanish from the only surface that shows them");
+  const rerrs = tabData.resolverErrors;
+  if (!rerrs.length) { el.style.display = "none"; return; }
+  const rows = rerrs.map((r) => {
+    DCHECK(typeof r.context === "string" && typeof r.message === "string",
+           "a page-error row reached the popup without a context/message pair — bridge.js writes both as " +
+           "strings on every entry it builds, so a row missing one is that relay broken");
+    return `<div class="deep-row" title="${esc(r.message)}"><span class="deep-label">${esc(r.context + ": " + r.message.slice(0, 140))}</span></div>`;
+  }).join("");
+  el.innerHTML = `<details class="deep-cross-tab"><summary>Analyzer gaps — reached-but-unresolved / host-model (${rerrs.length})</summary>${rows}</details>`;
   el.style.display = "block";
 }
 

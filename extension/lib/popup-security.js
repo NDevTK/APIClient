@@ -40,6 +40,46 @@ function _deliverySentence(item) {
   return _DELIVERY[item.delivery](item.deliveryPrefix);
 }
 
+// §@S(a): A FIRING BREAKOUT IN THE MODEL IS NOT YET A WORKING EXPLOIT — it has to run under the page's ACTUAL
+// policy, and the engine answers that with TWO INDEPENDENT facts on the record. `cspBlocks` carries the policy
+// text that kills this vector; `trustedTypes` carries the sink GROUP the document requires a trusted type for,
+// which makes the assignment THROW before the markup is ever parsed. Either one alone means the payload does
+// not run on the real page.
+//
+// The badge asked only the first. So a sink under `require-trusted-types-for 'script'` badged a clean HIGH XSS
+// one line above an envelope that said the assignment throws — the card contradicting itself, and what a
+// reader takes away from a card is the badge. That is CLAUDE.md's recorded `cspBlocked` defect a second time:
+// there, the popup read a name the engine never wrote; here, it reads one of the two names the engine DOES
+// write and ignores the other, and the visible consequence is identical — a policy-dead vector reported as a
+// clean XSS. So the verdict is computed ONCE, here, and every surface that states one reads this.
+function _policyBlockers(item) {
+  var out = [];
+  if (item.cspBlocks)    out.push({ what: "CSP", detail: item.cspBlocks });
+  if (item.trustedTypes) out.push({ what: "Trusted Types", detail: item.trustedTypes });
+  return out;
+}
+function _blockerNames(blockers) {
+  var n = [];
+  for (var i = 0; i < blockers.length; i++) n.push(blockers[i].what);
+  return n.join(" + ");
+}
+
+// THE ENCODE SET IS THREE STATES AND THIS READ TWO. `concolic_source_encodes` (solver/concolic.h) returns the
+// bytes a source's own component percent-encodes, the EMPTY STRING for a declared source that encodes nothing,
+// and NULL only for a source with no delivery declaration at all — and `emit_delivery` emits the empty string
+// as an empty string, because `if (enc)` is true for it in C. On this side `if (item.sourceEncodes)` is FALSE
+// for it, so a source that carries the attacker's bytes to the page UNTOUCHED — the strongest fact this field
+// has, and the reason a raw-fragment JS-context breakout is real — read exactly like a source the engine never
+// declared. Returns HTML (it emits <code>), so callers place it WITHOUT esc().
+function _encodeSentence(item) {
+  if (typeof item.sourceEncodes !== "string") return "";   // undeclared source — _deliverySentence states that
+  if (item.sourceEncodes === "")
+    return "the browser percent-encodes <strong>nothing</strong> in this source — the bytes reach the page "
+         + "exactly as the attacker wrote them";
+  return "the browser percent-encodes <code>" + esc(item.sourceEncodes) + "</code> in this source, so a "
+       + "candidate needing those bytes arrives escaped";
+}
+
 // Stable-ish key for a finding card within a tab. The engine emits one record per
 // (sink, source); key by that + the script the sink lives in.
 function _findingKey(entry) {
@@ -52,13 +92,34 @@ function renderSecurityPanel() {
   const container = document.getElementById("security-findings");
   const empty = document.getElementById("security-empty");
 
-  const findings = tabData?.securityFindings || [];
+  // `tabData` ABSENT and `securityFindings` ABSENT ARE TWO DIFFERENT STATEMENTS, and `tabData?.x || []` said
+  // the same thing for both. A null tabData is "GET_STATE has not answered yet, or Clear just emptied the
+  // view" — a real state this panel renders as its empty text. A tabData that HAS no securityFindings is
+  // serializeTabData broken: `mergedSecurityFindings` returns an array on every path, so there is no run in
+  // which the field is missing, and defaulting it to [] renders "nothing has been reported" for a document
+  // whose findings were dropped in transit — the "safe" verdict §@S forbids, arrived at by a `||`.
+  if (!tabData) { container.innerHTML = ""; empty.style.display = "block"; return; }
+  DCHECK(Array.isArray(tabData.securityFindings),
+         "GET_STATE answered without a securityFindings array — serializeTabData builds one on every path "
+         + "(lib/serialize.js -> mergedSecurityFindings), so its absence is that serializer broken and this "
+         + "panel is about to report a page with dropped findings as a page with none");
+  const findings = tabData.securityFindings;
   // A securitySink is one of TWO records (see the split below): a FIRED PoC — a concrete candidate driven
   // through the real code + branches + filters that BROKE OUT at the sink, self-verifying by replay — or a
   // PARKED search on a sink attacker input demonstrably reaches. Neither carries a verdict to compute: a
-  // proven exploit is HIGH, full stop, and the absence of either record is NOT "safe".
+  // proven exploit is HIGH unless the page's own policy kills the vector (see _policyBlockers), and the
+  // absence of either record is NOT "safe".
   let secCount = 0;
-  for (let i = 0; i < findings.length; i++) secCount += (findings[i].securitySinks || []).length;
+  for (let i = 0; i < findings.length; i++) {
+    // lib/merge.js pushes `securitySinks: secSinks` straight from the analysis it has already DCHECKed is an
+    // array, so an entry without one is that merge broken — not a source that reported no sinks (merge.js
+    // does not create an entry at all in that case).
+    DCHECK(Array.isArray(findings[i].securitySinks),
+           "a securityFindings entry reached the popup with no securitySinks array — lib/merge.js only "
+           + "creates an entry when it HAS sinks, so an entry without the array is that merge broken "
+           + "(sourceUrl=" + findings[i].sourceUrl + ")");
+    secCount += findings[i].securitySinks.length;
+  }
   const fp = findings.length + ":" + secCount;
   if (fp === _lastSecFp) return;
   _lastSecFp = fp;
@@ -70,15 +131,15 @@ function renderSecurityPanel() {
   // assignment), so a failed render leaves the LAST honest cards standing beside a loud console @WHY.
 
   // TWO STATES, NEVER ONE LIST. The engine reports every sink an attacker source REACHES, and a sink whose
-  // breakout has not been solved carries "search":"parked" instead of a poc. Rendering both as "Working XSS
-  // PoCs" would badge a parked search HIGH with an empty payload — a claim the engine never made. They are
+  // breakout has not been solved carries "search":"parked" instead of a poc. Rendering both under one fired
+  // heading would badge a parked search HIGH with an empty payload — a claim the engine never made. They are
   // separated here for the same reason the engine emits them apart: a fired PoC is proof, a parked search is
   // an open lead, and neither is a statement that the sink is safe.
   var allItems = [], parked = [];
   for (var fi = 0; fi < findings.length; fi++) {
     var f = findings[fi];
     var srcLabel = f.sourceUrl ? _shortUrl(f.sourceUrl) : "(unknown)";
-    for (var si = 0; si < (f.securitySinks || []).length; si++) {
+    for (var si = 0; si < f.securitySinks.length; si++) {
       var it = f.securitySinks[si];
       var e = { item: it, sourceUrl: f.sourceUrl, srcLabel: srcLabel, pageUrl: f.pageUrl };
       (it && it.search === "parked" ? parked : allItems).push(e);
@@ -88,8 +149,20 @@ function renderSecurityPanel() {
   if (!allItems.length && !parked.length) { container.innerHTML = ""; empty.style.display = "block"; return; }
   empty.style.display = "none";
 
+  // THE HEADING IS A CLAIM TOO. "Working XSS PoCs" was written over a list that includes every breakout the
+  // page's own CSP or Trusted-Types policy kills on real Chrome — §@S(a)'s "never a bare XSS", made by the
+  // section title rather than by a card. What the engine proved about every entry in this list is exactly one
+  // thing: the candidate BROKE OUT AND FIRED in the model. Whether it runs on the real page is the per-card
+  // policy verdict, so the heading says the first and counts the second.
+  var blockedCount = 0;
+  for (var bi = 0; bi < allItems.length; bi++) if (_policyBlockers(allItems[bi].item).length) blockedCount++;
   var html = allItems.length
-    ? '<div class="section-header">Working XSS PoCs <span class="badge badge-status">' + allItems.length + '</span></div>'
+    ? '<div class="section-header">Breakouts the engine FIRED <span class="badge badge-status">' + allItems.length + '</span>'
+      + (blockedCount
+          ? ' <span class="badge badge-medium" title="the sink is REAL and the breakout fired in the model, but the page\'s own policy kills the vector on real Chrome — each needs a policy-permitted vector">'
+            + blockedCount + ' policy-blocked</span>'
+          : "")
+      + '</div>'
     : "";
 
   for (var i = 0; i < allItems.length; i++) {
@@ -119,11 +192,13 @@ function renderSecurityPanel() {
       + ") — the token vocabulary is solve.h's, one per sink class, and a PoC whose firing semantics cannot be "
       + "stated is a payload the reader cannot reproduce (sink=" + item.sink + ")");
 
+    // NO `|| "?"` BESIDE AN ASSERTED FIELD. The DCHECK above states that sink/source/poc are all present on a
+    // fired record; a placeholder beside it is the release-build behaviour of a contract that has already
+    // been declared, and it is what lets a drifted record render a card that looks complete.
     var srcHtml = '<div class="card-value" title="the attacker-controlled source whose bytes reach this sink">'
-      + 'source: <code>' + esc(item.source || "?") + '</code></div>';
-    var pocHtml = item.poc
-      ? '<div class="card-poc"><span class="poc-lbl">breakout input</span> <code class="poc-payload">' + esc(item.poc) + '</code></div>'
-      : "";
+      + 'source: <code>' + esc(item.source) + '</code></div>';
+    var pocHtml = '<div class="card-poc"><span class="poc-lbl">breakout input</span> <code class="poc-payload">'
+      + esc(item.poc) + '</code></div>';
 
     // §@S(d): EVERY PoC CARRIES ITS REPRODUCTION ENVELOPE — what makes it fire, whether it is stored, and the
     // CSP/Trusted-Types state it needs — because a payload without those is not reproducible by the person
@@ -132,19 +207,25 @@ function renderSecurityPanel() {
     // and no `delivery` means the source declared none (server-injected page state the attacker writes
     // directly) rather than one the engine forgot. The one thing this card must never do is fill a silence
     // with a plausible default — that is how it used to badge every finding HIGH.
+    var blockers = _policyBlockers(item);
+    var policyClause = blockers.length
+      ? '<strong>the page\'s own policy blocks this vector</strong> — '
+        + blockers.map(function (b) {
+            return b.what === "CSP"
+              ? 'CSP <code>' + esc(b.detail) + '</code>'
+              : 'Trusted Types: the document requires a trusted type for the <code>' + esc(b.detail)
+                + '</code> sink group, so the assignment throws before the payload is ever parsed unless a '
+                + 'policy stringifies it';
+          }).join(' &middot; and ')
+      : 'the page CSP permits this vector, and no Trusted-Types requirement reaches this sink';
+    var encClause = _encodeSentence(item);   // already HTML — see _encodeSentence
     var envHtml = '<div class="card-dims">reproduction envelope: '
       + '<strong>' + esc(_FIRES_ON[item.firesOn]
           || ('the engine reports this vector as `' + item.firesOn + '`, which this view has no sentence for'))
         + '</strong>'
-      + ' · ' + (item.cspBlocks
-          ? '<strong>CSP blocks this vector</strong> — <code>' + esc(item.cspBlocks) + '</code>'
-          : 'the page CSP permits this vector')
-      + ' · ' + (item.trustedTypes
-          ? '<strong>Trusted Types gate this sink</strong> — the document requires a trusted type for the <code>'
-            + esc(item.trustedTypes) + '</code> sink group, so the assignment throws before the payload is ever '
-            + 'parsed unless a policy stringifies it'
-          : 'no Trusted-Types requirement reaches this sink')
+      + ' · ' + policyClause
       + ' · ' + esc(_deliverySentence(item))
+      + (encClause ? ' · ' + encClause : "")
       + '</div>';
 
     // ENGINE AGREEMENT verify: run the engine's EXACT poc against the REAL page in a sandboxed attacker
@@ -157,25 +238,38 @@ function renderSecurityPanel() {
     // The probe carries the engine's DECLARATION (`delivery` + `deliveryPrefix`) and no host-side source
     // taxonomy: `srcpath` and `gatefields` used to be sent here and the engine emits neither — they were
     // inputs to the deleted `{pm}` field-path builder, so they were `undefined` on every probe ever sent.
+    // THE PROBE CARRIES ABSENCE AS ABSENCE. `item.delivery || ""` turned "the engine declared no delivery for
+    // this source" into an empty string, which buildLiveDelivery then re-reads as the same thing through its
+    // own `!delivery` — a round trip that works only because both ends happen to agree that "" is falsy. An
+    // engine field the record legitimately omits is omitted here too, so the receiver's DCHECKs see the
+    // record's real shape rather than this view's normalisation of it.
     var key = _findingKey(entry);
     var verifyHtml = "";
-    if (item.poc && entry.pageUrl) {
-      var probe = JSON.stringify({ poc: item.poc, source: item.source, delivery: item.delivery || "", deliveryPrefix: item.deliveryPrefix || "", sinkName: item.sink, sourceUrl: entry.sourceUrl, pageUrl: entry.pageUrl, findingId: key, cspBlocks: item.cspBlocks || "", trustedTypes: item.trustedTypes || "" });
+    if (entry.pageUrl) {
+      var probeObj = { poc: item.poc, source: item.source, sinkName: item.sink,
+                       sourceUrl: entry.sourceUrl, pageUrl: entry.pageUrl, findingId: key };
+      if (item.delivery)       probeObj.delivery = item.delivery;
+      if (item.deliveryPrefix) probeObj.deliveryPrefix = item.deliveryPrefix;
+      if (item.cspBlocks)      probeObj.cspBlocks = item.cspBlocks;
+      if (item.trustedTypes)   probeObj.trustedTypes = item.trustedTypes;
+      var probe = JSON.stringify(probeObj);
       verifyHtml = '<div class="verify-row">'
         + '<button class="verify-btn" data-probe=\'' + esc(probe) + '\' data-key="' + esc(key) + '">Verify in real Chrome</button>'
         + '<span class="verify-hint">loads the real page with the engine’s EXACT payload in a sandboxed attacker window — the sink firing <code>apiclientsink</code> is ground-truth REAL EXPLOIT (no fire → engine/Chrome divergence)</span>'
         + '<div class="verify-result" data-key="' + esc(key) + '"></div></div>';
-    } else if (item.poc) {
+    } else {
       verifyHtml = '<div class="verify-na">no page url recorded for this finding — live verify delivers the payload to the page the sink was observed on</div>';
     }
 
-    // POLICY-RELATIVE severity: a model breakout the page's CSP blocks on real Chrome is NOT a clean HIGH XSS —
-    // it needs a policy-permitted vector. The engine states that by emitting the POLICY that blocks it.
-    var sevBadge = item.cspBlocks
-      ? '<span class="badge badge-medium" title="broke out in the model, but the page CSP blocks THIS vector on real Chrome — needs a policy-permitted vector">CSP-BLOCKED</span>'
+    // POLICY-RELATIVE severity, over BOTH policy facts the engine emits — see _policyBlockers for why reading
+    // only `cspBlocks` here was the same live defect as reading a name the engine never wrote.
+    var sevBadge = blockers.length
+      ? '<span class="badge badge-medium" title="' + esc('broke out and fired in the model, but the page\'s own policy ('
+          + _blockerNames(blockers) + ') kills THIS vector on real Chrome — the sink is REAL and needs a '
+          + 'policy-permitted vector') + '">POLICY-BLOCKED · ' + esc(_blockerNames(blockers)) + '</span>'
       : '<span class="badge badge-high">HIGH</span>';
     html += '<div class="card" data-finding-key="' + esc(key) + '">'
-      + '<div class="card-label"><span class="badge badge-xss">XSS PoC</span> ' + sevBadge + ' ' + esc(item.sink || "?") + '</div>'
+      + '<div class="card-label"><span class="badge badge-xss">XSS PoC</span> ' + sevBadge + ' ' + esc(item.sink) + '</div>'
       + srcHtml + pocHtml + envHtml
       + '<div class="card-meta">' + srcLink + '</div>'
       + verifyHtml
@@ -195,17 +289,18 @@ function renderSecurityPanel() {
         "a parked @S record reached the popup without sink/source/tried — solve_json_array emits all three, "
         + "and without `tried` the card would say '0 breakouts run' about a search that has run (sink="
         + pit.sink + " source=" + pit.source + ")");
+      var pEnc = _encodeSentence(pit);   // already HTML — see _encodeSentence
       var pSrc = pe.sourceUrl && /^https?:\/\//i.test(pe.sourceUrl)
         ? '<a href="' + esc(pe.sourceUrl) + '" target="_blank" title="' + esc(pe.sourceUrl) + '">' + esc(pe.srcLabel) + '</a>'
         : esc(pe.srcLabel);
       html += '<div class="card">'
         + '<div class="card-label"><span class="badge badge-status" title="an attacker source reaches this sink; no breakout has fired yet — this is NOT a finding that the sink is safe">PARKED</span> '
-        + esc(pit.sink || "?") + ' &larr; <code>' + esc(pit.source || "?") + '</code></div>'
-        + '<div class="card-dims">' + esc(String(pit.tried || 0)) + ' breakout' + (pit.tried === 1 ? "" : "s")
+        + esc(pit.sink) + ' &larr; <code>' + esc(pit.source) + '</code></div>'
+        // No `|| 0` beside `tried`: the DCHECK above states it is a number, and 0 is a real value this card
+        // must be able to say (a sink reached but not yet searched) rather than one a default manufactures.
+        + '<div class="card-dims">' + esc(String(pit.tried)) + ' breakout' + (pit.tried === 1 ? "" : "s")
         + ' run, none fired'
-        + (pit.sourceEncodes
-            ? ' — the browser percent-encodes <code>' + esc(pit.sourceEncodes) + '</code> in this source, so a candidate needing those bytes arrives escaped'
-            : "")
+        + (pEnc ? ' — ' + pEnc : "")
         + '</div>'
         // The parked entry carries the SOURCE DECLARATION, not an envelope: there is no PoC yet, so there is
         // no firing vector or policy verdict to state about one. What it can say is how the attacker would
@@ -234,16 +329,27 @@ window.addEventListener("message", function (e) {
   for (var ent of _verifySandboxes.values()) {
     var ifr = document.querySelector('iframe[data-verify-id="' + ent.pocId + '"]');
     if (!ifr || ifr.contentWindow !== e.source) continue;
-    if (d.type === "POC_READY") { try { e.source.postMessage({ type: "POC_SETUP", pocJs: ent.pocJs, marker: ent.marker }, "*"); } catch (_) {} }
+    // NO try/catch AROUND THE HANDOFF. This posts a plain object to a same-origin extension frame THIS view
+    // created and whose contentWindow it has just identified, so the only way it throws is a bug in that
+    // identification — and swallowing it left the sandbox waiting for a POC_SETUP that never came, which
+    // reads to the user as a live-verify that simply never answers.
+    if (d.type === "POC_READY") { e.source.postMessage({ type: "POC_SETUP", pocJs: ent.pocJs, marker: ent.marker }, "*"); }
     else if (d.type === "POC_RAN" && ent.resultEl) {
       ent.resultEl.textContent = d.error ? "PoC threw in the sandbox: " + d.error : "payload delivered — waiting for the sink to fire in Chrome…";
-      _pollVerify(ent.resultEl, ent.marker, ent.cspBlocks, ent.trustedTypes);
+      _pollVerify(ent.resultEl, ent.marker, ent.blockers);
     }
     return;
   }
 });
 async function _handleVerify(btn) {
-  var probe = {}; try { probe = JSON.parse(btn.dataset.probe || "{}"); } catch (_) {}
+  // THE PROBE IS THIS VIEW'S OWN JSON, so a parse failure here is this file disagreeing with itself — never a
+  // page state. `probe = {}` on the catch built a probe with no poc and no pageUrl and sent it anyway, and
+  // startExploitProbe's "need the engine's poc" throw came back as a build error about the finding rather
+  // than about the attribute that failed to round-trip.
+  DCHECK(typeof btn.dataset.probe === "string" && btn.dataset.probe.length > 0,
+         "a verify button carries no data-probe — renderSecurityPanel writes one on every button it creates, "
+         + "so an empty one is that attribute failing to survive the innerHTML round trip");
+  var probe = JSON.parse(btn.dataset.probe);
   var card = btn.closest(".card");
   var resultEl = card ? card.querySelector(".verify-result") : null;
   if (!resultEl) return;
@@ -260,8 +366,11 @@ async function _handleVerify(btn) {
       btn.disabled = false; btn.textContent = prev; return;
     }
     var pocId = "v" + (_verifyIdSeq++);
-    _verifySandboxes.set(start.sessionId, { pocId: pocId, pocJs: start.pocJs, marker: start.sessionId, resultEl: resultEl,
-                                            cspBlocks: probe.cspBlocks || "", trustedTypes: probe.trustedTypes || "" });
+    // The probe carries the engine's policy facts (present only when the engine stated them), so the ONE
+    // _policyBlockers reading serves the card and the verify verdict alike. Two spellings of "did the page's
+    // policy kill this" is how the badge and the envelope came to disagree in the first place.
+    _verifySandboxes.set(start.sessionId, { pocId: pocId, pocJs: start.pocJs, marker: start.sessionId,
+                                            resultEl: resultEl, blockers: _policyBlockers(probe) });
     var ifr = document.createElement("iframe");
     ifr.setAttribute("data-verify-id", pocId);
     ifr.src = "poc-sandbox.html";
@@ -274,24 +383,57 @@ async function _handleVerify(btn) {
     resultEl.textContent = "verify error: " + (err && err.message || err); btn.disabled = false; btn.textContent = prev;
   }
 }
-async function _pollVerify(resultEl, marker, cspBlocks, trustedTypes) {
+async function _pollVerify(resultEl, marker, blockers) {
   for (var i = 0; i < 20; i++) {
     await new Promise(function (r) { setTimeout(r, 400); });
     var snap = await new Promise(function (res) { chrome.runtime.sendMessage({ type: "EXPLOIT_PROBE_STATUS", sessionId: marker }, function (r) { res(r); }); });
+    // A session that has expired out of the offscreen's LRU answers {error}; that is a real state and the
+    // loop keeps polling the remaining attempts rather than claiming anything about the sink.
     if (!snap || snap.error) continue;
-    var hits = (snap.hits || []).length || (snap.executed ? Object.keys(snap.executed).filter(function (k) { return snap.executed[k]; }).length : 0);
-    if (hits) { resultEl.className = "verify-result verify-hit"; resultEl.textContent = "REAL EXPLOIT — the engine’s payload fired the sink in real Chrome (apiclientsink relayed). Engine agrees with Chrome."; return; }
+    // `hits` IS THE ONLY EVIDENCE, and `executed` NEVER EXISTED. This line read a second vocabulary —
+    // `snap.executed`, an object of per-payload booleans — as a fallback source of "did it fire". Nothing in
+    // this extension has ever WRITTEN it: startExploitProbe builds the session with {marker, status, pageUrl,
+    // findingId, sourceUrl, sinkName, waitMs, hits, createdAt, finishedAt, error} and PROBE_HIT only ever
+    // pushes onto `hits`, so the reply's own producer wrote `executed: ses.executed || null` — a default over
+    // a field with no writer, which is what kept a dead vocabulary looking live. It is the `canVerify`/`shape`
+    // defect exactly: a reader whose writer does not exist, hidden by a default. Deleted on both sides, and
+    // `hits` is asserted rather than defaulted so the day EXPLOIT_PROBE_STATUS stops carrying it this crashes
+    // instead of reporting NOT REPRODUCED for every finding forever.
+    DCHECK(Array.isArray(snap.hits),
+           "EXPLOIT_PROBE_STATUS answered without a hits array — the probe session is created with hits:[] "
+           + "and PROBE_HIT only appends to it, so its absence is that reply broken and every live verify "
+           + "would report NOT REPRODUCED no matter what real Chrome did");
+    if (snap.hits.length) {
+      resultEl.className = "verify-result verify-hit";
+      // A FIRE THE ENGINE PREDICTED WOULD BE BLOCKED IS A DIVERGENCE, NOT AN AGREEMENT. §LIVE-VERIFY reads a
+      // hit as ground truth, and it is — but "engine agrees with Chrome" is a claim about the MODEL, and the
+      // model said this vector was dead. Saying it agreed there would hide a wrong policy read behind the
+      // best-looking result the panel can print.
+      resultEl.textContent = blockers.length
+        ? "REAL EXPLOIT — apiclientsink fired in real Chrome. But the engine predicted this vector was dead ("
+          + _blockerNames(blockers) + "), so its policy read DIVERGES from Chrome here: the exploit is real and "
+          + "the model that called it blocked is wrong (an engine-fidelity bug to investigate)."
+        : "REAL EXPLOIT — the engine’s payload fired the sink in real Chrome (apiclientsink relayed). Engine agrees with Chrome.";
+      return;
+    }
   }
   resultEl.className = "verify-result verify-miss";
-  // POLICY-RELATIVE no-fire: when the engine already flagged the page CSP — or the document's Trusted Types
-  // requirement — as killing THIS vector, a non-fire is the EXPECTED, confirmed outcome (real sink, dead
-  // vector), not an engine-fidelity divergence to chase. The last arm no longer OFFERS "CSP/Trusted-Types"
-  // as a possibility: the engine answered both questions on the record, so if neither is set here they are
-  // both a No and the remaining explanation is a divergence. A no-fire is NEVER "safe" either — the sink
-  // stays REAL and the search stays open.
-  resultEl.textContent = cspBlocks
-    ? "CSP BLOCKED as predicted — apiclientsink never fired because the page CSP blocks this vector (" + cspBlocks + "). The sink is REAL; it needs a policy-permitted vector. A policy-relative result, NOT an engine-fidelity bug."
-    : trustedTypes
-    ? "TRUSTED TYPES BLOCKED as predicted — apiclientsink never fired because the document requires a trusted type for the '" + trustedTypes + "' sink group, so the assignment throws before the payload is parsed. The sink is REAL; it needs a policy that stringifies. A policy-relative result, NOT an engine-fidelity bug."
+  // POLICY-RELATIVE no-fire: when the engine already flagged the page's own policy — a CSP, a Trusted-Types
+  // requirement, or both — as killing THIS vector, a non-fire is the EXPECTED, confirmed outcome (real sink,
+  // dead vector), not an engine-fidelity divergence to chase. The last arm does not OFFER "CSP/Trusted-Types"
+  // as a possibility: the engine answered both questions on the record, so an empty blocker list means both
+  // are a No and the remaining explanation is a divergence. A no-fire is NEVER "safe" either — the sink stays
+  // REAL and the search stays open.
+  resultEl.textContent = blockers.length
+    ? "BLOCKED AS PREDICTED (" + _blockerNames(blockers) + ") — apiclientsink never fired, and the engine said "
+      + "this vector is dead on the real page: "
+      + blockers.map(function (b) {
+          return b.what === "CSP"
+            ? "the page CSP blocks it (" + b.detail + ")"
+            : "the document requires a trusted type for the '" + b.detail + "' sink group, so the assignment "
+              + "throws before the payload is parsed";
+        }).join("; and ")
+      + ". The sink is REAL; it needs a policy-permitted vector. A policy-relative result, NOT an "
+      + "engine-fidelity bug — and NOT a statement that the sink is safe."
     : "NOT REPRODUCED — apiclientsink never fired, and the engine reported neither a blocking CSP nor a Trusted-Types requirement for this vector, so the engine’s model diverges from Chrome here (an engine-fidelity bug to investigate). Not a statement that the sink is safe.";
 }

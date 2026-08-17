@@ -376,9 +376,17 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     case "EXPLOIT_PROBE_STATUS": {
       const ses = msg.sessionId ? _probeSessions.get(msg.sessionId) : null;
       if (!ses) { sendResponse({ error: "session not found or expired" }); return; }
+      // NO `executed` FIELD. It was `executed: ses.executed || null` — a default over a name NOTHING has ever
+      // written: startExploitProbe builds the session with {marker, status, pageUrl, findingId, sourceUrl,
+      // sinkName, waitMs, hits, createdAt, finishedAt, error} and the only writer after that is PROBE_HIT,
+      // which appends to `hits`. So the field crossed as null on every reply, and the popup read it as a
+      // SECOND source of "did the payload fire" — a whole alternate evidence vocabulary that could never
+      // answer. Deleted here and at its reader (lib/popup-security.js), per CLAUDE.md §Architecture: a name
+      // read somewhere and written nowhere is a broken contract, and the default is what stops it crashing.
+      // `hits` is the one evidence channel and it is a real array on every session.
       sendResponse({
         success: true, status: ses.status, marker: ses.marker, pageUrl: ses.pageUrl,
-        hits: ses.hits.slice(), executed: ses.executed || null,
+        hits: ses.hits.slice(),
         pocJs: ses.pocJs || null, error: ses.error || null,
         startedAt: ses.createdAt, finishedAt: ses.finishedAt || null,
       });
