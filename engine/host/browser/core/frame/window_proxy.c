@@ -118,7 +118,7 @@ typedef struct {
     /* HTML §8.1.3.1's TOP-LEVEL CREATION URL for the environments of this navigable's documents — kept beside
        the policy container because it is the same KIND of fact and arrives the same way: decided by the
        operation that created the navigable, read when a realm is finally built. §7.4 makes a CHILD navigable
-       inherit its creator's and gives an AUXILIARY one its own address, and §7.11's navigation of a top-level
+       inherit its creator's and gives an AUXILIARY one its own address, and §7.4.5's navigation of a top-level
        traversable moves it to the new address while a nested navigable's stays where its creation put it.
        IT IS PER-FLOW, exactly like `url`: navigating a top-level traversable moves it, so an arm that
        navigated and an arm that did not must not share one. It is a POD pointer inside the bytes proxy_of
@@ -420,7 +420,7 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
            "a navigable was navigated with no top-level creation URL for the new document's environment — the "
            "realm the caller just built has one, and these two must be the same string");
     p->top_level_url = proxy_strdup(top_level_url);
-    /* AND ITS TOP-LEVEL ORIGIN MOVED WITH IT, from the same caller and for the same reason. §7.11's fetch
+    /* AND ITS TOP-LEVEL ORIGIN MOVED WITH IT, from the same caller and for the same reason. §7.4.5's fetch
        gives a top-level traversable's new environment the NEW DOCUMENT's origin and a nested navigable's the
        parent environment's — the pair is one decision about the operation's target, so a navigation that
        moved the URL and left the origin behind would key this document's permissions to the document it

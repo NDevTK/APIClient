@@ -28,7 +28,7 @@
  * every test in html/browsers/the-window-object failed on its first line. Two jobs in one function is what
  * made the second caller impossible; each install now sits with its own caller.
  *
- * `name` IS THE NAVIGABLE'S — §7.11's, the same attribute a WindowProxy answers — so it is not computed here
+ * `name` IS THE NAVIGABLE'S — §7.2.2.1's, the same attribute a WindowProxy answers — so it is not computed here
  * at all; window_proxy_name_value is. It is ATTACKER INPUT exactly when nobody stated it: the name survives
  * navigation, so whoever opened the document sets it, which is why CLAUDE.md lists it beside cookies and the
  * referrer — and it is a computed value when this engine's own `open(url, target)` named the navigable. Read
@@ -76,7 +76,7 @@ static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
    answer is a fact the engine HAS — CLAUDE.md's rule is that the concolic value is for what is unknowable, and
    forking a boolean whose sibling world does not exist spends the frontier on a document that was never
    loaded. The other arm is reached by exploring a document at a different ADDRESS, which is a real navigation.
-   IT IS AN ACCESSOR AND NOT A STORED BOOLEAN because §7.11's navigation replaces a Window's Document while the
+   IT IS AN ACCESSOR AND NOT A STORED BOOLEAN because §7.4.2.2's navigation replaces a Window's Document while the
    global survives, and a byte written at install would then be the previous document's answer. */
 static JSValue js_win_is_secure_context(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -160,21 +160,21 @@ static JSValue js_win_set_opener(JSContext *ctx, JSValueConst this_val, JSValueC
     return idl_replace_with_value(ctx, this_val, "opener", val) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
-/* §7.11's `name` — THE NAVIGABLE'S, which is the same attribute `w.name` reads through the WindowProxy and is
+/* §7.2.2.1's `name` — THE NAVIGABLE'S, which is the same attribute `w.name` reads through the WindowProxy and is
    answered from the same record. It was a second source here: a source-only concolic with no example, so
    `open(url, "chan42")` gave "chan42" to the opener and an example-free unknown to the popup's own script,
-   which is the popup unable to learn the name it was created with. §7.11 says "return the current name of
-   this's navigable"; window_proxy_name_value is where that is computed, including whether it is known at all. */
+   which is the popup unable to learn the name it was created with. §7.2.2.1 says "return this's navigable's
+   target name"; window_proxy_name_value is where that is computed, including whether it is known at all. */
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)this_val; (void)magic;
     return window_proxy_name_value(ctx, document_window_proxy(ctx));
 }
 
-/* §7.11's `name` is SETTABLE, and it was not — the accessor had no setter at all, so `window.name = "x"` was a
+/* §7.2.2.1's `name` is SETTABLE, and it was not — the accessor had no setter at all, so `window.name = "x"` was a
    silent no-op and a page that names itself to be reached by `open(url, "x")` could not. It renames the
    NAVIGABLE, which is the same write `w.name = "x"` performs from outside.
-   §7.11's `attribute DOMString name`, and the DOMString is the DECLARATION'S. Written as a bare
+   §7.2.2.1's `attribute DOMString name`, and the DOMString is the DECLARATION'S. Written as a bare
    JS_NewCFunction setter, the ToString ran from C — `window.name = {toString(){ for(;;){} }}` is the page's
    code in an activation with no flow base, so the loop drove to completion instead of parking, and the same
    value as a Proxy reached its `get` trap there too. The body now receives a real string, which is also what
@@ -442,7 +442,7 @@ static JSClassID g_window_props_class;
    browser. So this registers, and window_install builds. */
 static int g_id_close, g_id_blur, g_id_stop;   /* declared once per agent — see window_init */
 static int g_id_opener_set;   /* §7.2.2.4's `opener` setter, declared with them for the same reason */
-static int g_id_name_set;     /* §7.11's `name` setter — its DOMString conversion is the page's code */
+static int g_id_name_set;     /* §7.2.2.1's `name` setter — its DOMString conversion is the page's code */
 
 void window_init(JSContext *ctx)
 {

@@ -295,7 +295,7 @@ bool window_proxy_same_origin_with_top(JSContext *ctx);
    matches against it, so the walk that answers `window.myFrameName` needs to read it. BORROWED. */
 const char *window_proxy_name(JSValueConst proxy);
 
-/* §7.11's `name`, READ AND WRITTEN THROUGH THE ONE PLACE IT LIVES. A Window and its WindowProxy are two
+/* §7.2.2.1's `name`, READ AND WRITTEN THROUGH THE ONE PLACE IT LIVES. A Window and its WindowProxy are two
    spellings of one navigable, so `window.name` inside a document and `w.name` from its opener are one attribute
    of one record — window.c answers the global's accessor from here rather than from a second source. The value
    is CONCRETE where the navigable's name was stated (§7.4 states it) and CONCOLIC where it was not, which is
@@ -315,7 +315,7 @@ const Origin *window_proxy_origin(JSValueConst proxy);
    origin, origin — because they are one binding. An earlier attempt replaced the Window and the origin and
    left the REALM behind, so the two halves of one navigable named different documents; that is why they are
    one call and not seven setters. `top_level_url` and `top_level_origin` are the environment the CALLER built
-   the new realm under: §7.11's navigate gives a TOP-LEVEL traversable's new environment `currentURL` and the
+   the new realm under: §7.4.2.2's navigate gives a TOP-LEVEL traversable's new environment `currentURL` and the
    new document's own origin, and leaves a nested navigable's pair where its creation put it ("If navigable is
    not a top-level traversable ... set topLevelCreationURL to parentEnvironment's top-level creation URL and
    topLevelOrigin to parentEnvironment's top-level origin"). The caller is the one that knows which, because it

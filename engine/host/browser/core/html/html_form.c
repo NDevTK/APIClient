@@ -786,7 +786,7 @@ static void form_record_request(JSContext *ctx, UrlRecord *action, int method, i
     free(serialized);
 }
 
-/* §4.10.22.3's HAND-OFF TO EXTERNAL SOFTWARE — §7.11's navigate step for a URL "handled using a mechanism that
+/* §4.10.22.3's HAND-OFF TO EXTERNAL SOFTWARE — §7.4.2.3.4's navigate step for a URL "handled using a mechanism that
    does not affect targetNavigable ... because url's scheme is handled externally". The navigation ends there:
    the URL goes to whatever the platform registered for its scheme and the navigable keeps the document it had.
    IT HAS NO SCRIPTABLE RESULT, and that is the standard's answer rather than this engine's gap — "hand-off to
@@ -1134,7 +1134,7 @@ static void submit_plan_to_navigate(JSContext *ctx, JSSubmitState *s, UrlRecord 
         form_record_request(ctx, parsed, method, enctype);
         return;
     }
-    /* `mailto:` and `ftp:` are HANDLED EXTERNALLY, so §7.11's navigate hands the URL off and the navigable
+    /* `mailto:` and `ftp:` are HANDLED EXTERNALLY, so §7.4.2.3.4's navigate hands the URL off and the navigable
        keeps the document it had. For `mailto:` that is what the two Mail cells exist to build a URL for — the
        platform's mail client is what consumes it. For `ftp:` it is a UA DECISION the standard leaves open
        ("handled using a mechanism that does not affect targetNavigable, e.g. because url's scheme is handled
@@ -1175,11 +1175,11 @@ static void submit_plan_to_navigate(JSContext *ctx, JSSubmitState *s, UrlRecord 
               "a GET of the literal text); build the data: URL processor and the navigate that takes a "
               "RESPONSE THE ENGINE ALREADY HAS, then route this row through it");
     /* The unlisted-scheme row took `Get action URL` above, which is a decision about the TABLE; what the
-       navigation then does is §7.11's business and depends on the scheme — `file:` and `blob:` load a
+       navigation then does is §7.4.2.3.4's business and depends on the scheme — `file:` and `blob:` load a
        document, a registered `web+foo:` hands off — and nothing here knows which. */
     DFAIL("a form submits to an action whose scheme §4.10.22.3's step 26 table does not list. The TABLE row is "
           "decided — `Get action URL` in both columns, so the entry list is discarded and the parsed action is "
-          "navigated to unchanged (see submit_cell_for) — and what is missing is the navigation: §7.11's "
+          "navigated to unchanged (see submit_cell_for) — and what is missing is the navigation: §7.4.2.3.4's "
           "navigate has to decide, per scheme, between loading a document and handing off to external "
           "software, and this engine's navigate does neither for a scheme it has never seen");
 }
