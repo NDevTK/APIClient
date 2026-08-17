@@ -1,440 +1,0 @@
-#0 building with "desktop-linux" instance using docker driver
-
-#1 [internal] load build definition from Dockerfile
-#1 transferring dockerfile: 5.06kB done
-#1 DONE 0.1s
-
-#2 resolve image config for docker-image://docker.io/docker/dockerfile:1.5
-#2 DONE 1.4s
-
-#3 docker-image://docker.io/docker/dockerfile:1.5@sha256:39b85bbfa7536a5feceb7372a0817649ecb2724562a38360f4d6a7782a409b14
-#3 resolve docker.io/docker/dockerfile:1.5@sha256:39b85bbfa7536a5feceb7372a0817649ecb2724562a38360f4d6a7782a409b14 0.0s done
-#3 sha256:a47ff7046597eea0123ea02817165350e3680f75000dc5d69c9a310258e1bedd 0B / 11.55MB 0.2s
-#3 sha256:a47ff7046597eea0123ea02817165350e3680f75000dc5d69c9a310258e1bedd 1.05MB / 11.55MB 0.3s
-#3 sha256:a47ff7046597eea0123ea02817165350e3680f75000dc5d69c9a310258e1bedd 3.15MB / 11.55MB 0.5s
-#3 sha256:a47ff7046597eea0123ea02817165350e3680f75000dc5d69c9a310258e1bedd 5.24MB / 11.55MB 0.6s
-#3 sha256:a47ff7046597eea0123ea02817165350e3680f75000dc5d69c9a310258e1bedd 7.34MB / 11.55MB 0.8s
-#3 sha256:a47ff7046597eea0123ea02817165350e3680f75000dc5d69c9a310258e1bedd 8.39MB / 11.55MB 0.9s
-#3 sha256:a47ff7046597eea0123ea02817165350e3680f75000dc5d69c9a310258e1bedd 10.49MB / 11.55MB 1.1s
-#3 sha256:a47ff7046597eea0123ea02817165350e3680f75000dc5d69c9a310258e1bedd 11.55MB / 11.55MB 1.1s done
-#3 extracting sha256:a47ff7046597eea0123ea02817165350e3680f75000dc5d69c9a310258e1bedd
-#3 extracting sha256:a47ff7046597eea0123ea02817165350e3680f75000dc5d69c9a310258e1bedd 0.2s done
-#3 DONE 1.4s
-
-#4 [internal] load .dockerignore
-#4 transferring context:
-#4 transferring context: 2B done
-#4 DONE 0.0s
-
-#5 [internal] load metadata for docker.io/emscripten/emsdk:3.1.50
-#5 DONE 1.3s
-
-#6 [build-base 1/6] FROM docker.io/emscripten/emsdk:3.1.50@sha256:b6ea0e55fdc95be36427df6df7892d5e5e27f0440cfcf442a55f784aba09a4fa
-#6 resolve docker.io/emscripten/emsdk:3.1.50@sha256:b6ea0e55fdc95be36427df6df7892d5e5e27f0440cfcf442a55f784aba09a4fa 0.0s done
-#6 DONE 0.2s
-
-#6 [build-base 1/6] FROM docker.io/emscripten/emsdk:3.1.50@sha256:b6ea0e55fdc95be36427df6df7892d5e5e27f0440cfcf442a55f784aba09a4fa
-#6 sha256:6f603619343df7685c18fbe10341719114db236a7ce3ea329abcce2c9a0792ac 0B / 93B 0.2s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 0B / 227.85MB 0.2s
-#6 sha256:307f3d81359ad913e64def2a95ded566170d3e57d70bf5fde301ba9f90db370d 0B / 4.34kB 0.2s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 0B / 402.68MB 0.2s
-#6 sha256:6f603619343df7685c18fbe10341719114db236a7ce3ea329abcce2c9a0792ac 93B / 93B 0.6s done
-#6 sha256:307f3d81359ad913e64def2a95ded566170d3e57d70bf5fde301ba9f90db370d 4.34kB / 4.34kB 0.8s done
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 0B / 29.54MB 0.2s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 2.10MB / 29.54MB 0.5s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 4.19MB / 29.54MB 0.8s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 6.29MB / 29.54MB 0.9s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 8.39MB / 29.54MB 1.2s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 10.49MB / 29.54MB 1.5s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 12.58MB / 29.54MB 1.7s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 15.73MB / 29.54MB 2.0s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 17.83MB / 29.54MB 2.3s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 19.92MB / 29.54MB 2.6s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 22.02MB / 29.54MB 2.7s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 25.17MB / 29.54MB 3.0s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 27.26MB / 29.54MB 3.3s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 11.53MB / 227.85MB 4.2s
-#6 sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 29.54MB / 29.54MB 3.4s done
-#6 extracting sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e
-#6 extracting sha256:aece8493d3972efa43bfd4ee3cdba659c0f787f8f59c82fb3e48c87cbb22a12e 0.9s done
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 19.92MB / 402.68MB 5.3s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 23.07MB / 227.85MB 5.9s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 34.60MB / 227.85MB 7.4s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 41.94MB / 402.68MB 7.5s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 46.14MB / 227.85MB 8.9s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 62.91MB / 402.68MB 9.9s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 57.67MB / 227.85MB 10.4s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 69.21MB / 227.85MB 11.9s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 83.89MB / 402.68MB 12.5s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 80.74MB / 227.85MB 13.8s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 92.27MB / 227.85MB 15.8s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 105.91MB / 402.68MB 15.9s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 104.86MB / 227.85MB 17.3s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 116.39MB / 227.85MB 18.6s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 126.88MB / 402.68MB 18.5s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 127.93MB / 227.85MB 20.1s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 147.85MB / 402.68MB 20.7s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 139.46MB / 227.85MB 21.8s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 150.99MB / 227.85MB 23.2s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 168.82MB / 402.68MB 23.1s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 162.53MB / 227.85MB 24.9s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 174.06MB / 227.85MB 26.2s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 189.79MB / 402.68MB 26.1s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 185.60MB / 227.85MB 28.3s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 210.76MB / 402.68MB 28.5s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 197.13MB / 227.85MB 29.8s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 231.74MB / 402.68MB 30.9s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 208.67MB / 227.85MB 31.3s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 220.20MB / 227.85MB 33.0s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 253.76MB / 402.68MB 33.1s
-#6 sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 227.85MB / 227.85MB 33.9s done
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 276.82MB / 402.68MB 34.9s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 298.84MB / 402.68MB 36.3s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 319.82MB / 402.68MB 37.8s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 340.79MB / 402.68MB 39.1s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 362.81MB / 402.68MB 40.6s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 383.78MB / 402.68MB 41.8s
-#6 sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 402.68MB / 402.68MB 43.1s done
-#6 extracting sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873
-#6 extracting sha256:a67768f222fa4eac62a9a730731cc66cf9dc36661de8a1cfb14de1ba20558873 7.3s done
-#6 DONE 50.7s
-
-#6 [build-base 1/6] FROM docker.io/emscripten/emsdk:3.1.50@sha256:b6ea0e55fdc95be36427df6df7892d5e5e27f0440cfcf442a55f784aba09a4fa
-#6 extracting sha256:307f3d81359ad913e64def2a95ded566170d3e57d70bf5fde301ba9f90db370d 0.0s done
-#6 extracting sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259
-#6 extracting sha256:d473fdfc0977010a169d667c96377e0d174eb83e5430c0b9746db2e377488259 4.8s done
-#6 DONE 55.5s
-
-#6 [build-base 1/6] FROM docker.io/emscripten/emsdk:3.1.50@sha256:b6ea0e55fdc95be36427df6df7892d5e5e27f0440cfcf442a55f784aba09a4fa
-#6 extracting sha256:6f603619343df7685c18fbe10341719114db236a7ce3ea329abcce2c9a0792ac 0.0s done
-#6 DONE 55.5s
-
-#7 [build-base 2/6] RUN apt-get update && apt-get install -y     autoconf     build-essential     libglib2.0-dev     libtool     pkgconf     ninja-build     python3-pip
-#7 0.331 Get:1 http://archive.ubuntu.com/ubuntu jammy InRelease [270 kB]
-#7 0.374 Get:2 http://security.ubuntu.com/ubuntu jammy-security InRelease [129 kB]
-#7 0.408 Get:3 http://archive.ubuntu.com/ubuntu jammy-updates InRelease [128 kB]
-#7 0.441 Get:4 http://archive.ubuntu.com/ubuntu jammy-backports InRelease [127 kB]
-#7 0.475 Get:5 http://archive.ubuntu.com/ubuntu jammy/restricted amd64 Packages [164 kB]
-#7 0.517 Get:6 http://archive.ubuntu.com/ubuntu jammy/universe amd64 Packages [17.5 MB]
-#7 0.570 Get:7 http://security.ubuntu.com/ubuntu jammy-security/multiverse amd64 Packages [77.8 kB]
-#7 0.624 Get:8 http://security.ubuntu.com/ubuntu jammy-security/universe amd64 Packages [1303 kB]
-#7 0.858 Get:9 http://security.ubuntu.com/ubuntu jammy-security/main amd64 Packages [4006 kB]
-#7 1.610 Get:10 http://security.ubuntu.com/ubuntu jammy-security/restricted amd64 Packages [7183 kB]
-#7 2.479 Get:11 http://archive.ubuntu.com/ubuntu jammy/main amd64 Packages [1792 kB]
-#7 2.653 Get:12 http://archive.ubuntu.com/ubuntu jammy/multiverse amd64 Packages [266 kB]
-#7 2.672 Get:13 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 Packages [4357 kB]
-#7 2.994 Get:14 http://archive.ubuntu.com/ubuntu jammy-updates/restricted amd64 Packages [7489 kB]
-#7 3.577 Get:15 http://archive.ubuntu.com/ubuntu jammy-updates/multiverse amd64 Packages [86.4 kB]
-#7 3.580 Get:16 http://archive.ubuntu.com/ubuntu jammy-updates/universe amd64 Packages [1611 kB]
-#7 3.669 Get:17 http://archive.ubuntu.com/ubuntu jammy-backports/universe amd64 Packages [35.6 kB]
-#7 3.671 Get:18 http://archive.ubuntu.com/ubuntu jammy-backports/main amd64 Packages [82.8 kB]
-#7 4.306 Fetched 46.6 MB in 4s (11.6 MB/s)
-#7 4.306 Reading package lists...
-#7 5.470 Reading package lists...
-#7 6.587 Building dependency tree...
-#7 6.793 Reading state information...
-#7 6.986 build-essential is already the newest version (12.9ubuntu3).
-#7 6.986 The following additional packages will be installed:
-#7 6.986   automake autotools-dev file libblkid-dev libblkid1 libelf1 libffi-dev
-#7 6.986   libglib2.0-0 libglib2.0-bin libglib2.0-data libglib2.0-dev-bin libltdl-dev
-#7 6.986   libltdl7 libmagic-mgc libmagic1 libmount-dev libmount1 libpcre16-3
-#7 6.986   libpcre2-16-0 libpcre2-32-0 libpcre2-dev libpcre2-posix3 libpcre3-dev
-#7 6.986   libpcre32-3 libpcrecpp0v5 libpkgconf3 libselinux1-dev libsepol-dev
-#7 6.986   libsigsegv2 libuuid1 m4 uuid-dev zlib1g-dev
-#7 6.987 Suggested packages:
-#7 6.987   autoconf-archive gnu-standards autoconf-doc gettext libgirepository1.0-dev
-#7 6.987   libglib2.0-doc libgdk-pixbuf2.0-bin | libgdk-pixbuf2.0-dev libxml2-utils
-#7 6.987   libtool-doc cryptsetup-bin gfortran | fortran95-compiler gcj-jdk m4-doc
-#7 6.987 Recommended packages:
-#7 6.987   shared-mime-info xdg-user-dirs uuid-runtime python3-dev
-#7 7.097 The following NEW packages will be installed:
-#7 7.097   autoconf automake autotools-dev file libblkid-dev libelf1 libffi-dev
-#7 7.097   libglib2.0-bin libglib2.0-data libglib2.0-dev libglib2.0-dev-bin libltdl-dev
-#7 7.097   libltdl7 libmagic-mgc libmagic1 libmount-dev libpcre16-3 libpcre2-16-0
-#7 7.097   libpcre2-32-0 libpcre2-dev libpcre2-posix3 libpcre3-dev libpcre32-3
-#7 7.098   libpcrecpp0v5 libpkgconf3 libselinux1-dev libsepol-dev libsigsegv2 libtool
-#7 7.098   m4 ninja-build pkgconf uuid-dev zlib1g-dev
-#7 7.099 The following packages will be upgraded:
-#7 7.100   libblkid1 libglib2.0-0 libmount1 libuuid1 python3-pip
-#7 7.145 5 upgraded, 34 newly installed, 0 to remove and 120 not upgraded.
-#7 7.145 Need to get 10.1 MB of archives.
-#7 7.145 After this operation, 38.9 MB of additional disk space will be used.
-#7 7.145 Get:1 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libblkid1 amd64 2.37.2-4ubuntu3.5 [103 kB]
-#7 7.185 Get:2 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libmount1 amd64 2.37.2-4ubuntu3.5 [122 kB]
-#7 7.197 Get:3 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libuuid1 amd64 2.37.2-4ubuntu3.5 [23.6 kB]
-#7 7.199 Get:4 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libelf1 amd64 0.186-1ubuntu0.1 [51.1 kB]
-#7 7.203 Get:5 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libglib2.0-0 amd64 2.72.4-0ubuntu2.9 [1467 kB]
-#7 7.406 Get:6 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libglib2.0-data all 2.72.4-0ubuntu2.9 [5088 B]
-#7 7.407 Get:7 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libmagic-mgc amd64 1:5.41-3ubuntu0.1 [257 kB]
-#7 7.440 Get:8 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libmagic1 amd64 1:5.41-3ubuntu0.1 [87.2 kB]
-#7 7.448 Get:9 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 file amd64 1:5.41-3ubuntu0.1 [21.5 kB]
-#7 7.457 Get:10 http://archive.ubuntu.com/ubuntu jammy/main amd64 libsigsegv2 amd64 2.13-1ubuntu3 [14.6 kB]
-#7 7.458 Get:11 http://archive.ubuntu.com/ubuntu jammy/main amd64 m4 amd64 1.4.18-5ubuntu2 [199 kB]
-#7 7.498 Get:12 http://archive.ubuntu.com/ubuntu jammy/main amd64 autoconf all 2.71-2 [338 kB]
-#7 7.531 Get:13 http://archive.ubuntu.com/ubuntu jammy/main amd64 autotools-dev all 20220109.1 [44.9 kB]
-#7 7.534 Get:14 http://archive.ubuntu.com/ubuntu jammy/main amd64 automake all 1:1.16.5-1.3 [558 kB]
-#7 7.577 Get:15 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libglib2.0-bin amd64 2.72.4-0ubuntu2.9 [80.9 kB]
-#7 7.581 Get:16 http://archive.ubuntu.com/ubuntu jammy/main amd64 libffi-dev amd64 3.4.2-4 [63.7 kB]
-#7 7.587 Get:17 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libglib2.0-dev-bin amd64 2.72.4-0ubuntu2.9 [117 kB]
-#7 7.597 Get:18 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 uuid-dev amd64 2.37.2-4ubuntu3.5 [33.1 kB]
-#7 7.600 Get:19 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libblkid-dev amd64 2.37.2-4ubuntu3.5 [185 kB]
-#7 7.625 Get:20 http://archive.ubuntu.com/ubuntu jammy/main amd64 libsepol-dev amd64 3.3-1build1 [378 kB]
-#7 7.673 Get:21 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpcre2-16-0 amd64 10.39-3ubuntu0.1 [203 kB]
-#7 7.690 Get:22 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpcre2-32-0 amd64 10.39-3ubuntu0.1 [194 kB]
-#7 7.703 Get:23 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpcre2-posix3 amd64 10.39-3ubuntu0.1 [6130 B]
-#7 7.703 Get:24 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpcre2-dev amd64 10.39-3ubuntu0.1 [730 kB]
-#7 7.753 Get:25 http://archive.ubuntu.com/ubuntu jammy/main amd64 libselinux1-dev amd64 3.3-1build2 [158 kB]
-#7 7.765 Get:26 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libmount-dev amd64 2.37.2-4ubuntu3.5 [14.6 kB]
-#7 7.765 Get:27 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpcre16-3 amd64 2:8.39-13ubuntu0.22.04.1 [164 kB]
-#7 7.775 Get:28 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpcre32-3 amd64 2:8.39-13ubuntu0.22.04.1 [155 kB]
-#7 7.786 Get:29 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpcrecpp0v5 amd64 2:8.39-13ubuntu0.22.04.1 [16.5 kB]
-#7 7.788 Get:30 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpcre3-dev amd64 2:8.39-13ubuntu0.22.04.1 [579 kB]
-#7 7.848 Get:31 http://archive.ubuntu.com/ubuntu jammy/universe amd64 libpkgconf3 amd64 1.8.0-1 [30.3 kB]
-#7 7.856 Get:32 http://archive.ubuntu.com/ubuntu jammy/universe amd64 pkgconf amd64 1.8.0-1 [35.3 kB]
-#7 7.866 Get:33 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 zlib1g-dev amd64 1:1.2.11.dfsg-2ubuntu9.2 [164 kB]
-#7 7.883 Get:34 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 libglib2.0-dev amd64 2.72.4-0ubuntu2.9 [1744 kB]
-#7 8.001 Get:35 http://archive.ubuntu.com/ubuntu jammy/main amd64 libltdl7 amd64 2.4.6-15build2 [39.6 kB]
-#7 8.004 Get:36 http://archive.ubuntu.com/ubuntu jammy/main amd64 libltdl-dev amd64 2.4.6-15build2 [169 kB]
-#7 8.014 Get:37 http://archive.ubuntu.com/ubuntu jammy/main amd64 libtool all 2.4.6-15build2 [164 kB]
-#7 8.023 Get:38 http://archive.ubuntu.com/ubuntu jammy/universe amd64 ninja-build amd64 1.10.1-1 [111 kB]
-#7 8.033 Get:39 http://archive.ubuntu.com/ubuntu jammy-updates/universe amd64 python3-pip all 22.0.2+dfsg-1ubuntu0.7 [1306 kB]
-#7 8.251 debconf: delaying package configuration, since apt-utils is not installed
-#7 8.281 Fetched 10.1 MB in 1s (10.0 MB/s)
-#7 8.314 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 17689 files and directories currently installed.)
-#7 8.322 Preparing to unpack .../libblkid1_2.37.2-4ubuntu3.5_amd64.deb ...
-#7 8.350 Unpacking libblkid1:amd64 (2.37.2-4ubuntu3.5) over (2.37.2-4ubuntu3) ...
-#7 8.416 Setting up libblkid1:amd64 (2.37.2-4ubuntu3.5) ...
-#7 8.481 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 17689 files and directories currently installed.)
-#7 8.489 Preparing to unpack .../libmount1_2.37.2-4ubuntu3.5_amd64.deb ...
-#7 8.511 Unpacking libmount1:amd64 (2.37.2-4ubuntu3.5) over (2.37.2-4ubuntu3) ...
-#7 8.573 Setting up libmount1:amd64 (2.37.2-4ubuntu3.5) ...
-#7 8.637 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 17689 files and directories currently installed.)
-#7 8.644 Preparing to unpack .../libuuid1_2.37.2-4ubuntu3.5_amd64.deb ...
-#7 8.667 Unpacking libuuid1:amd64 (2.37.2-4ubuntu3.5) over (2.37.2-4ubuntu3) ...
-#7 8.729 Setting up libuuid1:amd64 (2.37.2-4ubuntu3.5) ...
-#7 8.807 Selecting previously unselected package libelf1:amd64.
-#7 8.807 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 17689 files and directories currently installed.)
-#7 8.815 Preparing to unpack .../00-libelf1_0.186-1ubuntu0.1_amd64.deb ...
-#7 8.825 Unpacking libelf1:amd64 (0.186-1ubuntu0.1) ...
-#7 8.902 Preparing to unpack .../01-libglib2.0-0_2.72.4-0ubuntu2.9_amd64.deb ...
-#7 8.932 Unpacking libglib2.0-0:amd64 (2.72.4-0ubuntu2.9) over (2.72.4-0ubuntu2.2) ...
-#7 9.073 Selecting previously unselected package libglib2.0-data.
-#7 9.074 Preparing to unpack .../02-libglib2.0-data_2.72.4-0ubuntu2.9_all.deb ...
-#7 9.083 Unpacking libglib2.0-data (2.72.4-0ubuntu2.9) ...
-#7 9.135 Selecting previously unselected package libmagic-mgc.
-#7 9.137 Preparing to unpack .../03-libmagic-mgc_1%3a5.41-3ubuntu0.1_amd64.deb ...
-#7 9.144 Unpacking libmagic-mgc (1:5.41-3ubuntu0.1) ...
-#7 9.241 Selecting previously unselected package libmagic1:amd64.
-#7 9.242 Preparing to unpack .../04-libmagic1_1%3a5.41-3ubuntu0.1_amd64.deb ...
-#7 9.251 Unpacking libmagic1:amd64 (1:5.41-3ubuntu0.1) ...
-#7 9.301 Selecting previously unselected package file.
-#7 9.302 Preparing to unpack .../05-file_1%3a5.41-3ubuntu0.1_amd64.deb ...
-#7 9.311 Unpacking file (1:5.41-3ubuntu0.1) ...
-#7 9.372 Selecting previously unselected package libsigsegv2:amd64.
-#7 9.373 Preparing to unpack .../06-libsigsegv2_2.13-1ubuntu3_amd64.deb ...
-#7 9.382 Unpacking libsigsegv2:amd64 (2.13-1ubuntu3) ...
-#7 9.432 Selecting previously unselected package m4.
-#7 9.433 Preparing to unpack .../07-m4_1.4.18-5ubuntu2_amd64.deb ...
-#7 9.442 Unpacking m4 (1.4.18-5ubuntu2) ...
-#7 9.496 Selecting previously unselected package autoconf.
-#7 9.497 Preparing to unpack .../08-autoconf_2.71-2_all.deb ...
-#7 9.507 Unpacking autoconf (2.71-2) ...
-#7 9.573 Selecting previously unselected package autotools-dev.
-#7 9.575 Preparing to unpack .../09-autotools-dev_20220109.1_all.deb ...
-#7 9.584 Unpacking autotools-dev (20220109.1) ...
-#7 9.650 Selecting previously unselected package automake.
-#7 9.651 Preparing to unpack .../10-automake_1%3a1.16.5-1.3_all.deb ...
-#7 9.661 Unpacking automake (1:1.16.5-1.3) ...
-#7 9.725 Selecting previously unselected package libglib2.0-bin.
-#7 9.726 Preparing to unpack .../11-libglib2.0-bin_2.72.4-0ubuntu2.9_amd64.deb ...
-#7 9.735 Unpacking libglib2.0-bin (2.72.4-0ubuntu2.9) ...
-#7 9.783 Selecting previously unselected package libffi-dev:amd64.
-#7 9.784 Preparing to unpack .../12-libffi-dev_3.4.2-4_amd64.deb ...
-#7 9.793 Unpacking libffi-dev:amd64 (3.4.2-4) ...
-#7 9.864 Selecting previously unselected package libglib2.0-dev-bin.
-#7 9.865 Preparing to unpack .../13-libglib2.0-dev-bin_2.72.4-0ubuntu2.9_amd64.deb ...
-#7 9.875 Unpacking libglib2.0-dev-bin (2.72.4-0ubuntu2.9) ...
-#7 9.932 Selecting previously unselected package uuid-dev:amd64.
-#7 9.933 Preparing to unpack .../14-uuid-dev_2.37.2-4ubuntu3.5_amd64.deb ...
-#7 9.943 Unpacking uuid-dev:amd64 (2.37.2-4ubuntu3.5) ...
-#7 9.995 Selecting previously unselected package libblkid-dev:amd64.
-#7 9.996 Preparing to unpack .../15-libblkid-dev_2.37.2-4ubuntu3.5_amd64.deb ...
-#7 10.01 Unpacking libblkid-dev:amd64 (2.37.2-4ubuntu3.5) ...
-#7 10.06 Selecting previously unselected package libsepol-dev:amd64.
-#7 10.06 Preparing to unpack .../16-libsepol-dev_3.3-1build1_amd64.deb ...
-#7 10.07 Unpacking libsepol-dev:amd64 (3.3-1build1) ...
-#7 10.14 Selecting previously unselected package libpcre2-16-0:amd64.
-#7 10.14 Preparing to unpack .../17-libpcre2-16-0_10.39-3ubuntu0.1_amd64.deb ...
-#7 10.15 Unpacking libpcre2-16-0:amd64 (10.39-3ubuntu0.1) ...
-#7 10.21 Selecting previously unselected package libpcre2-32-0:amd64.
-#7 10.21 Preparing to unpack .../18-libpcre2-32-0_10.39-3ubuntu0.1_amd64.deb ...
-#7 10.22 Unpacking libpcre2-32-0:amd64 (10.39-3ubuntu0.1) ...
-#7 10.28 Selecting previously unselected package libpcre2-posix3:amd64.
-#7 10.28 Preparing to unpack .../19-libpcre2-posix3_10.39-3ubuntu0.1_amd64.deb ...
-#7 10.29 Unpacking libpcre2-posix3:amd64 (10.39-3ubuntu0.1) ...
-#7 10.34 Selecting previously unselected package libpcre2-dev:amd64.
-#7 10.34 Preparing to unpack .../20-libpcre2-dev_10.39-3ubuntu0.1_amd64.deb ...
-#7 10.35 Unpacking libpcre2-dev:amd64 (10.39-3ubuntu0.1) ...
-#7 10.40 Selecting previously unselected package libselinux1-dev:amd64.
-#7 10.40 Preparing to unpack .../21-libselinux1-dev_3.3-1build2_amd64.deb ...
-#7 10.41 Unpacking libselinux1-dev:amd64 (3.3-1build2) ...
-#7 10.46 Selecting previously unselected package libmount-dev:amd64.
-#7 10.46 Preparing to unpack .../22-libmount-dev_2.37.2-4ubuntu3.5_amd64.deb ...
-#7 10.47 Unpacking libmount-dev:amd64 (2.37.2-4ubuntu3.5) ...
-#7 10.53 Selecting previously unselected package libpcre16-3:amd64.
-#7 10.53 Preparing to unpack .../23-libpcre16-3_2%3a8.39-13ubuntu0.22.04.1_amd64.deb ...
-#7 10.54 Unpacking libpcre16-3:amd64 (2:8.39-13ubuntu0.22.04.1) ...
-#7 10.60 Selecting previously unselected package libpcre32-3:amd64.
-#7 10.60 Preparing to unpack .../24-libpcre32-3_2%3a8.39-13ubuntu0.22.04.1_amd64.deb ...
-#7 10.61 Unpacking libpcre32-3:amd64 (2:8.39-13ubuntu0.22.04.1) ...
-#7 10.66 Selecting previously unselected package libpcrecpp0v5:amd64.
-#7 10.67 Preparing to unpack .../25-libpcrecpp0v5_2%3a8.39-13ubuntu0.22.04.1_amd64.deb ...
-#7 10.67 Unpacking libpcrecpp0v5:amd64 (2:8.39-13ubuntu0.22.04.1) ...
-#7 10.71 Selecting previously unselected package libpcre3-dev:amd64.
-#7 10.71 Preparing to unpack .../26-libpcre3-dev_2%3a8.39-13ubuntu0.22.04.1_amd64.deb ...
-#7 10.72 Unpacking libpcre3-dev:amd64 (2:8.39-13ubuntu0.22.04.1) ...
-#7 10.78 Selecting previously unselected package libpkgconf3:amd64.
-#7 10.78 Preparing to unpack .../27-libpkgconf3_1.8.0-1_amd64.deb ...
-#7 10.79 Unpacking libpkgconf3:amd64 (1.8.0-1) ...
-#7 10.85 Selecting previously unselected package pkgconf.
-#7 10.85 Preparing to unpack .../28-pkgconf_1.8.0-1_amd64.deb ...
-#7 10.86 Adding 'diversion of /usr/bin/pkg-config to /usr/bin/pkg-config.real by pkgconf'
-#7 10.88 Adding 'diversion of /usr/share/aclocal/pkg.m4 to /usr/share/aclocal/pkg.real.m4 by pkgconf'
-#7 10.88 Adding 'diversion of /usr/share/man/man1/pkg-config.1.gz to /usr/share/man/man1/pkg-config.real.1.gz by pkgconf'
-#7 10.89 Adding 'diversion of /usr/share/pkg-config-crosswrapper to /usr/share/pkg-config-crosswrapper.real by pkgconf'
-#7 10.89 Unpacking pkgconf (1.8.0-1) ...
-#7 10.94 Selecting previously unselected package zlib1g-dev:amd64.
-#7 10.94 Preparing to unpack .../29-zlib1g-dev_1%3a1.2.11.dfsg-2ubuntu9.2_amd64.deb ...
-#7 10.95 Unpacking zlib1g-dev:amd64 (1:1.2.11.dfsg-2ubuntu9.2) ...
-#7 11.00 Selecting previously unselected package libglib2.0-dev:amd64.
-#7 11.00 Preparing to unpack .../30-libglib2.0-dev_2.72.4-0ubuntu2.9_amd64.deb ...
-#7 11.01 Unpacking libglib2.0-dev:amd64 (2.72.4-0ubuntu2.9) ...
-#7 11.14 Selecting previously unselected package libltdl7:amd64.
-#7 11.15 Preparing to unpack .../31-libltdl7_2.4.6-15build2_amd64.deb ...
-#7 11.16 Unpacking libltdl7:amd64 (2.4.6-15build2) ...
-#7 11.22 Selecting previously unselected package libltdl-dev:amd64.
-#7 11.23 Preparing to unpack .../32-libltdl-dev_2.4.6-15build2_amd64.deb ...
-#7 11.24 Unpacking libltdl-dev:amd64 (2.4.6-15build2) ...
-#7 11.31 Selecting previously unselected package libtool.
-#7 11.31 Preparing to unpack .../33-libtool_2.4.6-15build2_all.deb ...
-#7 11.32 Unpacking libtool (2.4.6-15build2) ...
-#7 11.39 Selecting previously unselected package ninja-build.
-#7 11.40 Preparing to unpack .../34-ninja-build_1.10.1-1_amd64.deb ...
-#7 11.41 Unpacking ninja-build (1.10.1-1) ...
-#7 11.49 Preparing to unpack .../35-python3-pip_22.0.2+dfsg-1ubuntu0.7_all.deb ...
-#7 11.70 Unpacking python3-pip (22.0.2+dfsg-1ubuntu0.7) over (22.0.2+dfsg-1ubuntu0.4) ...
-#7 15.16 Setting up libpcrecpp0v5:amd64 (2:8.39-13ubuntu0.22.04.1) ...
-#7 15.19 Setting up libpcre16-3:amd64 (2:8.39-13ubuntu0.22.04.1) ...
-#7 15.23 Setting up libmagic-mgc (1:5.41-3ubuntu0.1) ...
-#7 15.27 Setting up libglib2.0-0:amd64 (2.72.4-0ubuntu2.9) ...
-#7 15.30 No schema files found: doing nothing.
-#7 15.31 Setting up libmagic1:amd64 (1:5.41-3ubuntu0.1) ...
-#7 15.37 Setting up file (1:5.41-3ubuntu0.1) ...
-#7 15.41 Setting up libffi-dev:amd64 (3.4.2-4) ...
-#7 15.44 Setting up libpcre2-16-0:amd64 (10.39-3ubuntu0.1) ...
-#7 15.48 Setting up ninja-build (1.10.1-1) ...
-#7 15.52 Setting up autotools-dev (20220109.1) ...
-#7 15.56 Setting up libpcre2-32-0:amd64 (10.39-3ubuntu0.1) ...
-#7 15.59 Setting up libglib2.0-data (2.72.4-0ubuntu2.9) ...
-#7 15.63 Setting up libpkgconf3:amd64 (1.8.0-1) ...
-#7 15.66 Setting up uuid-dev:amd64 (2.37.2-4ubuntu3.5) ...
-#7 15.70 Setting up libsigsegv2:amd64 (2.13-1ubuntu3) ...
-#7 15.74 Setting up libpcre32-3:amd64 (2:8.39-13ubuntu0.22.04.1) ...
-#7 15.77 Setting up libsepol-dev:amd64 (3.3-1build1) ...
-#7 15.81 Setting up python3-pip (22.0.2+dfsg-1ubuntu0.7) ...
-#7 16.81 Setting up libltdl7:amd64 (2.4.6-15build2) ...
-#7 16.84 Setting up zlib1g-dev:amd64 (1:1.2.11.dfsg-2ubuntu9.2) ...
-#7 16.88 Setting up libpcre2-posix3:amd64 (10.39-3ubuntu0.1) ...
-#7 16.92 Setting up libelf1:amd64 (0.186-1ubuntu0.1) ...
-#7 16.95 Setting up libglib2.0-dev-bin (2.72.4-0ubuntu2.9) ...
-#7 17.12 Setting up libblkid-dev:amd64 (2.37.2-4ubuntu3.5) ...
-#7 17.16 Setting up libpcre2-dev:amd64 (10.39-3ubuntu0.1) ...
-#7 17.19 Setting up libtool (2.4.6-15build2) ...
-#7 17.23 Setting up libselinux1-dev:amd64 (3.3-1build2) ...
-#7 17.26 Setting up libpcre3-dev:amd64 (2:8.39-13ubuntu0.22.04.1) ...
-#7 17.30 Setting up libglib2.0-bin (2.72.4-0ubuntu2.9) ...
-#7 17.33 Setting up m4 (1.4.18-5ubuntu2) ...
-#7 17.37 Setting up pkgconf (1.8.0-1) ...
-#7 17.43 Setting up autoconf (2.71-2) ...
-#7 17.48 Setting up libmount-dev:amd64 (2.37.2-4ubuntu3.5) ...
-#7 17.51 Setting up automake (1:1.16.5-1.3) ...
-#7 17.54 update-alternatives: using /usr/bin/automake-1.16 to provide /usr/bin/automake (automake) in auto mode
-#7 17.54 update-alternatives: warning: skip creation of /usr/share/man/man1/automake.1.gz because associated file /usr/share/man/man1/automake-1.16.1.gz (of link group automake) doesn't exist
-#7 17.54 update-alternatives: warning: skip creation of /usr/share/man/man1/aclocal.1.gz because associated file /usr/share/man/man1/aclocal-1.16.1.gz (of link group automake) doesn't exist
-#7 17.56 Setting up libltdl-dev:amd64 (2.4.6-15build2) ...
-#7 17.60 Setting up libglib2.0-dev:amd64 (2.72.4-0ubuntu2.9) ...
-#7 17.64 Processing triggers for libc-bin (2.35-0ubuntu3.4) ...
-#7 DONE 17.9s
-
-#8 [build-base 3/6] RUN pip3 install meson==1.5.0
-#8 1.016 Collecting meson==1.5.0
-#8 1.122   Downloading meson-1.5.0-py3-none-any.whl (959 kB)
-#8 1.259      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 959.8/959.8 KB 7.2 MB/s eta 0:00:00
-#8 1.277 Installing collected packages: meson
-#8 1.900 Successfully installed meson-1.5.0
-#8 1.900 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
-#8 DONE 2.0s
-
-#9 [build-base 4/6] RUN mkdir /build
-#9 DONE 0.5s
-
-#10 [build-base 5/6] WORKDIR /build
-#10 DONE 0.1s
-
-#11 [build-base 6/6] RUN mkdir -p /build/target
-#11 DONE 0.5s
-
-#12 [libffi-emscripten-dev 1/7] RUN mkdir -p /libffi
-#12 ...
-
-#13 [zlib-emscripten-dev 1/5] RUN mkdir -p /zlib
-#13 DONE 0.8s
-
-#12 [libffi-emscripten-dev 1/7] RUN mkdir -p /libffi
-#12 DONE 0.8s
-
-#14 [libffi-emscripten-dev 2/7] RUN git clone https://github.com/libffi/libffi /libffi
-#14 ...
-
-#15 [build-dev  1/21] RUN mkdir -p /stub
-#15 DONE 1.5s
-
-#16 [build-dev  2/21] WORKDIR /stub
-#16 DONE 0.1s
-
-#17 [build-dev  3/21] RUN <<EOF (cat <<'EOT' > res_query.c...)
-#17 ...
-
-#18 [pixman-emscripten-dev 1/9] RUN mkdir /pixman/
-#18 DONE 1.7s
-
-#19 [pixman-emscripten-dev 2/9] RUN git clone  https://gitlab.freedesktop.org/pixman/pixman /pixman/
-#19 1.106 Cloning into '/pixman'...
-#19 ...
-
-#17 [build-dev  3/21] RUN <<EOF (cat <<'EOT' > res_query.c...)
-#17 DONE 1.3s
-
-#20 [zlib-emscripten-dev 2/5] RUN curl -Ls https://zlib.net/zlib-1.3.1.tar.xz | tar xJC /zlib --strip-components=1
-#20 2.115 xz: (stdin): File format not recognized
-#20 2.115 tar: Child returned status 1
-#20 2.115 tar: Error is not recoverable: exiting now
-#20 ERROR: process "/bin/sh -c curl -Ls https://zlib.net/zlib-$ZLIB_VERSION.tar.xz | tar xJC /zlib --strip-components=1" did not complete successfully: exit code: 2
-
-#14 [libffi-emscripten-dev 2/7] RUN git clone https://github.com/libffi/libffi /libffi
-#14 1.602 Cloning into '/libffi'...
-#14 CANCELED
-
-#21 [build-dev  4/21] RUN emcc -O2 -matomics -mbulk-memory -DNDEBUG -sWASM_BIGINT -DWASM_BIGINT -pthread -sMALLOC=mimalloc  -sASYNCIFY=1  -c res_query.c -fPIC -o libresolv.o
-#21 CANCELED
-
-#19 [pixman-emscripten-dev 2/9] RUN git clone  https://gitlab.freedesktop.org/pixman/pixman /pixman/
-#19 1.467 warning: redirecting to https://gitlab.freedesktop.org/pixman/pixman.git/
-#19 CANCELED
-------
- > [zlib-emscripten-dev 2/5] RUN curl -Ls https://zlib.net/zlib-1.3.1.tar.xz | tar xJC /zlib --strip-components=1:
-2.115 xz: (stdin): File format not recognized
-2.115 tar: Child returned status 1
-2.115 tar: Error is not recoverable: exiting now
-------
-ERROR: failed to build: failed to solve: process "/bin/sh -c curl -Ls https://zlib.net/zlib-$ZLIB_VERSION.tar.xz | tar xJC /zlib --strip-components=1" did not complete successfully: exit code: 2

@@ -1,7 +1,0 @@
-started. chrome pid=47144 port=9337 extId=pfncpmcmkgcohblmpllhofkdpjjbmngl
-navigated to http://localhost:8765/sdk_firebase.html
-=== assert type (gc_decref_underflow should be GONE) ===
-"[]"
-background_page: [evict] dropped %d reviewed document(s) from state.docs 1
-endpoints: 5
-wasm aborted: 1

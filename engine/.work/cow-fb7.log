@@ -1,7 +1,0 @@
-=== RESTART ===
-started. chrome pid=38064 port=9337 extId=pfncpmcmkgcohblmpllhofkdpjjbmngl
-=== GOTO ===
-navigated to http://localhost:8765/sdk_firebase.html
-=== DIAG 90 reload ===
-background_page: @WHY {"phase":"cow_stats","pagesSaved":0,"commits":0,"discards":0,"captures":0,"applies":0,"poolUsedMB":0,"baselined":0}
-webworker: @WHY {"phase":"cow_stats","pagesSaved":0,"commits":0,"discards":0,"captures":0,"applies":0,"poolUsedMB":0,"baselined":0}
