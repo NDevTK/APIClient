@@ -100,8 +100,14 @@ const INTERFACES = {
   /* An interface that includes the BODY mixin has its readers and `bodyUsed` installed by the shared
      component, so body.c is where the audit finds them — naming only the interface's own file reported six
      members absent that both including interfaces have. */
-  Response:            ["core/fetch/response.c", "core/fetch/body.c", "core/byte_reader.c"],
-  Request:             ["core/fetch/request.c", "core/fetch/body.c", "core/byte_reader.c"],
+  /* byte_reader.c IS NOT IN THESE FOUR ROWS, and the run is what settled it: it installs nothing statically
+     nameable and declares no interface. Its `JS_SetPropertyStr(ctx, proto, d->readers[k].name, …)` reads the
+     name off a table a RUNTIME handle picks, so the audit reads the two-halved form's DECLARE site instead
+     (TABLE_FORMS' byte_reader_declare/byte_reader_install pair) and emits the members at the INSTALL CALL in
+     blob.c and body.c, attributed to the prototype those files hand it. Naming the shared machine here
+     therefore credited nothing and only made four rows report a stranger. */
+  Response:            ["core/fetch/response.c", "core/fetch/body.c"],
+  Request:             ["core/fetch/request.c", "core/fetch/body.c"],
   FormData:            ["core/html/form_data.c", "core/idl_iter.c"],
   /* §4's `interface File : Blob` shares blob.c with the interface it inherits: one struct, one class id, and
      a prototype chained to Blob.prototype — which is what the inheritance MEANS, so the members it inherits
@@ -151,8 +157,8 @@ const INTERFACES = {
   WritableStreamDefaultController: "core/streams/writable_stream.c",
   TransformStream:      "core/streams/transform_stream.c",
   TransformStreamDefaultController: "core/streams/transform_stream.c",
-  Blob:                ["core/file/blob.c", "core/byte_reader.c"],
-  File:                ["core/file/blob.c", "core/byte_reader.c"],
+  Blob:                 "core/file/blob.c",
+  File:                 "core/file/blob.c",
   /* File System Standard §2.2-§2.4. These three shipped with no row at all, so the audit said nothing about
      them in either direction — the lying-by-omission this map's own comment names. Each names the component
      plus File System Access §2.3's partial interface (queryPermission/requestPermission), whose members land
@@ -663,12 +669,22 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
   /* THE ROW IS NOW A CROSS-CHECK. It no longer decides what counts — it says which components this interface is
      believed to be built out of, and attribution answers whether that is true. A file whose members all land on
      other interfaces is a row that was wrong (or a component that moved), and it used to be invisible. */
+  /* A FILE IS THIS INTERFACE'S EITHER BY INSTALLING A MEMBER OR BY DECLARING IT, and reading only the first
+     made the check unclosable. xml_http_request.c BUILDS and §3.7.3-tags XMLHttpRequestUpload.prototype and
+     installs no member on it, because §4's Upload declares no members of its own and its seven handler
+     attributes are event_target.c's — so the component that IS the interface read as a stranger to it, and no
+     change to the C could have made it stop. A red with no root fix is not a forcing function, it is noise
+     that teaches the reader to skip the category. */
+  const declares = (p) => [...(env.declaresIface.get(p) || [])];
   const strangers = present.filter((p) => {
     const lands = landsIn.get(p);
-    return !lands || ![...lands].some((n) => chain.includes(n));
+    if (lands && [...lands].some((n) => chain.includes(n))) return false;
+    return !declares(p).some((n) => chain.includes(n));
   }).map((p) => {
-    const lands = [...(landsIn.get(p) || [])];
-    return `${p.replace(BROWSER + "/", "")} (${lands.length ? "installs for " + lands.join(", ") : "installs nothing this can attribute"})`;
+    const lands = [...(landsIn.get(p) || [])], decl = declares(p);
+    const what = [lands.length ? "installs for " + lands.join(", ") : "installs nothing this can attribute",
+                  decl.length ? "declares " + decl.join(", ") : "declares no interface"];
+    return `${p.replace(BROWSER + "/", "")} (${what.join("; ")})`;
   });
   /* An install in one of this row's files whose target's interface could not be decided. Neither credited to
      the row (the false COMPLETE this attribution removes) nor dropped — named, with its member and line. */
@@ -687,15 +703,34 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
   const condStale = cond.filter((e) => !spec.includes(e.name));
   const condInstalled = cond.filter((e) => installed.has(e.name));
   const condNames = new Set(cond.map((e) => e.name));
-  const absent = spec.filter((n) => !installed.has(n) && !condNames.has(n));
+  /* AN ABSENCE THE AUDIT CANNOT TELL FROM ITS OWN BLIND SPOT IS NOT AN ABSENCE. The two halves of this were
+     already computed and were printed in two places with nothing joining them, so the SAME member read as
+     ABSENT on one line and UNATTRIBUTED on another and a person had to notice: FileSystemDirectoryHandle's
+     §2.4.1 `entries` and `keys` ARE installed, by idl_async_iter.c's shared installer, under `if (ops->pair)`
+     — a condition over the DECLARATION the caller named, which names no interface, so with two callers
+     (FileSystemDirectoryHandle and ReadableStream) the target is two tagged prototypes and the site is
+     honestly undecidable. Counting those as gaps to implement sends someone to build a member that is already
+     there, which is a false ABSENT with the auditor's own name on it.
+     THE JOIN IS EXACT AND USES ONLY WHAT IS ALREADY KNOWN: an unattributed record carries the CANDIDATES its
+     target could be, so a member is UNPROVEN for this interface only when an install of that NAME landed on a
+     candidate set containing this interface or one of its bases. It is neither counted as a gap nor credited
+     as installed, and it is its own failing category — the work is to make the site decidable, never to
+     assume it either way. */
+  const maybeHere = new Map();
+  for (const r of unattributed)
+    if (r.candidates.some((n) => chain.includes(n)) && !maybeHere.has(r.name)) maybeHere.set(r.name, r);
+  const open = spec.filter((n) => !installed.has(n) && !condNames.has(n));
+  const absent = open.filter((n) => !maybeHere.has(n));
+  const unproven = open.filter((n) => maybeHere.has(n));
   const noop = spec.filter((n) => stubbed.has(n));
   totalMissing += absent.length + noop.length;
   for (const n of absent) distinct.add(n);
   for (const n of noop) distinct.add(n);
   /* PER INTERFACE, so the verdict names an AREA. An interface with nothing missing is a row too — it is what
      makes the table a census rather than a list of the loudest components. */
-  gapRows.push({ iface, absent: absent.length, noop: noop.length });
+  gapRows.push({ iface, absent: absent.length, noop: noop.length, unproven: unproven.length });
   defect("ABSENT members", absent.length);
+  defect("UNPROVEN members — installed on a target the audit cannot attribute", unproven.length);
   defect("js_noop-STUB members", noop.length);
   defect("STALE member exclusions", condStale.length);
   defect("CONTRADICTED member exclusions", condInstalled.length);
@@ -709,6 +744,10 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
   const plain = [...new Set(offInstaller.filter((o) => absent.includes(o.name)).map((o) => o.name))];
   const parts = [];
   if (absent.length) parts.push(`ABSENT ${absent.length} — ${absent.join(", ")}`);
+  if (unproven.length) parts.push(`UNPROVEN ${unproven.length} — ${unproven.map((n) => {
+    const r = maybeHere.get(n);
+    return `${n} (installed at ${r.file.replace(BROWSER + "/", "")}:${r.line}, ${r.why})`;
+  }).join("; ")}`);
   if (noop.length) parts.push(`js_noop-STUB ${noop.length} — ${noop.join(", ")}`);
   if (plain.length) parts.push(`PLAIN-PROPERTY ${plain.length} — ${plain.join(", ")} (written with ` +
                                `JS_SetPropertyStr onto an object no interface declaration reaches: either a ` +
@@ -901,14 +940,16 @@ if (prev === header) {
  * THE VERDICT, PER INTERFACE FIRST. §Testing: a gate reports per AREA as well as in total, because one number
  * in which the widest base answers most of the count makes every other component invisible — and here the
  * inherited members make that literal, since one absent Element member is absent on every HTML interface. */
-const withGaps = gapRows.filter((r) => r.absent || r.noop).sort((a, b) => (b.absent + b.noop) - (a.absent + a.noop));
+const tot = (r) => r.absent + r.noop + r.unproven;
+const withGaps = gapRows.filter(tot).sort((a, b) => tot(b) - tot(a));
 console.log(`[idl-audit] ── per interface ── ${gapRows.length - withGaps.length} of ${gapRows.length} audited ` +
             `interfaces install every member their IDL declares`);
 if (withGaps.length) {
   const w = Math.max(...withGaps.map((r) => r.iface.length));
   for (const r of withGaps)
     console.log(`[idl-audit]   ${r.iface.padEnd(w)}  ABSENT ${String(r.absent).padStart(3)}` +
-                (r.noop ? `  js_noop-STUB ${r.noop}` : ""));
+                (r.noop ? `  js_noop-STUB ${r.noop}` : "") +
+                (r.unproven ? `  UNPROVEN ${r.unproven}` : ""));
 }
 console.log("[idl-audit] ── verdict ──");
 if (!defects.size) {

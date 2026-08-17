@@ -1042,6 +1042,19 @@ export function loadEnvironment(root) {
   };
   const tlink = (a, b) => { tarrow(a, b, null); tarrow(b, a, null); };
   const tagSeeds = [];            /* {node, ifaces} */
+  /* WHICH INTERFACES A FILE DECLARES — not which members it installs. They are two different facts and the
+     caller's row cross-check was reading the second where it meant the first: xml_http_request.c BUILDS and
+     §3.7.3-TAGS XMLHttpRequestUpload.prototype and XMLHttpRequestEventTarget.prototype, and installs not one
+     member on either — Upload declares no members of its own, and the seven handler attributes are
+     event_target.c's shared installer's. So the file that IS that interface's component read as a stranger to
+     it, and no change to the C could ever have made it stop: an interface with no members of its own has no
+     member install to find. A component declares an interface by building its §3.7.3-tagged prototype or its
+     §3.7.1 interface object, which is exactly the pair of statements already read below. */
+  const declaresIface = new Map();
+  const declares = (path, names) => {
+    if (!declaresIface.has(path)) declaresIface.set(path, new Set());
+    for (const n of names) declaresIface.get(path).add(n);
+  };
   const tagIssues = [];           /* a tag whose interface name is not statically decidable */
   const ifaceObjects = [];        /* {node, ifaces, file, line} — checked back against the tag once solved */
   const interfaceTables = new Map();   /* table -> the field whose cells are interface identifiers */
@@ -1069,12 +1082,16 @@ export function loadEnvironment(root) {
           if (col) interfaceTables.set(col[1], col[2]);
           if (!named(obj)) { tagIssues.push({ file: path, line: lineAt(site.at), form: spec.fn, expr: obj }); continue; }
           tagSeeds.push({ node: at(obj, site.at), ifaces: names });
+          declares(path, names);
         }
       /* §3.7.1's interface OBJECT — linked to its prototype, and its NAME kept as a check on the tag. */
       for (const site of callSites(f.body, IFACE_OBJECT.fn)) {
         const obj = stripDup(site.args[IFACE_OBJECT.obj] || "");
         const names = R.strings(site.args[IFACE_OBJECT.iface] || "", locals);
-        if (named(obj) && names) ifaceObjects.push({ node: at(obj, site.at), ifaces: names, file: path, line: lineAt(site.at) });
+        if (named(obj) && names) {
+          ifaceObjects.push({ node: at(obj, site.at), ifaces: names, file: path, line: lineAt(site.at) });
+          declares(path, names);
+        }
       }
       for (const site of callSites(f.body, CTOR_LINK.fn)) {
         const c = stripDup(site.args[CTOR_LINK.ctor] || ""), p = stripDup(site.args[CTOR_LINK.proto] || "");
@@ -1215,7 +1232,7 @@ export function loadEnvironment(root) {
 
   return { macros, typedefs, sources, resolver, forms, fnsOf,
            tags, tagKey: (path, f, v, at) => tagKey(path, f, v, at), tagIssues, tagChecks, interfaceTables,
-           recordContradictions };
+           recordContradictions, declaresIface };
 }
 
 /* EVERY INSTALLED MEMBER, ATTRIBUTED TO THE INTERFACE ITS TARGET IS — one record per (member, site), carrying
