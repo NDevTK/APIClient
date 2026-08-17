@@ -93,13 +93,24 @@ function _serializeGlobalStore() {
       [...globalStore.apiKeys].map(([k, v]) => [k, serializeApiKeyEntry(v)]),
     ),
     endpoints: Object.fromEntries(globalStore.endpoints),
+    /* NO `method`. It held "PROBE"/"HYBRID" for a document that was probed rather than fetched; that producer
+       was DELETED (lib/discovery-probe.js records why: nothing projected the field to the popup, nothing merged
+       it, nothing rehydrated it) and this `v.method || null` outlived it — a default over a field with no
+       producer, written into IndexedDB every save. The one writer left is the popup's OpenAPI import
+       (`method: "IMPORT"`, lib/popup-handlers.js), and no surface in this extension reads it either, so it is
+       not carried across a session.
+       THE FIVE REMAINING `|| null`s ARE OPTIONALITY, NOT DEFAULTS, and this is the positive statement they
+       read as: a LEARNED entry has no fetched document behind it. lib/learn.js mints a virtual `status:"found"`
+       entry from a request it observed — grouping + doc only — so `url`/`apiKey`/`fetchedAt` are absent for
+       exactly that entry and their absence means "this service was never fetched from an address", while a
+       FETCHED entry (lib/discovery-probe.js) writes all three. `grouping` is the mirror: present on a learned
+       entry, absent on a fetched one. */
     discoveryDocs: Object.fromEntries(
       [...globalStore.discoveryDocs].map(([k, v]) => [
         k,
         {
           status: v.status,
           url: v.url || null,
-          method: v.method || null,
           apiKey: v.apiKey || null,
           fetchedAt: v.fetchedAt || null,
           doc: v.doc || null,

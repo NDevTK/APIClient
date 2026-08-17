@@ -27,7 +27,9 @@
 let nextDocumentId = 0;
 /* THE RUN LOG AND THE CRASH COUNT, DECLARED HERE SO THEIR ABSENCE IS THIS FILE NOT BEING LOADED and their
    emptiness is no engine having finalized / no engine having aborted. linesToAnalysis appends one record per
-   finalized session, crashBanner counts every abort path, and rendererPoolProbe reads both. */
+   finalized session, crashBanner counts every abort path, and rendererPoolProbe reads both (the log also
+   answers the popup's GET_ENGINE_RUNS). The log holds page ADDRESSES, so hostClear empties it and the crash
+   count stays — see the Clear path for why those two differ. */
 self._engineLog = [];
 self._engineCrashOccurred = 0;
 
@@ -38,8 +40,8 @@ const HOLE = /\{[a-z]*\}/;
 const hasHole = (s) => HOLE.test(s || "");
 
 /* Map the engine's ONE structured `@RESULT <json>` line -> the analysis object the brain consumes.
-   The ENGINE builds + DEDUPS the whole result (endpoints/params/headers/body, @S sinks, chunkUrls,
-   errors, park recipes) and JSON.stringifies it; the host does ONE JSON.parse and relays — NO per-line
+   The ENGINE builds + DEDUPS the whole result (endpoints/params/headers/body, @S sinks, page errors,
+   park recipes) and JSON.stringifies it; the host does ONE JSON.parse and relays — NO per-line
    @H/@Q/@HDR/@BODY parsing, NO host identity/dedup (all DELETED, the engine owns it like a browser).
    @E lines (host-side protocol errors) are still surfaced so a zero-result never fails silently.
 
@@ -101,15 +103,15 @@ function linesToAnalysis(lines, msg, expectResult) {
            Dev aborts; release keeps the parse error in the run's errors, because in release there is no
            document to read and a zero-result must still say why. */
         DFAIL("the engine emitted an @RESULT line that is not JSON: " + String(e && e.message || e));
-        extraErrors.push({ context: "result-parse", message: String(e && e.message || e), snippet: null, replyExample: null });
+        extraErrors.push({ context: "result-parse", message: String(e && e.message || e) });
       }
     } else if (ln.startsWith("@E ")) {
-      extraErrors.push({ context: "engine", message: ln.slice(3), snippet: null, replyExample: null });
+      extraErrors.push({ context: "engine", message: ln.slice(3) });
     } else if (ln.startsWith("@WHY ")) {
       // engine diagnostic for a zero-result/resource path (e.g. reg_oom) — surface it so an OOM or
       // aborted flow never fails SILENTLY (CLAUDE.md: every zero-result path emits @WHY).
-      try { const o = JSON.parse(ln.slice(5)); extraErrors.push({ context: o.phase || "why", message: o.reason || ln.slice(5), snippet: null, replyExample: null }); }
-      catch (_) { extraErrors.push({ context: "why", message: ln.slice(5), snippet: null, replyExample: null }); }
+      try { const o = JSON.parse(ln.slice(5)); extraErrors.push({ context: o.phase || "why", message: o.reason || ln.slice(5) }); }
+      catch (_) { extraErrors.push({ context: "why", message: ln.slice(5) }); }
     }
   }
   /* THE DOCUMENT IS EITHER THERE OR THIS CALLER SAID IT WOULD NOT BE. `result || {}` on its own is the exact
@@ -149,53 +151,54 @@ function linesToAnalysis(lines, msg, expectResult) {
        reported one. This arm is reachable only where the caller passed expectResult=false; the DCHECK above is
        what makes any other path here a crash rather than a silent second producer of empty runs. */
     : { crashed: true, resumed: resumed, url: (msg && msg.sourceUrl) || "" };
-  self._engineMeta = m;
   // A per-run LOG (not a single overwritten global): concurrent cold-kick engines each report here, so the
   // full park->persist->rehydrate->resume SEQUENCE across all engines is observable, not just the last one.
+  /* AND THERE IS NO `self._engineMeta` BESIDE IT. It held the LAST record — a page URL and its counters — in a
+     global nothing has ever read: not this file, not the popup's GET_ENGINE_RUNS, not rendererPoolProbe, not
+     testing/. A single overwritten global is the shape the line above says the log replaced, and it survived
+     underneath it, holding one page's address for the life of the offscreen with no surface to show it on. */
   /* THE ARRAY IS DECLARED AT LOAD (top of this file), not created on first use: `self._engineLog = self._engineLog || []`
      is the defaulting shape, and here it defaulted the one thing a reader wants to distinguish — an empty log
      because nothing has run from an absent log because this file never loaded. */
   self._engineLog.push(m);
   if (self._engineLog.length > 200) self._engineLog.shift();
-  /* THE HOST-SIDE EMPTIES A CRASH RECORD IS MADE OF, named once. `chunkUrls` below already draws this exact
-     distinction in this file — an empty the HOST owns is not the same object as an engine field defaulted to
-     empty — and the crash arm is that distinction applied to the whole document: there is no engine answer to
-     default, so every field is the host's own empty and the engine's `_park`/counters are absent rather than
-     zero. The engine's own protocol errors still travel, because @E and @WHY are emitted on their own lines
-     and do not ride the result document; that is the whole reason a crash record is worth returning at all. */
-  const engineDoc = result || { fetchCallSites: [], securitySinks: [], pageErrors: [],
-                                _switches: null, _park: [] };
+  /* THE HOST-SIDE EMPTIES A CRASH RECORD IS MADE OF, named once: there is no engine answer to default, so
+     every field is the host's own empty and the engine's `_park` is absent rather than zero. The engine's own
+     protocol errors still travel, because @E and @WHY are emitted on their own lines and do not ride the
+     result document; that is the whole reason a crash record is worth returning at all. */
+  const engineDoc = result || { fetchCallSites: [], securitySinks: [], pageErrors: [], _park: [] };
+  /* THIS DOCUMENT IS EXACTLY WHAT THE BRAIN READS, AND IT USED TO CARRY FIFTEEN MORE FIELDS THAT NOTHING DID.
+     A "sibling fields the brain reads unconditionally, present + empty so it never throws" block held
+     protoEnums/protoFieldMaps/dangerousPatterns/esmImportUrls/inRunModuleUrls/domEndpoints/sourceMapTypes/
+     sourceMapsByUrl/traceMapsByUrl/valueConstraints/sourceMapUrl/sourceMap, beside `chunkUrls`, `_replyWant`
+     and `_switches` — every one of them a constant the ENGINE has never written. The merge passes that read
+     them were deleted (lib/merge.js records four of them by name), and the writers outlived the readers, which
+     is the §FIELD-A-CONSUMER-DEFAULTS defect with the arrow reversed: `dangerousPatterns` crossed two
+     boundaries into `tab._securityFindings`, and a `.length` of 0 there is indistinguishable from "no
+     dangerous patterns found". A constant `[]` is not a measurement of a page, so it is not shipped as one.
+     (testing/extractors.js and testing/classify.js read dangerousPatterns/valueConstraints/protoEnums/
+     protoFieldMaps/sourceMapUrl off the analysis with `|| []`; they were already reading the constant, so they
+     read the same nothing, and testing/test-spec.js's two `domEndpoints` assertions fail exactly as they did —
+     they are the record that the DOM-attribute scan is an ENGINE capability nobody has built.) */
   return {
-    _switches: engineDoc._switches,
     fetchCallSites: engineDoc.fetchCallSites,
+    securitySinks: engineDoc.securitySinks,
     /* THE ENGINE'S OWN PAGE ERRORS, WHICH IT CALLS `pageErrors`. This line read `resolverErrors` — a name
        nothing on the engine side has ever written — so every error the engine recorded while running the page
        was dropped here, and the `|| []` beside it is precisely what made the drop invisible: the field the
-       brain reads existed, held the host's own errors, and looked complete. The consumer (popup.js,
-       _dispatchDocument) reads {context, message, snippet}; the engine's are strings. */
-    resolverErrors: engineDoc.pageErrors.map((e) => ({ context: "page", message: String(e), snippet: null, replyExample: null })).concat(extraErrors),
-    /* The engine does NOT carry chunk URLs in the result document — they cross on their own ABI edge
-       (qjs_chunks, drained and fetched every service round), so this is a host-side empty like the block
-       below and never a defaulted engine field. */
-    chunkUrls: [],
-    securitySinks: engineDoc.securitySinks,
+       brain reads existed, held the host's own errors, and looked complete.
+       A ROW IS {context, message}, TWO NON-EMPTY STRINGS, AND NOTHING ELSE. It carried `snippet` and
+       `replyExample` as constant `null`s: offscreen-brain dropped `replyExample` on the way through, no
+       renderer ever read either, and the engine has no source-text or reply to state for a page error in the
+       first place (result.c's pageErrors are strings). Three comments — here, in lib/serialize.js and in
+       popup.js — named `snippet` as part of the contract the popup reads; it was read nowhere. */
+    resolverErrors: engineDoc.pageErrors.map((e) => ({ context: "page", message: String(e) })).concat(extraErrors),
     /* NO probeResults ON THIS SEAM. The engine issues no request, so it receives no rejection and has no
        error-derived schema to relay; the record the Send panel reads is written by the two systems that DO
        probe — lib/req2proto.js (driven by lib/discovery-probe.js and lib/response-decode.js) — straight into
        `globalStore.probeResults`, which never crossed this boundary. */
-    // sibling fields the brain reads unconditionally, present + empty so it never throws:
-    protoEnums: [], protoFieldMaps: [], dangerousPatterns: [],
-    esmImportUrls: [], inRunModuleUrls: [], domEndpoints: [],
-    sourceMapTypes: [], sourceMapsByUrl: {}, traceMapsByUrl: {}, valueConstraints: [],
-    sourceMapUrl: null, sourceMap: null, sourceUrl: (msg && msg.sourceUrl) || "",
-    /* `_orphans` AND `_emit` ARE NOT FIELDS THE ENGINE HAS EVER WRITTEN, and both were read here — the same
-       defect the comment above records for `_orphans`/`_work`/`_parked`, surviving in the returned document
-       nine lines under the place it was fixed in the meta block, because the `|| 0` and the `!= null` beside
-       them made a dead read look like a live one that had nothing to say. solver/result.c emits twelve fields
-       and these are not among them; grep finds no writer anywhere in engine/host. Nothing reads them here
-       either, so they are deleted rather than renamed: a diagnostic with no producer and no consumer is not a
-       diagnostic. The counters that ARE emitted travel in `_engineMeta` above, where they are asserted. */
-    _replyWant: [], _park: engineDoc._park,
+    sourceUrl: (msg && msg.sourceUrl) || "",
+    _park: engineDoc._park,
   };
 }
 
@@ -1600,9 +1603,7 @@ async function engineFinalize(eng) {
     // only the crash marker + the error, so the crash is impossible to overlook and nothing downstream (cache,
     // popup, moat) ever consumes a crashed engine's output. Experimental stage: fail hard, then fix the ROOT.
     result._engineCrashed = true;
-    result.fetchCallSites = []; result.securitySinks = []; result.chunkUrls = []; result.domEndpoints = [];
-    result.esmImportUrls = []; result.inRunModuleUrls = []; result.protoEnums = []; result.protoFieldMaps = [];
-    result.dangerousPatterns = []; result._park = []; result._prior = null;
+    result.fetchCallSites = []; result.securitySinks = []; result._park = []; result._prior = null;
   }
   return result;
 }
@@ -1659,8 +1660,7 @@ function crashRecord(stage, m, msg) {
      before it could answer, so its absence is the crash rather than a broken contract. */
   const r = linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, false);
   r._engineCrashed = true;
-  r.fetchCallSites = []; r.securitySinks = []; r.chunkUrls = []; r.domEndpoints = [];
-  r.esmImportUrls = []; r.inRunModuleUrls = []; r.protoEnums = []; r.protoFieldMaps = []; r.dangerousPatterns = []; r._park = []; r._prior = null;
+  r.fetchCallSites = []; r.securitySinks = []; r._park = []; r._prior = null;
   return r;
 }
 
@@ -2295,6 +2295,17 @@ async function hostClear() {
      behind, each entry holds its asking engine's wasm Module alive for the life of the offscreen, which is the
      one shape a map keyed on a live instance fails in. */
   _remoteOps.clear();
+  /* AND THE RUN LOG GOES, BECAUSE IT IS A LIST OF PAGE ADDRESSES. Each record carries the `sourceUrl` of a
+     document this zone analysed, so `_engineLog` is a browsing history held in the offscreen realm — the one
+     thing Clear's stated contract ("delete ALL extension data") is most clearly about — and it survived every
+     Clear there has ever been: declared at load, emptied by nothing, so the popup dropped its copy and the very
+     next loadState fetched the same URLs straight back out of GET_ENGINE_RUNS. Truncated in place rather than
+     reassigned: the array is the identity popup-handlers.js asserts is present (a fresh one would be a second
+     array, and an absent one is this file never having loaded, which is what that assert distinguishes).
+     `_engineCrashOccurred` DELIBERATELY DOES NOT GO. It is a count of aborts with no page identity in it — this
+     document's own record that a WASM instance died — and a wipe that could zero it is a wipe that can silence
+     a crash the reviewer has not seen yet. A crash must be impossible to overlook, including across a Clear. */
+  self._engineLog.length = 0;
   await frontierClear();
   return dropped.length;
 }

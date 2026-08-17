@@ -228,14 +228,18 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
        which solve.c does not emit, so it filed every finding under the page URL and produced exactly what
        this block produces. That file is deleted and so is the flag: the replace-then-push below is already
        idempotent for a repeated merge of one analysis, which is all the flag ever bought.
-       `dangerousPatterns` is NOT a defaulted engine field — bridge.js emits it as a host-side constant `[]`
-       (the engine has no such surface), so it is read here as the empty statement it is. */
+
+       `dangerousPatterns` IS GONE FROM BOTH SIDES OF THIS SEAM. It was read off every analysis and carried onto
+       every finding record, while bridge.js wrote it as a host-side constant `[]` — the engine has no such
+       surface and no renderer has ever read the field. A `.length` of 0 on a finding was therefore
+       indistinguishable from "no dangerous patterns found on this page": a claim about the page made out of a
+       constant, and §RUN, DON'T MATCH forbids the pattern list it claimed to be. The record now carries only
+       what solve.c emits. */
     var secSinks = analysis.securitySinks;
-    var dangerousPats = analysis.dangerousPatterns;
-    DCHECK(Array.isArray(secSinks) && Array.isArray(dangerousPats),
-           "an analysis reached the security merge without its finding arrays — bridge.js builds both on " +
+    DCHECK(Array.isArray(secSinks),
+           "an analysis reached the security merge without its securitySinks array — bridge.js builds it on " +
            "every result document, so an absent one is that relay broken and this page would merge as clean");
-    if (secSinks.length || dangerousPats.length) {
+    if (secSinks.length) {
       if (!tab._securityFindings) tab._securityFindings = [];
       var _mfMeta = tab || null;
       // REPLACE any prior entry for this source, don't append — the deep grind
@@ -249,10 +253,8 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
         sourceUrl: analysis.sourceUrl,
         pageUrl: _mfMeta ? _mfMeta.url : null,
         securitySinks: secSinks,
-        dangerousPatterns: dangerousPats,
       });
-      console.debug("[AST:merge] Security findings for %s: %d sinks, %d dangerous patterns",
-        analysis.sourceUrl, secSinks.length, dangerousPats.length);
+      console.debug("[AST:merge] Security findings for %s: %d sinks", analysis.sourceUrl, secSinks.length);
     }
   }
   // Schedule the eviction sweep after this merge: the doc's forced-exec run has produced
@@ -395,10 +397,12 @@ function mergeToGlobal(tab) {
       if (v.pageUrls) for (var _pu of v.pageUrls) _mergedPageUrls.add(_pu);
       var _mergedFrameOrigins = new Set(_existingGDoc?.frameOrigins || []);
       if (v.frameOrigins) for (var _fo of v.frameOrigins) _mergedFrameOrigins.add(_fo);
+      /* NO `method` ON THE WAY UP EITHER. No tab-side producer has ever written one (lib/learn.js,
+         lib/grouping.js, lib/discovery-probe.js and lib/response-decode.js write none), so this copied
+         `undefined` on every merge into a field no surface reads. */
       globalStore.discoveryDocs.set(k, {
         status: v.status,
         url: v.url,
-        method: v.method,
         apiKey: v.apiKey,
         fetchedAt: v.fetchedAt,
         doc: _mergeDocInto(_existingGDoc && _existingGDoc.doc, v.doc) || null,   // UNION, not replace: keep every page's methods

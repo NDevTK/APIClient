@@ -264,10 +264,10 @@ const _scriptBuffers = new Map(); // documentId → per-document analysis state
 const globalStore = {
   apiKeys: new Map(), // key → { origin, referer, firstSeen, ... }
   endpoints: new Map(), // endpointKey → endpoint data
-  discoveryDocs: new Map(), // service → { status, url, method, apiKey, fetchedAt, doc }
+  discoveryDocs: new Map(), // service → { status, url, apiKey, fetchedAt, doc }  (see lib/merge.js: no `method`)
   probeResults: new Map(), // endpointKey → probe result
   scopes: new Map(), // service → string[]
-  securityFindings: new Map(), // sourceUrl → { sourceUrl, securitySinks[], dangerousPatterns[] }
+  securityFindings: new Map(), // sourceUrl → { sourceUrl, pageUrl, securitySinks[] }
   /* NO scriptCache. It was a (analyzer fingerprint + origin + SHA-256 of the page HTML) → stored result map
      that the handoff below consulted BEFORE dispatching, and a hit replayed the stored result and returned without
      ever creating an engine — so a revisited page never resumed the flows it had parked. §NO BOUNDS bans a
@@ -779,7 +779,13 @@ async function _dispatchDocument(docKey) {
      from the engine's `pageErrors`, so its absence is that edge broken, not a page with nothing to say.
      There is no dedup set here either — `result_page_error` in result.c already refuses a message it is
      holding, so a second one on this side would be a host-side identity set standing over the producer's
-     own answer. */
+     own answer.
+
+     A ROW IS {context, message} AND IS COPIED WHOLE. This loop rebuilt each row field by field and the third
+     field was `_re.snippet || null` — bridge.js wrote that as a constant `null` on every row it ever built, no
+     renderer read it, and the `replyExample` beside it was dropped here without anybody noticing, which is what
+     a hand-copied projection of a record does. Both fields are deleted at the producer; a row that reached here
+     with more than the pair would now be carried instead of silently trimmed. */
   DCHECK(Array.isArray(analysis.resolverErrors),
          "the engine result carried no resolverErrors array — bridge.js builds it from the engine's own " +
          "pageErrors on every result, so its absence is that relay broken and every error the engine " +
@@ -788,8 +794,12 @@ async function _dispatchDocument(docKey) {
     if (!Array.isArray(tab._resolverErrors)) tab._resolverErrors = [];
     for (var _rei = 0; _rei < analysis.resolverErrors.length; _rei++) {
       var _re = analysis.resolverErrors[_rei];
+      DCHECK(_re && typeof _re.context === "string" && typeof _re.message === "string",
+             "an engine page-error row carried no context/message pair — bridge.js writes both as strings on " +
+             "every row it builds, so a row missing one is that relay broken and the popup's diagnostic view " +
+             "would print an undefined attribution beside a real error");
       console.debug("[AST:page-error] %s: %s", _re.context, _re.message);
-      tab._resolverErrors.push({ context: _re.context, message: _re.message, snippet: _re.snippet || null });
+      tab._resolverErrors.push(_re);
     }
   }
 

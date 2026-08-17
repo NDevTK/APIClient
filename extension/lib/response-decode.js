@@ -590,24 +590,50 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
      WHAT REMAINS IS NOT A BOUND. `!preLearnDiscovery || status === "not_found"` is §Attacker sources'
      "one-per-endpoint (no method is universally safe …), never a blind sweep": a service whose document is
      already `found` has nothing to re-ask, and one that is `pending` has the same GETs in flight this instant.
-     A `not_found` service is asked AGAIN precisely because the second ask is a DIFFERENT request — the key set
-     below has grown since the first, and a candidate carrying a key the page had not yet used is a URL that
-     has never been fetched. */
-  if (!_isBoringFetch && (!preLearnDiscovery || preLearnDiscovery.status === "not_found")) {
-    const discoveryStatus = tab.discoveryDocs.get(service);
-    if (discoveryStatus) {
-      discoveryStatus.status = "pending";
-    } else {
-      tab.discoveryDocs.set(service, { status: "pending", seedUrl: msg.url });
-    }
+     A `not_found` service is asked AGAIN precisely because the second ask is a DIFFERENT request.
+
+     AND THAT SENTENCE IS NOW CHECKED RATHER THAN ASSERTED — `_triedKeys` HAS ITS READER HERE. The not_found
+     record names the key set that found nothing (lib/discovery-probe.js writes it on every such record: "what
+     makes a later attempt with a newly-learned key a DIFFERENT question rather than the same one"), and until
+     now nothing read it: `status === "not_found"` alone re-fired the identical candidate sweep — the same
+     addresses with the same keys — on EVERY captured response for the service, for as long as the page ran.
+     That is not the one-per-endpoint rule, it is the blind sweep it forbids, and it was hidden by a field whose
+     comment described a comparison no code performed.
+     THE ASK IS DIFFERENT ALONG EXACTLY TWO AXES, so both are asked and neither is invented. (1) A KEY the
+     failed sweep never carried: a candidate URL bearing it has never been fetched. (2) A PROBEABLE SEED the
+     record did not have: `fetchDiscoveryForService`'s tail falls back to the req2proto error probe, which the
+     recorded seed did not qualify for (lib/discovery-probe.js writes a not_found record only on that branch),
+     so this exchange offering one is new work rather than a repeat. The verb test is `_seedIsProbeable`'s and
+     is not restated here; a null `seedMethod` is a record with no probeable seed, which is why it is asked
+     before that call rather than passed into its DCHECK. */
+  if (!_isBoringFetch) {
     const keysForService = collectKeysForService(tab, service, url.hostname);
     if (apiKey && !keysForService.includes(apiKey)) keysForService.push(apiKey);
-    /* THE SEED'S METHOD TRAVELS WITH THE SEED. The tail of that call may fall back to the req2proto error
-       probe, which is a POST of a deliberately-malformed body, so it may only probe a seed the page itself
-       POSTed — and this is the only frame that knows: `msg.method` sits beside `msg.url` here and is lost
-       everywhere below. Passing the address without it is what sent a malformed POST to an endpoint the page
-       had only GET'd. `_seedIsProbeable` aborts on the absence rather than guessing. */
-    fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url, msg.method);
+    let _askIsNew = !preLearnDiscovery;
+    if (!_askIsNew && preLearnDiscovery.status === "not_found") {
+      DCHECK(preLearnDiscovery._triedKeys instanceof Set,
+             "a not_found discovery record carries no _triedKeys Set — lib/discovery-probe.js writes one on " +
+             "every not_found record it stores, and it is the whole of what makes a second ask a different " +
+             "question, so its absence would make every captured response re-fire the identical sweep");
+      for (const _k of keysForService) if (!preLearnDiscovery._triedKeys.has(_k)) { _askIsNew = true; break; }
+      if (!_askIsNew && _seedIsProbeable(msg.url, msg.method) &&
+          !(preLearnDiscovery.seedMethod && _seedIsProbeable(preLearnDiscovery.seedUrl, preLearnDiscovery.seedMethod)))
+        _askIsNew = true;
+    }
+    if (_askIsNew) {
+      const discoveryStatus = tab.discoveryDocs.get(service);
+      if (discoveryStatus) {
+        discoveryStatus.status = "pending";
+      } else {
+        tab.discoveryDocs.set(service, { status: "pending", seedUrl: msg.url });
+      }
+      /* THE SEED'S METHOD TRAVELS WITH THE SEED. The tail of that call may fall back to the req2proto error
+         probe, which is a POST of a deliberately-malformed body, so it may only probe a seed the page itself
+         POSTed — and this is the only frame that knows: `msg.method` sits beside `msg.url` here and is lost
+         everywhere below. Passing the address without it is what sent a malformed POST to an endpoint the page
+         had only GET'd. `_seedIsProbeable` aborts on the absence rather than guessing. */
+      fetchDiscoveryForService(documentId, service, url.hostname, keysForService, msg.url, msg.method);
+    }
   }
 
   // Error-based service-info probe (lib/req2proto.js; README "Error-Based Schema
