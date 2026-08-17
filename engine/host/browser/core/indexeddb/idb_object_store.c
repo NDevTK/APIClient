@@ -1546,8 +1546,10 @@ void idb_object_store_init(JSContext *ctx)
     static const IdlArgType INDEX_ARGS[1] = { IDL_DOMSTRING };
     static const IdlArgType CREATE_INDEX_ARGS[3] = { IDL_DOMSTRING, IDL_DOMSTRING_OR_SEQUENCE, IDL_DICT };
     static const IdlDictMember INDEX_PARAMETERS[] = {
-        { "unique", IDL_BOOLEAN },
+        /* Lexicographic, which is Web IDL 3.2.17 step 4.1's read order and what idl_args.c asserts:
+           "multiEntry" < "unique". Declared the other way round this aborted at every runtime init. */
         { "multiEntry", IDL_BOOLEAN },
+        { "unique", IDL_BOOLEAN },
     };
 
     DCHECK(!g_ready, "idb_object_store_init ran twice — one instance is one document is one agent");
