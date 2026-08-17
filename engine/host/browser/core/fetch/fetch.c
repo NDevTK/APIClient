@@ -777,23 +777,28 @@ static int fetch_reject_pending(JSContext *ctx, struct JSFetchState *s)
  *
  * §5.6's `fetch(input, init)` is three steps, and its SECOND one INVOKES the Request constructor — so the
  * algorithm this machine walks is §5.3's, performed inline because the request it builds never becomes a
- * Request object. The `init` members it reads belong to neither: Web IDL §3.2.18 converts the RequestInit
- * dictionary BEFORE step 1 of either algorithm, member by member IN LEXICOGRAPHICAL ORDER.
+ * Request object. The `init` members it reads belong to neither: Web IDL §3.2.17 dictionary types converts the
+ * RequestInit dictionary BEFORE step 1 of either algorithm, member by member IN LEXICOGRAPHICAL ORDER (its
+ * step 4.1). The Web IDL numbers below were §3.2.18/§3.2.14, which this edition gives to enumeration types and
+ * to `symbol`; they are checked against the spec text.
  *
  * THAT ORDER IS OBSERVABLE, and it was wrong. The reads were method, then body, then headers — the order this
  * file grew in — so `fetch(u, new Proxy({}, {get(t, k){ log.push(k) }}))` reported an order no browser
  * produces, and `input.url` was read in the MIDDLE of them where §5.3 reads it after all of them. The stages
  * are the spec's order now, and each one names the step it rests at. */
 #define FETCH_STAGES(X) \
-    X(FETCH_INIT_BODY,    "Web IDL §3.2.18 step 5.2 (Get(init, \"body\") — RequestInit's members are converted " \
-                          "in lexicographical order, before step 1 of either algorithm)") \
-    X(FETCH_INIT_HEADERS, "Web IDL §3.2.18 step 5.2 (Get(init, \"headers\"))") \
-    X(FETCH_INIT_METHOD,  "Web IDL §3.2.18 step 5.2 (Get(init, \"method\"))") \
-    X(FETCH_METHOD_STR,   "Web IDL §3.2.18 step 5.5 (converting init[\"method\"] to its ByteString)") \
+    X(FETCH_INIT_DICT,    "Web IDL §3.2.17 dictionary types step 1 (the RequestInit argument is an Object, or " \
+                          "is undefined or null — anything else is a TypeError, before any member is read)") \
+    X(FETCH_INIT_BODY,    "Web IDL §3.2.17 dictionary types step 4.1.3.1 (Get(init, \"body\") — RequestInit's " \
+                          "members are read in lexicographical order, per its step 4.1)") \
+    X(FETCH_INIT_HEADERS, "Web IDL §3.2.17 dictionary types step 4.1.3.1 (Get(init, \"headers\"))") \
+    X(FETCH_INIT_METHOD,  "Web IDL §3.2.17 dictionary types step 4.1.3.1 (Get(init, \"method\"))") \
+    X(FETCH_METHOD_STR,   "Web IDL §3.2.17 dictionary types step 4.1.4.1 (converting init[\"method\"] to " \
+                          "§3.2.11 ByteString's IDL type)") \
     X(FETCH_INPUT_URL,    "Fetch §5.3 new Request(input, init) steps 5-6 (the request's URL: the input string, " \
                           "or the input Request's own)") \
-    X(FETCH_INPUT_URL_STR, "Web IDL §3.2.14 (converting a non-Request `input` to its USVString — the union's " \
-                          "other member, which runs the page's own toString)") \
+    X(FETCH_INPUT_URL_STR, "Web IDL §3.2.12 USVString (converting a non-Request `input` to its USVString — the " \
+                          "union's other member, which runs the page's own toString)") \
     X(FETCH_METHOD,       "Fetch §5.3 new Request(input, init) step 25 (init[\"method\"] is a method, is not a " \
                           "forbidden method, and is normalized)") \
     X(FETCH_HEADERS,      "Fetch §5.3 new Request(input, init) step 33 (fill the request's headers with " \
@@ -805,8 +810,9 @@ static int fetch_reject_pending(JSContext *ctx, struct JSFetchState *s)
 enum { FETCH_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_fetch_steps[] = { FETCH_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* Web IDL §3.2.18 step 2: a dictionary argument that is neither an object nor null/undefined is a TypeError —
-   `fetch(u, 5)` rejects. It was simply skipped, which made every member of such an init silently absent. */
+/* Web IDL §3.2.17 dictionary types step 1: a dictionary argument that is neither an object nor null/undefined is
+   a TypeError — `fetch(u, 5)` rejects. It was simply skipped, which made every member of such an init silently
+   absent. */
 static bool fetch_init_is_dict(JSValueConst init)
 {
     return JS_IsObject(init);
@@ -819,11 +825,27 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
     const char *method = "GET", *mc = NULL;
     int r;
 
-    if (s->hdr.stage == FETCH_INIT_BODY) {
-        /* EVERY ANSWER SLOT IS SPELLED HERE, on the one entry every path passes through. It cannot be deferred
-           behind an "is it set yet" test on the slot: a zeroed step state's JSValue is the INTEGER 0 and not
-           JS_UNDEFINED, so such a test always reads as already-set. The INPUT itself is kept too — a Request
-           carries a captured blob URL entry that its `url` string cannot express. */
+    if (s->hdr.stage == FETCH_INIT_DICT) {
+        /* THE ONE-TIME WORK LIVES IN A STAGE THAT HOLDS NO REQUEST, and that is the only reason this stage
+           exists. A stage that PARKS is re-entered at its first line when the answer arrives — that is the
+           two-phase contract, and every other machine in this tree does its capture in a stage that STEP_GOTOs
+           before it can park (readable_stream's RSIX_START, TS_START, FS_START, DS_START, writable_stream's
+           WSC_START). This capture stood at the top of the `body` read's stage instead, so every `fetch(u, {…})`
+           — every fetch with an init object, which is every fetch a bundle actually writes — took a SECOND
+           reference to the URL argument on the resume and lost the first. A string literal's JSString IS the
+           atom the compiler interned for it, so what leaked was the page's own fetch URL: not a GC object, so
+           the object census cannot see it, and JS_FreeRuntime's atom walk aborted the instance at teardown with
+           every finding of the session still in it.
+           THE INPUT IS KEPT rather than read back off the header, because `fini` needs it and cannot: the shared
+           teardown releases the captured arguments and zeroes `argc` BEFORE it calls `fini`, so `step_arg` there
+           answers undefined. A Request also carries a captured blob URL entry that its `url` string cannot
+           express.
+           EVERY ANSWER SLOT IS SPELLED HERE for the reason the capture is here: a zeroed step state's JSValue is
+           the INTEGER 0 and not JS_UNDEFINED, so "is it set yet" asked of a slot always reads as already-set. */
+        DCHECK(JS_VALUE_GET_TAG(s->input) == JS_TAG_INT,
+               "the fetch machine's invocation capture ran twice — tramp_step_state_new js_mallocz's the state "
+               "and a ZEROED JSValue is the INTEGER 0 (JS_TAG_INT is 0), so anything else in this slot means "
+               "this stage was re-entered and the reference it took last time is leaked for the runtime's life");
         s->input = JS_DupValue(ctx, input);
         s->method = s->url = s->hinit = s->binit = JS_UNDEFINED;
         s->body_mime = s->reject_promise = JS_UNDEFINED;
@@ -832,6 +854,11 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
             JS_ThrowTypeError(ctx, "the fetch init is not an object");
             return fetch_reject_pending(ctx, s);
         }
+        /* cb_result is NOT consumed here: this stage issues no request, so the delivery it was called with
+           belongs to the read below, which frees it. */
+        STEP_GOTO(s->hdr.stage, FETCH_INIT_BODY, &s->hdr.get_phase, NULL);
+    }
+    if (s->hdr.stage == FETCH_INIT_BODY) {
         /* §5.3 step 37: `init.body`. The READ is the page's code; the EXTRACTION is §5.1's, which body.c owns
            for every interface that takes a BodyInit, and which runs at its own step below. */
         if (fetch_init_is_dict(init)) {
