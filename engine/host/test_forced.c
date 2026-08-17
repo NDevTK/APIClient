@@ -1510,8 +1510,13 @@ static const char *HTML =
     "  var _vs = _r.result.transaction('ord').objectStore('ord');"
     "  var _v9 = _vs.get(9), _v1 = _vs.get(1);"
     "  _v1.onsuccess = function(){"
+    /* `h` IS THE CONTROL FOR `t`, ON THE SAME FETCH so that one endpoint record carries both. `t` is
+       `location.hash` after a round trip through an object store; `h` is the SAME source reaching the SAME
+       param list without one. Without it a `t` that does not read `{hash}` cannot say whether the STORE
+       de-tainted the value or whether this source never reaches an @H param as a shape at all — two unrelated
+       mechanisms under one 0, which is the defect the row above was just split to remove. */
     "   fetch('/api/idbrec?v=' + _rec + ':undone' + (_v9.result === undefined ? 'A' : 'LEAKA')"
-    "        + (_v1.result === 10 ? 'D' : 'LEAKD') + '&t=' + _tv); }; }; };"
+    "        + (_v1.result === 10 ? 'D' : 'LEAKD') + '&t=' + _tv + '&h=' + location.hash); }; }; };"
 
     /* §4.5's WORKED EXAMPLE, IN ITS OWN DATABASE because its whole point is that the UPGRADE TRANSACTION dies:
        two records queued under one name, then a UNIQUE index over that name. The standard's own words are that
@@ -3429,6 +3434,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        a store that de-tainted on the way in would emit the EXAMPLE and read as a perfectly healthy endpoint. */
     int idbrec_tt = strstr(js, "ConstraintError:first1:over21:made77gone:undoneAD") != NULL;
     int idbtaint_tt = param_value_has(js, "/api/idbrec", "t", "{hash}");
+    /* THE CONTROL, read off the same endpoint record: the same source, the same param list, no store in
+       between. `{hash}` is §Solver's display SHAPE for this source (solver/concolic.h) and not a name invented
+       here, so a 0 on BOTH means the loss is upstream of Indexed Database and a 0 on `t` alone means §5.11's
+       clone or §6.1 step 4's serialization is where the triple collapses to its example. */
+    int lochash_tt = param_value_has(js, "/api/idbrec", "h", "{hash}");
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -3750,6 +3760,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE },
         { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
         { "idb-record-taint", idbtaint_tt, "/api/idbrec", SESS_EXPLORE },
+        { "loc-hash-param", lochash_tt, "/api/idbrec", SESS_EXPLORE },
         { "idb-index", idbidx_tt, "/api/idbidx", SESS_EXPLORE },
         { "idb-index-uniq", idbuniq_tt, "/api/idbuniq", SESS_EXPLORE },
         { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE },
