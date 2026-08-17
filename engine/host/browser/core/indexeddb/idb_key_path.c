@@ -400,7 +400,7 @@ IdbKeyPathResult idb_key_path_extract(JSContext *ctx, JSValueConst value, JSValu
 }
 
 void idb_key_path_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbKeyPathResult *pres,
-                             JSValueConst value, JSValueConst key_path, int base, int after)
+                             JSValueConst value, JSValueConst key_path, bool multi_entry, int base, int after)
 {
     JSValue r;
 
@@ -411,9 +411,12 @@ void idb_key_path_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbK
         return;
     }
     /* THE CONVERSION IS WHAT ANSWERS FROM HERE, which is what this records: `failure` is the one answer the walk
-       cannot report, because on that arm it was never begun. */
+       cannot report, because on that arm it was never begun. STEP 3 picks its conversion by the flag. */
     *pres = IDB_KEY_PATH_KEY;
-    idb_key_walk_start(ctx, hdr, w, r, base, after);          /* STEP 3 */
+    if (multi_entry)
+        idb_key_walk_start_multi_entry(ctx, hdr, w, r, base, after);   /* STEP 3, multiEntry */
+    else
+        idb_key_walk_start(ctx, hdr, w, r, base, after);               /* STEP 3 */
     JS_FreeValue(ctx, r);
 }
 

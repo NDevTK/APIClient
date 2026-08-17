@@ -53,17 +53,18 @@ typedef enum { IDB_KEY_PATH_KEY = 0, IDB_KEY_PATH_INVALID, IDB_KEY_PATH_FAILURE 
  * `key_path` MUST BE §2.5-VALID — the two functions above are what makes that true at §4.4, and this asserts
  * it, because the walk splits exactly the segments they accept.
  *
- * THERE IS NO multiEntry FLAG, and that is a fact about this engine rather than a step skipped. §7.1's optional
- * flag has exactly one producer in the standard — §6.1's "for each index which references store" step, passing
- * the index's own flag — and §2.6's index does not exist, so nothing can pass one; the conversion the flag
- * selects ("convert a value to a multiEntry key") does not exist either. The parameter arrives with the index,
- * with its producer.
+ * `multi_entry` IS STEP 3's CHOICE OF CONVERSION — "the result of converting a value to a key with r if the
+ * multiEntry flag is false, and the result of converting a value to a multiEntry key with r otherwise". Its one
+ * producer is §6.1 step 5.1, passing the index's own flag; §4.5's `add or put` passes false, because a store's
+ * key is never multiEntry.
  *
  * *pkey is OWNED and is a key record (core/indexeddb/idb_key.h) on IDB_KEY_PATH_KEY, JS_UNDEFINED otherwise.
  *
  * THIS IS THE C ENTRY, for a caller with no flow under it — an in-C fixture. Its step 3 is §7.4, whose ARRAY arm
  * runs the page's own code, so a key path that resolves to an Array (which every LIST key path does, its step 1
- * assembling one) crashes here exactly where §7.4's own C entry does. Every member drives the walk below. */
+ * assembling one) crashes here exactly where §7.4's own C entry does. Every member drives the walk below. It
+ * takes no multiEntry flag: that flag SELECTS the conversion whose Array arm is the whole of what it is, so the
+ * one case this entry could answer under it is the one case the flag does not change. */
 IdbKeyPathResult idb_key_path_extract(JSContext *ctx, JSValueConst value, JSValueConst key_path, JSValue *pkey);
 
 /* §7.1 AS A DELEGATABLE ALGORITHM, in core/indexeddb/idb_key_array.h's shape and for its reason: its step 3 is
@@ -85,7 +86,7 @@ IdbKeyPathResult idb_key_path_extract(JSContext *ctx, JSValueConst value, JSValu
                                       "step 3 (let key be the result of converting a value to a key with r)")
 
 void idb_key_path_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbKeyPathResult *pres,
-                             JSValueConst value, JSValueConst key_path, int base, int after);
+                             JSValueConst value, JSValueConst key_path, bool multi_entry, int base, int after);
 
 /* STEPS 4-5 AT THE CALLER'S OWN STAGE, over the answer `start` recorded in `res`. Returns §7.1's own three
    answers, with *pkey OWNED on IDB_KEY_PATH_KEY — the same three the C entry returns, from the same two lines. */

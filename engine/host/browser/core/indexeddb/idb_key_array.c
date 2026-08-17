@@ -76,6 +76,7 @@ static void walk_release(JSContext *ctx, IdbKeyWalk *w)
     w->sp = 0;
     w->cap = 0;
     w->res = IDB_KEY_OK;
+    w->multi = 0;
 }
 
 /* THE RUNTIME'S ALLOCATOR, BECAUSE THE DECLARATION'S IS: `v->array` copies this stack with js_malloc for a
@@ -166,13 +167,76 @@ static int walk_finish(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, IdbKeyResu
     return JS_STEP_YIELD;
 }
 
+/* THE MULTIENTRY MODE'S ONE DIFFERENCE THAT IS NOT A SKIP: "if there is no item in keys equal to key, then
+   append key to keys". Equal by §2.4's compare, which is the only equality this standard has for keys. It runs
+   at the TOP level only, because a nested level is the ordinary algorithm. */
+static bool multi_keys_hold(JSContext *ctx, JSValueConst keys, JSValueConst key)
+{
+    uint32_t i, n = walk_len(ctx, keys);
+
+    for (i = 0; i < n; i++) {
+        JSValue k = JS_GetPropertyUint32(ctx, keys, i);
+        int c = idb_key_compare(ctx, k, key);
+
+        JS_FreeValue(ctx, k);
+        if (c == 0)
+            return true;
+    }
+    return false;
+}
+
+/* STEP 5.7 FOR EITHER MODE — the parent's "append key to keys", which multiEntry's top level filters. `key` is
+   CONSUMED either way, so a dropped duplicate is freed here and not left to the caller. */
+static void level_append_subkey(JSContext *ctx, IdbKeyWalk *w, IdbKeyLevel *f, JSValue key)
+{
+    if (w->multi && f == &w->lv[0] && multi_keys_hold(ctx, f->keys, key)) {
+        JS_FreeValue(ctx, key);
+        return;
+    }
+    walk_append(ctx, f->keys, key);
+}
+
+/* MULTIENTRY'S "IF entry IS NOT AN ABRUPT COMPLETION" AND "IF key IS NOT 'invalid value' OR 'invalid type' OR
+ * AN ABRUPT COMPLETION" — one mechanism, because both say the same thing about the same element: this top-level
+ * member contributes nothing and the loop moves on.
+ *
+ * IT UNWINDS TO THE TOP LEVEL, which is what makes it right at any depth. The refusal may be reached inside a
+ * NESTED conversion (a hole in `[[1, , 2]]`, a throwing accessor two arrays down), and that whole nested
+ * conversion is the one call whose result is being discarded — so every level below the top leaves, and the top
+ * level's index advances exactly once. */
+static int multi_skip(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, int base)
+{
+    DCHECK(w->multi && w->sp >= 1, "§7.4's multiEntry skip ran with no top level under it, or in the mode that "
+                                   "has no skip — convert-a-value-to-a-key REFUSES where this advances");
+    if (JS_HasException(ctx))
+        JS_FreeValue(ctx, JS_GetException(ctx));
+    JS_FreeValue(ctx, w->entry);
+    w->entry = JS_UNDEFINED;
+    DCHECK(w->hop_atom == JS_ATOM_NULL, "§7.4's multiEntry skip ran with step 5.1's property key still held — "
+                                        "the atom is released the moment that request answers, and every site "
+                                        "that skips is at or after it");
+    while (w->sp > 1) {
+        IdbKeyLevel *f = &w->lv[--w->sp];
+
+        JS_FreeValue(ctx, f->src);
+        JS_FreeValue(ctx, f->keys);
+        f->src = JS_UNDEFINED;
+        f->keys = JS_UNDEFINED;
+    }
+    w->lv[0].index++;
+    IDB_KW_GOTO(hdr, base + IDB_KW_HOP);
+    return JS_STEP_YIELD;
+}
+
 /* ---- the entry, the run and the answer -------------------------------------------------------------------- */
 
-void idb_key_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueConst input, int base, int after)
+static void walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueConst input, int base, int after,
+                       bool multi)
 {
     JSValue arr = JS_UNDEFINED;
 
     walk_release(ctx, w);
+    w->multi = multi ? 1 : 0;
     w->after = after;
     w->entry = JS_UNDEFINED;
     w->key = JS_UNDEFINED;
@@ -190,6 +254,20 @@ void idb_key_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueCo
     w->res = IDB_KEY_OK;   /* nothing is decided yet: the walk below is what answers */
     walk_push(ctx, w, arr);
     hdr->stage = (uint16_t)(base + IDB_KW_LENGTH);
+}
+
+void idb_key_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueConst input, int base, int after)
+{
+    walk_start(ctx, hdr, w, input, base, after, false);
+}
+
+/* "If input is an Array exotic object, then: ... Otherwise, return the result of converting a value to a key
+   with argument input." Both arms are the entry above with the mode set: a non-Array never reaches a level, so
+   the flag decides nothing for it, and an Array's top level is the one this mode changes. */
+void idb_key_walk_start_multi_entry(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueConst input,
+                                    int base, int after)
+{
+    walk_start(ctx, hdr, w, input, base, after, true);
 }
 
 int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, int base,
@@ -216,7 +294,13 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
         r = step_getprop_run(ctx, hdr, f->src, a, in, &lenv, out_cb, out_argc);
         JS_FreeAtom(ctx, a);
         if (r > 0) return r;
-        if (r < 0) return JS_STEP_ABRUPT;      /* the `?`: the page's throw leaves §7.4 entirely */
+        /* The `?`: the page's throw leaves §7.4 entirely — and multiEntry's own step 1.1 spells the same `?`,
+           so the TOP level rethrows too. Below it the throw belongs to a nested conversion whose result that
+           mode discards. */
+        if (r < 0) {
+            if (w->multi && w->sp > 1) return multi_skip(ctx, hdr, w, base);
+            return JS_STEP_ABRUPT;
+        }
         /* AN ARRAY EXOTIC OBJECT'S `length` IS ITS OWN WRITABLE, NON-CONFIGURABLE DATA PROPERTY — the one
            property of an Array a page can neither shadow nor turn into an accessor — so this read cannot have
            run the page's code and ToLength cannot coerce anything. Asserted rather than assumed, because it is
@@ -257,6 +341,14 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
             IDB_KW_GOTO(hdr, base + IDB_KW_LEAVE);
             return JS_STEP_YIELD;
         }
+        /* MULTIENTRY'S TOP LEVEL HAS NO STEP 5.1 AT ALL — its loop is "let entry be Get(input, index)" and
+           nothing else — which is why `[10, , 20]` is a two-subkey multiEntry key where it is no key at all for
+           the ordinary conversion. Every level below is that ordinary conversion and asks. */
+        if (w->multi && w->sp == 1) {
+            JS_FreeValue(ctx, in);
+            IDB_KW_GOTO(hdr, base + IDB_KW_ENTRY);
+            return JS_STEP_YIELD;
+        }
         /* STEP 5.1: "Let hop be ? HasOwnProperty(input, index)" — 7.3.13, which is [[GetOwnProperty]] and a
            test of whether the descriptor is undefined. The property key is ToPropertyKey of the NUMBER, which
            is its canonical numeric string. The atom is held ON THE WALK across the request (see hop_atom) and
@@ -269,11 +361,15 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
         if (r > 0) return r;   /* the atom stays held: the request carries it BORROWED */
         JS_FreeAtom(ctx, w->hop_atom);
         w->hop_atom = JS_ATOM_NULL;
-        if (r < 0) return JS_STEP_ABRUPT;
+        if (r < 0) {
+            if (w->multi) return multi_skip(ctx, hdr, w, base);
+            return JS_STEP_ABRUPT;
+        }
         /* STEP 5.2: "If hop is false, return 'invalid value'." A HOLE is what this refuses, which is why
            `[1, , 3]` is not a key and `[1, undefined, 3]` is refused one step later for its type instead. */
         if (JS_IsUndefined(desc)) {
             JS_FreeValue(ctx, desc);
+            if (w->multi) return multi_skip(ctx, hdr, w, base);
             return walk_finish(ctx, hdr, w, IDB_KEY_INVALID_VALUE, JS_UNDEFINED);
         }
         JS_FreeValue(ctx, desc);
@@ -292,7 +388,12 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
         r = step_getprop_run(ctx, hdr, f->src, a, in, &w->entry, out_cb, out_argc);
         JS_FreeAtom(ctx, a);
         if (r > 0) return r;
-        if (r < 0) return JS_STEP_ABRUPT;
+        /* MULTIENTRY'S TOP-LEVEL READ IS NOT `?` — "let entry be Get(input, index); if entry is not an abrupt
+           completion, then:" — so a throwing accessor drops that one member and the conversion goes on. */
+        if (r < 0) {
+            if (w->multi) return multi_skip(ctx, hdr, w, base);
+            return JS_STEP_ABRUPT;
+        }
         IDB_KW_GOTO(hdr, base + IDB_KW_SUBKEY);
         return JS_STEP_YIELD;
     }
@@ -306,8 +407,10 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
            carrying, so an array that is already in it is a CYCLE (or a repeat) and the answer is "invalid
            value" — reached here rather than at the push, because it is a step of the recursive call and not of
            this level's loop. */
-        if (walk_seen_contains(ctx, w, w->entry))
+        if (walk_seen_contains(ctx, w, w->entry)) {
+            if (w->multi) return multi_skip(ctx, hdr, w, base);
             return walk_finish(ctx, hdr, w, IDB_KEY_INVALID_VALUE, JS_UNDEFINED);
+        }
         sr = idb_key_convert_here(ctx, w->entry, &sub, &arr);
         if (sr == IDB_KEY_ARRAY) {
             /* THE RECURSION, AS A PUSH. `f` is not read again: the stack may have moved. */
@@ -324,10 +427,11 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
            place in it that makes one. */
         if (sr != IDB_KEY_OK) {
             DCHECK(JS_IsUndefined(sub), "§7.4's arms left a key behind on a refusal");
+            if (w->multi) return multi_skip(ctx, hdr, w, base);
             return walk_finish(ctx, hdr, w, IDB_KEY_INVALID_VALUE, JS_UNDEFINED);
         }
-        walk_append(ctx, f->keys, sub);   /* STEP 5.7 */
-        f->index++;                       /* STEP 5.8 */
+        level_append_subkey(ctx, w, f, sub);   /* STEP 5.7 */
+        f->index++;                            /* STEP 5.8 */
         IDB_KW_GOTO(hdr, base + IDB_KW_HOP);
         return JS_STEP_YIELD;
     }
@@ -348,8 +452,8 @@ int idb_key_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValue in, 
         if (w->sp == 0)
             return walk_finish(ctx, hdr, w, IDB_KEY_OK, key);
         f = &w->lv[w->sp - 1];
-        walk_append(ctx, f->keys, key);   /* the PARENT's step 5.7 */
-        f->index++;                       /* and its step 5.8 */
+        level_append_subkey(ctx, w, f, key);   /* the PARENT's step 5.7 */
+        f->index++;                            /* and its step 5.8 */
         IDB_KW_GOTO(hdr, base + IDB_KW_HOP);
         return JS_STEP_YIELD;
     }

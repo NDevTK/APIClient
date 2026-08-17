@@ -498,7 +498,9 @@ static int js_os_put(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
             STEP_GOTO(hdr->stage, OSP_OPERATION, &hdr->get_phase, &hdr->desc_phase, NULL);
             return JS_STEP_YIELD;
         }
-        idb_key_path_walk_start(ctx, hdr, &s->w, &s->kpres, s->clone, s->key_path,
+        /* "with clone and store's KEY PATH" — and no multiEntry flag: §7.1's flag is an INDEX's, and §6.1 step
+           5.1 is its one producer. A store's key is never multiEntry. */
+        idb_key_path_walk_start(ctx, hdr, &s->w, &s->kpres, s->clone, s->key_path, /*multi_entry*/ false,
                                 OSP_KP_LENGTH, OSP_TOOK_KPK);                    /* STEP 11.1 */
         return JS_STEP_YIELD;
 

@@ -86,6 +86,13 @@ typedef struct IdbKeyWalk {
     JSAtom       hop_atom;
     JSValue      key;     /* THE ANSWER on IDB_KEY_OK (owned) */
     IdbKeyResult res;
+    /* §7.4's SECOND ALGORITHM, "convert a value to a multiEntry key", as a MODE of this one rather than a
+       second walk: it differs from convert-a-value-to-a-key only at the TOP level of an Array input (no step
+       5.1 HasOwnProperty, an abrupt or invalid element is SKIPPED instead of refusing the whole conversion,
+       and duplicate subkeys are dropped), and every nested level is the ordinary algorithm because the spec
+       hands `seen` to the ordinary one. A separate walk would be that ordinary algorithm written twice. POD,
+       so it rides the state's byte copy into a forked arm and a parked snapshot. */
+    uint8_t      multi;
     int          after;   /* the CALLER's stage this algorithm hands control back at */
 } IdbKeyWalk;
 
@@ -95,6 +102,15 @@ typedef struct IdbKeyWalk {
  * decide the answer, and at step 6 otherwise. The caller returns JS_STEP_YIELD and reads `w->res` at `after`.
  * A walk already used is released first, because §4.7's `bound` converts two values through one record. */
 void idb_key_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueConst input, int base, int after);
+
+/* §7.4's "CONVERT A VALUE TO A MULTIENTRY KEY" over the same stage block and the same record — the algorithm
+   §7.1 selects when its multiEntry flag is true, whose only producer is §6.1 step 5.1 passing an index's own
+   flag. A non-Array input is that section's last line ("otherwise, return the result of converting a value to a
+   key with argument input"), so this entry answers it identically; an Array is the mode described on `multi`.
+   The standard's own worked example is the contract: [10, 20, null, 30, 20] is an array key with subkeys
+   10, 20, 30. */
+void idb_key_walk_start_multi_entry(JSContext *ctx, JSStepHdr *hdr, IdbKeyWalk *w, JSValueConst input,
+                                    int base, int after);
 
 /* ONE STAGE of it. Returns a step code the caller must return (a request's, or JS_STEP_YIELD to rest), or
    JS_STEP_ABRUPT having let the page's throw stand — §7.4's `?` on every one of its reads. `in` is CONSUMED. */
