@@ -562,12 +562,41 @@ stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
    bad declaration, and nothing at all about an undefined symbol. Leaving it would be a second, worse check of
    the same thing (CLAUDE.md: a superseded system is deleted in the same diff, never kept as a fallback). */
 
+/* A RUN THAT NEVER RETURNS IS NOT A VERDICT, AND UNTIL THIS BACKSTOP IT WAS NOT EVEN AN EVENT. `spawnSync`
+   here carried no timeout, so `node engine/build.mjs` — the command CLAUDE.md names as THE build — did not
+   terminate whenever the fixture's frontier did not drain, and it consumed a core while not terminating. That
+   is not hypothetical and it was not rare: four abandoned `out/qjs.js` processes were found at 84-97% CPU
+   having run 1.9-4.1 hours, in the scratch trees of agents that had long since finished. They WERE the machine
+   load, and the load was then read by six separate lanes as "the machine is saturated, a measurement now would
+   be a loaded-machine artifact" — so they each declined to run their gates. One missing timeout suppressed
+   every gate in the project, and nothing anywhere said the word "hang".
+   THE BACKSTOP IS NOT A CAP, AND THE DISTINCTION IS §Testing's: the real measure is the fixture reporting its
+   own stream, this is the case that measure cannot see, so it is GENEROUS and it reports through a DIFFERENT
+   SIGNAL — a `signal` where a failure sets a `status` — and the two never collapse into one verdict. A hang is
+   named as a hang, with the load average that is the first thing to suspect, and it is NOT reported as a
+   failing smoke test. §NO BOUNDS is about the FRONTIER: it forbids the engine capping its own exploration, and
+   it has never had anything to say about a harness refusing to wait forever for a process it launched. */
+const RUN_BACKSTOP_MS = 15 * 60 * 1000;
+function runProgram(label, argv) {
+  const t = spawnSync(process.execPath, argv, { stdio: "inherit", shell: false, timeout: RUN_BACKSTOP_MS });
+  if (t.signal) {
+    let load = "unknown";
+    try { load = readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).join(" "); } catch { /* not linux */ }
+    console.error(`[build] ${label} DID NOT FINISH within ${RUN_BACKSTOP_MS / 60000} min — killed by the ` +
+                  `harness backstop (${t.signal}), NOT a failing run and NOT a passing one.\n` +
+                  `[build]   load average at kill: ${load} (on ${cpus().length} cores)\n` +
+                  `[build]   Either the machine is saturated, or the fixture's frontier does not drain and the\n` +
+                  `[build]   program has no completion condition — which is a defect in the fixture, not in the\n` +
+                  `[build]   engine, and is the thing to diagnose rather than wait out.`);
+    process.exit(2);                    /* distinct from a failing run's exit, on purpose */
+  }
+  if (t.status !== 0) { console.error(`[build] ${label} FAILED rc=` + (t.status ?? "signal")); process.exit(t.status || 1); }
+}
+
 /* The trailing arguments reach main()'s argv — the channel getenv could not be, since emscripten's ENV never
    merges the launching process's environment. */
 {
-  const t = spawnSync(process.execPath, [join(OUT, "qjs.js"), ...(MIN ? ["--min"] : [])],
-                      { stdio: "inherit", shell: false });
-  if (t.status !== 0) { console.error("[build] smoke test FAILED rc=" + (t.status ?? "signal")); process.exit(t.status || 1); }
+  runProgram("smoke test", [join(OUT, "qjs.js"), ...(MIN ? ["--min"] : [])]);
   console.log("[build] smoke test PASS (new-world @H + @S" + (MIN ? ", minimal document" : "") + ")");
 }
 
@@ -579,11 +608,7 @@ stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
    the precondition for believing any cross-instance mechanism has ever run — and it used to run only when
    somebody remembered to pass `abi`, which is to say almost never. */
 {
-  const t = spawnSync(process.execPath, [join(ENGINE, "route.mjs")], { stdio: "inherit", shell: false });
-  if (t.status !== 0) {
-    console.error("[build] the two-instance ABI drive FAILED rc=" + (t.status ?? "signal"));
-    process.exit(t.status || 1);
-  }
+  runProgram("the two-instance ABI drive", [join(ENGINE, "route.mjs")]);
   console.log("[build] two-instance ABI drive PASS");
 }
 
