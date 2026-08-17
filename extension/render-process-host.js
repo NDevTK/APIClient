@@ -41,6 +41,33 @@
  * The same reasoning promotes every other refusal in this file: an id this table never minted, a renderer
  * reported dead twice, an exhausted id space, and the arithmetic that ties the slots to the counters.
  *
+ * ═══ AND THE KEY IS A PAIR, WHICH THIS TABLE NOW SAYS ═══
+ *
+ * The authority took the cluster key as an OPAQUE non-empty string and asserted a CHARACTER SET over it: no
+ * comma, no `|`, no control character but the NUL that joins the halves, on the stated grounds that "a cluster
+ * key is a browsing-context group and a URL-serialized origin, neither of which can hold" those. Both halves of
+ * that were wrong, in the two directions that matter.
+ *
+ * It asserted the WRONG THING. What makes `group + NUL + origin` a safe name for a `(browsing-context group,
+ * origin)` agent cluster is that the mapping is INJECTIVE — and a comma cannot break that while a SECOND NUL
+ * can: `("a\0b", "")` and `("a", "b")` are two different agent clusters and one string, so a table keyed on
+ * that string hands them ONE instance, which is two principals behind one heap and is exactly the split
+ * SECURITY.md's rule exists to forbid. The character set never checked injectivity; it checked legibility.
+ *
+ * And it was FACTUALLY FALSE ABOUT THIS TREE, so it was a live landmine. `bridge.js` rehydrates a cold recipe
+ * with `groupId: "cold:" + c.key` and that frontier key is `origin + "|" + bundleId` — a `|` in the group half,
+ * on every cross-session resume there has ever been. In a dev build the char assert aborts the offscreen at the
+ * admission; in release it compiles out and the ambiguity it was there to keep out of a DIAGNOSTIC arrives
+ * silently. The group half is NOT a URL origin — it is a browser-stated tab id or that frontier key — and a
+ * rule that constrains what a producer may put in it is this table legislating for a producer it does not own.
+ *
+ * So the shape is asserted where it is load-bearing and the legibility problem is solved where it was: the key
+ * is PARSED into its two halves (CHECK: exactly one separator, a non-empty group), and `getRegistry` reports
+ * the halves as a RECORD instead of re-joining them into a string that needed a character set to stay readable.
+ * An EMPTY ORIGIN half is not refused, because it is a positive statement rather than a hole: a rehydrated cold
+ * recipe has no live browser document and therefore no browser-stated principal, and bridge.js gives it a group
+ * that is unique per recipe — a cluster of one, which collides with nothing.
+ *
  * ═══ WHAT THE REGISTRY IS NOT, AND WHY THERE IS NO PIPE ═══
  *
  * It was a dedicated Worker reached over a Mojo pipe (`content.mojom.RendererHost`), ordering the offscreen's
@@ -85,10 +112,35 @@
   var _nextRoutingId = 1;
   var _launched = 0, _terminated = 0, _failed = 0;
 
-  /* `clusterKeyOf` joins the browsing-context group and the origin with a NUL, because neither half can
-     contain one. A NUL is invisible in every console that prints it, so the DIAGNOSTIC view in `getRegistry`
-     substitutes `|` for it and the authority itself never does. */
+  /* `clusterKeyOf` joins the browsing-context group and the origin with a NUL. THE JOIN IS ONLY A NAME FOR THE
+     PAIR IF IT IS INJECTIVE, so this is where the pair is taken back apart and the injectivity is asserted:
+     exactly one separator, and a group half that is not empty. Two NULs would let two agent clusters spell one
+     key and share one instance; an empty group half would put every document whose group went missing into one
+     cluster with every other. Both are CHECK-class for the same reason the duplicate refusal is — what a
+     violation means is two principals behind one heap.
+     THE HALVES ARE NOT INSPECTED BEYOND THAT, and the previous character-set assert is deleted rather than
+     narrowed: the group half is a browser-stated tab id OR `bridge.js`'s `cold:<origin>|<bundle>` frontier key,
+     so a `|` in it is the cross-session frontier working, not a caller that built a key out of something else.
+     A NUL is invisible in every console that prints it, which is why `getRegistry` reports the two halves as
+     separate FIELDS — there is no re-joined string left for a character set to have to keep legible. */
   var CLUSTER_KEY_SEP = String.fromCharCode(0);
+  function clusterPair(clusterKey) {
+    var i;
+    CHECK(typeof clusterKey === "string" && clusterKey !== "",
+          "the renderer registry was handed an agent cluster key that is not a string — a renderer IS a " +
+          "cluster's instance and the key is the whole of how this table knows which, so anything else here " +
+          "is a caller naming a cluster this authority cannot tell apart from another");
+    i = clusterKey.indexOf(CLUSTER_KEY_SEP);
+    CHECK(i > 0 && clusterKey.indexOf(CLUSTER_KEY_SEP, i + 1) < 0,
+          "an agent cluster key is not a (browsing-context group, origin) PAIR — it is the two halves joined " +
+          "by one NUL, and a key with none has no group, a key whose separator is first has an EMPTY group, " +
+          "and a key with two lets `(a\\0b, \"\")` and `(a, b)` — two different agent clusters — spell one " +
+          "name, which is this table handing them one instance, one heap and one principal");
+    return { group: clusterKey.slice(0, i), origin: clusterKey.slice(i + 1) };
+  }
+  /* THE PAIR, RENDERED FOR A HUMAN READING AN `@E` LINE. It is never a key and never compared — the authority
+     is the string the caller handed over, and this is the only thing in the file that reshapes it. */
+  function pairText(p) { return p.group + " | " + p.origin; }
 
   /* ── THE TABLE'S OWN INVARIANTS, ASSERTED AFTER EVERY MUTATION AND BEFORE EVERY READ. They are CHECK and
      not DCHECK for this file's stated reason: what a violation means is two heaps behind one principal, or an
@@ -112,9 +164,9 @@
             "the renderer registry holds a renderer whose routing id this table never minted — the counter is " +
             "the only source of an id, so a registered one outside its issued range is a renderer some other " +
             "component decided existed");
-      CHECK(typeof key === "string" && key !== "",
-            "the renderer registry holds a renderer with no agent cluster key — a renderer IS a cluster's " +
-            "instance, so a nameless slot is an instance nothing can find and a cluster nothing can free");
+      /* THE KEY'S SHAPE IS PART OF THE TABLE'S STATE, so it is re-checked here with the arithmetic rather than
+         only at the door. A slot whose key stopped being a pair is a cluster nothing can free by name. */
+      clusterPair(key);
       CHECK(!ids.has(s.routingId),
             "two renderers in the registry carry ONE routing id — an id is the only name a renderer has, so a " +
             "collision means a termination frees whichever of the two the scan reaches first and leaves the " +
@@ -159,28 +211,10 @@
      the frame; there is no await between the refusal below and the write under it, so the window in which a
      second arrival for one cluster could find an empty table does not exist. */
   function registerRenderer(clusterKey) {
-    var i, c, routingId;
-    CHECK(typeof clusterKey === "string" && clusterKey !== "",
-          "the renderer registry was asked for a renderer for an EMPTY agent cluster key — a renderer IS a " +
-          "cluster's instance, so an empty one would put every document that failed to state its cluster " +
-          "behind one heap and one principal");
-    /* THE KEY IS DIAGNOSTIC-SAFE, ASSERTED WHERE IT ARRIVES rather than where the snapshot is rendered. A
-       cluster key is a browsing-context group and a URL-serialized origin, neither of which can hold a comma,
-       a `|` or a control character — the NUL that joins them is the one exception, and `getRegistry` renders
-       it as `|`. Asserting it here names the caller that built the key out of something else; asserting it at
-       the renderer would name the renderer. It is a DCHECK because what it protects is a reader's ability to
-       tell two keys apart in one comma-joined string, not the admission decision itself. */
-    for (i = 0; i < clusterKey.length; i++) {
-      c = clusterKey.charCodeAt(i);
-      DCHECK(c === 0 || (c >= 0x20 && c !== 0x2c && c !== 0x7c),
-             "an agent cluster key carried a character neither an origin nor a browsing-context group can " +
-             "hold — the key is a browser-stated group and a URL-serialized origin joined by a NUL, so a " +
-             "comma, a `|` or another control character is a caller that built the key out of something else " +
-             "and a registry snapshot in which two clusters cannot be told apart");
-    }
+    var routingId, p = clusterPair(clusterKey);
     CHECK(!_renderers.has(clusterKey),
-          "the renderer registry was asked for a SECOND renderer for agent cluster `" +
-          clusterKey.split(CLUSTER_KEY_SEP).join("|") + "` — two heaps for one similar-origin window agent is " +
+          "the renderer registry was asked for a SECOND renderer for agent cluster `" + pairText(p) +
+          "` — two heaps for one similar-origin window agent is " +
           "the split SECURITY.md's one-instance-per-cluster rule exists to forbid, and this table is the " +
           "authority that already held the answer");
     CHECK(_nextRoutingId < 0x7fffffff,
@@ -235,15 +269,24 @@
 
   /* THE TABLE, READ AS ONE RECORD. The seven fields are rendered together from one walk, so no two of them
      can be read from different moments — which is the property `rendererPoolProbe` compares this document's
-     frames against. `clusters` is a DIAGNOSTIC view (the NUL rendered as `|`) and never the authority. */
+     frames against.
+     `clusters` IS A LIST OF PAIRS AND NO LONGER A JOINED STRING, which is the whole reason the character-set
+     assert above could go. It was `key.split(NUL).join("|")` pushed into a comma-joined string, so a `|` or a
+     comma in either half produced a snapshot in which two clusters could not be told apart — and the group
+     half of a rehydrated cold recipe contains a `|` by construction. Reported as `{group, origin}` there is
+     nothing to disambiguate: the halves the key was built from are the halves that come back out, beside the
+     routing id that names the renderer holding them. It is still a DIAGNOSTIC view and never the authority —
+     the authority is the key string itself, which is what this table is keyed on. */
   function getRegistry() {
     var clusters = [], ids = [];
     invariants();
     _renderers.forEach(function (s, key) {
-      clusters.push(key.split(CLUSTER_KEY_SEP).join("|"));
+      var p = clusterPair(key);
+      clusters.push({ group: p.group, origin: p.origin, routingId: s.routingId, launched: s.launched });
       ids.push(s.routingId);
     });
-    return { clusters: clusters.sort().join(","),
+    clusters.sort(function (a, b) { return a.routingId - b.routingId; });
+    return { clusters: clusters,
              routingIds: ids.sort(function (a, b) { return a - b; }).join(","),
              live: _renderers.size, launched: _launched, terminated: _terminated, failed: _failed,
              nextRoutingId: _nextRoutingId };

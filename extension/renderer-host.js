@@ -174,9 +174,25 @@
      `_awaitingAdopt` IS GONE WITH THE PIPE RELAY. It held a renderer that had a frame, a booted engine and NO
      endpoint in this realm, because the endpoint was in flight between the zygote's reply and the browser
      process handing it back — a state that existed only to make that journey observable. Nothing travels now,
-     so the state is unrepresentable rather than tracked. */
+     so the state is unrepresentable rather than tracked.
+
+     A FORK IS COUNTED AT BOTH ENDS, AND THE SECOND COUNTER IS WHY. `forked` was ONE number, raised where a
+     fork BEGINS, and `rendererPoolProbe` asserts it against the registry's `launched + failed`, which are both
+     raised where a fork ENDS. That identity is therefore FALSE for the whole duration of every boot — it held
+     only because nothing had ever read the probe while a fork was outstanding, which with one renderer at a
+     time and a probe run between analyses is most of the time and, with a document embedding a cross-origin
+     iframe, none of it. MEASURED: sampling the pool every 25 ms across the analysis of such a page fires that
+     DCHECK on the first sample, "admitted 6 while this document forked 7", accusing this file of materializing
+     a frame outside the admission path — a true-looking accusation about a fork that was simply still running.
+     So the fact is recorded as the two facts it is: `_forkBegun` rises in the fork's preamble (before anything
+     that can throw — its caller frees the registry slot on every way out, so a fork that aborted in its own
+     preamble must still be a fork) and `_forkSettled` rises in `rendererLaunch`, in the SAME TURN as the
+     registry transition that settles it. `forked` is the SETTLED count, so the probe's identity is now exactly
+     true at every instant rather than only at rest, and `forking` reports the in-flight forks the identity used
+     to be silently missing. The two are tied to the SET and not merely to each other: a renderer whose fork has
+     not settled is exactly one that has not bound its interfaces, which `rendererStats` asserts. */
   var _live = new Set();
-  var _forked = 0, _provisioned = 0, _destroyed = 0;
+  var _forkBegun = 0, _forkSettled = 0, _provisioned = 0, _destroyed = 0;
 
   /* THE FRAME GOES, AND NOTHING IS TOLD. There is no free list on the other side and none is wanted: a pointer
      a call RETAINED lives as long as the module does and the module dies with the document, so removing the
@@ -235,6 +251,19 @@
      routing id would be one this document created for itself. */
   function rendererStats() {
     var frames = document.querySelectorAll('iframe[title^="renderer "]').length;
+    /* THE IN-FLIGHT FORKS, COUNTED TWICE OVER TWO DIFFERENT THINGS AND COMPARED. A fork that has not settled
+       is exactly a renderer that has not bound its interfaces — `rendererFork` binds them on the line after
+       the invitation is accepted and `rendererLaunch` settles the counter in the turn after that — so the
+       difference between the two counters must equal the number of live records with nothing bound. A counter
+       raised without its record, or a record left unbound by a fork that finished, is caught here rather than
+       as an identity failure in the pool probe that names this file for a fork that was merely running. */
+    var forking = _forkBegun - _forkSettled, unbound = 0;
+    _live.forEach(function (r) { if (r.renderer === null) unbound++; });
+    DCHECK(forking >= 0 && forking === unbound,
+           "this zone has begun " + _forkBegun + " fork(s) and settled " + _forkSettled + " while " + unbound +
+           " live renderer(s) have bound no interface — a fork settles in the same turn as the registry " +
+           "transition that admits or buries it, so a difference is a counter raised without its renderer or a " +
+           "renderer left half-forked with nothing waiting on it");
     DCHECK(frames === _live.size,
            "this zone holds " + _live.size + " renderer(s) but the document carries " + frames + " renderer " +
            "frame(s) — a frame that outlives its record is a WASM instance nothing can reach and nothing will " +
@@ -248,8 +277,8 @@
       ids.push(r.routingId);
       names.push(r.name);
     });
-    return { forked: _forked, provisioned: _provisioned, destroyed: _destroyed, live: _live.size,
-             frames: frames,
+    return { forked: _forkSettled, forking: forking, provisioned: _provisioned, destroyed: _destroyed,
+             live: _live.size, frames: frames,
              routingIds: ids.sort(function (a, b) { return a - b; }), names: names };
   }
   self.rendererStats = rendererStats;
@@ -271,12 +300,11 @@
      reported by Chrome, by name, on this document's console.
      ──────────────────────────────────────────────────────────────────────────────────────────────────────── */
   async function rendererFork(routingId, clusterKey, prog) {
-    /* COUNTED ON THE FIRST LINE, BEFORE ANYTHING THAT CAN THROW, because `_forked` is one side of an
-       ARITHMETIC identity the pool probe asserts: the registry's launches plus its failures must equal the
-       forks this document began. Its caller frees the registry slot on EVERY way out of this function, so a
-       fork that aborted in its own preamble would be counted as a registry failure and not as a fork, and the
-       probe would report the difference as a frame created outside this path. */
-    _forked++;
+    /* COUNTED ON THE FIRST LINE, BEFORE ANYTHING THAT CAN THROW. Its caller frees the registry slot on EVERY
+       way out of this function, so a fork that aborted in its own preamble must still be a fork that BEGAN —
+       otherwise the registry would record a failure this document never counted. What the pool probe's
+       identity is asserted against is the SETTLED counter, raised beside that registry transition. */
+    _forkBegun++;
     DCHECK(clusterKey !== "",
            "a fork named no agent cluster — a renderer IS an agent cluster's instance and the key is how the " +
            "registry says which, and how a frame in this document is identified as that instance");
@@ -295,7 +323,13 @@
        `allow-popups`/`allow-popups-to-escape-sandbox`/`allow-modals` as well (poc-sandbox.html needs them), and
        the effective flag set is the UNION of both restrictions, so this attribute is what takes them away. */
     f.setAttribute("sandbox", "allow-scripts");
-    f.setAttribute("title", "renderer " + clusterKey);
+    /* THE ROUTING ID LEADS THE TITLE because the cluster key's own separator is a NUL, which every console and
+       every element inspector renders as nothing at all — so a document holding several renderers showed a
+       list of titles that ran two halves together and could not be told apart by eye. The id is the one name
+       this file did not mint and is unique by the registry's own arithmetic, so it is what identifies a frame
+       to a human; the key follows it unaltered, because reshaping it here would be a second place that knows
+       what a cluster key is made of. `rendererStats` matches on the `renderer ` prefix, which is unchanged. */
+    f.setAttribute("title", "renderer " + routingId + " " + clusterKey);
     f.setAttribute("src", RENDERER_URL);
     f.style.cssText = "position:absolute;left:0;top:0;width:1px;height:1px;border:0;visibility:hidden";
     /* NO WORKING-SET FIELD IS IN THIS LITERAL AND NONE MAY BE. There is no number meaning "this instance has
@@ -429,71 +463,170 @@
          whether what failed was the page's engine or one of this zone's own invariants, which is why the
          registry transition is unconditional and this catch re-throws whatever it caught rather than
          classifying it. The recorded-vs-invariant split is engineCreate's, one frame up, where it already
-         was; making a second one here would be two answers to one question. */
+         was; making a second one here would be two answers to one question.
+         AND THE FORK IS SETTLED IN THE SAME TURN AS THE TRANSITION, on both exits. The two statements are one
+         fact — this fork is over, and here is which way — and nothing may observe one without the other: the
+         pool probe is synchronous, so a pair written in one turn is a pair it can only ever read together. */
+      _forkSettled++;
       self.renderProcessHost.rendererLaunchFailed(routingId);
       throw e;
     }
+    _forkSettled++;
     self.renderProcessHost.rendererLaunched(routingId);
     return r;
   }
   self.rendererLaunch = rendererLaunch;
 
-  /* THE PROVISIONING, EXERCISED. SECURITY.md: "A HOST THAT CANNOT PROVISION A SECOND INSTANCE HAS NOT TESTED
-     THE TRANSPORT, AND EVERY CROSS-INSTANCE MECHANISM ABOVE IS THEN A DESIGN THAT HAS NEVER RUN." This is the
-     caller that makes that sentence false for this boundary, and it is driven from outside — `harness offscreen
-     "return await self.rendererProbe()"` — rather than from a self-test, because a mechanism whose only caller
-     is its own test is exactly what that paragraph is about.
-     IT IS A REAL ROUND TRIP AND NOT A PING. The document crosses as BYTES (the shape a child navigable's
-     document already takes, and the byte path cee1af3e had to export HEAPU8 for), the engine PARSES it with
-     Lexbor and runs `document_bundle_id`'s <script> scan over the result, and a number computed inside the
-     frame comes back. `qjs_init` runs no page script, so nothing here needs the reply/notice edges that are
-     still synchronous in bridge.js.
+  /* THE PROVISIONING, EXERCISED — AND EXERCISED PLURAL, WHICH IS THE ONLY VERSION OF THIS THAT PROVES
+     ANYTHING. SECURITY.md: "A HOST THAT CANNOT PROVISION A SECOND INSTANCE HAS NOT TESTED THE TRANSPORT, AND
+     EVERY CROSS-INSTANCE MECHANISM ABOVE IS THEN A DESIGN THAT HAS NEVER RUN." This probe provisioned exactly
+     ONE renderer, so the sentence it quoted was still true of it: everything in this file that is about there
+     being SEVERAL of them — the registry keyed by agent cluster, a `_live` set rather than a slot, one
+     `message` listener per fork matching on `event.source`, a DOM count compared against that set — was
+     reachable in principle and reached by nothing. It provisions TWO, and it holds them AT THE SAME TIME,
+     because a probe that tears the first down before asking for the second exercises reuse of one slot and
+     calls it a pool.
+     THE TWO ARE CROSS-ORIGIN TO EACH OTHER AND IN ONE BROWSING-CONTEXT GROUP, which is the pair the key exists
+     to tell apart. Same group, same origin would be REFUSED (fatally, by the registry, which is the rule); two
+     groups would prove only that two unrelated names produce two rows. One group and two origins is the case
+     SECURITY.md's key is FOR: "an iframe or a popup gets its own instance the moment its origin differs".
+     THE FORKS RUN CONCURRENTLY, ON PURPOSE. Two frames boot at once, so two `hello` records arrive on this
+     document's ONE window channel with both listeners installed — the per-fork `event.source` match is the
+     only thing that routes each to its own handshake, and sequential launches would never put a record in
+     front of the wrong listener. It is also what makes the invitation's `MessageChannel` per fork rather than
+     per file, which is unobservable when only one exists.
+     EACH IS A REAL ROUND TRIP AND NOT A PING, and the two documents DIFFER so the answers can be compared. The
+     document crosses as BYTES, the engine PARSES it with Lexbor and runs `document_bundle_id`'s <script> scan
+     over the result, and a number computed inside the frame comes back — so two DIFFERENT script sets must
+     produce two different numbers. One number appearing twice would be one engine answering for both, which is
+     precisely the failure "two instances" is supposed to make impossible and is otherwise invisible.
      `routingId` IS THE REGISTRY'S AND NOT THIS FILE'S. It is minted by render-process-host.js when it decides
      the cluster gets an instance, and its presence in that table's own snapshot is what `rendererPoolProbe`
      cross-checks. That check no longer spans two PROGRAMS — the table is a Map in this realm — so what it
      proves is stated where it is made, at that probe.
-     AND THE TYPING IS OBSERVABLE, which is the point of the conversion this file reports. `iface`/`ifaceVersion`/`ifaceMethods` are
-     read off the bound interface's own descriptor rather than restated here, so they answer "which interface
-     is this pipe actually carrying, at which version" — the question a broker that bound the wrong
-     implementation would get wrong. `badMessages` is the count of records this TRUSTED zone's validator
-     refused, and it is the number that would move if a renderer ever sent something the mojom does not
-     declare: SECURITY.md makes the renderer the peer whose messages must be assumed hostile, so a healthy run
-     reads 0 and a non-zero is that peer being broken. `child` is the same IPC surface asked of the frame ITSELF
-     over a second brokered pipe, because a transport whose only evidence is that a message arrived is one
-     whose shape nobody can check from outside. */
-  self.rendererProbe = async function rendererProbe(html) {
-    var ADDR = "https://renderer.probe/app/index.html";
-    var doc = typeof html === "string" ? html
-            : '<!doctype html><html><head><script src="/static/app.7c1f9b.js"></script>' +
-              '<script src="/static/vendor.20f3aa.js"></script></head><body>renderer probe</body></html>';
-    var rec = { provisioned: false, routingId: null, initrc: null, bundleId: null, torndown: false };
-    var r = await rendererLaunch("probe");
-    rec.provisioned = true;
-    rec.routingId = r.routingId;
-    rec.iface = r.renderer.def.name;
-    rec.ifaceVersion = r.renderer.def.version;
-    rec.ifaceMethods = r.renderer.def.byOrd.size;
+     AND THE TYPING IS OBSERVABLE. `iface`/`ifaceVersion`/`ifaceMethods` are read off each bound interface's own
+     descriptor rather than restated here, so they answer "which interface is this pipe actually carrying, at
+     which version" — the question a broker that bound the wrong implementation would get wrong. `badMessages`
+     is the count of records this TRUSTED zone's validator refused: SECURITY.md makes the renderer the peer
+     whose messages must be assumed hostile, so a healthy run reads 0. `child` is the same IPC surface asked of
+     each frame ITSELF over a second brokered pipe, because a transport whose only evidence is that a message
+     arrived is one whose shape nobody can check from outside — and asked of BOTH frames it is also how this
+     document sees that each renderer holds its OWN endpoints rather than a shared set.
+     WHAT IT IS NOT: the browser's own answer. The two cluster keys here are written by this probe, and
+     SECURITY.md says both halves of a real one are BROWSER-STATED — so this exercises the provisioning, the
+     registry and the transport, and it does NOT exercise `clusterKeyOf` deciding that two live documents are
+     two clusters. That is the product path (a page embedding a cross-origin iframe, `rendererPoolProbe`
+     reading the pool it produced), and it is a different claim, made elsewhere. */
+  self.rendererProbe = async function rendererProbe() {
+    var NUL = String.fromCharCode(0), GROUP = "probe-group";
+    /* THE PEERS. Two origins, one group, and a DIFFERENT document each — the `<script src>` set is what
+       `document_bundle_id` hashes, so these two pages cannot answer with one bundle id unless one engine
+       answered twice. */
+    var PEERS = [
+      { origin: "https://a.renderer.probe", addr: "https://a.renderer.probe/app/index.html",
+        doc: '<!doctype html><html><head><script src="/static/a.7c1f9b.js"></script>' +
+             '<script src="/static/vendor.20f3aa.js"></script></head><body>renderer probe A</body></html>' },
+      { origin: "https://b.renderer.probe", addr: "https://b.renderer.probe/app/index.html",
+        doc: '<!doctype html><html><head><script src="/static/b.30e2cc.js"></script>' +
+             '</head><body>renderer probe B</body></html>' },
+    ];
+    var i, rs = [], settled, firstErr = null;
+    /* EVERY FIELD OF THE RECORD IS DECLARED HERE, INCLUDING THE ONES ONLY ONE OUTCOME FILLS. A field a
+       consumer has to default is a field nobody notices is never written, so `torndown` counts (0 is "none
+       did", which is what a crash means) and `err` is `null` rather than absent. The peer slots are declared
+       one per peer and filled BY INDEX, so a peer that answered nothing is a `null` sitting in the report
+       rather than a shorter list that reads as if fewer were asked. */
+    var rec = { group: GROUP, asked: PEERS.length, provisioned: 0,
+                peers: PEERS.map(function () { return null; }),
+                whileLive: null, after: null, torndown: 0, crashed: false, err: null, badMessages: null,
+                rendererLines: null };
+
+    /* ONE ORDER, ONE ARM PER OUTCOME. `Promise.all` would reject on the first failed fork while the others
+       kept building frames nobody holds a record of, so a probe that failed once would leave this document
+       carrying WASM instances until it reloads — which it does not. Every fork is allowed to settle, the ones
+       that produced a renderer are reclaimed, and the first failure travels on as itself. */
+    settled = await Promise.all(PEERS.map(function (p) {
+      return rendererLaunch(GROUP + NUL + p.origin).then(
+        function (r) { return { r: r }; }, function (e) { return { e: e }; });
+    }));
+    for (i = 0; i < settled.length; i++) {
+      if (settled[i].r) { rs.push(settled[i].r); PEERS[i].r = settled[i].r; }
+      else if (firstErr === null) firstErr = settled[i].e;
+    }
+    rec.provisioned = rs.length;
+    if (firstErr !== null) {
+      for (i = 0; i < rs.length; i++) rs[i].destroy();
+      throw firstErr;
+    }
+
     try {
-      /* THE DOCUMENT CROSSES AS BYTES — `Init`'s `array<uint8>`, which is what `qjs_init` takes (a
-         NUL-terminated pointer it strlen()s). The four strings beside it are §4.4's address, the name this
-         agent's root document is known by, the response's header field lines (empty: this document had no
-         response) and §8.1.3.1's top-level creation URL, which for a root document is its own. */
-      var v = await r.renderer.init(new TextEncoder().encode(doc), ADDR, "probe", "", ADDR);
-      rec.initrc = v.rc;
-      var b = await r.renderer.getBundleId();
-      rec.bundleId = (b.bundleId >>> 0).toString(36);
-      /* THE WORKING SET THE FRAME STATED, read off the reply that carried it — the fact bridge.js's RAM floor
-         is summed out of. A probe that never looked at it would leave the pool's one non-ABI input untested. */
-      rec.heapBytes = b.workingSetBytes;
-      rec.child = await r.childProcess.getMojoStats();
-      /* AND THE TEARDOWN, because it is the call that makes the runtime walk gc_obj_list and report a leaked
-         GC object as a failure. A probe that provisioned an instance and walked away from it would be
-         measuring the transport with the one check that judges the instance switched off. */
-      await r.renderer.teardown();
-      rec.torndown = true;
+      /* ── BOTH ALIVE, ASSERTED WHILE THEY ARE. Every number below is read in ONE turn with no await in it, so
+         the registry's answer and this document's frames are the same instant rather than two snapshots. */
+      var reg = self.renderProcessHost.getRegistry();
+      var st = rendererStats();
+      DCHECK(reg.live === PEERS.length && st.live === PEERS.length && st.frames === PEERS.length,
+             "the probe holds " + rs.length + " renderer(s) but the registry reports " + reg.live + " and this " +
+             "document " + st.live + " record(s) over " + st.frames + " frame(s) — provisioning a SECOND " +
+             "instance is the whole claim, and any of those three reading one is a pool that reuses a slot");
+      DCHECK(reg.clusters.length === PEERS.length &&
+             reg.clusters.every(function (c) { return c.group === GROUP; }),
+             "the registry's live clusters are not the ones this probe asked for — both peers name ONE " +
+             "browsing-context group and differ only by origin, which is the pair the key exists to tell apart");
+      var origins = reg.clusters.map(function (c) { return c.origin; }).sort();
+      DCHECK(origins.length === 2 && origins[0] !== origins[1],
+             "the registry holds two renderers whose agent clusters carry ONE origin — that is the duplicate " +
+             "the admission refuses, so seeing it here means the two halves of the key did not reach the table");
+      DCHECK(rs[0].routingId !== rs[1].routingId,
+             "two live renderers carry ONE routing id — the id is minted by the registry's counter and is the " +
+             "only name a renderer has, so a collision is a termination burying whichever the scan reaches");
+      DCHECK(rs[0].frame !== rs[1].frame && rs[0].frame.parentNode !== null && rs[1].frame.parentNode !== null &&
+             rs[0].frame.contentWindow !== rs[1].frame.contentWindow,
+             "the two renderers are not two frames in this document — each instance is a WASM heap the browser " +
+             "isolates behind its own opaque origin, and two records over one frame would be one heap wearing " +
+             "two names");
+      DCHECK(rs[0].port !== rs[1].port && rs[0].conn !== rs[1].conn && rs[0].renderer !== rs[1].renderer,
+             "the two renderers share a transport — the invitation mints a MessageChannel per fork and every " +
+             "call after it is point-to-point, so one endpoint answering for both is two engines behind one " +
+             "pipe with nothing to say which replied");
+      rec.whileLive = { registry: reg, renderers: st };
+
+      /* ── BOTH ANSWERING, AT THE SAME TIME. The two ABI conversations are started together and interleave on
+         two pipes; a document that could only serve one at a time would deadlock here rather than pass. */
+      await Promise.all(PEERS.map(async function (p, idx) {
+        var r = p.r;
+        /* THE DOCUMENT CROSSES AS BYTES — `Init`'s `array<uint8>`, which is what `qjs_init` takes (a
+           NUL-terminated pointer it strlen()s). The four strings beside it are §4.4's address, the name this
+           agent's root document is known by, the response's header field lines (empty: this document had no
+           response) and §8.1.3.1's top-level creation URL, which for a root document is its own. */
+        var v = await r.renderer.init(new TextEncoder().encode(p.doc), p.addr, "probe", "", p.addr);
+        var b = await r.renderer.getBundleId();
+        var child = await r.childProcess.getMojoStats();
+        rec.peers[idx] = { origin: p.origin, routingId: r.routingId, name: r.name, addr: p.addr,
+                           iface: r.renderer.def.name, ifaceVersion: r.renderer.def.version,
+                           ifaceMethods: r.renderer.def.byOrd.size,
+                           initrc: v.rc, bundleId: (b.bundleId >>> 0).toString(36),
+                           /* THE WORKING SET THE FRAME STATED, read off the reply that carried it — the fact
+                              bridge.js's RAM floor is summed out of. A probe that never looked at it would
+                              leave the pool's one non-ABI input untested. */
+                           heapBytes: b.workingSetBytes, child: child, lines: r.lines.slice() };
+      }));
+      DCHECK(rec.peers.indexOf(null) < 0,
+             "a peer answered no ABI call at all — every renderer this probe provisioned is initialized with " +
+             "its own document and asked for the bundle id it computed, and an empty slot is an instance " +
+             "reported as live that nothing ever spoke to");
+      DCHECK(rec.peers[0].bundleId !== rec.peers[1].bundleId,
+             "two renderers computed ONE bundle id from two DIFFERENT documents (" + rec.peers[0].bundleId +
+             ") — the id is a Lexbor <script> scan of the document each was handed, so one answer for both is " +
+             "one engine answering twice, which is the shared heap this whole boundary exists to make " +
+             "impossible");
+      /* AND THE TEARDOWN, because it is the call that makes each runtime walk gc_obj_list and report a leaked
+         GC object as a failure. A probe that provisioned two instances and walked away from them would be
+         measuring the transport with the one check that judges an instance switched off. */
+      await Promise.all(rs.map(function (r) { return r.renderer.teardown(); }));
+      rec.torndown = rs.length;
     } catch (e) {
       /* AN ENGINE ABORT IS A RECORDED OUTCOME AND A HOST INVARIANT FAILURE IS NOT — the same split
-         engineFinalize/crashResult already make, for the same reason: a WASM abort means this instance failed
+         engineFinalize/crashResult already make, for the same reason: a WASM abort means that instance failed
          and the honest report of it is the crash PLUS everything it printed on the way down, while a DCHECK in
          THIS file is our own contract breaking and must not be reported as the engine's. Discarding the record
          here would leave an empty tail where a crash leaves the output that preceded it. */
@@ -501,20 +634,28 @@
       rec.crashed = true;
       rec.err = String((e && e.message) || e);
     } finally {
-      r.destroy();
+      for (i = 0; i < rs.length; i++) rs[i].destroy();
     }
-    /* READ AFTER THE TEARDOWN ON PURPOSE: a destroyed renderer's endpoints leave this realm's open set with the
-       connection they belonged to, so `mojo` here is what the offscreen holds once this probe's instance is
-       gone. THAT IS NOW ZERO, and the number moved for a reason worth reading: it was three — a Remote for
-       `content.mojom.RendererHost`, a Remote for the browser process's `content.mojom.ChildProcess`, and the
-       Receiver that process bound for `content.mojom.Zygote` — and all three were pipes between the offscreen
-       and a Worker whose program the offscreen wrote. The only IPC this document has left is with the peer
-       SECURITY.md calls untrusted, and it has none of it once that peer is gone. An `endpoints` that kept
-       climbing across probes would still be a document reporting its whole history of instances as its live
-       IPC. */
-    rec.mojo = self.mojo.stats();
-    rec.badMessages = rec.mojo.badMessages;
-    rec.lines = r.lines;
+    /* ── READ AFTER BOTH TEARDOWNS ON PURPOSE. A destroyed renderer's endpoints leave this realm's open set
+       with the connection they belonged to, and its agent cluster leaves the registry — so this is the state
+       of a document that provisioned two instances and finished with them, which is what a NEXT provisioning
+       for either cluster depends on. `live` reading 0 with `terminated` reading 2 is the pair of numbers that
+       tells a clean teardown apart from an extension that never ran; a cluster still listed here would be one
+       refused an instance for the life of this document, and a climbing `endpoints` would be a document
+       reporting its whole history of instances as its live IPC. */
+    /* THE TAIL OF WHAT EACH FRAME PRINTED, KEPT WHATEVER HAPPENED. A record is still a record after its frame
+       is gone, so this reads the same lines a rejected ABI call would have decorated its error with — and on
+       the crash path it is the ONLY place the engine's own `@WHY` ROOT line survives, which is the failure
+       CLAUDE.md names: an empty tail where a crash leaves the output that preceded it. */
+    rec.rendererLines = rs.map(function (r) { return { routingId: r.routingId, tail: r.lines.slice(-8) }; });
+    var after = { registry: self.renderProcessHost.getRegistry(), renderers: rendererStats(),
+                  mojo: self.mojo.stats() };
+    DCHECK(after.registry.live === 0 && after.renderers.live === 0 && after.renderers.frames === 0,
+           "this probe's renderers did not all leave — " + after.registry.live + " agent cluster(s) still " +
+           "registered over " + after.renderers.frames + " frame(s), which is a cluster refused its next " +
+           "instance and a WASM heap resident under a document that does not reload");
+    rec.after = after;
+    rec.badMessages = after.mojo.badMessages;
     return rec;
   };
 
