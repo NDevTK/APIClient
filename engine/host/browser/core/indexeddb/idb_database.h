@@ -7,6 +7,9 @@
 #include <stdint.h>
 
 #include "quickjs.h"
+#include "quickjs-step.h"
+#include "core/indexeddb/idb_key_array.h"
+#include "core/indexeddb/idb_key_path.h"
 
 /* Declared once per AGENT: §2.1's "each storage key has an associated set of databases", built EMPTY at the
    pre-boot COW baseline. It is agent state and not realm state for the reason core/file/file_system.c's two
@@ -93,10 +96,75 @@ JSValue idb_object_store_find(JSContext *ctx, JSValueConst db, const char *name)
  * The record's value is a COPY THIS ALGORITHM MAKES, so §2.3's "later changes to a value have no effect on the
  * record stored in the database" is a fact about this component rather than a precondition on its caller.
  *
- * Returns 0 with *pkey the key the record was filed under (OWNED, a key record — §6.1's "Return key"), or -1
- * with the DOMException the algorithm names live ("ConstraintError"). */
-int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst value, JSValueConst key,
-                     bool no_overwrite, JSValue *pkey);
+ * IT IS A DELEGATABLE ALGORITHM AND NOT A CALL, and §6.1 STEP 5 IS WHY. That step runs §7.1's extract-a-key
+ * once per index which references the store, whose step 3 is §7.4 — and an index whose key path resolves to an
+ * Array reaches §7.4's ARRAY ARM, which is exactly what §2.6's multiEntry flag exists for. There is one
+ * implementation of that arm and it is the parkable walk (core/indexeddb/idb_key_array.h), so §6.1 has that
+ * algorithm's rest points inside its own and the caller drives them: §4.5's add-or-put OPERATION declares this
+ * block in its stage list, embeds an IdbStoreWalk, chains idb_store_record_walk_visit into its `visit` and
+ * hands `run` the base of the block. There is no C entry, because the only caller is that operation and a
+ * second, non-suspending copy of these steps is the thing this shape exists to prevent.
+ *
+ * §7.1's stage block leads the list so the walk's base IS this block's base; the six numbered steps follow. */
+#define IDB_STORE_RECORD_ALGO_STAGES(X, P, W) \
+    IDB_KEY_PATH_EXTRACT_ALGO_STAGES(X, P, W " → Indexed Database §6.1 step 5.1 (let index key be the result " \
+                                             "of extracting a key from a value using a key path with value, " \
+                                             "index's key path, and index's multiEntry flag)") \
+    X(P##_GENERATE, W " → Indexed Database §6.1 step 1 (if store uses a key generator: generate a key for " \
+                      "store and inject it into value, or possibly update the key generator with the key " \
+                      "that was given)") \
+    X(P##_NO_OVERWRITE, W " → Indexed Database §6.1 step 2 (the no-overwrite flag is true and a record " \
+                          "already exists in store with its key equal to key: a ConstraintError)") \
+    X(P##_REMOVE, W " → Indexed Database §6.1 step 3 (a record already exists in store with its key equal to " \
+                    "key: remove it using delete records from an object store)") \
+    X(P##_STORE, W " → Indexed Database §6.1 step 4 (store a record in store containing key as its key and " \
+                   "the serialization of value as its value)") \
+    X(P##_INDEX, W " → Indexed Database §6.1 step 5 (the next index which references store, or step 6 when " \
+                   "there is none; step 5.1's extraction begins)") \
+    X(P##_INDEX_TOOK, W " → Indexed Database §6.1 step 5.2 (an index key that is an exception, or invalid, or " \
+                        "failure: take no further actions for this index and continue with the next)") \
+    X(P##_INDEX_UNIQUE, W " → Indexed Database §6.1 steps 5.3-5.4 — ONE CONDITION the standard states in its " \
+                          "two arms: index's unique flag is true and index already contains a record with a " \
+                          "key equal to the index key (or to any of its subkeys), which is a ConstraintError") \
+    X(P##_INDEX_WRITE, W " → Indexed Database §6.1 steps 5.5-5.6 — THE SAME CONDITION's two arms: one record " \
+                         "whose key is the index key, or one record per subkey of it, each with key as its " \
+                         "value")
+
+/* §6.1 IN FLIGHT. `w` and `kpres` are §7.1's (its extra state is an enum, which is why the caller of THAT
+   algorithm holds it rather than a record); everything else is §6.1's own — its four operands, the key
+   step 1.1.1 generated, step 5's list of indexes and the cursor into it, and the index key step 5.1 answered. */
+typedef struct IdbStoreWalk {
+    IdbKeyWalk       w;
+    IdbKeyPathResult kpres;
+    JSValue  tx, store, value, key;   /* §6.1's operands; `key` is also its answer (owned) */
+    JSValue  generated;               /* step 1.1.1's key, held until step 1.1.3 has injected it (owned) */
+    JSValue  indexes;                 /* step 5's "each index which references store", as it stood (owned) */
+    JSValue  index_key;               /* step 5.1's answer, between steps 5.2 and 5.6 (owned) */
+    uint32_t idx;                     /* the cursor into `indexes` */
+    uint8_t  no_overwrite;
+    /* WHETHER STEP 1 RAISED §2.11's CURRENT NUMBER, which step 2 asserts against the key it found. It spans
+       two stages now that §6.1 is one, so it is state rather than a C local. */
+    uint8_t  generator_raised;
+    int      after;                   /* the CALLER's stage this algorithm hands control back at */
+} IdbStoreWalk;
+
+/* BEGIN §6.1. Every operand is BORROWED and dup'd onto the record, because this algorithm is a work item and
+   §scheduler's rule is that a work item takes its inputs with it. The caller returns JS_STEP_YIELD. */
+void idb_store_record_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, JSValueConst tx,
+                                 JSValueConst store, JSValueConst value, JSValueConst key, bool no_overwrite,
+                                 int base, int after);
+
+/* ONE STAGE of it. Returns a step code the caller must return, or JS_STEP_ABRUPT with the DOMException §6.1
+   names live ("ConstraintError") — the only abrupt this algorithm produces, because step 5.2 catches §7.1's.
+   `in` is CONSUMED. */
+int  idb_store_record_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, JSValue in, int base,
+                               JSValue **out_cb, int *out_argc);
+
+void idb_store_record_walk_visit(JSContext *ctx, IdbStoreWalk *sw, JSStepVisit *v);
+
+/* §6.1's LAST STEP, "Return key", at the caller's own stage. OWNED — a key record, which §7.3 converts on the
+   way to `request.result`. */
+JSValue idb_store_record_walk_take(JSContext *ctx, IdbStoreWalk *sw);
 
 /* §6.2's TWO RETRIEVALS, over `range` — a key range (core/indexeddb/idb_key_range.h). Each answers the FIRST
    record in the store's list of records whose key is in range, which is the first in KEY ORDER because §2.2
@@ -111,23 +179,31 @@ JSValue idb_retrieve_key(JSContext *ctx, JSValueConst store, JSValueConst range)
  * records with key in range") and §6.6 takes none at all ("remove all records from store"). Each returns
  * undefined, which §5.6 makes the request's result.
  *
- * NEITHER CAN FAIL, so neither has §6.1's -1 arm and both meet §5.6 step 5.4's atomicity by having nothing to
- * report: the key conversion §4.5's member owes is already done, there is no value to clone, and §2.2 states
- * no constraint a removal can violate. What leaves is RECORDED against the transaction like every other change
- * this file makes — holding the record objects themselves, so §5.5 step 2 files those same records back rather
- * than rebuilding them.
+ * NEITHER CAN FAIL, so neither has an error arm: the key conversion §4.5's member owes is already done, there
+ * is no value to clone, and §2.2 states no constraint a removal can violate. What leaves is RECORDED against
+ * the transaction like every other change this file makes — holding the record objects themselves, so §5.5
+ * step 2 files those same records back rather than rebuilding them.
+ *
+ * EACH ALSO PERFORMS ITS INDEX HALF: §6.4 step 2 removes "every record from index's list of records whose
+ * VALUE is in range" — the STORE's range, once per index, never once per removed record — and §6.6 step 2
+ * removes all of them. Both are core/indexeddb/idb_index.h's, beside the list they write.
  *
  * They are two entries because the standard states two algorithms; the one write they are both made of is in
- * the .c, and it is where §6.4 step 2 and §6.6 step 2 (the index halves) are asserted absent. */
+ * the .c. */
 void idb_delete_records(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst range);
 void idb_clear_store(JSContext *ctx, JSValueConst tx, JSValueConst store);
 
-/* §6.5's RECORD COUNTING OPERATION — "let count be the number of records, if any, in source's list of records
-   with key in range". A READ: it records no change and therefore takes no transaction, which is the same
-   reason §6.2's two retrievals do not take one. §6.5 says SOURCE and not store because §2.6's index is one
-   too, and an index has a list of records of its own; this engine has no index (§4.5's `createIndex` is not
-   installed and no store record carries an index set), so the store is the only source there is. */
+/* §6.5's RECORD COUNTING OPERATION over an OBJECT STORE source — "let count be the number of records, if any,
+   in source's list of records with key in range". A READ: it records no change and therefore takes no
+   transaction, which is the same reason §6.2's two retrievals do not take one. §6.5 says SOURCE and not store
+   because §2.6's index is one too; the index's half of the same algorithm is idb_index_count_records, beside
+   the list it counts. */
 uint32_t idb_count_records(JSContext *ctx, JSValueConst store, JSValueConst range);
+
+/* HOW MANY RECORDS A STORE HOLDS AT ALL — not §6.5, which is stated over a range, but the question §4.5's
+   `createIndex` asks: an index may be created faithfully only into a store whose content is settled, because
+   §4.5's note makes the population an ASYNCHRONOUS REQUEST this engine does not yet place. */
+uint32_t idb_store_record_count(JSContext *ctx, JSValueConst store);
 
 /* §2.2's THREE FIELDS a store handle reports and §4.5's members branch on. The name is the STORE's, which
    §4.5's `name` getter note distinguishes from the HANDLE's copy of it; the key path is JS_NULL for a store
@@ -135,6 +211,12 @@ uint32_t idb_count_records(JSContext *ctx, JSValueConst store, JSValueConst rang
 JSValue idb_object_store_name(JSContext *ctx, JSValueConst store);
 JSValue idb_object_store_key_path(JSContext *ctx, JSValueConst store);
 bool    idb_object_store_uses_key_generator(JSContext *ctx, JSValueConst store);
+
+/* §2.6's SET OF INDEXES that reference this store, as the field it is. The SET is
+   core/indexeddb/idb_index.h's — every write to it and every question about it is that component's — and this
+   is only where the store record keeps it, exported so that component can reach it without a second spelling
+   of the field name. OWNED. */
+JSValue idb_object_store_indexes(JSContext *ctx, JSValueConst store);
 
 /* §2.11's KEY GENERATOR ITSELF, which is the record §2.11's two algorithms are stated over
    (core/indexeddb/idb_key_generator.h). §2.2 makes it OPTIONAL and the question above is how that is asked, so
@@ -151,6 +233,22 @@ JSValue idb_object_store_key_generator(JSContext *ctx, JSValueConst store);
    vocabulary of changes for one revert to understand. `prior` is the current number the generator held BEFORE
    the write about to be made, and it is the caller's obligation to record it first. */
 void idb_object_store_record_generator_change(JSContext *ctx, JSValueConst tx, JSValueConst store, int64_t prior);
+
+/* §2.6's FIVE CHANGES, filed here for the same reason §2.11's one is: §5.5 step 2's list is this file's, and a
+   second place that appended to it would be a second vocabulary of changes for one revert to understand. The
+   STATE is core/indexeddb/idb_index.h's, so the revert's five arms call that component's five inverses — the
+   mutation is its and the ledger is this one's. Each asserts what §2.7 lets its transaction do: only an upgrade
+   transaction may add, remove or rename an index, and a read-only transaction may write no record at all.
+   `name` and `records` are CONSUMED; everything else is BORROWED. */
+void idb_database_record_index_created(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst index);
+void idb_database_record_index_destroyed(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst index,
+                                         JSValue name);
+void idb_database_record_index_renamed(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst index,
+                                       JSValue name);
+void idb_database_record_index_records_stored(JSContext *ctx, JSValueConst tx, JSValueConst index,
+                                              JSValue records);
+void idb_database_record_index_records_removed(JSContext *ctx, JSValueConst tx, JSValueConst index,
+                                               JSValue records);
 
 /* §4.5's `keyPath` GETTER'S CONVERSION: "return this's object store's key path, or null if none. The key path
  * is converted as a DOMString (if a string) or a sequence<DOMString> (if a list of strings), per [WEBIDL]."
@@ -195,6 +293,26 @@ void idb_object_store_rename(JSContext *ctx, JSValueConst tx, JSValueConst db, J
    See the file for why this is NOT a span of the flow's COW delta. */
 void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx);
 
+/* §5.6 STEP 5.4: "If result is an error, then REVERT ALL CHANGES MADE BY OPERATION", with the standard's own
+ * note beside it — "this only reverts the changes done by this request, not any other changes made by the
+ * transaction".
+ *
+ * IT BECAME REQUIRED WITH §6.1 STEP 5, and idb_request.h used to state the opposite: that §6.1 "satisfies
+ * atomicity structurally, reporting every failure before it copies the value". That was TRUE while step 2 was
+ * §6.1's last refusal and is FALSE now — step 5's "ConstraintError" for a unique index happens AFTER step 3 has
+ * removed the displaced record, step 4 has written the new one and earlier indexes have taken their records, so
+ * an operation that fails has already changed the database. It is also §2.11's per-operation sentence ("if the
+ * operation fails and the operation is reverted, the current number is reverted to the value it had before the
+ * operation started"), which is why a key-generator change is one of the kinds this undoes.
+ *
+ * `from` is the length of the transaction's list of changes taken BEFORE the operation ran
+ * (idb_transaction_change_count), so what this reverts is exactly the operation's own tail — backwards, the
+ * order §5.5 step 2 uses and for the same reason. The reverted changes then LEAVE the list, because they are no
+ * longer changes the transaction made and an abort must not undo them twice; §5.5 step 2's whole-transaction
+ * revert does NOT truncate, because §5.8 step 5.1 asks that same list which stores this transaction created and
+ * the list is emptied only when the transaction reaches FINISHED. */
+void idb_database_revert_operation(JSContext *ctx, JSValueConst tx, uint32_t from);
+
 /* §5.5 step 2's "any object stores ... WHICH WERE CREATED DURING THE TRANSACTION", asked of one store — which
    is the question §5.8 step 5.1 branches on ("if handle's object store was not newly created during
    transaction"). It is answered out of the SAME list the revert runs, because that list is the record of what
@@ -202,5 +320,10 @@ void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx);
    step 2 and its step 4: the list is emptied when the transaction reaches FINISHED, which this asserts rather
    than reading an empty list as "no". */
 bool idb_database_store_was_created_by(JSContext *ctx, JSValueConst tx, JSValueConst store);
+
+/* THE SAME QUESTION ABOUT AN INDEX — §5.8 step 6's "if handle's index was NOT NEWLY CREATED during
+   transaction, set handle's name to its index's name". Answered out of the same list and with the same
+   restriction on when it may be asked. */
+bool idb_database_index_was_created_by(JSContext *ctx, JSValueConst tx, JSValueConst index);
 
 #endif

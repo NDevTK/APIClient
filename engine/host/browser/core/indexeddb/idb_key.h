@@ -68,6 +68,13 @@ int idb_key_from_value(JSContext *ctx, JSValueConst input, JSValue *pkey);
    page returns (§4.7's `lower` and `upper`, §4.8's `key`, §6.2's retrieve-a-key). OWNED. */
 JSValue idb_key_to_value(JSContext *ctx, JSValueConst key);
 
+/* §2.4's "AN ARRAY KEY", and §6.1 steps 5.4 and 5.6's "THE SUBKEYS OF index key" — the two questions §6.1 step
+   5's multiEntry arms are stated over, and the only place outside this file that has to know a key has a type
+   at all. The subkey list is §2.4's "a list of other keys" and is OWNED; asking for one of a key that is not an
+   array key is a should-never-happen, because the condition selecting that arm is the same question. */
+bool    idb_key_is_array(JSContext *ctx, JSValueConst key);
+JSValue idb_key_subkeys(JSContext *ctx, JSValueConst key);
+
 /* §2.4's COMPARE TWO KEYS — -1, 0 or 1. It is THE ordering of this standard: §2.2's list of records is sorted
    by it, §2.9's key range is bounded by it, §2.10's cursor walks in it, and §4.3's `cmp` is it, exposed. */
 int idb_key_compare(JSContext *ctx, JSValueConst a, JSValueConst b);

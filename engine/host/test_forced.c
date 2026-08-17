@@ -1413,7 +1413,22 @@ static const char *HTML =
        it — SYNCHRONOUSLY, out of `put` itself, where the page's own try/catch sees it, and not as a request
        that later fires an `error` event — for a value with nothing at the key path in a store with no key
        generator. Both are the shape every bundle that keeps records by id writes. */
-    "var _r = indexedDB.open('fixture', 1); var _idb = ''; var _k;"
+    /* AND THE ROUND TRIP ITSELF, WHICH USED TO BE AN IN-C FIXTURE. §6.1 is a step machine now (its step 5
+       drives §7.1 and therefore §7.4's array arm), so there is no C entry for it and these four claims run
+       where a page runs them — which is strictly more than the C fixture asserted, because each goes through
+       §5.6's request and §5.9/§5.10's event rather than calling the operation directly.
+       `ConstraintError` is §6.1 step 2's no-overwrite refusal — what tells `add` from `put` — delivered as an
+       `error` event that `preventDefault()` keeps from aborting the transaction (§5.10 step 9.3, which is the
+       reason that event is cancelable at all). `first1` is §2.2's ordering read through §6.2: the records
+       arrive 3, 1, 2 and the first in an unbounded-below range is the SMALLEST key, not the one that arrived
+       first. `over21` is §6.1 step 3: a second put under one key REPLACES the record rather than filing a
+       second one. `undoneAD` is §5.5 step 2 over the two RECORD changes, reached through a real `abort()`:
+       the record the transaction ADDED is gone and the record it REMOVED is back with its own value.
+       AND THE TAINT, which is the half a browser's own test suite cannot have: `location.hash` goes into a
+       store and has to come back out still concolic, because a page keeps its session in here and reads it
+       into gated code. §Attacker-sources names IndexedDB as a source; a store that de-tainted on the way in
+       would answer with a plausible datum and delete the fork the read should produce. */
+    "var _r = indexedDB.open('fixture', 1); var _idb = ''; var _k; var _rec = ''; var _tv; var _ix = '';"
     "_r.onupgradeneeded = function(e){"
     " var _s = _r.result.createObjectStore('s');"
     " _s.put(99, 2); var _g = _s.get(2);"
@@ -1428,11 +1443,62 @@ static const char *HTML =
     " _i.put({ id: { v: 'u-9' }, n: 7 });"
     " try { _i.put({ q: 1 }); _idb += ':nothrow'; } catch (_e) { _idb += ':' + _e.name; }"
     " var _ig = _i.get('u-9');"
-    " _ig.onsuccess = function(){ _idb += ':' + _ig.result.n + ':' + _ig.result.id.v; }; };"
+    " _ig.onsuccess = function(){ _idb += ':' + _ig.result.n + ':' + _ig.result.id.v; };"
+    /* THE ORDER OF THESE HANDLERS IS §5.6 STEP 5.1's, not this statement's: a transaction's requests are
+       executed in the order they were placed, so the tokens accumulate in placement order. */
+    " var _o = _r.result.createObjectStore('ord');"
+    " _o.put(30, 3); _o.put(10, 1); _o.put(20, 2); _o.put(21, 2);"
+    " var _oa = _o.add(11, 1);"
+    " _oa.onerror = function(ev){ ev.preventDefault(); _rec += _oa.error.name; };"
+    " var _ok = _o.getKey(IDBKeyRange.lowerBound(0));"
+    " _ok.onsuccess = function(){ _rec += ':first' + _ok.result; };"
+    " var _o2 = _o.get(2);"
+    " _o2.onsuccess = function(){ _rec += ':over' + _o2.result; };"
+    " var _t = _r.result.createObjectStore('t'); _t.put(location.hash, 1);"
+    " var _tg = _t.get(1); _tg.onsuccess = function(){ _tv = _tg.result; };"
+    /* §2.6's INDEX, created into a store whose content is settled — the store is new and no request of this
+       transaction is placed against it, which is the whole of what §4.5's createIndex may do eagerly. The two
+       indexes are the two arms of §6.1 step 5: `by_name` files ONE record whose key is the index key, and
+       `by_tag` is multiEntry, so an ARRAY key files one record PER SUBKEY — which is what makes `multi2`
+       load-bearing, both records carrying tag 'b'. `ref` is §6.3's retrieve-a-referenced-value (the index
+       record's value is a store key, and the answer is the record THAT key names), `pk` is §6.3's
+       retrieve-a-value (the store key itself), and `meta` is §4.6's attributes over the index handle. */
+    " var _n = _r.result.createObjectStore('idx');"
+    " var _x = _n.createIndex('by_name', 'name');"
+    " var _mx = _n.createIndex('by_tag', 'tags', { multiEntry: true });"
+    " _ix += _x.name + ':' + _x.keyPath + ':' + (_x.unique ? 'u' : 'nu')"
+    "      + ':' + (_mx.multiEntry ? 'me' : 'nome')"
+    "      + ':' + (_x.objectStore === _n ? 'own' : 'other')"
+    "      + ':' + (_n.index('by_name') === _x ? 'same' : 'fresh');"
+    " _n.put({ name: 'alice', tags: ['a', 'b'] }, 1);"
+    " _n.put({ name: 'bob', tags: ['b', 'c'] }, 2);"
+    " var _xg = _x.get('bob'); _xg.onsuccess = function(){ _ix += ':ref' + _xg.result.name; };"
+    " var _xk = _x.getKey('bob'); _xk.onsuccess = function(){ _ix += ':pk' + _xk.result; };"
+    " var _xc = _mx.count('b');"
+    " _xc.onsuccess = function(){ fetch('/api/idbidx?v=' + _ix + ':multi' + _xc.result); }; };"
     "_r.onsuccess = function(){"
     " var _k2 = _r.result.transaction('kp').objectStore('kp');"
     " _idb += ':' + _k2.keyPath.join('+') + ':' + (_k2.keyPath === _k.keyPath ? 'shared' : 'perhandle');"
-    " fetch('/api/idbopen?v=' + _idb + ':' + _r.result.version + ':' + _r.result.name); };"
+    " fetch('/api/idbopen?v=' + _idb + ':' + _r.result.version + ':' + _r.result.name);"
+    /* §5.5 STEP 2 THROUGH §5.5 ITSELF. One record is added under a key the store has none for and one the
+       store does hold is deleted, and the abort has to undo BOTH — which is also the pair whose inverses are
+       a removal and a re-file, run backwards. The verification is a second transaction, because the aborted
+       one is FINISHED and every member of §4.5 refuses one. */
+    " var _at = _r.result.transaction('ord', 'readwrite'), _as = _at.objectStore('ord');"
+    " _as.put(77, 9); _as.delete(1);"
+    " var _m9 = _as.get(9), _m1 = _as.get(1);"
+    /* THE ABORT RUNS FROM A HANDLER, NOT FROM THIS TASK. `abort()` called here would reach §5.5 step 6 before
+       any of the four requests had executed — the operations would never run, there would be nothing to
+       revert, and both `undone` terms would read TRUE for a transaction that had changed nothing. So the two
+       writes are read back first, and `made77gone` is what makes the claim below about a real state. */
+    " _m1.onsuccess = function(){"
+    "  _rec += ':made' + _m9.result + (_m1.result === undefined ? 'gone' : 'LEFT'); _at.abort(); };"
+    " _at.onabort = function(){"
+    "  var _vs = _r.result.transaction('ord').objectStore('ord');"
+    "  var _v9 = _vs.get(9), _v1 = _vs.get(1);"
+    "  _v1.onsuccess = function(){"
+    "   fetch('/api/idbrec?v=' + _rec + ':undone' + (_v9.result === undefined ? 'A' : 'LEAKA')"
+    "        + (_v1.result === 10 ? 'D' : 'LEAKD') + '&t=' + _tv); }; }; };"
     "</script>"
     "</body></html>";
 
@@ -2334,55 +2400,29 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
     return ctx;
 }
 
-/* INDEXED DATABASE §2.1/§2.2 AND §6.1/§6.2 — THE ROUND TRIP, which is the whole statement of what an object
- * store IS: a value a `put` writes is the value a `get` reads back, filed under the ordering §2.4 defines, and
- * a TAINTED value comes back still tainted.
+/* INDEXED DATABASE §2.1's DATABASE AND §2.2's OBJECT STORE — the state a store IS, before anything schedules
+ * an operation over it.
  *
- * WHY IT IS ASSERTED HERE AND NOT THROUGH THE INTERFACES. §4.5's `put` is a request, on a transaction, on a
- * connection, opened by §5.1 — and every one of those decides WHEN the two algorithms below run rather than
- * what they do. They are the next subproblem; this is the one that says the operation they will schedule is
- * finished before anything is built on top of it. That is a different thing from the self-test §Security warns
- * about: these algorithms answer over a store's own list of records, so no caller changes their answer, and
- * what this cannot exercise — the scheduling — it does not claim to.
+ * §6.1 AND §6.2 ARE NOT HERE ANY MORE, AND THAT IS NOT A GAP. §6.1 became a delegatable algorithm the moment
+ * its step 5 was built: that step runs §7.1's extract-a-key once per index which references the store, whose
+ * step 3 is §7.4, and §7.4's array arm exists in exactly ONE form — the parkable walk. So §6.1 is driven by a
+ * step machine and there is no C entry for it, deliberately: a C entry would exist only because this fixture is
+ * in C, which is CLAUDE.md's own test for a FALLBACK rather than routing (delete the thing it selects against
+ * and it becomes meaningless), and it would be the second non-suspending driver §C-stack names as the dual
+ * system. The round trip therefore runs where a page runs it — `_s.put`/`_s.get`/`_o.add`/`_at.abort()` in the
+ * full document's own statement, read back by the `idb-open` and `idb-record` probes — which is a STRONGER
+ * assertion than this file could make, because it goes through §5.6's request, §5.9's success event and §5.5's
+ * abort rather than calling the operations directly.
  *
- * THE SORT IS ASSERTED THROUGH THE RETRIEVAL rather than through an accessor that would exist only for this:
- * §6.2 answers the FIRST record whose key is in range, so an UNBOUNDED range answers the SMALLEST key. The
- * records below go in as 3, 1, 2 and the answer must be 1. */
-static JSValue idb_selftest_key(JSContext *ctx, JSValue v)      /* CONSUMES v */
-{
-    JSValue key;
-
-    CHECK(idb_key_from_value(ctx, v, &key) == 0, "§7.4 refused a value this fixture files a record under");
-    JS_FreeValue(ctx, v);
-    return key;
-}
-
-static JSValue idb_selftest_range(JSContext *ctx, JSValue v)    /* CONSUMES v */
-{
-    JSValue range;
-
-    CHECK(idb_key_range_from_value(ctx, v, false, &range) == 0, "§2.9 refused a value this fixture queries by");
-    JS_FreeValue(ctx, v);
-    return range;
-}
-
+ * WHAT STAYS HERE IS WHAT NEEDS NO FLOW: §2.1's set of databases, §2.2's set of object stores, and the three
+ * algorithms below whose own C entries crash exactly where a flow would be required (§7.1's extract, §2.5's key
+ * path, §5.5 step 2's revert of the metadata changes, §5.8's abort of an upgrade transaction). */
 static int32_t idb_selftest_int(JSContext *ctx, JSValueConst v)
 {
     int32_t n = -1;
 
     CHECK(JS_ToInt32(ctx, &n, v) == 0, "a value this fixture stored as a number did not come back as one");
     return n;
-}
-
-static void idb_selftest_put(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst value,
-                             JSValueConst key)
-{
-    JSValue out = JS_UNDEFINED;
-
-    CHECK(idb_store_record(ctx, tx, store, value, key, false, &out) == 0,
-          "§6.1 refused a record for a store with out-of-line keys and no key generator");
-    CHECK(!JS_IsUndefined(out), "§6.1's last step is \"Return key\", and it returned none");
-    JS_FreeValue(ctx, out);
 }
 
 /* A TRANSACTION IN THE MODE §2.7 REQUIRES FOR THE CHANGE ABOUT TO BE MADE, over the connection §5.1 would have
@@ -2416,12 +2456,11 @@ static void idb_selftest_finish(JSContext *ctx, JSValue tx)   /* CONSUMES tx */
  * the version. Any object stores and indexes which were created during the transaction are now considered
  * deleted for the purposes of other algorithms."
  *
- * WHAT IT EXERCISES. Five changes are every change this engine can make to a database, and each is asserted
- * from both sides — the change is visible, and after the revert the state the transaction found is back: a
- * record put OVER another (the displaced record returns), a record put where there was NONE (it goes away and
- * §2.2's ordering survives its removal), a store CREATED (it leaves the set and is marked deleted, which is
- * what a handle the page still holds must report), a store RENAMED (it is filed under its former name again), a
- * store DESTROYED (it is back in the set and no longer deleted), and the VERSION.
+ * WHAT IT EXERCISES: the METADATA changes, which are the ones no flow is needed to make — a store CREATED (it
+ * leaves the set and is marked deleted, which is what a handle the page still holds must report), a store
+ * RENAMED (it is filed under its former name again), a store DESTROYED (it is back in the set and no longer
+ * deleted), and the VERSION. The RECORD changes are reverted where they are made: §6.1 is a step machine, so
+ * the document's own `_at.abort()` asserts them through §5.5 itself rather than through this call.
  *
  * AND THE ORDER, which is the part a one-change test cannot reach. The changes below are made as version →
  * create → rename → destroy, so the revert has to run them BACKWARDS: the destroy is undone first, putting the
@@ -2434,47 +2473,7 @@ static void idb_selftest_finish(JSContext *ctx, JSValue tx)   /* CONSUMES tx */
  * exercises is what it claims: the changes, and the writes that put them back. */
 static void idb_revert_selftest(JSContext *ctx, JSValueConst conn, JSValueConst db, JSValueConst store)
 {
-    JSValue tx, key, range, got, value, other, found;
-
-    /* §6.1's TWO SHAPES, through a read/write transaction over the store the round trip left behind. */
-    tx = idb_selftest_tx(ctx, conn, store, IDB_TX_READWRITE);
-    key = idb_selftest_key(ctx, JS_NewInt32(ctx, 2));
-    value = JS_NewInt32(ctx, 42);
-    idb_selftest_put(ctx, tx, store, value, key);   /* over the record the round trip left under key 2 */
-    JS_FreeValue(ctx, value);
-    JS_FreeValue(ctx, key);
-    key = idb_selftest_key(ctx, JS_NewInt32(ctx, 8));
-    value = JS_NewInt32(ctx, 80);
-    idb_selftest_put(ctx, tx, store, value, key);   /* under a key the store holds no record for */
-    JS_FreeValue(ctx, value);
-    JS_FreeValue(ctx, key);
-    range = idb_selftest_range(ctx, JS_NewInt32(ctx, 8));
-    got = idb_retrieve_value(ctx, store, range);
-    CHECK(idb_selftest_int(ctx, got) == 80, "§6.1 did not file the record this fixture is about to revert");
-    JS_FreeValue(ctx, got);
-
-    idb_database_revert_transaction(ctx, tx);
-
-    got = idb_retrieve_value(ctx, store, range);
-    CHECK(JS_IsUndefined(got), "§5.5 step 2 left a record the transaction ADDED — \"all the changes made to "
-                               "the database by the transaction are reverted\"");
-    JS_FreeValue(ctx, got);
-    JS_FreeValue(ctx, range);
-    range = idb_selftest_range(ctx, JS_NewInt32(ctx, 2));
-    got = idb_retrieve_value(ctx, store, range);
-    CHECK(idb_selftest_int(ctx, got) == 99,
-          "§5.5 step 2 did not put back the record the transaction OVERWROTE — the record §6.1 displaced is "
-          "the state that key was in when the transaction found it, and it is what the store must hold again");
-    JS_FreeValue(ctx, got);
-    JS_FreeValue(ctx, range);
-    range = idb_selftest_range(ctx, JS_UNDEFINED);
-    got = idb_retrieve_key(ctx, store, range);
-    CHECK(idb_selftest_int(ctx, got) == 1,
-          "§5.5 step 2's removal left the list of records out of order — §2.2 keeps it \"sorted according to "
-          "key in ascending order\", so the tail has to come down over the record that was taken out");
-    JS_FreeValue(ctx, got);
-    JS_FreeValue(ctx, range);
-    idb_selftest_finish(ctx, tx);
+    JSValue tx, other, found;
 
     /* THE UPGRADE TRANSACTION'S THREE, made in an order whose revert only composes backwards. */
     tx = idb_selftest_tx(ctx, conn, JS_UNDEFINED, IDB_TX_VERSIONCHANGE);
@@ -2885,9 +2884,7 @@ static void idb_upgrade_abort_selftest(JSContext *ctx, JSValueConst conn, JSValu
 
 static void idb_store_selftest(JSContext *ctx)
 {
-    static const int32_t ARRIVAL[] = { 3, 1, 2 };
-    JSValue db, found, store, key, range, got, tainted, value, out, conn, tx;
-    int i;
+    JSValue db, found, store, conn, tx;
 
     /* §2.1: "When a database is first created, its version is 0", and a storage key has ONE database per name
        — the set answers with the database that was created and not with a copy of it. */
@@ -2908,120 +2905,15 @@ static void idb_store_selftest(JSContext *ctx)
     conn = idb_connection_open(ctx, db);
     tx = idb_selftest_tx(ctx, conn, JS_UNDEFINED, IDB_TX_VERSIONCHANGE);
 
-    /* §2.2: out-of-line keys, no key generator — the store §6.1's first step does not branch for. */
+    /* §2.2: out-of-line keys, no key generator. What a record filed INTO it does is the document's assertion —
+       see the block above idb_selftest_int for why §6.1 has no C entry to reach from here. */
     store = idb_object_store_create(ctx, tx, db, "s", JS_NULL, false);
     found = idb_object_store_find(ctx, db, "s");
     CHECK(JS_VALUE_GET_PTR(found) == JS_VALUE_GET_PTR(store),
           "§2.2: an object store's name is unique within its database and names that store");
     JS_FreeValue(ctx, found);
 
-    for (i = 0; i < 3; i++) {
-        key = idb_selftest_key(ctx, JS_NewInt32(ctx, ARRIVAL[i]));
-        value = JS_NewInt32(ctx, ARRIVAL[i] * 10);
-        idb_selftest_put(ctx, tx, store, value, key);
-        JS_FreeValue(ctx, value);
-        JS_FreeValue(ctx, key);
-    }
-
-    /* §2.2's ORDER, through §6.2's "first record ... whose key is in range" over an unbounded one. */
-    range = idb_selftest_range(ctx, JS_UNDEFINED);
-    got = idb_retrieve_key(ctx, store, range);
-    CHECK(idb_selftest_int(ctx, got) == 1,
-          "§2.2: the list of records is sorted by key in ascending order, so the first record in an unbounded "
-          "range is the smallest key and not the one that arrived first");
-    JS_FreeValue(ctx, got);
-    got = idb_retrieve_value(ctx, store, range);
-    CHECK(idb_selftest_int(ctx, got) == 10, "§6.2 answered the wrong record's value for the smallest key");
-    JS_FreeValue(ctx, got);
-    JS_FreeValue(ctx, range);
-
-    /* THE ROUND TRIP ITSELF, and then §6.1's step 3: a second put under one key REPLACES that record rather
-       than filing a second one — "There can never be multiple records in a given object store with the same
-       key" (§2.2), which the list's own invariant asserts as the write happens. */
-    range = idb_selftest_range(ctx, JS_NewInt32(ctx, 2));
-    got = idb_retrieve_value(ctx, store, range);
-    CHECK(idb_selftest_int(ctx, got) == 20, "§6.2 must read back the value §6.1 wrote under that key");
-    JS_FreeValue(ctx, got);
-    key = idb_selftest_key(ctx, JS_NewInt32(ctx, 2));
-    value = JS_NewInt32(ctx, 99);
-    idb_selftest_put(ctx, tx, store, value, key);
-    JS_FreeValue(ctx, value);
-    got = idb_retrieve_value(ctx, store, range);
-    CHECK(idb_selftest_int(ctx, got) == 99, "§6.1's overwrite must replace the record filed under that key");
-    JS_FreeValue(ctx, got);
-
-    /* §6.1 STEP 2: the no-overwrite flag — what tells `add` from `put` — is a "ConstraintError", reported
-       BEFORE the value is copied, and it leaves the record it refused to overwrite exactly as it was. */
-    value = JS_NewInt32(ctx, 7);
-    out = JS_UNDEFINED;
-    CHECK(idb_store_record(ctx, tx, store, value, key, true, &out) < 0,
-          "§6.1's no-overwrite flag must refuse a key the store already holds a record for");
-    {
-        /* THE INTERNAL SLOT, not the accessor. `DOMException.prototype.name` is an IDL getter, so reading it
-           with JS_GetPropertyStr runs page-shaped code from a C activation with no flow base — which the engine
-           asserts against, and the abort names that read rather than anything about this test. This is the case
-           JS_GetDOMExceptionName exists for, and its own comment says so: a stored value, never an operation,
-           because a reporter runs from outside any flow. A non-DOMException yields undefined and the CHECK below
-           fails loudly with the name it did get, which is the answer this test wants anyway. */
-        JSValue exc = JS_GetException(ctx), name = JS_GetDOMExceptionName(ctx, exc);
-        const char *s = JS_ToCString(ctx, name);
-
-        CHECK(s && !strcmp(s, "ConstraintError"),
-              "§6.1 reported its no-overwrite refusal as something other than a ConstraintError — a page tells "
-              "that apart from a DataError by name");
-        JS_FreeCString(ctx, s);
-        JS_FreeValue(ctx, name);
-        JS_FreeValue(ctx, exc);
-    }
-    JS_FreeValue(ctx, out);
-    JS_FreeValue(ctx, value);
-    got = idb_retrieve_value(ctx, store, range);
-    CHECK(idb_selftest_int(ctx, got) == 99, "a refused put must leave the record it refused to overwrite");
-    JS_FreeValue(ctx, got);
-    JS_FreeValue(ctx, key);
-    JS_FreeValue(ctx, range);
-
-    /* A TAINTED VALUE, which is the half a browser's own test suite cannot have. A page keeps its session in
-       here and reads it back into gated code; §Attacker-sources names IndexedDB as a source. A store that
-       refused this would take the whole surface out of reach, and a store that de-tainted it would answer
-       with a plausible datum and delete the fork the read should produce. */
-    tainted = concolic_new(ctx, "{hash}", "{hash}", JS_NewString(ctx, "session-token"));
-    key = idb_selftest_key(ctx, JS_NewInt32(ctx, 5));
-    idb_selftest_put(ctx, tx, store, tainted, key);
-    JS_FreeValue(ctx, key);
-    range = idb_selftest_range(ctx, JS_NewInt32(ctx, 5));
-    got = idb_retrieve_value(ctx, store, range);
-    CHECK(concolic_is(got), "§6.2 must answer with the stored value still CONCOLIC");
-    CHECK(JS_VALUE_GET_PTR(got) == JS_VALUE_GET_PTR(tainted),
-          "the value came back as a SECOND symbol rather than the one that went in — a concolic stands for a "
-          "primitive and a primitive is its own copy, so every constraint a flow narrowed the source with has "
-          "to name what this read answers");
-    JS_FreeValue(ctx, got);
-    JS_FreeValue(ctx, range);
-    JS_FreeValue(ctx, tainted);
-
-    /* AND A TAINTED KEY — `store.get(location.hash.slice(1))` is the ordinary shape. §7.4's concolic arm takes
-       the TYPE from the example and carries the concolic as the key's value, so §7.3 hands it back as the
-       concolic rather than as a laundered copy of one, and §2.4's compare finds it by reading the example. */
-    tainted = concolic_new(ctx, "{hash}", "{hash}", JS_NewString(ctx, "u-42"));
-    key = idb_selftest_key(ctx, JS_DupValue(ctx, tainted));
-    value = JS_NewString(ctx, "by-tainted-key");
-    idb_selftest_put(ctx, tx, store, value, key);
-    JS_FreeValue(ctx, value);
-    JS_FreeValue(ctx, key);
-    range = idb_selftest_range(ctx, JS_DupValue(ctx, tainted));
-    got = idb_retrieve_key(ctx, store, range);
-    CHECK(JS_VALUE_GET_PTR(got) == JS_VALUE_GET_PTR(tainted),
-          "§7.3 must hand a concolic KEY back as the concolic — a record found by attacker-chosen input is "
-          "found by comparing examples, and the key it answers with is the tainted value itself");
-    JS_FreeValue(ctx, got);
-    got = idb_retrieve_value(ctx, store, range);
-    CHECK(JS_IsString(got), "a record filed under a tainted key must be the record that key finds");
-    JS_FreeValue(ctx, got);
-    JS_FreeValue(ctx, range);
-    JS_FreeValue(ctx, tainted);
-
-    /* The upgrade transaction ends the way §5.4's commit task ends it, so the records above are the state the
+    /* The upgrade transaction ends the way §5.4's commit task ends it, so the store above is the state the
        next transaction finds — which is what §5.5 step 2 has to put back. */
     idb_selftest_finish(ctx, tx);
     idb_key_path_selftest(ctx, conn, db);
@@ -3193,6 +3085,29 @@ static int param_value_count(const char *js, const char *url, const char *pname)
         if (!*v) break;
     }
     return n;
+}
+
+/* DOES ONE PARAM OF ONE ENDPOINT CARRY A VALUE CONTAINING `needle`. The sibling of param_value_count and the
+   same walk, for a row whose claim is about what a value IS rather than how many there are — here, that the
+   record read back out of an object store is still the CONCOLIC that went in. It has to be scoped to the
+   endpoint: the taint rendering appears in this document from the XSS statements as well, so an unscoped
+   strstr is a term that cannot fail, which is the shape param_value_count's own comment was written about. */
+static int param_value_has(const char *js, const char *url, const char *pname, const char *needle) {
+    char pat[160];
+    const char *e, *end, *p, *v, *stop;
+
+    snprintf(pat, sizeof pat, "\"url\":\"%s\"", url);
+    e = strstr(js, pat);
+    if (!e) return 0;
+    end = strstr(e + 1, "\"url\":\"");   /* the NEXT endpoint's url is this object's far edge */
+    snprintf(pat, sizeof pat, "\"name\":\"%s\",\"location\":", pname);
+    p = strstr(e, pat);
+    if (!p || (end && p >= end)) return 0;
+    v = strstr(p, "\"validValues\":[");
+    if (!v) return 0;
+    stop = strchr(v, ']');
+    p = strstr(v, needle);
+    return p != NULL && stop != NULL && p < stop;
 }
 
 /* Fill `out` with the rows this invocation carries and answer how many. Every row's `ok` is computed here, so
@@ -3447,6 +3362,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int idbopen_tt = (strstr(js, "\"/api/idbopen\"") &&
                      strstr(js, "0:1:versionchange:pending:a+b:same:plain:DataError:99:done:7:u-9"
                                 ":a+b:perhandle:1:fixture"));
+
+    /* §6.1 AND §5.5 STEP 2 OVER RECORDS, from the page's own door — the four claims the in-C round-trip
+       fixture used to make before §6.1 became a step machine with no C entry. The taint term is read as the
+       CONCOLIC's own rendering in the emitted URL: a store that de-tainted would emit the example instead,
+       which is the one difference between a fork the solver keeps and one it silently loses. */
+    /* §2.6's INDEX end to end: §4.5's createIndex (both arms of §2.6's multiEntry flag), §4.6's attributes and
+       its one-handle-per-index note, §6.1 step 5's two write arms, §6.3's two retrievals and §6.5 over an
+       index source. `multi2` is the multiEntry key doing the thing it exists for — one record per subkey, so
+       both records answer for tag 'b' — which was dead code until §6.1 step 5 was built. */
+    int idbidx_tt = strstr(js, "by_name:name:nu:me:own:same:refbob:pk2:multi2") != NULL;
+
+    int idbrec_tt = (strstr(js, "ConstraintError:first1:over21:made77gone:undoneAD") &&
+                     param_value_has(js, "/api/idbrec", "t", "{hash}"));
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -3766,6 +3694,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "timer-order", timer_tt, "/api/timerfire", SESS_EXPLORE },
         { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE },
         { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE },
+        { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },
+        { "idb-index", idbidx_tt, "/api/idbidx", SESS_EXPLORE },
         { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE },
         { "s-eval", s_eval, "state.code", SESS_EXPLORE },
         { "s-evalc", s_evalc, "state.note", SESS_EXPLORE },

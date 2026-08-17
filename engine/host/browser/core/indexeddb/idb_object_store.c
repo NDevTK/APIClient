@@ -25,9 +25,10 @@
  * rather than from re-deriving which one is missing. Every number and title below is the W3C Recommendation's
  * own (§2.6 Index, §2.10 Cursor, §6.7 Cursor iteration operation, §6.3 Index retrieval operations, §5.12
  * Creating a request to retrieve multiple items, §4.8 The IDBRecord interface):
- *   - `indexNames`, `index()`, `createIndex()`, `deleteIndex()` wait on §2.6 INDEX. Nothing in this engine can
- *     hold §2.6's index set, and §2.6.1's index handle has no interface (§4.6 The IDBIndex interface is
- *     absent), which is the same reason §6.3 Index retrieval operations has no body.
+ *   - `indexNames` waits on DOMStringList, which this engine does not have — the same construct §4.4's
+ *     `objectStoreNames` waits on, and the reason its getter's own step 2 ("return the result (a DOMStringList)
+ *     of creating a sorted name list with names") cannot be written. `index()`, `createIndex()` and
+ *     `deleteIndex()` are HERE: §2.6 Index, §2.6.1 Index handle and §4.6 The IDBIndex interface are built.
  *   - `openCursor()`, `openKeyCursor()` wait on §2.10 CURSOR — the record with a position, a source handle and
  *     a direction — and on §6.7 Cursor iteration operation, which is what a `continue()` performs.
  *   - `getAll()`, `getAllKeys()`, `getAllRecords()` wait on §5.12 CREATING A REQUEST TO RETRIEVE MULTIPLE
@@ -50,6 +51,8 @@
 #include "core/idl_slots.h"
 #include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_database.h"
+#include "core/indexeddb/idb_index.h"
+#include "core/indexeddb/idb_index_handle.h"
 #include "core/indexeddb/idb_key.h"
 #include "core/indexeddb/idb_key_array.h"
 #include "core/indexeddb/idb_key_path.h"
@@ -69,6 +72,10 @@
    positive statement "not inspected yet" and is written when the handle is created, never left absent: a
    consumer that read a missing field as "no cache" would be defaulting a field nobody writes. */
 #define OS_KEY_PATH    "keyPathValue"
+/* §2.2.1's INDEX SET, and §2.6.1's one-handle-per-index cache. Both are Arrays in creation order; see the
+   header for why the first is NOT the store's own set. */
+#define OS_INDEX_SET   "indexSet"
+#define OS_INDEX_HANDLES "indexHandles"
 
 static JSValue   g_key;
 static JSClassID g_os_class;
@@ -76,6 +83,7 @@ static int       g_ready;
 static JSRuntime *g_os_rt;
 static int g_id_put = -1, g_id_add = -1, g_id_get = -1, g_id_get_key = -1, g_setter_name = -1;
 static int g_id_delete = -1, g_id_clear = -1, g_id_count = -1;
+static int g_id_index = -1, g_id_create_index = -1, g_id_delete_index = -1;
 
 /* The magics that tell the two pairs of members apart. §4.5 states `put` and `add` as ONE algorithm differing
    only in the no-overwrite flag, and `get` and `getKey` as two retrievals differing only in which of §6.2's
@@ -84,6 +92,20 @@ enum { OS_PUT = 0, OS_ADD = 1 };
 enum { OS_GET_VALUE = 0, OS_GET_KEY = 1 };
 
 /* ---- the record ---------------------------------------------------------------------------------------- */
+
+/* HOW LONG ONE OF THIS FILE'S OWN LISTS IS — engine-built, holding engine-built records, so a malformed one
+   is the component disagreeing with itself and crashes rather than reporting. */
+static uint32_t os_list_len(JSContext *ctx, JSValueConst list)
+{
+    JSValue len = JS_GetPropertyStr(ctx, list, "length");
+    uint32_t n = 0;
+    int r = JS_ToUint32(ctx, &n, len);
+
+    DCHECK(r >= 0, "one of §2.2.1's own lists had a length that is not a number");
+    (void)r;
+    JS_FreeValue(ctx, len);
+    return n;
+}
 
 static JSValue os_slots(JSContext *ctx, JSValueConst h)
 {
@@ -123,9 +145,24 @@ static JSValue os_get(JSContext *ctx, JSValueConst h, const char *field)
     return v;
 }
 
+/* §2.2.1's "the set of indexes that REFERENCE the associated object store", COPIED — the operation §2.2.1's
+   initialisation and §5.8 step 5.2 both perform. A copy and not the store's own Array, because the two lists
+   diverge the moment an upgrade transaction creates or deletes an index. OWNED. */
+static JSValue os_index_set_copy(JSContext *ctx, JSValueConst store)
+{
+    JSValue live = idb_store_index_set(ctx, store), out = JS_NewArray(ctx);
+    uint32_t i, n = idb_store_index_count(ctx, store);
+
+    CHECK(!JS_IsException(out), "IndexedDB: §2.2.1's index set could not be allocated");
+    for (i = 0; i < n; i++)
+        JS_DefinePropertyValueUint32(ctx, out, i, JS_GetPropertyUint32(ctx, live, i), JS_PROP_C_W_E);
+    JS_FreeValue(ctx, live);
+    return out;
+}
+
 JSValue idb_object_store_handle(JSContext *ctx, JSValueConst store, JSValueConst transaction)
 {
-    JSValue h, st, proto;
+    JSValue h, st, proto, handles;
     JSAtom k;
 
     DCHECK(g_ready, "an object store handle was created before idb_object_store_init declared the interface");
@@ -147,6 +184,14 @@ JSValue idb_object_store_handle(JSContext *ctx, JSValueConst store, JSValueConst
        the old name after an aborted rename, the difference §4.5's getter note draws. */
     JS_SetPropertyStr(ctx, st, OS_NAME, idb_object_store_name(ctx, store));
     JS_SetPropertyStr(ctx, st, OS_KEY_PATH, JS_UNDEFINED);
+    /* §2.6.1's set of index handles, empty: a handle is minted on the first `index()` or `createIndex`. */
+    handles = JS_NewArray(ctx);
+    CHECK(!JS_IsException(handles), "IndexedDB: §2.6.1's set of index handles could not be allocated");
+    JS_SetPropertyStr(ctx, st, OS_INDEX_HANDLES, handles);
+    /* §2.2.1's index set, "INITIALIZED TO THE SET OF INDEXES THAT REFERENCE THE ASSOCIATED OBJECT STORE when
+       the object store handle is created" — a COPY of that set and not the set itself, which is the whole of
+       what §5.8 step 5.2 restores. */
+    JS_SetPropertyStr(ctx, st, OS_INDEX_SET, os_index_set_copy(ctx, store));
     k = JS_ValueToAtom(ctx, g_key);
     CHECK(k != JS_ATOM_NULL, "the IDBObjectStore slot key could not be interned");
     JS_SetProperty(ctx, h, k, st);
@@ -185,6 +230,89 @@ void idb_object_store_handle_restore_name(JSContext *ctx, JSValueConst handle)
     JS_SetPropertyStr(ctx, slots, OS_NAME, idb_object_store_name(ctx, store));
     JS_FreeValue(ctx, slots);
     JS_FreeValue(ctx, store);
+}
+
+JSValue idb_object_store_handle_transaction(JSContext *ctx, JSValueConst handle)
+{
+    JSValue tx;
+
+    DCHECK(idb_object_store_is(handle), "the transaction of something that is not an object store handle was "
+                                        "asked for");
+    tx = os_get(ctx, handle, OS_TRANSACTION);
+    DCHECK(idb_transaction_is(tx), "an object store handle carried no transaction");
+    return tx;
+}
+
+JSValue idb_object_store_handle_index_set(JSContext *ctx, JSValueConst handle)
+{
+    JSValue set;
+
+    DCHECK(idb_object_store_is(handle), "§2.2.1's index set was asked of something that is not an object store "
+                                        "handle");
+    set = os_get(ctx, handle, OS_INDEX_SET);
+    DCHECK(JS_IsArray(set), "an object store handle carried no INDEX SET — §2.2.1 gives every handle one when "
+                            "it is created, and only this file writes it");
+    return set;
+}
+
+void idb_object_store_handle_reset_index_set(JSContext *ctx, JSValueConst handle)
+{
+    JSValue store = idb_object_store_handle_store(ctx, handle), slots = os_slots(ctx, handle);
+
+    DCHECK(JS_IsObject(slots), "an object store handle's index set was reset on a value carrying no slots");
+    JS_SetPropertyStr(ctx, slots, OS_INDEX_SET, os_index_set_copy(ctx, store));
+    JS_FreeValue(ctx, slots);
+    JS_FreeValue(ctx, store);
+}
+
+void idb_object_store_handle_clear_index_set(JSContext *ctx, JSValueConst handle)
+{
+    JSValue set = idb_object_store_handle_index_set(ctx, handle);
+
+    JS_SetPropertyStr(ctx, set, "length", JS_NewUint32(ctx, 0));
+    JS_FreeValue(ctx, set);
+}
+
+JSValue idb_object_store_handle_index_handles(JSContext *ctx, JSValueConst handle, uint32_t *count)
+{
+    JSValue list;
+
+    DCHECK(idb_object_store_is(handle), "§2.6.1's set of index handles was asked of something that is not an "
+                                        "object store handle");
+    list = os_get(ctx, handle, OS_INDEX_HANDLES);
+    DCHECK(JS_IsArray(list), "an object store handle carried no set of index handles");
+    *count = os_list_len(ctx, list);
+    return list;
+}
+
+/* §2.6.1's "only one index handle associated with a particular index within a transaction", as the one door
+   both §4.5's `index()` and its `createIndex` go through. Keyed by the INDEX RECORD and not by a name, which is
+   the same argument idb_transaction.h makes for the object store handles: a rename is the one thing about an
+   index an upgrade transaction can change. OWNED. */
+static JSValue os_index_handle_for(JSContext *ctx, JSValueConst handle, JSValueConst index)
+{
+    uint32_t i, n;
+    JSValue list = idb_object_store_handle_index_handles(ctx, handle, &n), made;
+
+    for (i = 0; i < n; i++) {
+        JSValue h = JS_GetPropertyUint32(ctx, list, i), held;
+        bool same;
+
+        DCHECK(idb_index_handle_is(h), "an object store handle's set of index handles held something that is "
+                                       "not an index handle");
+        held = idb_index_handle_index(ctx, h);
+        same = JS_VALUE_GET_PTR(held) == JS_VALUE_GET_PTR(index);
+        JS_FreeValue(ctx, held);
+        if (same) {
+            JS_FreeValue(ctx, list);
+            return h;
+        }
+        JS_FreeValue(ctx, h);
+    }
+    made = idb_index_handle(ctx, index, handle);
+    JS_DefinePropertyValueUint32(ctx, list, n, JS_DupValue(ctx, made), JS_PROP_C_W_E);
+    JS_FreeValue(ctx, list);
+    return made;
 }
 
 /* ---- the refusals every member of §4.5 begins with -------------------------------------------------------
@@ -252,40 +380,132 @@ static void os_active_across_suspension(JSContext *ctx, JSValueConst tx)
  * demands of anything that becomes a work item: the operands travel WITH it, so the record is filed under the
  * key the member converted rather than under whatever the handle names by the time the task runs.
  *
- * Neither of these runs the page's code. §6.1's clone is over a value §4.5 has ALREADY cloned (see the member),
- * and §6.2's is over a value this component built, so both operate on engine-owned plain data — which is why
- * they are C bodies over their captured data rather than step machines. */
-/* THE TRANSACTION IS ONE OF THE OPERANDS, for the same reason the store and the key are: this operation is a
-   work item, and §5.5 step 2 has to know whose change the record it writes is. Read back off the handle at task
-   time it would be whichever transaction that handle names BY THEN — the same one today, and exactly the shape
-   §scheduler names as the defect that arrives with every conversion from a call to a job. */
-#define OP_STORE_TX     0
-#define OP_STORE_STORE  1
-#define OP_STORE_VALUE  2
-#define OP_STORE_KEY    3
+ * NONE OF THEM RUNS THE PAGE'S CODE — §6.1's clone is over a value §4.5 has ALREADY cloned, and §6.2's is over
+ * a value this component built — so the four below are C bodies over their captured data. §6.1 IS NOT one of
+ * them, and the reason is not the page: its step 5 drives §7.1 over each index's key path, whose step 3 is
+ * §7.4, and §7.4's array arm exists in exactly one form, the parkable walk. So that operation is a step machine
+ * (js_idb_store_operation) and these four are not. */
+/* §6.1's OPERATION IS A STEP MACHINE AND NOT A C BODY, and §6.1 step 5 is why: that step runs §7.1's
+ * extract-a-key once per index which references the store, and an index whose key path resolves to an Array —
+ * which is the whole point of §2.6's multiEntry flag — reaches §7.4's ARRAY ARM. There is one implementation of
+ * that arm and it is the parkable walk, so the operation drives it exactly as §4.5's own members do. It is a
+ * JS_NewStepClosure over its operands rather than a JS_NewCFunctionData over them, which is the same capture
+ * with a machine behind it; idb_request.c calls it through step_call_run and nothing there changes.
+ *
+ * THE TRANSACTION IS ONE OF THE OPERANDS, for the same reason the store and the key are: this operation is a
+ * work item, and §5.5 step 2 has to know whose change the record it writes is. Read back off the handle at task
+ * time it would be whichever transaction that handle names BY THEN — the same one today, and exactly the shape
+ * §scheduler names as the defect that arrives with every conversion from a call to a job. THE NO-OVERWRITE FLAG
+ * IS ONE TOO: `put` and `add` are one algorithm differing in that flag, and a step closure has no magic to
+ * carry it in, so it travels with the other four. */
+#define OP_STORE_TX            0
+#define OP_STORE_STORE         1
+#define OP_STORE_VALUE         2
+#define OP_STORE_KEY           3
+#define OP_STORE_NO_OVERWRITE  4
 
-static JSValue js_idb_store_operation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                      int magic, JSValueConst *func_data)
+#define OSOP_STAGES(X) \
+    X(OSOP_ENTER, "Indexed Database §5.6 step 5.2, entering §6.1's store a record into an object store with " \
+                  "the four operands §4.5 step 12 closed this operation over") \
+    IDB_STORE_RECORD_ALGO_STAGES(X, OSOP, "Indexed Database §4.5 add or put step 12's operation") \
+    X(OSOP_RESULT, "Indexed Database §7.3 convert a key to a value, over the key §6.1 step 6 returned")
+enum { OSOP_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const OSOP_STEPS[] = { OSOP_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr    hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
+    IdbStoreWalk sw;       /* §6.1 in flight */
+    JSValue      result;   /* §7.3's conversion of the key it returned (owned) */
+} JSIdbStoreOpState;
+
+/* WHAT THIS MACHINE OWNS: §6.1's own record, whose visit names every reference it holds, and this machine's
+   answer. There is no `release` — the walk's level stack is idb_key_walk_visit's. */
+static void js_idb_store_op_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    JSValue key = JS_UNDEFINED, out;
+    JSIdbStoreOpState *s = st;
 
-    (void)this_val; (void)argc; (void)argv;
-    /* §6.1's own contract: 0 with the key it filed the record under, or -1 with the DOMException it names
-       live — which §5.6 step 5.2 takes as "result is an error". */
-    if (idb_store_record(ctx, func_data[OP_STORE_TX], func_data[OP_STORE_STORE], func_data[OP_STORE_VALUE],
-                         func_data[OP_STORE_KEY], magic == OS_ADD, &key) < 0)
-        return JS_EXCEPTION;
-    /* "If successful, request's result will be the record's key" — and §7.3 IS THAT WORD "key" CROSSING TO
-       SCRIPT. §5.6 step 5.6.4 sets request's result to what this operation answered and nothing converts on
-       the way, while §4.1 declares `result` as Web IDL's `any`; a §2.4 key is not one, it is a (type, value)
-       record this engine holds internally, so handing it over would put a slot record on `request.result`
-       where a page reads `e.target.result === 1`. §6.2's retrieve-a-key spells the conversion out as its own
-       last step and §6.1 does not, which is editorial: both answers reach the page through the one attribute,
-       and there is exactly one algorithm in this standard that turns a key into an ECMAScript value. */
-    out = idb_key_to_value(ctx, key);
-    JS_FreeValue(ctx, key);
-    return out;
+    idb_store_record_walk_visit(ctx, &s->sw, v);
+    v->val(ctx, &s->result);
 }
+
+static JSValue js_idb_store_op_fini(JSContext *ctx, void *st, bool take_result)
+{
+    JSIdbStoreOpState *s = st;
+    JSValue r = take_result ? s->result : JS_UNDEFINED;
+
+    (void)ctx;
+    if (take_result) s->result = JS_UNDEFINED;
+    return r;
+}
+
+static int js_idb_store_operation(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSIdbStoreOpState *s = st;
+
+    STEP_DISPATCH(OSOP_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(OSOP_ENTER);
+    {
+        /* A STEP STATE IS js_mallocz'd AND A ZEROED JSValue IS THE INTEGER 0, so every slot this machine owns
+           is PLACED before anything can read one — `start` below places §6.1's. */
+        JSValueConst flag = JS_StepClosureData(&s->hdr, OP_STORE_NO_OVERWRITE);
+
+        s->result = JS_UNDEFINED;
+        JS_FreeValue(ctx, cb_result);
+        DCHECK(JS_IsBool(flag), "§6.1's no-overwrite flag was captured as something that is not a boolean — "
+                                "§4.5 step 12 mints this operation with the flag that tells `add` from `put`");
+        idb_store_record_walk_start(ctx, &s->hdr, &s->sw,
+                                    JS_StepClosureData(&s->hdr, OP_STORE_TX),
+                                    JS_StepClosureData(&s->hdr, OP_STORE_STORE),
+                                    JS_StepClosureData(&s->hdr, OP_STORE_VALUE),
+                                    JS_StepClosureData(&s->hdr, OP_STORE_KEY),
+                                    JS_ToBool(ctx, flag) != 0, OSOP_LENGTH, OSOP_RESULT);
+        return JS_STEP_YIELD;
+    }
+
+    /* §6.1's own rest points, which include §7.1's and therefore §7.4's. Named individually for the reason
+       core/dom/node.c names `clone a node`'s: a stage added to the algorithm does not compile until it has an
+       arm here, where a negation or a partial list would silently route it into a neighbour. */
+    STEP_ARM(OSOP_LENGTH);
+    STEP_ARM(OSOP_BEGIN);
+    STEP_ARM(OSOP_HOP);
+    STEP_ARM(OSOP_ENTRY);
+    STEP_ARM(OSOP_SUBKEY);
+    STEP_ARM(OSOP_LEAVE);
+    STEP_ARM(OSOP_GENERATE);
+    STEP_ARM(OSOP_NO_OVERWRITE);
+    STEP_ARM(OSOP_REMOVE);
+    STEP_ARM(OSOP_STORE);
+    STEP_ARM(OSOP_INDEX);
+    STEP_ARM(OSOP_INDEX_TOOK);
+    STEP_ARM(OSOP_INDEX_UNIQUE);
+    STEP_ARM(OSOP_INDEX_WRITE);
+        return idb_store_record_walk_run(ctx, &s->hdr, &s->sw, cb_result, OSOP_LENGTH, out_cb, out_argc);
+
+    STEP_ARM(OSOP_RESULT);
+    {
+        JSValue key = idb_store_record_walk_take(ctx, &s->sw);
+
+        JS_FreeValue(ctx, cb_result);
+        /* "If successful, request's result will be the record's key" — and §7.3 IS THAT WORD "key" CROSSING TO
+           SCRIPT. §5.6 step 5.6.4 sets request's result to what this operation answered and nothing converts
+           on the way, while §4.1 declares `result` as Web IDL's `any`; a §2.4 key is not one, it is a (type,
+           value) record this engine holds internally, so handing it over would put a slot record on
+           `request.result` where a page reads `e.target.result === 1`. §6.2's retrieve-a-key spells the
+           conversion out as its own last step and §6.1 does not, which is editorial. */
+        s->result = idb_key_to_value(ctx, key);
+        JS_FreeValue(ctx, key);
+        return JS_STEP_DONE;
+    }
+}
+
+static const JSTrampStepDef js_idb_store_op_def = {
+    sizeof(JSIdbStoreOpState), js_idb_store_operation, js_idb_store_op_fini, 0,
+    .visit = js_idb_store_op_visit,
+    .algorithm = "Indexed Database §6.1 store a record into an object store, as §4.5 step 12's operation",
+    .steps = OSOP_STEPS
+};
+static int g_store_op_stepid = -1;
 
 #define OP_GET_STORE 0
 #define OP_GET_RANGE 1
@@ -565,8 +785,8 @@ static int js_os_put(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
 
     STEP_ARM(OSP_OPERATION);
     {
-        JSValueConst data[4];
-        JSValue op;
+        JSValueConst data[5];
+        JSValue op, flag = JS_NewBool(ctx, idl_step_magic(hdr) == OS_ADD);
 
         JS_FreeValue(ctx, cb_result);
         os_active_across_suspension(ctx, s->tx);
@@ -574,7 +794,9 @@ static int js_os_put(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
         data[OP_STORE_STORE] = s->store;
         data[OP_STORE_VALUE] = s->clone;
         data[OP_STORE_KEY] = s->key;
-        op = JS_NewCFunctionData(ctx, js_idb_store_operation, 0, idl_step_magic(hdr), 4, data);   /* STEP 12 */
+        data[OP_STORE_NO_OVERWRITE] = flag;
+        op = JS_NewStepClosure(ctx, g_store_op_stepid, 0, 5, data);                    /* STEP 12 */
+        JS_FreeValue(ctx, flag);
         CHECK(!JS_IsException(op), "IndexedDB: §6.1's operation could not be minted");
         /* "Return the result (an IDBRequest) of running asynchronously execute a request with HANDLE and
            operation." The source is the HANDLE, which is what `request.source` answers with. */
@@ -995,6 +1217,280 @@ fail:
     return JS_EXCEPTION;
 }
 
+/* ---- §4.5's INDEX, CREATEINDEX and DELETEINDEX ------------------------------------------------------------
+ *
+ * NONE OF THE THREE IS A MACHINE, and that is a fact about their arguments rather than a shortcut: each takes
+ * only `DOMString name`, a `(DOMString or sequence<DOMString>)` and an `IDBIndexParameters` dictionary, all of
+ * which the DECLARATION has already converted (core/idl_args.h) — so no body below reads a page value, and
+ * there is no §7.4 in any of them. `createIndex` returns an IDBIndex synchronously and NOT an IDBRequest,
+ * which is §4.5's own shape. */
+
+/* "The index(name) method steps are: let transaction be this's transaction. Let store be this's object store.
+   If store has been deleted, throw an InvalidStateError. If transaction's state is FINISHED, then throw an
+   InvalidStateError. Let index be the index named name in this's INDEX SET if one exists, or throw a
+   NotFoundError otherwise. Return an index handle associated with index and this."
+   THE STATE TEST IS `finished` AND NOT `not active`, which is the standard's and is the one place in §4.5
+   where those differ: `tx.objectStore('s').index('i')` from a `setTimeout` after the task returned finds an
+   INACTIVE transaction and still answers, because reading the index set changes nothing. */
+static JSValue js_os_index(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue store, tx, set, index, handle;
+    const char *name;
+
+    (void)argc; (void)magic;
+    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
+    store = os_get(ctx, this_val, OS_STORE);
+    tx = os_get(ctx, this_val, OS_TRANSACTION);
+    DCHECK(JS_IsObject(store) && idb_transaction_is(tx), "an object store handle carried no store or no "
+                                                         "transaction");
+    if (idb_object_store_is_deleted(ctx, store)) {
+        JS_ThrowDOMException(ctx, "InvalidStateError", "the object store has been deleted");
+        goto fail;
+    }
+    if (idb_transaction_state(ctx, tx) == IDB_TX_FINISHED) {
+        JS_ThrowDOMException(ctx, "InvalidStateError", "the transaction has finished");
+        goto fail;
+    }
+    name = JS_ToCString(ctx, argv[0]);
+    if (name == NULL) goto fail;
+    set = idb_object_store_handle_index_set(ctx, this_val);
+    index = idb_index_find_in(ctx, set, name);
+    JS_FreeValue(ctx, set);
+    JS_FreeCString(ctx, name);
+    if (JS_IsNull(index)) {
+        JS_FreeValue(ctx, index);
+        JS_ThrowDOMException(ctx, "NotFoundError", "no index with that name exists in the object store");
+        goto fail;
+    }
+    /* "Return AN index handle associated with index and this", plus the note a page compares: "each call to
+       this method on the same IDBObjectStore instance with the same name returns the same IDBIndex instance." */
+    handle = os_index_handle_for(ctx, this_val, index);
+    JS_FreeValue(ctx, index);
+    JS_FreeValue(ctx, store);
+    JS_FreeValue(ctx, tx);
+    return handle;
+
+fail:
+    JS_FreeValue(ctx, store);
+    JS_FreeValue(ctx, tx);
+    return JS_EXCEPTION;
+}
+
+/* The FIRST FIVE STEPS of `createIndex` and the first five of `deleteIndex`, which §4.5 writes identically:
+   "let transaction be this's transaction. Let store be this's object store. If transaction is not an upgrade
+   transaction, throw an InvalidStateError. If store has been deleted, throw an InvalidStateError. If
+   transaction's state is not active, then throw a TransactionInactiveError." Both are OWNED on success. */
+static int os_upgrade_check(JSContext *ctx, JSValueConst h, JSValue *pstore, JSValue *ptx)
+{
+    JSValue store = os_get(ctx, h, OS_STORE), tx = os_get(ctx, h, OS_TRANSACTION);
+
+    DCHECK(JS_IsObject(store) && idb_transaction_is(tx), "an object store handle carried no store or no "
+                                                         "transaction");
+    if (idb_transaction_mode(ctx, tx) != IDB_TX_VERSIONCHANGE) {
+        JS_ThrowDOMException(ctx, "InvalidStateError",
+                             "an index can only be created or deleted within an upgrade transaction");
+        goto fail;
+    }
+    if (idb_object_store_is_deleted(ctx, store)) {
+        JS_ThrowDOMException(ctx, "InvalidStateError", "the object store has been deleted");
+        goto fail;
+    }
+    if (idb_transaction_state(ctx, tx) != IDB_TX_ACTIVE) {
+        JS_ThrowDOMException(ctx, "TransactionInactiveError", "the upgrade transaction is not active");
+        goto fail;
+    }
+    *pstore = store;
+    *ptx = tx;
+    return 0;
+
+fail:
+    JS_FreeValue(ctx, store);
+    JS_FreeValue(ctx, tx);
+    return -1;
+}
+
+/* IS ANY REQUEST THIS TRANSACTION HAS STILL TO RUN PLACED AGAINST `store` — §4.5's `createIndex` question, and
+ * NOT "does the transaction have pending requests", which is what this first asked and which is WRONG in the
+ * ordinary direction. §5.7's upgrade transaction is ONE transaction for every store an `upgradeneeded` handler
+ * touches, so `s1.put(...)` followed by `db.createObjectStore('s2').createIndex(...)` — the shape every bundle
+ * that migrates a schema writes — leaves a pending request the whole time, and the broad question would refuse
+ * it. What §4.5's note is actually about is a request that will run §6.1 STEP 5 over THIS store after the index
+ * exists, so the source of each pending request is what decides it.
+ *
+ * §2.8's source is an object store handle, an index handle, or null for an open request; an index handle counts
+ * because §6.3's retrievals read the same store's records through it. */
+static bool os_pending_for_store(JSContext *ctx, JSValueConst tx, JSValueConst store)
+{
+    uint32_t i, from = 0, n = 0;
+    JSValue list = idb_transaction_pending_requests(ctx, tx, &from, &n);
+    bool hit = false;
+
+    for (i = from; i < n && !hit; i++) {
+        JSValue req = JS_GetPropertyUint32(ctx, list, i), src, held = JS_UNDEFINED;
+
+        DCHECK(JS_IsObject(req), "a transaction's request list had a hole in it");
+        src = idb_request_source(ctx, req);
+        if (idb_object_store_is(src))
+            held = idb_object_store_handle_store(ctx, src);
+        else if (idb_index_handle_is(src)) {
+            JSValue index = idb_index_handle_index(ctx, src);
+
+            held = idb_index_store(ctx, index);
+            JS_FreeValue(ctx, index);
+        }
+        hit = JS_IsObject(held) && JS_VALUE_GET_PTR(held) == JS_VALUE_GET_PTR(store);
+        JS_FreeValue(ctx, held);
+        JS_FreeValue(ctx, src);
+        JS_FreeValue(ctx, req);
+    }
+    JS_FreeValue(ctx, list);
+    return hit;
+}
+
+/* "The createIndex(name, keyPath, options) method steps are: [the five above] ... If an index named name
+   already exists in store, throw a ConstraintError. If keyPath is not a valid key path, throw a SyntaxError.
+   Let unique be options's unique member. Let multiEntry be options's multiEntry member. If keyPath is a
+   sequence and multiEntry is true, throw an InvalidAccessError. Let index be a new index in store [with the
+   four fields]. Add index to this's index set. Return a new index handle associated with index and this." */
+static JSValue js_os_create_index(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                  int magic)
+{
+    /* `optional IDBIndexParameters options = {}` means the dictionary EXISTS whether or not the page wrote
+       one, carrying both members at their declared `= false` — so this reads out of the vector rather than
+       out of `argc`, which would be filling a hole the conversion does not leave. */
+    JSValueConst options = argv[2];
+    JSValue store = JS_UNDEFINED, tx = JS_UNDEFINED, set, existing, index, handle;
+    const char *name = NULL;
+    bool unique, multi_entry;
+
+    (void)argc; (void)magic;
+    DCHECK(JS_IsObject(options), "§4.5's createIndex was handed no options dictionary — the IDL writes "
+                                 "`optional IDBIndexParameters options = {}`, so the conversion builds one "
+                                 "with every member at its default even for `createIndex(n, k)`");
+    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
+    if (os_upgrade_check(ctx, this_val, &store, &tx) < 0) return JS_EXCEPTION;      /* STEPS 1-5 */
+    name = JS_ToCString(ctx, argv[0]);
+    if (name == NULL) goto fail;
+    existing = idb_index_find(ctx, store, name);                                    /* STEP 6 */
+    if (!JS_IsNull(existing)) {
+        JS_FreeValue(ctx, existing);
+        JS_ThrowDOMException(ctx, "ConstraintError",
+                             "an index with that name already exists in the object store");
+        goto fail_name;
+    }
+    JS_FreeValue(ctx, existing);
+    /* "If keyPath is not a valid key path, throw a SyntaxError." §2.5's two arms over the value §3.2.25's
+       union answered with — a string, or the ENGINE'S own array of strings. UNLIKE createObjectStore's, this
+       argument is NOT NULLABLE, so there is no null arm: §2.6 derives an index's keys from a key path and an
+       index without one is not a state the standard has. */
+    if (!idb_key_path_value_is_valid(ctx, argv[1])) {                               /* STEP 7 */
+        JS_ThrowDOMException(ctx, "SyntaxError", "the key path is not a valid key path");
+        goto fail_name;
+    }
+    unique = idl_dict_bool(ctx, options, "unique");                                 /* STEP 8 */
+    multi_entry = idl_dict_bool(ctx, options, "multiEntry");                        /* STEP 9 */
+    /* "If keyPath is a SEQUENCE and multiEntry is true, throw an InvalidAccessError." §2.6's multiEntry flag
+       is about an index key that is an ARRAY KEY, and a list key path always builds one — so the two together
+       would make every record's key a per-subkey expansion of a compound key. */
+    if (JS_IsArray(argv[1]) && multi_entry) {                                       /* STEP 10 */
+        JS_ThrowDOMException(ctx, "InvalidAccessError",
+                             "a multiEntry index cannot have a sequence key path");
+        goto fail_name;
+    }
+    /* §4.5's NOTE IS A WHOLE ALGORITHM AND IT IS NOT BUILT: "although this method does not return an
+       IDBRequest object, the INDEX CREATION ITSELF IS PROCESSED AS AN ASYNCHRONOUS REQUEST within the upgrade
+       transaction", and a constraint failure then aborts the TRANSACTION rather than the request. Its worked
+       example is two `put`s queued BEFORE the createIndex, which must NOT see the index — so the index needs
+       an unpopulated state, or the population request has to order ahead of the pending puts. Neither exists,
+       so what this file can do faithfully is create an index into a store whose content is SETTLED: no
+       records, and no request of this transaction still to run. Anything else would silently give the wrong
+       answer — a ConstraintError on the page's second `put` where a browser aborts the transaction. */
+    DCHECK(idb_store_record_count(ctx, store) == 0 && !os_pending_for_store(ctx, tx, store),
+           "§4.5's createIndex was called over an object store whose content is NOT SETTLED — the store already "
+           "holds records, or a request of this transaction that is still to run is placed against it. §4.5 "
+           "processes the index creation as an ASYNCHRONOUS REQUEST within the upgrade transaction, which is "
+           "what makes the index invisible to requests queued BEFORE it and what makes a uniqueness failure "
+           "abort the TRANSACTION rather than one request; created eagerly, as here, those requests see the "
+           "index and §6.1 step 5 reports a ConstraintError on one put where a browser aborts the whole "
+           "upgrade. Build that: an UNPOPULATED state on §2.6's index, and a population operation placed "
+           "through §5.6 that walks the store's existing records through §6.1 step 5");
+    index = idb_index_create(ctx, tx, store, name, JS_DupValue(ctx, argv[1]), unique, multi_entry); /* STEP 11 */
+    /* "Add index to THIS's index set" — the handle's, which is what `indexNames` and `index()` read and what
+       §5.8 step 5.2 restores from the store's. */
+    set = idb_object_store_handle_index_set(ctx, this_val);                         /* STEP 12 */
+    JS_DefinePropertyValueUint32(ctx, set, os_list_len(ctx, set), JS_DupValue(ctx, index), JS_PROP_C_W_E);
+    JS_FreeValue(ctx, set);
+    handle = os_index_handle_for(ctx, this_val, index);                             /* STEP 13 */
+    JS_FreeValue(ctx, index);
+    JS_FreeCString(ctx, name);
+    JS_FreeValue(ctx, store);
+    JS_FreeValue(ctx, tx);
+    return handle;
+
+fail_name:
+    JS_FreeCString(ctx, name);
+fail:
+    JS_FreeValue(ctx, store);
+    JS_FreeValue(ctx, tx);
+    return JS_EXCEPTION;
+}
+
+/* "The deleteIndex(name) method steps are: [the five above] ... Let index be the index named name in STORE if
+   one exists, or throw a NotFoundError otherwise. Remove index from THIS's index set. Destroy index."
+   THE TWO SETS ARE BOTH NAMED IN ONE ALGORITHM, which is the clearest statement that they are two: the lookup
+   is in the store's and the removal is from the handle's. */
+static JSValue js_os_delete_index(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                  int magic)
+{
+    JSValue store = JS_UNDEFINED, tx = JS_UNDEFINED, set, index;
+    const char *name;
+    uint32_t i, n;
+    bool found;
+
+    (void)argc; (void)magic;
+    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
+    if (os_upgrade_check(ctx, this_val, &store, &tx) < 0) return JS_EXCEPTION;      /* STEPS 1-5 */
+    name = JS_ToCString(ctx, argv[0]);
+    if (name == NULL) { JS_FreeValue(ctx, store); JS_FreeValue(ctx, tx); return JS_EXCEPTION; }
+    index = idb_index_find(ctx, store, name);                                       /* STEP 6 */
+    JS_FreeCString(ctx, name);
+    if (JS_IsNull(index)) {
+        JS_FreeValue(ctx, index);
+        JS_FreeValue(ctx, store);
+        JS_FreeValue(ctx, tx);
+        return JS_ThrowDOMException(ctx, "NotFoundError",
+                                    "no index with that name exists in the object store");
+    }
+    /* "Remove index from this's index set." THE SHIFT IS INSIDE THE SEARCH, which is idb_database.c's shape for
+       the same operation and is why the not-found arm is a DFAIL rather than a length write past a failed
+       assert: an index in the STORE's set that is not in this HANDLE's set is a state neither §2.2.1's
+       initialisation nor §4.5's createIndex can produce, and truncating on it would drop a live entry. */
+    set = idb_object_store_handle_index_set(ctx, this_val);                         /* STEP 7 */
+    n = os_list_len(ctx, set);
+    found = false;
+    for (i = 0; i < n && !found; i++) {
+        JSValue member = JS_GetPropertyUint32(ctx, set, i);
+
+        found = JS_VALUE_GET_PTR(member) == JS_VALUE_GET_PTR(index);
+        JS_FreeValue(ctx, member);
+        if (!found) continue;
+        for (i--; i + 1 < n; i++)
+            JS_DefinePropertyValueUint32(ctx, set, i, JS_GetPropertyUint32(ctx, set, i + 1), JS_PROP_C_W_E);
+        JS_SetPropertyStr(ctx, set, "length", JS_NewUint32(ctx, n - 1));
+    }
+    JS_FreeValue(ctx, set);
+    if (!found)
+        DFAIL("an index named in the STORE's set of indexes was not in this HANDLE's index set. §2.2.1 "
+              "initialises the handle's from the store's and §4.5's createIndex adds to both, so the two can "
+              "only diverge across an aborted upgrade — which §5.8 step 5.2 puts back before any member of "
+              "this interface can be reached again");
+    idb_index_destroy(ctx, tx, store, index);                                       /* STEP 8 */
+    JS_FreeValue(ctx, index);
+    JS_FreeValue(ctx, store);
+    JS_FreeValue(ctx, tx);
+    return JS_UNDEFINED;
+}
+
 /* ---- install ------------------------------------------------------------------------------------------------ */
 
 static void idb_object_store_install_realm(JSContext *ctx)
@@ -1022,6 +1518,9 @@ static void idb_object_store_install_realm(JSContext *ctx)
     idl_install_method(ctx, proto, "get", 1, g_id_get);
     idl_install_method(ctx, proto, "getKey", 1, g_id_get_key);
     idl_install_method(ctx, proto, "count", 0, g_id_count);
+    idl_install_method(ctx, proto, "index", 1, g_id_index);
+    idl_install_method(ctx, proto, "createIndex", 2, g_id_create_index);
+    idl_install_method(ctx, proto, "deleteIndex", 1, g_id_delete_index);
     JS_SetClassProto(ctx, g_os_class, JS_DupValue(ctx, proto));
 
     ctor = idl_interface_object(ctx, "IDBObjectStore", proto);
@@ -1044,6 +1543,12 @@ void idb_object_store_init(JSContext *ctx)
        declared type list; what tells them apart is which BODY runs and, for `count`, that its one position is
        optional. */
     static const IdlArgType QUERY_ARGS[1] = { IDL_ANY };
+    static const IdlArgType INDEX_ARGS[1] = { IDL_DOMSTRING };
+    static const IdlArgType CREATE_INDEX_ARGS[3] = { IDL_DOMSTRING, IDL_DOMSTRING_OR_SEQUENCE, IDL_DICT };
+    static const IdlDictMember INDEX_PARAMETERS[] = {
+        { "unique", IDL_BOOLEAN },
+        { "multiEntry", IDL_BOOLEAN },
+    };
 
     DCHECK(!g_ready, "idb_object_store_init ran twice — one instance is one document is one agent");
     g_key = JS_NewSymbol(ctx, "idbObjectStoreState", false);
@@ -1069,7 +1574,21 @@ void idb_object_store_init(JSContext *ctx)
     g_id_clear = idl_method_id(ctx, NULL, 0, js_os_clear, 0);
     g_id_count = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &COUNT_STEP, 0);
     idl_optional_from(0);                        /* `count(optional any query)` */
+    /* `IDBIndex index(DOMString name)`, `IDBIndex createIndex(DOMString name, (DOMString or
+       sequence<DOMString>) keyPath, optional IDBIndexParameters options = {})` and
+       `undefined deleteIndex(DOMString name)`. The union is NOT nullable here, unlike createObjectStore's
+       `keyPath` — §2.6 gives every index a key path — and the dictionary's two members carry the IDL's own
+       `= false`, so the body reads values that are there. */
+    g_id_index = idl_method_id(ctx, INDEX_ARGS, 1, js_os_index, 0);
+    g_id_create_index = idl_method_id_dict(ctx, CREATE_INDEX_ARGS, 3, INDEX_PARAMETERS,
+                                           (int)(sizeof INDEX_PARAMETERS / sizeof INDEX_PARAMETERS[0]),
+                                           js_os_create_index, 0);
+    idl_optional_from(2);                        /* `optional IDBIndexParameters options = {}` */
+    g_id_delete_index = idl_method_id(ctx, INDEX_ARGS, 1, js_os_delete_index, 0);
     g_setter_name = idl_setter_id(ctx, IDL_DOMSTRING, /*null_to_empty*/ false, js_os_set_name, 0);
+    /* §6.1's operation, which §4.5 step 12 mints one of per `put`/`add`. It is a step machine because §6.1
+       step 5 drives §7.1 and therefore §7.4's array arm — see js_idb_store_operation. */
+    g_store_op_stepid = JS_RegisterStepDef(rt, &js_idb_store_op_def);
     g_ready = 1;
     agent_state_flag("idb_object_store", &g_ready, "the declaration latch");
     agent_state_ptr("idb_object_store", &g_os_rt, "the runtime §2.2.1's slot key was minted in");

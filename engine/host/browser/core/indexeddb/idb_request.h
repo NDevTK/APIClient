@@ -24,9 +24,14 @@ void idb_request_free(JSRuntime *rt);
  * operands, so it parks and time-travels like anything else). Its CONTRACT is §5.6's own: it either answers
  * with the operation's result, or it THROWS the DOMException the algorithm names ("this operation failed with
  * a ConstraintError DOMException"), which arrives here as a value because this machine catches an abrupt
- * request result. It must be ATOMIC — an operation that fails must have changed nothing — because §5.6 step
- * 5.4's "revert all changes made by operation" has nothing to undo in this engine and is not written; §6.1
- * satisfies that structurally, reporting every failure before it copies the value it was given.
+ * request result.
+ *
+ * IT NEED NOT BE ATOMIC, AND THIS PARAGRAPH USED TO SAY IT WAS. The claim was that §5.6 step 5.4's "revert all
+ * changes made by operation" had nothing to undo because §6.1 "reports every failure before it copies the
+ * value". That was true while step 2 was §6.1's last refusal and is FALSE now that §6.1 step 5 is built: its
+ * unique-index "ConstraintError" is raised after step 3 removed the displaced record, step 4 wrote the new one
+ * and earlier indexes took their records. So step 5.4 is a REAL step, performed by this machine against the
+ * watermark it takes before it performs the operation (idb_database_revert_operation).
  *
  * Returns the IDBRequest (§5.6's last step, "Return request"), OWNED. */
 JSValue idb_request_execute(JSContext *ctx, JSValueConst source, JSValueConst transaction,
@@ -64,6 +69,12 @@ void idb_request_set_done(JSContext *ctx, JSValueConst req, bool done);
 void idb_request_set_processed(JSContext *ctx, JSValueConst req, bool processed);
 /* §5.1 step 10.9's "If request's error is set" — the value, OWNED, JS_NULL when no error occurred. */
 JSValue idb_request_error(JSContext *ctx, JSValueConst req);
+
+/* §2.8's SOURCE OBJECT, as §4.5's `createIndex` reads it: that member may only create an index into a store
+   whose content is SETTLED, and "settled" is a question about which PENDING REQUESTS of this transaction are
+   placed against THIS store — so the pending requests have to be able to say what they are against. OWNED,
+   JS_NULL for an open request ("the source of an open request is always null"). */
+JSValue idb_request_source(JSContext *ctx, JSValueConst req);
 
 /* §2.8's TRANSACTION, as the algorithms outside this component read it: §5.4 step 2.5.4 and §5.5 step 7.3 each
    reach the open request FROM the upgrade transaction and back. OWNED, JS_NULL when there is none. */

@@ -194,6 +194,13 @@ static JSValue range_only(JSContext *ctx, JSValue key)
     return idb_key_range_new(ctx, JS_DupValue(ctx, key), key, false, false);
 }
 
+JSValue idb_key_range_only_key(JSContext *ctx, JSValueConst key)
+{
+    DCHECK(JS_IsObject(key), "a key range containing only a key was asked for over something that is not a "
+                             "§2.4 key record");
+    return range_only(ctx, JS_DupValue(ctx, key));
+}
+
 int idb_key_range_from_value(JSContext *ctx, JSValueConst value, bool null_disallowed, JSValue *prange)
 {
     JSValue key;

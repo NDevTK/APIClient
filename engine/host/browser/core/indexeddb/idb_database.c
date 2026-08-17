@@ -62,6 +62,7 @@
 #include "core/agent_state.h"
 #include "core/idl_slots.h"
 #include "core/indexeddb/idb_database.h"
+#include "core/indexeddb/idb_index.h"
 #include "core/indexeddb/idb_key.h"
 #include "core/indexeddb/idb_key_generator.h"
 #include "core/indexeddb/idb_key_path.h"
@@ -85,11 +86,8 @@
 #define IDB_STORE_KEY_GENERATOR "keyGenerator"
 #define IDB_STORE_RECORDS       "records"       /* §2.2's "list of records ... sorted according to key" */
 #define IDB_STORE_DELETED       "deleted"       /* §4.4's "Destroy store" — see idb_object_store_destroy */
-/* §2.6's SET OF INDEXES, WHICH NO STORE IN THIS ENGINE HAS. The name is spelled here so the removal below can
-   ASSERT its absence rather than describe it: §6.4 step 2 and §6.6 step 2 each remove the index records that
-   reference the store records they remove, and neither is written. The day a store gains this field without
-   those two steps, a deleted record goes on being reachable through its index and nothing says so — so the
-   removal crashes on the field instead. */
+/* §2.6's SET OF INDEXES that reference this store, as the LIST core/indexeddb/idb_index.h keeps it. The field
+   is the store record's and every write to it is that component's; this is the one spelling of its name. */
 #define IDB_STORE_INDEXES       "indexes"
 
 #define IDB_RECORD_KEY          "key"
@@ -103,11 +101,12 @@
 #define IDB_CHANGE_KIND         "kind"
 #define IDB_CHANGE_DB           "db"
 #define IDB_CHANGE_STORE        "store"
+#define IDB_CHANGE_INDEX        "index"    /* §2.6's index the change was made to or in */
 #define IDB_CHANGE_KEY          "key"
-#define IDB_CHANGE_PRIOR        "prior"    /* the record that key held before, or JS_NULL for none */
-#define IDB_CHANGE_NAME         "name"     /* the name the store was filed under before */
+#define IDB_CHANGE_NAME         "name"     /* the name the store or index was filed under before */
 #define IDB_CHANGE_VERSION      "version"  /* the version the database held before */
 #define IDB_CHANGE_REMOVED      "removed"  /* the records the store held before, in key order */
+#define IDB_CHANGE_RECORDS      "records"  /* the index records written or removed, in (key, value) order */
 /* §2.11's current number the store's key generator held before, as a BigInt — the exact integer type, for the
    reason idb_key_generator.c is built around: 2^53+1 is a current number and is not an ECMAScript Number. */
 #define IDB_CHANGE_NUMBER       "number"
@@ -117,7 +116,8 @@
    the revert is what a kind is for. */
 enum { IDB_CHANGE_RECORD_STORED, IDB_CHANGE_RECORDS_REMOVED, IDB_CHANGE_STORE_CREATED,
        IDB_CHANGE_STORE_DESTROYED, IDB_CHANGE_STORE_RENAMED, IDB_CHANGE_VERSION_SET,
-       IDB_CHANGE_KEY_GENERATOR };
+       IDB_CHANGE_KEY_GENERATOR, IDB_CHANGE_INDEX_CREATED, IDB_CHANGE_INDEX_DESTROYED,
+       IDB_CHANGE_INDEX_RENAMED, IDB_CHANGE_INDEX_RECORDS_STORED, IDB_CHANGE_INDEX_RECORDS_REMOVED };
 
 /* §2.1's SET OF DATABASES for this agent's storage key. See the header for why it is the AGENT's. */
 static JSValue g_databases = JS_UNDEFINED;
@@ -485,7 +485,7 @@ double idb_database_version(JSContext *ctx, JSValueConst db)
 JSValue idb_object_store_create(JSContext *ctx, JSValueConst tx, JSValueConst db, const char *name,
                                 JSValue key_path, bool key_generator)
 {
-    JSValue store, records, change;
+    JSValue store, records, indexes, change;
 
     DCHECK(idb_transaction_mode(ctx, tx) == IDB_TX_VERSIONCHANGE,
            "an object store was created by a transaction that is not an upgrade transaction — §2.7: \"object "
@@ -495,6 +495,12 @@ JSValue idb_object_store_create(JSContext *ctx, JSValueConst tx, JSValueConst db
     CHECK(!JS_IsException(store), "IndexedDB: §2.2's object store record could not be allocated");
     records = JS_NewArray(ctx);
     CHECK(!JS_IsException(records), "IndexedDB: an object store's list of records could not be allocated");
+    /* §2.6's set of indexes that reference this store, EMPTY: a store is created with none, and §4.5's
+       createIndex is the only algorithm that adds one. It is built here rather than on first use, so the
+       ABSENCE of the field is never a state — the same statement the key path's JS_NULL is. */
+    indexes = JS_NewArray(ctx);
+    CHECK(!JS_IsException(indexes), "IndexedDB: an object store's set of indexes could not be allocated");
+    JS_SetPropertyStr(ctx, store, IDB_STORE_INDEXES, indexes);
     JS_SetPropertyStr(ctx, store, IDB_STORE_KEY_PATH, key_path);
     /* §2.11: "when a object store is created it can be specified to use a key generator", and the generator's
        current number is "set when the associated object store is created" — so the record is built HERE and
@@ -577,6 +583,79 @@ JSValue idb_object_store_key_generator(JSContext *ctx, JSValueConst store)
     return gen;
 }
 
+JSValue idb_object_store_indexes(JSContext *ctx, JSValueConst store)
+{
+    JSValue v = JS_GetPropertyStr(ctx, store, IDB_STORE_INDEXES);
+
+    DCHECK(JS_IsArray(v), "an object store carried no SET OF INDEXES — §2.2 gives every store one and "
+                          "idb_object_store_create builds it empty, so a store without one was not built by "
+                          "this file");
+    return v;
+}
+
+/* §2.6's FIVE CHANGES. Each names the state it is about to write and what that state held before, exactly as
+   the store's six do; the inverse is idb_index.c's, because the write is. The three METADATA changes assert
+   §2.7's "object stores and indexes can't be added or removed" by anything but an upgrade transaction — the
+   two RECORD changes do not, because §6.1 step 5 and §6.4 step 2 run in a readwrite transaction, and the
+   read-only refusal they do owe is asserted once for every change by idb_transaction_record_change. */
+static void idb_index_change(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst index, int kind,
+                             const char *field, JSValue operand)
+{
+    JSValue change = idb_change_new(ctx, kind);
+
+    DCHECK(idb_transaction_mode(ctx, tx) == IDB_TX_VERSIONCHANGE,
+           "an index was added to, removed from or renamed within an object store by a transaction that is "
+           "not an upgrade transaction — §2.7 gives only \"versionchange\" that power, and §4.5's createIndex "
+           "and deleteIndex each report it as an InvalidStateError before they reach this");
+    JS_SetPropertyStr(ctx, change, IDB_CHANGE_STORE, JS_DupValue(ctx, store));
+    JS_SetPropertyStr(ctx, change, IDB_CHANGE_INDEX, JS_DupValue(ctx, index));
+    if (field != NULL)
+        JS_SetPropertyStr(ctx, change, field, operand);
+    idb_transaction_record_change(ctx, tx, change);
+}
+
+void idb_database_record_index_created(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst index)
+{
+    idb_index_change(ctx, tx, store, index, IDB_CHANGE_INDEX_CREATED, NULL, JS_UNDEFINED);
+}
+
+void idb_database_record_index_destroyed(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst index,
+                                         JSValue name)
+{
+    idb_index_change(ctx, tx, store, index, IDB_CHANGE_INDEX_DESTROYED, IDB_CHANGE_NAME, name);
+}
+
+void idb_database_record_index_renamed(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst index,
+                                       JSValue name)
+{
+    idb_index_change(ctx, tx, store, index, IDB_CHANGE_INDEX_RENAMED, IDB_CHANGE_NAME, name);
+}
+
+/* THE INDEX AND NOT ITS STORE, because these two changes are undone inside the index's own list of records and
+   the store plays no part in that — unlike the three above, whose inverse is a write to the store's set. */
+static void idb_index_records_change(JSContext *ctx, JSValueConst tx, JSValueConst index, int kind,
+                                     JSValue records)
+{
+    JSValue change = idb_change_new(ctx, kind);
+
+    DCHECK(JS_IsArray(records), "an index's record change carried no list of the records it wrote or removed");
+    JS_SetPropertyStr(ctx, change, IDB_CHANGE_INDEX, JS_DupValue(ctx, index));
+    JS_SetPropertyStr(ctx, change, IDB_CHANGE_RECORDS, records);
+    idb_transaction_record_change(ctx, tx, change);
+}
+
+void idb_database_record_index_records_stored(JSContext *ctx, JSValueConst tx, JSValueConst index,
+                                              JSValue records)
+{
+    idb_index_records_change(ctx, tx, index, IDB_CHANGE_INDEX_RECORDS_STORED, records);
+}
+
+void idb_database_record_index_records_removed(JSContext *ctx, JSValueConst tx, JSValueConst index,
+                                               JSValue records)
+{
+    idb_index_records_change(ctx, tx, index, IDB_CHANGE_INDEX_RECORDS_REMOVED, records);
+}
+
 void idb_object_store_record_generator_change(JSContext *ctx, JSValueConst tx, JSValueConst store, int64_t prior)
 {
     JSValue change = idb_change_new(ctx, IDB_CHANGE_KEY_GENERATOR);
@@ -651,177 +730,356 @@ JSValue idb_object_store_find(JSContext *ctx, JSValueConst db, const char *name)
 
 /* ---- §6.1's STORE A RECORD INTO AN OBJECT STORE ------------------------------------------------------------- */
 
-int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst value, JSValueConst key,
-                     bool no_overwrite, JSValue *pkey)
-{
-    JSValue records, clone, rec, change, generated = JS_UNDEFINED, indexes;
-    JSValueConst k = key;
-    uint32_t n, pos, i;
-    bool exists, no_indexes, generator_raised = false;
+/* THE BLOCK'S OWN STAGE NUMBERS, from the SAME declaration the caller expands — so a stage added to the
+   algorithm cannot renumber the arms below without renumbering the caller's list with it. */
+enum { IDB_STORE_RECORD_ALGO_STAGES(JS_STEP_STAGE_ENUM, IDB_SR, "") IDB_SR_N };
 
-    *pkey = JS_UNDEFINED;
-    /* §6.1's FIRST STEP branches on the KEY GENERATOR and on nothing else — "if store uses a key generator,
-       then: if key is undefined ..." — and a store with in-line keys and no generator has no first step at all,
-       because §4.5's `put` has already run §7.1's extract-a-key and handed the result in as `key`. That
-       distinction is what this read is: the key path is not consulted here, and the arm below is the one arm
-       §6.1 states rather than a "the key was derived somehow" test. */
-    if (idb_object_store_uses_key_generator(ctx, store)) {                    /* STEP 1 */
-        if (JS_IsUndefined(key)) {                                           /* STEP 1.1 */
+#define IDB_SR_GOTO(hdr, to) STEP_GOTO((hdr)->stage, (to), &(hdr)->get_phase, &(hdr)->desc_phase, NULL)
+
+void idb_store_record_walk_visit(JSContext *ctx, IdbStoreWalk *sw, JSStepVisit *v)
+{
+    idb_key_walk_visit(ctx, &sw->w, v);
+    v->val(ctx, &sw->tx);
+    v->val(ctx, &sw->store);
+    v->val(ctx, &sw->value);
+    v->val(ctx, &sw->key);
+    v->val(ctx, &sw->generated);
+    v->val(ctx, &sw->indexes);
+    v->val(ctx, &sw->index_key);
+}
+
+void idb_store_record_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, JSValueConst tx,
+                                 JSValueConst store, JSValueConst value, JSValueConst key, bool no_overwrite,
+                                 int base, int after)
+{
+    DCHECK(idb_transaction_is(tx), "§6.1 was begun with something that is not a §2.7 transaction — every change "
+                                   "it makes names the transaction making it");
+    DCHECK(JS_IsObject(store), "§6.1 was begun over something that is not a §2.2 object store");
+    /* A ZEROED JSValue IS THE INTEGER 0 AND NOT JS_UNDEFINED, so every slot is PLACED here. */
+    sw->kpres = IDB_KEY_PATH_KEY;
+    sw->tx = JS_DupValue(ctx, tx);
+    sw->store = JS_DupValue(ctx, store);
+    sw->value = JS_DupValue(ctx, value);
+    sw->key = JS_DupValue(ctx, key);
+    sw->generated = JS_UNDEFINED;
+    sw->indexes = JS_UNDEFINED;
+    sw->index_key = JS_UNDEFINED;
+    sw->idx = 0;
+    sw->no_overwrite = no_overwrite ? 1 : 0;
+    sw->generator_raised = 0;
+    sw->after = after;
+    hdr->stage = (uint16_t)(base + IDB_SR_GENERATE);
+}
+
+JSValue idb_store_record_walk_take(JSContext *ctx, IdbStoreWalk *sw)
+{
+    DCHECK(JS_IsObject(sw->key), "§6.1's last step, \"Return key\", has no key to return");
+    return JS_DupValue(ctx, sw->key);   /* STEP 6 */
+}
+
+/* §6.1 STEP 5's CURRENT INDEX. The set is the store's LIVE record and not a copy of it, which is exact rather
+   than convenient: an operation is one task, and §4.5's createIndex and deleteIndex are synchronous members of
+   a task of their own, so nothing can change this set between two stages of one operation. That is asserted
+   here — at the index rather than at the set, because what a change would produce is precisely an entry that is
+   deleted or that references another store. */
+static JSValue sr_index_at(JSContext *ctx, IdbStoreWalk *sw)
+{
+    JSValue index = JS_GetPropertyUint32(ctx, sw->indexes, sw->idx), referenced;
+
+    DCHECK(JS_IsObject(index), "§6.1 step 5's set of indexes had a hole in it");
+    DCHECK(!idb_index_is_deleted(ctx, index),
+           "§6.1 step 5 reached an index that has been DESTROYED. The set it walks is the store's own record "
+           "and an operation is one task, so nothing may add to or remove from it while this algorithm runs");
+    referenced = idb_index_store(ctx, index);
+    DCHECK(JS_VALUE_GET_PTR(referenced) == JS_VALUE_GET_PTR(sw->store),
+           "§6.1 step 5 reached an index that does not REFERENCE the store being written — the step is stated "
+           "over \"each index which references store\" and the set is that store's own");
+    JS_FreeValue(ctx, referenced);
+    return index;
+}
+
+/* §6.1 STEP 1, the whole of it: the two arms under "if store uses a key generator", and nothing else. A store
+   with in-line keys and no generator has no first step at all, because §4.5's `put` has already run §7.1's
+   extract-a-key and handed the result in as `key`. */
+static int sr_generate(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, int base)
+{
+    if (idb_object_store_uses_key_generator(ctx, sw->store)) {                    /* STEP 1 */
+        if (JS_IsUndefined(sw->key)) {                                           /* STEP 1.1 */
             JSValue key_path;
 
             /* "Let key be the result of generating a key for store. If key is FAILURE, then this operation
-               failed with a ConstraintError DOMException. Abort this algorithm without taking any further
-               steps." The generator is spent at 2^53+1 and §2.11 keeps it spent; §5.6 step 5.2 takes the
-               exception as the request's error. */
-            if (!idb_key_generate(ctx, tx, store, &generated)) {             /* STEP 1.1.1 */
-                JS_ThrowDOMException(ctx, "ConstraintError",                 /* STEP 1.1.2 */
+               failed with a ConstraintError DOMException." The generator is spent at 2^53+1 and §2.11 keeps it
+               spent; §5.6 step 5.2 takes the exception as the request's error. */
+            if (!idb_key_generate(ctx, sw->tx, sw->store, &sw->generated)) {     /* STEP 1.1.1 */
+                JS_ThrowDOMException(ctx, "ConstraintError",                     /* STEP 1.1.2 */
                                      "the object store's key generator can generate no more keys");
-                return -1;
+                return JS_STEP_ABRUPT;
             }
-            k = generated;
-            generator_raised = true;
+            JS_FreeValue(ctx, sw->key);
+            sw->key = JS_DupValue(ctx, sw->generated);
+            sw->generator_raised = 1;
             /* "If store ALSO uses in-line keys, then run inject a key into a value using a key path with
                value, key and store's key path." The value is §4.5 step 10's clone, and §4.5 step 11.4.2 has
                already run §7.2's other algorithm over this same pair — which is why §7.2's steps here are
                assertions rather than refusals. */
-            key_path = idb_object_store_key_path(ctx, store);
-            if (!JS_IsNull(key_path))                                        /* STEP 1.1.3 */
-                idb_key_path_inject(ctx, value, generated, key_path);
+            key_path = idb_object_store_key_path(ctx, sw->store);
+            if (!JS_IsNull(key_path))                                            /* STEP 1.1.3 */
+                idb_key_path_inject(ctx, sw->value, sw->generated, key_path);
             JS_FreeValue(ctx, key_path);
         } else {
             /* "Otherwise, run possibly update the key generator for store with key." */
-            generator_raised = idb_key_generator_possibly_update(ctx, tx, store, key);   /* STEP 1.2 */
+            sw->generator_raised =                                               /* STEP 1.2 */
+                idb_key_generator_possibly_update(ctx, sw->tx, sw->store, sw->key) ? 1 : 0;
         }
     }
-    DCHECK(JS_IsObject(k), "§6.1 has no key to file its record under after its first step. The key is §7.4's "
-                           "key RECORD and not the page's value, and there are three ways one arrives: §4.5's "
-                           "`put` converts an out-of-line store's key argument (and reports an absent one as a "
-                           "DataError), it extracts an in-line store's key from the clone with §7.1 (whose "
-                           "`invalid` and `failure` are that member's other two DataErrors), and step 1.1.1 "
-                           "above generates one for a store with a key generator");
+    DCHECK(JS_IsObject(sw->key), "§6.1 has no key to file its record under after its first step. The key is "
+                                 "§7.4's key RECORD and not the page's value, and there are three ways one "
+                                 "arrives: §4.5's `put` converts an out-of-line store's key argument (and "
+                                 "reports an absent one as a DataError), it extracts an in-line store's key "
+                                 "from the clone with §7.1 (whose `invalid` and `failure` are that member's "
+                                 "other two DataErrors), and step 1.1.1 above generates one");
+    IDB_SR_GOTO(hdr, base + IDB_SR_NO_OVERWRITE);
+    return JS_STEP_YIELD;
+}
 
-    records = idb_store_records(ctx, store);
-    n = idb_list_len(ctx, records);
-    /* WHERE THE KEY BELONGS, by §2.4's compare over a list §2.2 keeps sorted — see idb_record_pos, which is
-       also where §5.5 step 2's revert of this write finds it again. */
-    pos = idb_record_pos(ctx, records, k, &exists);
+/* "IS THERE A RECORD IN store WITH ITS KEY EQUAL TO key" — steps 2 and 3 ask it and step 4 asserts its answer,
+   through the one binary search over a list §2.2 keeps in §2.4's key order. */
+static bool sr_key_exists(JSContext *ctx, IdbStoreWalk *sw)
+{
+    JSValue records = idb_store_records(ctx, sw->store);
+    bool exists;
 
-    /* §2.11: "IF AN INSERTION FAILS due to constraint violations or IO error, THE KEY GENERATOR IS NOT
-       UPDATED" — the per-operation half of "modifying a key generator's current number is considered part of a
-       database operation ... if the operation fails and the operation is reverted, the current number is
-       reverted to the value it had before the operation started."
-       THERE IS NO OPERATION-LEVEL REVERT HERE, because the state one would undo cannot arise, and this is that
-       proof asserted rather than restated. Write c for the current number step 1 found. Every numeric key this
-       store already holds went through step 1 itself, and each left c EITHER strictly above itself (c becomes
-       floor(k)+1 > k, or k+1 after a generate) OR at the ceiling+1, from which no key generates again. So on
-       the arm that RAISED c: a generate produces c, which is at most the ceiling and therefore above every
-       stored numeric key; and an update raises c only when floor(min(k, ceiling)) >= c, which likewise puts
-       every stored numeric key below k. Either way the key this record is about to be filed under is one no
-       record holds. The OTHER failure §2.11 names — step 5's unique-index ConstraintError — is not covered by
-       this, and its assertion is on step 5's own absence below. */
-    DCHECK(!generator_raised || !exists,
-           "§6.1's step 1 raised the key generator's current number and step 2 then found a record ALREADY "
-           "under that key. §2.11 forbids both halves of what that means: for `add` the operation is about to "
-           "fail with a ConstraintError leaving the generator raised (\"if an insertion fails due to "
-           "constraint violations or IO error, the key generator is not updated\"), and for `put` a number the "
-           "generator produced or accepted is one a record already holds (\"the same key is never generated "
-           "twice for the same object store\"). Every numeric key in a generator store passes through step 1, "
-           "which leaves the current number above it, so this state means one did not — and what is then owed "
-           "is the per-operation revert §2.11 names, recorded beside §5.5 step 2's list at the bottom");
+    idb_record_pos(ctx, records, sw->key, &exists);
+    JS_FreeValue(ctx, records);
+    return exists;
+}
 
-    /* §6.1 STEP 2: "If the no-overwrite flag was given to these steps and is true, and a record already exists
-       in store with its key equal to key, then this operation failed with a ConstraintError." That is what
-       tells `add` from `put`, and it is reported BEFORE the value is copied — a page that catches it has had
-       nothing of its value read. */
-    if (no_overwrite && exists) {
-        JS_FreeValue(ctx, records);
-        JS_FreeValue(ctx, generated);
-        JS_ThrowDOMException(ctx, "ConstraintError",
-                             "a record with the given key is already in the object store");
-        return -1;
-    }
-
-    /* §6.1 STEP 5 — "for each index which references store" — is VACUOUS and not skipped: no store in this
-       engine carries §2.6's set of indexes, so there is no index for the step to walk. See IDB_STORE_INDEXES.
-       The day a store has one, this crashes, and what is owed with that step is more than the step: its
-       per-index §7.1 extract, its two unique-flag ConstraintErrors, its index-record writes — AND the
-       OPERATION-LEVEL REVERT §2.11 requires beside them, because a ConstraintError there is a failure AFTER
-       step 1 raised the current number, which is the one case the assertion above cannot cover. §2.11 writes
-       that example out itself: a store with a unique index takes key 1, fails on the second put, and the third
-       put gets key 2. */
-    indexes = JS_GetPropertyStr(ctx, store, IDB_STORE_INDEXES);
-    no_indexes = JS_IsUndefined(indexes);
-    JS_FreeValue(ctx, indexes);
-    DCHECK(no_indexes, "an object store carries §2.6's set of indexes and §6.1 step 5 is not built — a record "
-                       "would be stored with no index record referencing it, and a unique-index violation "
-                       "would go unreported. Build that step here, and the per-operation key-generator revert "
-                       "with it");
+/* §6.1 STEP 4's WRITE, and step 5's list taken immediately after it. */
+static int sr_store(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, int base)
+{
+    JSValue records = idb_store_records(ctx, sw->store), clone, rec, change;
+    uint32_t pos, n, i;
+    bool exists;
 
     /* §6.1 STEP 4's "! StructuredSerializeForStorage(value)", held as the live copy it produces. This is the
        step that makes §2.3's "later changes to a value have no effect on the record stored in the database"
        true of this component rather than of its caller — and it is where a concolic survives, because the
        clone seeds §2.7.1's `memory` with one rather than refusing it. */
-    clone = structured_clone(ctx, value);
+    clone = structured_clone(ctx, sw->value);
     if (JS_IsException(clone)) {
         JS_FreeValue(ctx, records);
-        JS_FreeValue(ctx, generated);
-        return -1;
+        return JS_STEP_ABRUPT;
     }
     rec = idl_slots_new(ctx);
     CHECK(!JS_IsException(rec), "IndexedDB: §2.2's record could not be allocated");
-    JS_SetPropertyStr(ctx, rec, IDB_RECORD_KEY, JS_DupValue(ctx, k));
+    JS_SetPropertyStr(ctx, rec, IDB_RECORD_KEY, JS_DupValue(ctx, sw->key));
     JS_SetPropertyStr(ctx, rec, IDB_RECORD_VALUE, clone);
 
-    /* §5.5 step 2's half of this write, recorded AFTER the two arms that refuse and BEFORE the list changes.
-       That placement is the same sentence §5.6 step 5.4 relies on and idb_request.h states — an operation is
-       atomic, so an operation that failed has nothing to revert — and it is why a `put` that reported a
-       ConstraintError leaves no change behind for the abort to undo.
-       THE PRIOR RECORD IS HELD, NOT COPIED. A record is written once by this algorithm and replaced whole
-       rather than mutated, so the record object the list currently holds IS the state that key had, and the
-       revert files that same object back. JS_NULL says the store held no record under this key, which the
-       revert reads as a positive statement (remove what this put added) rather than as a missing field. */
+    n = idb_list_len(ctx, records);
+    pos = idb_record_pos(ctx, records, sw->key, &exists);
+    DCHECK(!exists, "§6.1 step 4 found a record already under the key it is about to write. Step 3 removes it "
+                    "— through §6.4, so that the index records referencing it go with it — and step 3 is the "
+                    "stage immediately before this one");
+
+    /* §5.5 step 2's half of this write, recorded BEFORE the list changes. The change carries only the key,
+       because after step 3 there is never a record to displace: a put that overwrote is TWO changes, the §6.4
+       removal step 3 made and this addition, and the revert runs them backwards. */
     change = idb_change_new(ctx, IDB_CHANGE_RECORD_STORED);
-    JS_SetPropertyStr(ctx, change, IDB_CHANGE_STORE, JS_DupValue(ctx, store));
-    JS_SetPropertyStr(ctx, change, IDB_CHANGE_KEY, JS_DupValue(ctx, k));
-    JS_SetPropertyStr(ctx, change, IDB_CHANGE_PRIOR,
-                      exists ? JS_GetPropertyUint32(ctx, records, pos) : JS_NULL);
-    idb_transaction_record_change(ctx, tx, change);
+    JS_SetPropertyStr(ctx, change, IDB_CHANGE_STORE, JS_DupValue(ctx, sw->store));
+    JS_SetPropertyStr(ctx, change, IDB_CHANGE_KEY, JS_DupValue(ctx, sw->key));
+    idb_transaction_record_change(ctx, sw->tx, change);
 
     /* THE LIST IS WRITTEN WITH [[DefineOwnProperty]] AND NOT [[Set]], which is core/idl_slots.h's sibling rule
        one level out: an assignment consults the prototype chain, so a page that put an index accessor on
-       Array.prototype would swallow a record write and leave no own property behind at all — the store would
-       report a put that never happened. A define creates the own property this list is made of and there is
-       nothing for a page to intercept. */
-    if (exists) {
-        /* §6.1 STEP 3: "If a record already exists in store with its key equal to key, then remove the record
-           from store using delete records from an object store." Removing the equal record and inserting the
-           new one at the same key is one write at the same position — the list is sorted, so there is exactly
-           one place that key can be, and shifting the tail down and back up again would be the same list. */
-        JS_DefinePropertyValueUint32(ctx, records, pos, rec, JS_PROP_C_W_E);
-    } else {
-        for (i = n; i > pos; i--) {
-            JSValue moved = JS_GetPropertyUint32(ctx, records, i - 1);
+       Array.prototype would swallow a record write and leave no own property behind at all. */
+    for (i = n; i > pos; i--) {
+        JSValue moved = JS_GetPropertyUint32(ctx, records, i - 1);
 
-            DCHECK(JS_IsObject(moved), "an object store's list of records had a hole in it");
-            JS_DefinePropertyValueUint32(ctx, records, i, moved, JS_PROP_C_W_E);
-        }
-        JS_DefinePropertyValueUint32(ctx, records, pos, rec, JS_PROP_C_W_E);
+        DCHECK(JS_IsObject(moved), "an object store's list of records had a hole in it");
+        JS_DefinePropertyValueUint32(ctx, records, i, moved, JS_PROP_C_W_E);
     }
-    /* §2.2's TWO INVARIANTS, asserted where the list is written and nowhere else — "The list is sorted
-       according to key in ascending order" and "There can never be multiple records in a given object store
-       with the same key". Both are checked against the neighbours of the one position that changed, which is
-       the whole of what this write can break. */
-    DCHECK(pos == 0 || idb_record_key_compare(ctx, records, pos - 1, k) < 0,
+    JS_DefinePropertyValueUint32(ctx, records, pos, rec, JS_PROP_C_W_E);
+    /* §2.2's TWO INVARIANTS, asserted against the neighbours of the one position that changed — "the list is
+       sorted according to key in ascending order" and "there can never be multiple records in a given object
+       store with the same key". */
+    DCHECK(pos == 0 || idb_record_key_compare(ctx, records, pos - 1, sw->key) < 0,
            "an object store's list of records is no longer sorted: the record before the one just written has "
            "a key that is not less than it");
-    DCHECK(pos + 1 >= idb_list_len(ctx, records) || idb_record_key_compare(ctx, records, pos + 1, k) > 0,
+    DCHECK(pos + 1 >= idb_list_len(ctx, records) || idb_record_key_compare(ctx, records, pos + 1, sw->key) > 0,
            "an object store's list of records is no longer sorted, or holds two records under one key: the "
            "record after the one just written has a key that is not greater than it");
-
-    *pkey = JS_DupValue(ctx, k);   /* §6.1's last step: "Return key." */
     JS_FreeValue(ctx, records);
-    JS_FreeValue(ctx, generated);
-    return 0;
+
+    sw->indexes = idb_store_index_set(ctx, sw->store);   /* STEP 5's "each index which references store" */
+    sw->idx = 0;
+    IDB_SR_GOTO(hdr, base + IDB_SR_INDEX);
+    return JS_STEP_YIELD;
+}
+
+/* §6.1 STEPS 5.3-5.4 — one condition in two arms: "if index's multiEntry flag is false, or if index key is not
+   an array key, and if index already contains a record with key equal to index key, and index's unique flag is
+   true", and the same sentence over "any of the SUBKEYS of index key" on the other arm. */
+static bool sr_unique_clash(JSContext *ctx, IdbStoreWalk *sw, JSValueConst index)
+{
+    bool clash = false;
+
+    if (!idb_index_unique(ctx, index))
+        return false;
+    if (!idb_index_key_is_per_subkey(ctx, index, sw->index_key))
+        return idb_index_contains_key(ctx, index, sw->index_key);
+    {
+        JSValue subkeys = idb_key_subkeys(ctx, sw->index_key);
+        uint32_t i, n = idb_list_len(ctx, subkeys);
+
+        for (i = 0; i < n && !clash; i++) {
+            JSValue sub = JS_GetPropertyUint32(ctx, subkeys, i);
+
+            DCHECK(JS_IsObject(sub), "an array key's list of subkeys had a hole in it");
+            clash = idb_index_contains_key(ctx, index, sub);
+            JS_FreeValue(ctx, sub);
+        }
+        JS_FreeValue(ctx, subkeys);
+    }
+    return clash;
+}
+
+int idb_store_record_walk_run(JSContext *ctx, JSStepHdr *hdr, IdbStoreWalk *sw, JSValue in, int base,
+                              JSValue **out_cb, int *out_argc)
+{
+    int phase = hdr->stage - base;
+
+    DCHECK(phase >= 0 && phase < IDB_SR_N,
+           "§6.1 was resumed at a stage outside the block its caller declared for it");
+
+    /* §7.1's own rest points — step 5.1's extraction, which is §7.4's walk over the index's key path. */
+    if (phase <= IDB_SR_LEAVE) {
+        int r = idb_key_walk_run(ctx, hdr, &sw->w, in, base, out_cb, out_argc);
+
+        if (r != JS_STEP_ABRUPT)
+            return r;
+        /* §6.1 STEP 5.2's first arm: "If index key is an EXCEPTION ... take no further actions for index, and
+           continue these steps for the next index", with the standard's own note beside it — "an exception
+           thrown in this step is NOT RETHROWN". So the completion is taken here and discarded, which is this
+           step's stated result replacing the way the conversion reports it, not a swallowed error. */
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        sw->idx++;
+        IDB_SR_GOTO(hdr, base + IDB_SR_INDEX);
+        return JS_STEP_YIELD;
+    }
+    JS_FreeValue(ctx, in);
+
+    if (phase == IDB_SR_GENERATE)
+        return sr_generate(ctx, hdr, sw, base);
+
+    if (phase == IDB_SR_NO_OVERWRITE) {
+        bool exists = sr_key_exists(ctx, sw);
+
+        /* §2.11: "IF AN INSERTION FAILS due to constraint violations or IO error, THE KEY GENERATOR IS NOT
+           UPDATED." Write c for the current number step 1 found. Every numeric key this store already holds
+           went through step 1 itself, and each left c EITHER strictly above itself OR at the ceiling+1, from
+           which no key generates again. So on the arm that RAISED c the key about to be filed is one no record
+           holds, and this state cannot arise. The OTHER failure §2.11 names — step 5's unique-index
+           ConstraintError — is a failure AFTER step 1 raised it, and that one is undone by §5.6 step 5.4. */
+        DCHECK(!sw->generator_raised || !exists,
+               "§6.1's step 1 raised the key generator's current number and step 2 then found a record ALREADY "
+               "under that key. §2.11 forbids both halves of what that means: for `add` the operation is about "
+               "to fail leaving the generator raised, and for `put` a number the generator produced or accepted "
+               "is one a record already holds (\"the same key is never generated twice for the same object "
+               "store\")");
+        /* "If the no-overwrite flag was given to these steps and is true, and a record already exists in store
+           with its key equal to key, then this operation failed with a ConstraintError." That is what tells
+           `add` from `put`, and it is reported BEFORE the value is copied. */
+        if (sw->no_overwrite && exists) {                                        /* STEP 2 */
+            JS_ThrowDOMException(ctx, "ConstraintError",
+                                 "a record with the given key is already in the object store");
+            return JS_STEP_ABRUPT;
+        }
+        IDB_SR_GOTO(hdr, base + IDB_SR_REMOVE);
+        return JS_STEP_YIELD;
+    }
+
+    if (phase == IDB_SR_REMOVE) {
+        /* "If a record already exists in store with its key equal to key, then remove the record from store
+           USING DELETE RECORDS FROM AN OBJECT STORE." It is §6.4 and not a splice, and the difference is the
+           whole of finding #4: §6.4's step 2 removes the index records whose VALUE is this key, so an
+           overwrite drops the old value's index entries before step 5 writes the new value's. */
+        if (sr_key_exists(ctx, sw)) {                                            /* STEP 3 */
+            JSValue only = idb_key_range_only_key(ctx, sw->key);
+
+            idb_delete_records(ctx, sw->tx, sw->store, only);
+            JS_FreeValue(ctx, only);
+        }
+        IDB_SR_GOTO(hdr, base + IDB_SR_STORE);
+        return JS_STEP_YIELD;
+    }
+
+    if (phase == IDB_SR_STORE)
+        return sr_store(ctx, hdr, sw, base);
+
+    if (phase == IDB_SR_INDEX) {
+        JSValue index, key_path;
+
+        JS_FreeValue(ctx, sw->index_key);
+        sw->index_key = JS_UNDEFINED;
+        if (sw->idx >= idb_list_len(ctx, sw->indexes)) {
+            IDB_SR_GOTO(hdr, sw->after);                                         /* STEP 6 */
+            return JS_STEP_YIELD;
+        }
+        index = sr_index_at(ctx, sw);
+        /* "Let index key be the result of extracting a key from a value using a key path with VALUE, index's
+           key path, and index's MULTIENTRY FLAG." The value is the one §6.1 was given — §4.5 step 10's clone,
+           which is why §7.1's own precondition holds and why nothing here runs the page's code. */
+        key_path = idb_index_key_path(ctx, index);
+        idb_key_path_walk_start(ctx, hdr, &sw->w, &sw->kpres, sw->value, key_path,   /* STEP 5.1 */
+                                idb_index_multi_entry(ctx, index), base, base + IDB_SR_INDEX_TOOK);
+        JS_FreeValue(ctx, key_path);
+        JS_FreeValue(ctx, index);
+        return JS_STEP_YIELD;
+    }
+
+    if (phase == IDB_SR_INDEX_TOOK) {
+        JSValue kpk;
+
+        /* §6.1 STEP 5.2's other two arms: "invalid, or failure — take no further actions for index, and
+           continue these steps for the next index." §7.1's three answers map onto exactly that one line. */
+        if (idb_key_path_walk_take(ctx, &sw->w, sw->kpres, &kpk) != IDB_KEY_PATH_KEY) {
+            JS_FreeValue(ctx, kpk);
+            sw->idx++;
+            IDB_SR_GOTO(hdr, base + IDB_SR_INDEX);
+            return JS_STEP_YIELD;
+        }
+        sw->index_key = kpk;
+        IDB_SR_GOTO(hdr, base + IDB_SR_INDEX_UNIQUE);
+        return JS_STEP_YIELD;
+    }
+
+    if (phase == IDB_SR_INDEX_UNIQUE) {
+        JSValue index = sr_index_at(ctx, sw);
+        bool clash = sr_unique_clash(ctx, sw, index);                            /* STEPS 5.3-5.4 */
+
+        JS_FreeValue(ctx, index);
+        if (clash) {
+            /* "then this operation failed with a ConstraintError DOMException. Abort this algorithm without
+               taking any further steps." §5.6 step 5.4 is what puts back what steps 3, 4 and the earlier
+               indexes already wrote — this algorithm reports the failure and undoes nothing itself. */
+            JS_ThrowDOMException(ctx, "ConstraintError",
+                                 "the value's key at a unique index's key path is already in that index");
+            return JS_STEP_ABRUPT;
+        }
+        IDB_SR_GOTO(hdr, base + IDB_SR_INDEX_WRITE);
+        return JS_STEP_YIELD;
+    }
+
+    DCHECK(phase == IDB_SR_INDEX_WRITE, "§6.1 was re-entered at a phase it never rests at");
+    {
+        JSValue index = sr_index_at(ctx, sw);
+
+        idb_index_store_records(ctx, sw->tx, index, sw->index_key, sw->key);     /* STEPS 5.5-5.6 */
+        JS_FreeValue(ctx, index);
+        sw->idx++;
+        IDB_SR_GOTO(hdr, base + IDB_SR_INDEX);
+        return JS_STEP_YIELD;
+    }
 }
 
 /* ---- §6.2's OBJECT STORE RETRIEVAL OPERATIONS --------------------------------------------------------------- */
@@ -915,23 +1173,11 @@ JSValue idb_retrieve_key(JSContext *ctx, JSValueConst store, JSValueConst range)
 static void idb_records_remove_span(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst records,
                                     uint32_t from, uint32_t count)
 {
-    JSValue change, removed, indexes;
+    JSValue change, removed;
     uint32_t n = idb_list_len(ctx, records), i;
-    bool no_indexes;
 
     DCHECK(from <= n && count <= n - from,
            "a span that is not inside an object store's list of records was removed from it");
-    /* §6.4 STEP 2 and §6.6 STEP 2 — "for each index which references store, remove every record from index's
-       list of records whose value is in range" / "in all indexes which reference store, remove all records" —
-       are the halves of these algorithms this engine does not perform, and a store that HAS an index set is
-       exactly the state in which not performing them is wrong. See IDB_STORE_INDEXES. */
-    indexes = JS_GetPropertyStr(ctx, store, IDB_STORE_INDEXES);
-    no_indexes = JS_IsUndefined(indexes);
-    JS_FreeValue(ctx, indexes);
-    DCHECK(no_indexes, "an object store carries §2.6's set of indexes, and §6.4 step 2 / §6.6 step 2 — the "
-                       "steps that remove the index records referencing the store records being removed — are "
-                       "not built. A record deleted from the store would stay reachable through its index. "
-                       "Build both steps here, beside the removal they mirror, when §2.6's index lands");
     /* §5.5 step 2 records "THE CHANGES MADE to the database by the transaction", and a removal that removed
        nothing made none. That is not a decision about what the abort may see — it is the same sentence §6.1
        relies on when it records only after its two refusals — and it is what keeps a `delete` over keys the
@@ -1000,9 +1246,15 @@ void idb_delete_records(JSContext *ctx, JSValueConst tx, JSValueConst store, JSV
     uint32_t from, count;
 
     /* "Remove all records, if any, from store's list of records with key in range." */
-    idb_range_span(ctx, records, range, &from, &count);
+    idb_range_span(ctx, records, range, &from, &count);          /* STEP 1 */
     idb_records_remove_span(ctx, tx, store, records, from, count);
     JS_FreeValue(ctx, records);
+    /* "For each index which references store, remove every record from index's list of records whose VALUE is
+       in range, if any such records exist." THE STORE'S RANGE AND NOT A PER-RECORD LOOP: an index record's
+       value is a key of the referenced object store, so the records to remove are named by the same range step
+       1 removed the store's records under — which is also why this runs even when step 1 removed nothing, the
+       standard putting no condition on it. */
+    idb_index_remove_records_in_value_range(ctx, tx, store, range);   /* STEP 2 */
     /* "Return undefined" is the caller's — the operation closure this runs inside answers §5.6 with it. */
 }
 
@@ -1013,11 +1265,23 @@ void idb_clear_store(JSContext *ctx, JSValueConst tx, JSValueConst store)
     /* "Remove all records from store." The whole list is the span, so this is §6.4 with the range that has no
        bounds — except that §6.6 has no range at all, which is why it is stated as its own algorithm rather
        than reached through a range this file would have had to mint. */
-    idb_records_remove_span(ctx, tx, store, records, 0, idb_list_len(ctx, records));
+    idb_records_remove_span(ctx, tx, store, records, 0, idb_list_len(ctx, records));   /* STEP 1 */
     JS_FreeValue(ctx, records);
+    /* "In all indexes which reference store, remove ALL records." No range at all, which is the difference
+       from §6.4 step 2 rather than an unbounded range this file would have had to mint. */
+    idb_index_remove_all_records(ctx, tx, store);                                     /* STEP 2 */
 }
 
 /* ---- §6.5's RECORD COUNTING OPERATION ------------------------------------------------------------------------ */
+
+uint32_t idb_store_record_count(JSContext *ctx, JSValueConst store)
+{
+    JSValue records = idb_store_records(ctx, store);
+    uint32_t n = idb_list_len(ctx, records);
+
+    JS_FreeValue(ctx, records);
+    return n;
+}
 
 uint32_t idb_count_records(JSContext *ctx, JSValueConst store, JSValueConst range)
 {
@@ -1069,18 +1333,16 @@ uint32_t idb_count_records(JSContext *ctx, JSValueConst store, JSValueConst rang
  * FIRST one's prior record is the state the transaction found; a store created and then renamed is put back by
  * undoing the rename and then the creation, which is also what lets the destroy assert that the set still holds
  * the store under the name it is about to remove. */
-void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx)
+/* THE ONE BACKWARDS WALK both §5.5 step 2 and §5.6 step 5.4 are made of, over the half-open span [from, n) of
+   the transaction's list of changes. The two entries below differ only in WHICH span they name and in what
+   they do with the list afterwards. */
+static void idb_revert_span(JSContext *ctx, JSValueConst changes, uint32_t from, uint32_t n)
 {
-    JSValue changes = idb_transaction_changes(ctx, tx);
-    uint32_t i, n = idb_list_len(ctx, changes);
+    uint32_t i;
 
-    DCHECK(idb_transaction_state(ctx, tx) != IDB_TX_FINISHED,
-           "the changes of a FINISHED transaction were reverted — §5.5 step 1 abandons the abort of a finished "
-           "transaction, so reaching here twice means the changes are being undone against a database that has "
-           "already had them undone once");
-    for (i = n; i > 0; i--) {
+    for (i = n; i > from; i--) {
         JSValue change = JS_GetPropertyUint32(ctx, changes, i - 1);
-        JSValue db, store, key, prior, records, name;
+        JSValue db, store, index, key, records, name;
         const char *cname;
         uint32_t pos, j, len;
         bool exists;
@@ -1092,29 +1354,22 @@ void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx)
         kind = idb_change_kind(ctx, change);
         switch (kind) {
         case IDB_CHANGE_RECORD_STORED:
+            /* §6.1 step 4 ALWAYS ADDED, because its step 3 removed whatever was under this key first — so the
+               inverse is a removal, and a put that overwrote is put back by the §6.4 removal step 3 recorded,
+               which the backwards walk reaches next. */
             store = idb_change_get(ctx, change, IDB_CHANGE_STORE);
             key = idb_change_get(ctx, change, IDB_CHANGE_KEY);
-            prior = idb_change_get(ctx, change, IDB_CHANGE_PRIOR);
             records = idb_store_records(ctx, store);
             pos = idb_record_pos(ctx, records, key, &exists);
             DCHECK(exists, "a record this transaction stored is no longer in the store it was stored in — §6.1 "
                            "is the only algorithm that writes this list, and §2.7.2 gives one store to one "
                            "read/write transaction at a time, so nothing else can have removed it");
-            if (JS_IsNull(prior)) {
-                /* The put ADDED this key: the list loses it, and the tail comes down one place so the ordering
-                   §2.2 states survives the removal. */
-                len = idb_list_len(ctx, records);
-                for (j = pos; j + 1 < len; j++)
-                    JS_DefinePropertyValueUint32(ctx, records, j, JS_GetPropertyUint32(ctx, records, j + 1),
-                                                 JS_PROP_C_W_E);
-                JS_SetPropertyStr(ctx, records, "length", JS_NewUint32(ctx, len - 1));
-            } else {
-                /* The put OVERWROTE a record: the one it displaced goes back at the same position, which is the
-                   only position its key can occupy in a sorted list. */
-                JS_DefinePropertyValueUint32(ctx, records, pos, JS_DupValue(ctx, prior), JS_PROP_C_W_E);
-            }
+            len = idb_list_len(ctx, records);
+            for (j = pos; j + 1 < len; j++)
+                JS_DefinePropertyValueUint32(ctx, records, j, JS_GetPropertyUint32(ctx, records, j + 1),
+                                             JS_PROP_C_W_E);
+            JS_SetPropertyStr(ctx, records, "length", JS_NewUint32(ctx, len - 1));
             JS_FreeValue(ctx, records);
-            JS_FreeValue(ctx, prior);
             JS_FreeValue(ctx, key);
             JS_FreeValue(ctx, store);
             break;
@@ -1200,6 +1455,45 @@ void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx)
             JS_FreeValue(ctx, store);
             break;
         }
+        case IDB_CHANGE_INDEX_CREATED:
+            store = idb_change_get(ctx, change, IDB_CHANGE_STORE);
+            index = idb_change_get(ctx, change, IDB_CHANGE_INDEX);
+            /* "For upgrade transactions this includes changes to the set of object stores AND INDEXES ... any
+               object stores AND INDEXES which were created during the transaction are now considered deleted
+               for the purposes of other algorithms." */
+            idb_index_revert_creation(ctx, store, index);
+            JS_FreeValue(ctx, index);
+            JS_FreeValue(ctx, store);
+            break;
+        case IDB_CHANGE_INDEX_DESTROYED:
+        case IDB_CHANGE_INDEX_RENAMED:
+            store = idb_change_get(ctx, change, IDB_CHANGE_STORE);
+            index = idb_change_get(ctx, change, IDB_CHANGE_INDEX);
+            name = idb_change_get(ctx, change, IDB_CHANGE_NAME);
+            cname = JS_ToCString(ctx, name);
+            CHECK(cname != NULL, "IndexedDB: an index's former name could not be read back to restore it");
+            /* THE TWO ARE ONE ARM because the state each undoes is the same pair — the name and the set — and
+               a destroy differs only in that the index also has to rejoin the set it left. */
+            if (kind == IDB_CHANGE_INDEX_DESTROYED)
+                idb_index_revert_destruction(ctx, store, index, cname);
+            else
+                idb_index_revert_rename(ctx, store, index, cname);
+            JS_FreeCString(ctx, cname);
+            JS_FreeValue(ctx, name);
+            JS_FreeValue(ctx, index);
+            JS_FreeValue(ctx, store);
+            break;
+        case IDB_CHANGE_INDEX_RECORDS_STORED:
+        case IDB_CHANGE_INDEX_RECORDS_REMOVED:
+            index = idb_change_get(ctx, change, IDB_CHANGE_INDEX);
+            records = idb_change_get(ctx, change, IDB_CHANGE_RECORDS);
+            if (kind == IDB_CHANGE_INDEX_RECORDS_STORED)
+                idb_index_revert_records_stored(ctx, index, records);
+            else
+                idb_index_revert_records_removed(ctx, index, records);
+            JS_FreeValue(ctx, records);
+            JS_FreeValue(ctx, index);
+            break;
         case IDB_CHANGE_STORE_RENAMED:
             db = idb_change_get(ctx, change, IDB_CHANGE_DB);
             store = idb_change_get(ctx, change, IDB_CHANGE_STORE);
@@ -1238,6 +1532,20 @@ void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx)
         }
         JS_FreeValue(ctx, change);
     }
+}
+
+void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx)
+{
+    JSValue changes = idb_transaction_changes(ctx, tx);
+
+    DCHECK(idb_transaction_state(ctx, tx) != IDB_TX_FINISHED,
+           "the changes of a FINISHED transaction were reverted — §5.5 step 1 abandons the abort of a finished "
+           "transaction, so reaching here twice means the changes are being undone against a database that has "
+           "already had them undone once");
+    /* THE LIST IS NOT TRUNCATED HERE, unlike §5.6 step 5.4's revert below. §5.8 step 5.1 asks this same list
+       which object stores this transaction CREATED, and §5.5 runs §5.8 (its step 3) before it sets the state
+       to finished (its step 4) — which is what empties the list. */
+    idb_revert_span(ctx, changes, 0, idb_list_len(ctx, changes));
     /* AND THE LIST ITSELF, which idb_transaction_changes hands over OWNED. Dropping it here was worth a whole
        browser: the list is emptied when the transaction reaches finished, so what survived was an EMPTY Array
        — and an Array holds Array.prototype, which holds the realm's function objects, each of which holds the
@@ -1248,34 +1556,63 @@ void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx)
     JS_FreeValue(ctx, changes);
 }
 
+void idb_database_revert_operation(JSContext *ctx, JSValueConst tx, uint32_t from)
+{
+    JSValue changes = idb_transaction_changes(ctx, tx);
+    uint32_t n = idb_list_len(ctx, changes);
+
+    DCHECK(from <= n, "§5.6 step 5.4's watermark is beyond the transaction's list of changes. It is the length "
+                      "that list had before the operation ran, and the list only grows while one runs — so a "
+                      "watermark past its end means something REMOVED changes underneath the operation");
+    DCHECK(idb_transaction_state(ctx, tx) != IDB_TX_FINISHED,
+           "an operation's changes were reverted against a FINISHED transaction — §5.6's task terminates for "
+           "every request of an aborted transaction, exactly so that no operation runs past that point");
+    idb_revert_span(ctx, changes, from, n);
+    /* THE REVERTED CHANGES LEAVE THE LIST. They are no longer changes the transaction made — §5.6 step 5.4's
+       own note is that this "only reverts the changes done by this request" — so a later abort must not undo
+       them a second time, which would fire every one of the inverses' own asserts. */
+    JS_SetPropertyStr(ctx, changes, "length", JS_NewUint32(ctx, from));
+    JS_FreeValue(ctx, changes);
+}
+
 /* "ANY OBJECT STORES ... WHICH WERE CREATED DURING THE TRANSACTION" — one store, asked of the list the revert
    above runs. The list is READ FORWARDS here because this is a membership question and not a composition: a
    store either appears as a creation of this transaction or it does not, and a store created and then
    destroyed inside one transaction was still created by it (§5.8 step 5.1 skips its handle either way). */
-bool idb_database_store_was_created_by(JSContext *ctx, JSValueConst tx, JSValueConst store)
+static bool idb_created_by(JSContext *ctx, JSValueConst tx, JSValueConst thing, int kind, const char *field)
 {
     JSValue changes = idb_transaction_changes(ctx, tx);
     uint32_t i, n = idb_list_len(ctx, changes);
     bool created = false;
 
-    DCHECK(JS_IsObject(store), "\"was this store newly created during the transaction\" was asked of something "
-                               "that is not a §2.2 object store");
+    DCHECK(JS_IsObject(thing), "\"was this newly created during the transaction\" was asked of something that "
+                               "is not a §2.2 object store or a §2.6 index");
     DCHECK(idb_transaction_state(ctx, tx) != IDB_TX_FINISHED,
-           "a FINISHED transaction was asked which object stores it created. Its list of changes is emptied "
-           "when it reaches that state, so the answer would be NO for every store — and §5.8 step 5.1 would "
-           "then rename the handle of a store this transaction created, which is the one case it must not");
+           "a FINISHED transaction was asked what it created. Its list of changes is emptied when it reaches "
+           "that state, so the answer would be NO for everything — and §5.8 steps 5.1 and 6 would then rename "
+           "the handle of something this transaction created, which is the one case they must not");
     for (i = 0; i < n && !created; i++) {
         JSValue change = JS_GetPropertyUint32(ctx, changes, i);
 
         DCHECK(JS_IsObject(change), "a transaction's list of database changes had a hole in it");
-        if (idb_change_kind(ctx, change) == IDB_CHANGE_STORE_CREATED) {
-            JSValue made = idb_change_get(ctx, change, IDB_CHANGE_STORE);
+        if (idb_change_kind(ctx, change) == kind) {
+            JSValue made = idb_change_get(ctx, change, field);
 
-            created = JS_VALUE_GET_PTR(made) == JS_VALUE_GET_PTR(store);
+            created = JS_VALUE_GET_PTR(made) == JS_VALUE_GET_PTR(thing);
             JS_FreeValue(ctx, made);
         }
         JS_FreeValue(ctx, change);
     }
     JS_FreeValue(ctx, changes);
     return created;
+}
+
+bool idb_database_store_was_created_by(JSContext *ctx, JSValueConst tx, JSValueConst store)
+{
+    return idb_created_by(ctx, tx, store, IDB_CHANGE_STORE_CREATED, IDB_CHANGE_STORE);
+}
+
+bool idb_database_index_was_created_by(JSContext *ctx, JSValueConst tx, JSValueConst index)
+{
+    return idb_created_by(ctx, tx, index, IDB_CHANGE_INDEX_CREATED, IDB_CHANGE_INDEX);
 }

@@ -489,6 +489,28 @@ JSValue idb_key_to_value(JSContext *ctx, JSValueConst key)
     return idb_key_scalar_to_value(ctx, rank, key);
 }
 
+/* §2.4's ARRAY KEY, asked and unpacked. It is the ONE type question this file answers for another component:
+   §6.1 step 5's two multiEntry arms turn on "index key is an array key" and then walk "the subkeys of index
+   key", which is that key's value. The unpack asserts the type rather than answering for a scalar, because the
+   condition that selects the arm is the same question and a caller holding "the subkeys of a number" has
+   nothing it could correctly do with them. */
+bool idb_key_is_array(JSContext *ctx, JSValueConst key)
+{
+    return idb_key_rank(ctx, key) == IDB_RANK_ARRAY;
+}
+
+JSValue idb_key_subkeys(JSContext *ctx, JSValueConst key)
+{
+    JSValue subkeys;
+
+    DCHECK(idb_key_rank(ctx, key) == IDB_RANK_ARRAY,
+           "the SUBKEYS of a key that is not an array key were asked for — §2.4 gives a list of other keys to "
+           "the array type alone, and idb_key_is_array is how that is asked");
+    subkeys = idb_key_value(ctx, key);
+    DCHECK(JS_IsArray(subkeys), "an array key's value is not a list of subkeys");
+    return subkeys;
+}
+
 /* ---- §2.4's COMPARE TWO KEYS -------------------------------------------------------------------------------- */
 
 /* "If va is CODE UNIT LESS THAN vb, then return -1" — Infra's code-unit ordering over UTF-16, which is NOT the

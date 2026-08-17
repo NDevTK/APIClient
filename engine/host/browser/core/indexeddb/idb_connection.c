@@ -479,9 +479,18 @@ static JSValue js_conn_delete_object_store(JSContext *ctx, JSValueConst this_val
                                     "no object store with that name exists in the database");
     }
     /* "Remove store from this's object store set" and "Destroy store" are ONE operation here, because this
-       connection's object store set IS the database's record — see the file header. The index-set step has
-       nothing to clear: §2.6's index does not exist, so no handle can hold one. */
+       connection's object store set IS the database's record — see the file header. */
     idb_transaction_scope_remove(ctx, tx, store);
+    /* "If there is an object store handle associated with store and transaction, REMOVE ALL ENTRIES FROM ITS
+       INDEX SET." The store's own set of indexes is left alone — this is the handle's §2.2.1 copy, and
+       emptying it is what makes `handle.indexNames` empty for a store the page has just deleted. */
+    {
+        JSValue handle = idb_transaction_handle_find(ctx, tx, store);
+
+        if (!JS_IsNull(handle))
+            idb_object_store_handle_clear_index_set(ctx, handle);
+        JS_FreeValue(ctx, handle);
+    }
     idb_object_store_destroy(ctx, tx, db, store);
     JS_FreeValue(ctx, store);
     JS_FreeValue(ctx, db);

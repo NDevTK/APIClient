@@ -85,6 +85,14 @@ void idb_transaction_add_request(JSContext *ctx, JSValueConst tx, JSValueConst r
 void idb_transaction_remove_request(JSContext *ctx, JSValueConst tx, JSValueConst request);
 bool idb_transaction_requests_empty(JSContext *ctx, JSValueConst tx);
 
+/* §2.7's REQUEST LIST, WALKED — the entries from the head cursor to the end, which are exactly the requests
+   that have not been removed yet. §4.5's `createIndex` is the caller and its question is not "is the list
+   empty" but "is any request still to run placed against THIS store", which is a different and much narrower
+   thing: a pending `put` into another object store cannot be observed by an index on this one. `*from` is the
+   head cursor and `*count` the list's length, so the caller walks [from, count) without a second reader of
+   either. The list is OWNED. */
+JSValue idb_transaction_pending_requests(JSContext *ctx, JSValueConst tx, uint32_t *from, uint32_t *count);
+
 /* §5.5 step 2's "ALL THE CHANGES MADE TO THE DATABASE BY THE TRANSACTION" — the list of them, in the order they
    were made. It is the TRANSACTION's state because that is whose changes they are, and it is a JS Array on the
    transaction's slot record for the reason every other list in this component is one (§State-isolation): a
@@ -97,6 +105,13 @@ bool idb_transaction_requests_empty(JSContext *ctx, JSValueConst tx);
    `change` is CONSUMED; the list is OWNED and is read backwards by §5.5 step 2. */
 void    idb_transaction_record_change(JSContext *ctx, JSValueConst tx, JSValue change);
 JSValue idb_transaction_changes(JSContext *ctx, JSValueConst tx);
+
+/* HOW MANY CHANGES THE TRANSACTION HAS RECORDED SO FAR — §5.6 step 5.4's WATERMARK, read before an operation
+   is performed so that "revert all changes made by OPERATION" names the tail the operation appended and not
+   the transaction's whole list. It is a count and not a cursor object because the list only grows while an
+   operation runs: §2.7.2 gives one store to one read/write transaction at a time, and an operation is one
+   task, so nothing else appends to or removes from this list across one. */
+uint32_t idb_transaction_change_count(JSContext *ctx, JSValueConst tx);
 
 /* §2.7's MODE and CONNECTION, read. The mode is what §4.5's members test for a "ReadOnlyError" and what §4.4's
    `createObjectStore` tests to know it is inside an upgrade transaction; the connection is what §4.10's `db`

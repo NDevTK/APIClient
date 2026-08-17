@@ -41,6 +41,7 @@
 #include "core/realm.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_request.h"
 #include "core/indexeddb/idb_transaction.h"
 
@@ -229,6 +230,12 @@ JSValue idb_request_error(JSContext *ctx, JSValueConst req)
     return e;
 }
 
+JSValue idb_request_source(JSContext *ctx, JSValueConst req)
+{
+    DCHECK(idb_request_is(req), "a request source was read off something that is not a request");
+    return rq_get(ctx, req, RQ_SOURCE);
+}
+
 JSValue idb_request_transaction(JSContext *ctx, JSValueConst req)
 {
     DCHECK(idb_request_is(req), "a request transaction was read off something that is not a request");
@@ -260,6 +267,11 @@ typedef struct {
     EventFireCb cb;           /* the request buffer — wide enough for §2.9's three-argument dispatch, and so
                                  for the zero-argument operation call that uses it in an earlier stage */
     uint8_t     is_error;     /* §5.6's "result is an error" */
+    /* §5.6 STEP 5.4's WATERMARK: how many changes the transaction had recorded before the operation ran, so
+       that "revert all changes made by OPERATION" names the tail this one appended. Taken at the machine's
+       first entry, which IS "before performing operation" — RQX_PERFORM is the first stage and nothing between
+       that entry and the call records a change. */
+    uint32_t    changes_before;
     uint8_t     not_canceled; /* §5.10 step 9.3's "event's canceled flag", as the dispatch answers it */
 } JSIdbReqState;
 
@@ -279,8 +291,9 @@ static void js_idb_req_visit(JSContext *ctx, void *st, JSStepVisit *v)
    been: quickjs-step.h's own note is that a machine can never answer "have I started?" from its stage, since
    the first stage's constant is also the entry stage. It runs ABOVE the dispatch, where code that legitimately
    runs on every entry belongs. */
-static void rq_state_start(JSIdbReqState *s)
+static void rq_state_start(JSContext *ctx, JSIdbReqState *s, JSValueConst req)
 {
+    JSValue tx;
     int i;
 
     if (s->started)
@@ -289,6 +302,11 @@ static void rq_state_start(JSIdbReqState *s)
     s->result = JS_UNDEFINED;
     s->ev = JS_UNDEFINED;
     STEP_CB_FOREACH(s->cb, i) s->cb[i] = JS_UNDEFINED;
+    tx = rq_get(ctx, req, RQ_TRANSACTION);
+    DCHECK(idb_transaction_is(tx), "a request task ran for a request that was never placed against a "
+                                   "transaction — §5.6 step 4 adds it to one before this task exists");
+    s->changes_before = idb_transaction_change_count(ctx, tx);
+    JS_FreeValue(ctx, tx);
 }
 
 #define RQX_STAGES(X) \
@@ -320,7 +338,7 @@ static int js_idb_req_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     DCHECK(idb_request_is(req), "an Indexed Database request task was minted over something that is not a "
                                 "request");
 
-    rq_state_start(s);
+    rq_state_start(ctx, s, req);
     STEP_DISPATCH(RQX_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
 
     STEP_ARM(RQX_PERFORM);
@@ -338,8 +356,6 @@ static int js_idb_req_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
            the order they were placed and each completes inside its own task — so this is an assertion rather
            than a loop, and it fires if two of one transaction's requests ever run out of order. */
         tx = rq_get(ctx, req, RQ_TRANSACTION);
-        DCHECK(idb_transaction_is(tx), "a request task ran for a request that was never placed against a "
-                                       "transaction — §5.6 step 4 adds it to one before this task exists");
         /* §2.7: "until the transaction is started the implementation must not execute these requests". This
            task exists only because idb_transaction_queue_request_task released it, and it releases nothing
            before §2.7.1's start — so this is the other side of that contract rather than a second gate. */
@@ -385,12 +401,16 @@ static int js_idb_req_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         STEP_GOTO(s->hdr.stage, RQX_PROCESSED, &s->phase, NULL);
 
     STEP_ARM(RQX_PROCESSED);
-        /* §5.6 step 5.4 ("if result is an error, then revert all changes made by operation") has nothing to
-           undo: the operation's contract is that it is ATOMIC, and §6.1 — the only operation this engine has
-           — reports every failure before it copies the value it was given. That is a property of the
-           operations rather than a step skipped, and it is stated at the contract in idb_request.h so an
-           operation that breaks it cannot be written by accident.
-           §5.6 step 5.5. */
+        /* §5.6 STEP 5.4: "If result is an error, then revert all changes made by operation." §6.1 step 5's
+           "ConstraintError" for a unique index is raised AFTER step 3 removed the displaced record, step 4
+           wrote the new one and earlier indexes took theirs — so an operation that fails HAS changed the
+           database, and the watermark is what names its tail. */
+        if (s->is_error) {
+            tx = rq_get(ctx, req, RQ_TRANSACTION);
+            idb_database_revert_operation(ctx, tx, s->changes_before);
+            JS_FreeValue(ctx, tx);
+        }
+        /* §5.6 step 5.5. */
         rq_set(ctx, req, RQ_PROCESSED, JS_TRUE);
         STEP_GOTO(s->hdr.stage, RQX_DELIVER, &s->phase, NULL);
 

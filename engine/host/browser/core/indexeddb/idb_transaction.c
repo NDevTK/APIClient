@@ -520,6 +520,20 @@ void idb_transaction_remove_request(JSContext *ctx, JSValueConst tx, JSValueCons
     JS_FreeValue(ctx, slots);
 }
 
+JSValue idb_transaction_pending_requests(JSContext *ctx, JSValueConst tx, uint32_t *from, uint32_t *count)
+{
+    JSValue slots = tx_slots(ctx, tx), list;
+
+    DCHECK(JS_IsObject(slots), "a request list was asked of a value that is not a transaction");
+    list = JS_GetPropertyStr(ctx, slots, TX_REQUESTS);
+    DCHECK(JS_IsArray(list), "a transaction carried no request list");
+    *from = (uint32_t)tx_int(ctx, tx, TX_HEAD);
+    *count = tx_array_len(ctx, list);
+    DCHECK(*from <= *count, "a transaction's request-list head cursor is past the end of the list");
+    JS_FreeValue(ctx, slots);
+    return list;
+}
+
 bool idb_transaction_requests_empty(JSContext *ctx, JSValueConst tx)
 {
     JSValue slots = tx_slots(ctx, tx), list;
@@ -544,6 +558,15 @@ JSValue idb_transaction_changes(JSContext *ctx, JSValueConst tx)
     DCHECK(JS_IsArray(list), "a transaction carried no list of database changes — every transaction is built by "
                              "idb_transaction_new, which gives it one");
     return list;
+}
+
+uint32_t idb_transaction_change_count(JSContext *ctx, JSValueConst tx)
+{
+    JSValue list = idb_transaction_changes(ctx, tx);
+    uint32_t n = tx_array_len(ctx, list);
+
+    JS_FreeValue(ctx, list);
+    return n;
 }
 
 void idb_transaction_record_change(JSContext *ctx, JSValueConst tx, JSValue change)

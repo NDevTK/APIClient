@@ -27,11 +27,11 @@
  * A flag remembering which database this was would be a second answer to a question the revert has already
  * answered, and it would be the field nobody notices is never written on the day the revert changes.
  *
- * §2.6's INDEX DOES NOT EXIST, so step 5.2 — "set handle's index set to the set of indexes that reference its
- * object store" — has nothing to write. That is a fact about this engine's state and not a step skipped: a
- * handle has no index set to put back because nothing can create an index to put in one, which is the same
- * sentence §4.4's deleteObjectStore states about its own index-set step. `createIndex` is honestly ABSENT and
- * the IDL gap auditor lists it; the day it lands, this step lands with it. */
+ * STEPS 5.2 AND 6 ARE THE TWO INDEX HALVES, and they are why §2.2.1's index set is not §2.6's. Step 5.2 sets
+ * each object store handle's index set BACK TO the set of indexes that reference its store — a write with an
+ * effect only because the two lists are two objects that diverged when this transaction created or deleted an
+ * index. Step 6 does for index handles' names what step 5.1 does for object store handles', reached through
+ * the object store handles because §2.6.1 scopes an index handle to one of those. */
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -39,6 +39,7 @@
 #include "quickjs.h"
 #include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_database.h"
+#include "core/indexeddb/idb_index_handle.h"
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_transaction.h"
 #include "core/indexeddb/idb_upgrade_abort.h"
@@ -47,7 +48,7 @@ void idb_abort_upgrade_transaction(JSContext *ctx, JSValueConst tx)
 {
     JSValue connection, database, conn_stores, db_stores, handles;
     double version;
-    uint32_t i, n;
+    uint32_t i, n, j, ixn;
 
     DCHECK(idb_transaction_is(tx), "§5.8 was run over something that is not a §2.7 transaction");
     DCHECK(idb_transaction_mode(ctx, tx) == IDB_TX_VERSIONCHANGE,
@@ -98,7 +99,7 @@ void idb_abort_upgrade_transaction(JSContext *ctx, JSValueConst tx)
        is aborted, it can still have references to IDBObjectStore instances"). */
     handles = idb_transaction_handles(ctx, tx, &n);
     for (i = 0; i < n; i++) {
-        JSValue handle = JS_GetPropertyUint32(ctx, handles, i), store;
+        JSValue handle = JS_GetPropertyUint32(ctx, handles, i), store, ixh;
 
         DCHECK(idb_object_store_is(handle), "a transaction's set of object store handles held something that "
                                             "is not an object store handle");
@@ -110,7 +111,29 @@ void idb_abort_upgrade_transaction(JSContext *ctx, JSValueConst tx)
            put back by step 2, and this is the write that carries that out to the page's handle. */
         if (!idb_database_store_was_created_by(ctx, tx, store))
             idb_object_store_handle_restore_name(ctx, handle);
-        /* Step 5.2 is the index set, which §2.6's index does not exist to fill — see the file header. */
+        /* Step 5.2: "Set handle's index set to the set of indexes that REFERENCE ITS OBJECT STORE." No guard —
+           unlike step 5.1, which skips a newly created store — because the store's own set is correct either
+           way after §5.5 step 2: a store this transaction created has been destroyed and holds whatever
+           indexes the revert left on it, and a store that outlived the transaction has its indexes back. */
+        idb_object_store_handle_reset_index_set(ctx, handle);
+        /* Step 6: "For each INDEX HANDLE handle associated with transaction, including those for indexes that
+           were created or deleted during transaction: if handle's index was not newly created during
+           transaction, set handle's name to its index's name." An index handle is associated with the
+           transaction THROUGH the object store handle §2.6.1 scopes it to, so the walk is here rather than
+           over a second list the transaction would have to keep. */
+        ixh = idb_object_store_handle_index_handles(ctx, handle, &ixn);
+        for (j = 0; j < ixn; j++) {
+            JSValue ih = JS_GetPropertyUint32(ctx, ixh, j), index;
+
+            DCHECK(idb_index_handle_is(ih), "an object store handle's set of index handles held something "
+                                            "that is not an index handle");
+            index = idb_index_handle_index(ctx, ih);
+            if (!idb_database_index_was_created_by(ctx, tx, index))
+                idb_index_handle_restore_name(ctx, ih);
+            JS_FreeValue(ctx, index);
+            JS_FreeValue(ctx, ih);
+        }
+        JS_FreeValue(ctx, ixh);
         JS_FreeValue(ctx, store);
         JS_FreeValue(ctx, handle);
     }

@@ -61,6 +61,14 @@ void idb_key_range_walk_visit(JSContext *ctx, IdbRangeWalk *rw, JSStepVisit *v);
    *prange an OWNED key range, or -1 with the "DataError" live. */
 int  idb_key_range_walk_take(JSContext *ctx, IdbRangeWalk *rw, JSValue *prange);
 
+/* §2.9's "A KEY RANGE CONTAINING ONLY KEY", minted from a key record the engine ALREADY HOLDS rather than from
+   a page value there is nothing to convert. Two algorithms ask for one: §6.1 step 3 removes the record a put
+   displaces "using DELETE RECORDS FROM AN OBJECT STORE", which takes a range and not a key, and §6.3's first
+   retrieval reaches the referenced value through §6.2 over the index record's primary key. Reaching this
+   through the conversion above instead would mean minting a page value to convert back. `key` is BORROWED; the
+   range is OWNED. */
+JSValue idb_key_range_only_key(JSContext *ctx, JSValueConst key);
+
 /* §2.9's "a key is IN a key range" — the membership test §6.2's retrievals, §6.4's delete, §6.5's count and
    §6.7's cursor iteration are each stated over. `range` is one of this component's own ranges, which is what
    the conversion above guarantees, so a value that is not one crashes rather than answering. */
