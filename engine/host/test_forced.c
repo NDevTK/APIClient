@@ -3142,6 +3142,36 @@ static JSContext *g_probe_ctx;
 static ColdParked g_cp;
 static ColdResumed g_cr;
 
+/* HOW MANY VALUES ONE PARAM OF ONE ENDPOINT CARRIES. A `strstr` over the whole result document cannot state a
+   COUNT, so a row whose claim is about one — "this param carries more than one value, therefore the walk forked
+   instead of deciding a bound" — cannot be written with one and was written as a term that cannot fail. The walk
+   is endpoint_json_array's own shape: the endpoint object, the param inside it, and the entries of its
+   validValues array, whose bytes are inside quotes so nothing but an entry's own quote pair delimits it.
+   0 = no such endpoint, or no such param on it. */
+static int param_value_count(const char *js, const char *url, const char *pname) {
+    char pat[160];
+    const char *e, *end, *p, *v;
+    int n = 0;
+
+    snprintf(pat, sizeof pat, "\"url\":\"%s\"", url);
+    e = strstr(js, pat);
+    if (!e) return 0;
+    end = strstr(e + 1, "\"url\":\"");   /* the NEXT endpoint's url is this object's far edge */
+    snprintf(pat, sizeof pat, "\"name\":\"%s\",\"location\":", pname);
+    p = strstr(e, pat);
+    if (!p || (end && p >= end)) return 0;
+    v = strstr(p, "\"validValues\":[");
+    if (!v) return 0;
+    for (v += strlen("\"validValues\":["); *v && *v != ']'; v++) {
+        if (*v != '"') continue;
+        n++;
+        for (v++; *v && *v != '"'; v++)
+            if (*v == '\\' && v[1]) v++;   /* an escaped quote is a value's byte, not the entry's end */
+        if (!*v) break;
+    }
+    return n;
+}
+
 /* Fill `out` with the rows this invocation carries and answer how many. Every row's `ok` is computed here, so
    the mid-run report and the final one are the same function of the same bytes. */
 static int probes_eval(const char *js, Probe *out, int cap) {
@@ -3348,9 +3378,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        exists to guarantee. (2) `n` carries more than one value, because a chain that forked would report the
        length of each arm; one length would mean the walk decided a bound instead of forking it. This statement
        had NO row here at all, so nothing asserted it in either document — the fixture's own rule is that a probe
-       which is not declared does not exist. */
-    int optiter_tt = (strstr(js, "\"/api/optiter\"") && strstr(js, "{state}.items.0") && strstr(js, "{state}.items.1")
-                      && strstr(js, "\"n\""));
+       which is not declared does not exist.
+       THE SECOND FACT WAS NOT BEING ASSERTED. It read `strstr(js, "\"n\"")`, which is TRUE of every run that
+       emits this endpoint at all — the statement always builds `?n=`, so the term could not fail, and the row
+       reported the forked walk while checking only that the walk had happened once. The count is what the claim
+       is about, so the count is what is read; the endpoint's own presence is subsumed by asking for it. */
+    int optiter_tt = (param_value_count(js, "/api/optiter", "n") > 1 &&
+                      strstr(js, "{state}.items.0") && strstr(js, "{state}.items.1"));
     /* THE SYNCHRONOUS HOST READ resumed at its own call site, three times in a loop, each answer landing in
        the call that asked for it — hr0hr1hr2 in order, never interleaved or reused. */
     int hostreq_tt = (strstr(js, "\"/api/hostreq\"") && strstr(js, "hr0hr1hr2"));
