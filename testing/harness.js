@@ -54,9 +54,19 @@ function computeExtensionId(absPath) {
 
 const ROOT = path.resolve(__dirname, "..");
 const EXT_DIR = path.join(ROOT, "extension");
-const PROFILE_DIR = path.join(__dirname, "profile");
-const LOCK_FILE = path.join(__dirname, "harness.lock");
-const DEFAULT_PORT = 9337;
+/* THE PROFILE AND THE LOCK ARE ONE PAIR PER BROWSER, AND THIS CHECKOUT HOLDS SEVERAL AGENTS AT ONCE. Both
+   were fixed paths, so a second agent running `restart` killed the first agent's Chrome by the pid in the
+   shared lock and then wiped the IndexedDB out from under it — a measurement destroyed by a process that was
+   never asked about it, and silently, because the survivor's next command simply reconnects to a browser that
+   is not the one it started. Naming the pair through the environment makes a private browser one variable
+   away; unset, every path is exactly what it was. The debug port must be distinct too (it is already an
+   argument to `start`), and the extension ID is derived from EXT_DIR, so two browsers on one checkout still
+   agree on which chrome-extension:// origin is ours. */
+const PROFILE_DIR = process.env.HARNESS_PROFILE
+  ? path.resolve(process.env.HARNESS_PROFILE) : path.join(__dirname, "profile");
+const LOCK_FILE = process.env.HARNESS_LOCK
+  ? path.resolve(process.env.HARNESS_LOCK) : path.join(__dirname, "harness.lock");
+const DEFAULT_PORT = Number(process.env.HARNESS_PORT || 9337);
 
 function log(...args) { console.log(...args); }
 function err(...args) { console.error(...args); }
