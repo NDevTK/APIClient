@@ -644,6 +644,28 @@ static int js_close_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
            "§7.3's definitely close was given a navigable that is not a TOP-LEVEL traversable — §7.2.5.2 step "
            "2 returns for one, and a frame is closed by removing its container");
 
+    /* AND THE ACTIVE DOCUMENT EVERY ONE OF THOSE STEPS READS MAY BE A PEER'S. §7.3.1.6 navigable destruction's
+       definitely close is written over traversable's ACTIVE DOCUMENT — its inclusive descendant navigables,
+       §7.5.9's unload over them, then §7.5.10's destroy — and each of those runs IN THE AGENT THAT HOLDS THAT
+       DOCUMENT: unload fires `beforeunload` and `unload` at the page's own listeners and destroy tears down its
+       Window. This agent holds none of it for a remote navigable, so the fan-out below would walk an EMPTY
+       subtree and complete — the opener's copy of is closing true, the peer still running, its unload listeners
+       never fired, and nothing anywhere to say the close did not happen.
+       IT IS THE MIRROR OF THE READ AND IT WANTS THE SAME MECHANISM. §7.2.2.1's `closed` is ASKED of the agent
+       whose record the standard names (window_proxy.c's proxy_get_step); this is that agent being TOLD, so it
+       is a cross-agent operation the peer performs by running close() on its own root — one more row in
+       remote_op.c's OPS table, and the two hosts that route by verb widened past `windowproxy.get`
+       (extension/bridge.js, engine/route.mjs). Setting is closing here is NOT part of that gap and is correct
+       as it stands: it is monotonic, so this agent's true is the standard's answer for its own reads. */
+    DCHECK(!window_proxy_is_remote(proxy),
+           "§7.3.1.6's definitely close reached a top-level traversable whose ACTIVE DOCUMENT is in another "
+           "instance. Steps 1-3 are performed ON THAT DOCUMENT — the beforeunload/unload fan-out is over its "
+           "subtree and fires at its own listeners, and the destroy tears down its Window — so running them "
+           "here walks an empty subtree and leaves the peer alive with its unload never fired. Build the "
+           "cross-agent operation: a row in remote_op.c's OPS table whose program runs close() on the peer's "
+           "own root, and widen the by-verb routing in extension/bridge.js and engine/route.mjs past "
+           "`windowproxy.get` so it reaches the instance that holds the document");
+
     /* STEPS 1-2: toUnload is the active document's INCLUSIVE DESCENDANT NAVIGABLES, and checking if unloading
        is canceled over that list is the beforeunload fan-out — the subtree rooted here, one task per document.
        STEP 3 is its continuation: when the whole subtree has answered, unload the document and its descendants
