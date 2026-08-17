@@ -198,6 +198,12 @@ const worldDeaths = [];
 /* Every record this zone could not route because no instance holds the document it names. Collected rather
    than logged: an unroutable operation parks its asker forever, so it is a failure and not a note. */
 const routeFailures = [];
+/* READS ARE DIFFERENT FROM POSTS HERE, AND CONFLATING THEM REPORTED A WORKING SEAM AS BROKEN. A post's cursor
+   advances past a target that is not held yet, so that post is genuinely LOST and belongs in `routeFailures`
+   at first sighting. A read is re-reported every step, so "no holder yet" is a retry — and `d1.2`'s navigable
+   is created in the very step its read is asked. Held here and cleared the moment the read routes, so only a
+   read still unheld when the drive ENDS is a failure. */
+const unheldReads = new Map();
 /* DECLARED HERE BECAUSE THE PHASES USE IT. A phase that cannot reach the state the next one measures has to
    stop there rather than carry a half-built precondition into an assertion about something else. */
 const fail = (why) => { console.error('[route] FAILED: ' + why); process.exit(1); };
@@ -246,8 +252,17 @@ async function service(e) {
       if (reads.has(key)) continue;
       /* EVERY CROSS-AGENT OPERATION NAMES ITS TARGET DOCUMENT as its first operand, which is the one fact only
          this zone can act on: it is what says which instance holds the object. */
+      /* NO HOLDER **YET** IS A RETRY, NOT A VERDICT, and recording it as one made this drive report a working
+         seam as broken. A read is re-reported every step (above), and `d1.2`'s navigable is CREATED in the same
+         step that asks the read against it — so whichever notice the zone drains first decided the verdict. Both
+         records this used to name arrived in the same run's census as ANSWERED, twenty rows above the FAILED
+         line calling them "parked on a question nothing will ever answer": 13 asked, 2 withheld, 11 answered,
+         and the accounting check below passed while this one failed. A permanent verdict on a transient
+         condition — measured before the thing it is about has happened. Unheld at the END of the drive is the
+         real failure, and it is derived there, from reads that were never routed. */
       const holder = holderOf(op.split('\t')[1]);
-      if (!holder) { routeFailures.push(`read ${op}`); continue; }
+      if (!holder) { unheldReads.set(key, op); continue; }
+      unheldReads.delete(key);
       reads.set(key, { asker: e.tag, op, world: op.split('\t')[2], answered: false, withheld: withholdReads });
       console.log(`  [${e.tag}] cross-agent read asked: ${op}`);
       /* THE PEER IS ASKED, AND NOTHING IS ANSWERED INSIDE THAT CALL. It answers by RUNNING A PROGRAM — the IDL
@@ -476,6 +491,9 @@ if (readsAnswered !== reads.size - withheldReads.length)
 if (routeFailures.length)
   fail(`${routeFailures.length} record(s) named a document no instance holds, so their askers are parked on a ` +
        `question nothing will ever answer: ${routeFailures.join(' ; ')}`);
+if (unheldReads.size)
+  fail(`${unheldReads.size} cross-agent read(s) named a document no instance held for the WHOLE drive, so ` +
+       `their askers are parked on a question nothing will ever answer: ${[...unheldReads.values()].join(' ; ')}`);
 /* AND THE LAST ONE IS THE ONE A WRONG ANSWER PASSES. Every check above fails by a NUMBER staying zero — a
    record that did not cross, a segment that was not forked, a completion that never came — and none of them
    would have moved if `w.closed` had been answered out of `a`'s own byte, because a local answer is instant and
