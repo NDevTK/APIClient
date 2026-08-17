@@ -78,6 +78,12 @@
 #define IDB_STORE_KEY_GENERATOR "keyGenerator"  /* §2.2's optional key generator */
 #define IDB_STORE_RECORDS       "records"       /* §2.2's "list of records ... sorted according to key" */
 #define IDB_STORE_DELETED       "deleted"       /* §4.4's "Destroy store" — see idb_object_store_destroy */
+/* §2.6's SET OF INDEXES, WHICH NO STORE IN THIS ENGINE HAS. The name is spelled here so the removal below can
+   ASSERT its absence rather than describe it: §6.4 step 2 and §6.6 step 2 each remove the index records that
+   reference the store records they remove, and neither is written. The day a store gains this field without
+   those two steps, a deleted record goes on being reachable through its index and nothing says so — so the
+   removal crashes on the field instead. */
+#define IDB_STORE_INDEXES       "indexes"
 
 #define IDB_RECORD_KEY          "key"
 #define IDB_RECORD_VALUE        "value"
@@ -94,9 +100,13 @@
 #define IDB_CHANGE_PRIOR        "prior"    /* the record that key held before, or JS_NULL for none */
 #define IDB_CHANGE_NAME         "name"     /* the name the store was filed under before */
 #define IDB_CHANGE_VERSION      "version"  /* the version the database held before */
+#define IDB_CHANGE_REMOVED      "removed"  /* the records the store held before, in key order */
 
-enum { IDB_CHANGE_RECORD_STORED, IDB_CHANGE_STORE_CREATED, IDB_CHANGE_STORE_DESTROYED,
-       IDB_CHANGE_STORE_RENAMED, IDB_CHANGE_VERSION_SET };
+/* §6.4's delete and §6.6's clear share ONE KIND because they make ONE change: a set of records left a store,
+   and the inverse is filing those same records back. A second kind would be a second name for one revert, and
+   the revert is what a kind is for. */
+enum { IDB_CHANGE_RECORD_STORED, IDB_CHANGE_RECORDS_REMOVED, IDB_CHANGE_STORE_CREATED,
+       IDB_CHANGE_STORE_DESTROYED, IDB_CHANGE_STORE_RENAMED, IDB_CHANGE_VERSION_SET };
 
 /* §2.1's SET OF DATABASES for this agent's storage key. See the header for why it is the AGENT's. */
 static JSValue g_databases = JS_UNDEFINED;
@@ -153,6 +163,22 @@ static int idb_record_key_compare(JSContext *ctx, JSValueConst records, uint32_t
                               "(§2.2), and this list holds only records idb_store_record built");
     c = idb_key_compare(ctx, rkey, key);
     JS_FreeValue(ctx, rkey);
+    JS_FreeValue(ctx, rec);
+    return c;
+}
+
+/* THE SAME COMPARISON BETWEEN TWO POSITIONS of one list — the shape §2.2's ordering invariant takes where a
+   write JOINS two records that were not neighbours, which is what a removal does and what §6.1's write (whose
+   invariant is stated against the key it just filed) does not. */
+static int idb_record_pos_compare(JSContext *ctx, JSValueConst records, uint32_t i, uint32_t j)
+{
+    JSValue rec = JS_GetPropertyUint32(ctx, records, j);
+    JSValue key = JS_GetPropertyStr(ctx, rec, IDB_RECORD_KEY);
+    int c;
+
+    DCHECK(JS_IsObject(key), "a record in an object store carried no key");
+    c = idb_record_key_compare(ctx, records, i, key);
+    JS_FreeValue(ctx, key);
     JS_FreeValue(ctx, rec);
     return c;
 }
@@ -710,6 +736,22 @@ int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValu
 
 /* ---- §6.2's OBJECT STORE RETRIEVAL OPERATIONS --------------------------------------------------------------- */
 
+/* §2.9's "a key is IN a key range", asked of ONE POSITION of a store's list. The four algorithms over a range
+   — §6.2's two retrievals, §6.4's delete and §6.5's count — each ask it and each asked it differently while it
+   was written out at the call site, which is four chances to read the record's key from somewhere else. */
+static bool idb_record_in_range(JSContext *ctx, JSValueConst records, uint32_t i, JSValueConst range)
+{
+    JSValue rec = JS_GetPropertyUint32(ctx, records, i);
+    JSValue key = JS_GetPropertyStr(ctx, rec, IDB_RECORD_KEY);
+    bool in;
+
+    DCHECK(JS_IsObject(key), "a record in an object store carried no key");
+    in = idb_key_range_contains(ctx, range, key);
+    JS_FreeValue(ctx, key);
+    JS_FreeValue(ctx, rec);
+    return in;
+}
+
 /* "Let record be the FIRST record in store's list of records whose key is IN RANGE, if any." First in the
    list's own order, which §2.2 makes key order — so this walk answers the smallest in-range key and a store
    whose list had gone out of order would answer with the wrong record rather than with none. -1 for "record
@@ -718,17 +760,9 @@ static int idb_first_in_range(JSContext *ctx, JSValueConst records, JSValueConst
 {
     uint32_t n = idb_list_len(ctx, records), i;
 
-    for (i = 0; i < n; i++) {
-        JSValue rec = JS_GetPropertyUint32(ctx, records, i);
-        JSValue key = JS_GetPropertyStr(ctx, rec, IDB_RECORD_KEY);
-        bool in;
-
-        DCHECK(JS_IsObject(key), "a record in an object store carried no key");
-        in = idb_key_range_contains(ctx, range, key);
-        JS_FreeValue(ctx, key);
-        JS_FreeValue(ctx, rec);
-        if (in) return (int)i;
-    }
+    for (i = 0; i < n; i++)
+        if (idb_record_in_range(ctx, records, i, range))
+            return (int)i;
     return -1;
 }
 
@@ -777,6 +811,138 @@ JSValue idb_retrieve_key(JSContext *ctx, JSValueConst store, JSValueConst range)
     JS_FreeValue(ctx, rec);
     JS_FreeValue(ctx, records);
     return out;
+}
+
+/* ---- §6.4's DELETE RECORDS FROM AN OBJECT STORE and §6.6's OBJECT STORE CLEAR OPERATION ---------------------- */
+
+/* THE ONE WRITE BOTH REMOVALS ARE MADE OF: `count` records leave the list at `from`, and what left is recorded
+ * so §5.5 step 2 files it back.
+ *
+ * A SPAN AND NOT A SET OF POSITIONS, because §2.2 keeps the list in §2.4's key order and §2.9's range is an
+ * INTERVAL in that order — so the records a range selects are contiguous, which is what idb_range_span asserts
+ * where it computes them and what makes one shift of the tail the whole of the removal. §6.6 hands the whole
+ * list, which is the same shape with no range to be an interval of. */
+static void idb_records_remove_span(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst records,
+                                    uint32_t from, uint32_t count)
+{
+    JSValue change, removed, indexes;
+    uint32_t n = idb_list_len(ctx, records), i;
+    bool no_indexes;
+
+    DCHECK(from <= n && count <= n - from,
+           "a span that is not inside an object store's list of records was removed from it");
+    /* §6.4 STEP 2 and §6.6 STEP 2 — "for each index which references store, remove every record from index's
+       list of records whose value is in range" / "in all indexes which reference store, remove all records" —
+       are the halves of these algorithms this engine does not perform, and a store that HAS an index set is
+       exactly the state in which not performing them is wrong. See IDB_STORE_INDEXES. */
+    indexes = JS_GetPropertyStr(ctx, store, IDB_STORE_INDEXES);
+    no_indexes = JS_IsUndefined(indexes);
+    JS_FreeValue(ctx, indexes);
+    DCHECK(no_indexes, "an object store carries §2.6's set of indexes, and §6.4 step 2 / §6.6 step 2 — the "
+                       "steps that remove the index records referencing the store records being removed — are "
+                       "not built. A record deleted from the store would stay reachable through its index. "
+                       "Build both steps here, beside the removal they mirror, when §2.6's index lands");
+    /* §5.5 step 2 records "THE CHANGES MADE to the database by the transaction", and a removal that removed
+       nothing made none. That is not a decision about what the abort may see — it is the same sentence §6.1
+       relies on when it records only after its two refusals — and it is what keeps a `delete` over keys the
+       store does not hold from filing one empty change per call for the transaction's whole lifetime. */
+    if (count == 0)
+        return;
+    removed = JS_NewArray(ctx);
+    CHECK(!JS_IsException(removed), "IndexedDB: §5.5 step 2's record of the removed records could not be "
+                                    "allocated");
+    /* THE RECORDS THEMSELVES, HELD AND NOT COPIED — the same decision §6.1 makes for the record a put
+       displaces, and for the same reason: a record is written once and replaced whole, so the object the list
+       holds IS the state that key had, and the revert files that same object back. In key order, because that
+       is the order the list holds them in. */
+    for (i = 0; i < count; i++)
+        JS_DefinePropertyValueUint32(ctx, removed, i, JS_GetPropertyUint32(ctx, records, from + i),
+                                     JS_PROP_C_W_E);
+    change = idb_change_new(ctx, IDB_CHANGE_RECORDS_REMOVED);
+    JS_SetPropertyStr(ctx, change, IDB_CHANGE_STORE, JS_DupValue(ctx, store));
+    JS_SetPropertyStr(ctx, change, IDB_CHANGE_REMOVED, removed);
+    idb_transaction_record_change(ctx, tx, change);
+
+    /* DEFINE and not assign, for the reason §6.1's write states: an index accessor a page put on
+       Array.prototype would otherwise swallow the shift and leave the list holding records that are gone. */
+    for (i = from + count; i < n; i++)
+        JS_DefinePropertyValueUint32(ctx, records, i - count, JS_GetPropertyUint32(ctx, records, i),
+                                     JS_PROP_C_W_E);
+    JS_SetPropertyStr(ctx, records, "length", JS_NewUint32(ctx, n - count));
+    /* §2.2's ordering survives the removal of a CONTIGUOUS span by construction, and the one join the removal
+       creates is between the record before the span and the record now after it — which is the whole of what
+       this write can break, the same way §6.1 states its two invariants against the one position it wrote. */
+    DCHECK(from == 0 || from >= idb_list_len(ctx, records) ||
+           idb_record_pos_compare(ctx, records, from - 1, from) < 0,
+           "removing a span from an object store's list of records left it out of order: the record before "
+           "the removed span has a key that is not less than the record now after it");
+}
+
+/* §6.4's "all records ... with key in range", as the SPAN they occupy. `*pcount` is 0 when none is in range.
+   The walk asserts the contiguity the span shape rests on: once a record is in range, every later in-range
+   record must be the next one, because §2.9's range is an interval in the order §2.2 sorts the list by. */
+static void idb_range_span(JSContext *ctx, JSValueConst records, JSValueConst range,
+                           uint32_t *pfrom, uint32_t *pcount)
+{
+    uint32_t n = idb_list_len(ctx, records), i;
+    bool found = false;
+
+    *pfrom = 0;
+    *pcount = 0;
+    for (i = 0; i < n; i++) {
+        if (!idb_record_in_range(ctx, records, i, range))
+            continue;
+        DCHECK(!found || i == *pfrom + *pcount,
+               "an object store's list of records holds an in-range record separated from the span that same "
+               "range selected — §2.9's key range is an interval in §2.4's key order and §2.2 keeps the list "
+               "in that order, so a range selects a contiguous run or the list is no longer sorted");
+        if (!found) {
+            *pfrom = i;
+            found = true;
+        }
+        *pcount = i + 1 - *pfrom;
+    }
+}
+
+void idb_delete_records(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst range)
+{
+    JSValue records = idb_store_records(ctx, store);
+    uint32_t from, count;
+
+    /* "Remove all records, if any, from store's list of records with key in range." */
+    idb_range_span(ctx, records, range, &from, &count);
+    idb_records_remove_span(ctx, tx, store, records, from, count);
+    JS_FreeValue(ctx, records);
+    /* "Return undefined" is the caller's — the operation closure this runs inside answers §5.6 with it. */
+}
+
+void idb_clear_store(JSContext *ctx, JSValueConst tx, JSValueConst store)
+{
+    JSValue records = idb_store_records(ctx, store);
+
+    /* "Remove all records from store." The whole list is the span, so this is §6.4 with the range that has no
+       bounds — except that §6.6 has no range at all, which is why it is stated as its own algorithm rather
+       than reached through a range this file would have had to mint. */
+    idb_records_remove_span(ctx, tx, store, records, 0, idb_list_len(ctx, records));
+    JS_FreeValue(ctx, records);
+}
+
+/* ---- §6.5's RECORD COUNTING OPERATION ------------------------------------------------------------------------ */
+
+uint32_t idb_count_records(JSContext *ctx, JSValueConst store, JSValueConst range)
+{
+    JSValue records = idb_store_records(ctx, store);
+    uint32_t n = idb_list_len(ctx, records), i, count = 0;
+
+    /* "Let count be the number of records, if any, in source's list of records with key in range. Return
+       count." Every record is asked. It is NOT idb_range_span's width: that entry's contiguity is an assertion
+       the REMOVAL rests on, and a count that inherited it would report the assertion's answer instead of the
+       standard's plain one. */
+    for (i = 0; i < n; i++)
+        if (idb_record_in_range(ctx, records, i, range))
+            count++;
+    JS_FreeValue(ctx, records);
+    return count;
 }
 
 /* ---- §5.5 step 2's REVERT ----------------------------------------------------------------------------------
@@ -862,6 +1028,41 @@ void idb_database_revert_transaction(JSContext *ctx, JSValueConst tx)
             JS_FreeValue(ctx, key);
             JS_FreeValue(ctx, store);
             break;
+        case IDB_CHANGE_RECORDS_REMOVED: {
+            JSValue gone;
+            uint32_t r, rn;
+
+            store = idb_change_get(ctx, change, IDB_CHANGE_STORE);
+            gone = idb_change_get(ctx, change, IDB_CHANGE_REMOVED);
+            records = idb_store_records(ctx, store);
+            rn = idb_list_len(ctx, gone);
+            /* Each record goes back at the ONE position its key can occupy in a sorted list, found by the same
+               search §6.1's write and its revert use — so what this leaves is the list §2.2 describes rather
+               than one this arm assembled out of a remembered index. FORWARDS over the removed list, because
+               it is in key order and the insertion point of each is at or after the last. */
+            for (r = 0; r < rn; r++) {
+                JSValue rec = JS_GetPropertyUint32(ctx, gone, r);
+
+                key = JS_GetPropertyStr(ctx, rec, IDB_RECORD_KEY);
+                DCHECK(JS_IsObject(key), "a record removed from an object store carried no key");
+                pos = idb_record_pos(ctx, records, key, &exists);
+                DCHECK(!exists, "a record this transaction REMOVED is in the store again under its own key — "
+                                "§2.7.2 gives one store to one read/write transaction at a time, so the only "
+                                "writer between the removal and this revert is that transaction, and every "
+                                "write it made after the removal has already been undone (the list of changes "
+                                "is run backwards for exactly this)");
+                len = idb_list_len(ctx, records);
+                for (j = len; j > pos; j--)
+                    JS_DefinePropertyValueUint32(ctx, records, j, JS_GetPropertyUint32(ctx, records, j - 1),
+                                                 JS_PROP_C_W_E);
+                JS_DefinePropertyValueUint32(ctx, records, pos, rec, JS_PROP_C_W_E);
+                JS_FreeValue(ctx, key);
+            }
+            JS_FreeValue(ctx, records);
+            JS_FreeValue(ctx, gone);
+            JS_FreeValue(ctx, store);
+            break;
+        }
         case IDB_CHANGE_STORE_CREATED:
             db = idb_change_get(ctx, change, IDB_CHANGE_DB);
             store = idb_change_get(ctx, change, IDB_CHANGE_STORE);

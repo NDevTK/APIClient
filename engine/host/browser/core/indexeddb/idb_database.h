@@ -1,8 +1,10 @@
-/* INDEXED DATABASE §2.1's DATABASE, §2.2's OBJECT STORE, and §6.1/§6.2 over them. See idb_database.c. */
+/* INDEXED DATABASE §2.1's DATABASE, §2.2's OBJECT STORE, and §6.1/§6.2/§6.4/§6.5/§6.6 over them.
+   See idb_database.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_INDEXEDDB_IDB_DATABASE_H
 #define ENGINE_HOST_BROWSER_CORE_INDEXEDDB_IDB_DATABASE_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "quickjs.h"
 
@@ -98,6 +100,29 @@ int idb_store_record(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValu
    mutates what it got has not touched the record. `idb_retrieve_key` answers §7.3's conversion of its key. */
 JSValue idb_retrieve_value(JSContext *ctx, JSValueConst store, JSValueConst range);
 JSValue idb_retrieve_key(JSContext *ctx, JSValueConst store, JSValueConst range);
+
+/* §6.4's DELETE RECORDS FROM AN OBJECT STORE and §6.6's OBJECT STORE CLEAR OPERATION — the two REMOVALS, which
+ * differ only in which records leave: §6.4 takes a range ("remove all records, if any, from store's list of
+ * records with key in range") and §6.6 takes none at all ("remove all records from store"). Each returns
+ * undefined, which §5.6 makes the request's result.
+ *
+ * NEITHER CAN FAIL, so neither has §6.1's -1 arm and both meet §5.6 step 5.4's atomicity by having nothing to
+ * report: the key conversion §4.5's member owes is already done, there is no value to clone, and §2.2 states
+ * no constraint a removal can violate. What leaves is RECORDED against the transaction like every other change
+ * this file makes — holding the record objects themselves, so §5.5 step 2 files those same records back rather
+ * than rebuilding them.
+ *
+ * They are two entries because the standard states two algorithms; the one write they are both made of is in
+ * the .c, and it is where §6.4 step 2 and §6.6 step 2 (the index halves) are asserted absent. */
+void idb_delete_records(JSContext *ctx, JSValueConst tx, JSValueConst store, JSValueConst range);
+void idb_clear_store(JSContext *ctx, JSValueConst tx, JSValueConst store);
+
+/* §6.5's RECORD COUNTING OPERATION — "let count be the number of records, if any, in source's list of records
+   with key in range". A READ: it records no change and therefore takes no transaction, which is the same
+   reason §6.2's two retrievals do not take one. §6.5 says SOURCE and not store because §2.6's index is one
+   too, and an index has a list of records of its own; this engine has no index (§4.5's `createIndex` is not
+   installed and no store record carries an index set), so the store is the only source there is. */
+uint32_t idb_count_records(JSContext *ctx, JSValueConst store, JSValueConst range);
 
 /* §2.2's THREE FIELDS a store handle reports and §4.5's members branch on. The name is the STORE's, which
    §4.5's `name` getter note distinguishes from the HANDLE's copy of it; the key path is JS_NULL for a store

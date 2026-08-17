@@ -22,11 +22,15 @@
  * would have to be keyed by a pair this file has no identity for.
  *
  * WHAT IS ABSENT AND WHY. `indexNames`, `index()`, `createIndex()` and `deleteIndex()` are §2.6's INDEX, which
- * does not exist — there is nothing that can hold an index set. `delete()`, `clear()`, `count()`, the four
- * `getAll*` members and the two cursor openers are §6.3-§6.7 and §5.12, which do not exist either: the store
- * has §6.1's storage operation and §6.2's two retrievals and nothing else, so the four members here are exactly
- * the four algorithms there are. Each absent member is a TypeError naming itself, which the IDL gap auditor
- * lists — never a shape-only member that would report a deletion nothing performed. */
+ * does not exist — there is nothing that can hold an index set, which is also why §6.3's index retrieval
+ * operations are absent. The three `getAll*` members are §5.12's create-a-request-to-retrieve-multiple-items
+ * over the `IDBGetAllOptions` dictionary §4.5 declares beside this interface and, for `getAllRecords`, §4.8's
+ * IDBRecord — none of which exists. `openCursor` and `openKeyCursor` are §2.10's cursor and §6.7's iteration,
+ * which does not exist either. Each absent member is a TypeError naming itself, which the IDL gap auditor
+ * lists — never a shape-only member that would report a deletion nothing performed.
+ *
+ * The members that ARE here are exactly the algorithms that are: §6.1's storage operation (`put`/`add`), §6.2's
+ * two retrievals (`get`/`getKey`), §6.4's deletion (`delete`), §6.5's counting (`count`) and §6.6's clear. */
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -62,6 +66,7 @@ static JSClassID g_os_class;
 static int       g_ready;
 static JSRuntime *g_os_rt;
 static int g_id_put = -1, g_id_add = -1, g_id_get = -1, g_id_get_key = -1, g_setter_name = -1;
+static int g_id_delete = -1, g_id_clear = -1, g_id_count = -1;
 
 /* The magics that tell the two pairs of members apart. §4.5 states `put` and `add` as ONE algorithm differing
    only in the no-overwrite flag, and `get` and `getKey` as two retrievals differing only in which of §6.2's
@@ -256,6 +261,48 @@ static JSValue js_idb_retrieve_operation(JSContext *ctx, JSValueConst this_val, 
     return idb_retrieve_value(ctx, func_data[OP_GET_STORE], func_data[OP_GET_RANGE]);
 }
 
+/* §6.4's DELETE RECORDS FROM AN OBJECT STORE and §6.6's CLEAR, as two closures because they are two algorithms
+   — §6.4 is closed over a range and §6.6 has none, and a shared body would have had to mint the unbounded range
+   §6.6 does not state. Both carry the TRANSACTION for the reason §6.1's closure does: the change they record
+   belongs to the transaction this request was placed against, not to whichever the handle names when the task
+   runs. Both "return undefined". */
+#define OP_DEL_TX     0
+#define OP_DEL_STORE  1
+#define OP_DEL_RANGE  2
+
+static JSValue js_idb_delete_operation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                       int magic, JSValueConst *func_data)
+{
+    (void)this_val; (void)argc; (void)argv; (void)magic;
+    idb_delete_records(ctx, func_data[OP_DEL_TX], func_data[OP_DEL_STORE], func_data[OP_DEL_RANGE]);
+    return JS_UNDEFINED;
+}
+
+#define OP_CLEAR_TX     0
+#define OP_CLEAR_STORE  1
+
+static JSValue js_idb_clear_operation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic, JSValueConst *func_data)
+{
+    (void)this_val; (void)argc; (void)argv; (void)magic;
+    idb_clear_store(ctx, func_data[OP_CLEAR_TX], func_data[OP_CLEAR_STORE]);
+    return JS_UNDEFINED;
+}
+
+/* §6.5's COUNT THE RECORDS IN A RANGE. It carries NO transaction, because it changes nothing and therefore
+   records nothing against one — the same operand list §6.2's retrievals have, and for the same reason. "Return
+   count", which §5.6 makes the request's result. It is a COUNT OF THIS LIST, so it is a Web IDL §3.2.4.6
+   `unsigned long` by construction, and JS_NewUint32 is that number exactly. */
+#define OP_COUNT_STORE 0
+#define OP_COUNT_RANGE 1
+
+static JSValue js_idb_count_operation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic, JSValueConst *func_data)
+{
+    (void)this_val; (void)argc; (void)argv; (void)magic;
+    return JS_NewUint32(ctx, idb_count_records(ctx, func_data[OP_COUNT_STORE], func_data[OP_COUNT_RANGE]));
+}
+
 /* ---- §4.5's ADD OR PUT ------------------------------------------------------------------------------------ */
 
 static JSValue js_os_put(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -373,6 +420,63 @@ fail:
     return JS_EXCEPTION;
 }
 
+/* ---- §4.5's DELETE and CLEAR -------------------------------------------------------------------------------- */
+
+/* "The delete(query) method steps are: ... let range be the result of converting a value to a key range with
+   query AND TRUE. Rethrow any exceptions. Let operation be an algorithm to run delete records from an object
+   store with store and range. Return the result of running asynchronously execute a request with this and
+   operation."
+   THE `true` IS THE NULL-DISALLOWED FLAG and §4.5 says in its own note why this member has it where `count`
+   does not: "unlike other methods which take keys or key ranges, this method does not allow null to be given as
+   key. This is to reduce the risk that a small bug would clear a whole object store." */
+static JSValue js_os_delete(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValueConst data[3];
+    JSValue store = JS_UNDEFINED, tx = JS_UNDEFINED, range, op, req;
+
+    (void)argc; (void)magic;
+    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
+    if (os_check(ctx, this_val, /*writes*/ true, &store, &tx) < 0) return JS_EXCEPTION;
+    if (idb_key_range_from_value(ctx, argv[0], /*null_disallowed*/ true, &range) < 0) {
+        JS_FreeValue(ctx, store);
+        JS_FreeValue(ctx, tx);
+        return JS_EXCEPTION;
+    }
+    data[OP_DEL_TX] = tx;
+    data[OP_DEL_STORE] = store;
+    data[OP_DEL_RANGE] = range;
+    op = JS_NewCFunctionData(ctx, js_idb_delete_operation, 0, 0, 3, data);
+    JS_FreeValue(ctx, range);
+    CHECK(!JS_IsException(op), "IndexedDB: §6.4's operation could not be minted");
+    req = idb_request_execute(ctx, this_val, tx, op);
+    JS_FreeValue(ctx, op);
+    JS_FreeValue(ctx, store);
+    JS_FreeValue(ctx, tx);
+    return req;
+}
+
+/* "The clear() method steps are: ... let operation be an algorithm to run clear an object store with store.
+   Return the result of running asynchronously execute a request with this and operation." The member takes no
+   argument at all, so os_check's three refusals ARE the whole of its steps before the operation. */
+static JSValue js_os_clear(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValueConst data[2];
+    JSValue store = JS_UNDEFINED, tx = JS_UNDEFINED, op, req;
+
+    (void)argc; (void)argv; (void)magic;
+    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
+    if (os_check(ctx, this_val, /*writes*/ true, &store, &tx) < 0) return JS_EXCEPTION;
+    data[OP_CLEAR_TX] = tx;
+    data[OP_CLEAR_STORE] = store;
+    op = JS_NewCFunctionData(ctx, js_idb_clear_operation, 0, 0, 2, data);
+    CHECK(!JS_IsException(op), "IndexedDB: §6.6's operation could not be minted");
+    req = idb_request_execute(ctx, this_val, tx, op);
+    JS_FreeValue(ctx, op);
+    JS_FreeValue(ctx, store);
+    JS_FreeValue(ctx, tx);
+    return req;
+}
+
 /* ---- §4.5's GET and GETKEY --------------------------------------------------------------------------------- */
 
 static JSValue js_os_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -397,6 +501,43 @@ static JSValue js_os_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
     op = JS_NewCFunctionData(ctx, js_idb_retrieve_operation, 0, magic, 2, data);
     JS_FreeValue(ctx, range);
     CHECK(!JS_IsException(op), "IndexedDB: §6.2's operation could not be minted");
+    req = idb_request_execute(ctx, this_val, tx, op);
+    JS_FreeValue(ctx, op);
+    JS_FreeValue(ctx, store);
+    JS_FreeValue(ctx, tx);
+    return req;
+}
+
+/* ---- §4.5's COUNT ------------------------------------------------------------------------------------------- */
+
+/* "The count(query) method steps are: ... if store has been deleted, throw an InvalidStateError. If
+   transaction's state is not active, throw a TransactionInactiveError. Let range be the result of converting a
+   value to a key range with query. Rethrow any exceptions. Let operation be an algorithm to run count the
+   records in a range with store and range."
+   NO READ-ONLY REFUSAL AND NO NULL-DISALLOWED FLAG, and both absences are the standard's: counting reads, and
+   §2.9's conversion states undefined AND null as the one unbounded key range. AN ABSENT `query` IS THAT SAME
+   ANSWER and §4.5's own note is where it is written — "if null or not given, the total number of records in
+   the store is counted" — so the undefined below is the standard's statement about a member called with no
+   argument, not a default this consumer chose for a value the machine did not deliver. */
+static JSValue js_os_count(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValueConst data[2];
+    JSValue store = JS_UNDEFINED, tx = JS_UNDEFINED, range, op, req;
+
+    (void)magic;
+    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
+    if (os_check(ctx, this_val, /*writes*/ false, &store, &tx) < 0) return JS_EXCEPTION;
+    if (idb_key_range_from_value(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, /*null_disallowed*/ false,
+                                 &range) < 0) {
+        JS_FreeValue(ctx, store);
+        JS_FreeValue(ctx, tx);
+        return JS_EXCEPTION;
+    }
+    data[OP_COUNT_STORE] = store;
+    data[OP_COUNT_RANGE] = range;
+    op = JS_NewCFunctionData(ctx, js_idb_count_operation, 0, 0, 2, data);
+    JS_FreeValue(ctx, range);
+    CHECK(!JS_IsException(op), "IndexedDB: §6.5's operation could not be minted");
     req = idb_request_execute(ctx, this_val, tx, op);
     JS_FreeValue(ctx, op);
     JS_FreeValue(ctx, store);
@@ -573,10 +714,16 @@ static void idb_object_store_install_realm(JSContext *ctx)
     idl_install_accessor(ctx, proto, "keyPath", js_os_get_key_path, 0, -1);
     idl_install_accessor(ctx, proto, "transaction", js_os_get_transaction, 0, -1);
     idl_install_accessor(ctx, proto, "autoIncrement", js_os_get_auto_increment, 0, -1);
+    /* IN §4.5'S OWN ORDER, minus the members whose algorithms do not exist. The `length` of each is Web IDL
+       §3.7.7 Operations' — "the length of the shortest argument list in the entries in S", which for a member
+       with no overloads is the number of REQUIRED arguments — so `count`'s is 0 and `delete`'s is 1. */
     idl_install_method(ctx, proto, "put", 1, g_id_put);
     idl_install_method(ctx, proto, "add", 1, g_id_add);
+    idl_install_method(ctx, proto, "delete", 1, g_id_delete);
+    idl_install_method(ctx, proto, "clear", 0, g_id_clear);
     idl_install_method(ctx, proto, "get", 1, g_id_get);
     idl_install_method(ctx, proto, "getKey", 1, g_id_get_key);
+    idl_install_method(ctx, proto, "count", 0, g_id_count);
     JS_SetClassProto(ctx, g_os_class, JS_DupValue(ctx, proto));
 
     ctor = idl_interface_object(ctx, "IDBObjectStore", proto);
@@ -595,7 +742,10 @@ void idb_object_store_init(JSContext *ctx)
        §7.4's convert-a-value-to-a-key and §2.9's convert-a-value-to-a-key-range the members' OWN steps: the
        IDL hands the value through unconverted and the algorithm decides what it is. */
     static const IdlArgType PUT_ARGS[2] = { IDL_ANY, IDL_ANY };
-    static const IdlArgType GET_ARGS[1] = { IDL_ANY };
+    /* `get(any query)`, `getKey(any query)`, `delete(any query)` and `count(optional any query)` are one
+       declared type list; what tells them apart is which BODY runs and, for `count`, that its one position is
+       optional. */
+    static const IdlArgType QUERY_ARGS[1] = { IDL_ANY };
 
     DCHECK(!g_ready, "idb_object_store_init ran twice — one instance is one document is one agent");
     g_key = JS_NewSymbol(ctx, "idbObjectStoreState", false);
@@ -613,8 +763,14 @@ void idb_object_store_init(JSContext *ctx)
     idl_optional_from(1);                        /* `optional any key` */
     g_id_add = idl_method_id(ctx, PUT_ARGS, 2, js_os_put, OS_ADD);
     idl_optional_from(1);
-    g_id_get = idl_method_id(ctx, GET_ARGS, 1, js_os_get, OS_GET_VALUE);
-    g_id_get_key = idl_method_id(ctx, GET_ARGS, 1, js_os_get, OS_GET_KEY);
+    g_id_get = idl_method_id(ctx, QUERY_ARGS, 1, js_os_get, OS_GET_VALUE);
+    g_id_get_key = idl_method_id(ctx, QUERY_ARGS, 1, js_os_get, OS_GET_KEY);
+    /* §6.4 and §6.6 are two algorithms and not one with a flag, so neither takes a magic — unlike the two
+       pairs above, whose magic IS the difference the standard states. */
+    g_id_delete = idl_method_id(ctx, QUERY_ARGS, 1, js_os_delete, 0);
+    g_id_clear = idl_method_id(ctx, NULL, 0, js_os_clear, 0);
+    g_id_count = idl_method_id(ctx, QUERY_ARGS, 1, js_os_count, 0);
+    idl_optional_from(0);                        /* `count(optional any query)` */
     g_setter_name = idl_setter_id(ctx, IDL_DOMSTRING, /*null_to_empty*/ false, js_os_set_name, 0);
     g_ready = 1;
     agent_state_flag("idb_object_store", &g_ready, "the declaration latch");
