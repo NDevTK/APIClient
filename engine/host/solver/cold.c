@@ -394,11 +394,13 @@ void cold_park_preview(ColdPreview *out)
     DCHECK(out != NULL, "the cold tier was asked what a park would write into nothing");
     memset(out, 0, sizeof *out);
     for (i = 0; (f = flow_at(i)) != NULL; i++) {
+        int deep = park_flow_deep(f);
+
         switch (park_kind_of(f)) {
-        case PARK_KIND_CAND:  out->cands++;  break;
+        case PARK_KIND_CAND:  out->cands++;  if (deep) out->deepcands++;  break;
         case PARK_KIND_FLOW:  out->flows++;  break;
         }
-        if (park_flow_deep(f)) out->deep++;
+        if (deep) out->deep++;
     }
 }
 

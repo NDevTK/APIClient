@@ -1457,11 +1457,14 @@ static const char *HTML_MIN =
        227 seconds is the PRE-FIX measurement and is kept as the thing the unit is judged against; what the row
        costs now has not been re-measured, and the number to look at when it is is `switches`, which was 1.
        AND BEHIND THAT, the walk is unbounded by design (§NO BOUNDS: every length is a world and the walker
-       takes the "longer" arm forever), so the frontier NEVER DRAINS - and this harness's completion condition
-       is that it drains. What carries past that is the mechanism engine.c already names at its own flow-compile
-       OOM: a cold tier that pages the lowest-value tail out of the live frontier. Until it exists the honest
-       end of this run is the physical RAM floor, loud, at that CHECK. Both are why the row is DOC_MIN: putting
-       it in the full document costs the main gate the same way. */
+       takes the "longer" arm forever), so the frontier NEVER DRAINS. That was measured as this harness hanging,
+       because its completion condition WAS that the frontier drains - a condition no document is obliged to
+       meet. It is now the probe table (see it): the run ends when every statement this document makes has been
+       answered, and the residue that is left over is real and is reported rather than waited on. What the tail
+       needs after that is the mechanism engine.c already names at its own flow-compile OOM - a cold tier paging
+       the lowest-value tail out of the live frontier - and on a NATIVE target nothing ever asks it to, because
+       nothing refuses an allocation until the machine does (solver/reclaim.h owns that edge, and `sold` in
+       @PROGRESS is what reports it). */
     "var _af = Array.from(state.items); fetch('/api/optiter?n=' + _af.length + '&a=' + _af[0] + '&b=' + _af[1]);"
     "var _sad = new Set(); if (cfg.admin) { _sad.add('sadA'); } else { _sad.add('sadP'); } fetch('/api/setaddfork?v=' + [...(_sad)][0]);"   /* SHARED-SET record isolation: _sad is created before the concolic fork; each arm's Set.add must be COW-isolated via the map_add capture (record removed by JS_MapDeleteRecord on unapply) -> EXACTLY 'sadA' and 'sadP', never a contaminated set holding both */
     "function* sef(){ if (cfg.admin) { yield 'seA'; } else { yield 'seP'; } } fetch('/api/setfork?v=' + [...new Set(sef())][0]);"   /* new Set(GEN) consumer fork: the Set consumer (CONT_ITER_CONSUME, SET sink) forks mid-consume; now fork-SAFE via the map_add COW capture -> both seA and seP */
@@ -1516,14 +1519,12 @@ static const char *HTML_MIN =
  *     sink class is the only field that crosses the tier by NAME and has to be re-bound to a live pointer.
  *   - AN ENDPOINT, which is what makes this origin enter the endpoint surface at all.
  *
- * WHAT IT DOES NOT PRODUCE, said here because two claims that used to stand in this list were wrong about this
- * tree and a reader would have gone looking for the arm that was missing. Candidates are seeded ONLY when the
- * frontier drains with the host owing nothing (engine.c's stall seam), so at any moment a 'c' record exists
- * there is no exploration flow and no unanswered probe left in the frontier: the residue this document produces
- * is 's' + 'c', never 'f' and never 'd'. A park document holding those alongside a candidate is not a tuning
- * question and not a bigger document — it is a PARTIAL self-park writing the exploration tail early and the
- * candidates later into the same appendable document, which is the tier's own second mode and has no host seam
- * yet (only the allocator's reclaim edge reaches cold_park_flow).
+ * WHAT IT DOES NOT PRODUCE is one kind and no longer two. A 'd' record is an engine-seeded discovery probe and
+ * active discovery is the trusted zone's, so that arm cannot run at all. 'f' and 'c' now arrive TOGETHER, which
+ * is a correction of what stood here: candidates used to be seeded only where the frontier had drained, so a 'c'
+ * record implied there was no exploration flow left to write an 'f' for. They are seeded at the PICK now (a
+ * candidate is a work item the moment its sink exists — engine.c), so the moment this host parks at holds both
+ * the arms still exploring and the candidates verifying, and the residue is 's' + 'f' + 'c'.
  * It is deliberately SMALL in every other respect: one fork and a six-iteration loop, so the document drains in
  * a second session rather than becoming a frontier this fixture cannot finish measuring. */
 static const char *HTML_COLD =
@@ -3102,178 +3103,48 @@ static char *tf_park_load(const char *path) {
     return buf;
 }
 
-/* WHEN THIS HOST EVICTS (solver/engine.h's park hook). It is a POSITION IN THE RUN and not a budget: the park
- * writes every member of the frontier, so what this decides is when the residue leaves memory and never how
- * much of it there is.
+/* ─── THE PROBE TABLE, AND THE RUN'S COMPLETION MOMENT ────────────────────────────────────────────────────
+ * THE VERDICT AND THE MOMENT ARE ONE FUNCTION OF ONE STRING, which is why the table lives here rather than at
+ * the end of main. The fixture's job is to DEMONSTRATE its document, so it is finished when every statement
+ * that document makes has been answered in the result document — a statement about EMITTED OUTPUT, which is the
+ * only kind §NO BOUNDS permits. It is not a step, time, flow or no-progress count, and it does not claim the
+ * frontier was finite: this document's opaque-length walk makes every length a world, so the residue that
+ * remains when the moment arrives is real and unbounded, and the run reports over what it has.
+ * WITHOUT IT NO NATIVE RUN OF THIS FIXTURE HAD EVER FINISHED. Both documents' frontiers are unbounded, the
+ * harness's completion condition was that they DRAIN, and so `node engine/build.mjs native min` — described in
+ * build.mjs as the fast per-change memory gate — was killed by its own backstop at fifteen minutes with the
+ * probe table never printed once. Every row below had therefore never been observed by anybody.
  *
- * IT ASKS ABOUT THE RESIDUE, WHICH IS THE THING IT IS DECIDING ABOUT, and the version that did not is the whole
- * reason the read half of the cold tier had still never executed in any process. It was
- *     solve_candidate_count() > 0 && engine_host_owes()
- * and the second conjunct is FALSE BY CONSTRUCTION at the only point this seam is ever consulted: run_scheduler
- * asks the hook at the TOP of its loop, and the bottom of the previous iteration paid the provider and then
- * asserted, in two DCHECKs of its own, that `engine_pending_urls()` and `engine_host_requests()` are BOTH empty.
- * engine_host_owes() walks for exactly the entries those two joins list, so it answered 0 every time it was
- * asked, for every document, in every session. Nothing said so: an unsatisfiable predicate and one that is
- * merely not true yet produce the identical run, and the @COLDPARK census reports zeroes for both. That is the
- * defaulted-field defect one level up — a question whose answer is fixed, read as a measurement.
- *
- * SO THE FACTS ARE ASKED OF THE COLD TIER (solver/cold.h's ColdPreview), which is the component that owns what
- * a residue IS, and the two named here are the two that decide which arms of the recipe grammar cross:
- *   - A CANDIDATE SESSION IS A MEMBER OF THE FRONTIER (`cands`). They are the only records that carry attacker
- *     text, hence the only path through park_hex/park_unhex, and their sink class is the only field that
- *     crosses the tier by NAME and has to be re-bound to a live pointer on the way back.
- *   - AND SOMETHING IN IT STANDS ON A FROZEN DECISION SEGMENT (`deep`), which is what makes the park write 's'
- *     records and the ordinals that name them at all. It is what tells the moment AFTER the candidates have run
- *     — each has re-entered the document and taken the branch — from the moment they were SEEDED, when they are
- *     members standing on nothing and a park writes `c-,…` and not one segment. The old condition could not
- *     express that difference at all, which is why it reached for the host's register to stand in for it.
- *
- * WHAT THIS MOMENT CANNOT ALSO CONTAIN, stated because it is structural rather than a shortcoming of the
- * condition: a DISCOVERY PROBE ('d'). Candidates are seeded only when the frontier drains with the host owing
- * NOTHING (engine.c's stall seam), and a probe parked on its address is precisely something the host owes — so
- * every probe has been answered and finished by the time the first candidate exists. A park holding both is
- * not a tuning question, it is a different park. */
-static int fixture_want_park(void) {
-    ColdPreview would;
+ * WHICH DOCUMENT CARRIES A PROBE IS READ OFF THE DOCUMENT, never declared beside it, which is where it went
+ * wrong. The field was a hand-written `docs` value (FULL / BOTH / MIN) and the table's own rule was that "a
+ * probe whose statement is NOT in that document must be 0 here, or the gate asserts a fact about a program that
+ * never ran". SIX ROWS BROKE IT: `s-evalc` (`state.note`), `json-fork`, `xdoc-read`, `xdoc-job`, `timer-order`
+ * and `iframe-nav` were declared as both documents' while their statements are in the full one alone — so the
+ * minimal gate was UNSATISFIABLE by construction, which no amount of running it could have revealed while it
+ * could not finish. A hand-kept copy of a fact the document already states is the defect; the fix is to stop
+ * keeping the copy.
+ * SO A ROW CARRIES THE `key` OF ITS OWN STATEMENT — a substring of the document TEXT that the statement the
+ * probe is about is what puts there — and membership is `strstr(doc, key)`. The SESSION is the other half and is
+ * not derivable from the document: --cold-park and --cold-resume run the same one and make different statements
+ * about it (what a park WROTE / what a resume REBUILT). */
+typedef struct { const char *name; int ok; const char *key; unsigned char sess; } Probe;
+enum { SESS_EXPLORE = 0, SESS_PARK = 1, SESS_RESUME = 2 };
+#define PROBE_MAX 128
 
-    cold_park_preview(&would);
-    return would.cands > 0 && would.deep > 0;
-}
+/* WHAT THIS INVOCATION IS: the document whose statements are being answered, which of the three sessions it is,
+   and the realm the result document is rendered from. Set once in main before the scheduler runs, because the
+   streamed report reads them from INSIDE the run. */
+static const char *g_doc;
+static int g_sess = SESS_EXPLORE;
+static JSContext *g_probe_ctx;
+/* …and the two censuses the cold rows are statements about, filled by main after its run. An exploring session
+   leaves them at zero and selects none of those rows. */
+static ColdParked g_cp;
+static ColdResumed g_cr;
 
-int main(int argc, char **argv) {
-    JSRuntime *rt;
-    trusted_types_selftest();
-    policy_container_selftest();
-    csp_url_matching_selftest();
-    document_policy_selftest();
-    rt = JS_NewRuntime();
-    JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
-    JSContext *ctx = JS_NewContext(rt);
-
-    concolic_init(ctx);
-    flow_registry_init("fixture");   /* one document in this fixture; the world namespace is named by it */
-    world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
-    endpoint_init();
-    solve_init(ctx);
-
-    /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER.
-       THIS FIXTURE'S DOCUMENT IS ITS OWN TOP-LEVEL TRAVERSABLE, so §8.1.3.1's top-level creation URL is the
-       address it is installed at below — and `https:` makes it a SECURE CONTEXT, which is what a real bundle
-       runs in and therefore what the fixture must exercise. */
-    tf_agent_init(ctx, "https://x.test", "https://x.test/p");
-    navigable_set_realm_builder(tf_child_realm);
-    int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
-    /* THE TWO SESSIONS OF THE CROSS-SESSION ROUND TRIP, one per invocation, because that is what a session
-       boundary IS: the first writes its residue to this host's store and the process ends, the second starts
-       from nothing but that document. Doing both inside one process would leave the endpoint surface, the sink
-       searches and the world namespace of the first standing behind the second, so "the resumed session found
-       it" and "the previous session had already found it" would be the same observation. */
-    const char *cold_park_path = arg_val(argc, argv, "--cold-park");
-    const char *cold_resume_path = arg_val(argc, argv, "--cold-resume");
-    int cold_doc = (cold_park_path || cold_resume_path) ? 1 : 0;
-    char *cold_residue = NULL;
-    /* ONE OF THE TWO PER INVOCATION. The product's steady state is a session that resumes a residue AND
-       re-parks what it did not finish, so this is a limit of the FIXTURE's verdict and not of the tier: the
-       probe table names one document per run, and a session doing both would have to carry two sets of rows
-       under one answer. Said as a refusal rather than left to produce a half-checked run. */
-    DCHECK(!(cold_park_path && cold_resume_path),
-           "this host was asked to park AND to resume in one invocation — its probe table answers for one "
-           "session, so the two halves of the round trip are two runs of this binary");
-    DCHECK(!(cold_doc && min_doc),
-           "the cold round trip was asked for over the minimal document — the park refuses a frontier holding "
-           "a foreign world's segment and that document opens child navigables, so this run would abort in "
-           "cold_park naming the cross-instance park rather than measuring the tier");
-    const char *doc = cold_doc ? HTML_COLD : (min_doc ? HTML_MIN : HTML);
-    lxb_html_document_t *dom = dom_document_create();
-    html_parse_document(dom, (const lxb_char_t *)doc, strlen(doc));
-    g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
-    {
-        /* The fixture built this document, so the navigable's name is the initial "" and is known. */
-        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "");
-        CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        /* NULL: this fixture's document is a C string literal, so it came from no response and has no
-           header-borne policy. That is a fact about it, not a gap. */
-        /* AND AN EMPTY §7.1.5 ACTIVE SANDBOXING FLAG SET, from the same fact and the same sentence: the two
-           halves §7.4.5 unions are this navigable's CREATION sandboxing flags — empty, because a top-level
-           traversable has no embedder element and its POPUP sandboxing flag set begins empty — and the
-           CSP-derived flags of the policy above, which there is none of. Not a placeholder: an unsandboxed
-           document's set IS empty, and this fixture's is. */
-        /* CSP §2.2.2's SELF-ORIGIN, which this fixture's document has even though it has no policy: a CSP
-           list carries one whether or not it holds any policies, and `'self'` in a policy this fixture builds
-           later is measured against it. It is this document's own address's origin, because this document is
-           its own response. */
-        tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", NULL, "https://x.test", 0,
-                         world_local_doc(), root_proxy);
-        JS_FreeValue(ctx, root_proxy);
-    }
-
-    /* INDEXED DATABASE'S PUT/GET ROUND TRIP, at the BASELINE and before the time-travel hooks — the same
-       position core/file/file_system.c's two roots are built at, and for the same reason: a record written
-       here belongs to the pre-boot baseline rather than to whichever flow happened to run first. */
-    idb_store_selftest(ctx);
-
-    /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
-       and again in test_forced.c, and the pair had drifted. */
-    cow_install_time_travel_hooks(engine_gen_fork);
-    concolic_install_hooks();
-    concolic_install_source_overlay();   /* a SOLVER host: attacker-controlled values are symbolic sources */
-    /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
-       per-wrapper or per-flow mint, and that is what the pool asserts against. */
-    idl_args_seal();
-
-    /* The trusted host's half: what it is owed, and how it pays. */
-    engine_set_provider(fixture_provide);
-
-    DocScripts scripts = document_exec_scripts(dom);   /* each <script> its own program body — no concat */
-    /* THE RESIDUE THIS SESSION IS CONTINUING, read off the shelf before the scheduler is seeded — because the
-       choice between it and a boot flow is made once, inside engine_sched_begin, and a residue that arrived
-       after that point would be a second seeding of the same document. */
-    if (cold_resume_path) cold_residue = tf_park_load(cold_resume_path);
-    /* …AND WHETHER THIS HOST EVICTS AT ALL. Installed only for the session that was asked to park, because a
-       host that never gives up its residue installs nothing — the seam is the question, not a default. */
-    if (cold_park_path) engine_set_park_hook(fixture_want_park);
-    engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.n, cold_residue);   /* @H + @S detection */
-    /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */
-    doc_scripts_free(&scripts);
-    dom_document_destroy(dom);
-    free(cold_residue); cold_residue = NULL;   /* engine_sched_begin rebuilt from it; the text was borrowed */
-
-    /* ─── THE COLD TIER'S TWO ENDS, EACH REPORTED PER RECORD KIND ────────────────────────────────────────────
-       A total cannot say which ARMS ran, and the arms are the whole question: a residue of nothing but 'f'
-       records reads back without touching the segment rebuild, park_unhex or the sink-class re-bind, and
-       reports the same count as one that touches all three. Both lines carry the same three fields for the
-       same reason, so the two ends of one round trip can be read against each other by eye. A fourth,
-       `probes`, is gone with the record kind it counted ('d', an engine-seeded discovery probe): active
-       discovery is the trusted zone's again, so the arm cannot run and a field reporting 0 forever would say
-       it merely had not. */
-    ColdParked cp;
-    ColdResumed cr;
-    memset(&cp, 0, sizeof cp);
-    memset(&cr, 0, sizeof cr);
-    if (cold_park_path) {
-        const char *recipes = cold_park_recipes();
-        cold_parked(&cp);
-        /* THE RESIDUE GOES TO THE SHELF BEFORE THE TEARDOWN RUNS. flow_registry_free frees the park document
-           with the frontier it belongs to, so a store written after it would be written from freed memory —
-           and the residue is the only remaining copy of every flow in it. */
-        tf_park_store(cold_park_path, recipes);
-        printf("@COLDPARK {\"records\":%ld,\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,"
-               "\"bytes\":%zu,\"store\":\"%s\"}\n",
-               cold_park_records(), cp.segs, cp.flows, cp.cands, strlen(recipes), cold_park_path);
-    }
-    if (cold_resume_path) {
-        cold_resumed(&cr);
-        printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld}\n",
-               cr.segs, cr.flows, cr.cands);
-    }
-
-    /* ONE result document — both surfaces and the scheduler's interleave count, serialized DIRECTLY from the
-       C findings (no JS-object round-trip). The host does one JSON.parse of this line and relays it; it used
-       to be two lines here, which meant whoever consumed them assembled the document, and assembling is
-       structure. The assertions below read the same string, so they cover the composed shape. */
-    char *js = result_json(ctx);
-    printf("@RESULT %s\n", js);
-
+/* Fill `out` with the rows this invocation carries and answer how many. Every row's `ok` is computed here, so
+   the mid-run report and the final one are the same function of the same bytes. */
+static int probes_eval(const char *js, Probe *out, int cap) {
     int has_uid_param = strstr(js, "\"/api/u\"") && strstr(js, "\"uid\"") && strstr(js, "{state}.id");
     /* THE PATH AND THE BODY, which this surface could not name at all. The address is RE-SPELLED so its hole
        is one the popup's `/\{([^}\/]+)\}/` substitution can find — `{state}.id` has its braces around the root
@@ -3717,14 +3588,9 @@ int main(int argc, char **argv) {
        is two hand-maintained lists of the same thing — so a probe could be computed and joined to NEITHER, and
        one immediately was: `clone_body` asserted §6.4 clone() and the gate never read it, so the fixture
        reported PASS on a result nothing had checked. A row here is what makes a probe a probe: the gate walks
-       it and the report walks it, and a probe that is not declared does not exist rather than silently
-       passing. `min` marks the subset the `--min` document carries (the clone/COW/generator paths, and the
-       three @S sinks it drives) — a probe whose statement is NOT in that document must be 0 here, or the gate
-       asserts a fact about a program that never ran.
-       THE @S VERDICTS ARE ROWS TOO. They were a second conjunction below this table with its own printf, which
-       is exactly the two-hand-maintained-lists shape the paragraph above describes: they could not be scoped to
-       a document, so selecting the minimal one made the run FAIL on `location.hash` sinks that document does not
-       contain. One table, one gate, one report. */
+       it and the report walks it, and a probe that is not declared does not exist rather than silently passing.
+       THE @S VERDICTS ARE ROWS TOO, for the same reason — they were a second conjunction with its own printf
+       below this table. One table, one gate, one report, one selector.*/
     /* THE CROSS-SESSION ROUND TRIP'S OWN STATEMENTS, one per record kind at each end, because "it resumed" is
        the observation that cannot distinguish an exercised tier from an unexercised one. The park's four
        numbers and the resume's four are the SAME four, so a kind written at one end and not rebuilt at the
@@ -3735,17 +3601,16 @@ int main(int argc, char **argv) {
        park was taken, so no attacker text crossed and park_hex/park_unhex did not. Neither is a reason to
        soften the row — each names exactly which arm went unexercised, which is the whole reason the census is
        per kind, and fixture_want_park is where the moment is chosen. */
-    int cold_park_wrote = cold_park_path && cold_park_records() > 0;
-    int cold_park_deep  = cold_park_path && cp.segs > 0;
-    int cold_park_cand  = cold_park_path && cp.cands > 0;
-    int cold_resumed_any   = cold_resume_path && (cr.flows + cr.cands) > 0;
-    int cold_resumed_segs  = cold_resume_path && cr.segs > 0;
-    int cold_resumed_cand  = cold_resume_path && cr.cands > 0;
+    int cold_park_wrote = g_sess == SESS_PARK && cold_park_records() > 0;
+    int cold_park_deep  = g_sess == SESS_PARK && g_cp.segs > 0;
+    int cold_park_cand  = g_sess == SESS_PARK && g_cp.cands > 0;
+    int cold_resumed_any   = g_sess == SESS_RESUME && (g_cr.flows + g_cr.cands) > 0;
+    int cold_resumed_segs  = g_sess == SESS_RESUME && g_cr.segs > 0;
+    int cold_resumed_cand  = g_sess == SESS_RESUME && g_cr.cands > 0;
     /* AND THE REPLAY REACHED ITS SINK AGAIN — the strongest thing a resumed residue can be asked to say, and a
        correction of what this row used to ask. It read BOTH ARMS of the branch out of the @H surface, and that
        is a statement about a program this session does not run: the moment fixture_want_park picks is the moment
-       the @S search is live, and candidates are seeded only once the exploring flows have drained, so every
-       member of the frontier at that instant is a CANDIDATE SESSION. solve_flow_begin suppresses endpoint
+       the @S search is live, so the residue is mostly CANDIDATE SESSIONS. solve_flow_begin suppresses endpoint
        recording for exactly those, because a request built out of an injected breakout is an @S artifact and not
        an observed endpoint — so a residue of candidates emits no endpoints BY DESIGN, and the old row could
        only ever have passed because a candidate's fork used to drop its substitution and leave one arm behaving
@@ -3757,100 +3622,386 @@ int main(int argc, char **argv) {
        A session that rebuilt its flows and then went nowhere reports nothing here. */
     int cold_fired = (strstr(js, "\"sink\":\"eval\"") && strstr(js, "{state}.code")
                       && strstr(js, "';X9()//")) ? 1 : 0;
-    /* The four answers, so a row states which program its fact came from. The values are chosen so that the
-       rows already written keep their meaning: 0 was "full only" and 1 was "the minimal subset", which is BOTH.
-       The two cold sessions are two ANSWERS and not one, because they are two programs' worth of statements:
-       one is about what a park WROTE and the other about what a resume REBUILT, and a row that ran in the
-       wrong session would be asserting about a run that never happened. */
-    enum { DOC_FULL = 0, DOC_BOTH = 1, DOC_MIN = 2, DOC_PARK = 3, DOC_RESUME = 4 };
-    /* WHICH DOCUMENTS CARRY THE STATEMENT: DOC_FULL only, BOTH, or DOC_MIN only. Two documents means two bits,
-       and the field held one — which was sound only while the minimal document was a strict SUBSET of the full
-       one. It is not: the opaque-iteration statement is in the minimal document ALONE, because running it in the
-       full one dies (see its row), and a single bit cannot say that. A row that lies about which program its
-       fact came from is a probe asserting something about a run that never happened. */
-    struct { const char *name; int ok; unsigned char docs; } probes[] = {
-        { "uid-param", has_uid_param, 0 }, { "role-admin", role_admin, 0 },
-        { "path-param", path_param, 0 },   { "body-param", body_param, 0 },
-        { "path-example", path_example, 0 },
-        { "role-public", role_public, 0 }, { "merged", merged, 0 },
-        { "pinned", pinned, 0 },           { "lazy", lazy, 0 },
-        { "dom-attr", dom_attr, 0 },       { "dom-node", dom_node, 0 },
-        { "dom-tt", dom_tt, 0 },           { "accessor", accessor_tt, 0 },
-        { "async", async_tt, 0 },          { "await", await_tt, 0 },
-        { "asynccall", asynccall_tt, 0 },  { "throw", async_throw, 0 },
-        { "preempt", async_preempt, 0 },   { "fetch", fetch_await, 0 },
-        { "clone-body", clone_body, 0 },   { "body-bytes", body_bytes, 0 },
-        { "body-iso", body_iso, 0 },       { "hdrs", hdrs, 0 },
-        { "hdr-proxy", hdrproxy, 0 },      { "needs-auth", needsauth, 0 },
-        { "hdr-iter", hdriter, 0 },        { "hdr-seq", hdrseq, 0 },
-        { "hdr-record", hdrrec, 0 },       { "mp-escape", mpesc, 0 },
-        { "pending", pending_await, 0 },   { "promise-state", promise_state, 0 },
-        { "delete-iso", delete_iso, 0 },   { "floc-iso", floc_iso, 0 },
-        { "ua", uafork_tt, 0 },            { "touch", touchfork_tt, 0 },
-        { "layout", layoutfork_tt, 0 },    { "abort", abortfire_tt, 0 },
-        { "deadline", deadline_tt, 0 },    { "idl", idlcoerce_tt, 0 },
-        { "dom-idl", domidl_tt, 0 },       { "node-algo", nodealgo_tt, 0 },
-        { "pushfork", pushfork_tt, 0 },    { "mapfork", mapfork_tt, 0 },
-        { "fefork", fefork_tt, 1 },        { "owfork", owfork_tt, 1 },
-        { "genfork", genfork_tt, 1 },      { "gen2fork", gen2fork_tt, 1 },
-        { "genofork", genofork_tt, 1 },    { "afromfork", afromfork_tt, 1 },
-        { "spreadfork", spreadfork_tt, 1 },{ "setaddfork", setaddfork_tt, 1 },
-        { "setfork", setfork_tt, 1 },      { "mapmutfork", mapmutfork_tt, 1 },
-        { "afsfork", afsfork_tt, 1 },      { "paffork", paffork_tt, 1 },
-        { "paf2fork", paf2fork_tt, 1 },    { "redfork", redfork_tt, 1 },
-        { "rerepfork", rerepfork_tt, 1 },  { "gcallfork", gcallfork_tt, 1 },
-        { "gapplyfork", gapplyfork_tt, 1 },{ "grefapplyfork", grefapplyfork_tt, 1 },
-        { "hostreq", hostreq_tt, 1 }, { "hostreq-fork", hostreqfork_tt, 1 },
-        { "json-fork", jsonfork_tt, 1 },
-        { "nav-open", navopen_tt, 1 }, { "proxy-sop", sop_tt, 1 }, { "xdoc-read", xdocread_tt, 1 }, { "xdoc-job", xdocjob_tt, 1 }, { "timer-order", timer_tt, 1 }, { "iframe-nav", ifnav_tt, 1 },
-        /* DOC_FULL: the statement is in the full document only. The minimal one is the per-change MEMORY gate
-           and every branch added to it multiplies its fork tree, which is the whole reason it is small. */
-        { "idb-open", idbopen_tt, DOC_FULL },
-        /* DOC_MIN ONLY, and that is a MEASUREMENT, not a preference. The whole-map constraint copy that used to
-           kill this run at the FIRST script is gone (concolic.c is a segment chain now), and the walk runs — but
-           the flow walking it is never outranked, so it holds the thread and the frontier behind it never
-           dispatches, and the walk is unbounded so the frontier never drains either. Put the statement in the
-           full document and the main gate goes the same way. See the statement's own comment for the two
-           measured causes and which mechanism each one needs. */
-        { "optiter", optiter_tt, DOC_MIN },
-        { "s-eval", s_eval, 1 },           { "s-evalc", s_evalc, 1 },
-        { "s-html", s_html, 1 },
-        { "s-url", s_url, 1 },             { "s-loc", s_loc, 0 },
-        { "s-park", s_park, 0 },
-        /* SESSION ONE of the cross-session round trip: what the park WROTE, per record kind. */
-        { "park-wrote", cold_park_wrote, DOC_PARK }, { "park-deep", cold_park_deep, DOC_PARK },
-        { "park-cand", cold_park_cand, DOC_PARK },
-        /* SESSION TWO: what the resume REBUILT out of it, and that the rebuilt frontier then explored. */
-        { "resumed", cold_resumed_any, DOC_RESUME },       { "resumed-segs", cold_resumed_segs, DOC_RESUME },
-        { "resumed-cand", cold_resumed_cand, DOC_RESUME }, { "resumed-fired", cold_fired, DOC_RESUME },
+    /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
+       the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
+    Probe probes[] = {
+        { "uid-param", has_uid_param, "/api/u?uid=", SESS_EXPLORE },
+        { "role-admin", role_admin, "/api/data?role=", SESS_EXPLORE },
+        { "path-param", path_param, "/v1/users/", SESS_EXPLORE },
+        { "body-param", body_param, "firstPost", SESS_EXPLORE },
+        { "path-example", path_example, "/v1/vis/", SESS_EXPLORE },
+        { "role-public", role_public, "/api/data?role=", SESS_EXPLORE },
+        { "merged", merged, "/api/data?role=", SESS_EXPLORE },
+        { "pinned", pinned, "/api/region/", SESS_EXPLORE },
+        /* THE KEY IS THE STATEMENT THAT REACHES THE ENDPOINT, WHICH IS NOT ALWAYS THE ENDPOINT. This row reads
+           `/api/admin/audit-log`, an address that is in a CHUNK the provider serves and in no document at all;
+           what the document has is the `loadScript` behind the admin arm. A key is a substring of the PROGRAM,
+           never of the answer. */
+        { "lazy", lazy, "/chunk/admin.js", SESS_EXPLORE },
+        { "dom-attr", dom_attr, "/api/whoami", SESS_EXPLORE },
+        { "dom-node", dom_node, "/api/kid", SESS_EXPLORE },
+        { "dom-tt", dom_tt, "/api/whoami", SESS_EXPLORE },
+        { "accessor", accessor_tt, "/api/flag", SESS_EXPLORE },
+        { "async", async_tt, "/api/then", SESS_EXPLORE },
+        { "await", await_tt, "/api/await", SESS_EXPLORE },
+        { "asynccall", asynccall_tt, "/api/asynccall", SESS_EXPLORE },
+        { "throw", async_throw, "/api/caught", SESS_EXPLORE },
+        { "preempt", async_preempt, "/api/asyncloop", SESS_EXPLORE },
+        { "fetch", fetch_await, "/api/config", SESS_EXPLORE },
+        { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE },
+        { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE },
+        { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE },
+        { "hdrs", hdrs, "/api/hdrs?", SESS_EXPLORE },
+        { "hdr-proxy", hdrproxy, "/api/hdrproxy", SESS_EXPLORE },
+        { "needs-auth", needsauth, "/api/needsauth", SESS_EXPLORE },
+        { "hdr-iter", hdriter, "/api/hdriter", SESS_EXPLORE },
+        { "hdr-seq", hdrseq, "/api/hdrseq", SESS_EXPLORE },
+        { "hdr-record", hdrrec, "/api/hdrrec", SESS_EXPLORE },
+        { "mp-escape", mpesc, "/api/mpesc", SESS_EXPLORE },
+        { "pending", pending_await, "/api/lazy", SESS_EXPLORE },
+        { "promise-state", promise_state, "/api/shared", SESS_EXPLORE },
+        { "delete-iso", delete_iso, "/api/tok", SESS_EXPLORE },
+        { "floc-iso", floc_iso, "/api/floc", SESS_EXPLORE },
+        { "ua", uafork_tt, "/api/uafork", SESS_EXPLORE },
+        { "touch", touchfork_tt, "/api/touch", SESS_EXPLORE },
+        { "layout", layoutfork_tt, "/api/layout", SESS_EXPLORE },
+        { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE },
+        { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE },
+        { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE },
+        { "dom-idl", domidl_tt, "/api/protoid", SESS_EXPLORE },
+        { "node-algo", nodealgo_tt, "/api/nodeconst", SESS_EXPLORE },
+        { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE },
+        { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE },
+        { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE },
+        { "owfork", owfork_tt, "/api/owfork", SESS_EXPLORE },
+        { "genfork", genfork_tt, "/api/genfork", SESS_EXPLORE },
+        { "gen2fork", gen2fork_tt, "/api/gen2fork", SESS_EXPLORE },
+        { "genofork", genofork_tt, "/api/genofork", SESS_EXPLORE },
+        { "afromfork", afromfork_tt, "/api/afromfork", SESS_EXPLORE },
+        { "spreadfork", spreadfork_tt, "/api/spreadfork", SESS_EXPLORE },
+        { "setaddfork", setaddfork_tt, "/api/setaddfork", SESS_EXPLORE },
+        { "setfork", setfork_tt, "/api/setfork", SESS_EXPLORE },
+        { "mapmutfork", mapmutfork_tt, "/api/mapmutfork", SESS_EXPLORE },
+        { "afsfork", afsfork_tt, "/api/afsfork", SESS_EXPLORE },
+        { "paffork", paffork_tt, "/api/paffork?", SESS_EXPLORE },
+        { "paf2fork", paf2fork_tt, "/api/paf2fork", SESS_EXPLORE },
+        { "redfork", redfork_tt, "/api/redfork", SESS_EXPLORE },
+        { "rerepfork", rerepfork_tt, "/api/rerepfork", SESS_EXPLORE },
+        { "gcallfork", gcallfork_tt, "/api/gcallfork", SESS_EXPLORE },
+        { "gapplyfork", gapplyfork_tt, "/api/gapplyfork", SESS_EXPLORE },
+        { "grefapplyfork", grefapplyfork_tt, "/api/grefapplyfork", SESS_EXPLORE },
+        { "hostreq", hostreq_tt, "/api/hostreq?", SESS_EXPLORE },
+        { "hostreq-fork", hostreqfork_tt, "/api/hostreqfork", SESS_EXPLORE },
+        { "json-fork", jsonfork_tt, "/api/jsonok", SESS_EXPLORE },
+        { "nav-open", navopen_tt, "/api/navopen", SESS_EXPLORE },
+        { "proxy-sop", sop_tt, "/api/sop?", SESS_EXPLORE },
+        { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE },
+        { "xdoc-job", xdocjob_tt, "/api/xdocjob", SESS_EXPLORE },
+        { "timer-order", timer_tt, "/api/timerfire", SESS_EXPLORE },
+        { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE },
+        { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE },
+        { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE },
+        { "s-eval", s_eval, "state.code", SESS_EXPLORE },
+        { "s-evalc", s_evalc, "state.note", SESS_EXPLORE },
+        { "s-html", s_html, "state.html", SESS_EXPLORE },
+        { "s-url", s_url, "state.next", SESS_EXPLORE },
+        { "s-loc", s_loc, "location.hash", SESS_EXPLORE },
+        { "s-park", s_park, "location.hash", SESS_EXPLORE },
+        /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
+           a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
+           what tells the two apart, because they run the SAME document and one is about what a park WROTE while
+           the other is about what a resume REBUILT out of it. */
+        { "park-wrote", cold_park_wrote, "state.code", SESS_PARK },
+        { "park-deep", cold_park_deep, "state.code", SESS_PARK },
+        { "park-cand", cold_park_cand, "state.code", SESS_PARK },
+        { "resumed", cold_resumed_any, "state.code", SESS_RESUME },
+        { "resumed-segs", cold_resumed_segs, "state.code", SESS_RESUME },
+        { "resumed-cand", cold_resumed_cand, "state.code", SESS_RESUME },
+        { "resumed-fired", cold_fired, "state.code", SESS_RESUME },
     };
-    /* WHICH ROWS THIS INVOCATION CARRIES. DOC_BOTH means "the full document and the minimal one" — the two that
-       were the whole world when it was named — so a COLD session runs neither it nor them: every one of those
-       statements is about a program this invocation did not run, and a row asserting a fact about a run that
-       never happened is precisely what this field exists to prevent. */
-    const int doc_sel = cold_park_path ? DOC_PARK : cold_resume_path ? DOC_RESUME
-                      : min_doc ? DOC_MIN : DOC_FULL;
-    int h_ok = 1;
-    printf("@H ");
+    /* WHICH ROWS THIS INVOCATION CARRIES — its SESSION, and whether its document contains the statement. */
+    int n = 0;
     for (unsigned pi = 0; pi < sizeof(probes) / sizeof(probes[0]); pi++) {
-        if (probes[pi].docs != doc_sel &&
-            !(probes[pi].docs == DOC_BOTH && (doc_sel == DOC_FULL || doc_sel == DOC_MIN)))
-            continue;
-        h_ok = h_ok && probes[pi].ok;
-        printf("%s=%d ", probes[pi].name, probes[pi].ok);
+        /* A KEY NO DOCUMENT CONTAINS IS A PROBE ABOUT A PROGRAM THAT DOES NOT EXIST, and it CRASHES rather than
+           being quietly dropped from every run — which is the one failure mode a derived selector introduces and
+           the same defect as a corpus file the collector does not collect: the total looks complete. The message
+           NAMES the row, so the whole block is dev-only: a release build would otherwise still format it. */
+#if APICLIENT_DEV
+        {
+            char why[256];
+
+            snprintf(why, sizeof why,
+                     "the probe `%s` names a statement no document in this fixture makes — its key `%s` is in "
+                     "none of the three, so the row would be selected by no run and assert nothing, while the "
+                     "table it sits in reads as complete", probes[pi].name, probes[pi].key);
+            DCHECK(strstr(HTML, probes[pi].key) || strstr(HTML_MIN, probes[pi].key) ||
+                   strstr(HTML_COLD, probes[pi].key), why);
+        }
+#endif
+        if (probes[pi].sess != g_sess) continue;
+        if (!strstr(g_doc, probes[pi].key)) continue;
+        DCHECK(n < cap, "more probes were selected than the caller has room for — the report would state a "
+                        "verdict over a prefix of the table and call it the table");
+        out[n++] = probes[pi];
     }
-    printf("=> %s\n", h_ok ? "OK" : "FAIL");
+    /* AND THIS RUN ASSERTS SOMETHING. A selection of nothing reports `=> OK` over an empty conjunction, which is
+       a PASS nothing checked — and with the membership derived, that is exactly what a document whose statements
+       no row names would produce. */
+    DCHECK(n > 0, "this invocation selected no probes at all — every row was excluded by its session or by its "
+                  "key, so the run would report a verdict it never computed");
+    return n;
+}
+
+/* THE TABLE, PRINTED — ONE writer, for the reason the table is one list: a second printf listing some of the
+   rows is how a probe came to be computed and joined to neither. It is a STREAM and not a summary, because the
+   moment below is reached (if it is reached) only when every row is 1: a run that never reaches it must still
+   say WHICH row is 0, at the cadence the rest of the census reports at, or a fifteen-minute run that is killed
+   by its harness produces nothing at all — which is what every native run of this fixture had been doing. */
+static int probes_report(const char *js) {
+    Probe rows[PROBE_MAX];
+    int n = probes_eval(js, rows, PROBE_MAX), ok = 1, i;
+
+    printf("@H ");
+    for (i = 0; i < n; i++) {
+        ok = ok && rows[i].ok;
+        printf("%s=%d ", rows[i].name, rows[i].ok);
+    }
+    printf("=> %s\n", ok ? "OK" : "FAIL");
+    fflush(stdout);
+    return ok;
+}
+
+/* THE EXPLORING SESSIONS' PARK MOMENT (solver/engine.h's park hook): this document has answered every statement
+ * it makes, so this engine has what it came for and leaves memory with its residue WRITTEN — which for this host
+ * is the `_park` array of the result document below, the same recipes the extension's host stores in IndexedDB.
+ * It is a park and not a "stop" for the reason engine.h states: the residue holds flows suspended mid-frame, and
+ * dropping one is a dropped work item that flow_release is right to abort on.
+ *
+ * HOW OFTEN IT IS ASKED is a SAMPLING RATE of a MEASUREMENT and not a budget: it decides when the verdict is
+ * recomputed, never how much the frontier may explore, and the verdict cannot change without something being
+ * emitted. It is the engine's own progress cadence (ENGINE_PROGRESS_EVERY units of engine_work_done), so the @H
+ * stream lands beside the @PROGRESS/@COLD/@HEAP lines it has to be read against — a report at some other rate
+ * would be a second cadence to keep in step.
+ *
+ * WHY IT IS SAMPLED AT ALL: the answer is a function of the whole result document, which has to be rendered to
+ * be asked. Rendering it at every step boundary would put a full endpoint-surface serialization between two
+ * quanta of a run that takes tens of thousands of them. */
+#define PROBE_SAMPLE_EVERY 1000
+static int fixture_have_answers(void) {
+    static long next;
+    char *js;
+    int ok;
+
+    if (engine_work_done() < next) return 0;
+    next = engine_work_done() + PROBE_SAMPLE_EVERY;
+    /* THE RESULT DOCUMENT, RENDERED AT A STEP BOUNDARY WITH NO FLOW SWITCHED IN — which is the position this
+       hook is asked at, and is why it may be rendered from the session's realm at all: the flow stamp and the
+       COW capture route are both down between two slices, so nothing this builds is attributed to a flow. */
+    js = result_json(g_probe_ctx);
+    CHECK(js, "the fixture could not render the result document — its verdict AND its completion moment are both "
+              "functions of that one string, so the run can neither report nor decide it is finished");
+    ok = probes_report(js);
+    free(js);
+    return ok;
+}
+
+/* THE --cold-park SESSION'S PARK MOMENT (solver/engine.h's park hook, the same seam the exploring one above
+ * answers about the document instead). It is a POSITION IN THE RUN and not a budget: the park writes every
+ * member of the frontier, so what this decides is when the residue leaves memory and never how much of it
+ * there is.
+ *
+ * IT ASKS ABOUT THE RESIDUE, WHICH IS THE THING IT IS DECIDING ABOUT, and the version that did not is the whole
+ * reason the read half of the cold tier had still never executed in any process. It was
+ *     solve_candidate_count() > 0 && engine_host_owes()
+ * and the second conjunct is FALSE BY CONSTRUCTION at the only point this seam is ever consulted: run_scheduler
+ * asks the hook at the TOP of its loop, and the bottom of the previous iteration paid the provider and then
+ * asserted, in two DCHECKs of its own, that `engine_pending_urls()` and `engine_host_requests()` are BOTH empty.
+ * engine_host_owes() walks for exactly the entries those two joins list, so it answered 0 every time it was
+ * asked, for every document, in every session. Nothing said so: an unsatisfiable predicate and one that is
+ * merely not true yet produce the identical run, and the @COLDPARK census reports zeroes for both. That is the
+ * defaulted-field defect one level up — a question whose answer is fixed, read as a measurement.
+ *
+ * SO THE FACT IS ASKED OF THE COLD TIER (solver/cold.h's ColdPreview), which is the component that owns what a
+ * residue IS, and it is ONE fact because the arms of the recipe grammar meet in one member: a CANDIDATE SESSION
+ * THAT STANDS ON A FROZEN DECISION SEGMENT. A candidate is the only record that carries attacker text, hence the
+ * only path through park_hex/park_unhex, and the only one whose sink class crosses by NAME and has to be re-bound
+ * to a live pointer; standing on a segment is what makes the park write 's' records and the ordinals that name
+ * them. So this moment is AFTER a candidate has re-entered the document and taken the branch, and not the moment
+ * they were merely SEEDED, when their records are `c-,…` naming no segment at all.
+ * IT IS `deepcands` AND NOT `cands > 0 && deep > 0`, which is the same statement about two counts and is a
+ * WEAKER one: an exploring arm that has forked satisfies `deep` on its own. That mattered the moment candidates
+ * began being seeded during exploration rather than after it (engine.c's pick), and the conjunction would have
+ * gone on reading as though it said this.
+ *
+ * WHAT THIS MOMENT CANNOT CONTAIN is a DISCOVERY PROBE ('d'), and that is structural: active discovery is the
+ * trusted zone's, so nothing in this engine seeds one. */
+static int fixture_want_park(void) {
+    ColdPreview would;
+
+    cold_park_preview(&would);
+    return would.deepcands > 0;
+}
+
+int main(int argc, char **argv) {
+    JSRuntime *rt;
+    trusted_types_selftest();
+    policy_container_selftest();
+    csp_url_matching_selftest();
+    document_policy_selftest();
+    rt = JS_NewRuntime();
+    JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
+    JSContext *ctx = JS_NewContext(rt);
+
+    concolic_init(ctx);
+    flow_registry_init("fixture");   /* one document in this fixture; the world namespace is named by it */
+    world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
+    endpoint_init();
+    solve_init(ctx);
+
+    /* BASELINE setup (mark 0): the globals here must NOT be captured, so install the COW hook AFTER.
+       THIS FIXTURE'S DOCUMENT IS ITS OWN TOP-LEVEL TRAVERSABLE, so §8.1.3.1's top-level creation URL is the
+       address it is installed at below — and `https:` makes it a SECURE CONTEXT, which is what a real bundle
+       runs in and therefore what the fixture must exercise. */
+    tf_agent_init(ctx, "https://x.test", "https://x.test/p");
+    navigable_set_realm_builder(tf_child_realm);
+    int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
+    /* THE TWO SESSIONS OF THE CROSS-SESSION ROUND TRIP, one per invocation, because that is what a session
+       boundary IS: the first writes its residue to this host's store and the process ends, the second starts
+       from nothing but that document. Doing both inside one process would leave the endpoint surface, the sink
+       searches and the world namespace of the first standing behind the second, so "the resumed session found
+       it" and "the previous session had already found it" would be the same observation. */
+    const char *cold_park_path = arg_val(argc, argv, "--cold-park");
+    const char *cold_resume_path = arg_val(argc, argv, "--cold-resume");
+    int cold_doc = (cold_park_path || cold_resume_path) ? 1 : 0;
+    char *cold_residue = NULL;
+    /* ONE OF THE TWO PER INVOCATION. The product's steady state is a session that resumes a residue AND
+       re-parks what it did not finish, so this is a limit of the FIXTURE's verdict and not of the tier: the
+       probe table names one document per run, and a session doing both would have to carry two sets of rows
+       under one answer. Said as a refusal rather than left to produce a half-checked run. */
+    DCHECK(!(cold_park_path && cold_resume_path),
+           "this host was asked to park AND to resume in one invocation — its probe table answers for one "
+           "session, so the two halves of the round trip are two runs of this binary");
+    DCHECK(!(cold_doc && min_doc),
+           "the cold round trip was asked for over the minimal document — the park refuses a frontier holding "
+           "a foreign world's segment and that document opens child navigables, so this run would abort in "
+           "cold_park naming the cross-instance park rather than measuring the tier");
+    const char *doc = cold_doc ? HTML_COLD : (min_doc ? HTML_MIN : HTML);
+    /* WHAT THIS INVOCATION IS, stated ONCE and read by the probe table — see it for why the document itself is
+       what decides which rows this run carries. */
+    g_doc = doc;
+    g_probe_ctx = ctx;
+    g_sess = cold_park_path ? SESS_PARK : cold_resume_path ? SESS_RESUME : SESS_EXPLORE;
+    lxb_html_document_t *dom = dom_document_create();
+    html_parse_document(dom, (const lxb_char_t *)doc, strlen(doc));
+    g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
+    {
+        /* The fixture built this document, so the navigable's name is the initial "" and is known. */
+        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "");
+        CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
+        /* NULL: this fixture's document is a C string literal, so it came from no response and has no
+           header-borne policy. That is a fact about it, not a gap. */
+        /* AND AN EMPTY §7.1.5 ACTIVE SANDBOXING FLAG SET, from the same fact and the same sentence: the two
+           halves §7.4.5 unions are this navigable's CREATION sandboxing flags — empty, because a top-level
+           traversable has no embedder element and its POPUP sandboxing flag set begins empty — and the
+           CSP-derived flags of the policy above, which there is none of. Not a placeholder: an unsandboxed
+           document's set IS empty, and this fixture's is. */
+        /* CSP §2.2.2's SELF-ORIGIN, which this fixture's document has even though it has no policy: a CSP
+           list carries one whether or not it holds any policies, and `'self'` in a policy this fixture builds
+           later is measured against it. It is this document's own address's origin, because this document is
+           its own response. */
+        tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", NULL, "https://x.test", 0,
+                         world_local_doc(), root_proxy);
+        JS_FreeValue(ctx, root_proxy);
+    }
+
+    /* INDEXED DATABASE'S PUT/GET ROUND TRIP, at the BASELINE and before the time-travel hooks — the same
+       position core/file/file_system.c's two roots are built at, and for the same reason: a record written
+       here belongs to the pre-boot baseline rather than to whichever flow happened to run first. */
+    idb_store_selftest(ctx);
+
+    /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
+       and again in test_forced.c, and the pair had drifted. */
+    cow_install_time_travel_hooks(engine_gen_fork);
+    concolic_install_hooks();
+    concolic_install_source_overlay();   /* a SOLVER host: attacker-controlled values are symbolic sources */
+    /* The surface is installed, so every member the platform has is declared — a declaration from here on is a
+       per-wrapper or per-flow mint, and that is what the pool asserts against. */
+    idl_args_seal();
+
+    /* The trusted host's half: what it is owed, and how it pays. */
+    engine_set_provider(fixture_provide);
+
+    DocScripts scripts = document_exec_scripts(dom);   /* each <script> its own program body — no concat */
+    /* THE RESIDUE THIS SESSION IS CONTINUING, read off the shelf before the scheduler is seeded — because the
+       choice between it and a boot flow is made once, inside engine_sched_begin, and a residue that arrived
+       after that point would be a second seeding of the same document. */
+    if (cold_resume_path) cold_residue = tf_park_load(cold_resume_path);
+    /* WHEN THIS ENGINE LEAVES MEMORY — ONE seam, and the two sessions that install it answer it about different
+       things because they are measuring different things. The --cold-park session's moment is a statement about
+       the RESIDUE (a candidate standing on a segment: every arm of the recipe grammar in one member). An
+       EXPLORING session's is a statement about the DOCUMENT — every statement it makes answered — because its
+       frontier is unbounded and "it drained" is a completion condition no document owes anybody. The --cold-resume
+       session installs neither: its document drains, and its rows are about what the tier REBUILT. */
+    if (cold_park_path)            engine_set_park_hook(fixture_want_park);
+    else if (!cold_resume_path)    engine_set_park_hook(fixture_have_answers);
+    engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.n, cold_residue);   /* @H + @S detection */
+    /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */
+    doc_scripts_free(&scripts);
+    dom_document_destroy(dom);
+    free(cold_residue); cold_residue = NULL;   /* engine_sched_begin rebuilt from it; the text was borrowed */
+
+    /* ─── THE COLD TIER'S TWO ENDS, EACH REPORTED PER RECORD KIND ────────────────────────────────────────────
+       A total cannot say which ARMS ran, and the arms are the whole question: a residue of nothing but 'f'
+       records reads back without touching the segment rebuild, park_unhex or the sink-class re-bind, and
+       reports the same count as one that touches all three. Both lines carry the same three fields for the
+       same reason, so the two ends of one round trip can be read against each other by eye. A fourth,
+       `probes`, is gone with the record kind it counted ('d', an engine-seeded discovery probe): active
+       discovery is the trusted zone's again, so the arm cannot run and a field reporting 0 forever would say
+       it merely had not. */
+    /* THE TWO CENSUSES ARE THE FIXTURE'S OWN RECORD (g_cp/g_cr) rather than two locals, because the probe rows
+       that are statements ABOUT them are computed where the table is. */
+    /* ASKED OF THE ENGINE, NOT OF THE ARGUMENTS. Every session that PARKED reports its residue, and whether it
+       also has a FILE to put it in is a different question — the exploring sessions park too now, and their
+       residue rides the result document's `_park` array exactly as the extension's does. A census printed only
+       for the invocation that named a path would have gone silent for them. */
+    if (engine_frontier_paged()) {
+        const char *recipes = cold_park_recipes();
+        cold_parked(&g_cp);
+        /* THE RESIDUE GOES TO THE SHELF BEFORE THE TEARDOWN RUNS. flow_registry_free frees the park document
+           with the frontier it belongs to, so a store written after it would be written from freed memory —
+           and the residue is the only remaining copy of every flow in it. */
+        if (cold_park_path) tf_park_store(cold_park_path, recipes);
+        printf("@COLDPARK {\"records\":%ld,\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,"
+               "\"bytes\":%zu,\"store\":\"%s\"}\n",
+               cold_park_records(), g_cp.segs, g_cp.flows, g_cp.cands, strlen(recipes),
+               cold_park_path ? cold_park_path : "-");
+    }
+    if (cold_resume_path) {
+        cold_resumed(&g_cr);
+        printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld}\n",
+               g_cr.segs, g_cr.flows, g_cr.cands);
+    }
+
+    /* ONE result document — both surfaces and the scheduler's interleave count, serialized DIRECTLY from the
+       C findings (no JS-object round-trip). The host does one JSON.parse of this line and relays it; it used
+       to be two lines here, which meant whoever consumed them assembled the document, and assembling is
+       structure. The assertions below read the same string, so they cover the composed shape. */
+    char *js = result_json(ctx);
+    CHECK(js, "the result document could not be rendered — this fixture's whole verdict is a function of it, so "
+              "there is nothing to report and nothing to assert");
+    printf("@RESULT %s\n", js);
+    int h_ok = probes_report(js);
 
     /* THE SENTENCE NAMES WHAT THIS INVOCATION MEASURED. A cold session runs none of the @H/@S rows, so
        reporting their verdict over it would be a claim about a program it did not run — the same defect the
-       `docs` field exists to prevent, one line further down. */
+       probe key exists to prevent, one table above. */
     if (cold_doc)
         printf("%s\n", h_ok
             ? (cold_park_path
                 ? "PASS: the frontier was written to this host's cold-tier store as recipes — @S candidate "
-                  "sessions standing on the decision segments they forked at, which is every record kind this "
-                  "document can produce (see HTML_COLD for why 'f' and 'd' need a partial park and not a bigger "
-                  "document) — resume it with --cold-resume over the same path"
+                  "sessions and the arms still exploring, each standing on the decision segments it forked at, "
+                  "which is every record kind this document can produce (see HTML_COLD for the one that needs a "
+                  "capability nothing here has) — resume it with --cold-resume over the same path"
                 : "PASS: the parked residue was rebuilt into the ONE frontier, and a resumed @S candidate "
                   "replayed its recorded arms back to the sink it was suspended in front of and FIRED there")
             : "FAIL: the cross-session round trip did not exercise the tier — read the 0 rows above and the "

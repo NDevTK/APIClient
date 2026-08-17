@@ -2622,8 +2622,12 @@ int engine_switch_count(void) { return g_switches; }
  * emitted ONE line while RSS climbed past two gigabytes. A cadence keyed on a counter that stops is a report
  * that goes silent exactly when there is something to report, which is the same defect as a corpus file the
  * collector does not collect: the output LOOKS complete. Keying both on the same "work done" fixes it and also
- * makes the two agree by construction rather than by two people remembering to. */
-static long engine_work_done(void) {
+ * makes the two agree by construction rather than by two people remembering to.
+ *
+ * AND A THIRD CONSUMER, which is why engine.h declares it: a HOST that reports on its own run needs the same
+ * quantity to decide WHEN to report, and a host carrying a cadence of its own would be the second definition
+ * this paragraph exists to prevent. */
+long engine_work_done(void) {
     return decide_fork_total() + flow_created_count() + g_jobs_run + g_switches;
 }
 
@@ -3214,6 +3218,23 @@ static int engine_sched_slice(void) {
        (engine_provide, engine_host_answer, engine_deliver, engine_perform, and the shared document-script slot
        inside flow_drain_pending). */
     for (;;) {
+        /* THE SEARCH'S OWN WORK ITEMS, CREATED WHERE THEY COME INTO EXISTENCE. §@S: an @S candidate re-fire is a
+           FLOW on this ONE frontier, so a detected sink becomes members of the frontier the way a fork does —
+           when it happens.
+           IT WAS ASKED ONLY WHERE THE FRONTIER HAD DRAINED, and that gate is a claim §NO BOUNDS forbids: a
+           frontier need never drain. MEASURED on this tree's own minimal document, whose opaque-length walk
+           makes every length a world — fifteen minutes, 4813 flows, three @S sinks in the document and
+           `candidates: 0`, so every @S verdict it can state was unreachable by construction and nothing said so.
+           IT IS IDEMPOTENT BY CURSOR (solve.h), so the ask costs one walk of the detected-sink list and adds
+           only what detection has appended since the last one. At the PICK rather than once per slice, because
+           that is what makes the exhausted answer below honest: a sink detected by the LAST runnable flow is
+           seeded before the frontier can be declared empty, so there is no seeding site left below and no
+           second one to keep in step.
+           A BLOCKED FLOW'S REPLY IS NOT DEFERRED BY THIS, which was the whole of the old ordering's argument.
+           Its premise is gone: every driver pays the host at EVERY slice (run_scheduler below, and main.c's
+           qjs_step at the ABI) rather than only at a stall, so a flow suspended inside a read is answered at the
+           next slice whatever else the frontier has to run. */
+        solve_seed_candidates(ctx);
         /* WFQ: highest value-of-information among the members that can still make progress — a fresh fork
            (UCB) can preempt. The filter is the ONE order with the flows that have told the scheduler they are
            waiting on the host taken out of the PICK only; they keep their weight, their place and every work
@@ -3575,49 +3596,11 @@ static int engine_sched_slice(void) {
        a host callback, and the shipped host answered half of it. See engine_host_owes. */
     if (engine_host_owes())
         return ENGINE_STEP_STALLED;
-    /* The exploration found sinks; each breakout is a FLOW on this same frontier, seeded once the exploring
-       flows are done so a candidate never re-fires against a half-explored page. Seeding adds members, so the
-       loop above has more to do — hence before the exhausted answer, not after it.
-       ASKED EVERY TIME THE FRONTIER DRAINS, not once. A sink inside a lazily-imported chunk or an injected
-       <script src> is discovered AFTER the first drain, because the code holding it had not arrived yet; a
-       one-shot latch left every such sink unsearched, which bounded verification by when a sink was found. The
-       seeding is per-sink and idempotent, so asking again costs a scan and adds only what is new.
-       AND IT IS ASKED AFTER THE STALL IS REPORTED, WHICH IS THE CORRECTION. The sentence above says "seeded
-       once the exploring flows are done", and it stood ABOVE the stall report, where that sentence is FALSE:
-       reaching this line means the pick found no runnable member, so the exploring flows are not DONE, they are
-       PARKED ON THE HOST — every one of them mid-script with a suspended frame and an unanswered entry on its
-       register. Seeding there turned the one moment the whole frontier was waiting for a reply into a YIELD
-       carrying fresh from-baseline work, so the host was never told what it was holding up, and the flows it
-       was holding up went to the back of a queue that had just grown by a full re-exploration of the document
-       PER SINK.
-       MEASURED, and it is the entire shape of the smoke fixture's frontier: that run reports `candidates 27`,
-       and 27 is exactly the number of flows that took this seam. Its fork histogram's FIRST decision site is
-       entered by 28 flows — one boot flow and those 27 candidate sessions — and every later site doubles it
-       (28, 56, 112, 224, 414, 634, 1169, 2281, 4514). Nine decisions, 9432 flows, and 9404 of them exist
-       because a candidate was seeded instead of a reply being asked for. Not one flow ever finished, and the
-       flows that were parked at the instant of the seeding were still parked when the run was stopped.
-       A candidate re-firing against a page whose every timeline is suspended mid-script IS the half-explored
-       page the paragraph above forbids, arrived at from the other side: the page is not half-explored because
-       a chunk has not loaded, it is half-explored because the host has not been asked. */
-    /* AND THAT ORDER IS ASSERTED — asked of the FLOWS, which is what makes it a check rather than the `if`
-       above read out loud a second time. The stall report is the HOST's view (its two registers are empty);
-       this is the FRONTIER's (no member is parked on a synchronous request), and the two are only ever the same
-       answer if every blocked flow's entry really is on the register the host was shown. It fires on the tree
-       this replaces — where 500-odd members were suspended mid-script at exactly this line — and it fires again
-       on any future edit that puts engine-side work between a fully host-owed frontier and the one report that
-       tells the host so, which is a change nothing else can see: the run looks livelier afterwards, because a
-       YIELD always has something to run, and the parked flows simply never come back.
-       IT IS THE SYNCHRONOUS HALF SPECIFICALLY, because that is the half that suspends a flow MID-FRAME: a flow
-       waiting on a fetch reply has finished its script and is holding a promise, while a flow that is `blocked`
-       is stopped inside the call that asked, and re-firing a candidate against a document whose timelines are
-       stopped there is re-firing it against a page that never finished loading. */
-    for (int i = 0; i < flow_count(); i++)
-        DCHECK(!flow_blocked(flow_at(i)),
-               "a candidate is about to be seeded against a page whose timelines are PARKED ON THE HOST — this "
-               "member is suspended inside the read that asked, its answer is a work item nobody has been told "
-               "about, and the flow this seeds re-runs the document from the baseline in front of it");
-    if (solve_seed_candidates(ctx) && flow_best())
-        return ENGINE_STEP_YIELD;
+    /* NO SEEDING HERE, AND THE FRONTIER IS NOT ASKED WHETHER IT IS BLOCKED. Both used to stand at this line —
+       the @S search was seeded exactly where the frontier had drained, guarded by an assert that no member was
+       parked on the host — and the whole of that is now one ask at the PICK above, where a candidate becomes a
+       member the moment its sink exists. What stood here could only ever have run for a document that DRAINS,
+       which §NO BOUNDS says need never happen. */
     /* AND THE OTHER REASON A FRONTIER IS NOT EXHAUSTED, which is not a reply the host owes but a QUESTION it
        has not yet been asked: a document another instance holds a reference into can be asked something at any
        moment, so its timelines are parked (flow_step returns OWED for them) rather than finished, and the
@@ -3678,9 +3661,11 @@ int engine_sched_step(void) {
        object by any of those flows was recorded nowhere and survived that flow's unapply. Silent, and
        refcounting kept it from ever crashing.
        IT IS THE WRAPPER THAT MAKES THIS SYMMETRIC, which is the same reason the wrapper exists for the
-       quantum: the body has seven exits (three value yields, the quantum yield, STALLED, the seeded-candidate
-       yield, and the exhausted path that closes the session), and a mark cleared at six of them would look
-       correct forever. One bracket around one call cannot be got wrong.
+       quantum: the body has seven exits (the park's DONE, three yields, STALLED twice — a reply the host owes
+       and a peer's question — and the exhausted path that closes the session), and a mark cleared at six of
+       them would look correct forever. One bracket around one call cannot be got wrong. The enumeration is
+       spelled out because it was WRONG while the count was right: it named a seeded-candidate yield that is
+       gone (the seeding is at the pick now) and neither of the two exits that had been added since.
        AND IT IS SUSPEND/RESTORE, NEVER CLEAR/RE-ENTER. The generation is monotonic — every delta's fork_gen is
        a point on that one line — so the next slice resumes at the number this one left, and a restart at 1
        would make a later object compare as older than an earlier fork. */

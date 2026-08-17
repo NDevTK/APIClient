@@ -198,6 +198,14 @@ void cold_parked(ColdParked *out);
 typedef struct {
     long flows, cands;           /* the records a park taken now would write, per kind */
     long deep;                   /* …of those, the ones standing on a frozen decision segment */
+    /* …AND THE INTERSECTION, which is a DIFFERENT MOMENT and not a refinement of either count. A host that wants
+       the residue to exercise every arm of the recipe grammar at once needs a CANDIDATE that stands on a segment:
+       that is the one member whose record carries attacker text (park_hex) AND names a segment ordinal, so a
+       residue holding one crosses both. `cands && deep` cannot say it — an exploring arm that forked satisfies
+       `deep` while every candidate is still unstarted — and it stopped being able to the moment candidates began
+       being seeded during exploration rather than after it (engine.c's pick). Two counts whose conjunction was
+       read as an intersection is the same defect as a field defaulted by its consumer. */
+    long deepcands;
 } ColdPreview;
 void cold_park_preview(ColdPreview *out);
 

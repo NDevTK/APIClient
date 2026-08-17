@@ -92,14 +92,27 @@ void engine_prepare_fork(void *dec_blob, void *pin_blob);
 void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n,
                 const char *recipes);
 
-/* …AND WHETHER THIS HOST WANTS THE RESIDUE, asked at each step boundary of the one-call driver. It is the
-   Level-1 eviction seam: the HOST decides there is pressure (it is the only zone that can see the other
-   documents' engines and the summed working set) and the ENGINE decides when — the next boundary with no flow
-   switched in, which is the only moment every flow's state is in its own blob. A non-zero answer requests the
-   park (engine_request_park); a host that never evicts installs nothing, which is every existing caller.
+/* …AND WHETHER THIS ENGINE SHOULD LEAVE MEMORY NOW, asked at each step boundary of the one-call driver. It is
+   the Level-1 eviction seam: the HOST decides (it is the only zone that can see the other documents' engines and
+   the summed working set) and the ENGINE decides when — the next boundary with no flow switched in, which is the
+   only moment every flow's state is in its own blob. A non-zero answer requests the park (engine_request_park);
+   a host that never evicts installs nothing.
    IT IS A QUESTION, NOT A BUDGET. The park writes EVERY member of the frontier and the host stores it, so what
-   this decides is when the residue leaves memory and never how much of it survives. */
+   this decides is when the residue leaves memory and never how much of it survives.
+   PRESSURE IS NOT THE ONLY REASON, AND THE SEAM NEVER ASKED FOR ONE. The other is a host that has what it came
+   for: the fixture is finished when the document it is DEMONSTRATING has answered every statement it makes, and
+   its frontier is unbounded, so "the frontier drained" is a completion condition no document owes it. Both
+   answers mean the same thing here — this engine leaves memory, with its residue written down — which is also
+   why there is no "stop driving" seam beside this one: a driver that merely stopped would hand the teardown
+   flows suspended mid-frame with replies outstanding, and flow_release asserts that is a DROPPED work item. A
+   residue is parked or it is nothing. */
 void engine_set_park_hook(int (*want_park)(void));
+
+/* THE WORK THIS ENGINE HAS PERFORMED — forks taken, flows created, jobs run, context switches. Exported because
+   a host that REPORTS on its own run needs the cadence to be the same quantity the engine's own progress stream
+   uses; a host carrying its own would be a second definition of "has anything happened", and the one that
+   already existed went silent exactly when there was most to say (see the definition). */
+long engine_work_done(void);
 
 /* THE SESSION — the same dispatch loop, stepped by its HOST instead of drained. The extension's host has other
    work between quanta (its message port, other documents' engines, streaming findings), and CLAUDE.md's
