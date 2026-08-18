@@ -384,6 +384,37 @@ void        engine_notify_worlds_gone(JSContext *ctx, const char *const *names, 
  * actually carries, rather than every death for every cold document forever. */
 void        engine_notify_worlds_parked(JSContext *ctx, const char *const *vectors, int n);
 
+/* HAND BACK EVERY CROSS-AGENT OPERATION THIS INSTANCE WAS ASKED AND HAS NOT STARTED — `remoteop.retracted<TAB>
+ * <token>`, one notice per distinct token, and the queues are EMPTY when it returns. Taken at the park, before
+ * the residue is written, which is why the park's own assert can stay at full strength instead of being taught
+ * to tolerate a queued entry.
+ *
+ * WHY IT IS RETURNED AND NOT PARKED, which is the whole question and it turns on ONE fact: A TOKEN'S LIFETIME
+ * IS THE ZONE SESSION'S, and that is strictly SHORTER than the residue's. The token is minted by the trusted
+ * zone (it is not the asking flow's request id, which is unique only inside the asking instance), it names an
+ * entry in that zone's in-memory routing table, and it carries no generation — so a token written into a
+ * recipe and answered in a later browser session names nothing, and the zone's own check ("a peer answered
+ * under a rendezvous token this zone never minted") is what would fire. That is the identical defect the 'g'
+ * record closes for a WorldId and remote_object.c REFUSES for an export id, one namespace over, and unlike
+ * those two it cannot be fixed by adding a coordinate: the thing a token names is a suspended flow in another
+ * instance's register, and that does not survive a session either.
+ *
+ * SO NOTHING HAS TO CROSS, IN EITHER DIRECTION OF THE PARK. If this instance comes back inside the same zone
+ * session, the zone still holds the token, the record and the asker, and the asking flow is still suspended —
+ * so it simply asks again. If the browser restarted, the ASKER is gone too, and its own recipe RE-ISSUES the
+ * request and is answered with today's value — which is not a new claim, it is the one g_host_answers_late is
+ * already built on ("the flow that asked is written down as a recipe, and the replay RE-ISSUES the request").
+ * The asking side of this seam has always worked that way; this is the same rule applied to the answering side,
+ * where the only difference is that the thing that parks is not the thing that asked, so the RE-ASK has to come
+ * from the zone rather than from a replay.
+ *
+ * AND THE ZONE'S ACTION IS TO FORGET, NOT TO STORE. It suppresses re-asking a request it has already carried
+ * (otherwise an operation would be performed once per step, each one a program with the page's side effects);
+ * this record is what lifts that suppression. `engine_host_requests` deliberately does not dedupe, so the
+ * asking flow's request is still being reported every step, and the next sighting asks again — routed, by the
+ * zone, to whichever instance holds that document by then. */
+void        engine_retract_operations(JSContext *ctx);
+
 /* …AND THE INBOUND HALF OF IT: a peer says one of ITS worlds is gone, so the segment this instance holds for
    that world can go. The third record on the one-way line, beside a routed delivery and a performed operation,
    and the only one that seeds nothing — a death is not work, it is the end of some. */

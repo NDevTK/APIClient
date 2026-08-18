@@ -760,6 +760,75 @@ void engine_notify_worlds_parked(JSContext *ctx, const char *const *vectors, int
     }
 }
 
+/* See engine.h. Placed with the other two park-time announcements because the three are one statement about
+   what this instance is handing over: the residue (world.parked), the names it will never use again
+   (world.gone), and the questions it was asked and did not answer (this). */
+void engine_retract_operations(JSContext *ctx)
+{
+    char **seen = NULL;
+    int seen_n = 0, seen_cap = 0, i, k, j;
+    Flow *f;
+
+    for (i = 0; (f = flow_at(i)) != NULL; i++) {
+        int n = flow_perform_pending(f);
+
+        if (n == 0) continue;
+        for (k = 0; k < n; k++) {
+            JSValue e = JS_GetPropertyUint32(ctx, f->perform_q, (uint32_t)k);
+            JSValue tv = JS_GetPropertyUint32(ctx, e, 1);
+            const char *tok = JS_ToCString(ctx, tv);
+
+            CHECK(tok != NULL, "engine: OOM reading a cross-agent operation's token at the park — a question "
+                               "handed back without its name leaves the flow that asked, in another instance, "
+                               "suspended on an answer nothing will send");
+            /* ONE NOTICE PER DISTINCT TOKEN, and the dedup is the ARRIVAL's shape rather than a nicety: one
+               operation is attached to EVERY live timeline (engine_perform), because a document's state is its
+               flows and `otherW.length` has N answers for N of them. The QUESTION is still one question, and
+               the zone routes by token — so N notices would be one hand-back repeated once per flow, on a
+               frontier that is routinely thousands. Linear over the DISTINCT set, which is the number of peer
+               operations outstanding and not the number of flows. */
+            for (j = 0; j < seen_n; j++)
+                if (!strcmp(seen[j], tok)) break;
+            if (j == seen_n) {
+                size_t cap = strlen(tok) + 20;   /* "remoteop.retracted" + TAB + the token + NUL */
+                char *rec;
+
+                if (seen_n == seen_cap) {
+                    int c = seen_cap ? seen_cap * 2 : 8;
+                    char **g = realloc(seen, (size_t)c * sizeof *g);
+                    CHECK(g != NULL, "engine: OOM collecting the operations a park hands back");
+                    seen = g;
+                    seen_cap = c;
+                }
+                seen[seen_n] = strdup(tok);
+                CHECK(seen[seen_n] != NULL, "engine: OOM naming an operation a park hands back");
+                seen_n++;
+                rec = malloc(cap);
+                CHECK(rec != NULL, "engine: OOM announcing an operation a park hands back");
+                snprintf(rec, cap, "remoteop.retracted\t%s", tok);
+                engine_host_notify(ctx, rec);
+                free(rec);
+            }
+            JS_FreeCString(ctx, tok);
+            JS_FreeValue(ctx, tv);
+            JS_FreeValue(ctx, e);
+        }
+        /* AND THE QUEUE IS EMPTY, which is what keeps the park's own assert at full strength: `flow_owes_answer`
+           is two disjuncts, and after this the UNSTARTED one cannot be true, so the abort there names the
+           STARTED operation and nothing else. Through the engine's write bracket for perform_q_take's reason —
+           this is the scheduler's record about a flow, written from outside any flow's delta, and a delta that
+           captured it would restore the entries the moment a sibling switched in. */
+        cow_engine_write_begin();
+        JS_SetPropertyStr(ctx, f->perform_q, "length", JS_NewInt32(ctx, 0));
+        cow_engine_write_end();
+        DCHECK(flow_perform_pending(f) == 0,
+               "a flow's operation queue survived the retraction that emptied it — the park is about to abort "
+               "on a question this instance has already told the zone it is handing back");
+    }
+    for (j = 0; j < seen_n; j++) free(seen[j]);
+    free(seen);
+}
+
 /* THE INBOUND HALF OF IT — see engine.h. It is deliberately NOT engine_route: a delivery becomes a work item of
    every live timeline and a death is the end of one, so there is nothing to seed, no sender origin to stamp
    (nothing here runs page code) and no target document (the zone broadcasts, because the sender does not track
@@ -3711,6 +3780,12 @@ static int engine_sched_slice(void) {
        by the same one order. */
     if (g_park_req) {
         if (cur) { flow_switch_out(ctx, cur); cur = NULL; }
+        /* THE QUESTIONS THIS INSTANCE WAS ASKED AND DID NOT START ARE HANDED BACK FIRST, before the residue is
+           written, because they are not this instance's work to save: a token is the ZONE's name for a flow
+           suspended in ANOTHER instance, it carries no generation, and it does not outlive the zone session —
+           so it may never enter a recipe (engine.h). Returning them here is what lets cold_park's assert keep
+           naming the one shape that genuinely has no recipe yet: an operation already STARTED. */
+        engine_retract_operations(ctx);
         cold_park();
         /* AND THE FOREIGN SEGMENTS THAT RESIDUE CARRIES, announced before the deaths below because they are the
            opposite statement and the zone acts on them in that order: these worlds belong to PEERS and outlive

@@ -1534,6 +1534,37 @@ async function hostNotice(eng, line) {
     }
     return;
   }
+  /* `remoteop.retracted <token>` — an instance is parking with a question it was asked and never started, and
+     it is handing that question back rather than carrying it. THIS ZONE'S ACTION IS TO FORGET, and that is the
+     whole of it: the suppression below (`_remoteAsked`) exists because `engine_host_requests` deliberately does
+     NOT dedupe — two identical questions from two flows are two questions — so without it one operation would
+     be performed once per step, each a program with the page's own side effects. The ASKING flow is still
+     suspended and its request is still being reported every step, so lifting the suppression is the whole
+     re-ask: the next sighting carries it to whichever instance holds that document by then.
+     NOTHING IS STORED, AND THAT IS THE POINT. A token is this zone's name for an entry in this zone's
+     in-memory table; it has no generation and it does not outlive this session, so it can never be written into
+     a residue (solver/engine.h says why, and it is the defect the world-name generation closes one namespace
+     over). Across a browser restart the ASKER is gone too and its own recipe RE-ISSUES the request under a new
+     id — which is what the engine's late-answer refusal has always been built on. So neither side carries
+     anything, and the only thing that has to happen is this forget. */
+  if (f[0] === "remoteop.retracted") {
+    DCHECK(f.length >= 2 && !!f[1],
+           "a remoteop.retracted notice carried no rendezvous token — the token is the only thing that names " +
+           "which asking flow's question is being handed back, so an empty one leaves that flow suspended " +
+           "forever with this zone still suppressing the re-ask");
+    const back = _remoteOps.get(f[1]);
+    /* AN UNKNOWN TOKEN IS THIS ZONE ANSWERING FOR A QUESTION IT DID NOT ASK. The token is echoed verbatim by
+       the instance that was handed it, exactly as `remoteop.answer` echoes it, so anything else means the
+       engine minted a name of its own — and the flow this was meant to release is not the one released. */
+    DCHECK(back !== undefined,
+           "an engine handed back a cross-agent operation under a rendezvous token this zone never minted — " +
+           "the token is echoed verbatim by the instance that was asked, so the asking flow this was meant to " +
+           "un-suppress is still suppressed and stays parked");
+    if (!back) return;
+    back.asker._remoteAsked.delete(back.req);
+    _remoteOps.delete(f[1]);
+    return;
+  }
   /* `world.parked <world vector>` — the OPPOSITE statement to the one above, and the one this zone cannot yet
      act on. A park writes the foreign segments this instance holds into its residue as replay recipes
      (solver/cold.h's 'w' record), so a PEER's timeline now outlives the session that held it: whichever

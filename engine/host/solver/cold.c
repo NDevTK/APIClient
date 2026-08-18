@@ -491,12 +491,40 @@ void cold_park_flow(Flow *f)
        lose this flow's work: it parks a flow in ANOTHER instance forever, on a completion nothing will ever
        send. The delivery was asserted here and this was not, which is the asymmetry a reader of the pair would
        have to notice for themselves. */
+    /* AND THE OTHER HALF OF THAT SHAPE, WHICH IS TWO CAPABILITIES AND NOT ONE. `flow_owes_answer` is a
+       disjunction — an operation still QUEUED, or one already STARTED with its token on a program row — and a
+       single assert over both named whichever fired as though the other did not exist. They are asked
+       separately here because they have DIFFERENT ANSWERS, and the first one now has its answer built.
+       QUEUED IS ALREADY GONE BY THIS LINE. engine_retract_operations hands every unstarted operation back to
+       the zone before the park walks the frontier, so this states that it ran rather than tolerating what it
+       was supposed to have removed — an entry surviving here is the retraction not having happened, which is a
+       question this instance has told the zone it gave up and is still holding. */
+    DCHECK(flow_perform_pending(f) == 0,
+           "a flow was parked still holding an UNSTARTED cross-agent operation — the park hands those back to "
+           "the trusted zone before it writes anything (engine_retract_operations), so an entry here is a "
+           "question the zone has been told it owns and this instance is about to page out anyway");
+    /* STARTED IS THE ONE WITH NO RECIPE, and the fix is NOT the one this message used to name. It said "the
+       record and the token are text and cross as text… a resumed flow re-queues the program and answers the
+       same token", and the second half of that is wrong in a way that would only show up in a later browser
+       session: a TOKEN'S LIFETIME IS THE ZONE SESSION'S, strictly shorter than this residue's. It names an
+       entry in the trusted zone's in-memory routing table and carries no generation, so a recipe carrying one
+       emits, on resume, an answer under a name that zone never minted — the identical defect the 'g' record
+       closes for a WorldId and remote_object.c REFUSES for an export id. A recipe half built on that sentence
+       would produce an answer nobody can route.
+       WHAT IS ACTUALLY MISSING IS THE PROGRAM, not the name of the question. The record can be re-asked by the
+       zone for free (it is re-asked already, for the unstarted case); what a park cannot yet do is give up a
+       cross-agent program MID-RUN and have the resumed session re-run it from the start under a question the
+       zone asks again. So: retract a STARTED operation as well — its program's partial work is exactly what a
+       replay throws away for every other program (cold.h), and its completion has not been sent — or state why
+       a half-run peer program is different from every other suspended frame this tier regenerates. */
     DCHECK(!flow_owes_answer(f),
-           "a flow holding a CROSS-AGENT OPERATION was parked — the record and the rendezvous token are not in "
-           "its recipe, so the operation is dropped and the flow that ASKED for it, in another instance, stays "
-           "suspended on an answer nothing will ever send. Park it as what it is: the record and the token are "
-           "text and cross as text, and the answer is the program's COMPLETION, so a resumed flow re-queues the "
-           "program and answers the same token");
+           "a flow holding a STARTED cross-agent operation was parked — its program is mid-run with the zone's "
+           "rendezvous token on the row, and the token may not be written into the recipe (it is the zone's "
+           "name, it has no generation, and it does not outlive that zone's session), so the operation is "
+           "dropped and the flow that ASKED for it, in another instance, stays suspended on an answer nothing "
+           "will ever send. Hand it back the way the UNSTARTED one is handed back — a replay regenerates every "
+           "other program's partial work, and this one has sent no completion — or say what makes a half-run "
+           "peer program different");
     DCHECK(!f->started || f->dec_blob != NULL,
            "a flow that has RUN was parked with no suspended decision state — its path is unrecorded, so "
            "its record would name no segment and it would resume as a from-baseline flow, re-exploring the "
