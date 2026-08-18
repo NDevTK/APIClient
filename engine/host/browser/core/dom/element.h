@@ -76,9 +76,29 @@ JSValue element_proto(JSContext *ctx);
 
    A KIND MUST ANSWER BOTH DIRECTIONS FROM THE ATTRIBUTE ALONE. That is the test for whether something belongs
    in this enum, and it is also why core/html/global_attributes.c's six enumerated globals are not rows: their
-   getters walk ANCESTORS. */
-enum { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_STRING_NULLABLE, REFLECT_URL };
-typedef struct { const char *idl; const char *attr; int kind; } ElReflect;
+   getters walk ANCESTORS.
+
+   AN UNSIGNED LONG is §2.6.1's `unsigned long` model, and it is the first kind whose answer is not the
+   attribute's bytes: §2.3.4.2's rules parse them and the reflection then applies its OWN range. The range and
+   the default are §2.6.2's `[ReflectRange]` and `[ReflectDefault]`, declared per row below, and they are NOT
+   the same mechanism — a value outside a RANGE is pulled to the nearest end, a value that fails to PARSE falls
+   to the default. `<td colspan="0">` is 1 (the range starts at 1) and `<td colspan="x">` is also 1 (the
+   default), by two different steps that happen to agree here and do not for `rowspan`, whose range starts at
+   0 and whose default is 1. */
+enum { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_STRING_NULLABLE, REFLECT_URL, REFLECT_ULONG };
+/* The numeric fields are TRAILING so that every row declaring none of them is unchanged — an omitted brace
+   initialiser zeroes them, and each is read only through the `has_` flag beside it. That flag is a POSITIVE
+   statement that the IDL declares no default/range, never a hole a `?:` fills: §2.6.1's steps ask "if the
+   reflected IDL attribute HAS a default value", so absence is one of the algorithm's own branches. */
+typedef struct {
+    const char *idl;
+    const char *attr;
+    int         kind;
+    long long   dflt;       /* §2.6.2 [ReflectDefault] — read only when has_dflt */
+    bool        has_dflt;
+    long long   rmin, rmax; /* §2.6.2 [ReflectRange] — read only when has_range */
+    bool        has_range;
+} ElReflect;
 
 /* Install an interface's OWN reflections on its prototype. Each is assigned a magic out of one shared registry,
    so the two bodies that implement every reflection still take exactly one index. */

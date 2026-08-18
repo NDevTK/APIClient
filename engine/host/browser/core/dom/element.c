@@ -63,6 +63,7 @@
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
+#include "core/html/integer_microsyntax.h"
 #include "core/url/url.h"
 #include <lexbor/ns/ns.h>
 
@@ -1615,6 +1616,61 @@ static JSValue el_reflect_url(JSContext *ctx, lxb_dom_element_t *el, JSValue raw
     return out;
 }
 
+/* §2.6.1's getter for a reflected `unsigned long`. `raw` is the content attribute's value or JS_NULL when it is
+ * absent, and is CONSUMED — this kind has no early return for the absent case, so both paths land on the same
+ * steps and an unset `<col>` answers 1 rather than the empty string every other kind answers.
+ *
+ * THE RANGE AND THE DEFAULT ARE TWO DIFFERENT STEPS AND THEY DO NOT AGREE. A value that PARSES but sits outside
+ * `[minimum, maximum]` is pulled to the nearest end — but only when the member is CLAMPED TO THE RANGE, which
+ * is the whole of what §2.6.2's `[ReflectRange]` adds; a value that does not parse at all falls to
+ * `[ReflectDefault]`, or to `minimum` when there is none. `<td rowspan="99999">` is 65534 and
+ * `<td rowspan="x">` is 1, from a range whose maximum is 65534 and a default of 1 — one member, two answers,
+ * neither reachable from the other.
+ *
+ * AN OVERFLOWING RUN IS ABOVE THE MAXIMUM, NOT A PARSE ERROR. §2.3.4.2 has no upper bound, so the digits of
+ * `span="99999999999"` denote a number larger than any maximum this platform declares;
+ * core/html/integer_microsyntax.h reports that as `overflow` rather than wrapping, and it lands on the clamp
+ * exactly as 4000 does. Calling it a parse failure would answer the DEFAULT — 1 where a browser says 1000.
+ *
+ * THE ANSWER IS A NUMBER, so a concolic attribute keeps its provenance THROUGH the parse: the real rules run on
+ * the concrete example and the numeric result is re-wrapped, the shape el_reflect_url uses. */
+static JSValue el_reflect_ulong(JSContext *ctx, const ElReflect *r, JSValue raw)
+{
+    JSValue concrete = concolic_is(raw) ? concolic_example(ctx, raw) : JS_DupValue(ctx, raw);
+    long long minimum = r->has_range ? r->rmin : 0;
+    long long maximum = r->has_range ? r->rmax : 2147483647LL;
+    long long answer;
+    HtmlInteger n;
+    const char *s = NULL;
+    size_t len = 0;
+    bool ok = false;
+
+    DCHECK(r->kind == REFLECT_ULONG, "el_reflect_ulong was handed a row of another kind");
+    DCHECK(!r->has_range || r->rmin <= r->rmax,
+           "a [ReflectRange] was declared with its ends swapped — §2.6.2's list is (clampedMin, clampedMax) in "
+           "that order, and a reversed pair clamps every value to the smaller end");
+    if (JS_IsString(concrete)) {
+        s = JS_ToCStringLen(ctx, &len, concrete);
+        if (!s) { JS_FreeValue(ctx, concrete); JS_FreeValue(ctx, raw); return JS_EXCEPTION; }
+        ok = html_parse_non_negative_integer(s, len, &n);
+    }
+    JS_FreeValue(ctx, concrete);
+
+    if (ok && !n.overflow && n.value >= minimum && n.value <= maximum) answer = n.value;
+    else if (ok && r->has_range) answer = (!n.overflow && n.value < minimum) ? minimum : maximum;
+    else if (r->has_dflt) answer = r->dflt;
+    else answer = minimum;
+    if (s) JS_FreeCString(ctx, s);
+
+    {
+        JSValue out = JS_NewInt64(ctx, answer);
+
+        if (concolic_is(raw)) out = concolic_builtin_hook(ctx, raw, r->idl, out);
+        JS_FreeValue(ctx, raw);
+        return out;
+    }
+}
+
 static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     lxb_dom_element_t *el = element_of_value(this_val);
@@ -1624,6 +1680,8 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
            "a reflected property was declared with a magic the registry does not name");
     if (!el) return g_reflect[magic].kind == REFLECT_BOOL ? JS_FALSE
                   : g_reflect[magic].kind == REFLECT_STRING_NULLABLE ? JS_NULL
+                  : g_reflect[magic].kind == REFLECT_ULONG
+                    ? el_reflect_ulong(ctx, &g_reflect[magic], JS_NULL)
                   : JS_NewStringLen(ctx, "", 0);
     /* §2.2.1 a BOOLEAN reflection is the attribute's PRESENCE, not its value — `<input disabled>` and
        `<input disabled="false">` are both disabled, and a string reflection here would report "false".
@@ -1642,6 +1700,8 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
     JS_FreeValue(ctx, nv);
     /* §2.6.1's URL getter step 2a is the SAME answer the plain string reflection gives for an absent attribute
        ("if contentAttributeValue is null, then return the empty string"), so only the present case diverges. */
+    if (g_reflect[magic].kind == REFLECT_ULONG)
+        return el_reflect_ulong(ctx, &g_reflect[magic], r);   /* both the present and the absent value */
     if (!JS_IsNull(r))
         return g_reflect[magic].kind == REFLECT_URL ? el_reflect_url(ctx, el, r, g_reflect[magic].idl) : r;
     /* §2.6.1's two string models differ EXACTLY here: `DOMString` reads an absent attribute as the empty
@@ -1675,6 +1735,31 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
        attribute". The declared type is IDL_DOMSTRING_NULLABLE, so `undefined` is already this null. */
     if (g_reflect[magic].kind == REFLECT_STRING_NULLABLE && JS_IsNull(val)) {
         dom_cow_remove_attribute(el, g_reflect[magic].attr);
+        return JS_UNDEFINED;
+    }
+    /* §2.6.1's `unsigned long` SETTER, and the sentence that makes it not the getter's mirror: "Clamped to the
+       range has no effect on the setter steps." So `[ReflectRange]` is absent from these steps entirely and
+       `td.colSpan = 5000` WRITES 5000 — the attribute holds it and only the getter clamps, which is what
+       `td.colSpan = 5000; td.getAttribute('colspan')` reads back in a browser. What the setter does use is the
+       DEFAULT: newValue starts at minimum, becomes defaultValue if the member has one, and becomes the given
+       value only when that is in [minimum, 2147483647]. The declared IDL_UNSIGNED_LONG has already applied
+       §3.2.4's modulo, so this runs none of the page's code and the value can only be 0..4294967295 — a page
+       writing 3000000000 lands above 2147483647 and gets the default written, not a wrap. */
+    if (g_reflect[magic].kind == REFLECT_ULONG) {
+        /* minimum is 0 until a [ReflectPositive] kind exists; it is spelled so the day it does, this reads. */
+        long long minimum = 0, given = 0, newValue;
+
+        JS_ToInt64(ctx, &given, val);
+        newValue = g_reflect[magic].has_dflt ? g_reflect[magic].dflt : minimum;
+        if (given >= minimum && given <= 2147483647LL) newValue = given;
+        /* "converted to the shortest possible string representing the number as a valid non-negative integer" —
+           §2.3.4.2's production: base ten, no sign, no leading zeros. That is ECMAScript's own ToString of the
+           number for every value this can hold, so it is the ENGINE's conversion and never a printf format, for
+           the reason core/html/number_microsyntax.h gives at §2.3.4.3's counterpart. */
+        verified = JS_ToString(ctx, JS_NewInt64(ctx, newValue));
+        if (JS_IsException(verified)) return JS_EXCEPTION;
+        el_set_attribute_internal(ctx, this_val, g_reflect[magic].attr, verified);
+        JS_FreeValue(ctx, verified);
         return JS_UNDEFINED;
     }
     {
@@ -1779,11 +1864,20 @@ int element_declare_reflections(JSContext *ctx, const ElReflect *r, int n)
         case REFLECT_STRING:          t = IDL_DOMSTRING; break;
         case REFLECT_STRING_NULLABLE: t = IDL_DOMSTRING_NULLABLE; break;
         case REFLECT_URL:             t = IDL_USVSTRING; break;
+        case REFLECT_ULONG:           t = IDL_UNSIGNED_LONG; break;
         default:
             t = IDL_ANY;
             DFAIL("a reflection was declared with a kind §2.6.1 has no processing model for — give the kind "
                   "its IDL type here and its getter steps in js_el_reflect_get");
         }
+        /* §2.6.2 restricts BOTH augmenting attributes by TYPE — `[ReflectRange]` "must only be used on
+           attributes with a type of unsigned long", `[ReflectDefault]` on double, long or unsigned long — so a
+           row carrying either on a kind that has no step reading it is a declaration that silently does
+           nothing. It crashes here instead: the row is written once and read at every get, and a default the
+           getter never consults is indistinguishable from a member with no default at all. */
+        DCHECK(r[i].kind == REFLECT_ULONG || (!r[i].has_range && !r[i].has_dflt),
+               "a reflection declared [ReflectRange] or [ReflectDefault] on a kind whose steps do not read "
+               "them — §2.6.2 allows neither outside the numeric types");
         g_reflect_set[g_reflect_n] = idl_setter_id(ctx, t, false, js_el_reflect_set, g_reflect_n);
         g_reflect_n++;
     }

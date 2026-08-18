@@ -70,6 +70,10 @@ static const ElReflect R_HTML[] = {
     { "nonce", "nonce", REFLECT_STRING }, { "popover", "popover", REFLECT_STRING },
     { "hidden", "hidden", REFLECT_BOOL }, { "inert", "inert", REFLECT_BOOL },
     { "autofocus", "autofocus", REFLECT_BOOL },
+    /* §2.6.2 `[Reflect, ReflectRange=(0,8)] unsigned long` — no [ReflectDefault], so an unparseable or absent
+       `headingoffset` answers the range's MINIMUM (0) and not a default. HTMLElement is inherited by every
+       element interface, so this one row is the member on 62 of them. */
+    { "headingOffset", "headingoffset", REFLECT_ULONG, 0, false, 0, 8, true },
 };
 
 /* THE PER-INTERFACE REFLECTIONS. Each list is what that interface's IDL declares and nothing else — which is
@@ -210,8 +214,19 @@ static const ElReflect R_MOD[]    = { { "cite", "cite", REFLECT_URL }, { "dateTi
 static const ElReflect R_OL[]     = { { "type", "type", REFLECT_STRING }, { "reversed", "reversed", REFLECT_BOOL } };
 static const ElReflect R_LI[]     = { { "type", "type", REFLECT_STRING } };
 static const ElReflect R_TABLE[]  = { { "summary", "summary", REFLECT_STRING } };
-static const ElReflect R_TD[]     = { { "headers", "headers", REFLECT_STRING }, { "abbr", "abbr", REFLECT_STRING } };
-static const ElReflect R_COL[]    = { { "span", "span", REFLECT_STRING } };
+/* §4.9.11's two SPANS. Both carry `[ReflectDefault=1]` and both carry a `[ReflectRange]`, and the pair is what
+   makes the two steps distinguishable: `colSpan`'s range starts at 1 where its default also is, but
+   `rowSpan`'s starts at 0 while its default is 1 — so `<td rowspan="0">` is 0 (in range) and `<td rowspan="x">`
+   is 1 (unparseable, so the default). A single "fallback" number cannot express that. */
+static const ElReflect R_TD[]     = {
+    { "headers", "headers", REFLECT_STRING }, { "abbr", "abbr", REFLECT_STRING },
+    { "colSpan", "colspan", REFLECT_ULONG, 1, true, 1, 1000, true },
+    { "rowSpan", "rowspan", REFLECT_ULONG, 1, true, 0, 65534, true },
+};
+/* `span` was REFLECT_STRING, so `col.span` answered "" where the IDL declares `unsigned long` and a browser
+   answers 1 — the thirteenth member found by diffing declared kinds against the IDL rather than by the audit,
+   which counted it installed. */
+static const ElReflect R_COL[]    = { { "span", "span", REFLECT_ULONG, 1, true, 1, 1000, true } };
 static const ElReflect R_CANVAS[] = { { "width", "width", REFLECT_STRING }, { "height", "height", REFLECT_STRING } };
 static const ElReflect R_DIALOG[] = { { "open", "open", REFLECT_BOOL } };
 static const ElReflect R_DETAILS[]= { { "name", "name", REFLECT_STRING }, { "open", "open", REFLECT_BOOL } };
