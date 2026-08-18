@@ -470,6 +470,27 @@ static const char *HTML =
     "isc.async = true; iin.disabled = true; iin.disabled = false;"
     "fetch('/api/reflectbool?v=' + (isc.async === true && isc.getAttribute('async') === '' &&"
     " iin.disabled === false && iin.hasAttribute('disabled') === false ? 'isbool' : 'wrong'));"
+    /* §2.6.1's URL REFLECTION: the getter encoding-parses and serializes against the element's NODE DOCUMENT
+       and answers the ABSOLUTE URL, while the attribute keeps exactly what was written. A REFLECT_STRING row
+       answers `/a.mp4` here and is INSTALLED, so the gap auditor scores it complete either way — this endpoint
+       is the only thing in the tree that can tell the two apart. */
+    "var iv = document.createElement('video');"
+    "fetch('/api/refurlabsent?v=' + (iv.src === '' ? 'isempty' : 'wrong'));"
+    "iv.src = '/a.mp4';"
+    "fetch('/api/refurl?v=' + (iv.src === 'https://x.test/a.mp4' &&"
+    " iv.getAttribute('src') === '/a.mp4' ? 'isabs' : 'wrong'));"
+    /* A path-relative value resolves against the document's PATH, not against the origin alone. */
+    "iv.setAttribute('src', 'b.mp4');"
+    "fetch('/api/refurlrel?v=' + (iv.src === 'https://x.test/b.mp4' ? 'isrel' : 'wrong'));"
+    /* Step 3: a value that does not parse reads back as itself — a page that wrote garbage reads garbage. */
+    "iv.src = 'https://[!';"
+    "fetch('/api/refurlbad?v=' + (iv.src === 'https://[!' ? 'israw' : 'wrong'));"
+    /* `src` is HTMLMediaElement's ONE member and not a copy per subclass — the reflection put it on the
+       prototype the IDL names, which the two deleted hand-written accessors also had to get right. */
+    "fetch('/api/refurlproto?v=' + ("
+    " Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'src') === undefined &&"
+    " typeof Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src').get === 'function'"
+    " ? 'isone' : 'wrong'));"
     /* §3.2.2 click() is "fire a synthetic pointer event named click" — the SAME dispatch, so a handler wired
        with onclick sees an untrusted, cancelable, bubbling event and preventDefault reaches the caller. */
     "var ck = 0; var ckt = null; idv.onclick = function(e){ ck++; ckt = e; e.preventDefault(); };"
@@ -3593,6 +3614,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "\"https://x.test/api/reflected\"",  "isreflect"},
         { "\"/api/reflect2\"",   "isreflect2"},
         { "\"/api/reflectbool\"","isbool"  },   /* presence-based booleans, and removeAttribute */
+        /* §2.6.1's URL reflection, which the audit cannot measure: absolute on read, raw in the attribute,
+           path-relative resolved against the document's path, and an unparseable value read back verbatim. */
+        { "\"/api/refurlabsent\"", "isempty" },
+        { "\"/api/refurl\"",       "isabs"   },
+        { "\"/api/refurlrel\"",    "isrel"   },
+        { "\"/api/refurlbad\"",    "israw"   },
+        { "\"/api/refurlproto\"",  "isone"   },
         { "\"/api/click\"",      "isclick" },   /* §3.2.2 click() through the one dispatch machine */
         { "\"/api/cascade\"",    "isspec"  },   /* specificity beats document order — the cascade, not a list */
         { "\"/api/cssinline\"",  "isinline"},   /* inline layers over the author cascade */
