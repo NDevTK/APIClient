@@ -73,9 +73,18 @@ static const ElReflect R_HTML[] = {
 };
 
 /* THE PER-INTERFACE REFLECTIONS. Each list is what that interface's IDL declares and nothing else — which is
-   the whole point of splitting them off Element. */
-/* NO `href` HERE. §4.6.3's mixin owns it, because reading it RESOLVES against the document base and
-   re-serialises — `<a href="/x">` reads back as `http://host/x` — which a plain attribute mirror cannot do. */
+   the whole point of splitting them off Element.
+   THE URL ROWS ARE REFLECT_URL AND WERE REFLECT_STRING. §2.6.2's `[ReflectURL]` is a `USVString` whose getter
+   encoding-parses and serializes against the element's node document, so `<img src="/x">` reads back
+   `https://host/x`; the mirror answered `/x` for twelve members across as many interfaces. The gap auditor
+   could not see it — every one of them was INSTALLED and scored complete, and only the declared kind said what
+   value it would answer with. A reflection is a pair of names AND a type; two of the three were right. */
+/* NO `href` HERE, and the reason is not that a mirror cannot resolve one — core/dom/element.c's REFLECT_URL
+   does exactly that. It is that §4.6.3's `href` is `[ReflectSetter]` and not `[ReflectURL]`: its getter is the
+   URL RECORD's serialization, shared with the ten sibling members (`protocol`, `host`, `pathname`, …) that
+   re-parse and write the same attribute back, and it falls back to the RAW attribute where §2.6.1 falls back to
+   a scalar value string. Same for `<base href>` and `form.action`, which the IDL also declares
+   `[ReflectSetter]` and whose getters have their own fallbacks (the fallback base URL, the document's URL). */
 static const ElReflect R_ANCHOR[] = {
     { "target", "target", REFLECT_STRING },
     { "rel", "rel", REFLECT_STRING }, { "download", "download", REFLECT_STRING },
@@ -87,7 +96,7 @@ static const ElReflect R_AREA[] = {   /* `href` is §4.6.3's, as on <a> */
     { "rel", "rel", REFLECT_STRING }, { "alt", "alt", REFLECT_STRING },
 };
 static const ElReflect R_LINK[] = {
-    { "href", "href", REFLECT_STRING }, { "rel", "rel", REFLECT_STRING },
+    { "href", "href", REFLECT_URL }, { "rel", "rel", REFLECT_STRING },
     { "type", "type", REFLECT_STRING }, { "media", "media", REFLECT_STRING },
     { "as", "as", REFLECT_STRING }, { "crossOrigin", "crossorigin", REFLECT_STRING },
     { "integrity", "integrity", REFLECT_STRING }, { "referrerPolicy", "referrerpolicy", REFLECT_STRING },
@@ -98,21 +107,21 @@ static const ElReflect R_LINK[] = {
    setter's step 1 CLEARS that flag whatever value it is given — so a boolean reflection answers a different
    question in both directions. core/html/html_script.c owns it, beside the flag. */
 static const ElReflect R_SCRIPT[] = {
-    { "src", "src", REFLECT_STRING }, { "type", "type", REFLECT_STRING },
+    { "src", "src", REFLECT_URL }, { "type", "type", REFLECT_STRING },
     { "integrity", "integrity", REFLECT_STRING }, { "crossOrigin", "crossorigin", REFLECT_STRING },
     { "referrerPolicy", "referrerpolicy", REFLECT_STRING },
     { "defer", "defer", REFLECT_BOOL },
     { "noModule", "nomodule", REFLECT_BOOL },
 };
 static const ElReflect R_IMG[] = {
-    { "src", "src", REFLECT_STRING }, { "srcset", "srcset", REFLECT_STRING },
+    { "src", "src", REFLECT_URL }, { "srcset", "srcset", REFLECT_STRING },
     { "sizes", "sizes", REFLECT_STRING }, { "alt", "alt", REFLECT_STRING },
     { "useMap", "usemap", REFLECT_STRING }, { "crossOrigin", "crossorigin", REFLECT_STRING },
     { "referrerPolicy", "referrerpolicy", REFLECT_STRING }, { "loading", "loading", REFLECT_STRING },
     { "decoding", "decoding", REFLECT_STRING }, { "isMap", "ismap", REFLECT_BOOL },
 };
 static const ElReflect R_IFRAME[] = {
-    { "src", "src", REFLECT_STRING }, { "srcdoc", "srcdoc", REFLECT_STRING },
+    { "src", "src", REFLECT_URL }, { "srcdoc", "srcdoc", REFLECT_STRING },
     { "name", "name", REFLECT_STRING }, { "allow", "allow", REFLECT_STRING },
     { "referrerPolicy", "referrerpolicy", REFLECT_STRING }, { "loading", "loading", REFLECT_STRING },
     { "allowFullscreen", "allowfullscreen", REFLECT_BOOL },
@@ -132,7 +141,7 @@ static const ElReflect R_INPUT[] = {
     { "max", "max", REFLECT_STRING }, { "step", "step", REFLECT_STRING },
     { "formAction", "formaction", REFLECT_STRING }, { "formMethod", "formmethod", REFLECT_STRING },
     { "formEnctype", "formenctype", REFLECT_STRING }, { "formTarget", "formtarget", REFLECT_STRING },
-    { "src", "src", REFLECT_STRING }, { "alt", "alt", REFLECT_STRING },
+    { "src", "src", REFLECT_URL }, { "alt", "alt", REFLECT_STRING },
     { "disabled", "disabled", REFLECT_BOOL }, { "required", "required", REFLECT_BOOL },
     { "readOnly", "readonly", REFLECT_BOOL }, { "multiple", "multiple", REFLECT_BOOL },
     { "defaultChecked", "checked", REFLECT_BOOL }, { "formNoValidate", "formnovalidate", REFLECT_BOOL },
@@ -164,12 +173,12 @@ static const ElReflect R_META[]   = {
 };
 static const ElReflect R_BASE[]   = { { "href", "href", REFLECT_STRING }, { "target", "target", REFLECT_STRING } };
 static const ElReflect R_SOURCE[] = {
-    { "src", "src", REFLECT_STRING }, { "type", "type", REFLECT_STRING },
+    { "src", "src", REFLECT_URL }, { "type", "type", REFLECT_STRING },
     { "srcset", "srcset", REFLECT_STRING }, { "sizes", "sizes", REFLECT_STRING },
     { "media", "media", REFLECT_STRING },
 };
 static const ElReflect R_TRACK[]  = {
-    { "src", "src", REFLECT_STRING }, { "srclang", "srclang", REFLECT_STRING },
+    { "src", "src", REFLECT_URL }, { "srclang", "srclang", REFLECT_STRING },
     { "label", "label", REFLECT_STRING }, { "kind", "kind", REFLECT_STRING },
     { "default", "default", REFLECT_BOOL },
 };
@@ -177,13 +186,13 @@ static const ElReflect R_TRACK[]  = {
    HTMLMediaElement's, and they live on THAT prototype (core/html/media_element.c) rather than being repeated
    here per tag — which is what the IDL says and what makes `video.src` one member rather than two. */
 static const ElReflect R_VIDEO[]  = {
-    { "poster", "poster", REFLECT_STRING }, { "playsInline", "playsinline", REFLECT_BOOL },
+    { "poster", "poster", REFLECT_URL }, { "playsInline", "playsinline", REFLECT_BOOL },
 };
 static const ElReflect R_OBJECT[] = {
-    { "data", "data", REFLECT_STRING }, { "type", "type", REFLECT_STRING },
+    { "data", "data", REFLECT_URL }, { "type", "type", REFLECT_STRING },
     { "name", "name", REFLECT_STRING },
 };
-static const ElReflect R_EMBED[]  = { { "src", "src", REFLECT_STRING }, { "type", "type", REFLECT_STRING } };
+static const ElReflect R_EMBED[]  = { { "src", "src", REFLECT_URL }, { "type", "type", REFLECT_STRING } };
 /* §4.2.6's `media` is the element's ONE plain reflection. `disabled` used to sit beside it as a
    REFLECT_BOOL and it is not a reflection at all — HTML defines no `disabled` content attribute on a style
    element, and the IDL attribute's getter and setter steps read and write the ASSOCIATED CSS STYLE SHEET's
@@ -196,8 +205,8 @@ static const ElReflect R_FIELDSET[] = { { "name", "name", REFLECT_STRING }, { "d
 static const ElReflect R_OPTGROUP[] = { { "label", "label", REFLECT_STRING }, { "disabled", "disabled", REFLECT_BOOL } };
 static const ElReflect R_MAP[]    = { { "name", "name", REFLECT_STRING } };
 static const ElReflect R_TIME[]   = { { "dateTime", "datetime", REFLECT_STRING } };
-static const ElReflect R_QUOTE[]  = { { "cite", "cite", REFLECT_STRING } };
-static const ElReflect R_MOD[]    = { { "cite", "cite", REFLECT_STRING }, { "dateTime", "datetime", REFLECT_STRING } };
+static const ElReflect R_QUOTE[]  = { { "cite", "cite", REFLECT_URL } };
+static const ElReflect R_MOD[]    = { { "cite", "cite", REFLECT_URL }, { "dateTime", "datetime", REFLECT_STRING } };
 static const ElReflect R_OL[]     = { { "type", "type", REFLECT_STRING }, { "reversed", "reversed", REFLECT_BOOL } };
 static const ElReflect R_LI[]     = { { "type", "type", REFLECT_STRING } };
 static const ElReflect R_TABLE[]  = { { "summary", "summary", REFLECT_STRING } };
