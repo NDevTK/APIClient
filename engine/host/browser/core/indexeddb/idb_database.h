@@ -27,6 +27,12 @@ void idb_database_free(JSRuntime *rt);
 JSValue idb_database_find(JSContext *ctx, const char *name);
 JSValue idb_database_create(JSContext *ctx, const char *name);
 
+/* §5.3 step 11's "DELETE db" — the database LEAVES §2.1's set, so a later open of that name reaches step 6 and
+   creates a fresh one at version 0. It is a removal and not a teardown because §5.3 step 9 has already waited
+   until every connection associated with it is closed, and a closed connection has left the set §2.1.1 keeps;
+   both of those are asserted here, where the record is dropped, rather than trusted from the caller. */
+void idb_database_destroy(JSContext *ctx, JSValueConst db);
+
 /* §2.1's VERSION. There is no setter, and its absence is the standard's own sentence rather than a gap: "The
    only way to change the version is using an upgrade transaction", and there is no transaction yet — so the
    version a database has is the 0 it was created with, and the member that changes it arrives with §5.1's

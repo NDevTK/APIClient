@@ -1,4 +1,4 @@
-/* INDEXED DATABASE §2.8.2's CONNECTION QUEUE, §5.1's open and §5.7's upgrade. See idb_open.c. */
+/* INDEXED DATABASE §2.8.2's CONNECTION QUEUE, §5.1's open, §5.3's delete and §5.7's upgrade. See idb_open.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_INDEXEDDB_IDB_OPEN_H
 #define ENGINE_HOST_BROWSER_CORE_INDEXEDDB_IDB_OPEN_H
 
@@ -6,7 +6,7 @@
 
 #include "quickjs.h"
 
-/* Declared once per AGENT: the three step machines §5.1, §5.7 and §4.3's completion task are, §2.8.2's
+/* Declared once per AGENT: the five step machines §5.1, §5.3 (two), §5.7 and §4.3's completion task are, §2.8.2's
    connection queues, and the two rendezvous this component registers with (a connection becoming closed, an
    upgrade transaction finishing). The queues and the blocked list are agent-lifetime JS values, so there is a
    release. */
@@ -26,5 +26,15 @@ void idb_open_free(JSRuntime *rt);
  * "version is undefined", and collapsing the two would make `open(name)` on a database at version 7 an upgrade
  * to 1 and then a VersionError. OWNED. */
 JSValue idb_open_request(JSContext *ctx, const char *name, double version, bool has_version);
+
+/* §4.3's `deleteDatabase(name)` — everything after its own two synchronous steps, which are the storage key
+ * and nothing else (there is no version, so there is no TypeError and no coercion of the page's).
+ *
+ * The shape is `open`'s exactly: "let request be a new open request", "run these steps in parallel: let result
+ * be the result of deleting a database ... queue a database task to [settle the request and fire]", "return a
+ * new IDBOpenDBRequest object for request". It is filed in the SAME §2.8.2 connection queue for `name` as an
+ * open is, which is what makes `deleteDatabase(n)` immediately followed by `open(n, 1)` an ordering rather
+ * than a race, and it starts §5.3 when the queue's head is now this request. OWNED. */
+JSValue idb_delete_request(JSContext *ctx, const char *name);
 
 #endif

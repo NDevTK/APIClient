@@ -1,5 +1,5 @@
-/* INDEXED DATABASE §2.8.2's CONNECTION QUEUE, §5.1's OPEN A DATABASE CONNECTION, §5.7's UPGRADE A DATABASE and
- * §4.3's completion task — the algorithm a page reaches every other part of this standard through.
+/* INDEXED DATABASE §2.8.2's CONNECTION QUEUE and the algorithms PROCESSED IN IT — §5.1's OPEN A DATABASE
+ * CONNECTION, §5.3's DELETE A DATABASE, §5.7's UPGRADE A DATABASE, and §4.3's two completion tasks.
  *
  * WHY IT IS THREE MACHINES AND NOT ONE, WHICH IS THE WHOLE SHAPE OF THIS FILE. §5.1 is written as one algorithm
  * with FOUR waits in it, and the four are not the same kind of thing:
@@ -31,10 +31,23 @@
  * queue is keyed by NAME alone. It is why §2.1's "a database has AT MOST ONE upgrade transaction" is an
  * invariant rather than a hope, and why the DCHECKs below can assert that the entry being resumed is the head.
  *
- * WHAT IS ABSENT AND WHY. §5.3's DELETE A DATABASE and §4.3's `deleteDatabase` are not here: they are a second
- * algorithm over the same queue and the same `blocked` machinery, and writing them beside §5.1 before §5.1 has
- * run would be writing two things at once. `databases()` reports §2.1's set and needs a promise plus an
- * IDBDatabaseInfo sequence. Both are honestly ABSENT and the IDL gap auditor lists them. */
+ * WHY §5.3 IS IN THIS FILE AND NOT A COMPONENT OF ITS OWN. It is a SECOND ALGORITHM over the FIRST's state:
+ * the same connection queue, the same entry record, the same step-10.5 blocked list, the same
+ * `versionchange`-then-`blocked` walk, and the same §4.3 completion task and dequeue. Splitting it out would
+ * export ten of this file's internals — the entry accessors, the queue, the blocked list, the shared step
+ * state, the enqueue — which is a wider seam than the thing it separates, and each of those exports is a
+ * second way to reach a queue whose whole contract is that there is one. So the file's contract is §2.8.2's
+ * QUEUE and everything processed in it, and what distinguishes §5.1's entry from §5.3's is one field (E_KIND)
+ * that three places read: the rendezvous that resumes a parked entry, and the completion task's two arms.
+ *
+ * §5.3 IS §5.1 WITH THREE DIFFERENCES AND NOT A COPY OF IT: its openConnections is ALL of the database's
+ * connections (there is no connection of its own to except), its two version change events carry a NULL new
+ * version rather than the requested one, and where §5.1 continues into §5.7's upgrade it continues into a
+ * removal from §2.1's set. Everything else — the ordering, the selection-then-fire split, the once-only
+ * `blocked`, the park — is the same mechanism reached through the same code.
+ *
+ * WHAT IS ABSENT AND WHY. Nothing of §4.3's is: `databases()` needs neither this queue nor an entry (it is a
+ * promise over §2.1's set, with no connection to wait for), so it is a member in indexed_db.c beside `cmp`. */
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -54,8 +67,15 @@
 #include "core/indexeddb/idb_transaction.h"
 #include "core/indexeddb/idb_version_change_event.h"
 
-/* §5.1's OWN LOCALS, on the record that carries them across the algorithm's hand-offs. */
+/* §5.1's AND §5.3's OWN LOCALS, on the record that carries them across the algorithm's hand-offs. */
 #define E_REQUEST      "request"          /* §2.8.1's open request */
+/* WHICH OF §4.3's TWO ALGORITHMS THIS ENTRY IS. §2.8.1's open request is "used when opening a connection OR
+   deleting a database", so the queue holds both and three places have to tell them apart: the rendezvous that
+   decides which machine resumes a parked entry, and §4.3's completion task, whose success arm is a connection
+   and a plain `success` for one and undefined and an IDBVersionChangeEvent for the other. It is on the ENTRY
+   rather than derived from which fields are set, because "E_CONNECTION is null" is also true of an open that
+   has not reached step 8 yet. */
+#define E_KIND         "kind"
 #define E_NAME         "name"             /* the database name, which is also this entry's queue */
 #define E_VERSION      "version"          /* §5.1's `version` once step 5 has decided it */
 #define E_HAS_VERSION  "hasVersion"       /* whether §4.3's caller gave one — step 5 branches on it */
@@ -68,7 +88,11 @@
    re-entered with its request's answer, and re-deriving the target there would re-run the very filter the fire
    has just invalidated. See OPN_STAGES. */
 #define E_TARGET       "versionChangeTarget"
-#define E_OLD_VERSION  "oldVersion"       /* §5.7 step 7's `old version`, fired at step 9.5 */
+/* THE VERSION THE DATABASE HELD BEFORE THIS ALGORITHM RAN — §5.7 step 7's `old version`, fired at step 9.5,
+   and §5.3 step 10's `version`, which is that algorithm's RETURN VALUE and what §4.3's delete completion task
+   fires as the success event's `oldVersion`. One field because it is one fact, and §5.3 step 4's "otherwise,
+   return 0 (zero)" is the 0 idb_open_request leaves here. */
+#define E_OLD_VERSION  "oldVersion"
 #define E_BLOCKED      "blockedFired"     /* whether step 10.4 has already fired `blocked` */
 /* §5.1 step 10.8's condition. §5.7 step 10 waits for the upgrade transaction to FINISH, and which of the two
    endings it reached is the whole of what that step asks — see idb_open_upgrade_finished. FALSE for an open
@@ -82,6 +106,10 @@ static JSValue g_queues = JS_UNDEFINED;   /* §2.8.2: name -> Array of entries, 
 static JSValue g_blocked = JS_UNDEFINED;
 
 static int g_open_stepid = -1, g_upgrade_stepid = -1, g_result_stepid = -1;
+static int g_delete_stepid = -1, g_delete_finish_stepid = -1;
+
+/* E_KIND's two values. §2.8.1's open request is one type used by two algorithms; this is which. */
+enum { IDB_REQ_OPEN, IDB_REQ_DELETE };
 
 /* ---- the entry, and §2.8.2's queue ------------------------------------------------------------------------ */
 
@@ -140,6 +168,16 @@ static bool entry_flag(JSContext *ctx, JSValueConst e, const char *field)
     b = JS_ToBool(ctx, v);
     JS_FreeValue(ctx, v);
     return b;
+}
+
+static int entry_kind(JSContext *ctx, JSValueConst e)
+{
+    int kind = (int)entry_num(ctx, e, E_KIND);
+
+    DCHECK(kind == IDB_REQ_OPEN || kind == IDB_REQ_DELETE,
+           "an open request in §2.8.2's queue is neither §5.1's nor §5.3's — E_KIND is written once, by the "
+           "entry's own constructor, and only those two exist");
+    return kind;
 }
 
 /* The entry's own queue. OWNED; built on first use, because §2.8.2's queue exists for a (storage key, name)
@@ -560,9 +598,23 @@ static const JSTrampStepDef js_idb_open_def = {
     .steps = OPN_STEPS
 };
 
-/* §5.2's rendezvous — a connection has become CLOSED, so every open request parked at step 10.5 asks its own
-   question again. It runs no page code (it reads flags the connection wrote) and it is not a machine, because
-   step 10.5's continuation is step 10.6, which IS one. */
+/* WHICH MACHINE CONTINUES AN ENTRY THAT HAS FINISHED WAITING FOR CONNECTIONS TO CLOSE. §5.1 step 10.5's
+   continuation is step 10.6, "run upgrade a database"; §5.3 step 9's is step 10, "let version be db's version".
+   Both are machines, and which one an entry resumes into is a fact about WHICH ALGORITHM the entry is — asked
+   of E_KIND rather than stored as a step id, because a step id is a handle this process handed out and the
+   entry outlives the process (it parks to the cold tier and resumes in a later session), while the kind is
+   what §2.8.1 says the request is. */
+static int entry_wait_continuation(JSContext *ctx, JSValueConst e)
+{
+    int id = entry_kind(ctx, e) == IDB_REQ_OPEN ? g_upgrade_stepid : g_delete_finish_stepid;
+
+    DCHECK(id >= 0, "an entry finished waiting before idb_open_init registered the machine that continues it");
+    return id;
+}
+
+/* §5.2's rendezvous — a connection has become CLOSED, so every open request parked at §5.1 step 10.5 or §5.3
+   step 9 asks its own question again. It runs no page code (it reads flags the connection wrote) and it is not
+   a machine, because each of those two continuations IS one. */
 static void idb_open_connection_closed(JSContext *ctx, JSValueConst connection)
 {
     uint32_t i, n;
@@ -580,12 +632,237 @@ static void idb_open_connection_closed(JSContext *ctx, JSValueConst connection)
             JS_DefinePropertyValueUint32(ctx, g_blocked, k, JS_GetPropertyUint32(ctx, g_blocked, k + 1),
                                          JS_PROP_C_W_E);
         JS_SetPropertyStr(ctx, g_blocked, "length", JS_NewUint32(ctx, n - 1));
-        entry_enqueue(ctx, g_upgrade_stepid, e);
+        entry_enqueue(ctx, entry_wait_continuation(ctx, e), e);
         JS_FreeValue(ctx, e);
         n--;
         i--;
     }
 }
+
+/* ---- §5.3's DELETE A DATABASE, steps 4 through 9 ----------------------------------------------------------- */
+
+/* THE SELECTION AND THE FIRE ARE TWO STAGES here for the reason OPN_STAGES states at length and does not
+   restate: step 6's own note is that firing the event may close the very connections the walk is standing on,
+   so the stage that DECIDES holds no request and the stage that HOLDS one decides nothing. */
+#define DEL_STAGES(X) \
+    X(DEL_FIND,    "Indexed Database §5.3 steps 4-5 — ONE O(1) engine action: the database named `name` is " \
+                   "looked up in this storage key (a name this storage key has no database for is step 4's " \
+                   "\"otherwise, return 0 (zero)\") and openConnections is the set of ALL connections " \
+                   "associated with it") \
+    X(DEL_VERSIONCHANGE, "Indexed Database §5.3 step 6's SELECTION, one connection per turn (the next entry " \
+                         "of openConnections that does not have its close pending flag set)") \
+    X(DEL_VERSIONCHANGE_FIRE, "Indexed Database §5.3 step 6's FIRE (fire a version change event named " \
+                              "versionchange at the selected entry with db's version and NULL); step 7's " \
+                              "\"wait for all of the events to be fired\" is this walk's own turns") \
+    X(DEL_BLOCKED, "Indexed Database §5.3 step 8's DECISION (whether any of the connections in " \
+                   "openConnections are still not closed, asked once with every cursor at rest)") \
+    X(DEL_BLOCKED_FIRE, "Indexed Database §5.3 step 8's FIRE (fire a version change event named blocked at " \
+                        "request with db's version and null)") \
+    X(DEL_WAIT,    "Indexed Database §5.3 step 9 (wait until all connections in openConnections are closed)")
+enum { DEL_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DEL_STEPS[] = { DEL_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_idb_delete_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSIdbOpenState *s = st;
+    JSValueConst entry = task_entry(&s->hdr);
+    JSValue db, req;
+    double db_version;
+    int r;
+
+    open_state_start(s);
+    STEP_DISPATCH(DEL_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(DEL_FIND);
+        JS_FreeValue(ctx, cb_result);
+        entry_assert_head(ctx, entry);
+        DCHECK(entry_kind(ctx, entry) == IDB_REQ_DELETE,
+               "§5.3's machine ran for an entry that is not a delete request");
+        {
+            JSValue nv = entry_get(ctx, entry, E_NAME);
+            const char *name = JS_ToCString(ctx, nv);
+
+            CHECK(name != NULL, "IndexedDB: an §5.3 entry could not report its own database name");
+            /* Step 4: "Let db be the database named name in storageKey, if one exists. Otherwise, return 0
+               (zero)." The 0 is what idb_delete_request already left in E_OLD_VERSION, and it is a SUCCESS —
+               `deleteDatabase` of a name that was never opened fires `success` with oldVersion 0, which is
+               what makes it the first statement of half the corpus's fixtures. */
+            db = idb_database_find(ctx, name);
+            JS_FreeCString(ctx, name);
+            JS_FreeValue(ctx, nv);
+        }
+        if (JS_IsNull(db)) {
+            JS_FreeValue(ctx, db);
+            entry_enqueue(ctx, g_result_stepid, entry);
+            return JS_STEP_DONE;
+        }
+        {
+            /* Step 5: "Let openConnections be the set of all connections associated with db." SNAPSHOTTED
+               here, where the step computes it, for the reason §5.1 step 10.1 is: step 9 waits for THESE, and
+               §2.1.1's live set loses each connection as it closes. Unlike §5.1's there is nothing to except —
+               this algorithm has no connection of its own. */
+            JSValue all = idb_database_connections(ctx, db), set = JS_NewArray(ctx);
+            uint32_t i, n = open_list_len(ctx, all);
+
+            CHECK(!JS_IsException(set), "IndexedDB: §5.3 step 5's openConnections could not be allocated");
+            for (i = 0; i < n; i++)
+                JS_DefinePropertyValueUint32(ctx, set, i, JS_GetPropertyUint32(ctx, all, i), JS_PROP_C_W_E);
+            JS_FreeValue(ctx, all);
+            entry_set(ctx, entry, E_OPEN_CONNS, set);
+            entry_set(ctx, entry, E_CURSOR, JS_NewInt32(ctx, 0));
+        }
+        entry_set(ctx, entry, E_DB, db);
+        STEP_GOTO(s->hdr.stage, DEL_VERSIONCHANGE, &s->phase, NULL);
+        return JS_STEP_YIELD;
+
+    STEP_ARM(DEL_VERSIONCHANGE);
+        JS_FreeValue(ctx, cb_result);
+        {
+            JSValue set = entry_get(ctx, entry, E_OPEN_CONNS), target = JS_NULL;
+            uint32_t i = (uint32_t)entry_num(ctx, entry, E_CURSOR), n = open_list_len(ctx, set);
+
+            while (i < n) {
+                JS_FreeValue(ctx, target);
+                target = JS_GetPropertyUint32(ctx, set, i);
+                DCHECK(idb_connection_is(target), "§5.3 step 5's openConnections held something that is not a "
+                                                  "connection");
+                if (!idb_connection_close_pending(ctx, target))
+                    break;
+                i++;
+            }
+            JS_FreeValue(ctx, set);
+            entry_set(ctx, entry, E_CURSOR, JS_NewInt32(ctx, (int32_t)i));
+            if (i >= n) {
+                JS_FreeValue(ctx, target);
+                STEP_GOTO(s->hdr.stage, DEL_BLOCKED, &s->phase, NULL);
+                return JS_STEP_YIELD;
+            }
+            entry_set(ctx, entry, E_TARGET, target);
+            STEP_GOTO(s->hdr.stage, DEL_VERSIONCHANGE_FIRE, &s->phase, NULL);
+            return JS_STEP_YIELD;
+        }
+
+    STEP_ARM(DEL_VERSIONCHANGE_FIRE);
+        {
+            JSValue target = entry_get(ctx, entry, E_TARGET);
+
+            DCHECK(idb_connection_is(target), "§5.3 step 6's fire was entered with no connection selected — "
+                                              "DEL_VERSIONCHANGE records the one it picked and is the only "
+                                              "stage that points here");
+            db = entry_get(ctx, entry, E_DB);
+            db_version = idb_database_version(ctx, db);
+            JS_FreeValue(ctx, db);
+            /* "…with db's version and NULL." The null new version is the whole of what a page's
+               `versionchange` handler tells a delete from an upgrade by, so `has_new` is false and not a 0. */
+            r = idb_fire_version_change_event_run(ctx, &s->phase, STEP_CB(s->cb), target, "versionchange",
+                                                  db_version, 0, /*has_new*/ false, &s->ev, cb_result,
+                                                  NULL, out_cb, out_argc);
+            JS_FreeValue(ctx, target);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+            JS_FreeValue(ctx, s->ev);
+            s->ev = JS_UNDEFINED;
+            entry_set(ctx, entry, E_TARGET, JS_NULL);
+            entry_set(ctx, entry, E_CURSOR,
+                      JS_NewInt32(ctx, (int32_t)((uint32_t)entry_num(ctx, entry, E_CURSOR) + 1)));
+            STEP_GOTO(s->hdr.stage, DEL_VERSIONCHANGE, &s->phase, NULL);
+            return JS_STEP_YIELD;
+        }
+
+    STEP_ARM(DEL_BLOCKED);
+        /* Step 8, ONCE — for the reason OPN_BLOCKED states: the flag is set BEFORE the fire, because a
+           `blocked` handler that closes the connections would otherwise flip the decision under the fire's own
+           resume leg. */
+        JS_FreeValue(ctx, cb_result);
+        if (!open_still_blocked(ctx, entry) || entry_flag(ctx, entry, E_BLOCKED)) {
+            STEP_GOTO(s->hdr.stage, DEL_WAIT, &s->phase, NULL);
+            return JS_STEP_YIELD;
+        }
+        entry_set(ctx, entry, E_BLOCKED, JS_TRUE);
+        STEP_GOTO(s->hdr.stage, DEL_BLOCKED_FIRE, &s->phase, NULL);
+        return JS_STEP_YIELD;
+
+    STEP_ARM(DEL_BLOCKED_FIRE);
+        req = entry_get(ctx, entry, E_REQUEST);
+        db = entry_get(ctx, entry, E_DB);
+        db_version = idb_database_version(ctx, db);
+        JS_FreeValue(ctx, db);
+        r = idb_fire_version_change_event_run(ctx, &s->phase, STEP_CB(s->cb), req, "blocked", db_version, 0,
+                                              /*has_new*/ false, &s->ev, cb_result, NULL, out_cb, out_argc);
+        JS_FreeValue(ctx, req);
+        if (r > 0) return r;
+        if (r < 0) return JS_STEP_ABRUPT;
+        JS_FreeValue(ctx, s->ev);
+        s->ev = JS_UNDEFINED;
+        STEP_GOTO(s->hdr.stage, DEL_WAIT, &s->phase, NULL);
+        return JS_STEP_YIELD;
+
+    STEP_ARM(DEL_WAIT);
+        JS_FreeValue(ctx, cb_result);
+        /* Step 9: "Wait until all connections in openConnections are closed." The SAME wait §5.1 step 10.5 is,
+           discharged by the SAME park — a `versionchange` handler that ignores the event leaves its connection
+           open until the page decides otherwise, and no queue can order that. The entry parks on the blocked
+           list at ~zero CPU and idb_open_connection_closed resumes it into the continuation its kind names. */
+        if (open_still_blocked(ctx, entry)) {
+            JS_DefinePropertyValueUint32(ctx, g_blocked, open_list_len(ctx, g_blocked),
+                                         JS_DupValue(ctx, entry), JS_PROP_C_W_E);
+            return JS_STEP_DONE;
+        }
+        entry_enqueue(ctx, g_delete_finish_stepid, entry);
+        return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_idb_delete_def = {
+    sizeof(JSIdbOpenState), js_idb_delete_step, NULL, 0, .visit = js_idb_open_visit,
+    .algorithm = "Indexed Database §5.3's delete a database, steps 4 through 9", .steps = DEL_STEPS
+};
+
+/* ---- §5.3's DELETE A DATABASE, steps 10 through 12 --------------------------------------------------------- */
+
+#define DELFIN_STAGES(X) \
+    X(DELFIN_DELETE, "Indexed Database §5.3 steps 10-12 — ONE O(1) engine action: version is db's version, db " \
+                     "is deleted from §2.1's set, and that version is what the algorithm returns")
+enum { DELFIN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DELFIN_STEPS[] = { DELFIN_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_idb_delete_finish_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb,
+                                     int *out_argc)
+{
+    JSIdbOpenState *s = st;
+    JSValueConst entry = task_entry(&s->hdr);
+    JSValue db;
+
+    (void)out_cb; (void)out_argc;
+    open_state_start(s);
+    STEP_DISPATCH(DELFIN_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(DELFIN_DELETE);
+        JS_FreeValue(ctx, cb_result);
+        entry_assert_head(ctx, entry);
+        DCHECK(entry_kind(ctx, entry) == IDB_REQ_DELETE,
+               "§5.3's second machine ran for an entry that is not a delete request");
+        DCHECK(!open_still_blocked(ctx, entry),
+               "§5.3 step 10 was reached with a connection in openConnections still not closed — step 9 is the "
+               "wait, and the only two ways here are that wait finding nothing left and the rendezvous that "
+               "asks the same question");
+        db = entry_get(ctx, entry, E_DB);
+        DCHECK(JS_IsObject(db), "§5.3 step 10 was reached with no database — step 4's \"otherwise, return 0\" "
+                                "ends the algorithm at DEL_FIND and never reaches this machine");
+        /* Steps 10-12: "Let version be db's version. Delete db. Return version." The version is recorded
+           BEFORE the deletion because it is what §4.3's completion task fires as the success event's
+           `oldVersion`, and after the deletion there is no record to read it from. */
+        entry_set(ctx, entry, E_OLD_VERSION, JS_NewFloat64(ctx, idb_database_version(ctx, db)));
+        idb_database_destroy(ctx, db);
+        JS_FreeValue(ctx, db);
+        entry_set(ctx, entry, E_DB, JS_NULL);
+        entry_enqueue(ctx, g_result_stepid, entry);
+        return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_idb_delete_finish_def = {
+    sizeof(JSIdbOpenState), js_idb_delete_finish_step, NULL, 0, .visit = js_idb_open_visit,
+    .algorithm = "Indexed Database §5.3's delete a database, steps 10 through 12", .steps = DELFIN_STEPS
+};
 
 /* ---- §5.7's UPGRADE A DATABASE ----------------------------------------------------------------------------- */
 
@@ -801,21 +1078,32 @@ static void idb_open_upgrade_finished(JSContext *ctx, JSValueConst tx, bool abor
     JS_FreeValue(ctx, conn);
 }
 
-/* ---- §5.1 steps 10.7-10.8 and §4.3's COMPLETION TASK -------------------------------------------------------
+/* ---- §5.1 steps 10.7-10.8 and §4.3's TWO COMPLETION TASKS --------------------------------------------------
  *
  * §4.3's own question-box is why these are not §5.9's and §5.10's steps: "there is no transaction associated
  * with the request (at this point), so those steps — which activate an associated transaction before dispatch
  * and deactivate the transaction after dispatch — do not apply." So the event is a plain §2.9 dispatch and
- * nothing follows it but the queue moving on. */
+ * nothing follows it but the queue moving on.
+ *
+ * ONE MACHINE FOR BOTH BECAUSE THE TWO TASKS DIFFER IN ONE SENTENCE. `open`'s and `deleteDatabase`'s completion
+ * tasks are written out separately in §4.3 and are the same three steps with the same error arm — result
+ * undefined, error set, done set, an `error` event with bubbles and cancelable both true. Their SUCCESS arms
+ * are what differ: `open` reports the connection and fires a plain `success`, while `deleteDatabase` reports
+ * undefined and fires "a version change event named success at request with result and null" — an
+ * IDBVersionChangeEvent, because §4.3's second question-box says the page is owed the `oldVersion` the deleted
+ * database had. E_KIND is the sentence; everything around it is shared, including the dequeue that lets the
+ * next request in the queue be processed, which is the one thing neither task may have a second copy of. */
 
 #define RES_STAGES(X) \
     X(RES_CHECK,   "Indexed Database §5.1 steps 10.7-10.8 (a connection that was closed, or a request whose " \
-                   "error is set, is an AbortError — and the second closes the connection first)") \
-    X(RES_SETTLE,  "Indexed Database §4.3's open() completion task, steps 1-3 of either arm — ONE O(1) " \
-                   "engine action: the request's result or its error is written and its done flag is set") \
-    X(RES_FIRE,    "Indexed Database §4.3's open() completion task, the fire (an event named success at " \
-                   "request, or one named error with its bubbles and cancelable attributes initialized to " \
-                   "true)") \
+                   "error is set, is an AbortError — and the second closes the connection first). §5.3 has no " \
+                   "connection and no such steps, so a delete passes through") \
+    X(RES_SETTLE,  "Indexed Database §4.3's completion task, steps 1-3 of either arm — ONE O(1) engine " \
+                   "action: the request's result (open's connection, delete's undefined) or its error is " \
+                   "written and its done flag is set") \
+    X(RES_FIRE,    "Indexed Database §4.3's completion task, the fire (an event named success at request, a " \
+                   "version change event named success with the deleted database's version and null, or one " \
+                   "named error with its bubbles and cancelable attributes initialized to true)") \
     X(RES_DEQUEUE, "Indexed Database §2.8.2 (this open request has run to completion, so the next request in " \
                    "the connection queue is processed)")
 enum { RES_STAGES(JS_STEP_STAGE_ENUM) };
@@ -836,6 +1124,11 @@ static int js_idb_result_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
         entry_assert_head(ctx, entry);
         req = entry_get(ctx, entry, E_REQUEST);
         conn = entry_get(ctx, entry, E_CONNECTION);
+        /* §5.1's steps 10.7-10.8 are about a CONNECTION, and §5.3 never makes one — so the delete arm falls
+           through both tests below rather than being branched around them, and this is what says so. */
+        DCHECK(entry_kind(ctx, entry) == IDB_REQ_OPEN || JS_IsNull(conn),
+               "a §5.3 delete request reached §4.3's completion task holding a connection — §5.3 has no step "
+               "that makes one, so an entry with both is an open request mislabelled as a delete");
         err = idb_request_error(ctx, req);
         if (JS_IsNull(err) && !entry_flag(ctx, entry, E_ABORTED) && idb_connection_is(conn)) {
             /* Step 10.7: "If connection was closed, return a newly created AbortError DOMException." A
@@ -856,6 +1149,11 @@ static int js_idb_result_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
             idb_request_set_error(ctx, req, open_dom_exception(ctx, "AbortError",
                                                                "the upgrade transaction was aborted"));
         }
+        /* §4.3 step 5.2, for BOTH members: "set request's processed flag to true", between the in-parallel
+           algorithm answering and the completion task running. §5.7 step 9 states it again for the one open
+           that runs an upgrade, which is why an open that did NOT — the second `open(name)` of a session, and
+           every delete — reached its completion task without it. */
+        idb_request_set_processed(ctx, req, true);
         JS_FreeValue(ctx, err);
         JS_FreeValue(ctx, conn);
         JS_FreeValue(ctx, req);
@@ -866,11 +1164,17 @@ static int js_idb_result_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
         JS_FreeValue(ctx, cb_result);
         req = entry_get(ctx, entry, E_REQUEST);
         err = idb_request_error(ctx, req);
-        if (JS_IsNull(err)) {
+        if (JS_IsNull(err) && entry_kind(ctx, entry) == IDB_REQ_OPEN) {
             conn = entry_get(ctx, entry, E_CONNECTION);
             DCHECK(idb_connection_is(conn), "§4.3's completion task found neither a connection nor an error — "
                                             "§5.1 answers with one or the other on every path");
             idb_request_set_result(ctx, req, conn);
+            idb_request_set_error(ctx, req, JS_UNDEFINED);
+        } else if (JS_IsNull(err)) {
+            /* `deleteDatabase`'s success arm: "set request's result to UNDEFINED". §5.3's answer — the version
+               the database had, or 0 — is not the result; it is the success event's `oldVersion`, which
+               RES_FIRE reads off the entry. */
+            idb_request_set_result(ctx, req, JS_UNDEFINED);
             idb_request_set_error(ctx, req, JS_UNDEFINED);
         } else {
             /* "Set request's result to undefined. Set request's error to result." */
@@ -885,6 +1189,21 @@ static int js_idb_result_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
 
     STEP_ARM(RES_FIRE);
         req = entry_get(ctx, entry, E_REQUEST);
+        if (!s->did_throw && entry_kind(ctx, entry) == IDB_REQ_DELETE) {
+            /* `deleteDatabase`'s success: "fire a version change event named success at request with result
+               and null." The result is §5.3's return — the version the database HELD — and §4.3's second
+               question-box is why it is an IDBVersionChangeEvent rather than a plain one: the page is owed
+               that `oldVersion`, and a `newVersion` of null is what says the database is gone rather than
+               upgraded. This event does NOT bubble and is NOT cancelable; only the error arm below is. */
+            r = idb_fire_version_change_event_run(ctx, &s->phase, STEP_CB(s->cb), req, "success",
+                                                  entry_num(ctx, entry, E_OLD_VERSION), 0, /*has_new*/ false,
+                                                  &s->ev, cb_result, NULL, out_cb, out_argc);
+            JS_FreeValue(ctx, req);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+            STEP_GOTO(s->hdr.stage, RES_DEQUEUE, &s->phase, NULL);
+            return JS_STEP_YIELD;
+        }
         if (JS_IsUndefined(s->ev)) {
             /* An `error` here BUBBLES and is CANCELABLE, and a `success` is neither — §4.3 spells both out,
                and the difference is what lets a page cancel the default the error would otherwise carry. */
@@ -938,20 +1257,26 @@ static const JSTrampStepDef js_idb_result_def = {
     .steps = RES_STEPS
 };
 
-/* ---- §4.3's open(), everything after its two synchronous steps -------------------------------------------- */
+/* ---- §4.3's open() and deleteDatabase(), everything after their synchronous steps -------------------------- */
 
-JSValue idb_open_request(JSContext *ctx, const char *name, double version, bool has_version)
+/* THE ONE PLACE AN OPEN REQUEST IS FILED IN §2.8.2's QUEUE. §5.1 steps 1-3 and §5.3 steps 1-3 are the same
+   three sentences — "let queue be the connection queue for storageKey and name; add request to queue; wait
+   until all previous requests in queue have been processed" — and a second copy of them would be a second
+   answer to "who is the head", which is the invariant every machine in this file asserts on entry. `stepid`
+   is which algorithm the entry starts, and it is a parameter rather than a branch on `kind` for the one reason
+   the entry cannot be asked yet: it is what this function is building.
+   Returns the REQUEST, owned; the member hands it straight back to the page. */
+static JSValue open_request_enqueue(JSContext *ctx, const char *name, int kind, int stepid, double version,
+                                    bool has_version)
 {
     JSValue req, entry, q;
     uint32_t n;
 
-    DCHECK(name != NULL, "§4.3's open was given no database name");
-    DCHECK(!has_version || version >= 1, "§4.3's open reached §5.1 with a zero version — its first step is "
-                                         "\"if version is 0 (zero), throw a TypeError\", reported by the "
-                                         "member before this");
-    req = idb_request_new_open(ctx);
+    req = idb_request_new_open(ctx);   /* §2.8.1: one type of request, "used when opening a connection OR
+                                          deleting a database" */
     entry = idl_slots_new(ctx);
     CHECK(!JS_IsException(entry), "IndexedDB: §5.1's entry could not be allocated");
+    entry_set(ctx, entry, E_KIND, JS_NewInt32(ctx, kind));
     entry_set(ctx, entry, E_REQUEST, JS_DupValue(ctx, req));
     entry_set(ctx, entry, E_NAME, JS_NewString(ctx, name));
     entry_set(ctx, entry, E_VERSION, JS_NewFloat64(ctx, has_version ? version : 0));
@@ -965,18 +1290,39 @@ JSValue idb_open_request(JSContext *ctx, const char *name, double version, bool 
     entry_set(ctx, entry, E_BLOCKED, JS_FALSE);
     entry_set(ctx, entry, E_ABORTED, JS_FALSE);
 
-    /* §5.1 steps 1-2: "let queue be the connection queue for storageKey and name. Add request to queue." */
+    /* §5.1 steps 1-2 and §5.3 steps 1-2: "let queue be the connection queue for storageKey and name. Add
+       request to queue." */
     q = open_queue(ctx, name, /*create*/ true);
     n = open_list_len(ctx, q);
     JS_DefinePropertyValueUint32(ctx, q, n, JS_DupValue(ctx, entry), JS_PROP_C_W_E);
     JS_FreeValue(ctx, q);
     /* Step 3: "Wait until all previous requests in queue have been processed." An entry that arrives at the
        HEAD starts now; one behind another starts when that one's §4.3 completion task dequeues it. Which is
-       what makes the wait an ORDERING rather than a loop. */
+       what makes the wait an ORDERING rather than a loop — and what makes `deleteDatabase(n)` immediately
+       followed by `open(n, 1)`, which is how half this standard's fixtures begin, run in that order without
+       either of them knowing the other exists. */
     if (n == 0)
-        entry_enqueue(ctx, g_open_stepid, entry);
+        entry_enqueue(ctx, stepid, entry);
     JS_FreeValue(ctx, entry);
     return req;   /* "Return a new IDBOpenDBRequest object for request." */
+}
+
+JSValue idb_open_request(JSContext *ctx, const char *name, double version, bool has_version)
+{
+    DCHECK(name != NULL, "§4.3's open was given no database name");
+    DCHECK(!has_version || version >= 1, "§4.3's open reached §5.1 with a zero version — its first step is "
+                                         "\"if version is 0 (zero), throw a TypeError\", reported by the "
+                                         "member before this");
+    return open_request_enqueue(ctx, name, IDB_REQ_OPEN, g_open_stepid, version, has_version);
+}
+
+JSValue idb_delete_request(JSContext *ctx, const char *name)
+{
+    DCHECK(name != NULL, "§4.3's deleteDatabase was given no database name");
+    /* §5.3 takes NO version — the algorithm's `version` is its own step 10, read off the database it is about
+       to delete — so the entry's requested version is absent and E_HAS_VERSION is false. §5.1's step 5 is the
+       only reader of that pair and it is not on any path a delete takes. */
+    return open_request_enqueue(ctx, name, IDB_REQ_DELETE, g_delete_stepid, 0, /*has_version*/ false);
 }
 
 void idb_open_init(JSContext *ctx)
@@ -992,6 +1338,8 @@ void idb_open_init(JSContext *ctx)
     g_open_stepid = JS_RegisterStepDef(rt, &js_idb_open_def);
     g_upgrade_stepid = JS_RegisterStepDef(rt, &js_idb_upgrade_def);
     g_result_stepid = JS_RegisterStepDef(rt, &js_idb_result_def);
+    g_delete_stepid = JS_RegisterStepDef(rt, &js_idb_delete_def);
+    g_delete_finish_stepid = JS_RegisterStepDef(rt, &js_idb_delete_finish_def);
     /* The two rendezvous this algorithm's un-dischargeable waits need. Registered HERE, in the declaration of
        the component that performs §5.1, which is what makes each of them one question with one asker. */
     idb_connection_set_closed_hook(idb_open_connection_closed);
@@ -1001,6 +1349,8 @@ void idb_open_init(JSContext *ctx)
     agent_state_id("idb_open", &g_open_stepid, "§5.1's open machine");
     agent_state_id("idb_open", &g_upgrade_stepid, "§5.1's run-an-upgrade-transaction machine");
     agent_state_id("idb_open", &g_result_stepid, "§5.1's deliver-the-result machine");
+    agent_state_id("idb_open", &g_delete_stepid, "§5.3's delete-a-database machine");
+    agent_state_id("idb_open", &g_delete_finish_stepid, "§5.3's remove-the-database machine");
 }
 
 void idb_open_free(JSRuntime *rt)
@@ -1016,4 +1366,5 @@ void idb_open_free(JSRuntime *rt)
     g_queues = JS_UNDEFINED;
     g_blocked = JS_UNDEFINED;
     g_open_stepid = g_upgrade_stepid = g_result_stepid = -1;
+    g_delete_stepid = g_delete_finish_stepid = -1;
 }

@@ -363,6 +363,31 @@ JSValue idb_database_create(JSContext *ctx, const char *name)
     return db;
 }
 
+void idb_database_destroy(JSContext *ctx, JSValueConst db)
+{
+    JSValue name = idb_database_name(ctx, db);
+    JSValue connections = idb_database_connections(ctx, db);
+    JSValue upgrade = JS_GetPropertyStr(ctx, db, IDB_DB_UPGRADE);
+    const char *cname = JS_ToCString(ctx, name);
+
+    DCHECK(!JS_IsUndefined(g_databases), "§2.1's set of databases was written before idb_database_init built "
+                                         "it");
+    CHECK(cname != NULL, "IndexedDB: a database being deleted could not report its own name");
+    DCHECK(idb_list_len(ctx, connections) == 0,
+           "§5.3 step 11 deleted a database that still has connections associated with it — step 9 waits until "
+           "all of them are closed and §5.2 step 3 is what makes a closed one leave §2.1.1's set, so a "
+           "non-empty set here means the wait was discharged by something other than the connections closing");
+    DCHECK(JS_IsNull(upgrade),
+           "§5.3 step 11 deleted a database carrying an upgrade transaction — §2.8.2 processes each open "
+           "request to completion before the next, so the open that created one has finished and §5.4 step "
+           "2.5.1 or §5.5 step 7.1 has cleared it");
+    idb_slots_delete(ctx, g_databases, cname);
+    JS_FreeCString(ctx, cname);
+    JS_FreeValue(ctx, upgrade);
+    JS_FreeValue(ctx, connections);
+    JS_FreeValue(ctx, name);
+}
+
 JSValue idb_database_name(JSContext *ctx, JSValueConst db)
 {
     JSValue v = JS_GetPropertyStr(ctx, db, IDB_DB_NAME);

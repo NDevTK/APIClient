@@ -17,11 +17,16 @@
  * core/indexeddb/idb_open.c is. The member is therefore short and the algorithm is not: what is here is the
  * TypeError for a zero version, the storage key, and the IDBOpenDBRequest the page holds while the rest runs.
  *
- * `deleteDatabase` (§5.3) and `databases()` are still ABSENT, and each is a whole algorithm rather than a
- * member: §5.3 is a second walk over the same connection queue with the same `versionchange`/`blocked`
- * machinery and a different ending, and `databases()` is a promise over §2.1's set. Both are honestly absent —
- * `indexedDB.deleteDatabase(...)` is a TypeError naming the member — and Web IDL is the auditor that lists
- * them.
+ * `deleteDatabase` is the SAME two synchronous steps minus the version — the storage key and the request — and
+ * for the same reason its algorithm is not here: §5.3 is a second walk over the SAME §2.8.2 connection queue
+ * with the same `versionchange`/`blocked` machinery and a different ending, so it lives beside §5.1 in
+ * core/indexeddb/idb_open.c and this file holds only the member. That siblinghood is not cosmetic: the two
+ * share a queue, so `deleteDatabase(n)` followed by `open(n, 1)` is an ordering the standard guarantees, and
+ * it is the first two statements of half this standard's own fixtures.
+ *
+ * `databases()` is still ABSENT — it is a promise over §2.1's set and needs neither the queue nor a request,
+ * so it is a member of this file and not a whole algorithm. It is honestly absent (`indexedDB.databases()` is
+ * a TypeError naming the member) and Web IDL is the auditor that lists it.
  *
  * `cmp` IS COMPLETE, and it is complete because it is §2.4's compare exposed and nothing else: "let a be the
  * result of converting a value to a key with first ... return the results of comparing two keys with a and b".
@@ -53,6 +58,7 @@ static JSClassID g_factory_class;
 static int       g_obj_slot = -1;
 static int       g_id_cmp   = -1;
 static int       g_id_open  = -1;
+static int       g_id_delete = -1;
 
 /* WEB IDL §3.7.5's BRAND CHECK. `IDBFactory.prototype.cmp.call({}, 1, 2)` is a TypeError, and a page tells that
    apart from a "DataError". */
@@ -212,6 +218,35 @@ static JSValue js_idb_open(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     return req;
 }
 
+/* "The deleteDatabase(name) method steps are: let environment be this's relevant settings object. Let
+ * storageKey be the result of running obtain a storage key given environment. If failure is returned, then
+ * throw a SecurityError DOMException and abort these steps. Let request be a new open request. Run these steps
+ * in parallel: ... Return a new IDBOpenDBRequest object for request."
+ *
+ * IT IS SHORTER THAN `open` BY EXACTLY ITS VERSION. There is no zero to refuse, no [EnforceRange] range to
+ * test, and no ToNumber to perform — so nothing here runs the page's code and this is a plain member rather
+ * than a machine. What is left is the storage key and the request, and everything after them is §5.3, which is
+ * core/indexeddb/idb_open.c because it is processed in the same §2.8.2 connection queue `open` is. */
+static JSValue js_idb_delete_database(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                      int magic)
+{
+    JSValue req;
+    const char *name;
+
+    (void)argc; (void)magic;
+    if (!factory_brand(ctx, this_val)) return JS_EXCEPTION;
+    /* The same refusal `open` makes and for the same reason: an OPAQUE ORIGIN has no storage key, so a
+       sandboxed document must not reach — or empty — this agent's databases. */
+    if (origin_is_opaque(window_proxy_origin(document_window_proxy(ctx))))
+        return JS_ThrowDOMException(ctx, "SecurityError",
+                                    "a document with an opaque origin has no storage key");
+    name = JS_ToCString(ctx, argv[0]);
+    if (name == NULL) return JS_EXCEPTION;
+    req = idb_delete_request(ctx, name);
+    JS_FreeCString(ctx, name);
+    return req;
+}
+
 /* `[SameObject] readonly attribute IDBFactory indexedDB` — the guarantee comes from the realm slot rather than
    from a cache in the getter, the same way §6.4.4's UserActivation and Storage §2's StorageManager do. */
 static JSValue js_idb_get_factory(JSContext *ctx, JSValueConst this_val, int magic)
@@ -232,6 +267,7 @@ static void indexed_db_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(proto), "IDBFactory.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "IDBFactory");
     idl_install_method(ctx, proto, "open", 1, g_id_open);
+    idl_install_method(ctx, proto, "deleteDatabase", 1, g_id_delete);
     idl_install_method(ctx, proto, "cmp", 2, g_id_cmp);
     JS_SetClassProto(ctx, g_factory_class, JS_DupValue(ctx, proto));
 
@@ -256,6 +292,7 @@ void indexed_db_init(JSContext *ctx)
     JSClassDef d = { "IDBFactory" };
     static const IdlArgType CMP_ARGS[2] = { IDL_ANY, IDL_ANY };
     static const IdlArgType OPEN_ARGS[2] = { IDL_DOMSTRING, IDL_UNRESTRICTED_DOUBLE };
+    static const IdlArgType DELETE_ARGS[1] = { IDL_DOMSTRING };
 
     DCHECK(g_obj_slot < 0, "indexed_db_init ran twice — the class and the slot are declared once per AGENT");
     JS_NewClassID(JS_GetRuntime(ctx), &g_factory_class);
@@ -271,5 +308,8 @@ void indexed_db_init(JSContext *ctx)
        `open("db", -1)` would open version 18446744073709551615 where every browser throws. */
     g_id_open = idl_method_id(ctx, OPEN_ARGS, 2, js_idb_open, 0);
     idl_optional_from(1);
+    /* `[NewObject] IDBOpenDBRequest deleteDatabase(DOMString name)` — one required argument, no optional
+       version, which is the whole of what its declaration differs from `open`'s by. */
+    g_id_delete = idl_method_id(ctx, DELETE_ARGS, 1, js_idb_delete_database, 0);
     realm_declare_intrinsic(indexed_db_install_realm);
 }
