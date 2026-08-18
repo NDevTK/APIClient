@@ -57,10 +57,17 @@
  * A STRING HANDLER IS A SCRIPT, and an @S sink. `setTimeout("evil()")` compiles and runs its argument in the
  * global scope, which is the engine's existing "queue this source as a script flow" path — the same one an
  * injected <script> takes. It is not evaluated here: this component does not run page code.
- * THE SECOND HALF OF THAT SENTENCE WAS PROSE ONLY, and the body is where it became true. Nothing called an @S
- * detector from anywhere in this engine's production path — `solve_eval_sink` had ONE caller in the tree and
- * it was the fixture — so solve_js.c's whole ECMAScript §12 derivation was reachable only from a test and a
- * real page's `setTimeout(taintedString)` was detected by nothing. Worse, it did not merely go unnoticed: the
+ * THE SECOND HALF OF THAT SENTENCE WAS PROSE ONLY, and the body is where it became true. When this arm landed
+ * nothing called an @S detector from anywhere in this engine's production path — `solve_eval_sink` had ONE
+ * caller in the tree and it was the fixture — so solve_js.c's whole ECMAScript §12 derivation was reachable
+ * only from a test and a real page's `setTimeout(taintedString)` was detected by nothing.
+ * THIS ARM IS NOW ONE OF TWO SEAMS RATHER THAN THE ONLY ONE, and the split is ownership. The ECMAScript
+ * intrinsics announce themselves (quickjs's JS_SetEvalSinkHook, which solve_init registers), so 19.2.1 eval in
+ * both its direct spellings, indirect eval, 20.2.1.1.1's `new Function` and ShadowRealm.prototype.evaluate all
+ * reach the same detector without this component. What stays HERE is exactly what the engine cannot see: 8.6's
+ * handler is a DOMString this component compiles LATER through `g_script_sink`, so the value has to be
+ * announced where it ARRIVES and not where some other algorithm evaluates it.
+ * Worse, it did not merely go unnoticed: the
  * union's non-callable arm resolves to DOMString, idl_args.c passes unknown external input across the boundary
  * AS ITSELF so opacity survives the coercion, and the body's `JS_IsString` assertion then fired on it — a
  * canonical XSS sink took the document down on an assert against attacker input. */

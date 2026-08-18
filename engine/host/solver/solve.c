@@ -181,8 +181,11 @@ enum { SINK_DERIVE_NONE = 0, SINK_DERIVE_HTML, SINK_DERIVE_JS };
    reader of a PoC could not tell one that fires at parse time from one that needs a navigation, which §S(d)
    requires every emitted PoC to carry.
    `fires_on` IS THE ORACLE'S OWN SEMANTICS, read off the oracle rather than chosen beside it:
-     - the eval oracle hands the sink's own argument to the flow's program queue, because that is what the sink
-       itself does with it — so a fired eval PoC runs the instant the page reaches that call;
+     - the eval sink IS its own oracle: 19.2.1 and 20.2.1.1.1 announce their source to this file and then
+       COMPILE AND RUN it on the flow's own tramp chain, so a fired eval PoC runs the instant the page reaches
+       that call, in the scope and strictness the spec gives it. Nothing here models that evaluation — a
+       modelled one beside the real one is a second executor, and the one that stood here was the weaker of
+       the two;
      - html_fire_walk runs `onload` and `onerror` and NOTHING else (the AUTO-firing handlers — `onmouseover`
        needs interaction) over markup it has just parsed, and solve_html.c's constructed escapes end in an
        auto-firing element for exactly that reason, so a fired HTML PoC runs at insertion and never needs a
@@ -279,6 +282,14 @@ void solve_init(JSContext *ctx) {
     DCHECK(!strstr(SOLVE_JS_LOCATOR, SOLVE_HTML_LOCATOR) && !strstr(SOLVE_HTML_LOCATOR, SOLVE_JS_LOCATOR),
            "the @S markup and JS context locators are not distinct — one contains the other, so the substring "
            "test that routes a probe's output to its own derivation answers for both");
+    /* THE JS-CONTEXT SINK'S OWN SEAM. The other two classes are reached from the browser component that
+       performs them — a markup sink from the innerHTML setter, a URL sink from the navigation — because the
+       host owns those operations. `eval` and the Function constructor are ECMAScript intrinsics that this host
+       does not own, so the ENGINE announces them (JSEvalSinkFunc) and the detector is registered here, in the
+       same call that installs the marker they fire. Without it this file's whole JS-context half was reachable
+       only from a fixture that had overridden the global `eval` with a stand-in, and a real page's
+       `eval(prefix + attackerInput)` was detected by nothing at all. */
+    JS_SetEvalSinkHook(solve_eval_sink);
     JSValue g = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, g, "X9", JS_NewCFunction(ctx, js_x9, "X9", 0));
     JS_FreeValue(ctx, g);
@@ -461,20 +472,31 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
                inert locator and no X9 (that is what makes it inert), a derived BREAKOUT carries X9 and no
                locator (it is built from the §12 state, not from the probe's token). It is a partition, not an
                ordering heuristic.
-               AND IT IS WHAT STOPS EVERY OTHER `eval` IN THE PAGE BEING RE-EXECUTED ONCE PER CANDIDATE. This
-               used to queue whatever string reached the sink, tested only by "the value is not concolic" —
-               which is also true of every literal the page evals — so each candidate flow re-ran the page's own
-               code at a cost of the page's evals times the number of breakouts tried. */
+               AND IT IS WHAT KEEPS THE PAGE'S OWN EVALS OUT OF THIS SEARCH, which matters more now that the
+               ENGINE announces every one of them rather than a fixture announcing the few it staged. A page
+               calling `eval` on a literal reaches this line during every candidate flow, and the two tests
+               below say exactly what it is: not this search's probe, not this search's breakout, so nothing is
+               derived from it and nothing is counted as having arrived. The bytes are still evaluated — by the
+               engine, once, because that is what the page's own code does — and this file neither performs nor
+               suppresses that. */
             /* ONLY THE BREAKOUT BRANCH IS AN ARRIVAL — see `reached`, and see what counting both cost. */
-            /* IMMEDIATE, because that is what this sink IS. ECMAScript §19.2.1.1 PerformEval pushes
-               evalContext, evaluates the body, pops it and returns that completion into the call expression —
-               so the code an eval sink is handed runs before the next statement of the program that called it,
-               never after the rest of the document. */
+            /* AND THE BREAKOUT BRANCH FIRES NOTHING, because THE SINK ITSELF IS ABOUT TO. This detector used to
+               be reachable only from a fixture whose `eval` was a stand-in that evaluated nothing, so the
+               search had to MODEL the evaluation — queue the sink's own argument back onto the flow as another
+               program, at DYN_POS_IMMEDIATE to stand for 19.2.1.1 running it before the next statement. The
+               engine now announces the REAL 19.2.1 and 20.2.1.1.1, and returns from this call straight into the
+               compile, so a queued copy would be a SECOND executor beside the real one: the breakout would run
+               twice and record its finding twice. It was also the weaker of the two, in two ways the spec
+               names — a DIRECT eval evaluates in the CALLER'S scope with the caller's strictness while a queued
+               program is global, so a breakout naming a local fired here and would not fire in a browser; and
+               20.2.1.1.1 CreateDynamicFunction CREATES a function without CALLING it, so `new Function(payload)`
+               fired here and fires nothing in a browser. Re-execution is the oracle §@S asks for, and the
+               engine's own evaluation IS the re-execution. */
             if (strstr(code, SOLVE_JS_LOCATOR))  derive_js_context(e, code);
-            else if (strstr(code, "X9"))         { breakout_arrived(e); fire_js(code, strlen(code), DYN_POS_IMMEDIATE); }
+            else if (strstr(code, "X9"))         breakout_arrived(e);
             JS_FreeCString(ctx, code);
         }
-        return;                                 /* g_fired reflects the PoC once this flow drains its queue */
+        return;                                 /* the marker records the PoC when the engine runs these bytes */
     }
     if (!concolic_is(arg)) return;              /* detection: not an attacker source -> not a sink */
     const char *shape = concolic_shape_c(arg);
@@ -851,6 +873,12 @@ char *solve_json_array(JSContext *ctx) {
 int solve_count(void) { return g_sinks_n; }
 
 void solve_free(void) {
+    /* THE SEAM IS GIVEN BACK FIRST, and it is an ownership fix rather than tidiness: the engine announces every
+       program evaluation for as long as a hook is installed, and everything below this line frees the store
+       add_pending writes into. A page that evals after the agent's release would be detected into freed
+       memory. NULL is the registration's own word for "no host is listening", which is exactly what this host
+       becomes here. */
+    JS_SetEvalSinkHook(NULL);
     for (int i = 0; i < g_pending_n; i++) {
         for (int c = 0; c < g_pending[i].npl; c++) free(g_pending[i].pl[c]);
         free(g_pending[i].pl);

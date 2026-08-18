@@ -87,12 +87,15 @@
 #include <stdlib.h>
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
-/* the eval host-edge: a code-execution sink — funnel into the @S solver. */
-static JSValue js_eval_sink(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)this_val;
-    if (argc > 0) solve_eval_sink(ctx, argv[0]);
-    return JS_UNDEFINED;
-}
+/* THERE IS NO `eval` STAND-IN HERE, AND ITS ABSENCE IS THE POINT. This fixture used to install a C function
+   named `eval` over the intrinsic, which funnelled its argument into solve_eval_sink and returned undefined —
+   so the eval sink's every probe and every breakout was measured against a function that EVALUATED NOTHING,
+   and the fixture could not have caught the fact that no production call site existed. Worse, shadowing the
+   global made `eval(x)` fail 13.3.6.1's identity test against %eval%, so the rows named for direct eval were
+   never running one. The engine announces the real 19.2.1 and 20.2.1.1.1 now (JS_SetEvalSinkHook, registered
+   by solve_init), so these rows drive the intrinsic and the sink's own evaluation is what fires them.
+   setInnerHTML and setLocation stay stand-ins because what they stand in for is a HOST operation this fixture
+   does not perform; `eval` was never in that class. */
 /* the innerHTML host-edge: an HTML-context sink (setInnerHTML(x) stands in for el.innerHTML = x). */
 static JSValue js_html_sink(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
@@ -2492,7 +2495,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     /* THE FIXTURE'S OWN SURFACE — the @S sinks and the host-edge stand-ins the probes drive. Every one of
        these is this fixture's, which is why it is here and not in the list. */
     JS_SetPropertyStr(ctx, g, "loadScript", JS_NewCFunction(ctx, js_load_script, "loadScript", 1));   /* lazy-chunk load */
-    JS_SetPropertyStr(ctx, g, "eval", JS_NewCFunction(ctx, js_eval_sink, "eval", 1));   /* the eval sink */
+    /* `eval` is NOT installed — see the note where its stand-in used to be defined. The intrinsic is the sink. */
     JS_SetPropertyStr(ctx, g, "setInnerHTML", JS_NewCFunction(ctx, js_html_sink, "setInnerHTML", 1));   /* the innerHTML sink */
     JS_SetPropertyStr(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
     /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call

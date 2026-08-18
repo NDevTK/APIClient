@@ -22,6 +22,20 @@ void solve_free(void);
 
 /* eval(arg): a JS-context code-execution sink. innerHTML=arg: an HTML-context sink. Detection records the
    source; a candidate re-run executes/re-parses the injected value so firing can be observed. */
+/* THE JS ONE IS REACHED DIFFERENTLY FROM THE OTHER TWO, and the difference is OWNERSHIP rather than taste. A
+   markup sink and a URL sink are HOST operations, so the browser component that performs one calls its
+   detector directly. `eval` is not: 19.2.1 "eval ( source )" and 20.2.1.1.1 CreateDynamicFunction are
+   ECMAScript intrinsics inside the engine, so this function is REGISTERED with it (JS_SetEvalSinkHook, from
+   solve_init) and the engine announces every value offered to a program evaluation — direct eval in both its
+   spellings, indirect eval, `new Function`, ShadowRealm.prototype.evaluate — beside HTML 8.6's string handler,
+   which timer.c announces because that arm is the host's. Before that registration existed this function had
+   ONE caller in the whole tree and it was the fixture, so solve_js.c's entire ECMAScript 12 derivation ran
+   only when a test asked for it and a real page's `eval(prefix + attackerInput)` produced no finding.
+   IT IS HANDED BOTH ARMS OF 19.2.1.1 STEP 2 and it needs both: unknown external input is not a String, so
+   `eval(location.hash)` takes step 2 and is DETECTED here, while a candidate run's substitution makes the very
+   same expression a real String whose bytes this function scans for its own locator and its own breakout.
+   AND IT FIRES NOTHING — the engine compiles and runs those bytes the moment this call returns, which is the
+   fire oracle §@S asks for. A modelled evaluation beside the real one runs every PoC twice. */
 void solve_eval_sink(JSContext *ctx, JSValueConst arg);
 void solve_html_sink(JSContext *ctx, JSValueConst arg);
 void solve_url_sink(JSContext *ctx, JSValueConst arg);
