@@ -56,7 +56,14 @@
  *
  * A STRING HANDLER IS A SCRIPT, and an @S sink. `setTimeout("evil()")` compiles and runs its argument in the
  * global scope, which is the engine's existing "queue this source as a script flow" path — the same one an
- * injected <script> takes. It is not evaluated here: this component does not run page code. */
+ * injected <script> takes. It is not evaluated here: this component does not run page code.
+ * THE SECOND HALF OF THAT SENTENCE WAS PROSE ONLY, and the body is where it became true. Nothing called an @S
+ * detector from anywhere in this engine's production path — `solve_eval_sink` had ONE caller in the tree and
+ * it was the fixture — so solve_js.c's whole ECMAScript §12 derivation was reachable only from a test and a
+ * real page's `setTimeout(taintedString)` was detected by nothing. Worse, it did not merely go unnoticed: the
+ * union's non-callable arm resolves to DOMString, idl_args.c passes unknown external input across the boundary
+ * AS ITSELF so opacity survives the coercion, and the body's `JS_IsString` assertion then fired on it — a
+ * canonical XSS sink took the document down on an assert against attacker input. */
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
@@ -68,6 +75,8 @@
 #include "core/realm.h"
 #include "core/dom/document.h"   /* §8.6 compiles a STRING handler in the entry global's document */
 #include "solver/engine.h"
+#include "solver/concolic.h"   /* §8.6's handler may be unknown external input, which crosses the IDL as itself */
+#include "solver/solve.h"      /* …and an unknown handler string is the @S JS-context sink */
 
 /* ONE ENTRY OF §8.6's MAP, as an Array — the shape §8.9's map of animation frame callbacks uses, for the
    reason CLAUDE.md gives: platform data a flow queues is a JS value, so the collector owns it, the COW delta
@@ -443,9 +452,33 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
         JSValue st, nv;
         uint32_t handle = 0;
 
+        /* §8.6's STRING ARM OVER UNKNOWN EXTERNAL INPUT IS A CODE-EXECUTION SINK, NOT A BROKEN INVARIANT.
+           The assertion here used to be `JS_IsString(argv[0])`, and it FIRED on `setTimeout(location.hash)`.
+           The union's non-callable arm resolves to DOMString, and idl_args.c passes unknown external input
+           across the boundary AS ITSELF so that opacity survives the coercion — so a concolic arrives here
+           neither callable nor a string, and asserting on it is asserting on ATTACKER INPUT, which is the one
+           thing §Offensive programming names as never a @WHY. A canonical XSS sink took the document down.
+           AND IT IS THE @S JS-CONTEXT SINK THIS ENGINE HAD NO PRODUCTION CALL SITE FOR. §8.6 creates a classic
+           script from the handler, which is an eval in every sense solve.h means, and `solve_eval_sink` had
+           exactly one caller in the tree: the fixture. So solve_js.c's whole §12 derivation was reachable only
+           from a test, and a real page's `setTimeout(taintedString)` was detected by nothing.
+           WHAT IS QUEUED IS NOTHING, AND THAT IS ABSENCE RATHER THAN A DROP: this engine cannot compile a
+           string it does not have, and the unknown handler names no program. Supplying one is exactly what the
+           @S search does — a candidate run substitutes a concrete breakout at this source, at which point the
+           value IS a string, the branch below queues it as §8.6 requires, and a marker in it fires there. */
+        if (concolic_is(argv[0])) {
+            solve_eval_sink(ctx, argv[0]);
+            st = timer_store(ctx);
+            nv = JS_GetProperty(ctx, st, g_atom_next);
+            JS_ToUint32(ctx, &handle, nv);
+            JS_FreeValue(ctx, nv);
+            JS_SetProperty(ctx, st, g_atom_next, JS_NewUint32(ctx, handle + 1));
+            JS_FreeValue(ctx, st);
+            return JS_NewInt32(ctx, (int32_t)handle);
+        }
         DCHECK(JS_IsString(argv[0]),
-               "setTimeout's handler reached the body neither callable nor a string — the TimerHandler union's "
-               "conversion is the declaration's, not this body's");
+               "setTimeout's handler reached the body neither callable, nor a string, nor unknown external "
+               "input — the TimerHandler union's conversion is the declaration's, not this body's");
         src = JS_ToCString(ctx, argv[0]);
         if (!src)
             return JS_EXCEPTION;
