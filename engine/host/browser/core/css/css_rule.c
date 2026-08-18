@@ -964,24 +964,33 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
 
 /* THE CRASH THAT NAMES WHAT TO BUILD. It is a function so that the at-rule's own name is in the message: the
    reader of a `@WHY` is standing at the rule the page shipped, and "an at-rule" tells them nothing about which
-   interface to write. */
+   interface to write.
+   ITS BUFFER IS SIZED FROM THE FORMAT STRING, so the message cannot be truncated. A fixed 600 could, and did:
+   the text had grown to 839 bytes, so every reader of this `@WHY` got it cut off partway through the list of
+   what is already built and never saw the list of what is not — the one sentence the crash exists to deliver,
+   silently deleted by the one call that was supposed to deliver it. `sizeof` the literal is what it will
+   actually be, and `unbuilt` bounds the name at 64, so the sum is a size that cannot go stale when the next
+   interface is struck off the list. */
 static void rule_unbuilt_fail(const char *name)
 {
-    char msg[600];
+#define RULE_UNBUILT_FMT                                                                                       \
+    "CSSOM §6.4 has no interface built for the at-rule `@%s`, so a stylesheet containing one cannot be "        \
+    "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "            \
+    "CSSMarginRule, §6.4.9's CSSNamespaceRule, CSS Conditional §7.2's CSSConditionRule, §7.3's "                \
+    "CSSMediaRule, CSS Fonts §12.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's CSSKeyframeRule "              \
+    "and CSSKeyframesRule, and CSS Cascade §8.1/§8.2's CSSLayerBlockRule and CSSLayerStatementRule "            \
+    "are built; what remains is CSS Conditional §7.4's CSSSupportsRule (whose condition needs CSS.supports "    \
+    "to evaluate), CSS Cascade 6 §4.1's CSSScopeRule, CSS Contain's CSSContainerRule, CSS Counter Styles 3 "    \
+    "§9.2's CSSCounterStyleRule and CSS Fonts 4 §12.2's CSSFontFeatureValuesRule — the last two have their "    \
+    "§6.4.2 TYPE NUMBER declared (11 and 14) and no interface behind it, which is what puts them on this "      \
+    "list rather than off it. Build the one this names and mint it in rule_from_parse — do NOT skip the "       \
+    "rule, because every index after it would then name a different rule than the page's"
 
-    snprintf(msg, sizeof msg,
-             "CSSOM §6.4 has no interface built for the at-rule `@%s`, so a stylesheet containing one cannot be "
-             "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "
-             "CSSMarginRule, §6.4.9's CSSNamespaceRule, CSS Conditional §7.2's CSSConditionRule, §7.3's "
-             "CSSMediaRule, CSS Fonts §12.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's CSSKeyframeRule "
-             "and CSSKeyframesRule, and CSS Cascade §8.1/§8.2's CSSLayerBlockRule and CSSLayerStatementRule "
-             "are built; what remains is CSS Conditional §7.4's CSSSupportsRule (whose "
-             "condition needs CSS.supports to evaluate), CSS Cascade 6 §4.1's CSSScopeRule and CSS Contain's "
-             "CSSContainerRule. Build the one this names and mint it "
-             "in rule_from_parse — do NOT skip the rule, because every index after it would then name a "
-             "different rule than the page's",
-             name);
+    char msg[sizeof RULE_UNBUILT_FMT + sizeof ((RuleBuild *)0)->unbuilt];
+
+    snprintf(msg, sizeof msg, RULE_UNBUILT_FMT, name);
     DFAIL(msg);
+#undef RULE_UNBUILT_FMT
 }
 
 /* Run one parse into `b`, and answer how many TOP-LEVEL rules it produced OBJECTS for. */
@@ -2705,9 +2714,22 @@ static const struct { const char *name; uint32_t v; } CR_CONSTS[] = {
        and §6.4.2's own `type` table lists both numbers, so the two standards agree about them outright. */
     { "KEYFRAMES_RULE", 7 }, { "KEYFRAME_RULE", 8 },
     { "MARGIN_RULE", 9 }, { "NAMESPACE_RULE", 10 },
+    /* CSS Counter Styles 3 §9.1 "Extensions to the CSSRule interface" — its `partial interface CSSRule`, the
+       same shape the two above have. THE NUMBER IS DECLARED WHETHER OR NOT THE RULE IS BUILT, and that is
+       §6.4.2's own arrangement rather than a shortcut: the constants are a HISTORICAL enumeration a page reads
+       off `CSSRule`, so `CSSRule.COUNTER_STYLE_RULE` is 11 in a document containing no `@counter-style` at all,
+       exactly as `CHARSET_RULE` is 2 with no CSSCharsetRule interface anywhere in the platform and
+       `SUPPORTS_RULE` is 12 here. What is NOT declared is a rule OBJECT for it — meeting `@counter-style` still
+       reaches rule_unbuilt_fail, which names CSSCounterStyleRule as the thing to build. */
+    { "COUNTER_STYLE_RULE", 11 },
     /* CSS Conditional §7.1's `partial interface CSSRule` — another addition to that same list, and it is here
        because that standard puts it there rather than because a number was needed. */
     { "SUPPORTS_RULE", 12 },
+    /* CSS Fonts 4 §12.2 "The CSSFontFeatureValuesRule interface" — its `partial interface CSSRule`. 13 is
+       skipped by the platform and not by this table: it was CSS Device Adaptation's VIEWPORT_RULE, whose
+       specification was abandoned, so no standard declares that number and inventing it would be a member no
+       browser has. */
+    { "FONT_FEATURE_VALUES_RULE", 14 },
 };
 
 static void rule_install_constants(JSContext *ctx, JSValueConst target)
