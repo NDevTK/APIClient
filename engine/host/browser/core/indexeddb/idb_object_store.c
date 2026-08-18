@@ -50,6 +50,7 @@
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/indexeddb/idb_connection.h"
+#include "core/indexeddb/idb_cursor.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_index.h"
 #include "core/indexeddb/idb_index_handle.h"
@@ -86,12 +87,16 @@ static JSRuntime *g_os_rt;
 static int g_id_put = -1, g_id_add = -1, g_id_get = -1, g_id_get_key = -1, g_setter_name = -1;
 static int g_id_delete = -1, g_id_clear = -1, g_id_count = -1;
 static int g_id_index = -1, g_id_create_index = -1, g_id_delete_index = -1;
+static int g_id_open_cursor = -1, g_id_open_key_cursor = -1;
 
 /* The magics that tell the two pairs of members apart. §4.5 states `put` and `add` as ONE algorithm differing
    only in the no-overwrite flag, and `get` and `getKey` as two retrievals differing only in which of §6.2's
    two operations they name — so each pair is one body, which is what the standard writes. */
 enum { OS_PUT = 0, OS_ADD = 1 };
 enum { OS_GET_VALUE = 0, OS_GET_KEY = 1 };
+/* §4.5's `openCursor` and `openKeyCursor` are one algorithm differing in the KEY ONLY FLAG the cursor is
+   created with, which is §2.10's own field and therefore this declaration's magic. */
+enum { OS_WITH_VALUE = 0, OS_KEY_ONLY = 1 };
 
 /* ---- the record ---------------------------------------------------------------------------------------- */
 
@@ -1067,6 +1072,94 @@ static const IdlStepDecl COUNT_STEP = {
     "Indexed Database §4.5 IDBObjectStore.count", OSC_STEPS
 };
 
+/* ---- §4.5's OPENCURSOR and OPENKEYCURSOR ------------------------------------------------------------------
+ *
+ * ONE SHAPE, TWO MEMBERS, and §4.5 states them as one: the two step lists are identical except for the KEY ONLY
+ * FLAG the cursor is created with, so the flag is this declaration's MAGIC exactly as `add`'s no-overwrite flag
+ * and `getKey`'s choice of §6.2 retrieval are theirs.
+ *
+ * THE ORDER OF THE LAST FOUR STEPS IS THE PART THAT MATTERS. The cursor is created BEFORE the request, the
+ * operation closes over the cursor, §5.6 answers with the request, and only THEN is the cursor's request set —
+ * a cycle the standard resolves in exactly that direction. Creating the request first is not possible (§5.6
+ * needs the operation, which needs the cursor); setting the cursor's request first is not possible (there is
+ * none yet); and skipping the write leaves §4.9's `request` attribute with nothing to answer and its three
+ * iterating members with nothing to re-fire.
+ *
+ * THERE IS NO NULL-DISALLOWED FLAG on the conversion, which is the standard's own difference from `get` and
+ * `delete`: §4.5's note is "if null or not given, an unbounded key range is used", because a cursor over the
+ * whole store is the ordinary way to read one. */
+#define OSCU_STAGES(X) \
+    X(OSCU_BEGIN, "Indexed Database §4.5 openCursor / openKeyCursor steps 1-4 — ONE O(1) engine action: " \
+                  "transaction and store are this's, a deleted store is an InvalidStateError and an inactive " \
+                  "transaction is a TransactionInactiveError — and step 5's conversion of query begins") \
+    IDB_KEY_RANGE_ALGO_STAGES(X, OSCU_R, "Indexed Database §4.5 openCursor / openKeyCursor step 5 (let range " \
+                                         "be the result of converting a value to a key range with query)") \
+    X(OSCU_OPERATION, "Indexed Database §4.5 openCursor / openKeyCursor steps 6-10, after the O(1) tail step " \
+                      "5's conversion ends in — ONE O(1) engine action: an invalid key is that conversion's " \
+                      "DataError, a new cursor is created over range with this as its source handle, the " \
+                      "operation is an algorithm to run iterate a cursor with it, the request is the result " \
+                      "of asynchronously executing that operation, and the cursor's request is set to it")
+enum { IDL_STEP_STAGE_BASE(OSCU_STAGES) OSCU_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const OSCU_STEPS[] = { OSCU_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_os_open_cursor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdbQueryState *s = st;
+
+    STEP_DISPATCH(OSCU_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(OSCU_BEGIN);
+        JS_FreeValue(ctx, cb_result);
+        s->store = JS_UNDEFINED;
+        s->tx = JS_UNDEFINED;
+        if (!os_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
+        /* Neither member writes, so the read-only refusal does not apply — §4.5 groups them with `get` and
+           `count` for exactly that reason. */
+        if (os_check(ctx, hdr->this_val, /*writes*/ false, &s->store, &s->tx) < 0)   /* STEPS 1-4 */
+            return JS_STEP_ABRUPT;
+        return idb_key_range_walk_start(ctx, hdr, &s->rw, argc > 0 ? argv[0] : JS_UNDEFINED,
+                                        /*null_disallowed*/ false, OSCU_R_LENGTH, OSCU_OPERATION);  /* STEP 5 */
+
+    STEP_ARM(OSCU_R_LENGTH);
+    STEP_ARM(OSCU_R_BEGIN);
+    STEP_ARM(OSCU_R_HOP);
+    STEP_ARM(OSCU_R_ENTRY);
+    STEP_ARM(OSCU_R_SUBKEY);
+    STEP_ARM(OSCU_R_LEAVE);
+        return idb_key_range_walk_run(ctx, hdr, &s->rw, cb_result, OSCU_R_LENGTH, out_cb, out_argc);
+
+    STEP_ARM(OSCU_OPERATION);
+    {
+        JSValue range, cursor, op, req;
+        const char *dir;
+
+        JS_FreeValue(ctx, cb_result);
+        if (idb_key_range_walk_take(ctx, &s->rw, &range) < 0) return JS_STEP_ABRUPT;
+        os_active_across_suspension(ctx, s->tx);
+        /* The IDL has already checked this against §4.9's IDBCursorDirection value list and placed its
+           `= "next"` default, so what arrives is one of the four identifiers and nothing here re-derives it. */
+        dir = JS_ToCString(ctx, argv[1]);
+        CHECK(dir != NULL, "IndexedDB: §4.5's openCursor could not read the direction its IDL converted");
+        cursor = idb_cursor_new(ctx, hdr->this_val, s->tx, dir, range,
+                                idl_step_magic(hdr) == OS_KEY_ONLY);                 /* STEP 6 */
+        JS_FreeCString(ctx, dir);
+        JS_FreeValue(ctx, range);
+        op = idb_cursor_iterate_operation(ctx, cursor);                              /* STEP 7 */
+        req = idb_request_execute(ctx, hdr->this_val, s->tx, op);                    /* STEP 8 */
+        JS_FreeValue(ctx, op);
+        idb_cursor_set_request(ctx, cursor, req);                                    /* STEP 9 */
+        JS_FreeValue(ctx, cursor);
+        *presult = req;                                                              /* STEP 10 */
+        return JS_STEP_DONE;
+    }
+}
+
+static const IdlStepDecl OPEN_CURSOR_STEP = {
+    js_os_open_cursor, sizeof(IdbQueryState), js_os_query_visit, NULL,
+    "Indexed Database §4.5 IDBObjectStore.openCursor / .openKeyCursor", OSCU_STEPS
+};
+
 /* ---- §4.5's attributes ------------------------------------------------------------------------------------- */
 
 /* "The name getter steps are to return this's name" — the HANDLE's, which is why it is not read off the store.
@@ -1502,6 +1595,8 @@ static void idb_object_store_install_realm(JSContext *ctx)
     idl_install_method(ctx, proto, "get", 1, g_id_get);
     idl_install_method(ctx, proto, "getKey", 1, g_id_get_key);
     idl_install_method(ctx, proto, "count", 0, g_id_count);
+    idl_install_method(ctx, proto, "openCursor", 0, g_id_open_cursor);
+    idl_install_method(ctx, proto, "openKeyCursor", 0, g_id_open_key_cursor);
     idl_install_method(ctx, proto, "index", 1, g_id_index);
     idl_install_method(ctx, proto, "createIndex", 2, g_id_create_index);
     idl_install_method(ctx, proto, "deleteIndex", 1, g_id_delete_index);
@@ -1527,6 +1622,10 @@ void idb_object_store_init(JSContext *ctx)
        declared type list; what tells them apart is which BODY runs and, for `count`, that its one position is
        optional. */
     static const IdlArgType QUERY_ARGS[1] = { IDL_ANY };
+    /* `openCursor(optional any query, optional IDBCursorDirection direction = "next")` and its key-only twin.
+       The query position is `any` for QUERY_ARGS' reason; the direction is the ENUMERATION §4.9 declares, so
+       `store.openCursor(null, "bogus")` is a TypeError from the TYPE and no body tests for it. */
+    static const IdlArgType CURSOR_ARGS[2] = { IDL_ANY, IDL_ENUM };
     static const IdlArgType INDEX_ARGS[1] = { IDL_DOMSTRING };
     static const IdlArgType CREATE_INDEX_ARGS[3] = { IDL_DOMSTRING, IDL_DOMSTRING_OR_SEQUENCE, IDL_DICT };
     static const IdlDictMember INDEX_PARAMETERS[] = {
@@ -1560,6 +1659,16 @@ void idb_object_store_init(JSContext *ctx)
     g_id_clear = idl_method_id(ctx, NULL, 0, js_os_clear, 0);
     g_id_count = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &COUNT_STEP, 0);
     idl_optional_from(0);                        /* `count(optional any query)` */
+    /* ONE BODY, TWO DECLARATIONS: §4.5 states the pair as one step list differing in the key only flag, which
+       IS the magic, so a declaration cannot be shared between them. */
+    g_id_open_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &OPEN_CURSOR_STEP, OS_WITH_VALUE);
+    idl_optional_from(0);                        /* both positions are optional; the member's length is 0 */
+    idl_enum_values(IDB_CURSOR_DIRECTIONS);      /* §3.2.18's value list for the `direction` position */
+    idl_arg_default(1, IDL_DEFAULT_STRING, "next");   /* §3.6 step 14.2's `= "next"` */
+    g_id_open_key_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &OPEN_CURSOR_STEP, OS_KEY_ONLY);
+    idl_optional_from(0);
+    idl_enum_values(IDB_CURSOR_DIRECTIONS);
+    idl_arg_default(1, IDL_DEFAULT_STRING, "next");
     /* `IDBIndex index(DOMString name)`, `IDBIndex createIndex(DOMString name, (DOMString or
        sequence<DOMString>) keyPath, optional IDBIndexParameters options = {})` and
        `undefined deleteIndex(DOMString name)`. The union is NOT nullable here, unlike createObjectStore's
