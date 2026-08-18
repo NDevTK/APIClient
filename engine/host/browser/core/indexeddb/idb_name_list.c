@@ -1,4 +1,4 @@
-/* INDEXED DATABASE §5.12 — create a sorted name list. See idb_name_list.h. */
+/* INDEXED DATABASE §2 Constructs — create a sorted name list. See idb_name_list.h. */
 #include <stdint.h>
 #include <string.h>
 
@@ -30,7 +30,7 @@ static uint32_t nl_place(JSContext *ctx, JSValue *v, uint32_t n, JSValueConst s)
         uint32_t mid = lo + (hi - lo) / 2;
         int c = idb_code_unit_compare(ctx, v[mid], s);
 
-        DCHECK(c != 0, "§5.12 was given a list holding one name TWICE — the names come from a SET (§2.1's set "
+        DCHECK(c != 0, "§2's create a sorted name list was given a list holding one name TWICE — the names come from a SET (§2.1's set "
                        "of object stores, §2.2.1's index set, §2.7's scope), whose members are unique by "
                        "definition, so a duplicate means the set itself is broken and the sorted list would "
                        "report a store that is not there");
@@ -44,15 +44,15 @@ JSValue idb_sorted_name_list(JSContext *ctx, JSValue names)
     uint32_t n, i;
     JSValue *v, sorted;
 
-    DCHECK(JS_IsArray(names), "§5.12 was given something that is not a list of names");
+    DCHECK(JS_IsArray(names), "§2's create a sorted name list was given something that is not a list of names");
     n = nl_len(ctx, names);
     v = n ? js_malloc(ctx, n * sizeof *v) : NULL;
-    CHECK(n == 0 || v != NULL, "IndexedDB: §5.12 could not allocate its sorted list");
+    CHECK(n == 0 || v != NULL, "IndexedDB: §2's create a sorted name list could not allocate its sorted list");
     for (i = 0; i < n; i++) {
         JSValue s = JS_GetPropertyUint32(ctx, names, i);
         uint32_t at;
 
-        DCHECK(JS_IsString(s), "§5.12 was given a list holding something that is not a name — every caller "
+        DCHECK(JS_IsString(s), "§2's create a sorted name list was given a list holding something that is not a name — every caller "
                                "builds it from the NAME field of the records in its set, and a non-string there "
                                "means the record's name is not the string §2.1/§2.2/§2.6 give it");
         at = nl_place(ctx, v, i, s);
@@ -61,7 +61,7 @@ JSValue idb_sorted_name_list(JSContext *ctx, JSValue names)
     }
     JS_FreeValue(ctx, names);   /* CONSUMED — the entries live on in v */
     sorted = JS_NewArray(ctx);
-    CHECK(!JS_IsException(sorted), "IndexedDB: §5.12's sorted list could not be allocated");
+    CHECK(!JS_IsException(sorted), "IndexedDB: §2's sorted list could not be allocated");
     for (i = 0; i < n; i++)
         JS_DefinePropertyValueUint32(ctx, sorted, i, v[i], JS_PROP_C_W_E);
     js_free(ctx, v);

@@ -1,4 +1,9 @@
-/* INDEXED DATABASE §5.12 — CREATE A SORTED NAME LIST. See idb_name_list.c.
+/* INDEXED DATABASE §2 Constructs — CREATE A SORTED NAME LIST. See idb_name_list.c.
+ *
+ * THE NUMBER IS §2 AND NOT §5.12, which is "Creating a request to retrieve multiple items" — a different
+ * algorithm in the same standard that this component's siblings genuinely call. The sort is defined among §2's
+ * definitions of `name`, beside the sentence that makes one "an arbitrary sequence of 16-bit code units",
+ * which is exactly why its ordering is the code-unit one.
  *
  * IT IS ONE ALGORITHM WITH THREE CALLERS — §4.4's `objectStoreNames`, §4.5's `indexNames` and §4.10's
  * `objectStoreNames` — and each of those members is one sentence plus this: "let names be a list of the names

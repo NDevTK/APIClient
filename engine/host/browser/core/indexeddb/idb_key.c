@@ -521,7 +521,7 @@ JSValue idb_key_subkeys(JSContext *ctx, JSValueConst key)
  * then walks past it, so the units are materialised and compared as units.
  * The decode is the engine's own (cutils.h's utf8_decode_buf16, the same one JS_NewStringUTF16 is the inverse
  * of), asked twice: once for the length, once to fill.
- * IT IS EXPORTED because §5.12's create-a-sorted-name-list is stated over the SAME Infra ordering — "sorted in
+ * IT IS EXPORTED because §2's create-a-sorted-name-list is stated over the SAME Infra ordering — "sorted in
  * ascending order with the code unit less than algorithm" — and a second implementation of it would be a second
  * answer to one question, disagreeing on exactly the strings above. */
 int idb_code_unit_compare(JSContext *ctx, JSValueConst a, JSValueConst b)

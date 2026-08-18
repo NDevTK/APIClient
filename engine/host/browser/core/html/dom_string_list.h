@@ -12,7 +12,7 @@
  *
  * §2.6.5 GIVES THE LIST NO WRITE PATH. "Each DOMStringList object has an associated list" and the three
  * members only read it, so a list is built COMPLETE by its producer and never changes afterwards — which is
- * also what Indexed Database §5.12 means by "return a NEW DOMStringList associated with sorted" at each read
+ * also what Indexed Database §2 means by "return a NEW DOMStringList associated with sorted" at each read
  * rather than one object kept in step. */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_DOM_STRING_LIST_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_DOM_STRING_LIST_H
@@ -27,7 +27,7 @@ void dom_string_list_install(JSContext *ctx, JSValueConst global);
 void dom_string_list_free(JSRuntime *rt);
 
 /* §2.6.5's list over `strings`, an Array of DOMString in the order the producer's algorithm put them in —
- * this interface defines no ordering of its own, so a producer that has one (Indexed Database §5.12's code-unit
+ * this interface defines no ordering of its own, so a producer that has one (Indexed Database §2's code-unit
  * sort) applies it before it gets here. CONSUMES `strings`.
  *
  * AN EMPTY LIST IS NOT A SEPARATE ENTRY POINT: a producer with nothing to list says so by passing an empty
