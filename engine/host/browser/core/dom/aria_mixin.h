@@ -88,13 +88,55 @@
     X("ariaLabelledByElements",      "aria-labelledby",       1) \
     X("ariaOwnsElements",            "aria-owns",             1)
 
+/* HTML §2.6.1's REFLECTED TARGET — "an element or ElementInternals object". EVERY difference between the two
+ * interfaces that include this mixin is in the four algorithms §2.6.1 names, and nothing else is parameterized:
+ * an Element reflects into its own content attributes, an ElementInternals into §4.13.7.4's internal content
+ * attribute map, and the members are otherwise one algorithm. That is why this is a target parameter and not a
+ * second copy of the mixin — a copy is how the two would drift, and the walk, the shadow-including-ancestor
+ * filter and the FrozenArray cache are a hundred lines that must not exist twice.
+ *
+ * THE ONE ASYMMETRY, AND IT IS THE SPEC'S: §2.6.1's attribute change steps are stated "For element reflected
+ * targets only". An ElementInternals' explicitly set attr-element(s) are therefore NEVER dropped by a content
+ * attribute write — nothing can write that map except the member itself — so aria_mixin_attribute_changed is
+ * an ELEMENT-target algorithm and must not grow an ElementInternals arm. Making the two symmetric would be a
+ * plausible-looking tidy-up that deletes the default ARIA semantics a custom element just set. */
+typedef enum {
+    ARIA_TARGET_ELEMENT = 0,
+    ARIA_TARGET_INTERNALS,
+    ARIA_TARGET_KINDS,
+} AriaTargetKind;
+
+/* §2.6.1's four target algorithms, and exactly those four. A kind's ops are DECLARED beside the members of the
+   interface that has them, which is what keeps this component ignorant of ElementInternals. */
+typedef struct {
+    /* "GET THE ELEMENT" — for an element target, itself; for an ElementInternals, its target element. OWNED,
+       and JS_UNDEFINED when the receiver is not a target of this kind, which makes it Web IDL §3.7.5's BRAND
+       TEST in the same call: the caller throws the TypeError a wrong receiver is owed. One op rather than two,
+       because for both kinds the brand IS "does this object have an element to answer for". */
+    JSValue (*element)(JSContext *ctx, JSValueConst target);
+    /* "GET THE CONTENT ATTRIBUTE" — an OWNED string freed with free(), or NULL when the attribute does not
+       exist (§2.6.1's null, which is what the members read as the IDL null). */
+    char   *(*attr_get)(JSContext *ctx, JSValueConst target, const char *name);
+    /* "SET THE CONTENT ATTRIBUTE" and "DELETE THE CONTENT ATTRIBUTE". */
+    void    (*attr_set)(JSContext *ctx, JSValueConst target, const char *name, const char *value);
+    void    (*attr_del)(JSContext *ctx, JSValueConst target, const char *name);
+} AriaTargetOps;
+
+/* DECLARE a target kind's algorithms, once per AGENT, before any realm installs its members. */
+void aria_mixin_declare_target(AriaTargetKind kind, const AriaTargetOps *ops);
+
 /* DECLARED ONCE PER AGENT, beside Element's own reflections — the string table goes into the same registry. */
 void aria_mixin_init(JSContext *ctx);
-/* INSTALLED PER REALM onto the prototype of an interface that INCLUDES the mixin. */
-void aria_mixin_install(JSContext *ctx, JSValueConst proto);
+/* §2.6.1's `DOMString?` HALF, for an ELEMENT target only: they are ordinary content-attribute reflections and
+   go through §4.9's one reflection registry, which is where every other element reflection in this engine
+   lives. An ElementInternals' 44 are reflections into a MAP and are that component's own. */
+void aria_mixin_install_strings(JSContext *ctx, JSValueConst proto);
+/* §2.6.1's ELEMENT-REFLECTION half — the eight members, for either target kind. */
+void aria_mixin_install_elements(JSContext *ctx, JSValueConst proto, AriaTargetKind kind);
 /* §2.6.1's ATTRIBUTE CHANGE STEPS for the eight element-reflecting members: writing the content attribute by
    any other spelling (setAttribute, the parser, removeAttribute) drops the explicitly set attr-element(s), so
-   the next read resolves the ids the attribute now names. Called from §4.9's one attribute-changed hook. */
+   the next read resolves the ids the attribute now names. Called from §4.9's one attribute-changed hook.
+   FOR ELEMENT REFLECTED TARGETS ONLY — see the asymmetry stated above. */
 void aria_mixin_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local);
 void aria_mixin_free(JSRuntime *rt);
 

@@ -2339,8 +2339,11 @@ void element_install_proto(JSContext *ctx)
        here too, which is three properties Element's IDL does not declare — they belong to HTMLScriptElement,
        to a dozen form interfaces and to HTMLMetaElement, and they are installed there now. */
     element_install_reflections(ctx, proto, g_refl_base, g_refl_n);
-    /* WAI-ARIA's ARIAMixin, which the IDL mixes into Element and therefore into every element interface. */
-    aria_mixin_install(ctx, proto);
+    /* WAI-ARIA's ARIAMixin, which the IDL mixes into Element and therefore into every element interface. The
+       string half is installed as ELEMENT reflections (this registry); the element-reflection half names the
+       target kind, because ElementInternals includes the same eight members over a different target. */
+    aria_mixin_install_strings(ctx, proto);
+    aria_mixin_install_elements(ctx, proto, ARIA_TARGET_ELEMENT);
     /* §4.9's two Shadow DOM members — `attachShadow` and the `shadowRoot` getter, which the interface
        declares on Element and not on HTMLElement. */
     shadow_root_install_element_members(ctx, proto);
