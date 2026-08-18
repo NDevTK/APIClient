@@ -75,6 +75,16 @@ void idb_object_store_handle_clear_index_set(JSContext *ctx, JSValueConst handle
    its length so a walk needs no second reader of `length` in a third file. */
 JSValue idb_object_store_handle_index_handles(JSContext *ctx, JSValueConst handle, uint32_t *count);
 
+/* §6.1's and §6.4's OPERATIONS, MINTED — §4.5's `add or put` step 12 and `delete` step 7 state them, and
+   §4.9's `update` step 10 and `delete` step 7 state the SAME two over a cursor's effective object store and
+   effective key. Exported so there is one closure over §6.1's five operands rather than two that could come to
+   disagree about what they are. `key` is a §2.4 key record, `range` a §2.9 key range; every operand is
+   BORROWED and the callable is OWNED. */
+JSValue idb_object_store_record_operation(JSContext *ctx, JSValueConst tx, JSValueConst store,
+                                          JSValueConst value, JSValueConst key, bool no_overwrite);
+JSValue idb_object_store_delete_operation(JSContext *ctx, JSValueConst tx, JSValueConst store,
+                                          JSValueConst range);
+
 /* Web IDL §3.7.5's brand, asked of a value that arrived from another component. */
 bool idb_object_store_is(JSValueConst v);
 

@@ -568,6 +568,49 @@ static JSValue js_idb_count_operation(JSContext *ctx, JSValueConst this_val, int
     return JS_NewUint32(ctx, idb_count_records(ctx, func_data[OP_COUNT_STORE], func_data[OP_COUNT_RANGE]));
 }
 
+/* §4.9's `update` STEP 10 and `delete` STEP 7 MINT THESE TWO SAME OPERATIONS — "let operation be an algorithm
+ * to run store a record into an object store with this's effective object store, clone, this's effective key,
+ * AND FALSE", and "an algorithm to run delete records from an object store with this's effective object store
+ * and this's effective key". They are §4.5's own two operations with the cursor's operands, so the minting is
+ * exported rather than written a second time in core/indexeddb/idb_cursor.c: a second closure over §6.1 would
+ * be a second answer to which operands that algorithm takes, and §6.1's is FIVE with the transaction among
+ * them for §5.5 step 2's sake.
+ *
+ * `key` is a §2.4 key record and `range` a §2.9 key range — neither is a page value, because both members have
+ * already converted everything the page gave them. Every operand is BORROWED; the callable is OWNED. */
+JSValue idb_object_store_record_operation(JSContext *ctx, JSValueConst tx, JSValueConst store,
+                                          JSValueConst value, JSValueConst key, bool no_overwrite)
+{
+    JSValueConst data[5];
+    JSValue op, flag = JS_NewBool(ctx, no_overwrite);
+
+    DCHECK(g_store_op_stepid >= 0, "§6.1's operation was minted before idb_object_store_init declared its "
+                                   "machine");
+    data[OP_STORE_TX] = tx;
+    data[OP_STORE_STORE] = store;
+    data[OP_STORE_VALUE] = value;
+    data[OP_STORE_KEY] = key;
+    data[OP_STORE_NO_OVERWRITE] = flag;
+    op = JS_NewStepClosure(ctx, g_store_op_stepid, 0, 5, data);
+    JS_FreeValue(ctx, flag);
+    CHECK(!JS_IsException(op), "IndexedDB: §6.1's operation could not be minted");
+    return op;
+}
+
+JSValue idb_object_store_delete_operation(JSContext *ctx, JSValueConst tx, JSValueConst store,
+                                          JSValueConst range)
+{
+    JSValueConst data[3];
+    JSValue op;
+
+    data[OP_DEL_TX] = tx;
+    data[OP_DEL_STORE] = store;
+    data[OP_DEL_RANGE] = range;
+    op = JS_NewCFunctionData(ctx, js_idb_delete_operation, 0, 0, 3, data);
+    CHECK(!JS_IsException(op), "IndexedDB: §6.4's operation could not be minted");
+    return op;
+}
+
 /* ---- §4.5's MEMBERS ARE MACHINES, BECAUSE §7.4 IS ONE ------------------------------------------------------
  *
  * `store.put(v, [1, 2])` and `store.get([1, 2])` convert an Array exotic object to a key, and THAT arm of §7.4
@@ -792,19 +835,12 @@ static int js_os_put(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
 
     STEP_ARM(OSP_OPERATION);
     {
-        JSValueConst data[5];
-        JSValue op, flag = JS_NewBool(ctx, idl_step_magic(hdr) == OS_ADD);
+        JSValue op;
 
         JS_FreeValue(ctx, cb_result);
         os_active_across_suspension(ctx, s->tx);
-        data[OP_STORE_TX] = s->tx;
-        data[OP_STORE_STORE] = s->store;
-        data[OP_STORE_VALUE] = s->clone;
-        data[OP_STORE_KEY] = s->key;
-        data[OP_STORE_NO_OVERWRITE] = flag;
-        op = JS_NewStepClosure(ctx, g_store_op_stepid, 0, 5, data);                    /* STEP 12 */
-        JS_FreeValue(ctx, flag);
-        CHECK(!JS_IsException(op), "IndexedDB: §6.1's operation could not be minted");
+        op = idb_object_store_record_operation(ctx, s->tx, s->store, s->clone, s->key,
+                                               idl_step_magic(hdr) == OS_ADD);         /* STEP 12 */
         /* "Return the result (an IDBRequest) of running asynchronously execute a request with HANDLE and
            operation." The source is the HANDLE, which is what `request.source` answers with. */
         *presult = idb_request_execute(ctx, hdr->this_val, s->tx, op);                            /* STEP 13 */
@@ -885,18 +921,13 @@ static int js_os_delete(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
 
     STEP_ARM(OSD_OPERATION);
     {
-        JSValueConst data[3];
         JSValue range, op;
 
         JS_FreeValue(ctx, cb_result);
         if (idb_key_range_walk_take(ctx, &s->rw, &range) < 0) return JS_STEP_ABRUPT;
         os_active_across_suspension(ctx, s->tx);
-        data[OP_DEL_TX] = s->tx;
-        data[OP_DEL_STORE] = s->store;
-        data[OP_DEL_RANGE] = range;
-        op = JS_NewCFunctionData(ctx, js_idb_delete_operation, 0, 0, 3, data);      /* STEP 7 */
+        op = idb_object_store_delete_operation(ctx, s->tx, s->store, range);        /* STEP 7 */
         JS_FreeValue(ctx, range);
-        CHECK(!JS_IsException(op), "IndexedDB: §6.4's operation could not be minted");
         *presult = idb_request_execute(ctx, hdr->this_val, s->tx, op);              /* STEP 8 */
         JS_FreeValue(ctx, op);
         return JS_STEP_DONE;

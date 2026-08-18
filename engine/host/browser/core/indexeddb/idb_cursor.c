@@ -55,6 +55,7 @@
 #include "core/indexeddb/idb_index_handle.h"
 #include "core/indexeddb/idb_key.h"
 #include "core/indexeddb/idb_key_array.h"
+#include "core/indexeddb/idb_key_path.h"
 #include "core/indexeddb/idb_key_range.h"
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_request.h"
@@ -89,6 +90,7 @@ static JSClassID g_cursor_class, g_cursor_wv_class;
 static JSRuntime *g_cursor_rt;
 static int g_iterate_stepid = -1;
 static int g_id_advance = -1, g_id_continue = -1, g_id_continue_pk = -1;
+static int g_id_update = -1, g_id_delete = -1;
 
 /* ---- the record ------------------------------------------------------------------------------------------ */
 
@@ -685,7 +687,7 @@ JSValue idb_cursor_iterate_operation(JSContext *ctx, JSValueConst cursor)
  * THE GOT-VALUE REFUSAL IS THE ONE THE PAGE ACTUALLY MEETS, and §4.9's own note says why: calling `continue()`
  * twice from one `onsuccess` handler is an "InvalidStateError" on the second call, because the first cleared
  * the flag and only the request's next success sets it again. Returns -1 with the throw live; `*ptx` is OWNED. */
-static int cu_check(JSContext *ctx, JSValueConst c, JSValue *ptx)
+static int cu_check(JSContext *ctx, JSValueConst c, bool writes, JSValue *ptx)
 {
     JSValue tx = cu_get(ctx, c, CU_TRANSACTION), src, store;
     bool deleted;
@@ -696,6 +698,16 @@ static int cu_check(JSContext *ctx, JSValueConst c, JSValue *ptx)
         JS_FreeValue(ctx, tx);
         JS_ThrowDOMException(ctx, "TransactionInactiveError",
                              "the transaction the cursor belongs to is not active");
+        return -1;
+    }
+    /* §4.9's `update` step 3 and `delete` step 3, which the three ITERATING members do not have — §4.9 puts
+       the two groups under different headings for exactly that reason ("the following methods throw a
+       ReadOnlyError if called within a read-only transaction"). It sits between the active check and the
+       deletion check because that is where the standard states it, and a page can tell: `cursor.update(v)` on
+       a read-only transaction whose store was also deleted reports the ReadOnlyError. */
+    if (writes && idb_transaction_mode(ctx, tx) == IDB_TX_READONLY) {
+        JS_FreeValue(ctx, tx);
+        JS_ThrowDOMException(ctx, "ReadOnlyError", "the transaction is a read-only transaction");
         return -1;
     }
     src = cu_source(ctx, c);
@@ -771,7 +783,7 @@ static JSValue js_cu_advance(JSContext *ctx, JSValueConst this_val, int argc, JS
           "IndexedDB: §4.9's advance received a count its [EnforceRange] unsigned long did not convert");
     if (count == 0)
         return JS_ThrowTypeError(ctx, "the cursor cannot be advanced by 0 records");
-    if (cu_check(ctx, this_val, &tx) < 0) return JS_EXCEPTION;               /* STEPS 2-5 */
+    if (cu_check(ctx, this_val, /*writes*/ false, &tx) < 0) return JS_EXCEPTION;               /* STEPS 2-5 */
     cu_place(ctx, this_val, tx, JS_UNDEFINED, JS_UNDEFINED, argv[0]);       /* STEPS 6-11 */
     JS_FreeValue(ctx, tx);
     return JS_UNDEFINED;
@@ -828,7 +840,7 @@ static int js_cu_continue(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
         s->tx = JS_UNDEFINED;
         s->key = JS_UNDEFINED;
         if (!cu_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
-        if (cu_check(ctx, hdr->this_val, &s->tx) < 0) return JS_STEP_ABRUPT;   /* STEPS 1-4 */
+        if (cu_check(ctx, hdr->this_val, /*writes*/ false, &s->tx) < 0) return JS_STEP_ABRUPT;   /* STEPS 1-4 */
         /* "If key is GIVEN, then:" — an absent argument is not a key to convert, and §6.7's "if key is
            defined" is the same absence read from the other side. */
         if (argc < 1 || JS_IsUndefined(argv[0])) {
@@ -1041,6 +1053,194 @@ static const IdlStepDecl CONTINUE_PK_STEP = {
     "Indexed Database §4.9 IDBCursor.continuePrimaryKey", CUP_STEPS
 };
 
+/* ---- §4.9's UPDATE and DELETE ------------------------------------------------------------------------------
+ *
+ * THE TWO WRITING MEMBERS, and the two things that set them apart from the three above: they refuse a READ-ONLY
+ * transaction (cu_check's `writes`) and a KEY ONLY cursor, and they place a NEW request each rather than
+ * re-firing the cursor's. That last difference is the standard's own — "return the result (an IDBRequest) of
+ * running asynchronously execute a request with THIS and operation" — and both halves of it are observable:
+ * the request is returned to the page, and its `source` is the CURSOR rather than the cursor's source handle.
+ *
+ * THE EFFECTIVE OBJECT STORE AND THE EFFECTIVE KEY ARE WHAT BOTH OPERATE ON, never the cursor's own key: for a
+ * cursor over an INDEX the key is the index key and the record to write or remove lives in the referenced
+ * object store under the OBJECT STORE POSITION. §2.10 defines both terms for exactly this pair of members.
+ *
+ * `delete` RUNS NONE OF THE PAGE'S CODE — its operands are the cursor's own already-converted key and the
+ * store — so it is an ordinary C function. `update` IS A MACHINE, and §7.1 is why: an in-line-key store makes
+ * it extract a key from the clone at the store's key path, whose step 3 is §7.4 and therefore §7.4's array arm,
+ * which runs the page's own accessors for a LIST key path or an Array-valued one. */
+
+static JSValue js_cu_delete(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue tx, store, key, range, op, req;
+
+    (void)argc; (void)argv; (void)magic;
+    if (!cu_brand(ctx, this_val)) return JS_EXCEPTION;
+    if (cu_check(ctx, this_val, /*writes*/ true, &tx) < 0) return JS_EXCEPTION;    /* STEPS 1-5 */
+    /* "If this's KEY ONLY FLAG is true, throw an InvalidStateError." An `openKeyCursor` cursor never read the
+       record's value, so the standard refuses to let it write one or remove it through this member. */
+    if (cu_flag(ctx, this_val, CU_KEY_ONLY)) {                                     /* STEP 6 */
+        JS_FreeValue(ctx, tx);
+        return JS_ThrowDOMException(ctx, "InvalidStateError",
+                                    "a key-only cursor cannot delete the record it is positioned at");
+    }
+    store = cu_effective_store(ctx, this_val);
+    key = cu_effective_key(ctx, this_val);
+    DCHECK(!JS_IsUndefined(key), "§4.9's `delete` reached its operation with no effective key — the got value "
+                                 "flag is what says the cursor is positioned at a record, and step 5 refuses "
+                                 "when it is false");
+    /* "an algorithm to run DELETE RECORDS FROM AN OBJECT STORE with this's effective object store and this's
+       effective key" — §6.4 takes a RANGE and not a key, so the key becomes §2.9's range containing only it,
+       exactly as §6.1 step 3's own removal does. */
+    range = idb_key_range_only_key(ctx, key);
+    op = idb_object_store_delete_operation(ctx, tx, store, range);                 /* STEP 7 */
+    req = idb_request_execute(ctx, this_val, tx, op);                              /* STEP 8 */
+    JS_FreeValue(ctx, op);
+    JS_FreeValue(ctx, range);
+    JS_FreeValue(ctx, key);
+    JS_FreeValue(ctx, store);
+    JS_FreeValue(ctx, tx);
+    return req;
+}
+
+typedef struct {
+    IdbKeyWalk       w;
+    IdbKeyPathResult kpres;   /* §7.1's extra state — an enum, so the caller holds it */
+    JSValue tx, store, key;   /* the transaction, the effective object store and the effective key (owned) */
+    JSValue clone;            /* step 8's clone, held across step 9's extraction (owned) */
+    JSValue key_path;         /* the effective object store's, JS_NULL for out-of-line keys (owned) */
+} IdbCursorUpdateState;
+
+static void js_cu_update_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    IdbCursorUpdateState *s = st;
+
+    idb_key_walk_visit(ctx, &s->w, v);
+    v->val(ctx, &s->tx);
+    v->val(ctx, &s->store);
+    v->val(ctx, &s->key);
+    v->val(ctx, &s->clone);
+    v->val(ctx, &s->key_path);
+}
+
+#define CUU_STAGES(X) \
+    X(CUU_BEGIN, "Indexed Database §4.9 update steps 1-8 — ONE O(1) engine action plus §5.11's clone: an " \
+                 "inactive transaction is a TransactionInactiveError, a read-only transaction is a " \
+                 "ReadOnlyError, a deleted source or effective object store is an InvalidStateError, a false " \
+                 "got value flag is an InvalidStateError, a true key only flag is an InvalidStateError, and " \
+                 "clone is a clone of value in this member's own Realm during transaction") \
+    IDB_KEY_PATH_EXTRACT_ALGO_STAGES(X, CUU_KP, "Indexed Database §4.9 update step 9.1 (let kpk be the " \
+                                                "result of extracting a key from a value using a key path " \
+                                                "with clone and the key path of this's effective object " \
+                                                "store)") \
+    X(CUU_OPERATION, "Indexed Database §4.9 update steps 9.2-11 — ONE O(1) engine action: a kpk that is " \
+                     "failure, invalid, or not equal to this's effective key is a DataError, the operation " \
+                     "is an algorithm to run store a record into an object store with the effective object " \
+                     "store, clone, the effective key and false, and the request is the result of " \
+                     "asynchronously executing it")
+enum { IDL_STEP_STAGE_BASE(CUU_STAGES) CUU_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CUU_STEPS[] = { CUU_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_cu_update(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdbCursorUpdateState *s = st;
+
+    (void)argc;
+    STEP_DISPATCH(CUU_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(CUU_BEGIN);
+        JS_FreeValue(ctx, cb_result);
+        s->tx = JS_UNDEFINED;
+        s->store = JS_UNDEFINED;
+        s->key = JS_UNDEFINED;
+        s->clone = JS_UNDEFINED;
+        s->key_path = JS_UNDEFINED;
+        if (!cu_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
+        if (cu_check(ctx, hdr->this_val, /*writes*/ true, &s->tx) < 0)              /* STEPS 1-5 */
+            return JS_STEP_ABRUPT;
+        if (cu_flag(ctx, hdr->this_val, CU_KEY_ONLY)) {                             /* STEP 6 */
+            JS_ThrowDOMException(ctx, "InvalidStateError",
+                                 "a key-only cursor cannot update the record it is positioned at");
+            return JS_STEP_ABRUPT;
+        }
+        s->store = cu_effective_store(ctx, hdr->this_val);
+        s->key = cu_effective_key(ctx, hdr->this_val);
+        DCHECK(!JS_IsUndefined(s->key), "§4.9's `update` reached step 8 with no effective key — step 5's got "
+                                        "value refusal is what makes a positioned cursor the only one here");
+        /* "Let clone be a clone of value in targetRealm DURING TRANSACTION. Rethrow any exceptions." The
+           targetRealm of step 7 is this member's own; the clone is the MEMBER's and not the operation's, so an
+           unclonable value is a "DataCloneError" thrown by `update` itself where the page's try/catch sees it
+           rather than a request that later fires an `error` event. */
+        s->clone = structured_clone(ctx, argv[0]);                                  /* STEP 8 */
+        if (JS_IsException(s->clone)) {
+            s->clone = JS_UNDEFINED;
+            return JS_STEP_ABRUPT;
+        }
+        /* "If this's effective object store uses IN-LINE KEYS, then:" — §2.2's "with a key path it uses
+           in-line keys", so the condition IS whether that field is null. */
+        s->key_path = idb_object_store_key_path(ctx, s->store);                     /* STEP 9's condition */
+        if (JS_IsNull(s->key_path)) {
+            STEP_GOTO(hdr->stage, CUU_OPERATION, &hdr->get_phase, &hdr->desc_phase, NULL);
+            return JS_STEP_YIELD;
+        }
+        /* No multiEntry flag: that flag is an INDEX's, and this is the effective object store's key path. */
+        idb_key_path_walk_start(ctx, hdr, &s->w, &s->kpres, s->clone, s->key_path, /*multi_entry*/ false,
+                                CUU_KP_LENGTH, CUU_OPERATION);                      /* STEP 9.1 */
+        return JS_STEP_YIELD;
+
+    /* STEP 9.1's extraction, whose rest points are §7.4's. Named individually for the reason
+       core/dom/node.c names `clone a node`'s: a stage added to the algorithm does not compile until it has an
+       arm here, where a partial list would silently route it into a neighbour. */
+    STEP_ARM(CUU_KP_LENGTH);
+    STEP_ARM(CUU_KP_BEGIN);
+    STEP_ARM(CUU_KP_HOP);
+    STEP_ARM(CUU_KP_ENTRY);
+    STEP_ARM(CUU_KP_SUBKEY);
+    STEP_ARM(CUU_KP_LEAVE);
+        return idb_key_walk_run(ctx, hdr, &s->w, cb_result, CUU_KP_LENGTH, out_cb, out_argc);
+
+    STEP_ARM(CUU_OPERATION);
+    {
+        JSValue op;
+
+        JS_FreeValue(ctx, cb_result);
+        if (!JS_IsNull(s->key_path)) {
+            JSValue kpk = JS_UNDEFINED;
+            IdbKeyPathResult r = idb_key_path_walk_take(ctx, &s->w, s->kpres, &kpk);
+            /* "If kpk is FAILURE, INVALID, or NOT EQUAL TO this's effective key, throw a DataError." All three
+               are one refusal in the standard and one here: the record stays filed under the key the cursor is
+               positioned at, so a value whose in-line key would move it is not an update of that record. */
+            bool bad = r != IDB_KEY_PATH_KEY || idb_key_compare(ctx, kpk, s->key) != 0;
+
+            JS_FreeValue(ctx, kpk);
+            if (bad) {                                                              /* STEP 9.2 */
+                JS_ThrowDOMException(ctx, "DataError",
+                                     "the value's key at the object store's key path is missing, is not a "
+                                     "valid key, or is not the key the cursor is positioned at");
+                return JS_STEP_ABRUPT;
+            }
+        }
+        DCHECK(idb_transaction_state(ctx, s->tx) == IDB_TX_ACTIVE,
+               "§4.9's `update` had its transaction deactivated between its own state check and the step that "
+               "places the request — it suspends in between (§7.4's array arm is the page's own accessors), "
+               "and nothing may deactivate a transaction across that");
+        /* "... with this's effective object store, clone, this's effective key, AND FALSE" — the no-overwrite
+           flag is false, which is what §4.9's own note describes: "if the record has been deleted since the
+           cursor moved to it, a NEW RECORD WILL BE CREATED". */
+        op = idb_object_store_record_operation(ctx, s->tx, s->store, s->clone, s->key,
+                                               /*no_overwrite*/ false);             /* STEP 10 */
+        *presult = idb_request_execute(ctx, hdr->this_val, s->tx, op);              /* STEP 11 */
+        JS_FreeValue(ctx, op);
+        return JS_STEP_DONE;
+    }
+}
+
+static const IdlStepDecl UPDATE_STEP = {
+    js_cu_update, sizeof(IdbCursorUpdateState), js_cu_update_visit, NULL,
+    "Indexed Database §4.9 IDBCursor.update", CUU_STEPS
+};
+
 /* ---- §4.9's attributes ------------------------------------------------------------------------------------ */
 
 /* "The source getter steps are to return this's SOURCE HANDLE." The standard's own note is the whole of why
@@ -1137,6 +1337,8 @@ static void idb_cursor_install_realm(JSContext *ctx)
     idl_install_method(ctx, proto, "advance", 1, g_id_advance);
     idl_install_method(ctx, proto, "continue", 0, g_id_continue);
     idl_install_method(ctx, proto, "continuePrimaryKey", 2, g_id_continue_pk);
+    idl_install_method(ctx, proto, "update", 1, g_id_update);
+    idl_install_method(ctx, proto, "delete", 0, g_id_delete);
     JS_SetClassProto(ctx, g_cursor_class, JS_DupValue(ctx, proto));
 
     ctor = idl_interface_object(ctx, "IDBCursor", proto);
@@ -1170,6 +1372,9 @@ void idb_cursor_init(JSContext *ctx)
     static const IdlArgType ADVANCE_ARGS[1] = { IDL_UNSIGNED_LONG_ENFORCE };
     static const IdlArgType KEY_ARGS[1] = { IDL_ANY };
     static const IdlArgType KEY_PK_ARGS[2] = { IDL_ANY, IDL_ANY };
+    /* `update(any value)` — `any`, because §5.11's clone is the member's own step 8 and the IDL converts
+       nothing on the way. `delete()` takes no argument at all. */
+    static const IdlArgType VALUE_ARGS[1] = { IDL_ANY };
 
     DCHECK(!g_ready, "idb_cursor_init ran twice — one instance is one document is one agent");
     g_key = JS_NewSymbol(ctx, "idbCursorState", false);
@@ -1185,6 +1390,8 @@ void idb_cursor_init(JSContext *ctx)
     g_id_continue = idl_method_id_step(ctx, KEY_ARGS, 1, NULL, 0, &CONTINUE_STEP, 0);
     idl_optional_from(0);                        /* `continue(optional any key)` */
     g_id_continue_pk = idl_method_id_step(ctx, KEY_PK_ARGS, 2, NULL, 0, &CONTINUE_PK_STEP, 0);
+    g_id_update = idl_method_id_step(ctx, VALUE_ARGS, 1, NULL, 0, &UPDATE_STEP, 0);
+    g_id_delete = idl_method_id(ctx, NULL, 0, js_cu_delete, 0);
     g_iterate_stepid = JS_RegisterStepDef(rt, &js_idb_iterate_def);
     g_ready = 1;
     agent_state_flag("idb_cursor", &g_ready, "the declaration latch");
