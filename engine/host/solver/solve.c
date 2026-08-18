@@ -345,6 +345,13 @@ static void record_sink(int cls, const char *source, const char *poc) {
     if (g_sinks_n >= g_sinks_cap) { g_sinks_cap = g_sinks_cap ? g_sinks_cap * 2 : 8; g_sinks = realloc(g_sinks, (size_t)g_sinks_cap * sizeof(Finding)); CHECK(g_sinks, "solve: OOM @S store"); }
     Finding *f = &g_sinks[g_sinks_n++];
     f->cls = cls; f->source = strdup(source ? source : "?"); f->poc = strdup(poc);
+    /* THE ONLY TWO ALLOCATIONS IN THIS FILE THAT WERE NOT CHECKED, in the one record that must survive. A NULL
+       here is not a lost finding, it is a CORRUPT one: `solved` strcmps the source to decide whether to also
+       emit the sink as a parked search, and solve_json_array writes the poc straight into the report. Every
+       neighbouring allocation — the store's own realloc one line up, the pending entry, each breakout — has
+       carried a CHECK all along. */
+    CHECK(f->source && f->poc, "solve: OOM storing a fire-verified @S PoC — the finding is the proof, and a "
+                               "half-stored one corrupts every later read of the report rather than losing it");
     /* AND THE FLOW THAT PROVED IT IS PAID FOR IT. sink_search already credits a sink merely being DETECTED,
        which is the weakest @S observation there is, while the strongest — a fire-verified PoC, the thing this
        half of the tool exists to produce — credited nothing at all. That is not only an inconsistency inside
@@ -458,13 +465,38 @@ static void html_fire_walk(lxb_dom_node_t *node) {
         if (n) n = n->next;
     }
 }
+/* AN ORACLE MAY NOT ANSWER "NO" BECAUSE IT COULD NOT ASK. All three of these were swallowed conditions, and
+   what each of them swallowed is the same thing: a failure to build the parse silently becomes "this breakout
+   did not fire", which is a FALSE NEGATIVE in the half of the tool that must never produce one — §@S is
+   explicit that absence of a PoC is never a safe verdict, and an absence manufactured by an allocation is that
+   verdict arrived at by accident. solve_html.c CHECKs this identical allocation two functions away, in the
+   PROBE path, which is the weaker of the two places to care about it.
+   THE FIRST TWO ARE `CHECK` AND THE THIRD IS A `DCHECK`, because they are different claims. A document that
+   could not be allocated and a parse that returned anything but OK are both the physical floor — HTML
+   §13.2's tokenizer and tree construction are error-RECOVERING and define no input they reject, so a non-OK
+   status is memory and nothing else — and a security verdict quietly downgraded in a release build is worse
+   than aborting. A parsed document with no document element is the parser's own invariant (§13.2.6 inserts
+   html/head/body for every input, including the empty one), so it asserts against this engine's own logic. */
 static void html_fire(const char *html) {
     lxb_html_document_t *doc = dom_document_create();
-    if (!doc) return;
-    if (html_parse_document(doc, (const lxb_char_t *)html, strlen(html)) == LXB_STATUS_OK) {
-        lxb_dom_element_t *root = lxb_dom_document_element(&doc->dom_document);
-        if (root) html_fire_walk(lxb_dom_interface_node(root));
-    }
+    lxb_dom_element_t *root;
+    lxb_status_t st;
+
+    CHECK(doc != NULL, "solve: OOM creating the document an @S markup breakout is fired in — without it the "
+                       "oracle reports that the breakout did not fire, which is a false negative in the "
+                       "security half rather than a missing measurement");
+    /* THE PARSE IS RUN ON ITS OWN LINE, never inside the assert's condition: this one is a CHECK and would
+       survive release, but a later reader converting it to a DCHECK would delete the whole parse with it. */
+    st = html_parse_document(doc, (const lxb_char_t *)html, strlen(html));
+    CHECK(st == LXB_STATUS_OK,
+          "the parse of an @S markup breakout did not complete — HTML §13.2 tree construction is "
+          "error-recovering and rejects no input, so this is the allocation floor, and answering `did not "
+          "fire` past it downgrades a real exploit to no finding");
+    root = lxb_dom_document_element(&doc->dom_document);
+    DCHECK(root != NULL, "a completed HTML parse produced no document element — §13.2.6 inserts html, head and "
+                         "body for every input including the empty one, so the tree this oracle is about to "
+                         "walk was built by something that is not the parser");
+    html_fire_walk(lxb_dom_interface_node(root));
     dom_document_destroy(doc);
 }
 
