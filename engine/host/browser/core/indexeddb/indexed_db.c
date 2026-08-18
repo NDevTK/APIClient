@@ -24,9 +24,10 @@
  * share a queue, so `deleteDatabase(n)` followed by `open(n, 1)` is an ordering the standard guarantees, and
  * it is the first two statements of half this standard's own fixtures.
  *
- * `databases()` is still ABSENT — it is a promise over §2.1's set and needs neither the queue nor a request,
- * so it is a member of this file and not a whole algorithm. It is honestly absent (`indexedDB.databases()` is
- * a TypeError naming the member) and Web IDL is the auditor that lists it.
+ * `databases()` IS a member of this file and not a whole algorithm, for the reason its own section states: it
+ * needs neither the queue nor a request, because there is no connection to wait for and nothing to block on.
+ * What it needs instead is a promise and a TASK BOUNDARY, since the standard reads §2.1's set after the member
+ * has returned.
  *
  * `cmp` IS COMPLETE, and it is complete because it is §2.4's compare exposed and nothing else: "let a be the
  * result of converting a value to a key with first ... return the results of comparing two keys with a and b".
@@ -45,6 +46,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key.h"
 #include "core/indexeddb/idb_key_array.h"
 #include "core/indexeddb/idb_open.h"
@@ -59,6 +61,8 @@ static int       g_obj_slot = -1;
 static int       g_id_cmp   = -1;
 static int       g_id_open  = -1;
 static int       g_id_delete = -1;
+static int       g_id_databases = -1;
+static int       g_id_databases_task = -1;
 
 /* WEB IDL §3.7.5's BRAND CHECK. `IDBFactory.prototype.cmp.call({}, 1, 2)` is a TypeError, and a page tells that
    apart from a "DataError". */
@@ -247,6 +251,231 @@ static JSValue js_idb_delete_database(JSContext *ctx, JSValueConst this_val, int
     return req;
 }
 
+/* ---- §4.3's databases() ------------------------------------------------------------------------------------
+ *
+ * "Let environment be this's relevant settings object. Let storageKey be the result of running obtain a storage
+ * key given environment. If failure is returned, then return a promise rejected with a SecurityError
+ * DOMException. Let p be a new promise. Run these steps in parallel: ... Return p."
+ *
+ * IT IS THE ONE MEMBER OF §4.3 THAT NEEDS NEITHER THE CONNECTION QUEUE NOR A REQUEST. There is no connection to
+ * wait for, no `versionchange` to fire and nothing to block on — it reads §2.1's set and answers — so it is a
+ * member here rather than an algorithm in idb_open.c, and filing it in §2.8.2's queue would give it an ordering
+ * against opens that the standard pointedly does not give it ("there are no guarantees about the sequencing of
+ * the collection of the data ... with respect to requests to create, upgrade, or delete databases").
+ *
+ * TWO MACHINES because the standard puts a task boundary in the middle of one member. Step 4 is "in parallel"
+ * and its last step is "queue a database task to resolve p with result", so the SET IS READ AFTER THE MEMBER
+ * HAS RETURNED — the snapshot the page gets is of the moment the task ran, not of the call. Collapsing that
+ * into the member would resolve the promise from a set read one turn too early, which is precisely the
+ * sequencing the note above says is a snapshot. */
+
+#define DBT_STAGES(X) \
+    X(DBT_COLLECT, "Indexed Database §4.3 databases() steps 4.1-4.3 — ONE O(1) engine action: the set of " \
+                   "databases in this storage key becomes a list of IDBDatabaseInfo, skipping every database " \
+                   "whose version is 0") \
+    X(DBT_RESOLVE, "Indexed Database §4.3 databases() step 4.4 (queue a database task to resolve p with " \
+                   "result)")
+enum { DBT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DBT_STEPS[] = { DBT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr hdr;        /* FIRST: the driver writes the def and the operand bounds through it */
+    uint8_t   started;    /* a step state is js_mallocz'd and a zeroed JSValue is the INTEGER 0 */
+    uint8_t   phase;      /* the resolve call's own cursor */
+    JSValue   result;     /* step 4.2's list (owned) */
+    JSValue   cb[3];      /* the resolve call's operand buffer: [this, func, result] */
+} IdbDatabasesTask;
+
+static void js_idb_databases_task_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    IdbDatabasesTask *s = st;
+    int i;
+
+    v->val(ctx, &s->result);
+    STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
+}
+
+static int js_idb_databases_task(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    IdbDatabasesTask *s = st;
+    JSValueConst resolve = JS_StepClosureData(&s->hdr, 0);
+    int r;
+
+    if (!s->started) {
+        int i;
+
+        s->started = 1;
+        s->result = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, i) s->cb[i] = JS_UNDEFINED;
+    }
+    STEP_DISPATCH(DBT_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(DBT_COLLECT);
+        JS_FreeValue(ctx, cb_result);
+        {
+            /* Step 4.1: "let databases be the set of databases in storageKey. If this cannot be determined for
+               any reason, then ... reject p with an appropriate error." There is no reason it cannot be: the
+               set is this agent's own record, so a failure to read it is this component disagreeing with
+               itself and idb_database_list crashes rather than reporting an UnknownError. */
+            JSValue set = idb_database_list(ctx), out = JS_NewArray(ctx);
+            JSValue len = JS_GetPropertyStr(ctx, set, "length");
+            uint32_t i, n = 0, k = 0;
+            int cr = JS_ToUint32(ctx, &n, len);
+
+            DCHECK(cr >= 0, "§2.1's set of databases was listed as something without a numeric length");
+            (void)cr;
+            JS_FreeValue(ctx, len);
+            CHECK(!JS_IsException(out), "IndexedDB: §4.3 databases() step 4.2's list could not be allocated");
+            for (i = 0; i < n; i++) {
+                JSValue db = JS_GetPropertyUint32(ctx, set, i), info;
+                double version = idb_database_version(ctx, db);
+
+                /* Step 4.3.1: "If db's version is 0, then continue." A database is at version 0 between §5.1
+                   step 6 creating it and §5.7 step 8 raising it — and it STAYS there when step 7 refuses the
+                   open, so this is not a transient the page cannot observe. */
+                if (version == 0) { JS_FreeValue(ctx, db); continue; }
+                /* Steps 4.3.2-4.3.5: a new IDBDatabaseInfo whose two members are db's name and version.
+                   `dictionary IDBDatabaseInfo { DOMString name; unsigned long long version; }` — a Web IDL
+                   dictionary crosses into ECMAScript as own data properties in DECLARATION order. */
+                info = JS_NewObject(ctx);
+                CHECK(!JS_IsException(info), "IndexedDB: an IDBDatabaseInfo could not be allocated");
+                JS_SetPropertyStr(ctx, info, "name", idb_database_name(ctx, db));
+                JS_SetPropertyStr(ctx, info, "version", JS_NewFloat64(ctx, version));
+                JS_DefinePropertyValueUint32(ctx, out, k++, info, JS_PROP_C_W_E);
+                JS_FreeValue(ctx, db);
+            }
+            JS_FreeValue(ctx, set);
+            s->result = out;
+        }
+        STEP_GOTO(s->hdr.stage, DBT_RESOLVE, &s->phase, NULL);
+        return JS_STEP_YIELD;
+
+    STEP_ARM(DBT_RESOLVE);
+        {
+            JSValue settled = JS_UNDEFINED;
+
+            DCHECK(JS_IsFunction(ctx, resolve), "§4.3 databases()'s task carried no resolving function — the "
+                                                "member takes the capability's first function with it, and it "
+                                                "is the only thing the task is minted over");
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), resolve, JS_UNDEFINED, 1,
+                              (JSValueConst *)&s->result, cb_result, &settled, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+            JS_FreeValue(ctx, settled);
+        }
+        return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_idb_databases_task_def = {
+    sizeof(IdbDatabasesTask), js_idb_databases_task, NULL, 0, .visit = js_idb_databases_task_visit,
+    .algorithm = "Indexed Database §4.3 databases()'s in-parallel steps and the database task that resolves p",
+    .steps = DBT_STEPS
+};
+
+#define DBS_STAGES(X) \
+    X(DBS_RUN,    "Indexed Database §4.3 databases() steps 1-3 and 5 — ONE O(1) engine action: the storage " \
+                  "key is obtained, p is a new promise, step 4 is queued as a database task, and p is " \
+                  "returned") \
+    X(DBS_REJECT, "Indexed Database §4.3 databases() step 2's failure (return a promise rejected with a " \
+                  "SecurityError DOMException)")
+enum { IDL_STEP_STAGE_BASE(DBS_STAGES) DBS_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const DBS_STEPS[] = { DBS_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    uint8_t started;
+    uint8_t phase;
+    JSValue promise;   /* step 3's `p` (owned) */
+    JSValue func;      /* the capability function step 2's failure calls (owned) */
+    JSValue value;     /* the SecurityError it is called with (owned) */
+    JSValue cb[3];
+} IdbDatabasesState;
+
+static void js_idb_databases_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    IdbDatabasesState *s = st;
+    int i;
+
+    v->val(ctx, &s->promise);
+    v->val(ctx, &s->func);
+    v->val(ctx, &s->value);
+    STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
+}
+
+static int js_idb_databases(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                            JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdbDatabasesState *s = st;
+    int r;
+
+    (void)argc; (void)argv;
+    *presult = JS_UNDEFINED;
+    if (!s->started) {
+        int i;
+
+        s->started = 1;
+        s->promise = s->func = s->value = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, i) s->cb[i] = JS_UNDEFINED;
+    }
+    STEP_DISPATCH(DBS_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(DBS_RUN);
+        JS_FreeValue(ctx, cb_result);
+        {
+            JSValue funcs[2];
+
+            if (!factory_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
+            /* Step 3: "let p be a new promise." Minted BEFORE step 2's refusal is reported, because that
+               refusal is a REJECTED PROMISE and not a throw — `indexedDB.databases()` in a sandboxed document
+               returns something a page can `.catch`, which is the one way this member differs from `open` and
+               `deleteDatabase` in how it says the same no. */
+            s->promise = JS_NewPromiseCapability(ctx, funcs);
+            if (JS_IsException(s->promise)) { s->promise = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+            if (origin_is_opaque(window_proxy_origin(document_window_proxy(ctx)))) {
+                JS_ThrowDOMException(ctx, "SecurityError",
+                                     "a document with an opaque origin has no storage key");
+                s->value = JS_GetException(ctx);
+                s->func = funcs[1];
+                JS_FreeValue(ctx, funcs[0]);
+                STEP_GOTO(hdr->stage, DBS_REJECT, &s->phase, NULL);
+                return JS_STEP_YIELD;
+            }
+            /* Step 4: "run these steps in parallel". The task takes the RESOLVING FUNCTION with it and nothing
+               else — the set it reads is read when it runs, which is what makes the answer a snapshot of that
+               moment rather than of this one. */
+            {
+                JSValue task = JS_NewStepClosure(ctx, g_id_databases_task, 0, 1, (JSValueConst *)&funcs[0]);
+
+                CHECK(!JS_IsException(task), "IndexedDB: §4.3 databases()'s database task could not be minted");
+                JS_EnqueueCallTask(ctx, task, 0, NULL);
+                JS_FreeValue(ctx, task);
+            }
+            JS_FreeValue(ctx, funcs[0]);
+            JS_FreeValue(ctx, funcs[1]);   /* nothing rejects p: step 4.1's failure cannot arise — see the task */
+        }
+        *presult = s->promise;             /* step 5: "return p" */
+        s->promise = JS_UNDEFINED;
+        return JS_STEP_DONE;
+
+    STEP_ARM(DBS_REJECT);
+        {
+            JSValue settled = JS_UNDEFINED;
+
+            r = step_call_run(ctx, &s->phase, STEP_CB(s->cb), s->func, JS_UNDEFINED, 1,
+                              (JSValueConst *)&s->value, cb_result, &settled, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return JS_STEP_ABRUPT;
+            JS_FreeValue(ctx, settled);
+        }
+        *presult = s->promise;
+        s->promise = JS_UNDEFINED;
+        return JS_STEP_DONE;
+}
+
+static const IdlStepDecl DBS_STEP = {
+    js_idb_databases, sizeof(IdbDatabasesState), js_idb_databases_visit, NULL,
+    "Indexed Database §4.3 IDBFactory.databases()", DBS_STEPS
+};
+
 /* `[SameObject] readonly attribute IDBFactory indexedDB` — the guarantee comes from the realm slot rather than
    from a cache in the getter, the same way §6.4.4's UserActivation and Storage §2's StorageManager do. */
 static JSValue js_idb_get_factory(JSContext *ctx, JSValueConst this_val, int magic)
@@ -268,6 +497,7 @@ static void indexed_db_install_realm(JSContext *ctx)
     idl_interface_tag(ctx, proto, "IDBFactory");
     idl_install_method(ctx, proto, "open", 1, g_id_open);
     idl_install_method(ctx, proto, "deleteDatabase", 1, g_id_delete);
+    idl_install_method(ctx, proto, "databases", 0, g_id_databases);
     idl_install_method(ctx, proto, "cmp", 2, g_id_cmp);
     JS_SetClassProto(ctx, g_factory_class, JS_DupValue(ctx, proto));
 
@@ -311,5 +541,10 @@ void indexed_db_init(JSContext *ctx)
     /* `[NewObject] IDBOpenDBRequest deleteDatabase(DOMString name)` — one required argument, no optional
        version, which is the whole of what its declaration differs from `open`'s by. */
     g_id_delete = idl_method_id(ctx, DELETE_ARGS, 1, js_idb_delete_database, 0);
+    /* `Promise<sequence<IDBDatabaseInfo>> databases()` — no arguments, and the machine is what the REJECTION
+       needs: settling a promise is calling the capability's function, which is the page's code path and cannot
+       be a JS_Call from C. */
+    g_id_databases = idl_method_id_step(ctx, NULL, 0, NULL, 0, &DBS_STEP, 0);
+    g_id_databases_task = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_idb_databases_task_def);
     realm_declare_intrinsic(indexed_db_install_realm);
 }

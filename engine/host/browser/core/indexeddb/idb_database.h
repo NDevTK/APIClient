@@ -33,6 +33,13 @@ JSValue idb_database_create(JSContext *ctx, const char *name);
    both of those are asserted here, where the record is dropped, rather than trusted from the caller. */
 void idb_database_destroy(JSContext *ctx, JSValueConst db);
 
+/* §2.1's SET, ENUMERATED — "let databases be the set of databases in storageKey", which is §4.3's `databases()`
+   and nothing else. An OWNED Array of the database records in the set's own order; the caller reads each one's
+   name and version through the two accessors below. §4.3 step 4.3.1 is the caller's ("if db's version is 0,
+   then continue"), not this one's: the set genuinely holds a version-0 database whenever §5.1 step 6 created
+   one for an open that step 7 then refused, and that is the state the clause exists for. */
+JSValue idb_database_list(JSContext *ctx);
+
 /* §2.1's VERSION. There is no setter, and its absence is the standard's own sentence rather than a gap: "The
    only way to change the version is using an upgrade transaction", and there is no transaction yet — so the
    version a database has is the 0 it was created with, and the member that changes it arrives with §5.1's

@@ -388,6 +388,30 @@ void idb_database_destroy(JSContext *ctx, JSValueConst db)
     JS_FreeValue(ctx, name);
 }
 
+JSValue idb_database_list(JSContext *ctx)
+{
+    JSPropertyEnum *names = NULL;
+    uint32_t count = 0, i;
+    JSValue out;
+
+    DCHECK(!JS_IsUndefined(g_databases), "§2.1's set of databases was enumerated before idb_database_init "
+                                         "built it");
+    out = JS_NewArray(ctx);
+    CHECK(!JS_IsException(out), "IndexedDB: §2.1's set of databases could not be listed");
+    CHECK(JS_GetOwnPropertyNames(ctx, &names, &count, g_databases, JS_GPN_STRING_MASK) == 0,
+          "IndexedDB: §2.1's set of databases could not be enumerated");
+    for (i = 0; i < count; i++) {
+        JSValue db = JS_GetProperty(ctx, g_databases, names[i].atom);
+
+        DCHECK(JS_IsObject(db), "§2.1's set of databases held something that is not a database");
+        JS_DefinePropertyValueUint32(ctx, out, i, db, JS_PROP_C_W_E);
+    }
+    for (i = 0; i < count; i++)
+        JS_FreeAtom(ctx, names[i].atom);
+    js_free(ctx, names);
+    return out;
+}
+
 JSValue idb_database_name(JSContext *ctx, JSValueConst db)
 {
     JSValue v = JS_GetPropertyStr(ctx, db, IDB_DB_NAME);
