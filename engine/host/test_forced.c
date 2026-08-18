@@ -3176,8 +3176,30 @@ static char *tf_park_load(const char *path) {
  * probe is about is what puts there — and membership is `strstr(doc, key)`. The SESSION is the other half and is
  * not derivable from the document: --cold-park and --cold-resume run the same one and make different statements
  * about it (what a park WROTE / what a resume REBUILT). */
-typedef struct { const char *name; int ok; const char *key; unsigned char sess; } Probe;
+/* AND A FOLDED ROW CARRIES THE NAME OF THE STATEMENT THAT IS 0 IN IT, which is the same rule one layer down.
+   `node-algo` is ONE row computed from a hundred independent assertions, so its 0 says "one of a hundred" and
+   that is not a localisation — it is the count-with-no-name-in-it CLAUDE.md §C-stack forbids, wearing a
+   measurement's clothes instead of an engine's. It cost a real prediction this session: a report predicted a
+   probe called `ce-async` green, and there is no such row — the assertion it named (`/api/ceasync` carrying
+   `ceAWAIT`, the custom-element reaction that parks at a loop and at an await) is one of NODE_ALGOS' 98 rows,
+   has no name of its own, and was therefore never asked as itself. A row that cannot be named cannot be
+   predicted against, cannot be cited when it goes red, and cannot be reported verbatim.
+   NULL for every row that is its own statement (the omitted trailing initialiser), because those already name
+   themselves — `iframe-nav` is `/api/iframenav` carrying `ifnav` and nothing else, so its 0 is already a
+   localisation. */
+typedef struct { const char *name; int ok; const char *key; unsigned char sess; const char *why; } Probe;
 enum { SESS_EXPLORE = 0, SESS_PARK = 1, SESS_RESUME = 2 };
+
+/* THE FOLD, WITH THE NAME KEPT. `ok` is the assertion, `what` is what it is about, and the FIRST failure is the
+   one kept: a fold is a conjunction, so the first 0 is where the run stopped being right and everything after
+   it is unconditioned on that. `why` is a LOCAL of the caller and not a static, because probes_eval runs at
+   every sample of a live run — a static would pin the first sample's failure forever, and report a statement
+   that had since become true. */
+static void fold_row(int *row, const char **why, int ok, const char *what) {
+    if (ok) return;
+    *row = 0;
+    if (!*why) *why = what;
+}
 /* THE CALLER'S ROOM FOR THE SELECTED ROWS — a buffer size with an abort behind it (probes_eval's `n < cap`),
    never a limit on how many statements a document may make. Raised with the @S stage rows: the table is 107
    and the full document selects nearly all of them, so the old 128 left a margin the next lane to add a row
@@ -3797,33 +3819,57 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "\"/api/prereq\"",    "isreq"   },   /* a `required` dictionary member, enforced by the declaration */
         { "\"/api/prector\"",   "isctor"  },
     };
-    int nodealgo_tt = !strstr(js, "wrong");
+    /* EVERY ONE OF THESE NAMES ITSELF NOW (fold_row above). They were a hundred bare `nodealgo_tt = 0`
+       assignments, and the row is currently 0, so what the gate has been reporting for this whole session is
+       "one of a hundred spec statements is wrong" with no way to ask which — while two of the hundred are the
+       only reason anyone looks at it. */
+    int nodealgo_tt = 1;
+    const char *nodealgo_why = NULL;
+    /* THE WEAKEST-NAMED ONE, AND IT IS FIRST DELIBERATELY. `wrong` is the failure token of dozens of
+       independent fixture statements, so this assertion genuinely cannot localise further — which is exactly
+       why it must say so rather than share the silence of the ones that can. */
+    fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "wrong"),
+             "some statement of the fixture recorded its `wrong` token");
     /* §4.10: submit() derived the GET; the named field carries its SOURCE rather than an invented value; a
        DISABLED control contributed nothing and an UNCHECKED box contributed nothing, both of which only an
        absence can prove; and the second submit AFTER checking it does include it. */
-    if (!strstr(js, "\"/api/search\"") || !strstr(js, "{state}.q")) nodealgo_tt = 0;
-    if (strstr(js, "\"off\"")) nodealgo_tt = 0;
-    if (!strstr(js, "\"agree\"")) nodealgo_tt = 0;
+    fold_row(&nodealgo_tt, &nodealgo_why, strstr(js, "\"/api/search\"") && strstr(js, "{state}.q"),
+             "§4.10 submit() derived the GET carrying the field's source");
+    fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "\"off\""),
+             "§4.10 a DISABLED control contributed nothing");
+    fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "\"agree\""),
+             "§4.10 the box CHECKED before the second submit contributed");
     /* requestSubmit(): the CANCELLED form's action must never appear, and the uncancelled one's must. */
-    if (strstr(js, "/api/never")) nodealgo_tt = 0;
-    if (!strstr(js, "\"/api/didsubmit\"") || !strstr(js, "\"rs\"")) nodealgo_tt = 0;
+    fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "/api/never"),
+             "§4.10 requestSubmit()'s CANCELLED form never reached its action");
+    fold_row(&nodealgo_tt, &nodealgo_why, strstr(js, "\"/api/didsubmit\"") && strstr(js, "\"rs\""),
+             "§4.10 requestSubmit()'s uncancelled form reached its action");
     /* §4.13: the async reaction's loop ran to its END across the preempts, not to some suspended partial. */
-    if (!strstr(js, "\"44850\"")) nodealgo_tt = 0;
+    fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "\"44850\""),
+             "§4.13 the async reaction's loop ran to its END across the preempts");
     /* The uncaught DOMException is NAMED in the report, not "an object with no own name/message". */
-    if (!strstr(js, "SyntaxError: not a valid custom element name")) nodealgo_tt = 0;
+    fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "SyntaxError: not a valid custom element name"),
+             "an uncaught DOMException is NAMED in the page-error report");
     /* §8.4 outerHTML is the same serialiser over the element ITSELF — its own tag and attributes included. */
-    if (!strstr(js, "%3Csection%20data-k%3D%22v%22%3E%3Cp%20class%3D%22q%22%3Ehi%3Cbr%3E%3C%2Fp%3E%3C%2Fsection%3E"))
-        nodealgo_tt = 0;
+    fold_row(&nodealgo_tt, &nodealgo_why,
+             !!strstr(js, "%3Csection%20data-k%3D%22v%22%3E%3Cp%20class%3D%22q%22%3Ehi%3Cbr%3E%3C%2Fp%3E%3C%2Fsection%3E"),
+             "§8.4 outerHTML serialised the element ITSELF, tag and attributes included");
     /* §4.13.3: the old value, the new one, the removal's null — and NOTHING for the unobserved attribute. */
-    if (!strstr(js, "\"first\"") || !strstr(js, "\"second\"")) nodealgo_tt = 0;
-    if (strstr(js, "data-ignored") || strstr(js, "\"nope\"")) nodealgo_tt = 0;
+    fold_row(&nodealgo_tt, &nodealgo_why, strstr(js, "\"first\"") && strstr(js, "\"second\""),
+             "§4.13.3 attributeChangedCallback saw the old value and the new one");
+    fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "data-ignored") && !strstr(js, "\"nope\""),
+             "§4.13.3 the UNOBSERVED attribute produced no reaction");
     /* §8.1.7.5: the rejection nobody handled is reported, and the one handled a microtask later is NOT. */
-    if (!strstr(js, "rejNOHANDLER")) nodealgo_tt = 0;
-    if (strstr(js, "rejHANDLED")) nodealgo_tt = 0;
+    fold_row(&nodealgo_tt, &nodealgo_why, !!strstr(js, "rejNOHANDLER"),
+             "§8.1.7.5 the rejection nobody handled is reported");
+    fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "rejHANDLED"),
+             "§8.1.7.5 the rejection handled a microtask later is NOT reported");
     /* …and the one a listener CANCELLED is not reported either — the page answered for it. */
-    if (strstr(js, "rejCANCEL")) nodealgo_tt = 0;
+    fold_row(&nodealgo_tt, &nodealgo_why, !strstr(js, "rejCANCEL"),
+             "§8.1.7.5 the rejection a listener CANCELLED is not reported");
     for (unsigned ai = 0; ai < sizeof(NODE_ALGOS) / sizeof(NODE_ALGOS[0]); ai++)
-        if (!strstr(js, NODE_ALGOS[ai][0]) || !strstr(js, NODE_ALGOS[ai][1])) nodealgo_tt = 0;
+        fold_row(&nodealgo_tt, &nodealgo_why,
+                 strstr(js, NODE_ALGOS[ai][0]) && strstr(js, NODE_ALGOS[ai][1]), NODE_ALGOS[ai][0]);
     /* THE OUTCOME FORK, both halves. Positive: ONE run reached BOTH completions of `JSON.parse` over unknown
        text, which can only happen by a snapshot fork taken inside the builtin — the throw arm carries the real
        SyntaxError, so `catch` ran with a real Error object rather than a shape. Negative: the same builtin over
@@ -3966,7 +4012,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE },
         { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE },
         { "dom-idl", domidl_tt, "/api/protoid", SESS_EXPLORE },
-        { "node-algo", nodealgo_tt, "/api/nodeconst", SESS_EXPLORE },
+        { "node-algo", nodealgo_tt, "/api/nodeconst", SESS_EXPLORE, nodealgo_why },
         { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE },
         { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE },
         { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE },
@@ -4098,6 +4144,12 @@ static int probes_report(const char *js, bool final) {
     Probe rows[PROBE_MAX];
     int n = probes_eval(js, rows, PROBE_MAX), ok = 1, i;
 
+    /* THE STATEMENT BEHIND A FOLDED 0, ON ITS OWN LINE AND BEFORE THE VERDICT. Before, because this function's
+       own rule is that the LAST line of a killed run is the verdict — the file already carries the measurement
+       that 177 of 179 samples of a passing run were read backwards by a `tail`, and appending sentences after
+       it would put that back. A row with no `why` prints nothing: it already names itself. */
+    for (i = 0; i < n; i++)
+        if (!rows[i].ok && rows[i].why) printf("@H   %s: %s\n", rows[i].name, rows[i].why);
     printf("@H ");
     for (i = 0; i < n; i++) {
         ok = ok && rows[i].ok;
