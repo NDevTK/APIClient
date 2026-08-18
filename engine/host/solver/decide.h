@@ -63,10 +63,21 @@ int  decide_value_arm(JSValueConst cond);
    re-run got before forking. */
 int  decide_cursor(void);
 
-/* WHICH PREDICATE IS GROWING THE FRONTIER — the most-forked constraint key, its hits, the total number of
-   forks and how many distinct predicates have produced one. A frontier that grows without stopping is growing
-   at ONE branch, and every counter in the progress stream says only that it is growing: `flows` climbing while
-   `live` stays flat says the shape is a CHAIN and still not where the chain is. This is where.
+/* WHAT IS GROWING THE FRONTIER — the most-forked key, its hits, the total number of forks and how many
+   distinct sites have produced one. A frontier that grows without stopping is growing at ONE place, and every
+   counter in the progress stream says only that it is growing: `flows` climbing while `live` stays flat says
+   the shape is a CHAIN and still not where the chain is. This is where.
+   IT IS EVERY FORK AND NOT EVERY PREDICATE, which is a correction rather than a widening: a sibling minted
+   when a PEER'S ANSWER ARRIVES (decide_fork_same_path) is a member of the frontier and asked no question, so
+   it was in neither the total nor the rows while the total was the number a reader subtracts to account for
+   where the frontier's members came from. It has its own row, named for what it is, because a fabricated
+   predicate key would merge with a real one.
+   READ THE COUNTS AS ARRIVALS, NOT AS PRODUCTION. Each row is how many flows REACHED that site, and every
+   fork upstream doubles what reaches everything below it, so a program with k independent gates in sequence
+   produces rows in a geometric series and the LAST site in program order is always the largest. Measured on
+   the full-document smoke: 32, 64, 128, 256, 512 across five distinct gates, with the biggest row 44% of all
+   forks — read as one hot predicate that is a hot predicate, and read correctly it is the bottom of a cascade
+   that would be untouched by anything done to it.
    It is keyed by the CONSTRAINT key rather than a file:line because that is what a predicate IS here — two
    forks at one source and operation are one predicate however many call sites spell it, and a chain (a source
    whose operation string carries a position) shows as `distinct` climbing with `total`, which distinguishes

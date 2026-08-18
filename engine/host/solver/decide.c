@@ -444,6 +444,21 @@ void *decide_fork_same_path(void) {
     b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM forking a flow's decision state");
     b->seg = dec_freeze();   /* the caller's reference, on top of the running flow's own */
     b->c = g_c;
+    /* AND IT IS COUNTED, because this mints a MEMBER OF THE FRONTIER and @PROGRESS's `forks` is the frontier's
+       growth. It was counted nowhere: fork_key_count runs only in decide_arm's new-decision branch, so every
+       sibling a peer's answer created was invisible to both the total and the histogram — and the histogram's
+       own sentence is "WHICH PREDICATE IS GROWING THE FRONTIER", which for this class it could not answer at
+       all. The cost of the omission is not the undercount, it is what the undercount does to a reader: a
+       frontier's provenance is exactly `created = 1 + forks + candidates + joined documents + cold resumes`,
+       and with this class missing the residual of that subtraction is the sum of THREE unrelated things. A sum
+       labelled with one of its terms is a number that means whichever term the reader had in mind — measured,
+       a residual of 0 was read as "no child document was ever given a timeline", which is not what it says and
+       is not even true of the run that produced it.
+       IT GETS ITS OWN ROW AND NOT A FABRICATED KEY. There is no predicate here — the paragraph above says so
+       in as many words — so composing one would put a branch in the census that the program never took, and
+       the row would merge with a real predicate the moment one spelled the same way. The row states what
+       actually happened, which is also what keeps the rows summing to the total. */
+    fork_key_count("(a peer's answer arrived — no predicate was asked)");
     return b;
 }
 
