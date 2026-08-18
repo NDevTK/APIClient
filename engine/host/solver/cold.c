@@ -303,6 +303,21 @@ static void park_rec_cand(const Flow *f, long id)
     park_hex(f->cand_payload);
 }
 
+/* A FOREIGN WORLD'S SEGMENT — the one record in this document that names nothing of this frontier. See cold.h
+   for the grammar and solver/world.h for why a VECTOR is the whole of such a segment's recipe. It is written
+   like park_rec_cand's text fields and not through park_rec: a world vector holds the colons and commas
+   world_serialize writes and whatever the host called the root document, so it crosses as hex rather than as a
+   fifth charset this grammar has to be kept in step with. */
+static void park_rec_world(const char *vector)
+{
+    DCHECK(vector != NULL && *vector,
+           "a foreign segment was written to the park document with no vector — the vector IS the segment's "
+           "recipe, so a record without one names a peer timeline the resume cannot rebuild");
+    park_open_rec();
+    park_str("w");
+    park_hex(vector);
+}
+
 /* THE SEGMENT ORDINALS — the cross-tier NAME of a frozen decision segment, valid only inside one park document
    (which is the whole of what has to agree about it). The name lives ON THE SEGMENT (decide.h's
    decide_seg_park_id), and the only thing kept here is which ordinal comes next.
@@ -424,6 +439,11 @@ void cold_park_preview(ColdPreview *out)
         }
         if (deep) out->deep++;
     }
+    /* AND THE ROW THAT IS NOT A MEMBER OF THE FRONTIER. A foreign segment belongs to a PEER's flow, so no walk
+       of this registry can find it and the host would otherwise be shown a residue smaller than the one it is
+       about to be handed. Asked of the LIVE table (world.h's world_segments_held), never of the
+       materialization history beside it — the two agree only until a world dies. */
+    out->worlds = world_segments_held();
 }
 
 /* PARK ONE FLOW — the primitive, and the whole-frontier park below is the loop over it. See cold.h. */
@@ -540,42 +560,33 @@ void cold_park(void)
            "the host asked this engine to page out a frontier with no members — an empty park document is how a "
            "fully-explored document deletes its cold entry, so this stores 'nothing left to do' over whatever "
            "residue the origin had");
-    /* ANOTHER INSTANCE'S FLOW STATE LIVES HERE, AND IT HAS NO RECIPE. A foreign world's segment is a peer
-       document's timeline materialized in this instance; it belongs to a flow this frontier does not contain,
-       so no record written below names it and no replay of ours re-derives it. It is asked HERE and not in the
-       per-flow primitive because it is a fact about this ENGINE leaving memory, which is what a whole-frontier
-       park is and what a partial one is not.
-       IT IS ASKED OF THE LIVE COUNT, AND IT USED TO BE ASKED OF A HISTORY — which is the same defect this file's
-       own park hook had one layer up, arriving from the other side. `world_segment_stats` counts
-       MATERIALIZATIONS and world_release never decrements it (world.h calls it "a record of what the seam DID"),
-       so this present-tense claim was decided by a number that can only rise. test_forced.c's
-       world_registry_selftest materializes four peer worlds at startup and releases all four before the document
-       is even parsed, so the FIRST park that fixture ever succeeded in taking aborted here — on a peer it does
-       not have, naming the cross-instance park as the work to do next. The refusal itself is right and stays
-       exactly as it is; what changed is which number it reads. */
-#if APICLIENT_DEV
-    {
-        /* AND IT SAYS BOTH NUMBERS, because telling them apart is the whole of what this abort cost once. A
-           reader standing here has to decide between "a peer really is here" and "the counter is answering
-           about something else", and `held` alone cannot say: with `made` beside it, held=0 is impossible to
-           reach, held=4/made=4 is a live peer, and a held that is far below made is a seam that materialized
-           and released — which is what a self-test does, and what every sender whose flows have finished now
-           does, since a world announces its own death (solver/world.h). */
-        int held = world_segments_held(), made = 0;
-        char why[512];
-
-        world_segment_stats(&made, NULL);
-        snprintf(why, sizeof why,
-                 "the frontier was parked while this instance holds a segment of a FOREIGN world — that is a "
-                 "peer document's flow state living here, no record below names it, and paging this engine out "
-                 "drops it. Build the cross-instance park: a foreign segment travels with the WORLD's name "
-                 "(solver/world.h), not with this document's flows, and the offscreen is what re-routes it to "
-                 "the instance that rebuilds the peer. held=%d materialized-ever=%d", held, made);
-        DCHECK(held == 0, why);
-    }
-#endif
     cold_park_preview(&would);
     cold_parked(&before);
+    /* ANOTHER INSTANCE'S FLOW STATE LIVES HERE, AND IT CROSSES BY NAME. A foreign world's segment is a peer
+       document's timeline materialized in this instance; it belongs to a flow this frontier does not contain,
+       so no 'f' or 'c' record below names it and no replay of ours re-derives it. This file REFUSED the park
+       over it — correctly, while nothing carried it — and the refusal is deleted rather than kept beside the
+       mechanism: what a segment IS across the tier is the VECTOR it was materialized from, world_segment is a
+       pure function of that vector, and re-running it in the resumed session rebuilds the segment the way the
+       first arrival built it (solver/world.h). The invariant the refusal was standing in for did not
+       disappear — a vector is the whole recipe only while the segment holds no WRITES — and it is asserted at
+       its origin, on the segment, where both the delta and its name are in one hand.
+       WRITTEN HERE AND NOT IN THE PER-FLOW PRIMITIVE, because it is a fact about this ENGINE leaving memory:
+       a PARTIAL self-park writes a tail of flows and the instance keeps running, so it holds its peers'
+       segments exactly as it did before. That is also what the preview's `worlds` row is for — it is the one
+       row the two parks answer differently.
+       FIRST IN THE DOCUMENT AFTER THE GENERATION, and in MATERIALIZATION order, so the resume's forward pass
+       has every ancestor in place before it rebuilds anything forked from one. */
+    {
+        const char *const *carried;
+        int n_carried = world_segments_park(&carried), k;
+
+        park_gen_rec();
+        for (k = 0; k < n_carried; k++) {
+            park_rec_world(carried[k]);
+            g_parked_census.worlds++;
+        }
+    }
     for (i = 0; (f = flow_at(i)) != NULL; i++) {
         if (park_flow_deep(f)) deep_written++;
         cold_park_flow(f);
@@ -587,6 +598,7 @@ void cold_park(void)
        selection and not the other, and on a cold_park_flow that returned without writing. */
     DCHECK(after.flows - before.flows == would.flows &&
            after.cands - before.cands == would.cands &&
+           after.worlds - before.worlds == would.worlds &&
            deep_written == would.deep,
            "the park wrote a different residue from the one its own preview described — the host evicted this "
            "engine on the strength of that description, so whatever it is storing is not what it was told it "
@@ -735,6 +747,25 @@ void cold_resume(JSContext *ctx, const char *recipes)
             world_session_resume((uint32_t)strtoul(q, &ep, 10));
             DCHECK(ep == end, "a generation record carries something after its number — the record is one "
                               "unsigned integer and nothing else");
+        } else if (kind == 'w') {
+            /* A PEER'S TIMELINE, RE-MATERIALIZED FROM THE ONE THING ABOUT IT THAT HAS AN IDENTITY OUTSIDE THE
+               SESSION THAT HELD IT. The vector is handed straight back to world_segment, which is the same
+               call the first arrival made: it forks the nearest ancestor this instance already holds and
+               starts from the baseline when it holds none — so a document's records rebuild in one forward
+               pass, in the order they were materialized, with nothing to patch up.
+               IT IS NOT A FLOW and is deliberately outside `flows`: no member of the frontier is added, no
+               ordinal is assigned, and the merge's shape asserts below are about members. A residue of nothing
+               but 'w' records is refused by those asserts exactly as it should be — an instance that held
+               peers' segments and no flows of its own has nothing to resume. */
+            WorldId w;
+            const WorldId *anc;
+            int n_anc;
+            char *vec = park_unhex(q, end);
+
+            n_anc = world_parse(vec, &w, &anc);
+            world_segment(ctx, w, anc, n_anc);
+            free(vec);
+            g_resumed.worlds++;
         } else if (kind == 's') {
             long id, bid;
             signed char *arms;
@@ -864,7 +895,8 @@ void cold_resume(JSContext *ctx, const char *recipes)
                the letter is named in the abort so a reader is told which capability wrote it rather than being
                told the document is corrupt. */
             DFAIL("a park record names a kind this grammar does not have — the recipe holds a GENERATION ('g'), "
-                  "SEGMENTS ('s'), FLOWS ('f') and @S CANDIDATE SESSIONS ('c') and nothing else. A 'd' record "
+                  "FOREIGN WORLD SEGMENTS ('w'), SEGMENTS ('s'), FLOWS ('f') and @S CANDIDATE SESSIONS ('c') "
+                  "and nothing else. A 'd' record "
                   "is a DISCOVERY PROBE written by a session in which the engine seeded its own document "
                   "fetches; that flow kind no longer exists, so this residue predates the change or came from "
                   "another writer");

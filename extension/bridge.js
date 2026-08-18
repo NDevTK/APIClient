@@ -1534,6 +1534,35 @@ async function hostNotice(eng, line) {
     }
     return;
   }
+  /* `world.parked <world vector>` — the OPPOSITE statement to the one above, and the one this zone cannot yet
+     act on. A park writes the foreign segments this instance holds into its residue as replay recipes
+     (solver/cold.h's 'w' record), so a PEER's timeline now outlives the session that held it: whichever
+     instance resumes this document rebuilds a segment for that world from the vector this notice carries.
+     WHAT IS OWED HERE IS A MAPPING ACROSS A PARK, and it is a decision about THIS zone rather than a missing
+     line: `world.gone` is BROADCAST to the instances that are LIVE (the sending engine deliberately does not
+     record which peers a flow reached, because releasing a world with no segment is a no-op), and a cold
+     document is not one of them. So every death announced while this document is parked misses it, the
+     instance that resumes rebuilds a segment for a world that has ended, and it holds it for the rest of its
+     process — the exact leak `world.gone` exists to close, re-opened one tier down. Only this zone knows an
+     instance is parked and which document it was, which is why the engine states the set exactly (the worlds
+     the residue really carries, not every death for every cold document forever) and stops there.
+     THE DECISION, NAMED SO IT IS BUILT AND NOT GUESSED: where does that index live, and how far does it
+     survive? The frontier entry is keyed by (origin, bundle) and a death arrives naming a WORLD, so an index
+     on the entry needs a persisted reverse world -> entry map; a store of its own needs its own eviction. And
+     it must survive a BROWSER RESTART, because the residue does. Decide that, then deliver the held deaths to
+     the resuming instance through the `worldGone` call that already exists (ordinal 20) — after `begin`, which
+     is when its segments exist to be released. */
+  if (f[0] === "world.parked") {
+    DCHECK(f.length >= 2 && !!f[1],
+           "a world.parked notice carried no world vector — the vector is what the resuming instance hands " +
+           "back to world_segment, so an empty one names a peer timeline nothing can rebuild or release");
+    DFAIL("an engine parked while carrying a PEER's world segment across the cold tier (`" + f[1] + "`), and " +
+          "this zone holds no death queue for a cold document. Every `world.gone` announced while this " +
+          "document is parked is broadcast to the LIVE pool alone and lost, so the instance that resumes it " +
+          "rebuilds a segment for a world that has ended and never releases it. Build the index this notice " +
+          "exists to make exact — world name -> the parked document carrying a segment for it, persisted as " +
+          "far as the residue is — and drain it into the resuming instance's `worldGone` after `begin`");
+  }
   DFAIL("an engine emitted a notice with an op this zone does not act on — the engine's half is built, so the " +
         "host's half is the unbuilt one: `" + f[0] + "`");
 }

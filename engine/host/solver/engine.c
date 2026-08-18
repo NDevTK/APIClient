@@ -740,6 +740,26 @@ void engine_notify_worlds_gone(JSContext *ctx, const char *const *names, int n)
     }
 }
 
+/* See engine.h. The vector and not a bare name, because it is what the RESUME hands back to world_segment —
+   the ancestry is half of how a segment is materialized, so a record carrying only the head names a world the
+   rebuild would start from the baseline for. */
+void engine_notify_worlds_parked(JSContext *ctx, const char *const *vectors, int n)
+{
+    int i;
+
+    DCHECK(n == 0 || vectors != NULL, "the worlds a park carries were announced by a list that is not there");
+    for (i = 0; i < n; i++) {
+        size_t cap = strlen(vectors[i]) + 14;   /* "world.parked" + TAB + the vector + NUL */
+        char *rec = malloc(cap);
+        CHECK(rec != NULL, "engine: OOM announcing a foreign segment this park carries — the zone never told "
+                           "holds no death for that world while this document is cold, so the instance that "
+                           "resumes rebuilds a segment for a timeline that has ended and keeps it forever");
+        snprintf(rec, cap, "world.parked\t%s", vectors[i]);
+        engine_host_notify(ctx, rec);
+        free(rec);
+    }
+}
+
 /* THE INBOUND HALF OF IT — see engine.h. It is deliberately NOT engine_route: a delivery becomes a work item of
    every live timeline and a death is the end of one, so there is nothing to seed, no sender origin to stamp
    (nothing here runs page code) and no target document (the zone broadcasts, because the sender does not track
@@ -3692,6 +3712,15 @@ static int engine_sched_slice(void) {
     if (g_park_req) {
         if (cur) { flow_switch_out(ctx, cur); cur = NULL; }
         cold_park();
+        /* AND THE FOREIGN SEGMENTS THAT RESIDUE CARRIES, announced before the deaths below because they are the
+           opposite statement and the zone acts on them in that order: these worlds belong to PEERS and outlive
+           this session in the park document, so the zone has to hold their deaths for the instance that
+           resumes this document; the ones below are OURS and end here. */
+        {
+            const char *const *carried;
+            int n_carried = world_segments_park(&carried);
+            engine_notify_worlds_parked(ctx, carried, n_carried);
+        }
         /* AND EVERY WORLD THIS SESSION EVER PUT ON THE WIRE IS DEAD TO ITS PEERS — announced HERE, between the
            park and the close, because this is the last point at which a notice of ours is still drained. The
            frontier is recipes from the line above and a resumed session mints in a disjoint generation

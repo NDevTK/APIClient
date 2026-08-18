@@ -248,6 +248,36 @@ void world_segment_stats(int *materialized, int *forked);
  * still running. */
 int world_segments_held(void);
 
+/* …AND THE CROSS-TIER FORM OF EVERY ONE OF THEM, which is what lets an instance that has ANSWERED anything
+ * park at all. Returns how many, each written in world_serialize's own grammar and borrowed until the next
+ * call; `world_registry_free` frees the array.
+ *
+ * WHAT A FOREIGN SEGMENT IS IN COLD-TIER TERMS. It is a CowDelta — the one structure solver/cold.h says cannot
+ * be written down, because a CowEntry names its target by a LIVE HEAP POINTER — and it is worse than a local
+ * flow's delta in the one way that matters: no flow of THIS frontier produced it, so no recipe of ours replays
+ * it. It was materialized by an arrival from a PEER's flow, keyed on that flow's world, and cold_park refused
+ * the whole park while one was held rather than drop it.
+ *
+ * SO WHAT CROSSES IS THE VECTOR IT WAS MATERIALIZED FROM — the world's NAME and the ancestry the sender wrote
+ * — and that is a RECIPE and not a serialization in disguise, by exactly the argument cold.h makes about the
+ * decision chain: world_segment is a pure function of (vector, what this instance already holds), so replaying
+ * the vector in the resumed session rebuilds the same segment the same way the first arrival built it. The
+ * bytes of the delta are not written; the OPERATION that produced it is. It is also the only form that could
+ * cross: a `uint32_t doc` is this instance's handle into its own table and means a different document in a
+ * peer's, which is why the wire form names documents and the vector is kept rather than the WorldId.
+ *
+ * AND THE VECTOR IS THE WHOLE RECIPE EXACTLY WHILE THE SEGMENT IS EMPTY, which is asserted here rather than
+ * assumed — the same statement engine.c makes at all four arrival sites, from the other end. A segment gains
+ * CONTENT only when this instance runs page code under a foreign world, which is the JOIN engine_route names
+ * and which does not exist yet; the day it does, those writes were produced by the peer's records and the
+ * recipe is the ordered LOG of them, not these bytes. The refusal moves to that line rather than disappearing.
+ *
+ * IN MATERIALIZATION ORDER, which is what makes the replay reach the same answer rather than nearly it. A
+ * segment forks the nearest ancestor PRESENT when it is materialized, so an ancestor always has a lower
+ * position than anything forked from it, and emitting in that order means the rebuild's forward pass finds
+ * every ancestor already there. world_release preserves the order for this reason and not for tidiness. */
+int world_segments_park(const char *const **vectors);
+
 /* WHOSE LIFETIME A FOREIGN SEGMENT HAS, AND THE TWO DEATHS THAT END IT.
  *
  * A segment is materialized by the RECEIVING instance, keyed on the SENDING flow's world, and it must survive

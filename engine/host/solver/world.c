@@ -43,10 +43,20 @@ typedef struct {
 
 /* A SEGMENT this instance holds for a world minted somewhere ELSE. Sparse — only worlds that actually reached
    this instance appear — so a linear table indexed by nothing in particular is the right shape, and its length
-   is the number of foreign worlds that touched this document rather than the sender's frontier size. */
+   is the number of foreign worlds that touched this document rather than the sender's frontier size.
+   `vector` IS ITS CROSS-TIER NAME — the wire form it was materialized from, kept because that is the segment's
+   whole recipe (world.h, world_segments_park) and because the WorldId beside it cannot be written down: `doc`
+   is this instance's handle into its own table and names a different document in a peer's. Kept at
+   materialization rather than rebuilt at the park, so what crosses is the vector that actually built this
+   segment and not one re-derived from edges only the MINTING instance holds.
+   THE TABLE IS ORDERED BY MATERIALIZATION, which is a topological order over the fork edges: a segment forks
+   the nearest ancestor PRESENT when it is built, so an ancestor is always earlier. The park emits in that
+   order and the resume's forward pass then finds every ancestor already there — which is why world_release
+   removes in place rather than swapping the tail down. */
 typedef struct {
     WorldId   id;
     CowDelta *delta;
+    char     *vector;
 } ForeignSegment;
 
 static uint32_t g_doc;
@@ -183,6 +193,10 @@ static WorldId *g_parsed;   static int g_parsed_cap;
    state — the same reason neither buffer above takes a capacity. Each entry is owned here and freed at the
    start of the next call, which is what makes the borrow window in world.h a statement rather than a hope. */
 static char **g_gone;       static int g_gone_n, g_gone_cap;
+/* …AND THE FOURTH, WHICH OWNS NOTHING. world_segments_park hands out the vectors the SEGMENTS own, so this is
+   an array of borrowed pointers and only the array is freed — one entry per foreign segment held, which is a
+   number the park is about to write a record for each of anyway. */
+static const char **g_carried; static int g_carried_cap;
 
 void world_registry_init(const char *doc_name)
 {
@@ -233,8 +247,11 @@ void world_session_resume(uint32_t prev)
 void world_registry_free(JSContext *ctx)
 {
     int i;
-    for (i = 0; i < g_segs_n; i++)
+    for (i = 0; i < g_segs_n; i++) {
         cow_delta_release(ctx, g_segs[i].delta);
+        free(g_segs[i].vector);   /* the segment's cross-tier name is the segment's, and dies with it */
+    }
+    free(g_carried); g_carried = NULL; g_carried_cap = 0;
     free(g_segs);
     g_segs = NULL;
     g_segs_n = g_segs_cap = 0;
@@ -432,14 +449,18 @@ static int world_name_write(WorldId w, char *dst, size_t cap)
     return n;
 }
 
-/* See world.h. */
-int world_serialize(WorldId w, char *dst, size_t cap)
+/* THE VECTOR ITSELF — a head and an ancestry, in the grammar world_name_write spells one field of. It is split
+   out of world_serialize because a vector is produced from an ancestry this instance WALKED (a local flow's,
+   below) and from one it was HANDED (a foreign segment's, kept as that segment's cross-tier name), and two
+   spellings of the join would be two grammars — the defect world_parse's own comment names from the other
+   side. The walk stays inside world_serialize, which is what keeps world.h's "the ancestry walk is not
+   exported" true. */
+static int world_vector_write(WorldId w, const WorldId *anc, int n_anc, char *dst, size_t cap)
 {
-    WorldId *anc;
-    int n_anc, k, n;
+    int k, n;
 
     DCHECK(dst != NULL && cap > 0, "a world was serialized into no buffer");
-    n_anc = world_ancestry(w, &anc);
+    DCHECK(n_anc == 0 || anc != NULL, "a world vector was written with an ancestor count and no ancestors");
     n = world_name_write(w, dst, cap);
     for (k = 0; k < n_anc; k++) {
         CHECK((size_t)n + 1 < cap,
@@ -449,6 +470,34 @@ int world_serialize(WorldId w, char *dst, size_t cap)
         n += world_name_write(anc[k], dst + n, cap - (size_t)n);
     }
     return n;
+}
+
+/* …AND THE SAME VECTOR INTO A BUFFER THIS FILE OWNS, sized from the NAMES rather than from a constant, for
+   world_gone_push's reason: a document name nests one component per navigable depth, so any constant here is a
+   cap on the frame tree. The rest of a field is two colons, two full-width uint32 decimals, the separating
+   comma and the NUL. */
+static char *world_vector_alloc(WorldId w, const WorldId *anc, int n_anc)
+{
+    size_t cap = strlen(world_doc_name(w.doc)) + 23;
+    int i;
+    char *s;
+
+    for (i = 0; i < n_anc; i++) cap += strlen(world_doc_name(anc[i].doc)) + 24;
+    s = malloc(cap);
+    CHECK(s != NULL, "world registry: OOM naming a foreign segment — a segment whose NAME is lost cannot cross "
+                     "the cold tier, so the instance holding it can never park and the peer flow's state in "
+                     "this document is stranded here for the rest of the process");
+    world_vector_write(w, anc, n_anc, s, cap);
+    return s;
+}
+
+/* See world.h. */
+int world_serialize(WorldId w, char *dst, size_t cap)
+{
+    WorldId *anc;
+    int n_anc = world_ancestry(w, &anc);
+
+    return world_vector_write(w, anc, n_anc, dst, cap);
 }
 
 /* THE INVERSE, AND IT LIVES HERE BECAUSE A FORMAT WITH TWO READERS HAS TWO FORMATS. Every host that received a
@@ -611,9 +660,52 @@ CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int 
     }
     g_segs[g_segs_n].id = w;
     g_segs[g_segs_n].delta = d;
+    /* ITS CROSS-TIER NAME, TAKEN HERE BECAUSE HERE IS WHERE IT IS TRUE. The vector this segment was
+       materialized from is the operation that produced it, and world_segment is a pure function of it — so
+       keeping it is keeping the recipe (world.h). Re-deriving it at the park is not available: the ancestry
+       belongs to the MINTING instance's fork edges and this one holds none of them. */
+    g_segs[g_segs_n].vector = world_vector_alloc(w, ancestry, n_anc);
     g_segs_n++;
     g_seg_made++;
     return d;
+}
+
+/* See world.h. */
+int world_segments_park(const char *const **vectors)
+{
+    int i;
+
+    DCHECK(vectors != NULL, "the foreign segments this instance carries across the tier were asked for into "
+                            "nothing");
+    if (g_segs_n > g_carried_cap) {
+        const char **g = realloc(g_carried, (size_t)g_segs_n * sizeof *g);
+        CHECK(g != NULL, "world registry: OOM naming the foreign segments a park has to carry — a name dropped "
+                         "here is a peer flow's state in this document dropped at the boundary that was to "
+                         "save it");
+        g_carried = g;
+        g_carried_cap = g_segs_n;
+    }
+    for (i = 0; i < g_segs_n; i++) {
+        /* THE ONE THING THE VECTOR CANNOT SAY, ASSERTED WHERE THE VECTOR IS HANDED OVER. A segment's writes are
+           produced by page code this instance ran UNDER a foreign world, which is the JOIN engine.c names at
+           all four arrival sites and which does not exist yet — so today a segment IS its vector and the
+           replay rebuilds it exactly. The day the join lands, those writes came from the peer's RECORDS and
+           the recipe is the ordered log of them; this line is where that has to be built rather than where a
+           park quietly writes a name and loses the state under it. */
+        DCHECK(cow_delta_empty(g_segs[i].delta),
+               "a foreign world's segment holds WRITES, and a park would carry only its NAME — the vector "
+               "rebuilds an EMPTY segment in the resumed session, so everything this instance did under that "
+               "peer's world is dropped at the tier that exists to save it. The writes came from the peer's "
+               "records (the JOIN engine_route names is what puts them here), so the recipe is the ordered LOG "
+               "of the records performed under this world, re-performed at resume — build that, and carry it "
+               "beside the vector");
+        DCHECK(g_segs[i].vector != NULL && *g_segs[i].vector,
+               "a foreign segment has no cross-tier name — it is taken at materialization, which is the only "
+               "moment the ancestry that built it is in this instance's hands");
+        g_carried[i] = g_segs[i].vector;
+    }
+    *vectors = (const char *const *)g_carried;
+    return g_segs_n;
 }
 
 static void world_gone_push(WorldId w)
@@ -736,5 +828,13 @@ void world_release(JSContext *ctx, WorldId w)
        segment does nothing. */
     if (!s) return;
     cow_delta_release(ctx, s->delta);
-    *s = g_segs[--g_segs_n];
+    free(s->vector);
+    /* REMOVED IN PLACE, NOT SWAPPED DOWN FROM THE TAIL. The table's order is MATERIALIZATION order and that is
+       load-bearing now that a park emits it: a segment forks the nearest ancestor present when it is built, so
+       an ancestor is always earlier, and a swap-remove would move a descendant above its own ancestor. The
+       resumed session's forward pass would then rebuild the descendant from the baseline — silently, with the
+       ancestor's writes lost — which is the same loss a truncated vector causes, arriving from the other side.
+       memmove and not a swap costs one linear pass on a table every lookup already scans linearly. */
+    memmove(s, s + 1, (size_t)(&g_segs[g_segs_n] - (s + 1)) * sizeof *s);
+    g_segs_n--;
 }

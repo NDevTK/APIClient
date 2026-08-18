@@ -322,8 +322,12 @@
         reply: [
           { name: "notices", type: "string",
             why: "the engine's one-way notices, newline-joined — a navigable created, a message posted, a " +
-                 "cross-agent operation answered. This zone OWES each of them an action: a notice read and " +
-                 "discarded is a document nothing runs and a message nothing delivers" },
+                 "cross-agent operation answered, a world of this instance ended, a PEER's world segment " +
+                 "carried into this park's residue. This zone OWES each of them an action: a notice read and " +
+                 "discarded is a document nothing runs and a message nothing delivers. The last two are a " +
+                 "PAIR and the second is why the first has a deadline: `world.gone` is broadcast to the LIVE " +
+                 "pool, and `world.parked` names the worlds a COLD document is still holding a segment for, " +
+                 "so a death announced between them has nowhere to be delivered unless this zone holds it" },
           WORKING_SET] },
 
       { ordinal: 17, name: "Route",

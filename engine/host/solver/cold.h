@@ -111,6 +111,17 @@ void cold_census(ColdCensus *out);
  *                                 that makes a document name outlive a session, so the residue is the only
  *                                 thing this has to ride, and it rides it as the writer's OWN generation:
  *                                 cold_resume mints one above it rather than trusting a number to be next.
+ *     w<vector-hex>               A FOREIGN WORLD'S SEGMENT — a peer document's timeline materialized in this
+ *                                 instance, which is the one part of a park that belongs to no flow of this
+ *                                 frontier. Written by the WHOLE-frontier park only, because it is a fact
+ *                                 about this ENGINE leaving memory and not about a tail of flows going out
+ *                                 (solver/world.h says what a segment is and why its vector is the whole of
+ *                                 its recipe). The vector is world_serialize's own grammar — colons, commas
+ *                                 and whatever the host called a document — so it crosses as HEX for
+ *                                 park_hex's reason exactly: an encoding with no charset predicate in it,
+ *                                 rather than a fourth writer this grammar has to be kept in step with.
+ *                                 EMITTED IN MATERIALIZATION ORDER and rebuilt in it, so an ancestor is
+ *                                 already present when the segment forked from it is rebuilt.
  *     s<id>,<base-id|->,<arms>    a frozen segment: its own arms as '0'/'1', over the segment `base-id`
  *     f<seg-id|->,<val>           a flow standing on that segment, carrying its WFQ reward
  *     c<seg-id|->,<val>,<sink>,<src-hex>,<payload-hex>
@@ -184,6 +195,10 @@ typedef struct {
     long segs;     /* 's': frozen decision segments, written once each however many flows stand on them */
     long flows;    /* 'f' */
     long cands;    /* 'c' */
+    /* 'w': FOREIGN world segments — the peers' timelines this instance is carrying across the tier. It is a
+       kind here and not a constant like 'g' because there are as many as this instance answered peers, and
+       zero is a real and different answer: an instance that never answered anything. */
+    long worlds;
 } ColdParked;
 void cold_parked(ColdParked *out);
 
@@ -220,6 +235,12 @@ typedef struct {
        being seeded during exploration rather than after it (engine.c's pick). Two counts whose conjunction was
        read as an intersection is the same defect as a field defaulted by its consumer. */
     long deepcands;
+    /* AND THE PART OF THE RESIDUE THAT IS NOT A WALK OF THE FRONTIER AT ALL — the foreign world segments this
+       instance holds. It is here because the preview's contract is "the residue the host is about to be
+       shown", and a host that evicted on a description missing them would be storing a document larger than
+       the one it was told about. It is also the only row a whole-frontier park writes and a partial one does
+       not, which is what makes cold_park's two-sided check able to say so. */
+    long worlds;
 } ColdPreview;
 void cold_park_preview(ColdPreview *out);
 
@@ -254,6 +275,7 @@ typedef struct {
     long segs;     /* frozen decision segments rebuilt from 's' records — the shared prefixes every flow stands on */
     long flows;    /* 'f': exploration flows */
     long cands;    /* 'c': @S candidate sessions, each carrying a hex source and payload */
+    long worlds;   /* 'w': foreign world segments re-materialized from the vectors that first built them */
 } ColdResumed;
 void cold_resumed(ColdResumed *out);
 

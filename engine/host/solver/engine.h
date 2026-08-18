@@ -369,6 +369,21 @@ const char *engine_host_notices(void);
    carries no target document and the zone hands it to every instance but this one. */
 void        engine_notify_worlds_gone(JSContext *ctx, const char *const *names, int n);
 
+/* …AND THE FOREIGN WORLDS A PARK IS CARRYING ACROSS THE TIER — `world.parked<TAB><world vector>`, one notice
+ * per segment, announced at the PARK beside the death above and for the opposite reason. The death says "a
+ * world of MINE has ended, drop your segment"; this says "a segment of YOURS lives in the residue I am about
+ * to store, and it will be rebuilt by whichever instance resumes this document".
+ *
+ * WHY THE ZONE HAS TO BE TOLD, AND WHY IT CANNOT DERIVE IT. A `world.gone` is BROADCAST to the instances that
+ * are LIVE — the sender does not track which peers a flow reached, because releasing a world with no segment
+ * is a no-op (world.h). A parked instance is not live, so every death announced while this document is cold
+ * misses it, and the instance that resumes rebuilds a segment for a world that no longer exists and holds it
+ * for the rest of ITS process. That is the leak the death record exists to close, re-opened by the park — and
+ * the only zone that can close it is the one that knows an instance is parked and which document it was.
+ * This record is what makes the set of worlds it has to hold deaths for EXACT and finite: the ones the residue
+ * actually carries, rather than every death for every cold document forever. */
+void        engine_notify_worlds_parked(JSContext *ctx, const char *const *vectors, int n);
+
 /* …AND THE INBOUND HALF OF IT: a peer says one of ITS worlds is gone, so the segment this instance holds for
    that world can go. The third record on the one-way line, beside a routed delivery and a performed operation,
    and the only one that seeds nothing — a death is not work, it is the end of some. */
