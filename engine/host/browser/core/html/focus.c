@@ -45,6 +45,7 @@
  * carry: `e.relatedTarget` is what a page reads to learn where the focus WENT, `e.view` is the document it
  * moved in, and the composed flag is what decides whether the event escapes a shadow tree at all. The interface
  * is core/events/focus_event.c and the mint below is its one internal caller. */
+#include <limits.h>
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -65,6 +66,7 @@
 #include "core/html/focus.h"
 #include "core/html/html_form.h"
 #include "core/html/html_iframe.h"
+#include "core/html/integer_microsyntax.h"
 #include "core/html/user_activation.h"
 
 /* §6.6.2's FOCUSABLE AREAS AND THE OBJECTS §6.6.4 PASSES AROUND BESIDE THEM. A focus target is not always a
@@ -242,34 +244,24 @@ static bool el_is(const lxb_dom_node_t *n, const char *local)
     return q && qn == strlen(local) && !memcmp(q, local, qn);
 }
 
-/* HTML §2.3.4.1's RULES FOR PARSING INTEGERS, over the bytes of a content attribute. `*pv` is written only on
-   success; the answer is whether the string IS an integer, which is exactly what §6.6.3's "the tabindex value
-   of an element ... if parsing fails or the attribute is not specified, then the tabindex value is null" needs
-   and what a plain atoi cannot say (atoi("x") is 0, which is a tabindex that makes an element focusable). */
-static bool parse_integer(const lxb_char_t *s, size_t len, long *pv)
-{
-    size_t i = 0;
-    bool negative = false;
-    long v = 0;
-
-    while (i < len && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\f' || s[i] == '\r')) i++;
-    if (i >= len) return false;
-    if (s[i] == '-') { negative = true; i++; }
-    else if (s[i] == '+') { i++; }
-    if (i >= len || s[i] < '0' || s[i] > '9') return false;
-    for (; i < len && s[i] >= '0' && s[i] <= '9'; i++)
-        v = v * 10 + (s[i] - '0');
-    *pv = negative ? -v : v;
-    return true;
-}
-
-/* §6.6.3's TABINDEX VALUE of an element: the parsed attribute, or null. */
-static bool tabindex_value(const lxb_dom_node_t *n, long *pv)
+/* §6.6.3's TABINDEX VALUE of an element: the attribute run through §2.3.4.1's rules, or null. The rules are
+   core/html/integer_microsyntax.c's — they were a private copy here whose accumulation into a `long` was
+   signed-integer overflow for `tabindex="99999999999999999999"`, and the value that undefined behaviour
+   produced decided the SIGN this file branches on. `*pv` is written only on success; what §6.6.3 needs is
+   whether the string IS an integer, which a plain atoi cannot say (atoi("x") is 0, a tabindex that makes an
+   element focusable).
+   AN OUT-OF-RANGE TABINDEX IS NOT A PARSE FAILURE. §2.3.4.1 returns the number and §6.6.3's null is for "if
+   parsing fails", so a run too large for a `long long` is a successful parse of a positive value — which is
+   what its sign says, and the sign is the whole of what both callers ask. */
+static bool tabindex_value(const lxb_dom_node_t *n, long long *pv)
 {
     size_t len = 0;
     const lxb_char_t *v = el_attr(n, "tabindex", &len);
+    HtmlInteger parsed;
 
-    return v && parse_integer(v, len, pv);
+    if (!v || !html_parse_integer((const char *)v, len, &parsed)) return false;
+    *pv = parsed.overflow ? (parsed.negative ? LLONG_MIN : LLONG_MAX) : parsed.value;
+    return true;
 }
 
 /* §6.3's INERT. "By default, a node is not inert", and the two things that make one inert are the `inert`
@@ -330,7 +322,7 @@ static bool el_is_focusable_area(JSContext *ctx, JSValueConst el)
 {
     lxb_dom_node_t *n = node_of(el);
     lxb_dom_node_t *sr;
-    long ti;
+    long long ti;
 
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     if (!tabindex_value(n, &ti) && !el_is_ua_focusable(n)) return false;
@@ -351,7 +343,7 @@ static bool el_is_focusable_area(JSContext *ctx, JSValueConst el)
 static bool el_is_sequentially_focusable(JSContext *ctx, JSValueConst el)
 {
     lxb_dom_node_t *n = node_of(el);
-    long ti;
+    long long ti;
 
     if (!el_is_focusable_area(ctx, el)) return false;
     return !(tabindex_value(n, &ti) && ti < 0);
