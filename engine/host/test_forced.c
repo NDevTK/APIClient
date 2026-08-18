@@ -3985,8 +3985,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
    rows is how a probe came to be computed and joined to neither. It is a STREAM and not a summary, because the
    moment below is reached (if it is reached) only when every row is 1: a run that never reaches it must still
    say WHICH row is 0, at the cadence the rest of the census reports at, or a fifteen-minute run that is killed
-   by its harness produces nothing at all — which is what every native run of this fixture had been doing. */
-static int probes_report(const char *js) {
+   by its harness produces nothing at all — which is what every native run of this fixture had been doing.
+
+   A SAMPLE MAY NOT PRINT A VERDICT, AND WHILE IT DID, 177 OF 179 LINES OF A PASSING RUN SAID `FAIL`. That is
+   measured, on `native min`: every sample taken before the last row flipped to 1 ended `=> FAIL`, the run
+   finished `=> OK` with exit 0, and any reader — a person scrolling, a `tail`, a `grep ... | tail -1` against a
+   still-open log — had a 99% chance of taking the opposite of the answer. The stream is right and stays: a
+   killed run must still name WHICH row is 0. What was wrong is the TOKEN, because a sample cannot know that a
+   0 row is a failure rather than a row that has not been reached yet, and printing `FAIL` claims it does.
+   So the CALLER says which moment this is, because the caller is the only one that knows: the park hook is
+   asking "is every row 1 yet", where all-1 IS the terminal moment and a 0 is INCOMPLETE; the report at exit is
+   the run's verdict, where a 0 is genuinely FAIL. This composes with the harness backstop directly — a killed
+   run's last line now reads INCOMPLETE beside a HUNG stage, which together say what happened, where the old
+   pair said HUNG beside a FAIL that had nothing to do with the kill. */
+static int probes_report(const char *js, bool final) {
     Probe rows[PROBE_MAX];
     int n = probes_eval(js, rows, PROBE_MAX), ok = 1, i;
 
@@ -3995,7 +4007,7 @@ static int probes_report(const char *js) {
         ok = ok && rows[i].ok;
         printf("%s=%d ", rows[i].name, rows[i].ok);
     }
-    printf("=> %s\n", ok ? "OK" : "FAIL");
+    printf("=> %s\n", ok ? "OK" : (final ? "FAIL" : "INCOMPLETE"));
     fflush(stdout);
     return ok;
 }
@@ -4029,7 +4041,9 @@ static int fixture_have_answers(void) {
     js = result_json(g_probe_ctx);
     CHECK(js, "the fixture could not render the result document — its verdict AND its completion moment are both "
               "functions of that one string, so the run can neither report nor decide it is finished");
-    ok = probes_report(js);
+    /* A SAMPLE, so a 0 row is INCOMPLETE and not a failure — this hook's whole question is whether every row is
+       1 YET, and the run continues when the answer is no. */
+    ok = probes_report(js, false);
     free(js);
     return ok;
 }
@@ -4219,7 +4233,8 @@ int main(int argc, char **argv) {
     CHECK(js, "the result document could not be rendered — this fixture's whole verdict is a function of it, so "
               "there is nothing to report and nothing to assert");
     printf("@RESULT %s\n", js);
-    int h_ok = probes_report(js);
+    /* THE VERDICT, so a 0 row is FAIL: the run is over and the row will not be reached. */
+    int h_ok = probes_report(js, true);
 
     /* THE SENTENCE NAMES WHAT THIS INVOCATION MEASURED. A cold session runs none of the @H/@S rows, so
        reporting their verdict over it would be a claim about a program it did not run — the same defect the
