@@ -785,6 +785,9 @@ for (const [iface, paths] of AUDITED) {
   const maybeHere = new Map();
   for (const r of unattributed)
     if (r.candidates.some((n) => chain.includes(n)) && !maybeHere.has(r.name)) maybeHere.set(r.name, r);
+  const base = inheritanceOf.get(iface);
+  const inherited = base ? new Set(members(base)) : new Set();
+  const ownSet = new Set(spec.filter((n) => !inherited.has(n)));
   const open = spec.filter((n) => !installed.has(n) && !condNames.has(n));
   const absent = open.filter((n) => !maybeHere.has(n));
   const unproven = open.filter((n) => maybeHere.has(n));
@@ -794,7 +797,17 @@ for (const [iface, paths] of AUDITED) {
   for (const n of noop) distinct.add(n);
   /* PER INTERFACE, so the verdict names an AREA. An interface with nothing missing is a row too — it is what
      makes the table a census rather than a list of the loudest components. */
-  gapRows.push({ iface, absent: absent.length, noop: noop.length, unproven: unproven.length });
+  /* WHAT IS THIS INTERFACE'S OWN WORK. An inherited gap is absent on every interface that inherits it, which
+     is CORRECT — a page really cannot reach it on any of them — but it makes the total a measure of
+     INHERITANCE DEPTH rather than of work: 45 HTML element interfaces each carry the same ~85 unbuilt
+     Element/HTMLElement members, so one member built there clears 45 rows at once and a member built on
+     HTMLTableElement clears one. Ranking by the total sent two lanes at the deepest rows rather than the
+     largest ones. The own count is the members this interface DECLARES — its own IDL plus the partials and
+     mixins that name IT — minus everything its base already declares. */
+  const ownAbsent = absent.filter((n) => ownSet.has(n)).length;
+  const ownNoop = noop.filter((n) => ownSet.has(n)).length;
+  gapRows.push({ iface, absent: absent.length, noop: noop.length, unproven: unproven.length,
+                 own: ownAbsent + ownNoop });
   defect("ABSENT members", absent.length);
   defect("UNPROVEN members — installed on a target the audit cannot attribute", unproven.length);
   defect("js_noop-STUB members", noop.length);
@@ -1041,9 +1054,16 @@ if (prev === header) {
  * in which the widest base answers most of the count makes every other component invisible — and here the
  * inherited members make that literal, since one absent Element member is absent on every HTML interface. */
 const tot = (r) => r.absent + r.noop + r.unproven;
-const withGaps = gapRows.filter(tot).sort((a, b) => tot(b) - tot(a));
-console.log(`[idl-audit] ── per interface ── ${gapRows.length - withGaps.length} of ${gapRows.length} audited ` +
-            `interfaces install every member their IDL declares`);
+/* RANKED BY OWN WORK, not by total. The total counts an inherited gap once per inheriting interface, so it
+   ranks by inheritance depth: sorting by it put 45 HTML element rows carrying the SAME ~85 unbuilt
+   Element/HTMLElement members above every interface with real work of its own, and two lanes were scoped off
+   that order. Both numbers are printed, because the total is still the honest answer to "what can a page not
+   reach on this interface" — it is just not the answer to "what should I build next". */
+const withGaps = gapRows.filter(tot).sort((a, b) => (b.own - a.own) || (tot(b) - tot(a)));
+console.log(`[idl-audit] ── per interface, ranked by OWN work ── ${gapRows.length - withGaps.length} of ` +
+            `${gapRows.length} audited interfaces install every member their IDL declares. OWN counts only the ` +
+            `members this interface DECLARES; ABSENT counts those plus every inherited gap, which is what a ` +
+            `page cannot reach on it — one member built on a base clears an inherited gap on every row below it`);
 if (withGaps.length) {
   /* A DERIVED ROW IS MARKED, because a table that does not say so reads as if every row had been audited all
      along. These are the interfaces no row named — they were in no total until the set became derived, so
@@ -1052,7 +1072,8 @@ if (withGaps.length) {
   const derivedSet = new Set(derivedIfaces);
   const w = Math.max(...withGaps.map((r) => r.iface.length));
   for (const r of withGaps)
-    console.log(`[idl-audit]   ${r.iface.padEnd(w)}  ABSENT ${String(r.absent).padStart(3)}` +
+    console.log(`[idl-audit]   ${r.iface.padEnd(w)}  OWN ${String(r.own).padStart(3)}` +
+                `  ABSENT ${String(r.absent).padStart(3)}` +
                 (r.noop ? `  js_noop-STUB ${r.noop}` : "") +
                 (r.unproven ? `  UNPROVEN ${r.unproven}` : "") +
                 (derivedSet.has(r.iface) ? `  NEWLY-AUDITED ${(AUDITED.get(r.iface) || []).join(" + ")}` : ""));
