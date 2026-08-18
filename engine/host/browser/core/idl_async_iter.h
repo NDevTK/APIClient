@@ -199,7 +199,16 @@ int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops);
    reachable through these members, so building it wherever they are built is what keeps the two in step — a
    realm that does not get the members (§3.3.13 removes every [SecureContext] member of a non-secure one) must
    not get a prototype object nothing can reach either. */
+/* §3.7.10 IS TWO BRANCHES OVER THE DECLARATION AND THEY ARE TWO ENTRY POINTS, because which one applies is a
+   fact about the CALLER'S declaration and not about the object being installed on. A pair declaration defines
+   %Symbol.asyncIterator% and `entries` (step 3), then `keys` (step 4), then `values` (step 5); a value one
+   defines `values` and %Symbol.asyncIterator%. Written as one function with `if (ops->pair)` inside, the two
+   pair members land on a `proto` that is EVERY caller's interface prototype at once — so §2.4.1's `entries`
+   and `keys` could neither be credited to FileSystemDirectoryHandle nor reported missing from it, which is
+   the Web IDL gap audit's UNPROVEN state: installed on a target it cannot attribute. The declaration remains
+   the authority — each entry point asserts the caller picked the branch its own §3.7.10 declaration is. */
 void idl_async_iter_install(JSContext *ctx, JSValueConst proto, int handle);
+void idl_async_iter_install_pair(JSContext *ctx, JSValueConst proto, int handle);
 
 /* §2.5.10's END OF ITERATION — "a special end of iteration value to signal the end of the iteration".
  *

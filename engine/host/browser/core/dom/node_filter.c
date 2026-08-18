@@ -181,8 +181,10 @@ int node_filter_run(JSContext *ctx, JSStepHdr *hdr, JSValueConst owner, Traverse
     return 0;
 }
 
-/* §6.3's CONSTANTS. Web IDL §3.7.2: a callback interface with constants has a callback interface object on the
-   global carrying them, non-writable, non-enumerable and non-configurable — which is what the corpus reads. */
+/* §6.3's CONSTANTS. Web IDL §3.11.1 Legacy callback interface object: a callback interface on which constants
+   are defined has an object of that name on the global carrying them, and §3.7.5 Constants makes each
+   non-writable, non-enumerable and non-configurable — which is what the corpus reads. The citation here read
+   §3.7.2, which is Legacy factory functions and says nothing about any of this. */
 static const JSCFunctionListEntry js_node_filter_consts[] = {
     JS_PROP_INT32_DEF("FILTER_ACCEPT", NODE_FILTER_ACCEPT, 0),
     JS_PROP_INT32_DEF("FILTER_REJECT", NODE_FILTER_REJECT, 0),
@@ -208,9 +210,11 @@ static const JSCFunctionListEntry js_node_filter_consts[] = {
 
 void node_filter_install(JSContext *ctx, JSValueConst global)
 {
-    JSValue obj = JS_NewObject(ctx);
+    /* §3.11.1's object is a BUILT-IN FUNCTION, so `typeof NodeFilter` is "function". It was JS_NewObject here,
+       which answers "object" — and, having no §3.7.3 tag and no interface object statement anywhere on it, it
+       left all sixteen constants below attributed to no interface at all. */
+    JSValue obj = idl_callback_interface_object(ctx, "NodeFilter");
 
-    CHECK(!JS_IsException(obj), "the NodeFilter interface object could not be allocated");
     JS_SetPropertyFunctionList(ctx, obj, js_node_filter_consts,
                                (int)(sizeof(js_node_filter_consts) / sizeof(js_node_filter_consts[0])));
     JS_SetPropertyStr(ctx, (JSValue)global, "NodeFilter", obj);

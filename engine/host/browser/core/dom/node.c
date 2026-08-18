@@ -3235,17 +3235,20 @@ void node_install_interface_ctor(JSContext *ctx, JSValueConst global, const char
     DCHECK(JS_IsObject(proto), "a DOM interface object was installed with no prototype behind it");
     CHECK(!JS_IsException(ctor), "a DOM interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);   /* .prototype and .constructor, both directions, one call */
-    /* §4.4 puts its constants on the interface object as well as the prototype. Only Node declares any, and a
-       derived interface INHERITS them — `Text.ELEMENT_NODE` is a real read — so the chain carries them rather
-       than each object repeating the table. */
+    /* Web IDL §3.7.1 Interface object: an interface object whose interface INHERITS another has THAT
+       interface's object as its [[Prototype]], which is what makes `Text.ELEMENT_NODE` read §4.4's constants
+       off Node's object rather than each object repeating the table. §4.4's Node is the base and keeps
+       %Function.prototype%.
+       WHICH CONSTANTS AN OBJECT CARRIES IS NOT DECIDED HERE ANY MORE. §3.7.5 Constants puts them on the
+       interface object as well as the prototype, and the install stood in this shared helper under the
+       run-time `is_node` pointer comparison below — so the interface the eighteen §4.4 constants landed on was
+       decided at run time and the Web IDL gap audit could attribute none of them. It is stated by the caller
+       that names the interface (node_install_interfaces), where the object is Node's and nothing else's. */
     {
         JSValue base_proto = node_proto(ctx);
         bool is_node = JS_VALUE_GET_PTR(proto) == JS_VALUE_GET_PTR(base_proto);
         JS_FreeValue(ctx, base_proto);
-        if (is_node)
-            JS_SetPropertyFunctionList(ctx, ctor, js_node_consts,
-                                       (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
-        else {
+        if (!is_node) {
             JSValue base = node_interface_object(ctx, global);   /* OWNED by this read; JS_SetPrototype borrows */
             JS_SetPrototype(ctx, ctor, base);
             JS_FreeValue(ctx, base);
@@ -3261,7 +3264,14 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global)
         JSValue np = node_proto(ctx), cdp = node_chardata_proto(ctx);
         JSValue tp = node_type_proto(ctx, LXB_DOM_NODE_TYPE_TEXT);
         JSValue cmp = node_type_proto(ctx, LXB_DOM_NODE_TYPE_COMMENT);
-        node_install_interface(ctx, global, "Node", np);
+        /* §4.4's constants, on the ONE interface object Web IDL §3.7.5 Constants also puts them on — built
+           here by the same §3.7.1 call every other interface object in this engine is built by, so that which
+           interface they belong to is the argument beside them rather than a run-time comparison inside a
+           shared helper. media_element.c states §4.8.11's the same way. */
+        JSValue node_ctor = idl_interface_object(ctx, "Node", np);
+        JS_SetPropertyFunctionList(ctx, node_ctor, js_node_consts,
+                                   (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
+        node_install_interface_ctor(ctx, global, "Node", np, node_ctor);
         node_install_interface(ctx, global, "CharacterData", cdp);
         node_install_interface(ctx, global, "Text", tp);
         JSValue csp = node_type_proto(ctx, LXB_DOM_NODE_TYPE_CDATA_SECTION);

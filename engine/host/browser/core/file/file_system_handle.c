@@ -813,11 +813,12 @@ static void fs_handle_install_realm(JSContext *ctx)
     idl_install_method(ctx, dir_p, "getDirectoryHandle", 1, g_id_get_directory_handle);
     idl_install_method(ctx, dir_p, "removeEntry", 1, g_id_remove_entry);
     idl_install_method(ctx, dir_p, "resolve", 1, g_id_resolve);
-    /* §2.4.1's `async_iterable<USVString, FileSystemHandle>` — Web IDL §3.7.10's four members and §3.7.10.2's
-       asynchronous iterator prototype object, both built for THIS realm. It is installed here, inside the
-       [SecureContext] gate above, because §3.3.13 removes every member of these interfaces in a non-secure
-       realm and an iterator prototype nothing can reach would be an object built for nobody. */
-    idl_async_iter_install(ctx, dir_p, g_dir_iter_handle);
+    /* §2.4.1's `async_iterable<USVString, FileSystemHandle>` — a PAIR declaration, so Web IDL §3.7.10's steps
+       3-5 (`entries`, %Symbol.asyncIterator%, `keys`, `values`) and §3.7.10.2's asynchronous iterator prototype
+       object, both built for THIS realm. It is installed here, inside the [SecureContext] gate above, because
+       §3.3.13 removes every member of these interfaces in a non-secure realm and an iterator prototype nothing
+       can reach would be an object built for nobody. */
+    idl_async_iter_install_pair(ctx, dir_p, g_dir_iter_handle);
     JS_SetClassProto(ctx, g_dir_handle_class, JS_DupValue(ctx, dir_p));
 
     /* §3.7.1's INTERFACE OBJECTS, on THIS realm's global. None of the three declares a constructor, so `new

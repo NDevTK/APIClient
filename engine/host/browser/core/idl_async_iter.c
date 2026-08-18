@@ -839,11 +839,12 @@ int idl_async_iter_declare(JSContext *ctx, const IdlAsyncIterOps *ops)
     return handle;
 }
 
-void idl_async_iter_install(JSContext *ctx, JSValueConst proto, int handle)
+/* §3.7.10.2's ASYNCHRONOUS ITERATOR PROTOTYPE OBJECT for this interface — the half of the install that every
+   declaration has, whichever branch of §3.7.10 defines its members. */
+static IdlAsyncIface *async_iter_proto(JSContext *ctx, int handle)
 {
     IdlAsyncIface *f;
-    JSValue intrinsic, aproto, prev, entries;
-    char name[96];
+    JSValue intrinsic, aproto, prev;
 
     DCHECK(handle >= 0 && handle < g_async_n,
            "an async_iterable<> was installed with a handle nothing declared");
@@ -876,28 +877,53 @@ void idl_async_iter_install(JSContext *ctx, JSValueConst proto, int handle)
         idl_install_step_method(ctx, aproto, "return", 1, f->stepid[AIT_RETURN]);
     /* §3.7.10.2: "The class string of an asynchronous iterator prototype object for a given interface is the
        result of concatenating the identifier of the interface and the string ' AsyncIterator'." §3.7.10.1's
-       note makes it the ITERATOR's class string too, which is why the iterator carries none of its own. */
-    snprintf(name, sizeof name, "%s AsyncIterator", f->ops->iface);
-    JS_DefinePropertyValue(ctx, aproto, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG),
-                           JS_NewString(ctx, name), JS_PROP_CONFIGURABLE);
+       note makes it the ITERATOR's class string too, which is why the iterator carries none of its own. The
+       composition is idl_args.c's, because that statement is also what says this object is not an interface
+       prototype object and that `next` and `return` above are therefore nobody's IDL members. */
+    idl_async_iterator_tag(ctx, aproto, f->ops->iface);
     JS_SetClassProto(ctx, f->class_id, aproto);
+    return f;
+}
 
-    /* §3.7.10's members on the interface prototype object. A VALUE declaration gets `values` and
-       %Symbol.asyncIterator% only; a PAIR declaration gets `entries` and `keys` as well. */
-    idl_install_method(ctx, proto, "values", 0, f->id_values);
-    if (f->ops->pair) {
-        idl_install_method(ctx, proto, "entries", 0, f->id_entries);
-        idl_install_method(ctx, proto, "keys", 0, f->id_keys);
-    }
-    /* §3.7.10 step 3.11 / step 5.7: DefineMethodProperty(target, %Symbol.asyncIterator%, F, false) — the SAME
-       function object as `entries` for a pair declaration and as `values` for a value one, so
-       `dir[Symbol.asyncIterator] === dir.entries`, and `false` is the [[Enumerable]] it is defined with. Which
-       one it is comes off the DECLARATION, never off the caller. */
-    entries = JS_GetPropertyStr(ctx, proto, f->ops->pair ? "entries" : "values");
-    CHECK(JS_IsFunction(ctx, entries),
+/* §3.7.10 step 3.11 / step 5.7: DefineMethodProperty(target, %Symbol.asyncIterator%, F, false) — the SAME
+   function object as the member just installed, so `dir[Symbol.asyncIterator] === dir.entries` for a pair
+   declaration and `=== rs.values` for a value one, and `false` is the [[Enumerable]] it is defined with. */
+static void async_iter_symbol(JSContext *ctx, JSValueConst proto, const char *member)
+{
+    JSValue fv = JS_GetPropertyStr(ctx, proto, member);
+
+    CHECK(JS_IsFunction(ctx, fv),
           "an async_iterable<>'s %Symbol.asyncIterator% was taken before the member it is the same object as");
     JS_DefinePropertyValue(ctx, proto, JS_WellKnownSymbolAtom(JS_WKS_ASYNC_ITERATOR),
-                           entries, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+                           fv, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
+/* §3.7.10 step 5 for a VALUE asynchronously iterable declaration: `values`, and %Symbol.asyncIterator% as the
+   same function object. */
+void idl_async_iter_install(JSContext *ctx, JSValueConst proto, int handle)
+{
+    IdlAsyncIface *f = async_iter_proto(ctx, handle);
+
+    DCHECK(!f->ops->pair,
+           "a PAIR async_iterable<> was installed through §3.7.10's VALUE entry point — its declaration has "
+           "two type parameters, so the interface has `entries` and `keys` and this path installs neither");
+    idl_install_method(ctx, proto, "values", 0, f->id_values);
+    async_iter_symbol(ctx, proto, "values");
+}
+
+/* §3.7.10 steps 3, 4 and 5 for a PAIR asynchronously iterable declaration, IN THAT ORDER: step 3 defines
+   %Symbol.asyncIterator% and `entries` together, step 4 `keys`, step 5 `values`. */
+void idl_async_iter_install_pair(JSContext *ctx, JSValueConst proto, int handle)
+{
+    IdlAsyncIface *f = async_iter_proto(ctx, handle);
+
+    DCHECK(f->ops->pair,
+           "a VALUE async_iterable<> was installed through §3.7.10's PAIR entry point — its declaration has "
+           "one type parameter, so the interface has no `entries` and no `keys` to define");
+    idl_install_method(ctx, proto, "entries", 0, f->id_entries);
+    async_iter_symbol(ctx, proto, "entries");
+    idl_install_method(ctx, proto, "keys", 0, f->id_keys);
+    idl_install_method(ctx, proto, "values", 0, f->id_values);
 }
 
 /* See core/idl_async_iter.h. The joined arrays are this file's; the STRINGS in them are statics belonging to

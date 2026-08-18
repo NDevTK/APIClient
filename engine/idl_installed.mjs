@@ -781,7 +781,28 @@ const IFACE_SEEDS = [
   { fn: "idl_interface_tag",  obj: 1, iface: 2 },
 ];
 const IFACE_OBJECT = { fn: "idl_interface_object", iface: 1, obj: 2 };
+/* §3.11.1's LEGACY CALLBACK INTERFACE OBJECT, which is a SEED and not a link. A callback interface has no
+   interface prototype object — Web IDL §3.7.3's tag is that object's, so there is none anywhere on this one —
+   and the constants §3.7.5 defines on it are real members a page reads (`NodeFilter.SHOW_ELEMENT`). So the
+   call that builds it is the only statement of which interface those members belong to, and the object it
+   states about is the call's RESULT rather than one of its arguments. */
+const CALLBACK_IFACE_OBJECT = { fn: "idl_callback_interface_object", iface: 1 };
 const CTOR_LINK = { fn: "JS_SetConstructor", ctor: 1, proto: 2 };
+
+/* AN OBJECT THE CORPUS DECLARES IS NOT AN INTERFACE PROTOTYPE OBJECT. Web IDL gives three page-reachable
+   objects whose properties are NOBODY'S IDL members — §3.7.4's named properties object, §3.7.9.2's iterator
+   prototype object and §3.7.10.2's asynchronous iterator prototype object — and a property installed on one is
+   neither a gap to implement nor a member to credit. Left unstated it is indistinguishable from a target the
+   attribution FAILED on, which is exactly where §3.7.10.2's `next` and `return` sat: two rows of "installed
+   members whose target interface could not be decided", for an object whose interface was never the question.
+   So the C says which kind it is at the object's own construction, the same way §3.7.3's tag says an interface
+   prototype's identity, and the statement is read here rather than guessed from a name.
+   IT IS TWO-SIDED, which is what keeps it from being an allowlist: each kind names the members Web IDL defines
+   on it, and anything else installed there is an error rather than a line nobody revisits. */
+const NON_INTERFACE_FORMS = new Map(Object.entries({
+  idl_async_iterator_tag: { obj: 1, kind: "§3.7.10.2 asynchronous iterator prototype object",
+                            members: ["next", "return"] },
+}));
 
 /* ---- the scan ------------------------------------------------------------------------------------------- */
 
@@ -966,6 +987,42 @@ function localAssignments(body) {
   return map;
 }
 
+/* A NAME A FUNCTION WAS GIVEN AND MINTED AN ATOM OUT OF IS STILL THE NAME IT WAS GIVEN, and which parameter it
+   came from is the question the derivation below asks. Reading only the identifier standing AT the install
+   site answered it for `nav_env(ctx, nav, name, …)` and not for this engine's own accessor installers, which
+   write `JSAtom a = JS_NewAtom(ctx, name); JS_DefinePropertyGetSet(ctx, target, a, …)` — so idl_define_accessor
+   and idl_define_replaceable were not derived as install forms, and their forwarding lines then reported
+   themselves as constructs whose member name is not statically resolvable. Two of the audit's own install
+   helpers, named by the audit's own gap report, for the sake of one hop.
+   THE HOP IS AN IDENTITY AND NOTHING ELSE: an atom mint over a string is that string (the same rule
+   Resolver.strings already reads for JS_NewAtom in the other direction), and a plain assignment carries it.
+   An expression that BUILDS a different string — an snprintf, a concatenation, a suffix — reaches no parameter
+   and the site stays UNRESOLVED, which is the honest answer and not a silent credit. Two assignments naming
+   two different parameters is not one parameter either, and refuses. */
+const ATOM_MINT_RE = /^(JS_NewAtom|JS_NewAtomLen|JS_ValueToAtom)\s*\(/;
+function paramBehind(fn, locals, expr, depth = 0) {
+  if (depth > 4) return -1;
+  const e = stripCast(String(expr || ""));
+  const direct = fn.params.indexOf(e);
+  if (direct >= 0) return direct;
+  if (ATOM_MINT_RE.test(e)) {
+    const open = e.indexOf("("), end = matchAt(e, open);
+    if (end !== e.length) return -1;
+    const args = splitTop(e.slice(open + 1, end - 1));
+    return args.length >= 2 ? paramBehind(fn, locals, args[1], depth + 1) : -1;
+  }
+  if (/^[A-Za-z_]\w*$/.test(e) && locals.has(e)) {
+    let one = -1;
+    for (const rhs of locals.get(e)) {
+      const p = paramBehind(fn, locals, rhs, depth + 1);
+      if (p < 0 || (one >= 0 && p !== one)) return -1;
+      one = p;
+    }
+    return one;
+  }
+  return -1;
+}
+
 /* THIS KNOWS TWO TYPE NAMES OUT OF THE NINE THE CORPUS CASTS TO, and that narrowness is recorded here rather
    than in a verdict because it is measured to cost nothing TODAY: the census is three install-form target
    arguments carrying a cast this cannot strip, all three `(JSClassID)` in realm.c, all three on a PARAMETER
@@ -1129,12 +1186,14 @@ export function loadEnvironment(root) {
     for (const { masked } of sources.values()) {
       for (const fn of functions(masked)) {
         if (!fn.name || forms.has(fn.name)) continue;
+        let fnLocals = null;
+        const localsOf = () => (fnLocals || (fnLocals = localAssignments(fn.body)));
         for (const [callee, form] of forms) {
           for (const site of callSites(fn.body, callee)) {
             const nameArg = stripCast(site.args[form.name === undefined ? form.tableArg : form.name] || "");
-            const direct = fn.params.indexOf(nameArg);
             const col = nameArg.match(/^([A-Za-z_]\w*)\s*\[[^\]]*\]\s*\.\s*([A-Za-z_]\w*)$/);
             const via = col ? fn.params.indexOf(col[1]) : -1;
+            const direct = via >= 0 ? -1 : paramBehind(fn, localsOf(), nameArg);
             if (direct < 0 && via < 0) continue;
             const tgt = stripCast(site.args[form.target] || "");
             const derived = { target: fn.params.indexOf(tgt), ambiguous: !!form.ambiguous };
@@ -1318,6 +1377,7 @@ export function loadEnvironment(root) {
     for (const n of names) declaresIface.get(path).add(n);
   };
   const tagIssues = [];           /* a tag whose interface name is not statically decidable */
+  const nonIfaceNodes = new Map(); /* node -> the NON_INTERFACE_FORMS kind the C declares it to be */
   const ifaceObjects = [];        /* {node, ifaces, file, line} — checked back against the tag once solved */
   const interfaceTables = new Map();   /* table -> the field whose cells are interface identifiers */
 
@@ -1365,6 +1425,15 @@ export function loadEnvironment(root) {
           if (!named(obj)) { tagIssues.push({ file: path, line: lineAt(site.at), form: spec.fn, expr: obj }); continue; }
           tagSeeds.push({ node: at(obj, site.at), ifaces: names });
           declares(path, names);
+        }
+      /* The objects the corpus declares are NOT interface prototype objects — see NON_INTERFACE_FORMS. The
+         node is exact and local: an object handed somewhere else reaches no such declaration and stays
+         UNATTRIBUTED, which is the honest answer rather than a widened claim. */
+      for (const [fnName, spec] of NON_INTERFACE_FORMS)
+        for (const site of callSites(f.body, fnName)) {
+          const obj = stripDup(site.args[spec.obj] || "");
+          if (named(obj)) nonIfaceNodes.set(at(obj, site.at), spec);
+          else tagIssues.push({ file: path, line: lineAt(site.at), form: fnName, expr: obj });
         }
       /* §3.7.1's interface OBJECT — linked to its prototype, and its NAME kept as a check on the tag. */
       for (const site of callSites(f.body, IFACE_OBJECT.fn)) {
@@ -1429,6 +1498,17 @@ export function loadEnvironment(root) {
           if (src) { if (named(r)) tlink(at(lhs, d.at), src); else tarrow(src, at(lhs, d.at), null); }
           const io = r.match(/^idl_interface_object\s*\(\s*[^,]+,\s*([^,]+),\s*([^)]*)\)/);
           if (io && named(stripDup(io[2]))) tlink(at(lhs, d.at), tagKey(path, f, stripDup(io[2]), d.at - 1));
+          /* §3.11.1's legacy callback interface object — the seed for an interface that has no prototype
+             object to tag. Unreadable, it is reported like any other undecidable interface statement rather
+             than dropped: the members installed on the object would otherwise be attributed to nothing. */
+          if (r.match(/^([A-Za-z_]\w*)\s*\(/)?.[1] === CALLBACK_IFACE_OBJECT.fn) {
+            const open = r.indexOf("("), end = matchAt(r, open);
+            const cargs = end < 0 ? [] : splitTop(r.slice(open + 1, end - 1));
+            const cnames = R.strings(cargs[CALLBACK_IFACE_OBJECT.iface] || "", locals);
+            if (cnames) { tagSeeds.push({ node: at(lhs, d.at), ifaces: cnames }); declares(path, cnames); }
+            else tagIssues.push({ file: path, line: lineAt(d.at), form: CALLBACK_IFACE_OBJECT.fn,
+                                  expr: (cargs[CALLBACK_IFACE_OBJECT.iface] || "").trim() });
+          }
           /* AN INSTANCE IS ITS PROTOTYPE'S INTERFACE. `JS_NewObjectProtoClass(ctx, proto, cls)` builds a
              PLATFORM OBJECT over an interface prototype object, so what it implements is whatever that
              prototype was tagged with — and TWO of Web IDL's rules put an interface's members on such an
@@ -1554,6 +1634,7 @@ export function loadEnvironment(root) {
 
   return { macros, typedefs, sources, resolver, forms, fnsOf,
            tags, tagKey: (path, f, v, at) => tagKey(path, f, v, at), tagIssues, tagChecks, interfaceTables,
+           nonIfaceNodes,
            recordContradictions, declaresIface, ints, refusals, refuseUnread };
 }
 
@@ -1574,6 +1655,10 @@ export function installedMembers(paths, env) {
     if (!/^[A-Za-z_]\w*$/.test(v))
       return { ifaces: [], candidates: [], why: `the install target \`${(targetExpr || "").trim()}\` is not a named object` };
     env.refuseUnread(path, f, v, off - f.start);
+    /* AN OBJECT THE C DECLARES IS NOT AN INTERFACE PROTOTYPE OBJECT — asked FIRST, because "which interface
+       is this" is not the question there and an unanswered question is what this whole file refuses to fake. */
+    const kind = env.nonIfaceNodes.get(env.tagKey(path, f, v, off - f.start));
+    if (kind) return { ifaces: [], candidates: [], nonInterface: kind, why: null };
     const m = env.tags.get(env.tagKey(path, f, v, off - f.start));
     if (!m || !m.size)
       return { ifaces: [], candidates: [], why: `no interface tag reaches \`${v}\`` };
@@ -1652,7 +1737,8 @@ export function installedMembers(paths, env) {
       const at = where || { file: path, line: lineOf(orig, off) };
       for (const name of names)
         records.push({ name, stubbed: !!stub, file: at.file, line: at.line, form,
-                       ifaces: a.ifaces, candidates: a.candidates, why: a.why });
+                       ifaces: a.ifaces, candidates: a.candidates, why: a.why,
+                       nonInterface: a.nonInterface || null });
     };
     const emit = (names, stub, f, targetExpr, off, form) =>
       emitWith(names, stub, interfacesOf(path, f, targetExpr, off), off, form);

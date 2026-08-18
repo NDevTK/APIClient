@@ -217,8 +217,12 @@ const INTERFACES = {
      REPLACED the first, silently, so fetch.c, module_loader.c, abort.c and the CSSOM were dropped out of the
      row that ran and `fetch`, `structuredClone` and `AbortController` read as ABSENT while they were shipping.
      One row, the union of both. */
+  /* module_loader.c IS NOT IN THIS ROW, and the cross-check is what settled it: it installs no member on
+     anything — §8.1.3's dynamic `import()` and `import.meta` are ECMAScript syntax, not Web IDL members of
+     Window — so the row's belief that Window is partly built out of it was false. It came in with the union
+     above and nothing ever read it. */
   Window:              ["core/frame/window.c", "core/dom/document.c", "core/frame/location.c",
-                        "core/fetch/fetch.c", "core/events/event_target.c", "core/loader/module_loader.c",
+                        "core/fetch/fetch.c", "core/events/event_target.c",
                         "core/timing/timer.c", "core/frame/navigator.c", "core/frame/screen.c",
                         "core/dom/abort.c", "core/css/css_style_declaration.c",
                         "core/frame/navigable.c", "core/frame/bar_prop.c",
@@ -370,11 +374,14 @@ const INTERFACES = {
      so its gaps were not reported as zero — they were not reported at all, which is the audit lying by
      omission rather than by direction. */
   DocumentFragment:    ["core/dom/document_fragment.c", "core/dom/node.c", "core/events/event_target.c"],
-  /* DOM §6. The three interfaces share §6.4's filter, which lives in node_filter.c, so each names its own file
-     plus that one — the same rule the BODY mixin's row states: a member installed by a shared component is
-     found where that component is. */
-  NodeIterator:        ["core/dom/node_iterator.c", "core/dom/node_filter.c"],
-  TreeWalker:          ["core/dom/tree_walker.c", "core/dom/node_filter.c"],
+  /* DOM §6. The three interfaces share §6.3's NodeFilter, and SHARING IT IS NOT INSTALLING ANY OF IT: a
+     traverser CALLS the filter and installs nothing on its own prototype from node_filter.c — `filter`,
+     `root`, `whatToShow` and the walks are each their own component's, which is what the cross-check said
+     twice and was right about both times. A row naming a file that installs nothing this interface has is a
+     belief the audit checks, and this was two false ones; §6.3's own row keeps the file, which really does
+     build the object its sixteen constants go on. */
+  NodeIterator:         "core/dom/node_iterator.c",
+  TreeWalker:           "core/dom/tree_walker.c",
   NodeFilter:           "core/dom/node_filter.c",
   /* DOM §5. AbstractRange's five getters are installed by the shared component and INHERITED by both derived
      interfaces, so each names its own file plus that one — the same rule the BODY mixin's row states. */
@@ -466,9 +473,11 @@ const INTERFACES = {
   /* HTML §4.13.7. ElementInternals INCLUDES ARIAMixin, whose 54 members are therefore members the audit
      expects on it — which is what makes the eight element-reflecting ones show up as the real gap they are
      rather than as nothing at all. CustomStateSet's setlike members and both iterator surfaces come from the
-     shared default iterator object, so idl_iter.c is named beside the component for the reason every other
-     `iterable<>` interface names it. */
-  ElementInternals:    ["core/html/element_internals.c", "core/idl_iter.c"],
+     shared default iterator object, so idl_iter.c is named beside THAT interface for the reason every other
+     `iterable<>` interface names it — and beside this one it named a file whose members all land on
+     CustomStateSet, URLSearchParams, FormData and Headers, which the cross-check said and was right about.
+     §4.13.7's own interface declares no iteration. */
+  ElementInternals:     "core/html/element_internals.c",
   CustomStateSet:      ["core/html/element_internals.c", "core/idl_iter.c"],
   ValidityState:        "core/html/element_internals.c",
 };
@@ -585,7 +594,19 @@ const addTo = (map, iface, name) => {
   if (!map.has(iface)) map.set(iface, new Set());
   map.get(iface).add(name);
 };
+/* AN OBJECT WEB IDL DECLARES IS NOT AN INTERFACE PROTOTYPE OBJECT — §3.7.4's named properties object,
+   §3.7.9.2's iterator prototype object, §3.7.10.2's asynchronous iterator prototype object. What is installed
+   on one is nobody's member, so it is neither credited nor reported as a target the attribution failed on; it
+   is its own census, and the CHECK is that Web IDL defines the member there at all (idl_installed.mjs's
+   NON_INTERFACE_FORMS names what each kind defines). A third member appearing on a §3.7.10.2 object is a
+   member the spec does not put there, which is a defect and not a line to widen the list with. */
+const nonIface = [], nonIfaceExtra = [];
 for (const r of world.records) {
+  if (r.nonInterface) {
+    nonIface.push(r);
+    if (!r.nonInterface.members.includes(r.name)) nonIfaceExtra.push(r);
+    continue;
+  }
   if (!r.ifaces.length) { unattributed.push(r); continue; }
   for (const iface of r.ifaces) {
     addTo(r.stubbed ? stubbedBy : installedBy, iface, r.name);
@@ -673,17 +694,18 @@ for (const [path, names] of env.declaresIface)
 const AUDITED = new Map();
 for (const [iface, where] of Object.entries(INTERFACES))
   AUDITED.set(iface, Array.isArray(where) ? where : [where]);
-/* A NAMED PROPERTIES OBJECT IS NOT AN INTERFACE, and Web IDL §3.7.5 is what says so: its class string is the
-   interface's identifier concatenated with "Properties", so window.c tagging one "WindowProperties" is the
-   spec being OBEYED and not an interface being declared, and no IDL defines it because none is meant to. This
-   reads the spec's own composition rule back rather than matching a name: the suffix counts only when what
-   remains is an interface this index actually carries and the whole is not itself one. */
+/* A NAMED PROPERTIES OBJECT IS NOT AN INTERFACE, and Web IDL §3.7.4 Named properties object is what says so:
+   its class string is the interface's identifier concatenated with "Properties", so window.c tagging one
+   "WindowProperties" is the spec being OBEYED and not an interface being declared, and no IDL defines it
+   because none is meant to. This reads the spec's own composition rule back rather than matching a name: the
+   suffix counts only when what remains is an interface this index actually carries and the whole is not
+   itself one. */
 const namedProps = [];
 const derivedIfaces = [];
 for (const [iface, files] of declaringFiles) {
   if (AUDITED.has(iface)) continue;
   const host = iface.endsWith("Properties") ? iface.slice(0, -"Properties".length) : "";
-  if (host && byName.has(host) && !byName.has(iface)) { namedProps.push(`${iface} (§3.7.5 of ${host})`); continue; }
+  if (host && byName.has(host) && !byName.has(iface)) { namedProps.push(`${iface} (§3.7.4 of ${host})`); continue; }
   AUDITED.set(iface, files);
   derivedIfaces.push(iface);
 }
@@ -939,6 +961,16 @@ for (const r of env.refusals)
    happened to name the file (the file-granular lie); dropped, it opens a gap that is filled. So it is named,
    grouped by the file that wrote it, and the work is either to give the prototype its §3.7.3 tag or to teach
    this detector the construct that carries the object. */
+defect("members installed on a declared non-interface object that Web IDL does not define there",
+       nonIfaceExtra.length);
+for (const r of nonIfaceExtra)
+  console.log(`[idl-audit] ${r.file.replace(BROWSER + "/", "")}:${r.line}  \`${r.name}\` is installed on a ` +
+              `${r.nonInterface.kind}, on which Web IDL defines only ${r.nonInterface.members.join(", ")} — ` +
+              `either the member belongs on the interface prototype object or the spec does not define it here`);
+if (nonIface.length)
+  console.log(`[idl-audit] ${nonIface.length} property(ies) installed on objects Web IDL declares are NOT ` +
+              `interface prototype objects, so they are nobody's IDL member: ` +
+              `${[...new Set(nonIface.map((r) => `${r.name} (${r.nonInterface.kind})`))].join(", ")}`);
 defect("installed members whose target interface could not be decided", unattributed.length);
 if (unattributed.length) {
   const byFile = new Map();

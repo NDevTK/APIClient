@@ -2591,6 +2591,26 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
                            JS_NewString(ctx, iface), JS_PROP_CONFIGURABLE);
 }
 
+/* §3.7.10.2's ASYNCHRONOUS ITERATOR PROTOTYPE OBJECT is NOT an interface prototype object, and what it carries
+   is nobody's IDL member: §3.7.10.2 defines `next`, and `return` when the interface has an asynchronous
+   iterator return algorithm, and Web IDL defines nothing else on one. Its class string is "the result of
+   concatenating the identifier of the interface and the string ' AsyncIterator'", and the composition lives
+   here — one place, so it cannot be spelled two ways, and so that an object whose properties are nobody's
+   members is DISTINGUISHABLE from an object the Web IDL gap audit merely failed to attribute. */
+void idl_async_iterator_tag(JSContext *ctx, JSValueConst aproto, const char *iface)
+{
+    char name[128];
+
+    DCHECK(JS_IsObject(aproto),
+           "a §3.7.10.2 class string was installed on something that is not an object");
+    DCHECK(iface != NULL && *iface,
+           "a §3.7.10.2 asynchronous iterator prototype object was named for no interface — the class string "
+           "IS the interface's identifier plus a suffix, so there is nothing to concatenate");
+    snprintf(name, sizeof name, "%s AsyncIterator", iface);
+    JS_DefinePropertyValue(ctx, (JSValue)aproto, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG),
+                           JS_NewString(ctx, name), JS_PROP_CONFIGURABLE);
+}
+
 /* §3.2.27's CREATE FROZEN ARRAY — see idl_args.h for why the preventExtensions half alone is not it. */
 int idl_freeze_array(JSContext *ctx, JSValueConst arr)
 {
@@ -2824,6 +2844,34 @@ JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst prot
     CHECK(!JS_IsException(ctor), "an interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, proto);   /* .prototype and .constructor, both directions, one call */
     return ctor;
+}
+
+/* WEB IDL §3.11.1 "Legacy callback interface object". "For every callback interface that is exposed in a given
+   realm and on which constants are defined, a corresponding property exists on the realm's global object …
+   its value is an object called the legacy callback interface object", and that object is created by "Let
+   steps be the following steps: Throw a TypeError. Let F be CreateBuiltinFunction(steps, 0, id, « », realm).
+   Define the constants of interface on F". It is a FUNCTION, not an ordinary object — the section's own note
+   says `typeof` answers "function" — and it is NOT a constructor: §3.7.1's interface object is the one built
+   with [[Construct]], and `new NodeFilter()` is a TypeError either way.
+   The whole of §3.11.1 is these three lines, so there is ONE of them for the same reason there is one
+   idl_interface_object: a callback interface that hand-rolled its own would be free to build an ordinary
+   object again, which is what DOM's NodeFilter did — `typeof NodeFilter` answered "object" in this engine and
+   "function" in every browser. */
+static JSValue idl_callback_iface_call(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+{
+    (void)this_val; (void)argc; (void)argv;
+    return JS_ThrowTypeError(ctx, "Illegal invocation");
+}
+
+JSValue idl_callback_interface_object(JSContext *ctx, const char *name)
+{
+    JSValue f;
+
+    DCHECK(name != NULL && *name, "a legacy callback interface object was built with no identifier — §3.11.1 "
+                                  "names the function after the interface, and the global property after it");
+    f = JS_NewCFunction2(ctx, idl_callback_iface_call, name, 0, JS_CFUNC_generic, 0);
+    CHECK(!JS_IsException(f), "a legacy callback interface object could not be allocated");
+    return f;
 }
 
 JSValue idl_step_function(JSContext *ctx, const char *name, int length, int stepid)

@@ -653,6 +653,13 @@ typedef JSValue (*IdlGetter)(JSContext *ctx, JSValueConst this_val, int magic);
    is `proto` and whose call and construct both throw a TypeError. The one way to build one — a NULL C function
    pointer is not "no constructor", it is a crash where the spec says TypeError. */
 JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst proto);
+/* §3.11.1's LEGACY CALLBACK INTERFACE OBJECT — what a callback interface on which constants are defined puts
+   on the global. It is a BUILT-IN FUNCTION OBJECT ("Let F be CreateBuiltinFunction(steps, 0, id, « », realm)"
+   over steps that throw a TypeError), which is why the spec's own note says `typeof` answers "function"; an
+   ordinary object answers "object", and that is a fact a page reads. A callback interface has NO interface
+   prototype object, so there is no §3.7.3 tag anywhere on it and this call is the only statement of which
+   interface the constants installed on the returned object belong to. */
+JSValue idl_callback_interface_object(JSContext *ctx, const char *name);
 
 JSValue idl_step_function(JSContext *ctx, const char *name, int length, int stepid);
 JSValue idl_step_constructor(JSContext *ctx, const char *name, int length, int stepid);
@@ -666,6 +673,12 @@ int64_t idl_step_total(long *count);
 /* §3.7.3's @@toStringTag on an interface PROTOTYPE object: the interface's identifier, non-writable,
    non-enumerable, configurable. Every interface prototype has one, so every interface calls this. */
 void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface);
+
+/* §3.7.10.2's class string on an ASYNCHRONOUS ITERATOR PROTOTYPE OBJECT: the interface's identifier
+   concatenated with " AsyncIterator". It is deliberately NOT idl_interface_tag — that object is not an
+   interface prototype object and the members installed on it (§3.7.10.2's `next` and `return`) are not the
+   interface's, so the two statements must not be the same one. */
+void idl_async_iterator_tag(JSContext *ctx, JSValueConst aproto, const char *iface);
 
 /* §3.2.27's CREATE FROZEN ARRAY, over an Array the caller has already filled: SetIntegrityLevel(array, frozen).
    AN ARRAY IS NOT FROZEN BY PREVENTING EXTENSIONS — it always carries an own `length` and `length` is writable,

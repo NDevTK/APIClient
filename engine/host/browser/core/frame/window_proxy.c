@@ -1989,6 +1989,17 @@ void window_proxy_install_proto(JSContext *ctx)
 
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "the WindowProxy prototype could not be allocated");
+    /* §7.2.3 The WindowProxy exotic object: "There is no WindowProxy interface object." The surface below is
+       the [[Window]]'s — §7.2.3.7's same-origin [[Get]] is an OrdinaryGet answering out of it — so Web IDL
+       §3.7.3 Interface prototype object's class string on this object is WINDOW's identifier and not a name of
+       its own. It is also the answer a page reads: `Object.prototype.toString.call(w)` is "[object Window]"
+       for a window it may see, and for one it may not §7.2.3.1's [[GetPrototypeOf]] returns null while
+       §7.2.1.3.2's CrossOriginPropertyFallback answers %Symbol.toStringTag% with undefined before any walk, so
+       a cross-origin read never reaches this object at all.
+       Without the statement every member installed here belonged to no interface: the Web IDL gap audit could
+       attribute none of the twelve below, nor `close`, nor window_message.c's §9.4.4 `postMessage`, which goes
+       onto this same object — 50 installed members whose target interface it could not decide. */
+    idl_interface_tag(ctx, proto, "Window");
     for (i = 0; i < WP_MEMBER_N; i++) {
         if (i == WP_LENGTH)
             idl_install_accessor_step(ctx, proto, PROXY_MEMBER[i], g_wp_len_getter_id, -1);
