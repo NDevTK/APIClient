@@ -74,6 +74,7 @@ static const ElReflect R_HTML[] = {
        `headingoffset` answers the range's MINIMUM (0) and not a default. HTMLElement is inherited by every
        element interface, so this one row is the member on 62 of them. */
     { "headingOffset", "headingoffset", REFLECT_ULONG, 0, false, 0, 8, true },
+    { "headingReset", "headingreset", REFLECT_BOOL },
 };
 
 /* THE PER-INTERFACE REFLECTIONS. Each list is what that interface's IDL declares and nothing else — which is
