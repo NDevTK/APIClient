@@ -60,8 +60,23 @@ JSValue element_proto(JSContext *ctx);
    may appear on nothing but a `USVString`. Its getter RESOLVES: encoding-parse-and-serialize the attribute
    value against the ELEMENT'S NODE DOCUMENT, so `<img src="/x">` reads back `http://host/x` and not `/x`. A
    REFLECT_STRING row for one of these is not a lenient reading, it is a different value — the mirror answers
-   every relative URL wrong, silently, and `img.src`, `iframe.src`, `link.href`, `video.poster`, `source.src`,
-   `object.data` and eleven more are declared that way today. */
+   every relative URL wrong, silently, and twelve members were declared that way until they were corrected in
+   core/html/html_element.c.
+
+   THERE IS NO KIND FOR `[ReflectSetter]`, AND ADDING ONE WOULD BE A HALF-IMPLEMENTED ROW. §2.6.2 gives that
+   extended attribute one meaning: the SETTER reflects, and the getter is the member's OWN algorithm — so those
+   members are not registry rows at all, they are components. `<a>`/`<area>` `href` is §4.6.3's URL record
+   serialized, shared with the ten sibling members that re-parse and write the same attribute back, and it falls
+   back to the RAW attribute where §2.6.1 falls back to a scalar value string; `<base>` `href` falls back to the
+   fallback base URL; `form.action` falls back to the document's URL. A `REFLECT_SETTER_ONLY` kind could carry
+   the setter and would have nothing to answer the getter with, so it would answer the mirror — which is exactly
+   the wrong-value-that-passes-a-presence-test the twelve rows above were. This is written here because the
+   count invites the mistake: 10 DOMString + 7 double + 6 USVString + 4 unsigned long + `tabIndex`'s long are
+   unmodelled and they look like a pattern. They are twenty-eight component getters.
+
+   A KIND MUST ANSWER BOTH DIRECTIONS FROM THE ATTRIBUTE ALONE. That is the test for whether something belongs
+   in this enum, and it is also why core/html/global_attributes.c's six enumerated globals are not rows: their
+   getters walk ANCESTORS. */
 enum { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_STRING_NULLABLE, REFLECT_URL };
 typedef struct { const char *idl; const char *attr; int kind; } ElReflect;
 
