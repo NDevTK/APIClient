@@ -219,6 +219,25 @@ static const ElReflect R_TEMPLATE[] = {
 static const ElReflect R_DATA[]   = { { "value", "value", REFLECT_STRING } };
 static const ElReflect R_METER[]  = { { "min", "min", REFLECT_STRING }, { "max", "max", REFLECT_STRING } };
 
+/* THE FOUR GlobalEventHandlers MEMBERS THIS USER AGENT MUST NOT HAVE. Touch Events Level 2 puts them behind a
+   condition it states in PROSE and not in its IDL — "User agents have an associated boolean `expose legacy
+   touch event APIs` whose value is implementation-defined", and then, at `Extensions to the GlobalEventHandlers
+   mixin`: "For user agents where expose legacy touch event APIs is false, this mixin must not be implemented."
+   The published `partial interface mixin GlobalEventHandlers` carries no [Exposed] and no marker, so the four
+   reach @webref/idl unconditionally and an absent one is indistinguishable from an unbuilt one — which is
+   exactly what idl_members_excluded exists to say. (The sections are cited by TITLE with no number because the
+   Level 2 draft numbers none of its sections, and the 2013 Recommendation has no GlobalEventHandlers section at
+   all; both are checkable at w3c.github.io/touch-events/ and www.w3.org/TR/touch-events/.)
+   THIS AGENT'S FLAG IS FALSE, and not by preference: TouchEvent, Touch and TouchList are absent (they are names
+   on browser/platform_names.h, so reading one is the ReferenceError that names the component to write), so
+   there is nothing for a touch handler to be handed. Building Touch Events is what flips it, and deleting this
+   declaration is part of that build — the auditor fails if the corpus drops a name here, and idl_members_excluded
+   asserts per realm that the prototype indeed lacks each one.
+   The same four are absent on Document and on Window, which include the same mixin (core/dom/document.c and
+   core/frame/window.c each install EH_GLOBAL); each needs this declaration at its own install site, with its
+   own interface name, because the auditor reads the name as a literal at the call. */
+static const char *const TOUCH_EXCLUDED[] = { "ontouchstart", "ontouchend", "ontouchmove", "ontouchcancel" };
+
 #define RL(a) (a), (int)(sizeof(a) / sizeof((a)[0]))
 #define RNONE NULL, 0
 
@@ -488,6 +507,12 @@ void html_element_install_protos(JSContext *ctx)
     /* HTML mixes GlobalEventHandlers and DocumentAndElementEventHandlers into HTMLElement, not into Element —
        so this is where they belong, and where `div.onclick = f` now reaches them. */
     event_target_install_handlers(ctx, html_p, EH_GLOBAL);
+    idl_members_excluded(ctx, html_p, "HTMLElement", TOUCH_EXCLUDED,
+                         (int)(sizeof(TOUCH_EXCLUDED) / sizeof(TOUCH_EXCLUDED[0])),
+                         "Touch Events Level 2, `Extensions to the GlobalEventHandlers mixin`: \"For user "
+                         "agents where expose legacy touch event APIs is false, this mixin must not be "
+                         "implemented.\" This agent's `expose legacy touch event APIs` is false — TouchEvent, "
+                         "Touch and TouchList are absent, so a touch handler would have nothing to be handed");
     event_target_install_click(ctx, html_p);
     /* §3.2.2 `[SameObject] attribute CSSStyleDeclaration style` — the attribute is HTMLElement's, the object is
        the CSSOM's, so each side owns its half. */
