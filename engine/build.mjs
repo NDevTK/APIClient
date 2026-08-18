@@ -882,7 +882,28 @@ report(STAGES);
    WHAT NO GATE IN THIS FILE ASKS AT ALL, stated here rather than left for a reader to discover by grep:
    whether `clusterKeyOf` decides that two LIVE documents are two clusters. Both gates above write their own
    keys, and SECURITY.md requires both halves of a real one to be BROWSER-STATED — so that claim belongs to the
-   live harness (`harness offscreen "return await self.rendererPoolProbe()"`) and is made nowhere here. Nor is
-   a message routed BETWEEN two renderers: this stage speaks the ABI to each of two instances and compares
-   their answers, while renderer-to-renderer routing is bridge.js's and is exercised by route.mjs one layer
-   down. */
+   live harness (`harness offscreen "return await self.rendererPoolProbe()"`) and is made nowhere here.
+   AND A MESSAGE ROUTED BETWEEN TWO RENDERERS, WHICH THIS PARAGRAPH DESCRIBED WRONGLY ON THE LINE IT NOW
+   REPLACES. It said renderer-to-renderer routing "is bridge.js's and is exercised by route.mjs one layer
+   down", which reads as covered and is not: the two halves belong to different components and only one of
+   them has a caller. route.mjs exercises the ENGINE's receiving half — `qjs_route` delivering into the right
+   timeline, `qjs_perform`, `qjs_host_answer_remote` — but the routing DECISION it makes is its OWN model,
+   three lines of `engines.find((e) => e.docId === doc)`, and the shipped decision is `bridge.js`'s
+   (which instance holds the named document, and the sender's origin STAMPED BY THE TRUSTED ZONE — SECURITY.md
+   makes that stamp this zone's precisely because a forgeable one defeats every origin check in every bundle).
+   No gate loads bridge.js. So the claim splits three ways and each belongs somewhere different:
+     - the engine's receiving half — route.mjs, where it already is, and it must STAY there: giving that stage
+       frames, mojo and a registry would put an engine-seam regression and a browser-process regression in one
+       verdict, which is the collapse §Testing forbids;
+     - the record crossing the TYPED, VALIDATED wire — `content.mojom.Renderer` declares `route`, `perform`,
+       `hostAnswerRemote` and `worldGone`, and route.mjs reaches those entries by raw `ccall`, so the validator
+       that assumes the renderer is hostile has never seen a routed record. That belongs in the stage ABOVE,
+       which already holds two mojo-bound instances, and its precondition is not met yet either: that stage
+       calls `init`/`getBundleId`/`teardown` and never `begin`/`step`, so NO FLOW HAS EVER RUN behind the frame
+       boundary. Driving one peer's frontier over the wire until it emits its first `navigable.create` notice
+       is the next diff, and if the notice does not cross, that is the finding;
+     - the routing DECISION and the origin stamp — bridge.js's, exercised by nothing, and NOT closed by adding
+       a phase above: a gate that models `holderOf` the way route.mjs does is honest only if it says so. What
+       would close it is bridge.js's router becoming loadable without the chrome extension APIs and IndexedDB
+       it currently drags in, which is a refactor
+       and not a gate, and is written here so the next reader starts from it rather than from a green stage. */
