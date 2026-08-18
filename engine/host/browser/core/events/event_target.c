@@ -90,11 +90,15 @@ static JSClassID g_et_class;
 static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
 static void event_target_install(JSContext *ctx);
 
+/* §8.1.8.2's handler list is AGENT state, so its two hand-written columns are checked where it is declared. */
+static void eh_assert_types(void);
+
 void event_target_init(JSContext *ctx)
 {
     JSClassDef d = { "EventTarget" };
 
     DCHECK(!g_ready, "event_target_init ran twice — one instance is one document");
+    eh_assert_types();
     g_key = JS_NewSymbol(ctx, "eventListeners", false);
     CHECK(!JS_IsException(g_key), "the event-listener key allocation failed");
     g_handler_key = JS_NewSymbol(ctx, "eventHandlers", false);
@@ -693,98 +697,199 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
  *
  * The handler map is an own property under a private Symbol, for the reason the listener map is: it makes the
  * handler per-flow for free, so `onclick` assigned in one arm of a fork is invisible to its sibling. */
-#define EVENT_HANDLERS(X)                                                                                     \
-    /* GlobalEventHandlers — HTML §8.1.8.2.1, on Window, Document and Element alike. */                       \
-    X("onabort", EH_GLOBAL | EH_SIGNAL | EH_XHR | EH_IDB_TRANSACTION) X("onauxclick", EH_GLOBAL) X("onbeforeinput", EH_GLOBAL)          \
-    X("onbeforematch", EH_GLOBAL) X("onbeforetoggle", EH_GLOBAL) X("onblur", EH_GLOBAL) X("oncancel", EH_GLOBAL)      \
-    X("oncanplay", EH_GLOBAL) X("oncanplaythrough", EH_GLOBAL)                          \
-    /* `onchange` has THREE owners — GlobalEventHandlers, CSSOM VIEW §4.2's MediaQueryList and Permissions
-       §6.3's PermissionStatus — which is exactly what the mask is a BITMASK for. A second X() line for the
-       same name would put the name in this list twice, and every consumer of the list (the IDL auditor, the
-       content-attribute test) would then see a member that does not exist twice over. */                     \
-    X("onchange", EH_GLOBAL | EH_MEDIA_QUERY_LIST | EH_PERMISSION_STATUS) X("onclick", EH_GLOBAL)       \
-    X("onclose", EH_GLOBAL) X("oncontextlost", EH_GLOBAL) X("oncontextmenu", EH_GLOBAL)                             \
-    X("oncontextrestored", EH_GLOBAL) X("oncuechange", EH_GLOBAL) X("ondblclick", EH_GLOBAL) X("ondrag", EH_GLOBAL)   \
-    X("ondragend", EH_GLOBAL) X("ondragenter", EH_GLOBAL) X("ondragleave", EH_GLOBAL) X("ondragover", EH_GLOBAL)      \
-    X("ondragstart", EH_GLOBAL) X("ondrop", EH_GLOBAL) X("ondurationchange", EH_GLOBAL) X("onemptied", EH_GLOBAL)     \
-    X("onended", EH_GLOBAL) X("onerror", EH_GLOBAL | EH_XHR | EH_IDB_REQUEST | EH_IDB_TRANSACTION)              \
-    X("onfocus", EH_GLOBAL) X("onformdata", EH_GLOBAL)                \
-    X("oninput", EH_GLOBAL) X("oninvalid", EH_GLOBAL) X("onkeydown", EH_GLOBAL) X("onkeypress", EH_GLOBAL)            \
-    X("onkeyup", EH_GLOBAL) X("onload", EH_GLOBAL | EH_XHR) X("onloadeddata", EH_GLOBAL) X("onloadedmetadata", EH_GLOBAL)      \
-    X("onloadstart", EH_GLOBAL | EH_XHR) X("onmousedown", EH_GLOBAL) X("onmouseenter", EH_GLOBAL) X("onmouseleave", EH_GLOBAL) \
-    X("onmousemove", EH_GLOBAL) X("onmouseout", EH_GLOBAL) X("onmouseover", EH_GLOBAL) X("onmouseup", EH_GLOBAL)      \
-    X("onpause", EH_GLOBAL) X("onplay", EH_GLOBAL) X("onplaying", EH_GLOBAL) X("onprogress", EH_GLOBAL | EH_XHR)               \
-    X("onratechange", EH_GLOBAL) X("onreset", EH_GLOBAL)                                                          \
-    /* CSSOM VIEW §12 declares these three on VisualViewport as well, which is what the second bit says. */     \
-    X("onresize", EH_GLOBAL | EH_VISUAL_VIEWPORT) X("onscroll", EH_GLOBAL | EH_VISUAL_VIEWPORT)                 \
-    X("onscrollend", EH_GLOBAL | EH_VISUAL_VIEWPORT) X("onsecuritypolicyviolation", EH_GLOBAL)                  \
-    X("onseeked", EH_GLOBAL)                  \
-    X("onseeking", EH_GLOBAL) X("onselect", EH_GLOBAL) X("onslotchange", EH_GLOBAL | EH_SHADOW_ROOT) X("onstalled", EH_GLOBAL)         \
-    X("onsubmit", EH_GLOBAL) X("onsuspend", EH_GLOBAL) X("ontimeupdate", EH_GLOBAL) X("ontoggle", EH_GLOBAL)          \
-    X("onvolumechange", EH_GLOBAL) X("onwaiting", EH_GLOBAL) X("onwheel", EH_GLOBAL)                                \
-    /* DocumentAndElementEventHandlers — §8.1.7.2.3, on Document and Element (and Window, which mixes it in). */\
-    X("oncopy", EH_GLOBAL) X("oncut", EH_GLOBAL) X("onpaste", EH_GLOBAL)                                            \
-    /* WindowEventHandlers — §8.1.7.2.2, on Window (and, per the mixin, Document's body-delegated set). */     \
-    X("onafterprint", EH_WINDOW) X("onbeforeprint", EH_WINDOW) X("onbeforeunload", EH_WINDOW)                       \
-    X("onhashchange", EH_WINDOW) X("onlanguagechange", EH_WINDOW) X("onmessage", EH_WINDOW | EH_PORT)                          \
-    X("onmessageerror", EH_WINDOW | EH_PORT) X("onoffline", EH_WINDOW) X("ononline", EH_WINDOW) X("onpagehide", EH_WINDOW)      \
-    X("onpagereveal", EH_WINDOW) X("onpageshow", EH_WINDOW) X("onpageswap", EH_WINDOW) X("onpopstate", EH_WINDOW)     \
-    X("onrejectionhandled", EH_WINDOW) X("onstorage", EH_WINDOW) X("onunhandledrejection", EH_WINDOW)               \
-    X("onunload", EH_WINDOW)                                                                                    \
-    /* Document's own — §3.1.1 and the Page Visibility API. */                                                 \
-    X("onreadystatechange", EH_DOCUMENT | EH_XHR_READYSTATE) X("onvisibilitychange", EH_DOCUMENT) \
-    /* XHR §3.3 — the two of its seven that belong to NO other mixin, so this list is where they arrive. */ \
-    X("onloadend", EH_XHR) X("ontimeout", EH_XHR)                                                            \
-    /* HTML §7.2.6.2's Navigation and §7.2.6.5's NavigationHistoryEntry, each declaring its own. ALL FOUR of
-       §7.2.6.2's are here now: core/frame/navigate_event_fire.c performs §7.2.6.10.4, which dispatches
-       `navigate` at the Navigation before every navigation and `navigatesuccess` at the end of one that
-       committed, and core/frame/navigation_abort.c performs §7.2.6.8's ABORT A NavigateEvent, whose step 6
-       dispatches `navigateerror` at the same target for every navigation that ends any other way. Each of the
-       four arrived WITH the algorithm that fires it, because a handler attribute for an event nothing
-       dispatches is the shape-only member the IDL audit exists to expose. */                             \
-    X("oncurrententrychange", EH_NAVIGATION) X("onnavigate", EH_NAVIGATION)                               \
-    X("onnavigateerror", EH_NAVIGATION) X("onnavigatesuccess", EH_NAVIGATION)                             \
-    X("ondispose", EH_NAVIGATION_HISTORY_ENTRY)                                                           \
-    /* Indexed Database §4.1's `onsuccess` and §4.10's `oncomplete` — the two names that belong to NO other
-       mixin, so this list is where they arrive. Each came WITH the algorithm that fires it: §5.9's fire a
-       success event and §5.4's commit task, because a handler attribute for an event nothing dispatches is
-       the shape-only member the IDL audit exists to expose. */                                           \
-    X("onsuccess", EH_IDB_REQUEST) X("oncomplete", EH_IDB_TRANSACTION)                                    \
-    /* §4.1's IDBOpenDBRequest — "an extended interface to allow listening to the blocked and upgradeneeded
-       events" — and the one of §4.4's four that something fires. Each arrived WITH its algorithm: §5.1 step
-       10.5's `blocked`, §5.7 step 9.5's `upgradeneeded` and §5.1 step 10.2's `versionchange`. §4.4's other
-       three are NOT here: `onclose` needs §5.2's FORCED close, which no user-agent circumstance in this
-       engine performs, and `onabort`/`onerror` reach a connection only by BUBBLING from a transaction, which
-       needs §2.7's get-the-parent — until then each would be a handler attribute for an event nothing
-       dispatches, which is the shape-only member the IDL audit exists to expose. */                      \
-    X("onblocked", EH_IDB_OPEN_REQUEST) X("onupgradeneeded", EH_IDB_OPEN_REQUEST)                         \
-    X("onversionchange", EH_IDB_DATABASE)
+#define EVENT_HANDLERS(X)                                                                                        \
+    /* GlobalEventHandlers — HTML §8.1.8.2 Event handlers on elements, Document objects, and Window              \
+       objects, whose first table is the set every HTML element, Document and Window must support. */            \
+    X("onabort", "abort", EH_GLOBAL | EH_SIGNAL | EH_XHR | EH_IDB_TRANSACTION)                                   \
+    X("onauxclick", "auxclick", EH_GLOBAL)                                                                       \
+    X("onbeforeinput", "beforeinput", EH_GLOBAL)                                                                 \
+    X("onbeforematch", "beforematch", EH_GLOBAL)                                                                 \
+    X("onbeforetoggle", "beforetoggle", EH_GLOBAL)                                                               \
+    X("onblur", "blur", EH_GLOBAL)                                                                               \
+    X("oncancel", "cancel", EH_GLOBAL)                                                                           \
+    X("oncanplay", "canplay", EH_GLOBAL)                                                                         \
+    X("oncanplaythrough", "canplaythrough", EH_GLOBAL)                                                           \
+    /* `onchange` has THREE owners — GlobalEventHandlers, CSSOM VIEW §4.2's MediaQueryList and Permissions       \
+       §6.3's PermissionStatus — which is exactly what the mask is a BITMASK for. A second X() line for the      \
+       same name would put the name in this list twice, and every consumer of the list (the IDL auditor, the     \
+       content-attribute test) would then see a member that does not exist twice over. */                        \
+    X("onchange", "change", EH_GLOBAL | EH_MEDIA_QUERY_LIST | EH_PERMISSION_STATUS)                              \
+    X("onclick", "click", EH_GLOBAL)                                                                             \
+    X("onclose", "close", EH_GLOBAL)                                                                             \
+    X("oncommand", "command", EH_GLOBAL)                                                                         \
+    X("oncontextlost", "contextlost", EH_GLOBAL)                                                                 \
+    X("oncontextmenu", "contextmenu", EH_GLOBAL)                                                                 \
+    X("oncontextrestored", "contextrestored", EH_GLOBAL)                                                         \
+    /* oncopy, oncut and onpaste were DocumentAndElementEventHandlers and are GlobalEventHandlers members now —  \
+       that mixin no longer exists in HTML, and the name appears nowhere in §8.1.8. They keep their place in the \
+       spec's alphabetical order rather than sitting under a heading naming a mixin that is gone. */             \
+    X("oncopy", "copy", EH_GLOBAL)                                                                               \
+    X("oncuechange", "cuechange", EH_GLOBAL)                                                                     \
+    X("oncut", "cut", EH_GLOBAL)                                                                                 \
+    X("ondblclick", "dblclick", EH_GLOBAL)                                                                       \
+    X("ondrag", "drag", EH_GLOBAL)                                                                               \
+    X("ondragend", "dragend", EH_GLOBAL)                                                                         \
+    X("ondragenter", "dragenter", EH_GLOBAL)                                                                     \
+    X("ondragleave", "dragleave", EH_GLOBAL)                                                                     \
+    X("ondragover", "dragover", EH_GLOBAL)                                                                       \
+    X("ondragstart", "dragstart", EH_GLOBAL)                                                                     \
+    X("ondrop", "drop", EH_GLOBAL)                                                                               \
+    X("ondurationchange", "durationchange", EH_GLOBAL)                                                           \
+    X("onemptied", "emptied", EH_GLOBAL)                                                                         \
+    X("onended", "ended", EH_GLOBAL)                                                                             \
+    X("onerror", "error", EH_GLOBAL | EH_XHR | EH_IDB_REQUEST | EH_IDB_TRANSACTION)                              \
+    X("onfocus", "focus", EH_GLOBAL)                                                                             \
+    X("onformdata", "formdata", EH_GLOBAL)                                                                       \
+    X("oninput", "input", EH_GLOBAL)                                                                             \
+    X("oninvalid", "invalid", EH_GLOBAL)                                                                         \
+    X("onkeydown", "keydown", EH_GLOBAL)                                                                         \
+    X("onkeypress", "keypress", EH_GLOBAL)                                                                       \
+    X("onkeyup", "keyup", EH_GLOBAL)                                                                             \
+    X("onload", "load", EH_GLOBAL | EH_XHR)                                                                      \
+    X("onloadeddata", "loadeddata", EH_GLOBAL)                                                                   \
+    X("onloadedmetadata", "loadedmetadata", EH_GLOBAL)                                                           \
+    X("onloadstart", "loadstart", EH_GLOBAL | EH_XHR)                                                            \
+    X("onmousedown", "mousedown", EH_GLOBAL)                                                                     \
+    X("onmouseenter", "mouseenter", EH_GLOBAL)                                                                   \
+    X("onmouseleave", "mouseleave", EH_GLOBAL)                                                                   \
+    X("onmousemove", "mousemove", EH_GLOBAL)                                                                     \
+    X("onmouseout", "mouseout", EH_GLOBAL)                                                                       \
+    X("onmouseover", "mouseover", EH_GLOBAL)                                                                     \
+    X("onmouseup", "mouseup", EH_GLOBAL)                                                                         \
+    X("onpaste", "paste", EH_GLOBAL)                                                                             \
+    X("onpause", "pause", EH_GLOBAL)                                                                             \
+    X("onplay", "play", EH_GLOBAL)                                                                               \
+    X("onplaying", "playing", EH_GLOBAL)                                                                         \
+    X("onprogress", "progress", EH_GLOBAL | EH_XHR)                                                              \
+    X("onratechange", "ratechange", EH_GLOBAL)                                                                   \
+    X("onreset", "reset", EH_GLOBAL)                                                                             \
+    /* CSSOM VIEW §12 declares these three on VisualViewport as well, which is what the second bit says. */      \
+    X("onresize", "resize", EH_GLOBAL | EH_VISUAL_VIEWPORT)                                                      \
+    X("onscroll", "scroll", EH_GLOBAL | EH_VISUAL_VIEWPORT)                                                      \
+    X("onscrollend", "scrollend", EH_GLOBAL | EH_VISUAL_VIEWPORT)                                                \
+    X("onsecuritypolicyviolation", "securitypolicyviolation", EH_GLOBAL)                                         \
+    X("onseeked", "seeked", EH_GLOBAL)                                                                           \
+    X("onseeking", "seeking", EH_GLOBAL)                                                                         \
+    X("onselect", "select", EH_GLOBAL)                                                                           \
+    X("onslotchange", "slotchange", EH_GLOBAL | EH_SHADOW_ROOT)                                                  \
+    X("onstalled", "stalled", EH_GLOBAL)                                                                         \
+    X("onsubmit", "submit", EH_GLOBAL)                                                                           \
+    X("onsuspend", "suspend", EH_GLOBAL)                                                                         \
+    X("ontimeupdate", "timeupdate", EH_GLOBAL)                                                                   \
+    X("ontoggle", "toggle", EH_GLOBAL)                                                                           \
+    X("onvolumechange", "volumechange", EH_GLOBAL)                                                               \
+    X("onwaiting", "waiting", EH_GLOBAL)                                                                         \
+    /* THE FOUR HANDLERS WHOSE EVENT TYPE IS NOT THE NAME PAST THE `on` — §8.1.8.2's table gives                 \
+       `webkitAnimationEnd`, `webkitAnimationIteration`, `webkitAnimationStart` and `webkitTransitionEnd`, in    \
+       camel case, and they are the ONLY four in the whole table that differ from their attribute name. They are \
+       why the type is a COLUMN: derived from the name they would have registered a listener for a type nothing  \
+       dispatches, and `el.onwebkitanimationend = f` would have been a handler no `webkitAnimationEnd` could     \
+       ever reach. The events themselves are CSS Animations' and CSS Transitions'; HTML mandates the attributes  \
+       on every HTML element, Document and Window whatever fires them. */                                        \
+    X("onwebkitanimationend", "webkitAnimationEnd", EH_GLOBAL)                                                   \
+    X("onwebkitanimationiteration", "webkitAnimationIteration", EH_GLOBAL)                                       \
+    X("onwebkitanimationstart", "webkitAnimationStart", EH_GLOBAL)                                               \
+    X("onwebkittransitionend", "webkitTransitionEnd", EH_GLOBAL)                                                 \
+    X("onwheel", "wheel", EH_GLOBAL)                                                                             \
+    /* WindowEventHandlers — the same section's second table, on Window (and, per the mixin, Document's          \
+       body-delegated set). */                                                                                   \
+    X("onafterprint", "afterprint", EH_WINDOW)                                                                   \
+    X("onbeforeprint", "beforeprint", EH_WINDOW)                                                                 \
+    X("onbeforeunload", "beforeunload", EH_WINDOW)                                                               \
+    X("onhashchange", "hashchange", EH_WINDOW)                                                                   \
+    X("onlanguagechange", "languagechange", EH_WINDOW)                                                           \
+    X("onmessage", "message", EH_WINDOW | EH_PORT)                                                               \
+    X("onmessageerror", "messageerror", EH_WINDOW | EH_PORT)                                                     \
+    X("onoffline", "offline", EH_WINDOW)                                                                         \
+    X("ononline", "online", EH_WINDOW)                                                                           \
+    X("onpagehide", "pagehide", EH_WINDOW)                                                                       \
+    X("onpagereveal", "pagereveal", EH_WINDOW)                                                                   \
+    X("onpageshow", "pageshow", EH_WINDOW)                                                                       \
+    X("onpageswap", "pageswap", EH_WINDOW)                                                                       \
+    X("onpopstate", "popstate", EH_WINDOW)                                                                       \
+    X("onrejectionhandled", "rejectionhandled", EH_WINDOW)                                                       \
+    X("onstorage", "storage", EH_WINDOW)                                                                         \
+    X("onunhandledrejection", "unhandledrejection", EH_WINDOW)                                                   \
+    X("onunload", "unload", EH_WINDOW)                                                                           \
+    /* Document's own — §3.1.1 and the Page Visibility API. */                                                   \
+    X("onreadystatechange", "readystatechange", EH_DOCUMENT | EH_XHR_READYSTATE)                                 \
+    X("onvisibilitychange", "visibilitychange", EH_DOCUMENT)                                                     \
+    /* XHR §3.3 — the two of its seven that belong to NO other mixin, so this list is where they arrive. */      \
+    X("onloadend", "loadend", EH_XHR)                                                                            \
+    X("ontimeout", "timeout", EH_XHR)                                                                            \
+    /* HTML §7.2.6.2's Navigation and §7.2.6.5's NavigationHistoryEntry, each declaring its own. ALL FOUR of     \
+       §7.2.6.2's are here now: core/frame/navigate_event_fire.c performs §7.2.6.10.4, which dispatches          \
+       `navigate` at the Navigation before every navigation and `navigatesuccess` at the end of one that         \
+       committed, and core/frame/navigation_abort.c performs §7.2.6.8's ABORT A NavigateEvent, whose step 6      \
+       dispatches `navigateerror` at the same target for every navigation that ends any other way. Each of the   \
+       four arrived WITH the algorithm that fires it, because a handler attribute for an event nothing           \
+       dispatches is the shape-only member the IDL audit exists to expose. */                                    \
+    X("oncurrententrychange", "currententrychange", EH_NAVIGATION)                                               \
+    X("onnavigate", "navigate", EH_NAVIGATION)                                                                   \
+    X("onnavigateerror", "navigateerror", EH_NAVIGATION)                                                         \
+    X("onnavigatesuccess", "navigatesuccess", EH_NAVIGATION)                                                     \
+    X("ondispose", "dispose", EH_NAVIGATION_HISTORY_ENTRY)                                                       \
+    /* Indexed Database §4.1's `onsuccess` and §4.10's `oncomplete` — the two names that belong to NO other      \
+       mixin, so this list is where they arrive. Each came WITH the algorithm that fires it: §5.9's fire a       \
+       success event and §5.4's commit task, because a handler attribute for an event nothing dispatches is      \
+       the shape-only member the IDL audit exists to expose. */                                                  \
+    X("onsuccess", "success", EH_IDB_REQUEST)                                                                    \
+    X("oncomplete", "complete", EH_IDB_TRANSACTION)                                                              \
+    /* §4.1's IDBOpenDBRequest — "an extended interface to allow listening to the blocked and upgradeneeded      \
+       events" — and the one of §4.4's four that something fires. Each arrived WITH its algorithm: §5.1 step     \
+       10.5's `blocked`, §5.7 step 9.5's `upgradeneeded` and §5.1 step 10.2's `versionchange`. §4.4's other      \
+       three are NOT here: `onclose` needs §5.2's FORCED close, which no user-agent circumstance in this         \
+       engine performs, and `onabort`/`onerror` reach a connection only by BUBBLING from a transaction, which    \
+       needs §2.7's get-the-parent — until then each would be a handler attribute for an event nothing           \
+       dispatches, which is the shape-only member the IDL audit exists to expose. */                             \
+    X("onblocked", "blocked", EH_IDB_OPEN_REQUEST)                                                               \
+    X("onupgradeneeded", "upgradeneeded", EH_IDB_OPEN_REQUEST)                                                   \
+    X("onversionchange", "versionchange", EH_IDB_DATABASE)
 
 /* The NAMES are string literals, not stringified identifiers, so the IDL gap auditor — which scans a component
    for the property names it installs — can SEE them. Behind a `#n` it saw none of these and reported all ninety
    as absent, which is the audit lying by omission: the same failure as leaving an interface out of its map. */
 static const char *const EH_NAME[] = {
-#define X(n, m) n,
+#define X(n, t, m) n,
     EVENT_HANDLERS(X)
 #undef X
 };
 #define EH_COUNT ((int)(sizeof(EH_NAME) / sizeof(EH_NAME[0])))
 
-/* The EVENT TYPE each attribute handles: its own name past the `on`, which is what §8.1.7 says and why one
-   list produces both. WRITTEN AS AN INDEX, not as `n + 2`: the two mean the identical thing and the second is
-   the shape `-Wstring-plus-int` exists to catch, because on a string literal it is far more often someone
-   expecting concatenation. Saying `&n[2]` says SUBSTRING, which is what §8.1.7 asks for. */
+/* The EVENT TYPE each attribute handles, WRITTEN OUT rather than derived. It used to be `&(n)[2]` — the name
+   past the `on` — and that is not what §8.1.8.2 says: the section gives the type in a TABLE, and for four of
+   its rows the table's answer is not the attribute name at all but `webkitAnimationEnd`,
+   `webkitAnimationIteration`, `webkitAnimationStart` and `webkitTransitionEnd`, in camel case. A derivation
+   that is right ninety-nine times and silently wrong four times is worse than a column: it produced a handler
+   registered for a type nothing dispatches, which is indistinguishable from a handler nobody set. */
 static const char *const EH_TYPE[] = {
-#define X(n, m) &(n)[2],
+#define X(n, t, m) t,
     EVENT_HANDLERS(X)
 #undef X
 };
 
 static const int EH_MASK[] = {
-#define X(n, m) (m),
+#define X(n, t, m) (m),
     EVENT_HANDLERS(X)
 #undef X
 };
+
+/* THE TYPE IS THE NAME PAST THE `on` EXCEPT WHERE §8.1.8.2's TABLE SAYS OTHERWISE, and the exceptions are
+   exactly the four legacy webkit aliases. Asserted here rather than trusted, because the two columns are hand
+   written and a typo in either is a handler that never fires with nothing to say so. */
+static void eh_assert_types(void)
+{
+    int i;
+
+    for (i = 0; i < EH_COUNT; i++) {
+        const char *n = EH_NAME[i], *t = EH_TYPE[i];
+        DCHECK(n[0] == 'o' && n[1] == 'n' && n[2] != 0,
+               "an event handler IDL attribute was declared with a name that is not `on` plus an event type");
+        DCHECK(strcmp(&n[2], t) == 0 || strncmp(n, "onwebkit", 8) == 0,
+               "an event handler's event type is not its name past the `on`, and §8.1.8.2's table names only "
+               "the four legacy webkit aliases as exceptions");
+    }
+}
 
 
 /* The handler map (type -> handler) and the marker that stands for it in a listener list. The map is per
