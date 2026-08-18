@@ -801,12 +801,14 @@ report(STAGES);
    which was true and then was read as an instruction — the exact way a `DFAIL` outlives the absence it names
    and starts to lie. `engine/renderer_host_gate.mjs` loads render-process-host.js and renderer-host.js by
    their own bytes into a realm carrying only the browser surface they read, provisions two cross-origin
-   renderers through the registry, and asks it for a second renderer for a cluster that already has one — so
-   the duplicate-cluster CHECK now has a caller that fires it on every build.
-   WHAT IS STILL NOT FIRED, stated here rather than left for a reader to discover by grep: `slotRequire`'s two
-   refusals (a routing id this table never minted, and a renderer reported dead twice). Both are reachable by
-   calling `renderProcessHost` directly and neither is reached yet.
-   AND WHAT NO GATE IN THIS FILE ASKS AT ALL: whether `clusterKeyOf` decides that two LIVE documents are two
-   clusters. Both gates above write their own keys; the browser-stated halves SECURITY.md requires are the
-   product path, and that claim is made on the live harness (`harness offscreen "return await
-   self.rendererPoolProbe()"`) and nowhere here. */
+   renderers through the registry, asks it for a second renderer for a cluster that already has one, and asks
+   it to bury a routing id it never minted and a renderer it has already buried — so all THREE of the
+   registry's CHECK-class refusals now have a caller that fires them on every build, which is the whole of the
+   coverage this paragraph was written to record the loss of.
+   WHAT NO GATE IN THIS FILE ASKS AT ALL, stated here rather than left for a reader to discover by grep:
+   whether `clusterKeyOf` decides that two LIVE documents are two clusters. Both gates above write their own
+   keys, and SECURITY.md requires both halves of a real one to be BROWSER-STATED — so that claim belongs to the
+   live harness (`harness offscreen "return await self.rendererPoolProbe()"`) and is made nowhere here. Nor is
+   a message routed BETWEEN two renderers: this stage speaks the ABI to each of two instances and compares
+   their answers, while renderer-to-renderer routing is bridge.js's and is exercised by route.mjs one layer
+   down. */

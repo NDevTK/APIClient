@@ -411,6 +411,14 @@ try {
   const third = await self.rendererLaunch(DUP);
   noteId(third.routingId, 'phase 2 re-admission');
   const readmitted = registryLine('re-admitted');
+  /* THE RE-ADMISSION IS READ, NOT MERELY PERFORMED. A `registryLine` whose record nothing compares is a log
+     line wearing the shape of a check — the cluster being back in the table is the half of "a termination
+     frees its cluster" that the counters above cannot state. */
+  if (readmitted.reg.live !== freed.reg.live + 1 ||
+      !readmitted.reg.clusters.some((c) => c.origin === 'https://dup.renderer.gate'))
+    fail('the re-admitted renderer is not in the registry under the cluster that was freed — a termination ' +
+         'that frees a cluster only matters if the next request for it is ADMITTED, and a table that lost the ' +
+         'row would read exactly like a launch that never happened');
   if (third.routingId === first.routingId)
     fail(`the re-admitted renderer was given the id of the one that died (${third.routingId}) — an id is the ` +
          'only name a renderer has, and reusing a buried one makes a late reply from the dead instance land on ' +
@@ -418,10 +426,55 @@ try {
   console.log(`${TAG}   re-admitted with a NEW id: ${first.routingId} died, ${third.routingId} minted`);
   third.destroy();
 
-  /* ── PHASE 3 — THE IDS, ACCOUNTED FOR. Every id this table ever minted is registered, terminated or failed
+  /* ── PHASE 3 — THE TWO REFUSALS A ROUTING ID CAN EARN, WHICH `slotRequire` TELLS APART ON PURPOSE AND WHICH
+     NOTHING IN THIS TREE HAD EVER FIRED. build.mjs named them where the deleted C driver's coverage was
+     recorded: "an id this table never minted" and "a renderer reported dead twice". They are different
+     accusations and a caller reading one `@E` line is standing where the fix has to be made — an id at or
+     beyond the counter came from OUTSIDE this table, and an id below it names a renderer already buried, so
+     acting on it would free an agent cluster that has a live instance or is about to be given one.
+     THEY ARE ASKED OF THE REGISTRY DIRECTLY, and that is the honest shape rather than a shortcut: no caller in
+     the extension can produce either id — `rendererDestroy` passes the id its own record carries — so the
+     state these refusals are about is reachable only by a component that has already gone wrong. Driving it
+     through a renderer would be inventing a broken caller and then measuring the invention. */
+  console.log(`${TAG} ── phase 3: the refusals a routing id earns ──`);
+  const beforeRefusals = registryLine('before the id refusals');
+  /* ONE HELPER, TWO CASES, AND THE MESSAGE IS PART OF THE ASSERTION. A gate that checks only THAT a call threw
+     passes when it threw for a reason of its own — the same point render-process-host.js makes about a filter
+     that threw for everything, and the reason phase 2 matches its refusal's text too. */
+  const refuses = (what, fragment, fn) => {
+    let e = null;
+    try { fn(); } catch (err) { e = err; }
+    if (e === null)
+      fail(`the registry ACCEPTED ${what} — that is a CHECK in render-process-host.js, fatal in dev and in ` +
+           'release, and a table that takes it acts on a renderer some other component decided existed');
+    if (!e.apiclientFatal || !/^@E CHECK failed:/.test(String(e.message)) ||
+        !String(e.message).includes(fragment))
+      fail(`the registry refused ${what}, but not on the CHECK this asks about (expected text containing ` +
+           `\`${fragment}\`) — a refusal that is any other throw is this gate passing on an accident: ` +
+           String((e && e.stack) || e));
+    console.log(`${TAG}   REFUSED (${what}): ${String(e.message).slice(0, 110)}…`);
+  };
+  /* AN ID AT THE COUNTER IS THE NEXT ONE THIS TABLE WOULD MINT AND THEREFORE ONE IT NEVER HAS. */
+  refuses('a routing id it never minted', 'never minted',
+          () => self.renderProcessHost.rendererTerminated(beforeRefusals.reg.nextRoutingId));
+  /* AND `first` IS A RENDERER THIS GATE ALREADY BURIED, so its id is below the counter and names no slot —
+     which is exactly one death reported twice. */
+  refuses('a renderer reported dead twice', 'already buried',
+          () => self.renderProcessHost.rendererTerminated(first.routingId));
+  const afterRefusals = registryLine('after the id refusals');
+  if (afterRefusals.reg.nextRoutingId !== beforeRefusals.reg.nextRoutingId ||
+      afterRefusals.reg.live !== beforeRefusals.reg.live ||
+      afterRefusals.reg.launched !== beforeRefusals.reg.launched ||
+      afterRefusals.reg.terminated !== beforeRefusals.reg.terminated ||
+      afterRefusals.reg.failed !== beforeRefusals.reg.failed)
+    fail('a refused report still moved the registry\'s counters — `slotRequire` asserts before it returns a ' +
+         'slot and every transition mutates only after it, so a counter that moved here is a burial the table ' +
+         'performed on a renderer it had just refused to recognise');
+
+  /* ── PHASE 4 — THE IDS, ACCOUNTED FOR. Every id this table ever minted is registered, terminated or failed
      to launch, so the three counts must account for the whole id space it issued. The registry asserts that
      after every mutation; this is the same arithmetic read from outside, over the ids this gate actually saw. */
-  console.log(`${TAG} ── phase 3: routing ids ──`);
+  console.log(`${TAG} ── phase 4: routing ids ──`);
   const end = registryLine('final');
   const sorted = mintedIds.slice().sort((a, b) => a - b);
   console.log(`${TAG}   ids observed: ${sorted.join(',')}   nextRoutingId=${end.reg.nextRoutingId}`);
@@ -448,7 +501,8 @@ if (_workerErrors.length)
   fail(`${_workerErrors.length} renderer frame(s) died on an uncaught throw:\n` + _workerErrors.join('\n'));
 
 console.log(`${TAG} OK — two cross-origin renderers provisioned through the registry (bundle ids ` +
-            `${probe.peers.map((p) => p.bundleId).join(' ')}), the duplicate-cluster refusal fired and cost ` +
-            `nothing, ids minted ${mintedIds.join(',')} and never reused`);
+            `${probe.peers.map((p) => p.bundleId).join(' ')}), all three CHECK-class refusals fired and cost ` +
+            `nothing (a second renderer for a live cluster, an id never minted, a renderer reported dead ` +
+            `twice), ids minted ${mintedIds.join(',')} and never reused`);
 shutdown();
 process.exit(0);
