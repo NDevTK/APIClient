@@ -367,6 +367,32 @@ typedef struct {
     long unrun;        /* members with cpu == 0 — never charged for the thread, or emitted since they last
                           were. flow_pick's own definition of an unrun flow, read here rather than restated. */
     int64_t svc_max;   /* the largest service notch in the frontier — who is actually consuming the thread */
+
+    /* THE @S CANDIDATE SESSIONS, ASKED DIRECTLY, because the first reading of this census had to INFER them
+     * and the inference was three fields long: `val_zero` counts members that inherited nothing, `unrun`
+     * counts members never charged, `self_emit == 0` is what rules out a just-emitted flow among them, and
+     * only all three together said "the members that have never had the thread are the candidates". A fact
+     * reached by composing three rows is a fact the next reader composes differently. It is one row now.
+     *
+     * `cand_unrun` IS THE STARVATION QUESTION AND NOTHING ELSE ANSWERS IT. @PROGRESS's `running` names the
+     * INCUMBENT at the sample instant, which for a population that is 2% of the frontier is a 2% coin — it
+     * reads as total starvation and as exact fair share with the same numbers, and it was read as the first.
+     * A candidate that has held the thread has been charged for it (engine.c charges after every step), so
+     * this is how many have never had it, exactly, at the instant it is asked.
+     *
+     * `cand_dec_max` IS HOW FAR THE BEST OF THEM HAS GOT — the length of the decision vector it stands on,
+     * which is how many gates it has replayed and therefore how deep into the program it is. A candidate
+     * re-runs from the BASELINE, so arriving at a sink is a distance problem before it is anything else, and
+     * §@S requires the search to be DISTANCE-DIRECTED: "a fitness of {filter-survived, sink-reached,
+     * context-escaped, handler-fires} the WFQ reads". flow_weight reads none of those four — a candidate 800
+     * gates into its runway ranks exactly like one 3 gates in. This is the number that says whether that gap
+     * is what is costing the run, and it separates three states that look identical from outside: served and
+     * progressing (distance — build the fitness), never served (starvation — the ordering), and served while
+     * pinned at zero (a candidate being RESTARTED rather than resumed, which no amount of thread time fixes). */
+    long cand_members;    /* members carrying a payload substitution — a candidate session */
+    long cand_unrun;      /* …of those, how many have NEVER been charged for the thread */
+    int64_t cand_svc_max; /* …and the most service any one of them has consumed */
+    long cand_dec_max;    /* …and the deepest decision vector any one of them stands on */
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 

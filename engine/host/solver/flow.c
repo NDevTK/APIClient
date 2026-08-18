@@ -886,6 +886,8 @@ void flow_wfq_census(WfqCensus *out) {
     out->val_min = out->val_max = out->val_top = 0.0;
     out->val_zero = out->self_emit = out->unrun = 0;
     out->svc_max = 0;
+    out->cand_members = out->cand_unrun = out->cand_dec_max = 0;
+    out->cand_svc_max = 0;
     for (i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
         int64_t s = flow_service_notch(f);
@@ -899,6 +901,21 @@ void flow_wfq_census(WfqCensus *out) {
         if (f->val > f->val_born) out->self_emit++;
         if (f->cpu == 0) out->unrun++;
         if (s > out->svc_max) out->svc_max = s;
+        /* AND THE SAME TWO QUESTIONS ASKED OF THE CANDIDATES ALONE — see flow.h. `cand_src` is what a
+           candidate session IS (the substitution it carries), so this is the population itself rather than a
+           proxy for it. The decision-vector length comes from wherever this flow's decision state currently
+           lives: a parked flow's blob, and decide.c's live globals for the one the scheduler is switched into
+           — the same split cold.c's census makes, because there is only one place each can be. */
+        if (f->cand_src) {
+            long e = 0;
+
+            out->cand_members++;
+            if (f->cpu == 0) out->cand_unrun++;
+            if (s > out->cand_svc_max) out->cand_svc_max = s;
+            if (f->dec_blob) decide_blob_stats(f->dec_blob, &e, NULL);
+            else if (f == g_running) decide_live_stats(&e, NULL);
+            if (e > out->cand_dec_max) out->cand_dec_max = e;
+        }
     }
     top = flow_best();
     if (top) out->val_top = top->val;

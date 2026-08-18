@@ -104,7 +104,8 @@ function probeFlips(out) {
    candidate session, a joined document's boot flow) enters at reward 0 and is exactly that population.
    Same field contract as @COLD: the names are engine.c's printf, and an absent one throws rather than being
    silently compared as undefined. */
-const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmit", "unrun"];
+const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmit", "unrun",
+                    "cands", "candUnrun", "candDecMax"];
 function wfqReading(out) {
   const s = [];
   for (const m of out.matchAll(/^@WFQ (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
@@ -118,7 +119,8 @@ function wfqReading(out) {
   return {
     ordered: w.valMax - w.valMin > 1 && w.valZero > 0,
     text: `@WFQ: ${w.members} members, reward ${w.valMin}..${w.valMax} (top ${w.valTop}), ${w.valZero} at ` +
-          `reward 0, ${w.selfEmit} emitted since birth, ${w.unrun} never charged for the thread`,
+          `reward 0, ${w.selfEmit} emitted since birth, ${w.unrun} never charged for the thread; ` +
+          `${w.cands} @S candidates of which ${w.candUnrun} never ran, deepest one ${w.candDecMax} gates in`,
   };
 }
 
