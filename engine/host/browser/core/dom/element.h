@@ -90,6 +90,14 @@ void element_install_reflections(JSContext *ctx, JSValueConst proto, int base, i
 /* AN ELEMENT'S CONTENT ATTRIBUTE, through the same chokepoint the reflections use — so a component that reads
    and writes one (§4.6.3's hyperlink members re-serialise a URL back into `href`) stays captured in the
    running flow's DOM delta. element_attr_get returns an OWNED string, or NULL when the attribute is absent. */
+/* THE VALUE PAIR — what a component reads and writes when the attribute may hold a SOURCE. An attacker string
+   stashed in an attribute keeps its provenance and its domain in §@S's (element, name) shadow
+   (solver/attr_shadow.h), and these two are the only accessors that carry the whole triple: the getter answers
+   with the concolic itself (JS_NULL when the attribute is absent), the setter hands the value to §4.9's write,
+   which records the taint and stores the shape. The `char *` pair below is these two plus a ToString, and that
+   ToString is where provenance dies — so it ASSERTS rather than performing it on a concolic. */
+JSValue element_attr_get_value(JSContext *ctx, JSValueConst el, const char *name);
+void    element_attr_set_value(JSContext *ctx, JSValueConst el, const char *name, JSValueConst value);
 char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name);
 void  element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const char *value);
 

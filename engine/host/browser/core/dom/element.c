@@ -1564,9 +1564,15 @@ static int       g_reflect_n;
  * A CONCOLIC ATTRIBUTE VALUE STAYS CONCOLIC. An attacker string a flow stashed in `src` survives the round trip
  * through solver/attr_shadow.c, and resolving it is an ordinary op on the value: the REAL parse runs on the
  * concrete EXAMPLE — so a relative payload gains its absolute form the way `+` gains a concatenation — and the
- * result is re-wrapped under the same provenance. Answering with the bare resolved string would de-taint the
- * one member a page reads an injected URL back out of. */
-static JSValue el_reflect_url(JSContext *ctx, lxb_dom_element_t *el, JSValue raw)
+ * result is DERIVED from it. Answering with the bare resolved string would de-taint the one member a page reads
+ * an injected URL back out of.
+ * IT IS THE DERIVATION SEAM AND NOT concolic_source_wrap, which mints AT A SOURCE. source_wrap asserts that a
+ * declared source's shape is its provenance in braces, and provenance is INHERITED through a derivation — so
+ * `img.src = location.hash.slice(1)` arrives carrying the declared source `location.hash` under a DERIVED
+ * shape, and wrapping it aborted on that assert. It also gave every URL reflection of one element the same
+ * identity, so a branch on one would have decided another. `member` is the reflection's IDL name, which is what
+ * tells those derivations apart. */
+static JSValue el_reflect_url(JSContext *ctx, lxb_dom_element_t *el, JSValue raw, const char *member)
 {
     JSValue concrete = concolic_is(raw) ? concolic_example(ctx, raw) : JS_DupValue(ctx, raw);
     const char *base = document_url_of(lxb_dom_interface_node(el)->owner_document);
@@ -1604,7 +1610,7 @@ static JSValue el_reflect_url(JSContext *ctx, lxb_dom_element_t *el, JSValue raw
     out = JS_NewString(ctx, ser);
     free(ser);
     if (concolic_is(raw))
-        out = concolic_source_wrap(ctx, concolic_shape_c(raw), concolic_src_c(raw), out);
+        out = concolic_builtin_hook(ctx, raw, member, out);   /* consumes `out` as the example */
     JS_FreeValue(ctx, raw);
     return out;
 }
@@ -1637,7 +1643,7 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
     /* §2.6.1's URL getter step 2a is the SAME answer the plain string reflection gives for an absent attribute
        ("if contentAttributeValue is null, then return the empty string"), so only the present case diverges. */
     if (!JS_IsNull(r))
-        return g_reflect[magic].kind == REFLECT_URL ? el_reflect_url(ctx, el, r) : r;
+        return g_reflect[magic].kind == REFLECT_URL ? el_reflect_url(ctx, el, r, g_reflect[magic].idl) : r;
     /* §2.6.1's two string models differ EXACTLY here: `DOMString` reads an absent attribute as the empty
        string, `DOMString?` reads it as null. A page tests one against the other (`el.ariaLabel === null`), so
        answering "" for a nullable member is a wrong value and not a lenient one. */
@@ -1693,13 +1699,42 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
    (check_dom_chokepoint.mjs); it has been deleted, so the chokepoint is a convention now — held by attr_list.c
    being the only file that includes Lexbor's attribute mutators, and by nothing else.
    Returns an OWNED string, or NULL when the attribute is absent. */
-char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name)
+/* THE VALUE PAIR IS THE PRIMITIVE AND THE BYTES PAIR IS BUILT ON IT, because an attribute is a slot a SOURCE
+   can be stashed in and a `char *` cannot hold one. `js_el_get_attribute` answers out of §@S's (element, name)
+   shadow (solver/attr_shadow.h), so what comes back for `a.href = location.hash.slice(1)` is the concolic
+   itself — the triple of provenance, domain and example. A component that wants that value must take THE
+   VALUE; the moment it asks for bytes the first two thirds are gone. */
+JSValue element_attr_get_value(JSContext *ctx, JSValueConst el, const char *name)
 {
     JSValue nv = JS_NewString(ctx, name);
     JSValue r = js_el_get_attribute(ctx, el, 1, (JSValueConst *)&nv, 0);
-    char *out = NULL;
 
     JS_FreeValue(ctx, nv);
+    return r;
+}
+
+void element_attr_set_value(JSContext *ctx, JSValueConst el, const char *name, JSValueConst value)
+{
+    el_set_attribute_internal(ctx, el, name, value);
+}
+
+char *element_attr_get(JSContext *ctx, JSValueConst el, const char *name)
+{
+    JSValue r = element_attr_get_value(ctx, el, name);
+    char *out = NULL;
+
+    /* THE TRIPLE DOES NOT SURVIVE THIS CALL, so a value carrying one must not arrive at it. JS_ToCString over a
+       concolic reaches JS_ToStringInternal's own boundary, which owes C a real string and can only abort — and
+       in a release build throws a TypeError that the `if (c)` below then DROPS, returning "the attribute is
+       absent" with the throw still pending. Both endings are the §@S false negative: the sink downstream is fed
+       an untainted string, or nothing at all, and a finding is silently missing rather than parked.
+       The value is already there to be had — read it with element_attr_get_value and carry it. Where the
+       consumer genuinely needs bytes (navigable_open's destination, url_member_set's component), carrying the
+       concolic into THAT consumer is the mechanism to build; stringifying here only moves the loss upstream. */
+    DCHECK(!concolic_is(r),
+           "an attribute holding unknown external input was read through the BYTES accessor — the source "
+           "identity and the constraint domain are taken off the triple here and only the example survives, "
+           "so the sink this feeds reads as clean. Read it with element_attr_get_value and carry the value");
     if (!JS_IsNull(r) && !JS_IsException(r)) {
         const char *c = JS_ToCString(ctx, r);
         if (c) { out = strdup(c); JS_FreeCString(ctx, c); }
@@ -1712,7 +1747,7 @@ void element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const c
 {
     JSValue v = JS_NewString(ctx, value ? value : "");
 
-    el_set_attribute_internal(ctx, el, name, v);
+    element_attr_set_value(ctx, el, name, v);
     JS_FreeValue(ctx, v);
 }
 
