@@ -1207,7 +1207,7 @@ static const char *HTML =
     /* §5 Headers. The RECORD fill is the conversion `fetch(u, {headers: {...}})` performs, so it is exercised
        through the interface that states it: a record init, then the members that read it back. The list keeps
        PAIRS — two `set-cookie` appends stay two entries and getSetCookie reads both — while `get` combines them
-       per §2.2.4, which is the whole difference between a header list and a map. A name is lowercased on the
+       per §2.2.2 Headers, which is the whole difference between a header list and a map. A name is lowercased on the
        way in, an absent header is null rather than "", and `set` replaces every entry with that name. */
     "(function(){ var h = new Headers({'X-Api-Key': 'k1', 'Accept': 'application/json'});"
       " h.append('Set-Cookie', 'a=1'); h.append('Set-Cookie', 'b=2');"
@@ -1256,7 +1256,7 @@ static const char *HTML =
        Web IDL §3.2.23 converts `record<ByteString, ByteString>` with "Let typedKey be key converted to an IDL
        value of type K … Set result[typedKey] to typedValue" — K is ByteString, which does not case-fold, so
        `X-Rec` and `x-rec` are TWO entries of the record and the fill sees both. §5.1's fill then "append(key,
-       value) to headers" for each, and §2.2.4's get returns "the values of all headers … separated from each
+       value) to headers" for each, and §2.2.2 Headers' get returns "the values of all headers … separated from each
        other by 0x2C 0x20": "r1, r2", over ONE name in the list. A replace loop matching the LOWERCASED name
        stood in the fill and answered "r2" — one pair silently discarded, which for this tool is a header the
        report would not carry. */
@@ -3192,57 +3192,113 @@ static JSContext *g_probe_ctx;
 static ColdParked g_cp;
 static ColdResumed g_cr;
 
-/* HOW MANY VALUES ONE PARAM OF ONE ENDPOINT CARRIES. A `strstr` over the whole result document cannot state a
-   COUNT, so a row whose claim is about one — "this param carries more than one value, therefore the walk forked
-   instead of deciding a bound" — cannot be written with one and was written as a term that cannot fail. The walk
-   is endpoint_json_array's own shape: the endpoint object, the param inside it, and the entries of its
-   validValues array, whose bytes are inside quotes so nothing but an entry's own quote pair delimits it.
-   0 = no such endpoint, or no such param on it. */
-static int param_value_count(const char *js, const char *url, const char *pname) {
-    char pat[160];
-    const char *e, *end, *p, *v;
-    int n = 0;
+/* ─── ONE PARAM OF ONE ENDPOINT, READ OFF endpoint_json_array's OWN SHAPE ──────────────────────────────────
+ *
+ * A `strstr` over the whole result document cannot state a COUNT, and it cannot state WHICH endpoint carries
+ * the byte it found, so a row written with one is a term that cannot fail. That is the objection these helpers
+ * were written for, and THE MIRROR OF IT PUT THREE ROWS AT 0 FOR EVERY RUN THERE HAS EVER BEEN: a term that
+ * cannot PASS. `hdr-seq`, `hdr-record` and `mp-escape` each spelled the assertion by hand as
+ *     strstr(js, "\"bad\",\"validValues\":[\"threw\"]")
+ * and endpoint_json_array writes `{"name":"bad","location":"query","validValues":["threw"]}` — the LOCATION
+ * field sits between the two halves, so those six clauses matched nothing that file has ever emitted. Two of
+ * the three rows name Web IDL conversions (§3.2.21 sequence<T>, §3.2.23 record<K, V>) that this engine builds
+ * and drives (core/idl_iter.c, core/fetch/headers.c), so the 0 was read as an unbuilt capability and is not
+ * about the engine at all.
+ *
+ * SO THE LAYOUT IS KNOWN IN EXACTLY ONE PLACE — here — AND THIS ASSERTS THAT IT STILL IS. A probe term that
+ * silently stops matching is invisible: it reads 0, which is the same 0 as a real gap. The DCHECK below tells
+ * the two apart at the origin, because a param whose `"name"` is present WITHOUT the `,"location":` that must
+ * follow it is the emitter having moved under this reader and nothing else. */
 
-    snprintf(pat, sizeof pat, "\"url\":\"%s\"", url);
-    e = strstr(js, pat);
-    if (!e) return 0;
-    end = strstr(e + 1, "\"url\":\"");   /* the NEXT endpoint's url is this object's far edge */
-    snprintf(pat, sizeof pat, "\"name\":\"%s\",\"location\":", pname);
-    p = strstr(e, pat);
-    if (!p || (end && p >= end)) return 0;
-    v = strstr(p, "\"validValues\":[");
-    if (!v) return 0;
-    for (v += strlen("\"validValues\":["); *v && *v != ']'; v++) {
-        if (*v != '"') continue;
-        n++;
-        for (v++; *v && *v != '"'; v++)
-            if (*v == '\\' && v[1]) v++;   /* an escaped quote is a value's byte, not the entry's end */
-        if (!*v) break;
-    }
-    return n;
+/* ONE ENTRY of a validValues array, quote-aware — an escaped quote is a value's byte, not the entry's end, and
+   a `]` inside a value is not the array's end either. `v` is a position inside the array; returns the position
+   past the entry with [*pb, *pb + *pn) its raw JSON bytes, or NULL at the closing bracket. */
+static const char *param_value_next(const char *v, const char **pb, size_t *pn) {
+    const char *b;
+
+    while (*v == ',' || *v == ' ') v++;
+    if (*v != '"') return NULL;          /* the ']' — or a shape endpoint_json_array does not write */
+    b = ++v;
+    for (; *v && *v != '"'; v++)
+        if (*v == '\\' && v[1]) v++;
+    if (*v != '"') return NULL;
+    *pb = b;
+    *pn = (size_t)(v - b);
+    return v + 1;
 }
 
-/* DOES ONE PARAM OF ONE ENDPOINT CARRY A VALUE CONTAINING `needle`. The sibling of param_value_count and the
-   same walk, for a row whose claim is about what a value IS rather than how many there are — here, that the
-   record read back out of an object store is still the CONCOLIC that went in. It has to be scoped to the
-   endpoint: the taint rendering appears in this document from the XSS statements as well, so an unscoped
-   strstr is a term that cannot fail, which is the shape param_value_count's own comment was written about. */
-static int param_value_has(const char *js, const char *url, const char *pname, const char *needle) {
+/* The first byte INSIDE one param's validValues array, or NULL when this endpoint or this param is absent. */
+static const char *param_values_span(const char *js, const char *url, const char *pname) {
     char pat[160];
-    const char *e, *end, *p, *v, *stop;
+    const char *e, *end, *p, *v;
 
     snprintf(pat, sizeof pat, "\"url\":\"%s\"", url);
     e = strstr(js, pat);
-    if (!e) return 0;
+    if (!e) return NULL;
     end = strstr(e + 1, "\"url\":\"");   /* the NEXT endpoint's url is this object's far edge */
     snprintf(pat, sizeof pat, "\"name\":\"%s\",\"location\":", pname);
     p = strstr(e, pat);
-    if (!p || (end && p >= end)) return 0;
+    if (!p || (end && p >= end)) {
+        snprintf(pat, sizeof pat, "\"name\":\"%s\"", pname);
+        p = strstr(e, pat);
+        DCHECK(!p || (end && p >= end),
+               "endpoint_json_array writes a param object this reader cannot parse: the `\"name\"` is there and "
+               "the `,\"location\":` that must follow it is not, so every probe term over this param's values "
+               "reads 0 for a reason that is not about the engine");
+        return NULL;
+    }
     v = strstr(p, "\"validValues\":[");
-    if (!v) return 0;
-    stop = strchr(v, ']');
-    p = strstr(v, needle);
-    return p != NULL && stop != NULL && p < stop;
+    DCHECK(v != NULL && (!end || v < end),
+           "a param object carried a name and a location and no validValues array — endpoint_json_array emits "
+           "all three of them unconditionally");
+    if (!v || (end && v >= end)) return NULL;
+    return v + strlen("\"validValues\":[");
+}
+
+/* HOW MANY VALUES ONE PARAM OF ONE ENDPOINT CARRIES — for a row whose claim is about one ("this param carries
+   more than one value, therefore the walk forked instead of deciding a bound"). 0 = no such endpoint, or no
+   such param on it. */
+static int param_value_count(const char *js, const char *url, const char *pname) {
+    const char *v = param_values_span(js, url, pname), *b;
+    size_t n;
+    int k = 0;
+
+    while (v && (v = param_value_next(v, &b, &n)) != NULL) k++;
+    return k;
+}
+
+/* DOES ONE PARAM OF ONE ENDPOINT CARRY A VALUE CONTAINING `needle` — for a row whose claim is about what a
+   value IS rather than how many there are (here, that the record read back out of an object store is still the
+   CONCOLIC that went in). Scoped to the endpoint AND to one entry: the taint rendering appears in this document
+   from the XSS statements as well, so an unscoped strstr is the term that cannot fail. */
+static int param_value_has(const char *js, const char *url, const char *pname, const char *needle) {
+    const char *v = param_values_span(js, url, pname), *b;
+    size_t n, m = strlen(needle), i;
+
+    while (v && (v = param_value_next(v, &b, &n)) != NULL)
+        for (i = 0; m <= n && i <= n - m; i++)
+            if (memcmp(b + i, needle, m) == 0) return 1;
+    return 0;
+}
+
+/* ONE PARAM OF ONE ENDPOINT CARRIES EXACTLY ONE VALUE AND IT IS `val` — the claim the three rows above were
+   trying to make, and the one an `strstr` up to a literal `]` was standing in for. Exactly-one is the whole
+   assertion for a statement whose value the code DETERMINED: a second entry means the flow forked where the
+   fixture says it cannot, which is a finding and not a match.
+   `val` is compared against the emitted JSON bytes, so a value needing an escape would never match; that is
+   asserted rather than left to be discovered as a row stuck at 0. */
+static int param_value_only(const char *js, const char *url, const char *pname, const char *val) {
+    const char *v = param_values_span(js, url, pname), *b, *c;
+    size_t n, m = strlen(val);
+    int plain = 1;
+
+    for (c = val; *c; c++)
+        if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) plain = 0;
+    DCHECK(plain, "a probe's expected param value carries a byte json_buf_str escapes, so it is being compared "
+                  "against a spelling the emitter never writes");
+    if (!v || (v = param_value_next(v, &b, &n)) == NULL) return 0;
+    if (n != m || memcmp(b, val, m) != 0) return 0;
+    return param_value_next(v, &b, &n) == NULL;   /* and nothing after it */
 }
 
 /* THE STAGE AN @S SEARCH REACHED, read off the entry the report already carries. ONE boolean per sink
@@ -3395,20 +3451,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                    !strstr(js, "BADTHIS"));
     /* §5.1's sequence arm: a generator init (the protocol, not an array walk), a Map (iterable, not an array),
        an array, a malformed pair, and null — which is NOT "no init". */
-    int hdrseq = (strstr(js, "\"/api/hdrseq\"") && strstr(js, "g1, g2") && strstr(js, "\"m1\"") &&
-                  strstr(js, "\"a1\"") &&
-                  strstr(js, "\"bad\",\"validValues\":[\"threw\"]") &&
-                  strstr(js, "\"nul\",\"validValues\":[\"threw\"]"));
+    int hdrseq = (param_value_only(js, "/api/hdrseq", "g", "g1, g2") &&
+                  param_value_only(js, "/api/hdrseq", "m", "m1") &&
+                  param_value_only(js, "/api/hdrseq", "a", "a1") &&
+                  param_value_only(js, "/api/hdrseq", "bad", "threw") &&
+                  param_value_only(js, "/api/hdrseq", "nul", "threw"));
     /* §3.2.23's record dedup is by ByteString KEY and case-SENSITIVE, so both pairs of {'X-Rec','x-rec'} reach
        the fill and both APPEND — `get` combines them into "r1, r2" over the one name the list holds. The fill's
        old replace loop matched the lowercased HEADER name instead and answered "r2". */
-    int hdrrec = (strstr(js, "\"/api/hdrrec\"") && strstr(js, "\"v\",\"validValues\":[\"r1, r2\"]") &&
-                  strstr(js, "\"k\",\"validValues\":[\"x-rec\"]"));
+    int hdrrec = (param_value_only(js, "/api/hdrrec", "v", "r1, r2") &&
+                  param_value_only(js, "/api/hdrrec", "k", "x-rec"));
     /* §4.10.22.8's escape over a field name written inside quotes: `a"\r\nb` is `a%22%0D%0Ab`, and the RAW
        quote must be gone — a body that carried it would let a page's own field name close the quoted name and
        forge a part header. */
-    int mpesc = (strstr(js, "\"/api/mpesc\"") && strstr(js, "\"esc\",\"validValues\":[\"true\"]") &&
-                 strstr(js, "\"raw\",\"validValues\":[\"false\"]"));
+    int mpesc = (param_value_only(js, "/api/mpesc", "esc", "true") &&
+                 param_value_only(js, "/api/mpesc", "raw", "false"));
     /* THE ENDPOINT CARRIES ITS HEADERS: the two literals as the strings the code computed, and the
        Authorization as a SHAPE, because a value built out of unknown input is not one this engine may invent.
        The method comes from the same init, so a POST recorded as a GET would fail here too. */
