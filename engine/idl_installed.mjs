@@ -699,20 +699,36 @@ class Resolver {
    write on is one the corpus declares an interface for (see the header).
    `fn` is the position of the body, read only to catch a `js_noop` member — the lazy stub this audit exists to
    expose, and a ban that has to be expressed against the install FORM rather than against the file's text. */
+/* WHAT KIND OF PROPERTY A FORM DEFINES, which is a second thing the IDL states and the audit was not reading.
+   Web IDL §3.7.6 Attributes defines EVERY attribute as `PropertyDescriptor{[[Getter]], [[Setter]],
+   [[Enumerable]]: true, [[Configurable]]: configurable}` — an ACCESSOR, with [LegacyUnforgeable] deciding
+   only the `configurable` — while §3.7.7's operation and §3.7.5's constant are DATA properties. A member
+   installed as the wrong one is INSTALLED: it fills its ABSENT row and the interface reads COMPLETE, while
+   `Object.getOwnPropertyDescriptor(w, "document").get` is undefined where every browser has a function and
+   `w.document = x` writes where the spec ignores it.
+   THAT IS THE DEFECT CLASS NO GAP COUNT CAN HOLD: not a missing member, a wrong one. `typeof NodeFilter`
+   answered "object" where §3.11.1 constructs a function, and nothing in this audit could have counted it —
+   it was found by reading what the spec builds rather than which names were absent. This is the same
+   question asked where the audit can answer it mechanically, for every member of every audited interface.
+   A form whose kind this cannot state is left UNDECLARED and judged by nobody — the refusal every other
+   unread fact in this file gets — and the caller counts those, because a form nobody can judge is a member
+   nobody checks. */
 const CALL_FORMS = new Map(Object.entries({
-  idl_install_accessor:          { target: 1, name: 2, fn: 3 },
+  idl_install_accessor:          { target: 1, name: 2, fn: 3, kind: "accessor" },
   /* Web IDL §3.4.10's [LegacyUnforgeable]: the same attribute, defined on the object that IMPLEMENTS the
      interface rather than on its prototype and non-configurable. It is an install like any other — where it
      LANDS is what differs, and the attribution graph already follows the object. */
-  idl_install_accessor_unforgeable: { target: 1, name: 2, fn: 3 },
-  idl_install_accessor_step:     { target: 1, name: 2 },
-  idl_install_method:            { target: 1, name: 2 },
-  idl_install_step_method:       { target: 1, name: 2 },
-  idl_install_replaceable:       { target: 1, name: 2, fn: 3 },
-  idl_install_replaceable_value: { target: 1, name: 2 },
-  JS_DefinePropertyGetSet:       { target: 1, name: 2, fn: 3 },
-  JS_SetPropertyStr:             { target: 1, name: 2, fn: 3, ambiguous: true },
-  JS_DefinePropertyValueStr:     { target: 1, name: 2, fn: 3, ambiguous: true },
+  idl_install_accessor_unforgeable: { target: 1, name: 2, fn: 3, kind: "accessor" },
+  idl_install_accessor_step:     { target: 1, name: 2, kind: "accessor" },
+  idl_install_method:            { target: 1, name: 2, kind: "data" },
+  idl_install_step_method:       { target: 1, name: 2, kind: "data" },
+  idl_install_replaceable:       { target: 1, name: 2, fn: 3, kind: "accessor" },
+  idl_install_replaceable_value: { target: 1, name: 2, kind: "accessor" },
+  JS_DefinePropertyGetSet:       { target: 1, name: 2, fn: 3, kind: "accessor" },
+  /* Both write a DATA property, which is what makes them the two forms that can be an §3.7.6 violation: an
+     IDL attribute is an accessor and nothing else. */
+  JS_SetPropertyStr:             { target: 1, name: 2, fn: 3, ambiguous: true, kind: "data" },
+  JS_DefinePropertyValueStr:     { target: 1, name: 2, fn: 3, ambiguous: true, kind: "data" },
 }));
 
 /* The forms that state an object is one a page reaches members ON without naming a member themselves. Which
@@ -729,6 +745,11 @@ const TARGET_FORMS = new Map(Object.entries({
    something hands it to JS_SetPropertyFunctionList, so a table that is declared and never installed is not
    credited with anything. */
 const ENTRY_RE = /\b(JS_C(?:FUNC|GETSET)\w*_DEF|JS_PROP_\w+_DEF|JS_ALIAS\w*_DEF|JS_OBJECT_DEF)\s*\(/g;
+/* The same question of a JSCFunctionListEntry row, answered by the macro that builds it. `JS_ALIAS*_DEF` and
+   `JS_OBJECT_DEF` are undeclared: an alias is a second name for a member defined elsewhere, and an object
+   entry is a namespace rather than a member. */
+const ENTRY_KIND = (macro) => macro.startsWith("JS_CGETSET") ? "accessor"
+  : macro.startsWith("JS_CFUNC") || macro.startsWith("JS_PROP_") ? "data" : null;
 
 /* THE TWO-HALVED INSTALL FORMS — a REGISTRY that is filled once per agent and installed once per realm. Both
    halves are named here because the names are only ever in the table the DECLARE half is handed; the install
@@ -749,10 +770,12 @@ const ENTRY_RE = /\b(JS_C(?:FUNC|GETSET)\w*_DEF|JS_PROP_\w+_DEF|JS_ALIAS\w*_DEF|
 const EXCLUDED_FORM = { fn: "idl_members_excluded", iface: 2, table: 3, why: 5 };
 
 const TABLE_FORMS = [
+  /* a reflection IS §3.7.6's attribute — [Reflect] changes where the value comes from, not what kind of
+     property the member is — and a byte reader is one of §4's five operations. */
   { declare: "element_declare_reflections", install: "element_install_reflections", arg: 1, field: "idl",
-    target: 1, handle: 2 },
+    target: 1, handle: 2, kind: "accessor" },
   { declare: "byte_reader_declare", install: "byte_reader_install", arg: 1, via: "readers", field: "name",
-    target: 1, handle: 2 },
+    target: 1, handle: 2, kind: "data" },
 ];
 
 /* ---- which INTERFACE an object is ------------------------------------------------------------------------ */
@@ -1196,7 +1219,9 @@ export function loadEnvironment(root) {
             const direct = via >= 0 ? -1 : paramBehind(fn, localsOf(), nameArg);
             if (direct < 0 && via < 0) continue;
             const tgt = stripCast(site.args[form.target] || "");
-            const derived = { target: fn.params.indexOf(tgt), ambiguous: !!form.ambiguous };
+            /* A WRAPPER DEFINES WHAT ITS CALLEE DEFINES. The kind rides the derivation for the same reason
+               the name position does: `nav_env` installs whatever idl_install_accessor installs. */
+            const derived = { target: fn.params.indexOf(tgt), ambiguous: !!form.ambiguous, kind: form.kind };
             if (direct >= 0) derived.name = direct;
             else { derived.tableArg = via; derived.field = col[2]; }
             forms.set(fn.name, derived);
@@ -1733,15 +1758,15 @@ export function installedMembers(paths, env) {
     const report = (off, form, expr) =>
       unresolved.push({ file: path, line: lineOf(orig, off), form, expr: expr.trim().replace(/\s+/g, " ") });
 
-    const emitWith = (names, stub, a, off, form, where) => {
+    const emitWith = (names, stub, a, off, form, where, kind) => {
       const at = where || { file: path, line: lineOf(orig, off) };
       for (const name of names)
         records.push({ name, stubbed: !!stub, file: at.file, line: at.line, form,
                        ifaces: a.ifaces, candidates: a.candidates, why: a.why,
-                       nonInterface: a.nonInterface || null });
+                       nonInterface: a.nonInterface || null, kind: kind || null });
     };
-    const emit = (names, stub, f, targetExpr, off, form) =>
-      emitWith(names, stub, interfacesOf(path, f, targetExpr, off), off, form);
+    const emit = (names, stub, f, targetExpr, off, form, kind) =>
+      emitWith(names, stub, interfacesOf(path, f, targetExpr, off), off, form, null, kind);
 
     /* The member names one DECLARATION of a two-halved registry carries — a table of rows whose `field` column
        is the member's IDL name, reached either directly or (the byte readers) through the interface record that
@@ -1874,11 +1899,11 @@ export function installedMembers(paths, env) {
               continue;
             }
             emitWith(chosen, noop, interfacesOf(c.path, c.fn, stripCast(c.site.args[tgtIdx] || ""), off),
-                     off, callee, { file: c.path, line: cline });
+                     off, callee, { file: c.path, line: cline }, form.kind);
           }
           continue;
         }
-        emitWith(names, noop, a, site.at, callee);
+        emitWith(names, noop, a, site.at, callee, null, form.kind);
       }
     }
 
@@ -1900,7 +1925,8 @@ export function installedMembers(paths, env) {
         const names = R.strings(args[0] || "", null);
         if (!names) { report(site.at, `${m[1]} in ${tableExpr}`, args[0] || ""); continue; }
         const noop = /\bjs_noop\b/.test(row);
-        emit(names, noop, f, stripCast(site.args[1] || ""), site.at, `JS_SetPropertyFunctionList/${tableExpr}`);
+        emit(names, noop, f, stripCast(site.args[1] || ""), site.at, `JS_SetPropertyFunctionList/${tableExpr}`,
+             ENTRY_KIND(m[1]));
       }
     }
 
@@ -1935,7 +1961,8 @@ export function installedMembers(paths, env) {
             const names = membersOfDeclare(R, form, cell);
             const iname = R.strings(ifaces[r], null);
             if (!names || !iname) { report(site.at, `${form.declare}/${col[1]}[${r}]`, cell); continue; }
-            emitWith(names, false, { ifaces: iname, candidates: [], why: null }, site.at, form.declare);
+            emitWith(names, false, { ifaces: iname, candidates: [], why: null }, site.at, form.declare, null,
+                     form.kind);
           }
           continue;
         }
@@ -1954,7 +1981,7 @@ export function installedMembers(paths, env) {
           : { ifaces: [], candidates: [],
               why: `nothing in this file installs the ${form.declare} registration` +
                    (lhs ? ` held in \`${lhs}\`` : " (it is not held in a named handle)") };
-        emitWith(names, false, a, site.at, form.declare);
+        emitWith(names, false, a, site.at, form.declare, null, form.kind);
       }
     }
 

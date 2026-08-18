@@ -600,6 +600,35 @@ const addTo = (map, iface, name) => {
    is its own census, and the CHECK is that Web IDL defines the member there at all (idl_installed.mjs's
    NON_INTERFACE_FORMS names what each kind defines). A third member appearing on a §3.7.10.2 object is a
    member the spec does not put there, which is a defect and not a line to widen the list with. */
+/* WHAT KIND OF PROPERTY THE IDL SAYS EACH MEMBER IS. Every category above asks whether a member is THERE;
+   this asks whether what is there is what the spec builds, which is a question no gap count can hold — a
+   member installed as the wrong kind of property fills its ABSENT row and reads COMPLETE while answering the
+   page something else. It is the class `typeof NodeFilter` was in: Web IDL §3.11.1 constructs a built-in
+   FUNCTION and this engine built an ordinary object, and nothing here could have counted it, because it is
+   not a missing member — it is a wrong one. Found by reading what the spec constructs rather than which names
+   were absent, and this is the same question asked mechanically wherever the two sides can be compared.
+   §3.7.6 Attributes defines EVERY attribute as an ACCESSOR — `PropertyDescriptor{[[Getter]], [[Setter]],
+   [[Enumerable]]: true, [[Configurable]]: configurable}`, with [LegacyUnforgeable] deciding only the last
+   field — while §3.7.7's operation and §3.7.5's constant are DATA properties. The installed side states the
+   same fact at the install FORM (idl_installed.mjs's `kind`), so the two are read against each other. */
+const IDL_WANTS = { attribute: "accessor", operation: "data", const: "data" };
+const idlKindCache = new Map();
+const idlKinds = (iface) => {
+  if (idlKindCache.has(iface)) return idlKindCache.get(iface);
+  const out = new Map();
+  const add = (n, k) => { if (!n) return; if (!out.has(n)) out.set(n, new Set()); out.get(n).add(k); };
+  for (const m of flatten(iface)) {
+    if (m.type === "attribute" || m.type === "operation" || m.type === "const") add(m.name, m.type);
+    else if (m.type === "iterable" || m.type === "maplike" || m.type === "setlike" || m.type === "async_iterable") {
+      /* §3.7.9-§3.7.12's iteration members are operations; a maplike/setlike `size` is an attribute. */
+      for (const n of iterationMembers({ members: [m] })) add(n, "operation");
+      if (m.type === "maplike" || m.type === "setlike") add("size", "attribute");
+    }
+  }
+  idlKindCache.set(iface, out);
+  return out;
+};
+const wrongKind = [], kindUndeclared = [];
 const nonIface = [], nonIfaceExtra = [];
 for (const r of world.records) {
   if (r.nonInterface) {
@@ -611,6 +640,11 @@ for (const r of world.records) {
   for (const iface of r.ifaces) {
     addTo(r.stubbed ? stubbedBy : installedBy, iface, r.name);
     addTo(landsIn, r.file, iface);
+    const declared = idlKinds(iface).get(r.name);
+    if (!declared) continue;             /* not a member of this interface — the ABSENT side's question */
+    if (!r.kind) { kindUndeclared.push({ ...r, iface }); continue; }
+    if (![...declared].some((d) => IDL_WANTS[d] === r.kind))
+      wrongKind.push({ ...r, iface, declared: [...declared] });
   }
 }
 /* A member installed on a BASE prototype really is reachable on everything that inherits it, which is what the
@@ -961,6 +995,22 @@ for (const r of env.refusals)
    happened to name the file (the file-granular lie); dropped, it opens a gap that is filled. So it is named,
    grouped by the file that wrote it, and the work is either to give the prototype its §3.7.3 tag or to teach
    this detector the construct that carries the object. */
+/* THE MEMBER IS THERE AND IT IS THE WRONG KIND OF PROPERTY — see IDL_WANTS. Its own category because it is
+   its own defect: not a gap, a wrong answer, and one that every count above reports as COMPLETE. */
+defect("members installed as the wrong kind of property for their IDL declaration", wrongKind.length);
+for (const r of wrongKind)
+  console.log(`[idl-audit] ${r.file.replace(BROWSER + "/", "")}:${r.line}  ${r.iface}.${r.name} is an IDL ` +
+              `${r.declared.join("/")}, which Web IDL defines as ` +
+              `${[...new Set(r.declared.map((d) => IDL_WANTS[d]))].join("/")} — and ${r.form} ` +
+              `installs a ${r.kind} property. §3.7.6 gives every attribute a getter (and a setter unless it is ` +
+              `readonly) with [LegacyUnforgeable] deciding only [[Configurable]], so a data property answers ` +
+              `getOwnPropertyDescriptor wrongly and, being writable, lets a page overwrite the member`);
+/* An install form whose property kind is not stated is a member nobody can ask this of. Zero is the armed
+   state, exactly as it is for the reader refusals. */
+defect("install forms whose property kind is not declared, over a member the IDL declares", kindUndeclared.length);
+for (const r of [...new Map(kindUndeclared.map((r) => [r.form, r])).values()])
+  console.log(`[idl-audit] ${r.form} declares no property kind, so ${r.iface}.${r.name} and every member it ` +
+              `installs is exempt from the §3.7.6/§3.7.7/§3.7.5 check — state its kind in idl_installed.mjs`);
 defect("members installed on a declared non-interface object that Web IDL does not define there",
        nonIfaceExtra.length);
 for (const r of nonIfaceExtra)
