@@ -3127,7 +3127,11 @@ static char *tf_park_load(const char *path) {
  * about it (what a park WROTE / what a resume REBUILT). */
 typedef struct { const char *name; int ok; const char *key; unsigned char sess; } Probe;
 enum { SESS_EXPLORE = 0, SESS_PARK = 1, SESS_RESUME = 2 };
-#define PROBE_MAX 128
+/* THE CALLER'S ROOM FOR THE SELECTED ROWS — a buffer size with an abort behind it (probes_eval's `n < cap`),
+   never a limit on how many statements a document may make. Raised with the @S stage rows: the table is 107
+   and the full document selects nearly all of them, so the old 128 left a margin the next lane to add a row
+   would have spent without meaning to. */
+#define PROBE_MAX 192
 
 /* WHAT THIS INVOCATION IS: the document whose statements are being answered, which of the three sessions it is,
    and the realm the result document is rendered from. Set once in main before the scheduler runs, because the
@@ -3191,6 +3195,50 @@ static int param_value_has(const char *js, const char *url, const char *pname, c
     stop = strchr(v, ']');
     p = strstr(v, needle);
     return p != NULL && stop != NULL && p < stop;
+}
+
+/* THE STAGE AN @S SEARCH REACHED, read off the entry the report already carries. ONE boolean per sink
+ * collapses four mechanisms — detection, the context probe, the derivation, the fire — so its 0 names none of
+ * them, which is the defect `idb-record` and the taint row were each split for. It is not a theoretical
+ * objection here: the SAME five rows read 1 over HTML_MIN and 0 over HTML at one commit, and nothing about
+ * them says which stage the two documents differ at.
+ *
+ * NOTHING IS ADDED TO THE ENGINE TO ANSWER IT — every stage is already a fact of the emitted entry, and
+ * solve.h declares exactly two entry shapes: a sink no attacker source reached has NO entry, a parked entry
+ * carries `tried` (candidates seeded) and `reached` (candidates whose bytes arrived at the sink), and only a
+ * fired one carries a `poc`.
+ *
+ * S_UNSEEN IS TWO FACTS AND THEY ARE TOLD APART, which is the whole point of splitting a row: "no attacker
+ * source reached this sink" and "the report format moved under this reader" would otherwise both be 0 here,
+ * and the second is not a measurement at all. The sink NAMES are the engine's own table, so a document that
+ * emitted no entry for one still emitted entries — the assert is that the array this is reading is an @S
+ * array at all. */
+enum { S_UNSEEN = 0, S_SEEN, S_RAN, S_ARRIVED, S_FIRED };
+static int s_stage(const char *js, const char *sink, const char *src) {
+    static const char PARKED[] = ",\"search\":\"parked\",\"tried\":";
+    static const char REACHED[] = ",\"reached\":";
+    char pat[192];
+    const char *e, *r;
+
+    snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\"", sink, src);
+    e = strstr(js, pat);
+    if (!e) {
+        DCHECK(strstr(js, "\"securitySinks\":[") != NULL,
+               "an @S stage was read out of a result document that carries no @S array at all — the row would "
+               "report `unseen` for every sink, which is a statement about the PAGE, and this is a statement "
+               "about the REPORT: either result.c stopped composing the array or solve.h's entry shape moved");
+        return S_UNSEEN;
+    }
+    e += strlen(pat);
+    if (!strncmp(e, ",\"poc\":", 7)) return S_FIRED;
+    DCHECK(!strncmp(e, PARKED, sizeof PARKED - 1),
+           "an @S entry is neither of the two shapes solve.h declares — it carries no `poc` and no parked "
+           "search, so the report has a third state this row would silently score as never having run");
+    r = strstr(e, REACHED);
+    DCHECK(r != NULL, "a parked @S entry carries no `reached` — `tried` alone cannot say whether a candidate "
+                      "ever re-executed as far as the sink, which is the one thing this row exists to name");
+    if (atoi(r + sizeof REACHED - 1) > 0) return S_ARRIVED;
+    return atoi(e + sizeof PARKED - 1) > 0 ? S_RAN : S_SEEN;
 }
 
 /* Fill `out` with the rows this invocation carries and answer how many. Every row's `ok` is computed here, so
@@ -3694,6 +3742,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int s_park = strstr(ss, "\"sink\":\"innerHTML\",\"source\":\"" LOCATION_HASH_SRC "\",\"search\":\"parked\"")
               && strstr(ss, "\"sourceEncodes\":\" \\\"<>`\"")
               && !strstr(ss, "\"source\":\"" LOCATION_HASH_SRC "\",\"poc\":\"<");
+    /* THE STAGES BEHIND EACH OF THOSE ROWS. The rows above assert the PAYLOAD TEXT, which only a real
+       derivation followed by a real fire can produce, and nothing here relaxes them — these say WHERE a run
+       that has not got there yet has got to. `-derived` is `reached >= 1` on a search whose candidate count
+       has grown past the one run its class opens with, which for a DERIVED class means the derivation
+       constructed a breakout; SINK_URL declares SINK_DERIVE_NONE and opens with its two written-down vectors,
+       so it has no `-derived` row and asking for one would be a claim about a mechanism that class has not
+       got. */
+    int st_eval  = s_stage(ss, "eval",      "{state}.code");
+    int st_evalc = s_stage(ss, "eval",      "{state}.note");
+    int st_html  = s_stage(ss, "innerHTML", "{state}.html");
+    int st_url   = s_stage(ss, "location",  "{state}.next");
+    int st_loc   = s_stage(ss, "eval",      LOCATION_HASH_SRC);
+    int st_lpark = s_stage(ss, "innerHTML", LOCATION_HASH_SRC);
 
     /* THE PROBES, DECLARED ONCE. This was a 46-term conjunction and a separate printf listing 43 of them, which
        is two hand-maintained lists of the same thing — so a probe could be computed and joined to NEITHER, and
@@ -3824,6 +3885,29 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-url", s_url, "state.next", SESS_EXPLORE },
         { "s-loc", s_loc, "location.hash", SESS_EXPLORE },
         { "s-park", s_park, "location.hash", SESS_EXPLORE },
+        /* THE STAGES, so a 0 above names one. Each row carries its parent's key, so selection is unchanged. */
+        { "s-eval-seen", st_eval >= S_SEEN, "state.code", SESS_EXPLORE },
+        { "s-eval-ran", st_eval >= S_RAN, "state.code", SESS_EXPLORE },
+        { "s-eval-atsink", st_eval >= S_ARRIVED, "state.code", SESS_EXPLORE },
+        { "s-evalc-seen", st_evalc >= S_SEEN, "state.note", SESS_EXPLORE },
+        { "s-evalc-ran", st_evalc >= S_RAN, "state.note", SESS_EXPLORE },
+        { "s-evalc-atsink", st_evalc >= S_ARRIVED, "state.note", SESS_EXPLORE },
+        { "s-html-seen", st_html >= S_SEEN, "state.html", SESS_EXPLORE },
+        { "s-html-ran", st_html >= S_RAN, "state.html", SESS_EXPLORE },
+        { "s-html-atsink", st_html >= S_ARRIVED, "state.html", SESS_EXPLORE },
+        { "s-url-seen", st_url >= S_SEEN, "state.next", SESS_EXPLORE },
+        { "s-url-ran", st_url >= S_RAN, "state.next", SESS_EXPLORE },
+        { "s-url-atsink", st_url >= S_ARRIVED, "state.next", SESS_EXPLORE },
+        { "s-loc-seen", st_loc >= S_SEEN, "location.hash", SESS_EXPLORE },
+        { "s-loc-ran", st_loc >= S_RAN, "location.hash", SESS_EXPLORE },
+        { "s-loc-atsink", st_loc >= S_ARRIVED, "location.hash", SESS_EXPLORE },
+        /* AND THE NEGATIVE HALF'S MISSING PREMISE. `s-park` asserts the markup sink fed from `location.hash`
+           produces NO PoC and is still REPORTED — but "the sink was reached and the search genuinely failed"
+           was never actually asserted, because the only evidence the entry carried was `tried`, which is
+           raised at SEED time. This is that premise: a candidate of that search DELIVERED its bytes to the
+           write and the fragment encode set defeated it. Without it, `s-park` also passes over a search whose
+           candidates never ran. */
+        { "s-park-atsink", st_lpark >= S_ARRIVED, "location.hash", SESS_EXPLORE },
         /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
            what tells the two apart, because they run the SAME document and one is about what a park WROTE while
