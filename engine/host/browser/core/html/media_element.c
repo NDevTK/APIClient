@@ -869,7 +869,13 @@ typedef struct {
 enum { MEDIA_SELECT_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const MEDIA_SELECT_STEPS[] = { MEDIA_SELECT_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-#define MEDIA_FETCH_OP "HTML §4.8.11.5 the media data processing steps list (is the resource usable)"
+/* THE TITLE BESIDE THE NUMBER, and the phrase that was standing in for it kept as what it is. §4.8.11.5 is
+   titled "Loading the media resource"; "the media data processing steps list" is a phrase INSIDE it, and a
+   citation of the form "§N <phrase>" reads as a title claim, which is the one form §Browser half says must
+   survive an edition the number does not. This string is also the decision-site label every `forkedAt`
+   histogram prints, so it is read far more often than the code around it. */
+#define MEDIA_FETCH_OP "HTML §4.8.11.5 Loading the media resource — the media data processing steps list "\
+                       "(is the resource usable)"
 
 static void media_select_visit(JSContext *ctx, void *stp, JSStepVisit *v)
 {
