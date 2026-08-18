@@ -765,9 +765,21 @@ function callSites(masked, name) {
 }
 
 /* The top-level function bodies, with their parameter names. A function is a `{` whose header ends in `)`;
-   an array initializer's `{` follows a `=` and is skipped. */
+   an array initializer's `{` follows a `=` and is skipped.
+   A `{` THAT IS NEITHER IS THE ONE THIS MUST NOT SWALLOW. Dropping it drops a WHOLE FUNCTION BODY, and every
+   install written in it then does not exist as far as the audit is concerned — which already happened once,
+   when a `#define` between the last `;` and a function's header made that header unreadable and took
+   navigator.c's thirteen environment members and screen.c's nine with it, each reported ABSENT while it was
+   shipping. The C facts that make a top-level `{` genuinely not a function are stated below and dropped
+   silently because there is nothing there; anything else is UNCLASSIFIED and recorded.
+   Unlike localDefs' refusal, this one is counted WHERE IT IS PARSED and not where an answer is depended on,
+   and the difference is not an inconsistency: a name whose value could not be read still EXISTS, so a later
+   query can be told it is standing on unread ground, but a function that was never seen leaves no member to
+   ask about. There is no dependency point to attach to, because the consequence is an absence. */
+const AGGREGATE_HEADER = /(?:=|\bstruct\b[\w \t]*|\bunion\b[\w \t]*|\benum\b[\w \t]*|\btypedef\b[\s\S]*)\s*$/;
 function functions(masked) {
   const out = [];
+  out.unclassified = [];
   let depth = 0, bodyStart = -1, prevBoundary = 0;
   for (let i = 0; i < masked.length; i++) {
     const c = masked[i];
@@ -789,7 +801,10 @@ function functions(masked) {
         const header = masked.slice(prevBoundary, i);
         /* a function's header ends in its parameter list; a `#define F(a) {…}` ends the same way and is not one */
         if (/\)\s*$/.test(header)) bodyStart = i;
-        else bodyStart = -1;
+        else {
+          bodyStart = -1;
+          if (!AGGREGATE_HEADER.test(header)) out.unclassified.push({ at: i, header: header.trim().slice(-80) });
+        }
       }
       depth++;
     } else if (c === "}") {
@@ -1202,21 +1217,27 @@ export function loadEnvironment(root) {
      over (`ifaceObjects`). A refusal at either is a member or an identity decided on unread ground. */
   const refusals = [];
   const refusalSeen = new Set();
-  const refuse = (primitive, path, f, at, what, why) => {
-    const k = `${primitive}|${path}|${f.name}|${what}|${at}`;
+  const refuse = (primitive, path, off, fn, what, why) => {
+    const k = `${primitive}|${path}|${fn}|${what}|${off}`;
     if (refusalSeen.has(k)) return;
     refusalSeen.add(k);
-    refusals.push({ primitive, file: path, line: lineOf(sources.get(path).orig, f.start + Math.max(at, 0)),
-                    fn: f.name, what, why });
+    refusals.push({ primitive, file: path, line: lineOf(sources.get(path).orig, Math.max(off, 0)), fn, what, why });
   };
   const refuseUnread = (path, f, v, at) => {
     const ats = defsFor(path, f).unread.get(v);
     if (!ats || ats[0] > at) return;
-    refuse("localDefs", path, f, at, v,
+    refuse("localDefs", path, f.start + Math.max(at, 0), f.name, v,
            `which object \`${v}\` holds here is UNREAD — an earlier assignment writes it through an index or ` +
            `a member path, and whether that changes what \`${v}\` names depends on its declaration, which ` +
            `this parser does not read`);
   };
+  /* A top-level `{` that is neither a function header nor a data aggregate — a whole body this reader may have
+     dropped, counted at the parse because a member never seen leaves nothing to ask about. */
+  for (const [path] of sources)
+    for (const u of fnsOf.get(path).unclassified || [])
+      refuse("functions", path, u.at, "(file scope)", u.header,
+             `a top-level \`{\` whose header is neither a parameter list nor a data aggregate — if this opens ` +
+             `a FUNCTION, its whole body and every install in it is invisible to this audit: \`…${u.header}\``);
   const tagKey = (path, f, v, at) => key(path, f.name, `${v}#${versionAt(defsFor(path, f), v, at)}`);
   const paramKey = (fnName, p) => key("", fnName, p);
   const classKey = (path, c) => key(path, "@class", c);
