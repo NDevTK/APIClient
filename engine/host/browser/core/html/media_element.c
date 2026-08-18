@@ -109,7 +109,7 @@ static JSAtom  g_atom_state = JS_ATOM_NULL;
 static int g_refl_base = -1;
 static int g_id_load = -1, g_id_can_play = -1, g_id_play = -1, g_id_pause = -1, g_id_fast_seek = -1,
            g_id_start_date = -1, g_id_range_start = -1, g_id_range_end = -1;
-static int g_set_src = -1, g_set_src_object = -1, g_set_current_time = -1, g_set_volume = -1, g_set_muted = -1,
+static int g_set_src_object = -1, g_set_current_time = -1, g_set_volume = -1, g_set_muted = -1,
            g_set_rate = -1, g_set_default_rate = -1, g_set_pitch = -1, g_set_loading = -1;
 static int g_task_stepid = -1, g_select_stepid = -1;
 static int g_ready;
@@ -1599,40 +1599,6 @@ static JSValue js_media_ranges(JSContext *ctx, JSValueConst this_val, int magic)
     return out;
 }
 
-/* §4.8.11.2's `src`: the reflection, and ONLY the reflection. The rule the reflection alone cannot carry — "if
-   a src attribute of a media element is set or changed, the user agent must invoke the media element's media
-   element load algorithm" — used to be a call at the end of this setter, and that made `v.src = url` the one
-   spelling of the write that ran it: `v.setAttribute('src', url)` set the same attribute of the same element
-   and loaded nothing. It is media_element_attr_changed's now, on §4.9's chokepoint, which every spelling
-   reaches; a second copy here would run the load algorithm twice for this one. */
-static JSValue js_media_get_src(JSContext *ctx, JSValueConst this_val, int magic)
-{
-    char *src;
-    JSValue out;
-
-    (void)magic;
-    if (!media_is(ctx, this_val))
-        return JS_ThrowTypeError(ctx, "src read on something that is not a media element");
-    src = element_attr_get(ctx, this_val, "src");
-    out = JS_NewString(ctx, src ? src : "");
-    free(src);
-    return out;
-}
-
-static JSValue js_media_set_src(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
-{
-    const char *s;
-
-    (void)magic;
-    if (!media_is(ctx, this_val))
-        return JS_ThrowTypeError(ctx, "src set on something that is not a media element");
-    s = JS_ToCString(ctx, val);   /* a real string by now: the declared USVString cannot reach the page here */
-    if (!s) return JS_EXCEPTION;
-    element_attr_set(ctx, this_val, "src", s);   /* §4.9's change steps invoke the load algorithm */
-    JS_FreeCString(ctx, s);
-    return JS_UNDEFINED;
-}
-
 /* §4.8.11.2's `srcObject` setter: "set this's assigned media provider object to the given value. Invoke this's
    media element load algorithm." The IDL type is `(MediaStream or MediaSource or Blob)?`, and of those three
    only Blob exists in this build — so a page can only ever hand over a Blob or null, and the value is stored
@@ -1916,9 +1882,16 @@ static JSValue js_media_pause(JSContext *ctx, JSValueConst this_val, int argc, J
 /* §4.8.11's REFLECTIONS, which the IDL puts on HTMLMediaElement and not on the two interfaces that inherit
    them. They were on HTMLAudioElement.prototype and HTMLVideoElement.prototype — two copies of one member,
    which is what `Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'src')` returning a descriptor
-   makes visible in this engine and undefined in a browser. `src` is not here: §4.8.11.2 gives its setter a
-   step no plain reflection can carry (invoke the media element load algorithm). */
+   makes visible in this engine and undefined in a browser.
+   `src` IS here now. It was excluded on the grounds that its setter carries a step no plain reflection can —
+   "if a src attribute of a media element is set or changed, invoke the media element load algorithm" — and
+   that is not the SETTER's step: it is §4.9's attribute change steps, which media_element_attr_changed already
+   owns so that `v.setAttribute('src', u)` loads too. What actually kept it out is that the IDL says
+   `[CEReactions, ReflectURL] attribute USVString src` and the registry had no URL kind, so the hand-written
+   getter answered the RAW attribute — `<video src="/a.mp4">` read back `/a.mp4` where every browser answers
+   the absolute URL. Both bodies are deleted; the kind carries it. */
 static const ElReflect R_MEDIA[] = {
+    { "src",         "src",         REFLECT_URL },
     { "crossOrigin", "crossorigin", REFLECT_STRING },
     { "preload",     "preload",     REFLECT_STRING },
     { "autoplay",    "autoplay",    REFLECT_BOOL },
@@ -1983,7 +1956,6 @@ void media_element_declare(JSContext *ctx)
     g_id_range_start = idl_method_id(ctx, IDX1, 1, js_ranges_at, 0);
     g_id_range_end = idl_method_id(ctx, IDX1, 1, js_ranges_at, 1);
 
-    g_set_src = idl_setter_id(ctx, IDL_USVSTRING, false, js_media_set_src, 0);
     g_set_src_object = idl_setter_id(ctx, IDL_ANY, false, js_media_set_src_object, 0);
     g_set_current_time = idl_setter_id(ctx, IDL_DOUBLE, false, js_media_set_current_time, 0);
     g_set_volume = idl_setter_id(ctx, IDL_DOUBLE, false, js_media_set_volume, 0);
@@ -2044,7 +2016,6 @@ void media_element_install_proto(JSContext *ctx, JSValueConst html_proto)
     element_install_reflections(ctx, proto, g_refl_base, (int)(sizeof(R_MEDIA) / sizeof(R_MEDIA[0])));
 
     idl_install_accessor(ctx, proto, "error", js_media_get, MG_ERROR, -1);
-    idl_install_accessor(ctx, proto, "src", js_media_get_src, 0, g_set_src);
     idl_install_accessor(ctx, proto, "srcObject", js_media_get, MG_SRC_OBJECT, g_set_src_object);
     idl_install_accessor(ctx, proto, "currentSrc", js_media_get, MG_CURRENT_SRC, -1);
     idl_install_accessor(ctx, proto, "networkState", js_media_get, MG_NETWORK_STATE, -1);
@@ -2123,6 +2094,6 @@ void media_element_free(JSRuntime *rt)
     g_state_key = JS_UNDEFINED;
     g_refl_base = g_id_load = g_id_can_play = g_id_play = g_id_pause = g_id_fast_seek = -1;
     g_id_start_date = g_id_range_start = g_id_range_end = -1;
-    g_set_src = g_set_src_object = g_set_current_time = g_set_volume = g_set_muted = -1;
+    g_set_src_object = g_set_current_time = g_set_volume = g_set_muted = -1;
     g_set_rate = g_set_default_rate = g_set_pitch = g_set_loading = -1;
 }

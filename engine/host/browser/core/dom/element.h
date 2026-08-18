@@ -55,8 +55,14 @@ JSValue element_proto(JSContext *ctx);
    A NULLABLE STRING is HTML §2.6.1's `DOMString?` processing model and it is a THIRD kind rather than the
    first one read leniently: its getter answers NULL for an absent attribute where `DOMString` answers "", and
    its setter DELETES the attribute for null where `DOMString` would write the four characters "null". Every
-   one of ARIAMixin's 44 string members is this kind, and `el.ariaLabel === null` is how a page tests one. */
-enum { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_STRING_NULLABLE };
+   one of ARIAMixin's 44 string members is this kind, and `el.ariaLabel === null` is how a page tests one.
+   A URL is HTML §2.6.1's "type USVString, treated as a URL" — §2.6.2's `[ReflectURL]`, which that section says
+   may appear on nothing but a `USVString`. Its getter RESOLVES: encoding-parse-and-serialize the attribute
+   value against the ELEMENT'S NODE DOCUMENT, so `<img src="/x">` reads back `http://host/x` and not `/x`. A
+   REFLECT_STRING row for one of these is not a lenient reading, it is a different value — the mirror answers
+   every relative URL wrong, silently, and `img.src`, `iframe.src`, `link.href`, `video.poster`, `source.src`,
+   `object.data` and eleven more are declared that way today. */
+enum { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_STRING_NULLABLE, REFLECT_URL };
 typedef struct { const char *idl; const char *attr; int kind; } ElReflect;
 
 /* Install an interface's OWN reflections on its prototype. Each is assigned a magic out of one shared registry,

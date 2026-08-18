@@ -63,6 +63,7 @@
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
+#include "core/url/url.h"
 #include <lexbor/ns/ns.h>
 
 /* The two shapes every DOM member in this file has. Spelled once so a member declares its IDL, not a bitmask. */
@@ -1548,6 +1549,66 @@ static ElReflect g_reflect[320];
 static int       g_reflect_set[320];   /* each entry's setter pool id — declared with it, per AGENT */
 static int       g_reflect_n;
 
+/* §2.6.1's getter for a reflected `USVString` TREATED AS A URL, over an attribute value that is present.
+ *
+ * THE BASE IS THE ELEMENT'S NODE DOCUMENT'S, which is what the algorithm says ("relative to element's node
+ * document") and is NOT document_base_url — that one is the RUNNING REALM's active document, so an element
+ * parsed by DOMParser or living in a template's contents owner would resolve against the wrong address. §4.4's
+ * baseURI asks the same question of the same node and answers it with document_url_of; this asks it once more
+ * rather than keeping a second idea of where a node lives.
+ *
+ * A FAILED PARSE IS THE RAW VALUE. Step 2's serialization is skipped "if urlString is not failure", and step 3
+ * then returns the content attribute converted to a SCALAR VALUE STRING — the USVString conversion the return
+ * type carries, which is why `el.setAttribute('src', '\uD800')` reads back U+FFFD and not the lone surrogate.
+ *
+ * A CONCOLIC ATTRIBUTE VALUE STAYS CONCOLIC. An attacker string a flow stashed in `src` survives the round trip
+ * through solver/attr_shadow.c, and resolving it is an ordinary op on the value: the REAL parse runs on the
+ * concrete EXAMPLE — so a relative payload gains its absolute form the way `+` gains a concatenation — and the
+ * result is re-wrapped under the same provenance. Answering with the bare resolved string would de-taint the
+ * one member a page reads an injected URL back out of. */
+static JSValue el_reflect_url(JSContext *ctx, lxb_dom_element_t *el, JSValue raw)
+{
+    JSValue concrete = concolic_is(raw) ? concolic_example(ctx, raw) : JS_DupValue(ctx, raw);
+    const char *base = document_url_of(lxb_dom_interface_node(el)->owner_document);
+    UrlRecord u, b;
+    const char *s;
+    size_t len = 0;
+    char *ser = NULL;
+    bool have_base, parsed;
+    JSValue out;
+
+    /* A concolic value with no example yet has no bytes to parse; §2.6.1 has no step that invents them. */
+    if (!JS_IsString(concrete)) { JS_FreeValue(ctx, concrete); return raw; }
+    s = JS_ToCStringLen(ctx, &len, concrete);
+    JS_FreeValue(ctx, concrete);
+    if (!s) { JS_FreeValue(ctx, raw); return JS_EXCEPTION; }
+
+    url_record_init(&u);
+    url_record_init(&b);
+    have_base = base && *base && url_parse(&b, base, strlen(base), NULL);
+    parsed = url_parse(&u, s, len, have_base ? &b : NULL);
+    if (parsed) {
+        ser = url_serialize(&u, false);
+        CHECK(ser != NULL, "§2.6.1: a parsed URL could not be serialized — an allocation failure, and a "
+                           "reflection that answered the raw value instead would report a relative URL as "
+                           "the absolute one the page is about to fetch");
+    }
+    url_record_free(&u);   /* owned either way — a failed parse leaves the partial record to release */
+    url_record_free(&b);
+    JS_FreeCString(ctx, s);
+
+    /* Step 3, the failure path: the content attribute as a SCALAR VALUE STRING. A concolic value is returned
+       AS IS — the conversion is over bytes it does not carry, and running it would ToString the shadow away. */
+    if (!parsed) return concolic_is(raw) ? raw : JS_ToScalarValueString(ctx, raw);
+
+    out = JS_NewString(ctx, ser);
+    free(ser);
+    if (concolic_is(raw))
+        out = concolic_source_wrap(ctx, concolic_shape_c(raw), concolic_src_c(raw), out);
+    JS_FreeValue(ctx, raw);
+    return out;
+}
+
 static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     lxb_dom_element_t *el = element_of_value(this_val);
@@ -1573,7 +1634,10 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
     nv = JS_NewString(ctx, g_reflect[magic].attr);
     r = js_el_get_attribute(ctx, this_val, 1, (JSValueConst *)&nv, 0);   /* a real string already: the reflected NAME is the engine's */
     JS_FreeValue(ctx, nv);
-    if (!JS_IsNull(r)) return r;
+    /* §2.6.1's URL getter step 2a is the SAME answer the plain string reflection gives for an absent attribute
+       ("if contentAttributeValue is null, then return the empty string"), so only the present case diverges. */
+    if (!JS_IsNull(r))
+        return g_reflect[magic].kind == REFLECT_URL ? el_reflect_url(ctx, el, r) : r;
     /* §2.6.1's two string models differ EXACTLY here: `DOMString` reads an absent attribute as the empty
        string, `DOMString?` reads it as null. A page tests one against the other (`el.ariaLabel === null`), so
        answering "" for a nullable member is a wrong value and not a lenient one. */
@@ -1661,21 +1725,31 @@ int element_declare_reflections(JSContext *ctx, const ElReflect *r, int n)
     int base = g_reflect_n, i;
 
     for (i = 0; i < n; i++) {
+        IdlArgType t;
+
         CHECK(g_reflect_n < (int)(sizeof(g_reflect) / sizeof(g_reflect[0])),
               "the reflection registry is full — raise it rather than dropping an interface's attributes");
         g_reflect[g_reflect_n] = r[i];
-        DCHECK(r[i].kind == REFLECT_STRING || r[i].kind == REFLECT_BOOL ||
-               r[i].kind == REFLECT_STRING_NULLABLE,
-               "a reflection was declared with a kind §2.6.1 has no processing model for");
-        /* A boolean reflection's value is ToBoolean, which is total and runs none of the page's code; a string
-           one is a DOMString, which is ToString on whatever the page passed; a NULLABLE string one is
-           `DOMString?`, so null AND undefined reach the body as the IDL null and never as the word. Three
-           types, one declaration each — the null rule is the TYPE's, so the body never re-derives it. */
-        g_reflect_set[g_reflect_n] = idl_setter_id(ctx,
-                                                   r[i].kind == REFLECT_BOOL ? IDL_ANY
-                                                 : r[i].kind == REFLECT_STRING_NULLABLE ? IDL_DOMSTRING_NULLABLE
-                                                 : IDL_DOMSTRING,
-                                                   false, js_el_reflect_set, g_reflect_n);
+        /* THE KIND IS THE IDL TYPE, so the mapping is TOTAL and a kind with no row here CRASHES AT ITS
+           DECLARATION rather than being handed a DOMString and answering wrongly at the read. That is the whole
+           reason this is a switch and not the `?:` chain it was: a chain's tail is a silent default, and the
+           kind added without one is exactly the kind whose setter then runs the wrong conversion.
+           §2.6.2 states each pairing as a requirement of the extended attribute — `[ReflectURL]` "must only
+           appear on attributes with a type of USVString", so a URL reflection declares IDL_USVSTRING and its
+           §3.2.12 scalar-value conversion happens before the setter's one step is reached. A boolean's value is
+           ToBoolean, total and running none of the page's code; a `DOMString?` turns null AND undefined into
+           the IDL null so the body never sees the word. */
+        switch (r[i].kind) {
+        case REFLECT_BOOL:            t = IDL_ANY; break;
+        case REFLECT_STRING:          t = IDL_DOMSTRING; break;
+        case REFLECT_STRING_NULLABLE: t = IDL_DOMSTRING_NULLABLE; break;
+        case REFLECT_URL:             t = IDL_USVSTRING; break;
+        default:
+            t = IDL_ANY;
+            DFAIL("a reflection was declared with a kind §2.6.1 has no processing model for — give the kind "
+                  "its IDL type here and its getter steps in js_el_reflect_get");
+        }
+        g_reflect_set[g_reflect_n] = idl_setter_id(ctx, t, false, js_el_reflect_set, g_reflect_n);
         g_reflect_n++;
     }
     return base;
