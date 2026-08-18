@@ -765,9 +765,19 @@ for (const [iface, paths] of AUDITED) {
      sentence that excludes it, so nobody works it off the ABSENT list and builds a member the spec forbids.
      The declaration is CHECKED here, which is what stops it being an exclusion list: a name it excludes that
      the corpus no longer carries is stale, and one the component installs anyway contradicts itself. */
-  const cond = excluded.filter((e) => e.iface === iface);
-  const condStale = cond.filter((e) => !spec.includes(e.name));
-  const condInstalled = cond.filter((e) => installed.has(e.name));
+  /* AN EXCLUSION INHERITS EXACTLY AS THE MEMBER DOES, and reading it only at the DECLARING interface was the
+     same asymmetry as ranking by inherited totals: `installed` walks chainOf and this did not, so a member a
+     base declares this user agent must not have was excluded on the base and counted as a GAP on everything
+     that inherits it. media_element.c declares §4.8.11.10's `audioTracks`, `videoTracks`, `textTracks` and
+     `addTextTrack` absent because the TrackList interfaces are not built — correct on HTMLMediaElement, and
+     reported as four gaps each on HTMLVideoElement and HTMLAudioElement, which inherit the very same members
+     that do not exist. A false ABSENT sends someone to build what the condition forbids.
+     The two-sided ASSERTIONS stay bound to the declaring interface: a stale name, or one the component
+     installs anyway, is a single fact about a single declaration, and re-reporting it on every inheriting
+     interface would turn one wrong line into sixty-one identical reds. */
+  const cond = excluded.filter((e) => chain.includes(e.iface));
+  const condStale = cond.filter((e) => e.iface === iface && !spec.includes(e.name));
+  const condInstalled = cond.filter((e) => e.iface === iface && installed.has(e.name));
   const condNames = new Set(cond.map((e) => e.name));
   /* AN ABSENCE THE AUDIT CANNOT TELL FROM ITS OWN BLIND SPOT IS NOT AN ABSENCE. The two halves of this were
      already computed and were printed in two places with nothing joining them, so the SAME member read as
