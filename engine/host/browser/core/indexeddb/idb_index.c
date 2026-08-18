@@ -691,6 +691,30 @@ uint32_t idb_index_count_records(JSContext *ctx, JSValueConst index, JSValueCons
     return count;
 }
 
+uint32_t idb_index_record_count(JSContext *ctx, JSValueConst index)
+{
+    JSValue records;
+    uint32_t n;
+
+    idb_index_assert_populated(ctx, index);
+    records = idb_index_records(ctx, index);
+    n = idb_index_list_len(ctx, records);
+    JS_FreeValue(ctx, records);
+    return n;
+}
+
+void idb_index_record_at(JSContext *ctx, JSValueConst index, uint32_t i, JSValue *key, JSValue *value)
+{
+    JSValue records = idb_index_records(ctx, index);
+
+    DCHECK(i < idb_index_list_len(ctx, records),
+           "a position outside an index's list of records was read — §6.3's retrieve-multiple walk and "
+           "§6.7's cursor iteration both read [0, idb_index_record_count)");
+    *key = idb_irec_field(ctx, records, i, IDB_IREC_KEY);
+    *value = idb_irec_field(ctx, records, i, IDB_IREC_VALUE);
+    JS_FreeValue(ctx, records);
+}
+
 /* ---- §5.5 step 2's INVERSES -------------------------------------------------------------------------------- */
 
 void idb_index_revert_creation(JSContext *ctx, JSValueConst store, JSValueConst index)

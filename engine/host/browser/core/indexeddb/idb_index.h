@@ -99,6 +99,17 @@ JSValue idb_index_retrieve_value(JSContext *ctx, JSValueConst index, JSValueCons
    records with key in range". §6.5 says source and not store precisely because §2.6's index is one too. */
 uint32_t idb_index_count_records(JSContext *ctx, JSValueConst index, JSValueConst range);
 
+/* HOW MANY RECORDS AN INDEX HOLDS AT ALL — not §6.5, which is stated over a range — and the RECORD at one
+   position of §2.6's list, which §2.6 keeps sorted "primarily on the records keys, and secondarily on the
+   records values". The pair is what §6.3's RETRIEVE MULTIPLE ITEMS walks and what §6.7's ITERATE A CURSOR
+   walks: both take records one per stage rather than an answer about one record, so both need a cursor over
+   this list. Positional rather than a handed-out list, for the reason idb_store_record_count /
+   idb_store_record_at are: the list is this component's own record and a caller holding it would be a second
+   writer of §2.6's invariants. `*key` is the INDEX KEY and `*value` is the referenced object store's key —
+   §2.6's two fields, in that order. Both answers are OWNED. */
+uint32_t idb_index_record_count(JSContext *ctx, JSValueConst index);
+void     idb_index_record_at(JSContext *ctx, JSValueConst index, uint32_t i, JSValue *key, JSValue *value);
+
 /* §5.5 step 2's INVERSES — one per change idb_database.c files for this component, applied by that file's
    revert because the ledger is its and the state is this one's (the shape idb_key_generator_revert has). */
 void idb_index_revert_creation(JSContext *ctx, JSValueConst store, JSValueConst index);
