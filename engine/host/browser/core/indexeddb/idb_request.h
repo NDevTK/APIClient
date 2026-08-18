@@ -37,6 +37,24 @@ void idb_request_free(JSRuntime *rt);
 JSValue idb_request_execute(JSContext *ctx, JSValueConst source, JSValueConst transaction,
                             JSValueConst operation);
 
+/* THE SAME ALGORITHM WITH §5.6's THIRD OPERAND GIVEN — "to asynchronously execute a request with the source
+ * object and an operation to perform on a database, AND AN OPTIONAL REQUEST", whose step 3 is "if request was
+ * NOT GIVEN, let request be a new request with source as source". The entry above is that arm and this is the
+ * other; there is one implementation and the two names are the standard's own two cases.
+ *
+ * §4.9's CURSOR IS THE WHOLE REASON IT EXISTS, and it is not an optimisation. `advance`, `continue` and
+ * `continuePrimaryKey` each say "let request be THIS'S REQUEST … run asynchronously execute a request with
+ * this's source handle, operation, and request" — the ONE IDBRequest the opening member returned, re-fired,
+ * whose `success` event carries the cursor again. §4.9's `[SameObject] readonly attribute IDBRequest request`
+ * is that object exposed, and a page compares it across turns; a fresh request per turn would answer a
+ * different object every time and would leave the page holding one that never fires again.
+ *
+ * `request` is BORROWED and must already carry THIS transaction (§2.8's field is written when a request is
+ * first placed, and re-placing it does not move it), which is asserted rather than re-written. The answer is
+ * the same request, OWNED, so both entries end in §5.6's own "Return request". */
+JSValue idb_request_execute_into(JSContext *ctx, JSValueConst source, JSValueConst transaction,
+                                 JSValueConst operation, JSValueConst request);
+
 /* §5.5's abort-a-transaction step 6, for ONE request of the aborted transaction's request list: "abort the
    steps to asynchronously execute a request for request, set request's processed flag to true, and queue a
    database task to [set done, set result to undefined, set error to a newly created AbortError DOMException,

@@ -46,6 +46,13 @@ typedef enum {
        and the range check that follows then throws or misses where the spec wraps. */
     IDL_LONG,             /* `long` — 32, signed */
     IDL_UNSIGNED_LONG,    /* `unsigned long` — 32, unsigned */
+    /* `[EnforceRange] unsigned long` — §3.2.4.10, which REPLACES the modulo with a REFUSAL: a non-finite value,
+       or one whose integer part is outside the type's range, is a TypeError instead of a wrap. It is a separate
+       type and not a flag for the same reason [Clamp] is: the extended attribute IS the conversion.
+       Indexed Database §4.9's `advance([EnforceRange] unsigned long count)` is the member that needs it, and
+       the difference is the whole of what a page can observe there — `cursor.advance(-1)` is a TypeError, where
+       the modulo makes it a request to advance 4294967295 records that would walk the store to its end. */
+    IDL_UNSIGNED_LONG_ENFORCE,
     IDL_UNSIGNED_SHORT,   /* `unsigned short` — 16, unsigned */
     IDL_LONG_LONG,        /* `long long` — 64, signed */
     /* `unsigned long long` — 64, UNSIGNED, and it is a separate type because the sign is observable. File

@@ -96,7 +96,8 @@ static bool idl_is_iface(JSValueConst v, JSClassID iface)
 static bool idl_is_integer(IdlArgType t)
 {
     return t == IDL_LONG || t == IDL_UNSIGNED_LONG || t == IDL_UNSIGNED_SHORT ||
-           t == IDL_LONG_LONG || t == IDL_UNSIGNED_LONG_LONG || t == IDL_LONG_LONG_CLAMP;
+           t == IDL_LONG_LONG || t == IDL_UNSIGNED_LONG_LONG || t == IDL_LONG_LONG_CLAMP ||
+           t == IDL_UNSIGNED_LONG_ENFORCE;
 }
 
 
@@ -142,6 +143,19 @@ static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
         if (!isfinite(x))
             return JS_ThrowTypeError(ctx, "the provided double value is non-finite");
         return JS_NewFloat64(ctx, x);
+    }
+    /* §3.2.4.10's [EnforceRange], which is four of that section's own steps and not a bound this file chose:
+       "if x is NaN, +∞ or −∞, then throw a TypeError"; "let x be sign(x)·floor(abs(x))"; "if x < lowerBound or
+       x > upperBound, then throw a TypeError". The bounds are `unsigned long`'s, which is the only type in this
+       build carrying the attribute — a second one states its own here rather than sharing a width parameter,
+       because the whole point of the attribute is that the range is part of the TYPE. */
+    if (t == IDL_UNSIGNED_LONG_ENFORCE) {
+        if (!isfinite(x))
+            return JS_ThrowTypeError(ctx, "the provided value is non-finite and its argument enforces a range");
+        x = (x < 0 ? -1.0 : 1.0) * floor(fabs(x));
+        if (x < 0 || x > 4294967295.0)
+            return JS_ThrowTypeError(ctx, "the provided value is outside the range of an unsigned long");
+        return JS_NewInt64(ctx, (int64_t)x);
     }
     /* AN `unsigned long long` DOES NOT FIT IN AN int64_t, and the half of its range that does not is exactly
        the half a page reaches by writing a negative: §3.2.4.8's conversion of -1 is 2**64-1, which as an int64_t

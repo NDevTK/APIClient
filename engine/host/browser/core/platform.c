@@ -52,6 +52,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/unhandled_rejection.h"
 #include "core/indexeddb/idb_connection.h"
+#include "core/indexeddb/idb_cursor.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_index_handle.h"
 #include "core/indexeddb/idb_index_populate.h"
@@ -131,6 +132,7 @@ static void d_idb_transaction(JSContext *c, const PlatformAgent *a) { (void)a; i
 static void d_idb_request(JSContext *c, const PlatformAgent *a) { (void)a; idb_request_init(c); }
 static void d_idb_connection(JSContext *c, const PlatformAgent *a) { (void)a; idb_connection_init(c); }
 static void d_idb_object_store(JSContext *c, const PlatformAgent *a) { (void)a; idb_object_store_init(c); }
+static void d_idb_cursor(JSContext *c, const PlatformAgent *a) { (void)a; idb_cursor_init(c); }
 static void d_idb_index_handle(JSContext *c, const PlatformAgent *a) { (void)a; idb_index_handle_init(c); }
 static void d_idb_index_populate(JSContext *c, const PlatformAgent *a) { (void)a; idb_index_populate_init(c); }
 static void d_idb_vce(JSContext *c, const PlatformAgent *a) { (void)a; idb_version_change_event_init(c); }
@@ -213,6 +215,7 @@ static void r_idb_transaction(JSRuntime *rt) { idb_transaction_free(rt); }
 static void r_idb_request(JSRuntime *rt) { idb_request_free(rt); }
 static void r_idb_connection(JSRuntime *rt) { idb_connection_free(rt); }
 static void r_idb_object_store(JSRuntime *rt) { idb_object_store_free(rt); }
+static void r_idb_cursor(JSRuntime *rt) { idb_cursor_free(rt); }
 static void r_idb_index_handle(JSRuntime *rt) { idb_index_handle_free(rt); }
 static void r_idb_index_populate(JSRuntime *rt) { idb_index_populate_free(rt); }
 static void r_idb_vce(JSRuntime *rt) { idb_version_change_event_free(rt); }
@@ -485,6 +488,11 @@ static const PlatformComponent PLATFORM[] = {
        and §4.5's `createIndex` returns one — and because core/realm.h runs the per-realm installs in
        DECLARATION order. It holds one agent-lifetime value, the private Symbol its slots hang off. */
     { "idb_index_handle",    d_idb_index_handle,    NULL,        r_idb_index_handle },
+    /* §2.10's CURSOR with §4.9's IDBCursor and IDBCursorWithValue over it, after §2.2.1's and §2.6.1's
+       handles because a cursor's SOURCE HANDLE is one of those two and §4.9's `source` answers with it — and
+       because core/realm.h runs the per-realm installs in DECLARATION order. It holds one agent-lifetime
+       value, the private Symbol §2.10's eleven fields hang off, plus §6.7's step machine. */
+    { "idb_cursor",          d_idb_cursor,          NULL,        r_idb_cursor },
     /* §4.5's createIndex NOTE, as the request it says it is — "the index creation itself is processed as an
        asynchronous request within the upgrade transaction". It holds no interface and installs into no realm:
        what it declares is ONE step machine, which is agent-lifetime state and is what the release gives back.

@@ -501,6 +501,14 @@ static const JSTrampStepDef js_idb_req_def = {
 JSValue idb_request_execute(JSContext *ctx, JSValueConst source, JSValueConst transaction,
                             JSValueConst operation)
 {
+    /* §5.6 step 3's arm for a caller that gives no request. The other arm is idb_request_execute_into, and the
+       two are ONE implementation — the standard states one algorithm whose third operand is optional. */
+    return idb_request_execute_into(ctx, source, transaction, operation, JS_UNDEFINED);
+}
+
+JSValue idb_request_execute_into(JSContext *ctx, JSValueConst source, JSValueConst transaction,
+                                 JSValueConst operation, JSValueConst request)
+{
     JSValueConst data[2];
     JSValue req, fn;
 
@@ -513,14 +521,33 @@ JSValue idb_request_execute(JSContext *ctx, JSValueConst source, JSValueConst tr
            "§5.6 was reached with a transaction that is not ACTIVE. Its step 2 asserts this, because the "
            "member that placed the request is what reports a \"TransactionInactiveError\" for an inactive one "
            "— an assert firing here means that member did not");
-    /* §5.6 step 3: "If request was not given, let request be a new request with source as source." The
-       optional `request` operand belongs to §5.1's open and §4.8's cursor, which reuse ONE request object
-       across several results; neither exists, so there is nothing yet that can pass one and the parameter is
-       honestly absent rather than declared and always null. */
-    req = rq_new(ctx, source, g_req_class);
-    /* §5.6 step 4, and the write §2.8 describes as "this will be set when a request is placed against a
-       transaction using the steps to asynchronously execute a request". */
-    rq_set(ctx, req, RQ_TRANSACTION, JS_DupValue(ctx, transaction));
+    /* §5.6 step 3: "If request was not given, let request be a new request with source as source." §4.9's
+       cursor is what gives one — its three iterating members re-fire the request the opening member returned,
+       which is what makes `cursor.request` the SAME object for the whole iteration. */
+    if (JS_IsUndefined(request)) {
+        req = rq_new(ctx, source, g_req_class);
+        /* §5.6 step 4, and the write §2.8 describes as "this will be set when a request is placed against a
+           transaction using the steps to asynchronously execute a request". */
+        rq_set(ctx, req, RQ_TRANSACTION, JS_DupValue(ctx, transaction));
+    } else {
+        JSValue held;
+
+        DCHECK(idb_request_is(request), "§5.6 was given a `request` operand that is not a request");
+        req = JS_DupValue(ctx, request);
+        held = rq_get(ctx, req, RQ_TRANSACTION);
+        /* A REQUEST IS PLACED AGAINST ONE TRANSACTION FOR ITS WHOLE LIFE — §2.8's field is written when it is
+           first placed and §5.6 has no step that moves it — so this asserts the pair rather than re-writing
+           it. A cursor's re-fire that arrived with a different transaction would be a cursor whose source
+           handle has moved, which §2.10 gives no way to do. */
+        DCHECK(JS_VALUE_GET_PTR(held) == JS_VALUE_GET_PTR(transaction),
+               "§5.6 was given an existing request whose transaction is not the one it is being placed "
+               "against — §2.8 writes that field once, at the first placement");
+        JS_FreeValue(ctx, held);
+        DCHECK(!rq_flag(ctx, req, RQ_DONE) && !rq_flag(ctx, req, RQ_PROCESSED),
+               "§5.6 was given an existing request that is still DONE or PROCESSED — §4.9's three iterating "
+               "members clear both flags immediately before they reach this algorithm, and a request placed "
+               "with the processed flag set is one this machine's own first stage abandons as aborted");
+    }
     idb_transaction_add_request(ctx, transaction, req);
 
     /* §5.6 step 5's "run these steps in parallel" ends in "queue a database task". This engine has no second
