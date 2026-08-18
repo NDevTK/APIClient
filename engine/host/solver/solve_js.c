@@ -17,7 +17,9 @@
    switch in one place (`construct`) — and so a release build, where a DFAIL compiles out, emits no breakout for
    them instead of falling through to another state's escape. */
 typedef enum {
-    JS_SOURCE = 0,      /* §12.6 between input elements — the bytes ARE source */
+    JS_SOURCE = 0,      /* §12 Lexical Grammar, between input elements — the bytes ARE source (NOT §12.6
+                           Tokens, which is what stood here: an input element is §12's own unit, and the
+                           difference is the §12.10.1 boundary construct now has to answer) */
     JS_STR_SINGLE,      /* §12.9.4 SingleStringCharacters */
     JS_STR_DOUBLE,      /* §12.9.4 DoubleStringCharacters */
     JS_TEMPLATE,        /* §12.9.6 TemplateCharacters */
@@ -40,7 +42,13 @@ typedef enum {
 /* WHERE THE HOLE IS, and one orthogonal bit: whether its FIRST byte is the character an unfinished escape
    sequence consumes. That bit is orthogonal because §12.9.4/.6/.9.5 each admit a backslash inside them, so it
    multiplies the state rather than being one of them — and it changes the escape by exactly one filler byte. */
-typedef struct { HoleState st; int esc; } Hole;
+/* …AND, FOR A HOLE BETWEEN TOKENS, THE TWO FACTS §12.10.1 DECIDES ON. A hole in a STATE is left by that
+   state's own exit and nothing else matters; a hole at a token BOUNDARY has no state to leave, and what can
+   still go wrong there is the boundary itself — whether the grammar accepts the injected call juxtaposed
+   against the token before it, which §12.10.1 answers from the previous token and from whether a
+   LineTerminator separates them. Carried on the hole because the scan is the only thing that knows them and
+   construct is the only thing that needs them. */
+typedef struct { HoleState st; int esc; int prev; int sol; } Hole;
 
 /* WHAT THE PREVIOUS INPUT ELEMENT DECIDES ABOUT A `/`. §12 opens with the reason this exists: "There are
    several situations where the identification of lexical input elements is sensitive to the syntactic grammar
@@ -396,7 +404,10 @@ static Hole scan(Scan *z) {
     Hole h;
     int hit = 0, sub = 0, lf = 0;
 
-    h.st = JS_NOT_A_SCRIPT; h.esc = 0;
+    /* EVERY FIELD, at the one declaration, because this function returns from a dozen places and a state that
+       does not care about the boundary fields would otherwise return whatever the stack held — which
+       construct's JS_SOURCE arm would then read as a real answer. */
+    h.st = JS_NOT_A_SCRIPT; h.esc = 0; h.prev = PREV_NONE; h.sol = 1;
     while (i < n) {
         size_t l = 0;
         uint32_t c;
@@ -406,7 +417,7 @@ static Hole scan(Scan *z) {
                "scanner here must answer when the hole falls inside its element, so an overshoot means one "
                "production consumed bytes it never examined and the state reported next belongs to the wrong "
                "element entirely");
-        if (i == z->at) { h.st = JS_SOURCE; h.esc = 0; return h; }
+        if (i == z->at) { h.st = JS_SOURCE; h.esc = 0; h.prev = z->prev; h.sol = z->sol; return h; }
 
         c = cp_at(s, n, i, &l);
         if (is_ws(c)) { i += l; continue; }
@@ -547,9 +558,35 @@ static int construct(Hole h, SolveJsEmit emit, void *user) {
 
     switch (h.st) {
     case JS_SOURCE:
-        /* §12.6: the bytes are already input elements of the Script, so there is no state to leave and the
-           escape IS the fire — the same answer §13.2.5.1's data state gets in the markup half. */
-        escape = "X9()";
+        /* §12 ECMAScript Language: Lexical Grammar — the bytes BEGIN an input element, so there is no state to
+           leave, which is the same answer §13.2.5.1 data state gets in the markup half. What is NOT the same
+           is that a markup hole in the data state has no boundary to satisfy and this one does.
+           §12.10.1 Rules of Automatic Semicolon Insertion inserts a semicolon before an offending token only
+           when a LineTerminator separates it from the previous token, when the offending token is `}`, or at a
+           do-while's `)`. So a call juxtaposed against a preceding token that ENDS an expression, on the same
+           line, is not an ASI site at all — it is a SyntaxError. `eval("f()" + x)` with the derived escape was
+           `f()X9()`, which does not parse, so the candidate never compiled, never fired, and the search parked
+           reporting a breakout it had supposedly tried. The separator is written exactly where §12.10.1 does
+           not supply one, and nowhere else: after an operator (`cfg=`) a `;` would itself be the SyntaxError.
+           (This is the citation that was wrong rather than merely imprecise — it read §12.6 Tokens, and input
+            elements are §12. Checking it is what found the missing separator.) */
+        if (h.sol || h.prev == PREV_NONE || h.prev == PREV_OPERATOR) escape = "X9()";
+        else if (h.prev == PREV_OPERAND) escape = ";X9()";
+        else {
+            /* THE SECOND AXIS, AND IT IS NOT THE ONE §12.9.5 NEEDS. `prev` classifies tokens for the GOAL
+               SYMBOL question — may a `/` here open a RegularExpressionLiteral — and PREV_AMBIG is the answer
+               to THAT question, not to this one. For the boundary the four members split differently and each
+               is decidable: `)` REQUIRES the separator (`f()X9()` does not parse), `await` and `of` FORBID it
+               (both require an operand, so `await ;` is a SyntaxError), and `}` and `yield` ACCEPT it (`x =
+               {};X9()` and `yield ;X9()` both parse, as does a block's `}` without one). So this needs a
+               second classification recorded beside `prev` at each of the sites that sets it — one word of
+               spec per site — not a guess between two escapes here. Build that. */
+            DFAIL("the attacker bytes begin an input element straight after `)`, `}`, `of`, `yield` or `await` "
+                  "with no LineTerminator between — §12.10.1 supplies no semicolon there, and whether one may "
+                  "be WRITTEN differs across exactly those tokens while §12.9.5's goal-symbol classification "
+                  "lumps them together. Record the boundary question beside `prev` at each site that sets it");
+            return 0;
+        }
         break;
     case JS_STR_SINGLE:  escape = "';X9()//";  break;   /* §12.9.4 SingleStringCharacters end at `'` */
     case JS_STR_DOUBLE:  escape = "\";X9()//"; break;   /* §12.9.4 DoubleStringCharacters end at `"` */
