@@ -2039,20 +2039,29 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            same token. An arm that inherited the row without it would run a peer's operation and tell nobody. */
         sib->dyn_token = malloc((size_t)parent->dyn_n * sizeof(char *));
         CHECK(sib->dyn_token, "engine: OOM fork dyn tokens");
-        /* THE THREE ARRAYS ARE ONE TABLE WITH ONE LENGTH, asserted rather than defaulted past. This read used to
+        /* AND WHETHER EACH ROW IS A TASK OR THE SYNCHRONOUS TAIL OF THE PROGRAM THAT CAUSED IT, by the same
+           sentence: the arm inherits the parent's cursor, so it inherits the parent's owed microtask
+           checkpoint, and a row whose position it did not inherit would be ordered against that checkpoint the
+           other way round — an inline <script> the parent's program inserted deferred behind a promise
+           reaction on one arm and not on the other, from one insertion. */
+        sib->dyn_pos = malloc((size_t)parent->dyn_n);
+        CHECK(sib->dyn_pos, "engine: OOM fork dyn positions");
+        /* THE FIVE ARRAYS ARE ONE TABLE WITH ONE LENGTH, asserted rather than defaulted past. This read used to
            be `parent->dyn_cand ? parent->dyn_cand[i] : 0`, and a zero there is DYN_PAGE_SCRIPT — a real kind
            belonging to a real entry — so a parent whose flags were somehow absent handed the arm a queue of
-           page scripts. The three are allocated, grown and freed together, which makes the `? :` a claim about
+           page scripts. The five are allocated, grown and freed together, which makes the `? :` a claim about
            a state this file makes impossible; now the arm CRASHES where that state would be born instead of
            compiling a candidate as a page script, or an ADDRESS (DYN_SCRIPT_SRC) as a program. */
-        DCHECK(parent->dyn_cand != NULL && parent->dyn_doc != NULL && parent->dyn_token != NULL,
-               "a flow holds queued programs with no kind, document or token column — the four arrays are one "
-               "table and are allocated together, so the arm would inherit bodies whose kind, realm and waiting "
-               "peer are lost");
+        DCHECK(parent->dyn_cand != NULL && parent->dyn_doc != NULL && parent->dyn_token != NULL &&
+               parent->dyn_pos != NULL,
+               "a flow holds queued programs with no kind, document, token or position column — the five "
+               "arrays are one table and are allocated together, so the arm would inherit bodies whose kind, "
+               "realm, waiting peer or place against the microtask checkpoint are lost");
         for (int i = 0; i < parent->dyn_n; i++) {
             sib->dyn[i] = strdup(parent->dyn[i]); CHECK(sib->dyn[i], "engine: OOM fork dyn body");
             sib->dyn_cand[i] = parent->dyn_cand[i];
             sib->dyn_doc[i] = parent->dyn_doc[i];
+            sib->dyn_pos[i] = parent->dyn_pos[i];
             sib->dyn_token[i] = NULL;
             if (parent->dyn_token[i]) {
                 sib->dyn_token[i] = strdup(parent->dyn_token[i]);
@@ -2312,7 +2321,9 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
         f->dyn_cand = realloc(f->dyn_cand, (size_t)f->dyn_cap);
         f->dyn_doc = realloc(f->dyn_doc, (size_t)f->dyn_cap * sizeof(uint32_t));
         f->dyn_token = realloc(f->dyn_token, (size_t)f->dyn_cap * sizeof(char *));
-        CHECK(f->dyn && f->dyn_cand && f->dyn_doc && f->dyn_token, "engine: OOM dynamic-script queue");
+        f->dyn_pos = realloc(f->dyn_pos, (size_t)f->dyn_cap);
+        CHECK(f->dyn && f->dyn_cand && f->dyn_doc && f->dyn_token && f->dyn_pos,
+              "engine: OOM dynamic-script queue");
     }
     at = f->dyn_n;
     if (pos == DYN_POS_IMMEDIATE) {
@@ -2370,11 +2381,16 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
         memmove(&f->dyn_cand[at + 1],  &f->dyn_cand[at],  tail);
         memmove(&f->dyn_doc[at + 1],   &f->dyn_doc[at],   tail * sizeof(uint32_t));
         memmove(&f->dyn_token[at + 1], &f->dyn_token[at], tail * sizeof(char *));
+        memmove(&f->dyn_pos[at + 1],   &f->dyn_pos[at],   tail);
     }
     f->dyn[at] = strdup(body); CHECK(f->dyn[at], "engine: OOM dynamic-script body");
     f->dyn_cand[at] = (unsigned char)kind;
     f->dyn_doc[at] = doc;
     f->dyn_token[at] = token;   /* MOVED: one allocation from engine_perform to flow_answer_perform */
+    /* THE POSITION IS KEPT, NOT CONSUMED. `at` says where the row went; this says WHY, and the microtask
+       checkpoint reads it (flow_checkpoint_due) because §4.12.1.1's immediate program ran inside the causing
+       program and §8.1.4.4's checkpoint is owed only once that program's stack has emptied. */
+    f->dyn_pos[at] = (unsigned char)pos;
     f->dyn_n++;
 }
 
@@ -2823,6 +2839,38 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
     free(j.argv);
 }
 
+/* IS A MICROTASK CHECKPOINT DUE BEFORE THIS FLOW'S NEXT PROGRAM?
+   HTML §8.1.4.4 "Calling scripts", clean up after running script step 3: "If the JavaScript execution context
+   stack is now empty, perform a microtask checkpoint." `Flow::frame` IS that stack here ("the current script's
+   live preemptible frame, NULL between scripts", solver/flow.h) and the caller has already established that it
+   is NULL, so what is left to decide is only WHICH boundaries are boundaries.
+   §4.12.1.1 "Processing model" ends "prepare the script element" with "Otherwise, immediately execute the
+   script element el, even if other scripts are already executing" — that program ran INSIDE the one that
+   inserted it, so the stack never emptied across it and the checkpoint the inserting program owes falls AFTER
+   its row. Every OTHER program the flow has left is a task: the document's next <script>, a lazy chunk, a
+   `javascript:` URL, a §8.6 string handler, a peer's operation. §8.1.7.3 "Processing model" performs the
+   checkpoint at the END of each task, so all of them come after it, and that is the whole of the answer.
+   THIS USED TO BE ASKED ONLY AFTER THE SEQUENCE WAS EXHAUSTED, which is why it is a function now. The job arm
+   sat below the two that compile a program, so it was reachable only once `script_i - n >= dyn_n` — no
+   microtask of any kind ran until every document script and every queued row had run, and
+   `<script>Promise.resolve().then(() => fetch('/a'))</script><script>fetch('/b')</script>` produced /b before
+   /a. No browser does that, and nothing in the engine could say so: the checkpoint END hook (engine_step)
+   already read §8.1.4.4's precondition correctly while the checkpoint itself did not run there at all. */
+static int flow_checkpoint_due(const Flow *f, int n) {
+    int row;
+
+    if (!flow_has_microtask(f)) return 0;
+    row = f->script_i - n;
+    if (row >= 0 && row < f->dyn_n) {
+        DCHECK(f->dyn_pos != NULL,
+               "a flow holds queued programs with no position column — the row the cursor names cannot say "
+               "whether it is a task or the synchronous tail of the program that queued it, and the microtask "
+               "checkpoint is placed against exactly that");
+        if (f->dyn_pos[row] == DYN_POS_IMMEDIATE) return 0;
+    }
+    return 1;
+}
+
 /* ONE UNIT OF WORK, THEN RETURN — flow_step is a step, and it used to be a drain.
    Every branch below that finished something looped back inside this call instead of returning: a completed
    script advanced to the next one and ran it, a drained fetch ran the continuation, a fired load stage ran its
@@ -2948,6 +2996,24 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                delivery is: it is a work item another agent's flow is suspended at, and it becomes one of THIS
                flow's programs — after which the loop below runs it like any other. */
             if (flow_perform_pending(f)) { g_step_unit = "cross-agent-operation"; flow_perform(ctx, f); return 0; }
+            /* THE MICROTASK CHECKPOINT, BEFORE THE NEXT PROGRAM AND NOT AFTER THE LAST ONE — HTML §8.1.4.4
+               "Calling scripts" step 3 of clean up after running script, decided by flow_checkpoint_due above.
+               It is the FIRST thing the flow does with an empty stack because that is what the sentence says:
+               the checkpoint belongs to the program that just finished, so nothing the sequence still holds
+               may run in front of it. Everything below this line is a task.
+               A JOB CAN PARK, and until this was reported the park was invisible to the scheduler. A queued
+               step machine that suspends on a synchronous host request is parked by reaction_flow_step
+               (JS_ParkFlow) and this returned PROGRESS — so the flow was resumed, parked again, resumed again,
+               forever, and never reported host-owed. The host was therefore never asked, and the answer that
+               would have let it finish could not arrive: a livelock that looks exactly like slowness, because
+               every turn is "progress". It is the same rule the mid-frame yield already keeps: a blocked flow
+               has no work, whatever it just did. OWED is the register the scheduler already has for
+               waiting-not-finished. */
+            if (flow_checkpoint_due(f, n)) {
+                g_step_unit = "microtask-checkpoint";
+                flow_run_one_job(ctx, f);
+                return flow_blocked(f) ? FLOW_STEP_OWED : 0;
+            }
             if (f->script_i < n) {
                 body = bodies[f->script_i];
                 stype = g_sess_types[f->script_i];
@@ -2990,17 +3056,19 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 }
             }
             else if (f->njob > 0) {
-                /* A JOB CAN PARK, and until now that park was invisible to the scheduler. A queued step machine
-                   that suspends on a synchronous host request is parked by reaction_flow_step (JS_ParkFlow) and
-                   this returned PROGRESS — so the flow was resumed, parked again, resumed again, forever, and
-                   never reported host-owed. The host was therefore never asked, and the answer that would have
-                   let it finish could not arrive: a livelock that looks exactly like slowness, because every
-                   turn is "progress".
-                   It is the same rule the mid-frame yield already keeps: a blocked flow has no work, whatever
-                   it just did. OWED is the register the scheduler already has for waiting-not-finished. */
-                g_step_unit = "run-one-job";
+                /* WHAT IS LEFT ON THE QUEUE HERE IS A TASK — HTML §8.1.7.3 "Processing model" step 1, run the
+                   oldest runnable task. The checkpoint above is the only thing that consumes a microtask and it
+                   runs before every program, so a microtask on the queue at this point is one it declined to
+                   run, and the only reason it declines is the immediate row that the arm above this one would
+                   have compiled. There is no such row here (the cursor is past the end of the sequence), which
+                   is why this is an assertion and not a second pick rule. */
+                DCHECK(!flow_has_microtask(f),
+                       "a task was about to begin while this flow still held a microtask — the checkpoint runs "
+                       "before every program in the sequence, so reaching the end of the sequence with one "
+                       "outstanding means a program ran in front of the checkpoint it owed");
+                g_step_unit = "run-a-task";
                 flow_run_one_job(ctx, f);
-                return flow_blocked(f) ? FLOW_STEP_OWED : 0;   /* scripts done -> drain a microtask, yield */
+                return flow_blocked(f) ? FLOW_STEP_OWED : 0;
             }
             else if (pending_count(f->pending) > 0 && !flow_pending_ready(f))
                 return FLOW_STEP_OWED;   /* only host-owed replies remain: no progress, and NOT finished */
@@ -3188,8 +3256,8 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                body is an async activation the flow machinery owns, not a program handle — it parked itself into
                the slot the top of this loop drains (a top-level `await`, or a loop back-edge under the forced
                preempt), and the scheduler resumes it there like every other parked continuation. Its evaluation
-               promise settling is likewise a FLOW resuming and not a drain: the reaction is a job on THIS
-               flow's queue, run by the run-one-job branch above, which is why nothing here waits for it. */
+               promise settling is likewise a FLOW resuming and not a drain: the reaction is a microtask on THIS
+               flow's queue, run by the checkpoint above, which is why nothing here waits for it. */
             if (stype == SCRIPT_TYPE_MODULE) { f->script_i++; return 0; }
         }
         {
@@ -3362,8 +3430,9 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     /* THE QUEUE AND THE PENDING LIST ARE EMPTY HERE, AND THAT IS ASSERTED RATHER THAN CLEANED UP AFTER. Both
        used to be walked and freed "defensively" right here, which is the fallback shape: the walk can only ever
        run when a work item is being DROPPED, and freeing it quietly is precisely how that drop stays invisible.
-       Neither is reachable — flow_step decides "finished" only after offering the job queue a turn (njob > 0
-       runs one), and only when the register is empty, since a pending entry with a value drains and one without
+       Neither is reachable — flow_step decides "finished" only after offering the job queue a turn (the
+       microtask checkpoint before every program runs one, the task arm below the sequence runs the rest of
+       them), and only when the register is empty, since a pending entry with a value drains and one without
        reports host-owed. The release below DOES free both, because an EVICTED flow legitimately holds them (the
        cold tier's recipe re-enqueues the reactions and re-issues the requests as it replays). So the assertion
        has to stand HERE, where "finished" is the claim being made, and not there. */

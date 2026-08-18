@@ -21,7 +21,7 @@
 #include "solver/pending.h"   /* the replies the host still owes this flow — a JS Array, not a malloc'd list */
 
 /* One queued microtask/reaction job owned by a flow (routed here by the job-enqueue hook, not a global list):
-   the quickjs job function + its dup'd arguments, run under the flow's COW after its scripts. */
+   the quickjs job function + its dup'd arguments, run under the flow's COW at the point its queue says. */
 /* A queued job of this flow's, and WHICH of HTML 8.1.7's two queues it came from. `task` is not a label: the
    event loop performs a microtask checkpoint between one task and the next, so a task may not run while this
    flow still holds a microtask. One array keeps the two in a single arrival order — which is what a task source
@@ -217,6 +217,18 @@ typedef struct Flow {
        simply produces no Document. Kept as a parallel array so the page-script assert stays fully armed inside a
        candidate flow, which still loads real chunks. */
     unsigned char *dyn_cand;
+    /* AND WHETHER EACH ROW IS A TASK OR THE SYNCHRONOUS TAIL OF THE PROGRAM THAT CAUSED IT (a DynPos,
+       engine.h). The position a row was queued at is not consumed by the insertion — it is a fact the row
+       KEEPS, because the MICROTASK CHECKPOINT is placed against it. HTML §8.1.4.4 "Calling scripts" performs
+       the checkpoint when the JavaScript execution context stack empties, and §4.12.1.1 "Processing model"
+       ends "prepare the script element" with "Otherwise, immediately execute the script element el, even if
+       other scripts are already executing" — so a DYN_POS_IMMEDIATE row ran INSIDE the program that caused it,
+       the stack never emptied across it, and the checkpoint that program owes falls AFTER the row. Every other
+       row is a task and the checkpoint falls BEFORE it. Position alone cannot say which: an immediate row and
+       an appended one both land at the cursor when the queue was empty, so without this column the two are the
+       same row and one of the two orderings is silently wrong. Parallel to `dyn_cand` for the reason stated
+       there — the five arrays are allocated, copied and freed together. */
+    unsigned char *dyn_pos;
     void *delta;           /* this flow's isolated HEAP COW delta (CowDelta*), applied while running */
     void *dom; int dom_n, dom_cap;   /* this flow's isolated DOM COW delta HEAD buffer (dom_cow), swapped with the
                                         heap delta on every context-switch so the DOCUMENT is a per-flow time-travel
@@ -226,8 +238,11 @@ typedef struct Flow {
                               forked sibling references the parent's O(N) DOM delta in O(1). NULL until a fork. */
     void *dec_blob;        /* suspended decision state while paused (decide_suspend) */
     void *pin_blob;        /* suspended pin state while paused (concolic_pins_suspend) */
-    FlowJob *jobs; int njob, jobcap;   /* ASYNC-AS-FLOW: this flow's OWN queued microtasks AND tasks, drained
-                                          after its scripts under its live COW (correct ordering, per-flow isolated) */
+    /* ASYNC-AS-FLOW: this flow's OWN queued microtasks AND tasks, run under its live COW so a reaction runs in
+       the timeline that enqueued it. A MICROTASK runs at the checkpoint HTML §8.1.4.4 "Calling scripts" owes
+       once the program that queued it has left the stack — which is BEFORE the flow's next program, not after
+       its last one — and a TASK runs when the sequence is exhausted (engine.c's flow_checkpoint_due). */
+    FlowJob *jobs; int njob, jobcap;
     /* FETCH-AWAIT: this flow's OWN live (pending) fetches and the synchronous requests it is blocked on,
        resolved when the flow's scripts+microtasks stall (the network completing). A JS ARRAY of plain records
        (solver/pending.h) rather than a malloc'd list, because CLAUDE.md §State-isolation says so in as many
