@@ -859,6 +859,24 @@ char *solve_json_array(JSContext *ctx) {
            and have not got as far as the sink. One is a WFQ question and the other is a distance question. */
         json_buf_puts(&b, ",\"turns\":");
         snprintf(t, sizeof t, "%d", g_pending[i].turns); json_buf_puts(&b, t);
+        /* AND WHAT WAS ACTUALLY TRIED, which three counts cannot say. `tried` is how many runs, `reached` how
+           many arrived and `turns` how many turns the scheduler gave them — all quantities, and the state this
+           search is most often in wants a STRING: a breakout that ARRIVED and did not fire is a question about
+           the bytes, and the reader has to see them to answer it. Without this the report says a search ran
+           five candidates and never says what any of them was, which is the same silence `parked, tried 5`
+           carried before the derivations replaced the fixed lists.
+           ENTRY 0 OF A DERIVED CLASS IS THE INERT CONTEXT PROBE and is emitted like the rest, because it IS
+           one of the runs `tried` counts and hiding it would make the list disagree with the count. What tells
+           it apart is that it carries no marker: a probe cannot fire, by construction.
+           These are the payloads as the SEARCH built them, never as the browser delivers them — the source's
+           own transform is already stated once, beside this, as `sourceEncodes` and `deliveryPrefix`, and
+           writing the delivered form here as well would be the same fact in two places, free to disagree. */
+        json_buf_puts(&b, ",\"payloads\":[");
+        for (int c = 0; c < g_pending[i].npl; c++) {
+            if (c) json_buf_puts(&b, ",");
+            json_buf_str(&b, g_pending[i].pl[c]);
+        }
+        json_buf_puts(&b, "]");
         /* The parked entry carries the DECLARATION, not the envelope: a search that has not solved has no
            vector to state and no PoC to reproduce, so `firesOn`/`cspBlocks`/`trustedTypes` would be claims
            about a PoC that does not exist. What it does carry is the whole source declaration — the bytes a

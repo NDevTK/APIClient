@@ -78,7 +78,7 @@ const char *solve_resume_candidate(const char *src, const char *sink_name);
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
-     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T
+     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,"payloads":[..]
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
@@ -101,6 +101,10 @@ const char *solve_resume_candidate(const char *src, const char *sink_name);
    and `tried:2,reached:0,turns:900` is one whose flows have run and have not got as far as the sink. The first
    is a scheduling question and the second a distance-through-the-document one, they take opposite actions, and
    with two numbers they were the same report.
+   `payloads` IS THE ONE FIELD OF THE FOUR THAT IS NOT A COUNT, and the search's most common state is the one
+   that needs it: a breakout that ARRIVED and did not fire is a question about the BYTES, and no quantity
+   answers it. Entry 0 of a derived class is its inert context probe — it is one of the runs `tried` counts, so
+   omitting it would make the list disagree with the count, and it is told apart by carrying no marker.
 
    THE FIRED ENTRY IS §S(d)'s REPRODUCTION ENVELOPE, and every field of it is a POSITIVE statement whose ABSENCE
    is equally positive — never a gap to be read as a default:
