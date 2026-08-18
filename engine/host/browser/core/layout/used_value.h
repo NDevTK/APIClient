@@ -19,8 +19,11 @@
  * WHAT THIS COMPONENT COMPUTES TODAY, AND WHY THAT SET AND NOT A LARGER ONE. The set is every arm of §10 that
  * needs no INTRINSIC SIZE — no measurement of the box's own content — plus the box edge stated over them and
  * the containing block they are all stated against. The one thing missing from all of it is therefore one
- * thing: a shrink-to-fit width and a content-based height each need the box's text measured with a real font,
- * and nothing here does:
+ * thing: a shrink-to-fit width needs the box's text measured with a real font, and nothing here does. A
+ * CONTENT-BASED HEIGHT used to be on that list and is not: §10.6.3's own bullets say the font is needed only
+ * for the LINE-BOX arm, and its block-level-children arm is a walk over used heights and collapsing margins
+ * that core/layout/block_flow.h now runs — so a `height: auto` box whose children are block-level answers
+ * here, and one with inline content crashes inside that walk naming §9.4.2:
  *   - A MARGIN OR PADDING whose computed value is an absolute length. Nothing in CSS 2.1 alters it. §10.3.3's
  *     constraint equation solves for `auto` values and, when the box is OVER-CONSTRAINED, for one horizontal
  *     margin; it never touches a vertical margin, and §10.6.3 gives the vertical pair exactly one rule (`auto`
@@ -154,8 +157,33 @@ CssPx used_value_padding_edge_px(lxb_dom_element_t *el, bool vertical);
    ITS CALLER IS CSSOM VIEW §6's `getClientRects()` STEP 3 — a box fragment's BORDER AREA — and CSSOM VIEW §7's
    `offsetWidth`/`offsetHeight` are the second, which is why it is stated here once rather than in either.
    IT IS AN EXTENT AND NOT AN AREA. A border AREA is this extent on both axes AND the box's POSITION;
-   core/layout/flow_position.h owns that half, and it answers for the root element and crashes for every other
-   box naming CSS 2.1 §9.4.1's own missing piece. */
+   core/layout/flow_position.h owns that half. */
 CssPx used_value_border_edge_px(lxb_dom_element_t *el, bool vertical);
+
+/* THE SAME BORDER EDGE, for a caller that has ALREADY derived the box's CONTENT extent on that axis. CSS 2.1
+   §8.1's box model is one nesting — content, then padding, then border — so this is that content extent plus
+   the four terms css-sizing §5's conversion is stated over, computed in the one function that owns them.
+   §10.4/§10.7's clamp is asserted here as it is on every other path.
+   ITS CALLER IS core/layout/block_flow.c AND A CYCLE IS WHY IT EXISTS. A `height: auto` box's content extent
+   IS CSS 2.1 §10.6.3's walk, and `used_value_px(el, "height")` is what RUNS that walk — so a walk that asked
+   the entry above for one of its own children's border boxes would re-enter itself one level down, and every
+   level of the tree would be laid out twice over. The conversion is stated once, here, and the walk hands in
+   the number it already holds. */
+CssPx used_value_border_edge_from_content_px(lxb_dom_element_t *el, CssPx content, bool vertical);
+
+/* CSS 2.1 §10.1's CONTAINING BLOCK as an ELEMENT — the box whose CONTENT EDGE is the rectangle every
+   percentage and every `auto` in §10.3 is stated against. NULL exactly for the ROOT ELEMENT, whose containing
+   block is §10.1's first case, the initial containing block, and is no element's box.
+   IT IS EXPORTED BECAUSE A RECTANGLE HAS A POSITION AS WELL AS A WIDTH. This component derives the width and
+   needs nothing else of the box; core/layout/flow_position.c and core/layout/block_flow.c need the BOX — its
+   origin, its top and left border and padding, and the child list §9.4.1 stacks below it — and a second walk
+   for it would be §10.1's four cases implemented twice, free to disagree about which ancestor the rectangle
+   belongs to. Every case §10.1 defines and this component does not answer crashes naming that case. */
+lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el);
+
+/* THE SAME RECTANGLE'S WIDTH — §10.1's first case out of the viewport, its second out of the CONTENT EDGE of
+   the box above. It is a second entry rather than arithmetic over the first because the first case has no box
+   at all, so a caller holding the NULL could not derive it. */
+CssPx used_value_containing_block_width(lxb_dom_element_t *el);
 
 #endif

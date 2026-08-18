@@ -27,11 +27,18 @@
  * not collapse", so its top margin is its own used value and not a collapsed one. That is a derivation with no
  * term left over, and it is the base case every other box's position is stated against.
  *
- * EVERY OTHER BOX CRASHES, and each names ITS OWN missing piece rather than one shared "there is no layout".
- * A non-root block-level box in normal flow needs the used HEIGHT of every preceding in-flow sibling and
- * §8.3.1's collapsing between them — the same subproblem §10.6.3's content-based height is blocked on, which
- * is why building one builds the other. A float is §9.5's own positioning, an out-of-flow box is §9.3.2's
- * offsets over a static position, and an inline box is §9.4.2's line boxes.
+ * EVERY OTHER IN-FLOW BLOCK-LEVEL BOX IS THAT BASE CASE PLUS §10.1's SECOND, AND THE INDUCTION IS THE WHOLE
+ * COMPONENT. The containing block is "the CONTENT EDGE of the nearest block container ancestor box", so the
+ * box's origin is that ancestor's origin — this same function, one level up — plus CSS 2 §8.1's leading border
+ * and padding, plus what §9.4.1 puts between that content edge and this box. The horizontal term is the same
+ * left-outer-edge touching the root arm states. The VERTICAL one is core/layout/block_flow.h: the used height
+ * of every preceding in-flow sibling with §8.3.1's collapsing between them, which is the walk §10.6.3's
+ * content-based height was blocked on as well — one subproblem, and building it built both.
+ *
+ * WHAT STILL CRASHES, each naming ITS OWN missing piece rather than one shared "there is no layout": a float
+ * is §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, an inline box is
+ * §9.4.2's line boxes, and a box whose margin box does not FILL its containing block waits on the one row —
+ * `direction` — that decides which of §9.4.1's two horizontal touchings applies.
  *
  * THE ANSWER IS A `CssPx` PAIR FOR used_value.h's REASON. §10.1's base case is the viewport, so a coordinate
  * derived from it carries the ICB's environment fact and `rect.left < 768` is the same responsive gate

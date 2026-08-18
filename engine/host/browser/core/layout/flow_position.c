@@ -11,6 +11,7 @@
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
 #include "core/frame/viewport.h"
+#include "core/layout/block_flow.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/used_value.h"
 
@@ -62,11 +63,64 @@ static CssPx fp_icb_width(lxb_dom_element_t *el)
     return viewport_icb_width(dctx);
 }
 
+/* §9.4.1's HORIZONTAL RULE, which is one rule with two answers: "each box's left outer edge touches the left
+   edge of the containing block (for right-to-left formatting, right edges touch)". The two agree exactly when
+   the margin box FILLS the containing block, which is what §10.3.3's rule 5 makes true of every `width: auto`
+   box in normal flow, and they differ by the slack otherwise — so this asserts the agreement rather than
+   picking one. Which one applies is the containing block's computed `direction`, and `direction` is not among
+   the properties core/css/css_computed_value.h models. */
+static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
+{
+    CssPx ml, mr, outer;
+
+    if (!fp_length_is(el, "width", "auto"))
+        DFAIL("CSS 2 §9.4.1 says 'each box's left outer edge touches the left edge of the containing block (for "
+              "right-to-left formatting, right edges touch)', and this box declares a `width`, so its margin "
+              "box does NOT fill its containing block and the two answers differ by the slack. CSS 2.1 §10.1 "
+              "states which applies — for the root element, 'the direction property of the initial containing "
+              "block is the same as for the root element' — and `direction` is not among the properties "
+              "css_computed_value.c models, so there is nothing to read it through. ONE ROW is missing and it "
+              "is the same row §10.3.3's over-constrained margin case asks for in core/layout/used_value.c: "
+              "css-writing-modes gives `direction` the `Computed value: specified keyword` line, so it is a row "
+              "of css_computed_models' as-specified arm and a row of css_shorthand_complete_for. RECORD it, and "
+              "this crash becomes a branch between `margin-left` and the containing block's width minus the "
+              "margin box");
+    ml = used_value_px(el, "margin-left");
+    mr = used_value_px(el, "margin-right");
+    outer = css_px_add(css_px_add(ml, mr), used_value_border_edge_px(el, false));
+    if (outer.px > cb_width.px)
+        DFAIL("CSS 2 §10.3.3's rule 5 solved this box's `width` from the constraint equation, so its MARGIN BOX "
+              "should exactly fill its containing block — and it is WIDER than that block, which happens only "
+              "when css-sizing §5's floor of the content box at zero cut the solve short: the margins, borders "
+              "and paddings alone exceed the containing block. The margin box then does not fill it, §9.4.1's "
+              "left-touching and right-touching answers differ by the overflow, and the containing block's "
+              "computed `direction` is what chooses between them — the same one row the declared-`width` crash "
+              "above names in full");
+    /* The two formattings agree: the margin box fills the containing block, so its left outer edge is at that
+       block's left content edge under either. */
+    return ml;
+}
+
+/* CSS 2 §8.1's two edges between a box's BORDER box and its CONTENT box on the leading side of one axis — the
+   top border and padding, or the left pair. §10.1's second case makes a containing block the CONTENT edge of a
+   box whose own origin is its BORDER edge, and this is the whole of the difference. */
+static CssPx fp_edge_before(lxb_dom_element_t *el, bool vertical)
+{
+    CssLength b = css_computed_length(el, vertical ? "border-top-width" : "border-left-width");
+
+    DCHECK(b.kind == CSS_LENGTH_ABSOLUTE,
+           "a `border-*-width` computed to something that is not an absolute length. css-backgrounds-3 §3.3's "
+           "`Computed value:` line is `absolute length, snapped as a border width`, so every arm of that "
+           "derivation produces one and a percentage or a keyword here is a rule that did not run");
+    return css_px_add(b.px, used_value_px(el, vertical ? "padding-top" : "padding-left"));
+}
+
 FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
 {
     FlowPoint p = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
     lxb_dom_node_t *n;
-    CssPx ml, mr, outer;
+    lxb_dom_element_t *cb;
+    FlowPoint o;
 
     DCHECK(el != NULL, "a border box's position was asked for with no element");
     n = lxb_dom_interface_node(el);
@@ -97,58 +151,35 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
               "formatting context: the font metrics first, then §9.4.2's line boxes over them");
 
     /* §10.1's FIRST CASE, which is §9.4.1's base case as well: the root element's containing block is the ICB,
-       "anchored at the canvas origin". Both of §9.4.1's rules then reduce to this box's own two margins.
+       "anchored at the canvas origin", so both of §9.4.1's rules reduce to this box's own two margins.
        VERTICALLY, "boxes are laid out one after the other, vertically, beginning at the top of a containing
        block" — there is no preceding sibling, so the box begins at the ICB's top, and §8.3.1 'Collapsing
        margins' states that "margins of the root element's box do not collapse", so the distance from that top
-       to the border edge is the root's OWN used `margin-top` and not a collapsed one.
-       HORIZONTALLY, "each box's left outer edge touches the left edge of the containing block (for
-       right-to-left formatting, right edges touch)" — two answers, and §10.1 says which one applies: "the
-       direction property of the initial containing block is the same as for the root element". `direction` is
-       not among the properties core/css/css_computed_value.h models, so the two are told apart only where they
-       AGREE, which is exactly when the margin box fills the containing block. */
-    if (!fp_is_root(n))
-        DFAIL("CSS 2 §9.4.1 places a non-root block-level box in normal flow BELOW ITS PRECEDING SIBLINGS: "
-              "'boxes are laid out one after the other, vertically, beginning at the top of a containing block. "
-              "The vertical distance between two sibling boxes is determined by the margin properties.' So this "
-              "box's y needs the used HEIGHT of every preceding in-flow sibling and §8.3.1's COLLAPSING of the "
-              "margins between them — and a sibling whose `height` is `auto` is CSS 2 §10.6.3's content-based "
-              "height, which core/layout/used_value.c crashes on for the same walk. ONE subproblem answers "
-              "both, and it is the in-flow child walk §10.6.3's own crash asks for: 'the distance from the top "
-              "content edge to the bottom margin edge of the last in-flow child', which needs no font at all "
-              "when the children are block-level and none when there are none. BUILD that walk with §8.3.1's "
-              "collapsing, and this box's y is the running offset it already computes. The x is not waiting on "
-              "it: §10.1's second case makes the containing block the nearest block container ancestor's "
-              "CONTENT EDGE, whose extent used_value.c computes and whose own POSITION is this same recursion");
-    if (!fp_length_is(el, "width", "auto")) {
-        /* A declared `width` leaves slack in the containing block, and §9.4.1's two touchings then disagree. */
-        DFAIL("CSS 2 §9.4.1 says 'each box's left outer edge touches the left edge of the containing block (for "
-              "right-to-left formatting, right edges touch)', and this root element declares a `width`, so its "
-              "margin box does NOT fill the initial containing block and the two answers differ by the slack. "
-              "§10.1 states which applies — 'the direction property of the initial containing block is the same "
-              "as for the root element' — and `direction` is not among the properties css_computed_value.c "
-              "models, so there is nothing to read it through. ONE ROW is missing and it is the same row CSS 2 "
-              "§10.3.3's over-constrained margin case asks for in core/layout/used_value.c: css-writing-modes "
-              "gives `direction` the `Computed value: specified keyword` line, so it is a row of "
-              "css_computed_models' as-specified arm and a row of css_shorthand_complete_for. RECORD it, and "
-              "this crash becomes a branch between `margin-left` and the containing block's width minus the "
-              "margin box");
+       to the border edge is the root's OWN used `margin-top` and not a collapsed one. */
+    if (fp_is_root(n)) {
+        p.x = fp_left_offset(el, fp_icb_width(el));
+        /* §9.4.1's vertical rule at the top of the containing block, with §8.3.1's root-element exception. */
+        p.y = used_value_px(el, "margin-top");
+        return p;
     }
-    ml = used_value_px(el, "margin-left");
-    mr = used_value_px(el, "margin-right");
-    outer = css_px_add(css_px_add(ml, mr), used_value_border_edge_px(el, false));
-    if (outer.px > fp_icb_width(el).px)
-        DFAIL("CSS 2 §10.3.3's rule 5 solved this root element's `width` from the constraint equation, so its "
-              "MARGIN BOX should exactly fill the initial containing block — and it is WIDER than the ICB, "
-              "which happens only when css-sizing §5's floor of the content box at zero cut the solve short: "
-              "the margins, borders and paddings alone exceed the containing block. The margin box then does "
-              "not fill it, §9.4.1's left-touching and right-touching answers differ by the overflow, and the "
-              "ICB's computed `direction` is what chooses between them — the same one row the declared-`width` "
-              "crash above names in full");
-    /* §9.4.1's horizontal rule, with the two formattings agreeing: the margin box fills the containing block,
-       so its left outer edge is at the ICB's left edge under either. */
-    p.x = ml;
-    /* §9.4.1's vertical rule at the top of the containing block, with §8.3.1's root-element exception. */
-    p.y = used_value_px(el, "margin-top");
+
+    /* §10.1's SECOND CASE, and §9.4.1's inductive step: the containing block is "the CONTENT EDGE of the
+       nearest block container ancestor box", so this box's origin is that box's origin plus its own top and
+       left border and padding — the two edges CSS 2 §8.1 nests between a border box and a content box — plus
+       what §9.4.1 puts between the content edge and this box. HORIZONTALLY that is the same left-outer-edge
+       touching the root arm above states, over the containing block's width rather than the ICB's. VERTICALLY
+       it is core/layout/block_flow.h's walk: the used height of every preceding in-flow sibling with §8.3.1's
+       collapsing between them, which is the one subproblem §10.6.3's content-based height was waiting on too.
+       THE RECURSION TERMINATES AT THE ROOT, whose containing block is §10.1's first case — the ICB, which is
+       no element's box — so `used_value_containing_block` answering NULL is exactly the arm above. */
+    cb = used_value_containing_block(el);
+    DCHECK(cb != NULL,
+           "CSS 2.1 §10.1 answered NULL — its first case, the initial containing block — for an element that is "
+           "not the root. The two tests are the same test (a node whose parent is the Document), so they have "
+           "come apart");
+    o = flow_border_box_origin(cb);
+    p.x = css_px_add(css_px_add(o.x, fp_edge_before(cb, false)),
+                     fp_left_offset(el, used_value_containing_block_width(el)));
+    p.y = css_px_add(css_px_add(o.y, fp_edge_before(cb, true)), block_flow_child_top(el));
     return p;
 }
