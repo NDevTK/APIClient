@@ -78,7 +78,7 @@ const char *solve_resume_candidate(const char *src, const char *sink_name);
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
-     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,"payloads":[..]
+     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T[,"fires":F],"payloads":[..]
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
@@ -105,6 +105,13 @@ const char *solve_resume_candidate(const char *src, const char *sink_name);
    that needs it: a breakout that ARRIVED and did not fire is a question about the BYTES, and no quantity
    answers it. Entry 0 of a derived class is its inert context probe — it is one of the runs `tried` counts, so
    omitting it would make the list disagree with the count, and it is told apart by carrying no marker.
+   `fires` SEPARATES A SOLVER FAILURE FROM A SCHEDULING ONE, because ARRIVING at a sink is not reaching an
+   EXECUTABLE position. A markup breakout becomes a program only if the real parse put its marker in an
+   auto-firing handler and a URL one only if the delivered address survived as a `javascript:` URL, so
+   `reached:1,fires:0` says the source's own transform defeated it (the fragment set encodes `<`, the markup
+   parses as text) while `reached:1,fires:1` says the program exists and has not been run yet, which is the
+   flow's sequence and not this file's. ABSENT for an eval sink: that class evaluates its own argument, so
+   there is nothing to queue and a 0 would read as "nothing executable" when it means "nothing to count".
 
    THE FIRED ENTRY IS §S(d)'s REPRODUCTION ENVELOPE, and every field of it is a POSITIVE statement whose ABSENCE
    is equally positive — never a gap to be read as a default:

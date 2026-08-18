@@ -66,7 +66,7 @@ static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand
    fact is a second copy that can be behind. The fire branch asserts that implication rather than restating
    it. */
 typedef struct {
-    char *src; int sink; int tried; int reached; int turns;
+    char *src; int sink; int tried; int reached; int turns; int fires;
     /* THE BREAKOUTS THIS SINK'S SEARCH HAS, IN ORDER, AND HOW MANY OF THEM ARE ALREADY FLOWS. A derived-context
        sink does not KNOW its breakouts when it is detected — a probe run reads them off the sink's own parse —
        so the list GROWS after seeding has already happened, and a one-shot "this sink is seeded" latch cannot
@@ -204,12 +204,20 @@ struct SinkClass {
     int               derive;    /* SINK_DERIVE_* — which parser reads this sink's OWN output for its context */
     PolicyScriptKind  policy;    /* which of CSP's four script questions a fired breakout turns on */
     int               tt;        /* the TrustedTypeKind gating this sink, or -1 — the spec makes it no TT sink */
+    /* WHETHER A FIRED BREAKOUT BECOMES A QUEUED PROGRAM OF THE FLOW, or is run by the sink itself. It is a
+       fact about the CLASS and it decides whether `fires` is a number this search can have at all: an eval
+       sink EVALUATES its own argument (§19.2.1 / §20.2.1.1.1), so there is nothing to queue and nothing to
+       count; a markup breakout becomes a program only if the real parse put its marker in an auto-firing
+       handler, and a URL one only if the delivered address is still a `javascript:` URL. Declared here rather
+       than asked with a strcmp over `fires_on`, which is the display-text chain this table already replaced
+       once. */
+    int               queues_fire;
     const char       *fires_on;  /* what makes the fired breakout RUN, from the oracle above */
 };
 static const SinkClass SINKS[] = {
-    [SINK_EVAL] = { "eval",      NULL,      SINK_DERIVE_JS,   POLICY_EVAL,           TRUSTED_TYPE_SCRIPT, "sink-evaluates" },
-    [SINK_HTML] = { "innerHTML", NULL,      SINK_DERIVE_HTML, POLICY_INLINE_HANDLER, TRUSTED_TYPE_HTML,   "parse-insert"   },
-    [SINK_URL]  = { "location",  CANDS_URL, SINK_DERIVE_NONE, POLICY_JAVASCRIPT_URL, -1,                  "navigation"     },
+    [SINK_EVAL] = { "eval",      NULL,      SINK_DERIVE_JS,   POLICY_EVAL,           TRUSTED_TYPE_SCRIPT, 0, "sink-evaluates" },
+    [SINK_HTML] = { "innerHTML", NULL,      SINK_DERIVE_HTML, POLICY_INLINE_HANDLER, TRUSTED_TYPE_HTML,   1, "parse-insert"   },
+    [SINK_URL]  = { "location",  CANDS_URL, SINK_DERIVE_NONE, POLICY_JAVASCRIPT_URL, -1,                  1,                  "navigation"     },
 };
 #define SINK_CLASS_N ((int)(sizeof SINKS / sizeof SINKS[0]))
 
@@ -267,6 +275,10 @@ void solve_init(JSContext *ctx) {
        (`tt` is deliberately not asserted non-negative: -1 is the POSITIVE statement that the standard makes
        this sink no Trusted Types sink at all, which is what the URL row means.) */
     for (int i = 0; i < SINK_CLASS_N; i++) {
+        DCHECK(!SINKS[i].queues_fire == !!(SINKS[i].derive == SINK_DERIVE_JS),
+               "a sink class disagrees with itself about who runs a fired breakout — the JS-context class is "
+               "the one whose sink EVALUATES its own argument, so it is exactly the class that queues no "
+               "program, and any other pairing means one of the two was changed without the other");
         DCHECK(SINKS[i].name && SINKS[i].fires_on,
                "a sink class was declared without its display name or the fire semantics its oracle gives it — "
                "a PoC cannot state how it reproduces without that row being whole");
@@ -332,6 +344,7 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     e->tried = 0;
     e->reached = 0;
     e->turns = 0;
+    e->fires = 0;
     e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0;
     *created = 1;
     flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
@@ -511,7 +524,7 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
    of input this walk exists to run — so descending by C frame made the oracle's own depth attacker-controlled.
    Lexbor's nodes carry `parent`, so the traversal needs no stack at all: descend to first_child, else take
    `next`, else climb until a `next` exists, never above the level the walk started at. */
-static void html_fire_walk(lxb_dom_node_t *node) {
+static void html_fire_walk(Cand *e, lxb_dom_node_t *node) {
     lxb_dom_node_t *top = node->parent;   /* the level the walk must not climb above */
     lxb_dom_node_t *n = node;
 
@@ -523,7 +536,7 @@ static void html_fire_walk(lxb_dom_node_t *node) {
                 size_t vl = 0;
                 const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)H[h], strlen(H[h]), &vl);
                 /* APPEND: an event handler fires from a TASK, so it takes the tail like every other task. */
-                if (v && vl) fire_js((const char *)v, vl, DYN_POS_APPEND);
+                if (v && vl) { e->fires++; fire_js((const char *)v, vl, DYN_POS_APPEND); }
             }
         }
         if (n->first_child) { n = n->first_child; continue; }
@@ -546,7 +559,7 @@ static void html_fire_walk(lxb_dom_node_t *node) {
    status is memory and nothing else — and a security verdict quietly downgraded in a release build is worse
    than aborting. A parsed document with no document element is the parser's own invariant (§13.2.6 inserts
    html/head/body for every input, including the empty one), so it asserts against this engine's own logic. */
-static void html_fire(const char *html) {
+static void html_fire(Cand *e, const char *html) {
     lxb_html_document_t *doc = dom_document_create();
     lxb_dom_element_t *root;
     lxb_status_t st;
@@ -565,19 +578,20 @@ static void html_fire(const char *html) {
     DCHECK(root != NULL, "a completed HTML parse produced no document element — §13.2.6 inserts html, head and "
                          "body for every input including the empty one, so the tree this oracle is about to "
                          "walk was built by something that is not the parser");
-    html_fire_walk(lxb_dom_interface_node(root));
+    html_fire_walk(e, lxb_dom_interface_node(root));
     dom_document_destroy(doc);
 }
 
 /* URL firing oracle: navigating to a `javascript:` URL executes its JS. So the "fire" is: if the URL scheme is
    javascript:, eval the part after the colon — X9 fires iff the breakout made the URL a javascript: one. */
-static void url_fire(JSContext *ctx, const char *url) {
+static void url_fire(Cand *e, JSContext *ctx, const char *url) {
     while (*url == ' ' || *url == '\t' || *url == '\n') url++;   /* leading whitespace is ignored by the URL parser */
     if (!strncasecmp(url, "javascript:", 11)) {
         const char *js = url + 11;
         /* APPEND: HTML §7.4.2.2 "Beginning navigation" queues a global task on the navigation and traversal
            task source to navigate to a javascript: URL, so §7.4.2.3.2's evaluation is a TASK — the same
            position engine_queue_javascript_url gives the real one. */
+        e->fires++;
         fire_js(js, strlen(js), DYN_POS_APPEND);
     }
 }
@@ -594,7 +608,7 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
            the marker alone identifies its bytes: `CANDS_URL`'s vectors are the only strings this search ever
            injects and both carry X9. */
         if (url) {
-            if (strstr(url, "X9")) { breakout_arrived(e); url_fire(ctx, url); }
+            if (strstr(url, "X9")) { breakout_arrived(e); url_fire(e, ctx, url); }
             JS_FreeCString(ctx, url);
         }
         return;
@@ -626,7 +640,7 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
                whole document and parsed EVERY innerHTML in the page — the fixture's own markup, once per
                candidate — and the cost is the page's markup times the number of breakouts tried. */
             if (strstr(html, SOLVE_HTML_LOCATOR)) derive_html_context(e, html);
-            else if (strstr(html, "X9"))          { breakout_arrived(e); html_fire(html); }
+            else if (strstr(html, "X9"))          { breakout_arrived(e); html_fire(e, html); }
             JS_FreeCString(ctx, html);
         }
         return;
@@ -871,6 +885,21 @@ char *solve_json_array(JSContext *ctx) {
            These are the payloads as the SEARCH built them, never as the browser delivers them — the source's
            own transform is already stated once, beside this, as `sourceEncodes` and `deliveryPrefix`, and
            writing the delivered form here as well would be the same fact in two places, free to disagree. */
+        /* AND WHETHER A FIRE WAS EVER QUEUED — for the classes that queue one, which is where the number can
+           mean anything. ARRIVING at a sink is not reaching an EXECUTABLE position: html_fire parses the
+           DELIVERED bytes and queues a program only if the parse put the marker in an auto-firing handler,
+           and url_fire only if the delivered address survived as a `javascript:` URL. So `reached:1,fires:0`
+           says the source's own transform defeated this breakout — the fragment set encodes `<`, the markup
+           parses as text, and there is nothing executable to run — while `reached:1,fires:1` says the program
+           EXISTS and has not been run yet, which belongs to the flow's sequence and not to this file. Those
+           take opposite work and were one report.
+           ABSENT FOR AN EVAL SINK, and the absence is the positive statement this record's other optional
+           fields already use: that class's sink evaluates its own argument, so there is no queue to count and
+           a `0` there would read as "nothing executable" when it means "nothing to queue". */
+        if (sink_class(g_pending[i].sink)->queues_fire) {
+            json_buf_puts(&b, ",\"fires\":");
+            snprintf(t, sizeof t, "%d", g_pending[i].fires); json_buf_puts(&b, t);
+        }
         json_buf_puts(&b, ",\"payloads\":[");
         for (int c = 0; c < g_pending[i].npl; c++) {
             if (c) json_buf_puts(&b, ",");
