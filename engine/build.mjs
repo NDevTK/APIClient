@@ -15,7 +15,7 @@
  * harness once the browser target is wired.
  */
 import { spawnSync, spawn } from "node:child_process";
-import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync, readFileSync, rmSync, openSync, closeSync } from "node:fs";
 import { dirname, join, resolve, relative, sep } from "node:path";
 import { cpus } from "node:os";
 import { createHash } from "node:crypto";
@@ -51,6 +51,74 @@ const RUN_BACKSTOP_MS = 15 * 60 * 1000;
    sites below each carried an `if (t.status !== 0)` block with a diagnostic in it, and every one of those
    blocks was DEAD CODE — this function had already exited on that exact condition. The lines naming the
    @COLDPARK census and the LeakSanitizer summary have never once reached a terminal. */
+/* THE KILL NOW READS THE CENSUS, because the previous sentence here — "deciding it needs the child's census,
+   which needs capturing stdout rather than inheriting it, and that is a real change and not this one" — was a
+   gap DOCUMENTED where the fix belonged. It named the mechanism, named the obstacle, and left the reporter
+   printing an instruction to a human about numbers the reporter itself could have read. Every child now runs
+   through `runChild`, which gives the run a FILE instead of the terminal and hands the bytes here, so the two
+   causes the paragraph above distinguishes are distinguished BY THIS FUNCTION.
+   The samples compared are the LAST and the MIDDLE one rather than the last two, because the paragraph's own
+   caveat — "a plateau that resolves is WFQ re-ranking, not a stall" — is exactly what two adjacent samples
+   cannot see: one re-ranking pause between them reads as a stall, and a stall that happens to emit once reads
+   as health. Half the run is the shortest window in which neither is true.
+   THE VERDICT IS STILL A NON-PASS AND STILL CODE 2. A healthy frontier that wanted more budget is a REAL
+   change in this fixture — this same smoke terminated inside the backstop until it did not — so naming the
+   cause is diagnosis, never permission to call the run green. */
+/* THE FIELDS ARE NAMED AND THEIR ABSENCE THROWS, because the paragraph this function replaced read a field the
+   census does not have. It told the reader "`finished` flat with `live` rising is the stall" — and @COLD has no
+   `live`: engine.c prints `flows` for the live count, and `live` is a @PROGRESS name. Written as a comparison
+   that was the worst possible form of the mistake, `undefined > undefined`, which is FALSE for every input, so
+   the stall arm could never once have fired and the discriminator would have answered "healthy" to a stall
+   forever. A JS property read that answers `undefined` is this file's silent-fallback, and the fix is the same
+   one C gets: name the contract and abort on the origin that breaks it. */
+const COLD_FIELDS = ["finished", "flows", "blocked", "owed"];
+function hungCause(out) {
+  const s = [];
+  for (const m of out.matchAll(/^@COLD (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
+  if (s.length < 2) return `only ${s.length} @COLD census line(s) — too few to say why, and a run that prints ` +
+                           `none has not reached engine_sched_begin's first census at all.`;
+  const b = s[s.length - 1], a = s[Math.floor((s.length - 1) / 2)];
+  for (const f of COLD_FIELDS) for (const c of [a, b])
+    if (typeof c[f] !== "number")
+      throw new Error(`[build] the @COLD census has no numeric \`${f}\` — this discriminator reads ` +
+                      `${COLD_FIELDS.join(", ")} and engine.c's printf is what decides they exist; a renamed ` +
+                      `field must be renamed here rather than silently compared as undefined.`);
+  const span = `over the last ${s.length - Math.floor((s.length - 1) / 2)} of ${s.length} censuses: ` +
+               `finished ${a.finished}→${b.finished}, flows ${a.flows}→${b.flows}, ` +
+               `blocked ${b.blocked}, owed ${b.owed}`;
+  if (b.finished > a.finished && b.blocked === 0 && b.owed === 0)
+    return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET (${span}) — flows were still finishing when the kill ` +
+           `landed and nothing was waiting on the host.`;
+  if (b.finished === a.finished && b.flows > a.flows)
+    return `a STALL (${span}) — no flow finished across half the run while the live flow count rose, so work ` +
+           `is being admitted and not retired.`;
+  return `NEITHER named cause (${span}) — the frontier is doing something this discriminator does not model, ` +
+         `and the two censuses above are the measurement to start from.`;
+}
+
+/* ONE WAY TO RUN A CHILD, and it hands the run's own bytes to the reporter that judges it. The five call sites
+   this replaced each open-coded `spawnSync(..., { stdio: "inherit", timeout })` and then asked `runOutcome`
+   about a run it had never seen — five copies of the same three options, and every one of them a place for the
+   backstop to go missing (it already had: the smoke's spawn carried no timeout at all until the paragraph
+   below was written, and that is the shape a per-site option takes when it is forgotten).
+   THE TERMINAL LOSES THE LIVE STREAM AND KEEPS EVERY BYTE. `stdio: "inherit"` cannot also capture, and a
+   captured pipe (`spawnSync`'s own `stdout`) is a fixed buffer that TRUNCATES the tail — which is exactly the
+   half a hang is diagnosed from. So the child writes to a FILE, its path is announced BEFORE the run so it is
+   tailable while it runs, and the whole file is written to this process's stdout afterwards, in order, so a
+   transcript of this build still contains the run in full. */
+function runChild(label, prog, args, hint) {
+  const log = join(OUT, "run-" + label.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".log");
+  mkdirSync(OUT, { recursive: true });
+  console.log(`[build] ${label} — live at ${log}`);
+  const fd = openSync(log, "w");
+  let t;
+  try { t = spawnSync(prog, args, { stdio: ["inherit", fd, fd], shell: false, timeout: RUN_BACKSTOP_MS }); }
+  finally { closeSync(fd); }
+  t.captured = readFileSync(log, "utf8");
+  process.stdout.write(t.captured);
+  return runOutcome(label, t, hint);
+}
+
 function runOutcome(label, t, hint) {
   const bad = (verdict, code, why) => {
     console.error(`[build] ${label} ${why}`);
@@ -60,14 +128,12 @@ function runOutcome(label, t, hint) {
   if (t.error && t.error.code === "ETIMEDOUT") {
     let load = "unknown";
     try { load = readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).join(" "); } catch { /* not linux */ }
-    return bad("HUNG", 2,
+    const cause = hungCause(t.captured);
+    return bad("HUNG — " + cause.split(" (")[0], 2,
       `DID NOT FINISH within ${RUN_BACKSTOP_MS / 60000} min — killed by the harness ` +
       `backstop, NOT a failing run and NOT a passing one.\n` +
       `[build]   load average at kill: ${load} (on ${cpus().length} cores)\n` +
-      `[build]   READ THE @COLD CENSUS ABOVE — this kill does not know why it fired, and the two causes\n` +
-      `[build]   it used to name are told apart by numbers already on screen. \`finished\` rising with\n` +
-      `[build]   \`blocked\`/\`owed\` at 0 is a HEALTHY frontier that wanted more budget; \`finished\` flat\n` +
-      `[build]   with \`live\` rising is the stall. A plateau that resolves is WFQ re-ranking, not a stall.`);
+      `[build]   the census says it was ${cause}`);
   }
   if (t.signal) {
     return bad("CRASHED on " + t.signal, 3,
@@ -372,8 +438,7 @@ if (NATIVE) {
     /* THE SHELF IS EMPTY BEFORE SESSION ONE. A residue left by an earlier run of a DIFFERENT tree would resume
        flows standing on segments this build never wrote — and it would look like a pass. */
     rmSync(store, { force: true });
-    const one = spawnSync(bin, ["--cold-park", store], { stdio: "inherit", timeout: RUN_BACKSTOP_MS });
-    const v1 = runOutcome("session ONE (--cold-park)", one,
+    const v1 = runChild("session ONE (--cold-park)", bin, ["--cold-park", store],
       "read its `@H park-*` rows and the @COLDPARK census: a 0 there names which record kind the park did " +
       "not write, and the moment it was taken at is `fixture_want_park` in engine/host/test_forced.c.");
     /* SESSION TWO IS SKIPPED AND NOT MERELY UNREPORTED. This is a real data dependency and not a door — the
@@ -381,18 +446,16 @@ if (NATIVE) {
        — and it is stated as a skip with that reason so the report never has a silent hole in it. */
     const v2 = v1.code
       ? skipped("session TWO (--cold-resume)", "session ONE wrote no residue for it to resume from")
-      : runOutcome("session TWO (--cold-resume)",
-                   spawnSync(bin, ["--cold-resume", store], { stdio: "inherit", timeout: RUN_BACKSTOP_MS }),
-                   "`@RESUMED <n>` and the @COLDRESUME census say what it rebuilt out of the residue; a kind " +
-                   "session one wrote and this one did not rebuild is the arm to look at.");
+      : runChild("session TWO (--cold-resume)", bin, ["--cold-resume", store],
+                 "`@RESUMED <n>` and the @COLDRESUME census say what it rebuilt out of the residue; a kind " +
+                 "session one wrote and this one did not rebuild is the arm to look at.");
     if (!v1.code && !v2.code) console.log("[build] cold round trip (" + kind + ") — residue at " + store);
     report([v1, v2]);
   }
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
      the stream it prints and the report it ends with, and nothing else in the tree produces either. */
-  const t = spawnSync(bin, MIN ? ["--min"] : [], { stdio: "inherit", timeout: RUN_BACKSTOP_MS });
-  report([runOutcome("the native run (" + kind + (MIN ? ", minimal document" : "") + ")", t,
-                     "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault")]);
+  report([runChild("the native run (" + kind + (MIN ? ", minimal document" : "") + ")", bin, MIN ? ["--min"] : [],
+                   "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault")]);
 }
 
 /* THE EXPORTS THE BRIDGE ccalls — and the previous sentence here ("emscripten drops anything not named") is
@@ -664,8 +727,7 @@ if (ABI_LINK.code === 0) stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host",
    failing smoke test. §NO BOUNDS is about the FRONTIER: it forbids the engine capping its own exploration, and
    it has never had anything to say about a harness refusing to wait forever for a process it launched. */
 function runProgram(label, argv, hint) {
-  const t = spawnSync(process.execPath, argv, { stdio: "inherit", shell: false, timeout: RUN_BACKSTOP_MS });
-  return runOutcome(label, t, hint);
+  return runChild(label, process.execPath, argv, hint);
 }
 
 /* THE TWO PROGRAMS ARE TWO AREAS AND BOTH ARE ASKED, EVERY RUN.
