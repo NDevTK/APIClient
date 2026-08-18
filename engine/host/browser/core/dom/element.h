@@ -51,8 +51,12 @@ JSValue element_proto(JSContext *ctx);
 
 /* A [Reflect]ed content attribute: the pair of names that IS the reflection, plus which kind of value it holds.
    A STRING reflection is the attribute's value ("" when absent); a BOOLEAN one is its PRESENCE, because
-   `<input disabled="false">` is disabled and a string reflection would report the word. */
-enum { REFLECT_STRING = 0, REFLECT_BOOL };
+   `<input disabled="false">` is disabled and a string reflection would report the word.
+   A NULLABLE STRING is HTML §2.6.1's `DOMString?` processing model and it is a THIRD kind rather than the
+   first one read leniently: its getter answers NULL for an absent attribute where `DOMString` answers "", and
+   its setter DELETES the attribute for null where `DOMString` would write the four characters "null". Every
+   one of ARIAMixin's 44 string members is this kind, and `el.ariaLabel === null` is how a page tests one. */
+enum { REFLECT_STRING = 0, REFLECT_BOOL, REFLECT_STRING_NULLABLE };
 typedef struct { const char *idl; const char *attr; int kind; } ElReflect;
 
 /* Install an interface's OWN reflections on its prototype. Each is assigned a magic out of one shared registry,
@@ -70,6 +74,9 @@ void  element_attr_set(JSContext *ctx, JSValueConst el, const char *name, const 
 
 /* The element behind a wrapper, or NULL when the value is not one. */
 lxb_dom_element_t *element_of_value(JSValueConst v);
+/* WEB IDL §3.2.15's "V implements Element" — the narrowing an `Element` argument brands with, since every node
+   wrapper is ONE class and a class id therefore cannot say which interface the node implements. */
+bool element_is(JSValueConst v);
 /* THE ELEMENT AS §3.8 NAMES IT — its namespace URL and its local name, which together decide which interface it
    implements and therefore which row of the Trusted Types table it can match. Borrowed from Lexbor's interned
    strings into the caller's buffers; `*ns` is NULL for an element in no namespace. */

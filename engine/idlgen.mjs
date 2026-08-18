@@ -393,8 +393,10 @@ const INTERFACES = {
   DOMRectList:          "core/geometry/dom_rect_list.c",
   /* CSSOM VIEW §6's `partial interface Element` lands on Element.prototype, so element_view.c is one of
      Element's files — the same rule every mixin row here states. */
+  /* WAI-ARIA's `Element includes ARIAMixin` is fifty-two members of Element and its own component, for the
+     reason every other mixin row here names one: the members land on Element.prototype. */
   Element:             ["core/dom/element.c", "core/dom/node.c", "core/events/event_target.c",
-                        "core/dom/dom_token_list.c", "core/dom/element_view.c"],
+                        "core/dom/dom_token_list.c", "core/dom/element_view.c", "core/dom/aria_mixin.c"],
   /* The HTML layer. Each interface's files are its own plus everything it INHERITS from — HTMLElement on
      Element on Node — because a member installed on a base really is reachable, and reporting it absent is the
      audit lying in the direction that gets a real gap ignored. */

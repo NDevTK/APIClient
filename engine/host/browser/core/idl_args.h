@@ -142,6 +142,12 @@ typedef enum {
        rest point. The interface is named by idl_iface_brand / idl_iface_narrow, exactly as IDL_INTERFACE's is:
        one statement of what the type is, whether it appears alone or inside a sequence. */
     IDL_SEQUENCE_INTERFACE,
+    /* `FrozenArray<T>?` / `sequence<T>?` where T is an INTERFACE — §3.2.27 says a frozen array is CONVERTED
+       FROM the sequence it is built out of, so an attribute whose IDL type is `FrozenArray<Element>?` takes
+       exactly the conversion above under §3.2.20's nullable rule: null and undefined are the IDL null, and an
+       object is §3.2.21's iterator protocol with §3.2.15's brand as the element conversion. WAI-ARIA's seven
+       `ariaLabelledByElements`-shaped members are the first, and their `?` is what CLEARS them. */
+    IDL_SEQUENCE_INTERFACE_NULLABLE,
     /* `sequence<object>` — §3.2.21's iterator-protocol conversion with §3.2.13's `object` as the element type.
        HTML §2.7.6's `StructuredSerializeOptions.transfer` is the first, and it is what `structuredClone`,
        `window.postMessage` and `MessagePort.postMessage` all take.
@@ -246,6 +252,12 @@ typedef enum {
        to. The class is declared beside it with idl_iface_brand, which is what "implementing the interface"
        means to this engine. */
     IDL_INTERFACE,
+    /* `T?` WHERE T IS AN INTERFACE — §3.2.15 under §3.2.20's nullable rule: null AND undefined are the IDL
+       null, and what survives takes the brand test above. WAI-ARIA's `Element? ariaActiveDescendantElement` is
+       the first, and the `?` is the whole of what makes `el.ariaActiveDescendantElement = null` a CLEAR rather
+       than the TypeError the un-nullable type owes. The class is named by idl_iface_brand exactly as it is for
+       the un-nullable one — one statement of what the interface is, whether or not it is nullable. */
+    IDL_INTERFACE_NULLABLE,
     /* A NULLABLE CALLBACK INTERFACE — §3.2.16. `NodeFilter? filter` is the only shape of it here, and its rule
        is not IDL_CALLBACK's: a callback INTERFACE accepts any object (its operation is read off it by name),
        so a non-callable object is valid and only a primitive is a TypeError. null and undefined are the IDL

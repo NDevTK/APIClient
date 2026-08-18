@@ -28,6 +28,7 @@
 #include "solver/solve.h"
 #include "core/agent_state.h"
 #include "core/dom/element.h"
+#include "core/dom/aria_mixin.h"
 #include "core/dom/name_intern.h"   /* §4.5's storage step stores the three names AS GIVEN — see that header */
 #include "core/dom/node_interface.h" /* …and the (local name, namespace) pair decides the element's C STRUCT */
 #include "core/dom/element_view.h"
@@ -86,6 +87,11 @@ lxb_dom_element_t *element_of_value(JSValueConst v)
     lxb_dom_node_t *n = node_of(v);
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return NULL;
     return lxb_dom_interface_element(n);
+}
+
+bool element_is(JSValueConst v)
+{
+    return element_of_value(v) != NULL;
 }
 
 static JSValue js_el_get_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -1549,7 +1555,9 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
 
     DCHECK(magic >= 0 && magic < g_reflect_n,
            "a reflected property was declared with a magic the registry does not name");
-    if (!el) return g_reflect[magic].kind == REFLECT_BOOL ? JS_FALSE : JS_NewStringLen(ctx, "", 0);
+    if (!el) return g_reflect[magic].kind == REFLECT_BOOL ? JS_FALSE
+                  : g_reflect[magic].kind == REFLECT_STRING_NULLABLE ? JS_NULL
+                  : JS_NewStringLen(ctx, "", 0);
     /* §2.2.1 a BOOLEAN reflection is the attribute's PRESENCE, not its value — `<input disabled>` and
        `<input disabled="false">` are both disabled, and a string reflection here would report "false".
        ASKED OF THE ATTRIBUTE LIST, because `get_attribute` answers NULL for an attribute whose VALUE is absent
@@ -1565,7 +1573,11 @@ static JSValue js_el_reflect_get(JSContext *ctx, JSValueConst this_val, int magi
     nv = JS_NewString(ctx, g_reflect[magic].attr);
     r = js_el_get_attribute(ctx, this_val, 1, (JSValueConst *)&nv, 0);   /* a real string already: the reflected NAME is the engine's */
     JS_FreeValue(ctx, nv);
-    return JS_IsNull(r) ? JS_NewStringLen(ctx, "", 0) : r;   /* a reflected string attribute defaults to "" */
+    if (!JS_IsNull(r)) return r;
+    /* §2.6.1's two string models differ EXACTLY here: `DOMString` reads an absent attribute as the empty
+       string, `DOMString?` reads it as null. A page tests one against the other (`el.ariaLabel === null`), so
+       answering "" for a nullable member is a wrong value and not a lenient one. */
+    return g_reflect[magic].kind == REFLECT_STRING_NULLABLE ? JS_NULL : JS_NewStringLen(ctx, "", 0);
 }
 
 static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
@@ -1589,6 +1601,12 @@ static JSValue js_el_reflect_set(JSContext *ctx, JSValueConst this_val, JSValueC
        `(TrustedHTML or DOMString)`. Nearly every reflection maps to nothing and this returns the value it was
        given. */
     if (!el) return JS_UNDEFINED;
+    /* §2.6.1's `DOMString?` setter: "if the given value is null, then run this's delete the content
+       attribute". The declared type is IDL_DOMSTRING_NULLABLE, so `undefined` is already this null. */
+    if (g_reflect[magic].kind == REFLECT_STRING_NULLABLE && JS_IsNull(val)) {
+        dom_cow_remove_attribute(el, g_reflect[magic].attr);
+        return JS_UNDEFINED;
+    }
     {
         char nsbuf[128], lobuf[64];
         const char *ns, *local;
@@ -1646,9 +1664,17 @@ int element_declare_reflections(JSContext *ctx, const ElReflect *r, int n)
         CHECK(g_reflect_n < (int)(sizeof(g_reflect) / sizeof(g_reflect[0])),
               "the reflection registry is full — raise it rather than dropping an interface's attributes");
         g_reflect[g_reflect_n] = r[i];
+        DCHECK(r[i].kind == REFLECT_STRING || r[i].kind == REFLECT_BOOL ||
+               r[i].kind == REFLECT_STRING_NULLABLE,
+               "a reflection was declared with a kind §2.6.1 has no processing model for");
         /* A boolean reflection's value is ToBoolean, which is total and runs none of the page's code; a string
-           one is a DOMString, which is ToString on whatever the page passed. Two types, one declaration each. */
-        g_reflect_set[g_reflect_n] = idl_setter_id(ctx, r[i].kind == REFLECT_BOOL ? IDL_ANY : IDL_DOMSTRING,
+           one is a DOMString, which is ToString on whatever the page passed; a NULLABLE string one is
+           `DOMString?`, so null AND undefined reach the body as the IDL null and never as the word. Three
+           types, one declaration each — the null rule is the TYPE's, so the body never re-derives it. */
+        g_reflect_set[g_reflect_n] = idl_setter_id(ctx,
+                                                   r[i].kind == REFLECT_BOOL ? IDL_ANY
+                                                 : r[i].kind == REFLECT_STRING_NULLABLE ? IDL_DOMSTRING_NULLABLE
+                                                 : IDL_DOMSTRING,
                                                    false, js_el_reflect_set, g_reflect_n);
         g_reflect_n++;
     }
@@ -2069,6 +2095,11 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        agent must set el's force async to false". Here for the reason `src` above is: a content attribute has
        more than one spelling, and the IDL setter answers for one of them. */
     html_script_attr_changed(rctx, el, ns, local, val);
+    /* HTML §2.6.1's attribute change steps for an ELEMENT-REFLECTING member: writing `aria-labelledby` by any
+       spelling drops what `el.ariaLabelledByElements = [x]` recorded, so the next read resolves the ids the
+       attribute now names. Here for the reason `src` and `async` above are: a content attribute has more than
+       one spelling and the IDL setter answers for exactly one of them. */
+    aria_mixin_attribute_changed(rctx, el, ns, local);
 }
 
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
@@ -2179,6 +2210,10 @@ void element_init(JSContext *ctx)
         g_refl_n = (int)(sizeof(R) / sizeof(R[0]));
         g_refl_base = element_declare_reflections(ctx, R, g_refl_n);
     }
+    /* WAI-ARIA's `Element includes ARIAMixin` — 52 members, declared beside §4.9's own three because they are
+       the same kind of thing on the same interface: 44 reflections into the one registry above, and 8 members
+       of §2.6.1's element-reflection model, which is its own component. */
+    aria_mixin_init(ctx);
 
     idl_indexed_init(ctx);      /* the exotic class every indexed interface is built on */
     attr_init(ctx);             /* §4.9.2 Attr — registered for node type 2, which node_wrap had no interface for */
@@ -2304,6 +2339,8 @@ void element_install_proto(JSContext *ctx)
        here too, which is three properties Element's IDL does not declare — they belong to HTMLScriptElement,
        to a dozen form interfaces and to HTMLMetaElement, and they are installed there now. */
     element_install_reflections(ctx, proto, g_refl_base, g_refl_n);
+    /* WAI-ARIA's ARIAMixin, which the IDL mixes into Element and therefore into every element interface. */
+    aria_mixin_install(ctx, proto);
     /* §4.9's two Shadow DOM members — `attachShadow` and the `shadowRoot` getter, which the interface
        declares on Element and not on HTMLElement. */
     shadow_root_install_element_members(ctx, proto);
@@ -2379,6 +2416,7 @@ void element_free(JSRuntime *rt)
     fragment_serializer_free();
     sanitizer_free();
     idl_indexed_free(rt);
+    aria_mixin_free(rt);   /* its state key is the AGENT's; its 44 registry rows go with the registry below */
     /* the prototypes are the REALMS' — each is released with its context */
     g_reflect_n = 0;
     /* NODE.C IS LAST, and it is the member of this group that holds real references rather than slot keys: the

@@ -1435,6 +1435,21 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             t = idl_is_iface(a, m->iface) ? IDL_ANY : IDL_DOMSTRING;
         }
 
+        /* §3.2.20's NULLABLE RULE over the two interface-valued types: null AND undefined are the IDL null, and
+           what survives takes the un-nullable type's own conversion — which is why this collapses the TYPE
+           here rather than adding a null arm to each of those conversions below. It is resolved BEFORE the
+           unknown-external-input pass-through, so a concolic still reaches §3.2.15's brand test and is refused
+           there: a value that is not a platform object is a TypeError however it was declared. */
+        if (t == IDL_INTERFACE_NULLABLE || t == IDL_SEQUENCE_INTERFACE_NULLABLE) {
+            if (JS_IsNull(a) || JS_IsUndefined(a)) {
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                *slot = JS_NULL;
+                goto placed;
+            }
+            t = (t == IDL_INTERFACE_NULLABLE) ? IDL_INTERFACE : IDL_SEQUENCE_INTERFACE;
+        }
+
         /* UNKNOWN EXTERNAL INPUT CROSSES AS ITSELF, whatever the declared type says.
            An IDL conversion is a BOUNDARY, not an ECMAScript operator: nothing observes its result except the
            component behind it, and every one of those bodies already asks explicitly for what it needs from a
