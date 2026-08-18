@@ -762,6 +762,23 @@ STAGES.push(ABI_LINK.code
                "this is the cross-instance seam: the world registry, the nearest-first ancestry fork, the " +
                "synchronous cross-origin read, and the park on an outstanding one. Nothing else in this tree " +
                "provisions a second instance, so a failure here is unobserved by every other gate."));
+/* AND THE SAME SEAM ONE LAYER UP — the BROWSER-PROCESS half, which route.mjs plays the part of rather than
+   runs. route.mjs calls `makeEngine` itself, so what it proves about the transport says nothing about the two
+   components that decide an instance exists and materialize it in the shipped extension:
+   `extension/render-process-host.js` (the registry: which agent clusters have a renderer, the routing-id mint,
+   and the refusal of a second for one cluster) and `extension/renderer-host.js` (the RenderFrameHost). This
+   stage loads both by their own bytes and drives them, so the admission decision and the CHECK-class refusal
+   SECURITY.md's one-instance-per-agent-cluster rule is made of are taken by the shipped code.
+   IT SKIPS ON THE SAME CONDITION AND FOR THE SAME REASON as the drive above: it boots the renderer program the
+   ABI link just produced, so running it after a failed link would measure whatever a previous build left in
+   `extension/lib/qjs/` and report that number under this revision. */
+STAGES.push(ABI_LINK.code
+  ? skipped("browser-process layer", "the production ABI program did not link")
+  : runProgram("browser-process layer", [join(ENGINE, "renderer_host_gate.mjs")],
+               "this is the renderer registry and the RenderFrameHost, driven by their own bytes: two " +
+               "cross-origin renderers provisioned into one browsing-context group, the duplicate-cluster " +
+               "refusal that is SECURITY.md's one-instance-per-cluster rule, and the routing-id accounting. " +
+               "Until this stage existed neither file was compiled, imported or run by anything."));
 /* THE THIRD AREA: does each component install the surface its Web IDL declares. It gates nothing and nothing
    gates it — it compiles no C and reads no artifact, so it asks its question of the SOURCES whatever the two
    programs above did, and a link failure can never take the member census out of the run with it.
@@ -778,9 +795,18 @@ report(STAGES);
    transitions through it — and it is deleted with the program it drove. THE COVERAGE IT HELD IS NAMED RATHER
    THAN QUIETLY DROPPED, because a gate that vanishes with its subject is only honest if what it was measuring
    is stated: it exercised the duplicate-cluster refusal, the two keys that are equal up to `clusterKeyOf`'s
-   NUL separator, and the reported-dead-twice and never-minted-id refusals. The registry is
-   `extension/render-process-host.js` now and this build compiles no JavaScript, so those transitions are
-   exercised only where a live renderer takes them: `harness offscreen "return await self.rendererProbe()"`
-   drives register → launched → terminated, and `self.rendererPoolProbe()` cross-checks the table against the
-   frames. The REFUSALS have no caller that fires them. That is a gap in this tree, it is written here so the
-   next reader starts from it, and it is not a reason to keep a driver for a program that does not exist. */
+   NUL separator, and the reported-dead-twice and never-minted-id refusals.
+   THAT GAP IS THE `browser-process layer` STAGE ABOVE AND THIS PARAGRAPH NO LONGER DESCRIBES THIS TREE. It
+   stood here saying "this build compiles no JavaScript" and "the REFUSALS have no caller that fires them",
+   which was true and then was read as an instruction — the exact way a `DFAIL` outlives the absence it names
+   and starts to lie. `engine/renderer_host_gate.mjs` loads render-process-host.js and renderer-host.js by
+   their own bytes into a realm carrying only the browser surface they read, provisions two cross-origin
+   renderers through the registry, and asks it for a second renderer for a cluster that already has one — so
+   the duplicate-cluster CHECK now has a caller that fires it on every build.
+   WHAT IS STILL NOT FIRED, stated here rather than left for a reader to discover by grep: `slotRequire`'s two
+   refusals (a routing id this table never minted, and a renderer reported dead twice). Both are reachable by
+   calling `renderProcessHost` directly and neither is reached yet.
+   AND WHAT NO GATE IN THIS FILE ASKS AT ALL: whether `clusterKeyOf` decides that two LIVE documents are two
+   clusters. Both gates above write their own keys; the browser-stated halves SECURITY.md requires are the
+   product path, and that claim is made on the live harness (`harness offscreen "return await
+   self.rendererPoolProbe()"`) and nowhere here. */
