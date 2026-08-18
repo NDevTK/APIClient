@@ -83,6 +83,11 @@ static IdbRangeData *range_of(JSValueConst v)
     return r;
 }
 
+bool idb_key_range_is(JSValueConst v)
+{
+    return g_range_class != 0 && JS_GetClassID(v) == g_range_class;
+}
+
 /* WEB IDL §3.7.5's BRAND CHECK. `IDBKeyRange.prototype.includes.call({}, 1)` is a TypeError, and a page tells
    that apart from `false`. */
 static IdbRangeData *range_here(JSContext *ctx, JSValueConst v)

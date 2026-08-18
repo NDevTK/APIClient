@@ -56,6 +56,7 @@
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_index_handle.h"
 #include "core/indexeddb/idb_index_populate.h"
+#include "core/indexeddb/idb_get_all.h"
 #include "core/indexeddb/idb_key_range.h"
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_open.h"
@@ -135,6 +136,7 @@ static void d_idb_object_store(JSContext *c, const PlatformAgent *a) { (void)a; 
 static void d_idb_cursor(JSContext *c, const PlatformAgent *a) { (void)a; idb_cursor_init(c); }
 static void d_idb_index_handle(JSContext *c, const PlatformAgent *a) { (void)a; idb_index_handle_init(c); }
 static void d_idb_index_populate(JSContext *c, const PlatformAgent *a) { (void)a; idb_index_populate_init(c); }
+static void d_idb_get_all(JSContext *c, const PlatformAgent *a) { (void)a; idb_get_all_init(c); }
 static void d_idb_vce(JSContext *c, const PlatformAgent *a) { (void)a; idb_version_change_event_init(c); }
 static void d_idb_open(JSContext *c, const PlatformAgent *a) { (void)a; idb_open_init(c); }
 static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
@@ -218,6 +220,7 @@ static void r_idb_object_store(JSRuntime *rt) { idb_object_store_free(rt); }
 static void r_idb_cursor(JSRuntime *rt) { idb_cursor_free(rt); }
 static void r_idb_index_handle(JSRuntime *rt) { idb_index_handle_free(rt); }
 static void r_idb_index_populate(JSRuntime *rt) { idb_index_populate_free(rt); }
+static void r_idb_get_all(JSRuntime *rt) { idb_get_all_free(rt); }
 static void r_idb_vce(JSRuntime *rt) { idb_version_change_event_free(rt); }
 static void r_idb_open(JSRuntime *rt) { idb_open_free(rt); }
 /* THE ONE VIRTUAL FILESYSTEM AND THE STANDARDS OVER IT, and this is the row whose absence was measured rather
@@ -499,6 +502,12 @@ static const PlatformComponent PLATFORM[] = {
        It is placed after the two rows above because it is reached from §4.5's member and it places its request
        through §5.6's, both of which are declared by then. */
     { "idb_index_populate",  d_idb_index_populate,  NULL,        r_idb_index_populate },
+    /* §5.12's CREATING A REQUEST TO RETRIEVE MULTIPLE ITEMS, with §6.2's and §6.3's retrieve-multiple under
+       it. Like the row above it holds no interface and installs into no realm: what it declares is ONE step
+       machine, which is agent-lifetime state and is what the release gives back. It is placed after §2.2.1's
+       and §2.6.1's handles because §4.5's and §4.6's members are what reach it, and after §2.12's IDBRecord
+       row because its "record" arm mints one. */
+    { "idb_get_all",         d_idb_get_all,         NULL,        r_idb_get_all },
     { "event",               d_event,               i_event },
     /* §4.2's IDBVersionChangeEvent, and it is HERE rather than beside the other Indexed Database rows for the
        one reason that decides every position in this list: its prototype chains to Event.prototype, which the
