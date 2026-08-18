@@ -195,6 +195,8 @@ let withholdReads = false;
    is what makes `held` fall below `made` in the counters printed at the bottom, which is the only way a release
    is observable from out here. */
 const worldDeaths = [];
+/* The vectors a park says its residue carries — see the `world.parked` arm. Recorded rather than relayed. */
+const worldsParked = [];
 /* Every record this zone could not route because no instance holds the document it names. Collected rather
    than logged: an unroutable operation parks its asker forever, so it is a failure and not a note. */
 const routeFailures = [];
@@ -333,6 +335,19 @@ async function drainNotices(e) {
         if (peer === e) continue;
         peer.M.ccall('qjs_world_gone', 'void', ['number'], [peer.cs(f[1])]);
       }
+    }
+    /* `world.parked` IS THE OPPOSITE DIRECTION AND IT IS NOT A DEATH — it says "a segment of yours is in the
+       residue I am about to store", so the vector is one this driver must expect to see AGAIN when that
+       document resumes. It is recorded and not relayed, and the reason it cannot simply be relayed is the leak
+       it exists to make finite: `world.gone` is broadcast to LIVE instances, and a parked document is not one,
+       so every death announced while it is cold is lost and the resumed instance would hold a segment for an
+       ended world forever. Closing that needs a `world name -> parked document` index that outlives a browser
+       restart (the residue does), which is the zone's to own and which `bridge.js` DFAILs on by name. This
+       driver holds one process and no persistence, so it records the set and asserts on it rather than
+       pretending to be that index. */
+    else if (f[0] === 'world.parked') {
+      if (f.length < 2 || !f[1]) fail(`a world.parked notice carried no vector: ${n}`);
+      worldsParked.push(f[1]);
     }
     else throw new Error('a notice this host does not act on: ' + f[0]);
   }
@@ -614,7 +629,15 @@ console.log('[route] OK — two instances, every routed record delivered, ancest
  * orders the work: the cross-instance park (foreign segments travelling by world name, re-routed by the
  * offscreen) comes BEFORE either disjunct of `flow_owes_answer` is reachable, and before the token-lifetime
  * question below can be asked of a real run. A probe that reported only "it aborted" would have sent the next
- * reader to build the recipe half of a capability nothing can reach yet. */
+ * reader to build the recipe half of a capability nothing can reach yet.
+ *
+ * THAT PRIOR GAP IS NOW BUILT, so the paragraph above is history rather than the current state: a foreign
+ * segment crosses the tier as the VECTOR it was materialized from (`cold.h`'s `w` record), the `held == 0`
+ * refusal is deleted, and the park emits `world.parked` per vector — which is why `drainNotices` above has an
+ * arm for it. This probe should therefore now reach what it was written for: `cold_park_flow`'s
+ * `DCHECK(!flow_owes_answer(f))`, disjunct (1), the record sitting unstepped in `perform_q`. If it still stops
+ * at `cold.c`, the cross-instance park did not take and THAT is the finding — do not read a moved abort as a
+ * fixed one without reading which line it names. */
 if (process.argv[2] === 'park-probe') {
   const peer = engines[1];
   const sample = [...reads.values()].find((r) => holderOf(r.op.split('\t')[1]) === peer);
