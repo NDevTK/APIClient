@@ -79,4 +79,10 @@ JSValue idb_key_subkeys(JSContext *ctx, JSValueConst key);
    by it, §2.9's key range is bounded by it, §2.10's cursor walks in it, and §4.3's `cmp` is it, exposed. */
 int idb_key_compare(JSContext *ctx, JSValueConst a, JSValueConst b);
 
+/* INFRA'S CODE-UNIT ORDERING OVER TWO STRINGS — -1, 0 or 1. §2.4's string arm is stated over it and so is
+   §5.12's "sorted in ascending order with the code unit less than algorithm", which is why the one this file
+   already had is exported rather than written again: the UTF-16 order it computes disagrees with the UTF-8 byte
+   order of the same strings, and two implementations would disagree on which of the two a name list uses. */
+int idb_code_unit_compare(JSContext *ctx, JSValueConst a, JSValueConst b);
+
 #endif

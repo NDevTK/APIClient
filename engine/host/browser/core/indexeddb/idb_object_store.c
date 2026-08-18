@@ -58,6 +58,7 @@
 #include "core/indexeddb/idb_key_array.h"
 #include "core/indexeddb/idb_key_path.h"
 #include "core/indexeddb/idb_key_range.h"
+#include "core/indexeddb/idb_name_list.h"
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_request.h"
 #include "core/indexeddb/idb_transaction.h"
@@ -1111,6 +1112,34 @@ static JSValue js_os_get_key_path(JSContext *ctx, JSValueConst this_val, int mag
     return kp;
 }
 
+/* "The indexNames getter steps are: let names be a list of the names of the indexes in this's INDEX SET.
+   Return the result of creating a sorted name list with names."
+   IT IS THE HANDLE'S SET AND NOT THE STORE'S, which is the same distinction `index()` above turns on and what
+   §4.5's own note is about: "as long as the transaction has not finished, this is the same as the associated
+   object store's list of index names", and after it has finished the handle's copy is what a page still reads.
+   A NEW LIST PER READ, because §5.12 says so — the note's other half is that the contents of one already
+   returned never change while an upgrade transaction creates and deletes indexes around it. */
+static JSValue js_os_get_index_names(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue set, names;
+    uint32_t i, n;
+
+    (void)magic;
+    if (!os_brand(ctx, this_val)) return JS_EXCEPTION;
+    set = idb_object_store_handle_index_set(ctx, this_val);
+    n = os_list_len(ctx, set);
+    names = JS_NewArray(ctx);
+    CHECK(!JS_IsException(names), "IndexedDB: §4.5's list of index names could not be allocated");
+    for (i = 0; i < n; i++) {
+        JSValue index = JS_GetPropertyUint32(ctx, set, i);
+
+        JS_DefinePropertyValueUint32(ctx, names, i, idb_index_name(ctx, index), JS_PROP_C_W_E);
+        JS_FreeValue(ctx, index);
+    }
+    JS_FreeValue(ctx, set);
+    return idb_sorted_name_list(ctx, names);
+}
+
 /* "The transaction getter steps are to return this's transaction." `[SameObject]`, which holds because the
    handle stores the transaction rather than deriving it. */
 static JSValue js_os_get_transaction(JSContext *ctx, JSValueConst this_val, int magic)
@@ -1460,6 +1489,7 @@ static void idb_object_store_install_realm(JSContext *ctx)
     idl_interface_tag(ctx, proto, "IDBObjectStore");
     idl_install_accessor(ctx, proto, "name", js_os_get_name, 0, g_setter_name);
     idl_install_accessor(ctx, proto, "keyPath", js_os_get_key_path, 0, -1);
+    idl_install_accessor(ctx, proto, "indexNames", js_os_get_index_names, 0, -1);
     idl_install_accessor(ctx, proto, "transaction", js_os_get_transaction, 0, -1);
     idl_install_accessor(ctx, proto, "autoIncrement", js_os_get_auto_increment, 0, -1);
     /* IN §4.5'S OWN ORDER, minus the members whose algorithms do not exist. The `length` of each is Web IDL

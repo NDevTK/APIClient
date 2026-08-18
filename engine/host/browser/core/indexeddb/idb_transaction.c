@@ -52,6 +52,7 @@
 #include "core/events/event_target.h"
 #include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_database.h"
+#include "core/indexeddb/idb_name_list.h"
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_request.h"
 #include "core/indexeddb/idb_transaction.h"
@@ -1266,6 +1267,34 @@ JSValue idb_transaction_new(JSContext *ctx, JSValueConst connection, JSValue sco
 
 /* ---- §4.10's members ------------------------------------------------------------------------------------ */
 
+/* "The objectStoreNames getter steps are: let names be a list of the names of the object stores in this's
+   SCOPE. Return the result of creating a sorted name list with names."
+   IT READS THE STORES' OWN NAMES and not a copy taken when the transaction was made, which is what makes the
+   member's note true — "the contents of each list returned by this attribute does not change, but subsequent
+   calls to this attribute during an upgrade transaction can return lists with different contents as object
+   stores are created and deleted" — since §5.7 keeps an upgrade transaction's scope equal to the connection's
+   object store set as that set moves. */
+static JSValue js_tx_get_object_store_names(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue scope, names;
+    uint32_t i, n;
+
+    (void)magic;
+    if (!tx_brand(ctx, this_val)) return JS_EXCEPTION;
+    scope = tx_scope(ctx, this_val);
+    n = tx_array_len(ctx, scope);
+    names = JS_NewArray(ctx);
+    CHECK(!JS_IsException(names), "IndexedDB: §4.10's list of object store names could not be allocated");
+    for (i = 0; i < n; i++) {
+        JSValue store = JS_GetPropertyUint32(ctx, scope, i);
+
+        JS_DefinePropertyValueUint32(ctx, names, i, idb_object_store_name(ctx, store), JS_PROP_C_W_E);
+        JS_FreeValue(ctx, store);
+    }
+    JS_FreeValue(ctx, scope);
+    return idb_sorted_name_list(ctx, names);
+}
+
 /* "The mode getter steps are to return this's mode." The strings are IDBTransactionMode's own identifiers, in
    the order the enum declares them, so the constant and the name cannot drift. */
 static const char *const TX_MODE_NAME[] = { "readonly", "readwrite", "versionchange" };
@@ -1419,6 +1448,7 @@ static void idb_transaction_install_realm(JSContext *ctx)
        reached through the chain rather than copied onto each transaction. */
     event_target_chain(ctx, proto);
     event_target_install_handlers(ctx, proto, EH_IDB_TRANSACTION);
+    idl_install_accessor(ctx, proto, "objectStoreNames", js_tx_get_object_store_names, 0, -1);
     idl_install_accessor(ctx, proto, "mode", js_tx_get_mode, 0, -1);
     idl_install_accessor(ctx, proto, "durability", js_tx_get_durability, 0, -1);
     idl_install_accessor(ctx, proto, "error", js_tx_get_error, 0, -1);

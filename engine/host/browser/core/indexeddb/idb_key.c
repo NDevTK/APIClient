@@ -520,8 +520,11 @@ JSValue idb_key_subkeys(JSContext *ctx, JSValueConst key)
  * order is code POINT order. Getting that wrong puts a record in the wrong place in §2.2's list and a cursor
  * then walks past it, so the units are materialised and compared as units.
  * The decode is the engine's own (cutils.h's utf8_decode_buf16, the same one JS_NewStringUTF16 is the inverse
- * of), asked twice: once for the length, once to fill. */
-static int idb_string_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
+ * of), asked twice: once for the length, once to fill.
+ * IT IS EXPORTED because §5.12's create-a-sorted-name-list is stated over the SAME Infra ordering — "sorted in
+ * ascending order with the code unit less than algorithm" — and a second implementation of it would be a second
+ * answer to one question, disagreeing on exactly the strings above. */
+int idb_code_unit_compare(JSContext *ctx, JSValueConst a, JSValueConst b)
 {
     size_t alen = 0, blen = 0, an, bn, n, i;
     const char *au = JS_ToCStringLen(ctx, &alen, a);
@@ -590,7 +593,7 @@ static int idb_key_scalar_compare(JSContext *ctx, int rank, JSValueConst a, JSVa
         break;
     }
     case IDB_RANK_STRING:
-        r = idb_string_compare(ctx, va, vb);
+        r = idb_code_unit_compare(ctx, va, vb);
         break;
     case IDB_RANK_BINARY:
         r = idb_binary_compare(ctx, va, vb);

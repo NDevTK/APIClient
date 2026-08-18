@@ -46,6 +46,7 @@
 #include "core/frame/window_proxy.h"
 #include "core/geometry/dom_rect.h"
 #include "core/geometry/dom_rect_list.h"
+#include "core/html/dom_string_list.h"
 #include "core/html/domparser.h"
 #include "core/html/form_data.h"
 #include "core/html/html_iframe.h"
@@ -165,6 +166,7 @@ static void d_abort(JSContext *c, const PlatformAgent *a) { (void)a; abort_init(
 static void d_observable(JSContext *c, const PlatformAgent *a) { (void)a; observable_init(c); }
 static void d_dom_rect(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_init(c); }
 static void d_dom_rect_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_list_init(c); }
+static void d_dom_string_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_string_list_init(c); }
 static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_init(c); }
 static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_init(c); }
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
@@ -325,6 +327,7 @@ static void r_document(JSRuntime *rt) { document_agent_free(rt); }
 static void r_element(JSRuntime *rt) { element_free(rt); }
 static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
 static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
+static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
 static void r_dom_rect(JSRuntime *rt) { (void)rt; dom_rect_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
@@ -363,6 +366,7 @@ static void i_abort(JSContext *c, JSValueConst g, const PlatformDocument *d) { (
 static void i_observable(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; observable_install(c, g); }
 static void i_dom_rect(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_install(c, g); }
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
+static void i_dom_string_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_string_list_install(c, g); }
 static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
     document_install(c, g, d->dom, d->url, d->csp, d->csp_self_origin, d->sandbox_flags, d->doc_id,
@@ -431,6 +435,12 @@ static const PlatformComponent PLATFORM[] = {
        installs in declaration order. */
     { "file_system_access",  d_fs_access,           NULL,        r_fs_access },
     { "file_picker",         d_file_picker,         NULL,        r_file_picker },
+    /* HTML §2.6.5's DOMStringList, BEFORE the standard that is currently its only consumer — Indexed Database
+       §4.4, §4.5 and §4.10 each answer with one, and core/realm.h runs the per-realm installs in DECLARATION
+       order, so its prototype must be in a realm before any member below can build a list in it. It is an HTML
+       row and not an Indexed Database one because it is an HTML type; HTML §7.2.5's `ancestorOrigins` is the
+       next consumer and reaches the same component. */
+    { "dom_string_list",     d_dom_string_list,     i_dom_string_list, r_dom_string_list },
     /* INDEXED DATABASE, in the standard's own dependency order and no further. §2.4's KEY is what §2.2's list
        of records is sorted by, what §2.9's range is bounded by and what §2.10's cursor walks in, so it is the
        first thing that standard can have; §4.7's IDBKeyRange is the interface over it, and §4.3's IDBFactory
@@ -605,6 +615,7 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "AbortController",       "abort" },
     { "DOMRect",               "dom_rect" },
     { "DOMRectList",           "dom_rect_list" },
+    { "DOMStringList",         "dom_string_list" },
     { "IDBKeyRange",           "idb_key_range" },
     { "indexedDB",             "indexed_db" },
     { "IDBTransaction",        "idb_transaction" },
