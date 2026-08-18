@@ -71,7 +71,26 @@ const RUN_BACKSTOP_MS = 15 * 60 * 1000;
    the stall arm could never once have fired and the discriminator would have answered "healthy" to a stall
    forever. A JS property read that answers `undefined` is this file's silent-fallback, and the fix is the same
    one C gets: name the contract and abort on the origin that breaks it. */
+/* AND `finished` RISING IS NOT SUFFICIENT FOR "HEALTHY", WHICH THIS FUNCTION LEARNED FROM ITS OWN FIRST REAL
+   READING. Measured on the full-document smoke: 150 @H samples, the last row to flip did so at sample 82, and
+   the 68 samples after it moved NOTHING — sixteen rows still 0, every `-atsink` row among them — while @COLD's
+   `finished` climbed the whole time and `blocked`/`owed` stayed 0. The first arm called that a healthy frontier
+   that wanted more budget. It is not: the frontier was retiring flows steadily and NONE of that work advanced a
+   single statement the fixture makes, which is a claim about the WFQ's value ordering and not about the clock.
+   More budget helps the first state and does nothing for this one, so telling them apart is the whole point.
+   The probe table is the second stream and the fixture's OWN measure of progress — @COLD says work is moving,
+   @H says whether any of it arrived — so the discriminator reads both or it is guessing from half the evidence.
+   The window is the same half-the-run window, for the same reason: one WFQ re-ranking pause is not a freeze. */
 const COLD_FIELDS = ["finished", "flows", "blocked", "owed"];
+function probeFlips(out) {
+  const rows = [];
+  for (const m of out.matchAll(/^@H (.*)$/gm)) {
+    const r = {};
+    for (const [, k, v] of m[1].matchAll(/(\S+)=([01])\b/g)) r[k] = v === "1";
+    if (Object.keys(r).length) rows.push(r);
+  }
+  return rows;
+}
 function hungCause(out) {
   const s = [];
   for (const m of out.matchAll(/^@COLD (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
@@ -86,12 +105,27 @@ function hungCause(out) {
   const span = `over the last ${s.length - Math.floor((s.length - 1) / 2)} of ${s.length} censuses: ` +
                `finished ${a.finished}→${b.finished}, flows ${a.flows}→${b.flows}, ` +
                `blocked ${b.blocked}, owed ${b.owed}`;
+
+  /* THE FIXTURE'S OWN PROGRESS, over the same half-the-run window. */
+  const h = probeFlips(out);
+  const hb = h[h.length - 1], ha = h[Math.floor((h.length - 1) / 2)];
+  const flipped = h.length >= 2 ? Object.keys(hb).filter((k) => hb[k] && !ha[k]) : [];
+  const zero = h.length ? Object.keys(hb).filter((k) => !hb[k]) : [];
+  const hspan = h.length < 2
+    ? `no @H stream to read`
+    : `@H: ${flipped.length} row(s) reached 1 across the last ${h.length - Math.floor((h.length - 1) / 2)} of ` +
+      `${h.length} samples, ${zero.length} still 0` + (zero.length ? ` (${zero.join(" ")})` : "");
+
+  if (b.finished > a.finished && b.blocked === 0 && b.owed === 0 && h.length >= 2 && flipped.length === 0)
+    return `WORK THAT ADVANCES NO STATEMENT (${span}; ${hspan}) — flows retired steadily and not one probe row ` +
+           `reached 1 across half the run, so this is the WFQ's value ordering rather than the budget, and more ` +
+           `time would buy more of the same. The rows still 0 name what nothing scheduled was working toward.`;
   if (b.finished > a.finished && b.blocked === 0 && b.owed === 0)
-    return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET (${span}) — flows were still finishing when the kill ` +
-           `landed and nothing was waiting on the host.`;
+    return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET (${span}; ${hspan}) — flows were still finishing when ` +
+           `the kill landed, nothing was waiting on the host, and the probe table was still advancing.`;
   if (b.finished === a.finished && b.flows > a.flows)
-    return `a STALL (${span}) — no flow finished across half the run while the live flow count rose, so work ` +
-           `is being admitted and not retired.`;
+    return `a STALL (${span}; ${hspan}) — no flow finished across half the run while the live flow count rose, ` +
+           `so work is being admitted and not retired.`;
   return `NEITHER named cause (${span}) — the frontier is doing something this discriminator does not model, ` +
          `and the two censuses above are the measurement to start from.`;
 }
