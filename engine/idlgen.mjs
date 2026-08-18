@@ -1045,11 +1045,17 @@ const withGaps = gapRows.filter(tot).sort((a, b) => tot(b) - tot(a));
 console.log(`[idl-audit] ── per interface ── ${gapRows.length - withGaps.length} of ${gapRows.length} audited ` +
             `interfaces install every member their IDL declares`);
 if (withGaps.length) {
+  /* A DERIVED ROW IS MARKED, because a table that does not say so reads as if every row had been audited all
+     along. These are the interfaces no row named — they were in no total until the set became derived, so
+     their gaps are not new work appearing, they are existing work becoming visible, and the file that DECLARES
+     each is printed because that is where the work goes. */
+  const derivedSet = new Set(derivedIfaces);
   const w = Math.max(...withGaps.map((r) => r.iface.length));
   for (const r of withGaps)
     console.log(`[idl-audit]   ${r.iface.padEnd(w)}  ABSENT ${String(r.absent).padStart(3)}` +
                 (r.noop ? `  js_noop-STUB ${r.noop}` : "") +
-                (r.unproven ? `  UNPROVEN ${r.unproven}` : ""));
+                (r.unproven ? `  UNPROVEN ${r.unproven}` : "") +
+                (derivedSet.has(r.iface) ? `  NEWLY-AUDITED ${(AUDITED.get(r.iface) || []).join(" + ")}` : ""));
 }
 console.log("[idl-audit] ── verdict ──");
 if (!defects.size) {

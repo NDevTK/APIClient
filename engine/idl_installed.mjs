@@ -137,14 +137,18 @@ const lineOf = (src, off) => {
 
 /* ---- balanced scanning ---------------------------------------------------------------------------------- */
 
+const PAIRS = { "(": ")", "[": "]", "{": "}" };
+
 /* The index one past the closer that matches the opener at `open`. Strings are skipped, so a brace inside a
    literal never closes a block. Returns -1 when the text ends first, which is a source this cannot parse and
-   therefore something to report rather than to assume about. */
+   therefore something to report rather than to assume about.
+   THE CLOSER MUST MATCH THE OPENER'S KIND. Counting one depth across `(`, `[` and `{` let a `)` close a `[`,
+   which does not return -1 — it returns a SPAN, and a plausible wrong span is the failure mode this whole
+   file is built against, not a missing one. Every caller already treats -1 as "I could not read this", so
+   refusing costs nothing and guessing cost everything. */
 function matchAt(text, open) {
-  const PAIRS = { "(": ")", "[": "]", "{": "}" };
-  const close = PAIRS[text[open]];
-  if (!close) return -1;
-  let depth = 0;
+  if (!PAIRS[text[open]]) return -1;
+  const stack = [];
   for (let i = open; i < text.length; i++) {
     const c = text[i];
     if (c === '"' || c === "'") {
@@ -152,10 +156,40 @@ function matchAt(text, open) {
       while (i < text.length && text[i] !== c) { if (text[i] === "\\") i++; i++; }
       continue;
     }
-    if (c === "(" || c === "[" || c === "{") depth++;
-    else if (c === ")" || c === "]" || c === "}") { depth--; if (depth === 0) return i + 1; }
+    if (PAIRS[c]) stack.push(c);
+    else if (c === ")" || c === "]" || c === "}") {
+      if (PAIRS[stack.pop()] !== c) return -1;
+      if (!stack.length) return i + 1;
+    }
   }
   return -1;
+}
+
+/* PARSE INTEGRITY, ASKED ONCE PER FILE AND ANSWERED WITH A PLACE. Every span primitive in this reader —
+   matchAt, splitTop, callSites, functions, localDefs — assumes the masked text's brackets balance and nest by
+   kind, and each of them fails DIFFERENTLY and silently when they do not: matchAt now refuses, but splitTop
+   returns a depth that never comes back to zero, callSites drops the call, functions drops a whole body. There
+   is no useful place to report that per primitive, because by then the location is a span inside a span. So it
+   is asked ONCE of the file, where the answer is a line a person can open — and it is the one question whose
+   failure invalidates every other answer this file gives about that file. */
+function bracketFault(masked) {
+  const stack = [];
+  for (let i = 0; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === '"' || c === "'") {
+      i++;
+      while (i < masked.length && masked[i] !== c) { if (masked[i] === "\\") i++; i++; }
+      continue;
+    }
+    if (PAIRS[c]) stack.push({ c, at: i });
+    else if (c === ")" || c === "]" || c === "}") {
+      const open = stack.pop();
+      if (!open) return { at: i, why: `a closing \`${c}\` with nothing open` };
+      if (PAIRS[open.c] !== c) return { at: i, why: `a \`${open.c}\` closed by \`${c}\`` };
+    }
+  }
+  const last = stack[stack.length - 1];
+  return last ? { at: last.at, why: `an unclosed \`${last.c}\`` } : null;
 }
 
 /* Split at top-level `sep` only — a comma inside `(…)`, `[…]`, `{…}` or a string belongs to the thing it is
@@ -932,6 +966,14 @@ function localAssignments(body) {
   return map;
 }
 
+/* THIS KNOWS TWO TYPE NAMES OUT OF THE NINE THE CORPUS CASTS TO, and that narrowness is recorded here rather
+   than in a verdict because it is measured to cost nothing TODAY: the census is three install-form target
+   arguments carrying a cast this cannot strip, all three `(JSClassID)` in realm.c, all three on a PARAMETER
+   rather than a named slot, so all three resolve to nothing either way. It cannot be widened to "any
+   parenthesised identifier" without eating `(f)(x)`, and there is no lexical way to know a type name from a
+   value name — so the honest state is a narrow stripper whose blind spot is written down and whose cost is a
+   number somebody re-measured, not a TODO. If a target ever arrives behind `(JSValueConst *)` or a typedef,
+   the install lands as UNRESOLVED with its file and line, which is the loud failure and not a silent one. */
 function stripCast(e) {
   let s = e.trim();
   for (;;) {
@@ -1238,6 +1280,15 @@ export function loadEnvironment(root) {
       refuse("functions", path, u.at, "(file scope)", u.header,
              `a top-level \`{\` whose header is neither a parameter list nor a data aggregate — if this opens ` +
              `a FUNCTION, its whole body and every install in it is invisible to this audit: \`…${u.header}\``);
+  /* The file-level integrity question, asked before any answer about the file is believed. */
+  for (const [path, { masked }] of sources) {
+    const b = bracketFault(masked);
+    if (b)
+      refuse("brackets", path, b.at, "(file)", b.why,
+             `this file's brackets do not nest — ${b.why}. Every span this reader takes from it (a call's ` +
+             `arguments, a function's body, a statement) is measured from a delimiter that does not close ` +
+             `where it appears to, so no answer about this file can be trusted, including a COMPLETE one`);
+  }
   const tagKey = (path, f, v, at) => key(path, f.name, `${v}#${versionAt(defsFor(path, f), v, at)}`);
   const paramKey = (fnName, p) => key("", fnName, p);
   const classKey = (path, c) => key(path, "@class", c);
