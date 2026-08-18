@@ -832,12 +832,12 @@ function localDefs(body) {
      braces hid html_element.c's `JSAtom a = JS_NewAtom(ctx, "content")` inside the block that installs it. */
   const stmts = splitTop(body, ";", false);
   let stmtAt = 0;
-  for (const stmt of stmts) {
-    /* The declarator list, split on commas — but NOT when the statement is an aggregate initialiser, whose
-       commas separate ELEMENTS. Braces are not counted here either: a statement that opens a block carries an
-       unmatched `{`, and counting it hid the second declarator of `JSAtom a = …, r = …` inside such a block. */
-    const decls = /=\s*\{/.test(stmt) ? [stmt] : splitTop(stmt, ",", false);
-    let declAt = stmtAt;
+  /* The declarator list, split on commas — but NOT when the statement is an aggregate initialiser, whose
+     commas separate ELEMENTS. Braces are not counted here either: a statement that opens a block carries an
+     unmatched `{`, and counting it hid the second declarator of `JSAtom a = …, r = …` inside such a block. */
+  const take = (text, base) => {
+    const decls = /=\s*\{/.test(text) ? [text] : splitTop(text, ",", false);
+    let declAt = base;
     for (const decl of decls) {
       const eq = decl.indexOf("=");
       if (eq >= 0 && !"=!<>+-*/&|^%".includes(decl[eq + 1]) && !"=!<>+-*/&|^%".includes(decl[eq - 1])) {
@@ -849,6 +849,33 @@ function localDefs(body) {
       }
       declAt += decl.length + 1;                  /* the comma splitTop removed */
     }
+  };
+  /* A CONTROL-FLOW HEADER IS ITS OWN STATEMENTS, AND WHAT FOLLOWS IT IS ANOTHER. `for (i = 0; i < n; i++)`
+     keeps its semicolons INSIDE parens, so splitting the body on top-level semicolons leaves the whole header
+     glued to the first declaration in the loop — and reading that statement's FIRST `=` then answered with the
+     loop counter and lost the declaration entirely. `JSValue proto = realm_value_get(ctx,
+     g_proto_slot[IFACES[i].slot])` and `JSValue proto = JS_GetClassProto(ctx, classes[i])` are exactly those
+     statements, which is why css_rule.c's fourteen §6.4 interface objects and element_internals.c's three
+     §4.13.7 ones were built over an object no §3.7.3 tag reached: the object had no definition at all, so
+     there was nothing for a tag to travel along. The header's own parts are read too — dropping them would
+     trade one lost definition for another. */
+  const HEADER_RE = /^[\s{}]*(?:else\s+)?\b(?:for|if|while|switch)\s*\(/;
+  for (const stmt of stmts) {
+    let head = 0;
+    for (;;) {
+      const m = HEADER_RE.exec(stmt.slice(head));
+      if (!m) break;
+      const open = head + m[0].length - 1;
+      const end = matchAt(stmt, open);
+      if (end < 0) break;
+      let partAt = open + 1;
+      for (const part of splitTop(stmt.slice(open + 1, end - 1), ";", false)) {
+        take(part, stmtAt + partAt);
+        partAt += part.length + 1;
+      }
+      head = end;
+    }
+    take(stmt.slice(head), stmtAt + head);
     stmtAt += stmt.length + 1;                    /* the semicolon splitTop removed */
   }
   for (const defs of map.values()) defs.sort((a, b) => a.at - b.at);
@@ -1164,6 +1191,26 @@ export function loadEnvironment(root) {
   const ifaceObjects = [];        /* {node, ifaces, file, line} — checked back against the tag once solved */
   const interfaceTables = new Map();   /* table -> the field whose cells are interface identifiers */
 
+  /* THE NAMES ONE SLOT GOES BY. A class id is a VALUE, so the name a prototype was written under is not always
+     the name it is read back under: element_internals.c copies §4.13.7's three class ids into a local
+     `JSClassID classes[3]` and reads all three prototypes through `JS_GetClassProto(ctx, classes[i])`. The slot
+     node is keyed by the identifier, so that copy has to be an edge or the three §3.7.1 interface objects are
+     built over an object no tag reaches. Only identifiers this corpus actually USES as a slot are collected,
+     so an ordinary assignment between two JSValues cannot manufacture a slot that is not one. */
+  const SLOT_ARG = ["JS_SetClassProto", "JS_GetClassProto", "realm_value_set", "realm_value_get"];
+  const slotBase = (e) => (stripCast(e || "").match(/^([A-Za-z_]\w*)/) || [])[1];
+  const slotNames = new Map();
+  for (const [path] of sources) {
+    const set = new Set();
+    for (const f of fnsOf.get(path))
+      for (const fn of SLOT_ARG)
+        for (const site of callSites(f.body, fn)) {
+          const c = slotBase(site.args[1]);
+          if (c) set.add(c);
+        }
+    slotNames.set(path, set);
+  }
+
   for (const [path, { orig }] of sources) {
     for (const f of fnsOf.get(path)) {
       const R = resolver.for(path, f.name);
@@ -1207,11 +1254,23 @@ export function loadEnvironment(root) {
          object element.c tagged. An INDEXED slot (`g_iface_class[i]`) is read as the whole array, so the slot
          carries every interface the loop put in it — which is exactly what the caller's own name then picks
          one of (see the literal-narrowed return edge below). */
-      for (const site of callSites(f.body, "JS_SetClassProto")) {
-        const c = (stripCast(site.args[1] || "").match(/^([A-Za-z_]\w*)/) || [])[1];
-        const v = stripDup(site.args[2] || "");
-        if (c && named(v)) tarrow(at(v, site.at), classKey(path, c), null);
-      }
+      /* AND `realm_value_set` IS THAT SAME CALL. realm.c holds a per-realm value in exactly this store —
+         `realm_value_set` is `JS_SetClassProto(ctx, (JSClassID)slot, v)` and `realm_value_get` is
+         `JS_GetClassProto`, over a class declared for the SLOT that nothing is ever constructed with. So the
+         engine has two spellings of one mechanism, and reading only quickjs's left css_rule.c's fourteen §6.4
+         prototypes and css_style_sheet.c's §6.1.1 StyleSheet.prototype — every one of them §3.7.3-tagged where
+         it is built — unreachable from the interface objects built over them. */
+      for (const fn of ["JS_SetClassProto", "realm_value_set"])
+        for (const site of callSites(f.body, fn)) {
+          const c = slotBase(site.args[1]);
+          const v = stripDup(site.args[2] || "");
+          if (c && named(v)) tarrow(at(v, site.at), classKey(path, c), null);
+        }
+      /* A SLOT ID COPIED TO ANOTHER NAME IS THE SAME SLOT, and the edge runs FORWARD — from the name the
+         prototype was written under to the name it is read back under — like every other edge in this graph. */
+      for (const m of f.body.matchAll(/\b([A-Za-z_]\w*)\s*(?:\[[^\][;]*\])?\s*=\s*([A-Za-z_]\w*)\s*;/g))
+        if (slotNames.get(path).has(m[1]) && slotNames.get(path).has(m[2]))
+          tarrow(classKey(path, m[2]), classKey(path, m[1]), null);
       /* §3.7.3's [Global] rule, read off the statement the engine already makes: the global object is an
          INSTANCE of this class, so the interface whose prototype the class's slot holds is the interface whose
          members go directly on it. */
@@ -1224,7 +1283,7 @@ export function loadEnvironment(root) {
       const sourceOf = (expr, off) => {
         const e = stripDup(expr);
         if (named(e)) return at(e, off);
-        const cp = e.match(/^JS_GetClassProto\s*\(\s*[^,]+,\s*([A-Za-z_]\w*)/);
+        const cp = e.match(/^(?:JS_GetClassProto|realm_value_get)\s*\(\s*[^,]+,\s*([A-Za-z_]\w*)/);
         if (cp) return classKey(path, cp[1]);
         /* one realm, one global object — every JS_GetGlobalObject in the program answers with it, so the
            [Global] fact reaches the `global` every component installs on. */
