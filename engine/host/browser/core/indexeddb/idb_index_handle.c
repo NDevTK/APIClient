@@ -28,6 +28,7 @@
 #include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
+#include "core/indexeddb/idb_cursor.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_index.h"
 #include "core/indexeddb/idb_index_handle.h"
@@ -50,6 +51,10 @@ static JSClassID g_ix_class;
 static int       g_ready;
 static JSRuntime *g_ix_rt;
 static int g_id_get = -1, g_id_get_key = -1, g_id_count = -1, g_setter_name = -1;
+static int g_id_open_cursor = -1, g_id_open_key_cursor = -1;
+/* §4.6's `openCursor` and `openKeyCursor` are one algorithm differing in the KEY ONLY FLAG the cursor is
+   created with — the same magic §4.5's pair carries, for the same reason. */
+enum { IX_WITH_VALUE = 0, IX_KEY_ONLY = 1 };
 
 /* §6.3's two retrievals, which §4.6 states as two members over one shape. */
 enum { IX_GET_REFERENCED = 0, IX_GET_KEY = 1 };
@@ -383,6 +388,88 @@ static const IdlStepDecl IX_COUNT_STEP = {
     "Indexed Database §4.6 IDBIndex.count", IXC_STEPS
 };
 
+/* ---- §4.6's OPENCURSOR and OPENKEYCURSOR ------------------------------------------------------------------
+ *
+ * THE SAME SHAPE §4.5's PAIR HAS, over an INDEX source, and the difference is entirely inside §6.7: a cursor
+ * whose source is an index walks a list sorted primarily on the index key and SECONDARILY on the record's
+ * value, carries §2.10's OBJECT STORE POSITION beside its position, and answers `primaryKey` with that second
+ * position rather than with its key. None of that is stated here — it is §2.10's and §6.7's, so this member is
+ * the same ten steps with `this` being an index handle.
+ *
+ * `openCursor`'s cursor yields the REFERENCED VALUE (§6.7 step 13.1's "found record's referenced value"), which
+ * is what makes an index cursor a view of the store rather than of the index; `openKeyCursor`'s key only flag
+ * suppresses that lookup entirely, which is the whole cost difference between the two. */
+#define IXCU_STAGES(X) \
+    X(IXCU_BEGIN, "Indexed Database §4.6 openCursor / openKeyCursor steps 1-4 — ONE O(1) engine action: " \
+                  "transaction and index are this's, a deleted index or object store is an InvalidStateError " \
+                  "and an inactive transaction is a TransactionInactiveError — and step 5's conversion of " \
+                  "query begins") \
+    IDB_KEY_RANGE_ALGO_STAGES(X, IXCU_R, "Indexed Database §4.6 openCursor / openKeyCursor step 5 (let range " \
+                                         "be the result of converting a value to a key range with query)") \
+    X(IXCU_OPERATION, "Indexed Database §4.6 openCursor / openKeyCursor steps 6-10, after the O(1) tail step " \
+                      "5's conversion ends in — ONE O(1) engine action: an invalid key is that conversion's " \
+                      "DataError, a new cursor is created over range with this as its source handle, the " \
+                      "operation is an algorithm to run iterate a cursor with it, the request is the result " \
+                      "of asynchronously executing that operation, and the cursor's request is set to it")
+enum { IDL_STEP_STAGE_BASE(IXCU_STAGES) IXCU_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const IXCU_STEPS[] = { IXCU_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static int js_ix_open_cursor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                             JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdbIndexQueryState *s = st;
+
+    STEP_DISPATCH(IXCU_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(IXCU_BEGIN);
+        JS_FreeValue(ctx, cb_result);
+        s->index = JS_UNDEFINED;
+        s->tx = JS_UNDEFINED;
+        if (!ix_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
+        if (ix_check(ctx, hdr->this_val, &s->index, &s->tx) < 0)                      /* STEPS 1-4 */
+            return JS_STEP_ABRUPT;
+        return idb_key_range_walk_start(ctx, hdr, &s->rw, argc > 0 ? argv[0] : JS_UNDEFINED,
+                                        /*null_disallowed*/ false, IXCU_R_LENGTH, IXCU_OPERATION); /* STEP 5 */
+
+    STEP_ARM(IXCU_R_LENGTH);
+    STEP_ARM(IXCU_R_BEGIN);
+    STEP_ARM(IXCU_R_HOP);
+    STEP_ARM(IXCU_R_ENTRY);
+    STEP_ARM(IXCU_R_SUBKEY);
+    STEP_ARM(IXCU_R_LEAVE);
+        return idb_key_range_walk_run(ctx, hdr, &s->rw, cb_result, IXCU_R_LENGTH, out_cb, out_argc);
+
+    STEP_ARM(IXCU_OPERATION);
+    {
+        JSValue range, cursor, op, req;
+        const char *dir;
+
+        JS_FreeValue(ctx, cb_result);
+        if (idb_key_range_walk_take(ctx, &s->rw, &range) < 0) return JS_STEP_ABRUPT;
+        DCHECK(idb_transaction_state(ctx, s->tx) == IDB_TX_ACTIVE,
+               "§4.6's openCursor had its transaction deactivated between its own state check and the step "
+               "that places the request");
+        dir = JS_ToCString(ctx, argv[1]);
+        CHECK(dir != NULL, "IndexedDB: §4.6's openCursor could not read the direction its IDL converted");
+        cursor = idb_cursor_new(ctx, hdr->this_val, s->tx, dir, range,
+                                idl_step_magic(hdr) == IX_KEY_ONLY);                  /* STEP 6 */
+        JS_FreeCString(ctx, dir);
+        JS_FreeValue(ctx, range);
+        op = idb_cursor_iterate_operation(ctx, cursor);                               /* STEP 7 */
+        req = idb_request_execute(ctx, hdr->this_val, s->tx, op);                     /* STEP 8 */
+        JS_FreeValue(ctx, op);
+        idb_cursor_set_request(ctx, cursor, req);                                     /* STEP 9 */
+        JS_FreeValue(ctx, cursor);
+        *presult = req;                                                               /* STEP 10 */
+        return JS_STEP_DONE;
+    }
+}
+
+static const IdlStepDecl IX_OPEN_CURSOR_STEP = {
+    js_ix_open_cursor, sizeof(IdbIndexQueryState), js_ix_query_visit, NULL,
+    "Indexed Database §4.6 IDBIndex.openCursor / .openKeyCursor", IXCU_STEPS
+};
+
 /* ---- §4.6's attributes ------------------------------------------------------------------------------------ */
 
 /* "The name getter steps are to return this's name" — the HANDLE's. §4.6's own note is what that buys: "as long
@@ -550,6 +637,8 @@ static void idb_index_handle_install_realm(JSContext *ctx)
     idl_install_method(ctx, proto, "get", 1, g_id_get);
     idl_install_method(ctx, proto, "getKey", 1, g_id_get_key);
     idl_install_method(ctx, proto, "count", 0, g_id_count);
+    idl_install_method(ctx, proto, "openCursor", 0, g_id_open_cursor);
+    idl_install_method(ctx, proto, "openKeyCursor", 0, g_id_open_key_cursor);
     JS_SetClassProto(ctx, g_ix_class, JS_DupValue(ctx, proto));
 
     ctor = idl_interface_object(ctx, "IDBIndex", proto);
@@ -567,6 +656,9 @@ void idb_index_handle_init(JSContext *ctx)
     /* `get(any query)`, `getKey(any query)` and `count(optional any query)` — every position is `any`, which is
        what makes §2.9's convert-a-value-to-a-key-range the members' OWN step. */
     static const IdlArgType QUERY_ARGS[1] = { IDL_ANY };
+    /* `openCursor(optional any query, optional IDBCursorDirection direction = "next")` and its key-only twin —
+       the same two positions §4.5's pair declares, and the same §3.2.18 enumeration in the second. */
+    static const IdlArgType CURSOR_ARGS[2] = { IDL_ANY, IDL_ENUM };
 
     DCHECK(!g_ready, "idb_index_handle_init ran twice — one instance is one document is one agent");
     g_key = JS_NewSymbol(ctx, "idbIndexState", false);
@@ -579,6 +671,14 @@ void idb_index_handle_init(JSContext *ctx)
     g_id_get_key = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &IX_GET_STEP, IX_GET_KEY);
     g_id_count = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &IX_COUNT_STEP, 0);
     idl_optional_from(0);                        /* `count(optional any query)` */
+    g_id_open_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &IX_OPEN_CURSOR_STEP, IX_WITH_VALUE);
+    idl_optional_from(0);                        /* both positions are optional; the member's length is 0 */
+    idl_enum_values(IDB_CURSOR_DIRECTIONS);      /* §3.2.18's value list for the `direction` position */
+    idl_arg_default(1, IDL_DEFAULT_STRING, "next");   /* §3.6 step 14.2's `= "next"` */
+    g_id_open_key_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &IX_OPEN_CURSOR_STEP, IX_KEY_ONLY);
+    idl_optional_from(0);
+    idl_enum_values(IDB_CURSOR_DIRECTIONS);
+    idl_arg_default(1, IDL_DEFAULT_STRING, "next");
     g_setter_name = idl_setter_id(ctx, IDL_DOMSTRING, /*null_to_empty*/ false, js_ix_set_name, 0);
     g_ready = 1;
     agent_state_flag("idb_index_handle", &g_ready, "the declaration latch");
