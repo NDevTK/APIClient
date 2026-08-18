@@ -481,7 +481,13 @@ for (const spec of Object.values(all)) {
   let ast;
   try { ast = parse(await spec.text()); } catch { continue; }
   for (const n of ast) {
-    if ((n.type === "interface" || n.type === "interface mixin") && n.name) {
+    /* A CALLBACK INTERFACE IS COLLECTED TOO. Web IDL §3.7.1 gives one a callback interface OBJECT carrying its
+       constants — `NodeFilter.SHOW_ELEMENT` is a real property of a real object a page reads — and only its
+       PROTOTYPE object is absent, which is why it carries no §3.7.3 tag and why it needs a hand-written row.
+       Skipping the type meant DOM's NodeFilter was in webref with seventeen members and in this index with
+       none, so node_filter.c's sixteen constants were diffed against an empty member list and the row read
+       COMPLETE against nothing — the audit minting the false complete it exists to remove. */
+    if ((n.type === "interface" || n.type === "interface mixin" || n.type === "callback interface") && n.name) {
       if (n.inheritance) inheritanceOf.set(n.name, n.inheritance);
       const prev = byName.get(n.name);
       if (prev) prev.members.push(...n.members);
@@ -640,8 +646,54 @@ const unbuiltSeen = [], unmapped = [], stale = [];
 
 const distinct = new Set();
 const unresolvedAll = new Map();
-for (const [iface, where] of Object.entries(INTERFACES)) {
-  const paths = Array.isArray(where) ? where : [where];
+/* WHICH INTERFACES ARE AUDITED IS DERIVED FROM WHAT THE CORPUS DECLARES. The map above is a FILE-LIST
+   ANNOTATION on that set; it was the SET itself until this line existed, and a hand-maintained set has exactly
+   the failure CLAUDE.md names in build.mjs's hand-picked list: an interface with no row reads IDENTICALLY
+   whether it is complete or absent. It is in no total, contributes no ABSENT member and fails nothing — the
+   excluded-test shape one level up from the members, in the very file whose whole posture is to refuse rather
+   than guess. The census when this landed was EIGHTY-THREE interfaces the corpus declares and the map had no
+   row for. They are not drift: IndexedDB §4.6's IDBIndex has been shipping `objectStore`, `keyPath`, `name`,
+   `get`, `count` and `openCursor` since it landed and had never once been audited, and 46 of the 83 are HTML
+   element interfaces — HTMLSelectElement, HTMLTextAreaElement, HTMLTableElement among them.
+   A component DECLARES an interface by building its §3.7.3-tagged prototype or its §3.7.1 interface object
+   (idl_installed.mjs's `declaresIface`) — the same pair of statements the row cross-check below already reads,
+   so the audited set and that check now come from ONE fact instead of two lists free to disagree. An existing
+   row keeps its own file list: a row names every file that INSTALLS on the interface, while a declaration
+   names only the one that BUILT the prototype, and the cross-check needs the former.
+   A CALLBACK INTERFACE declares itself differently and is not in this set — Web IDL §3.7.1 gives it a callback
+   interface object carrying its constants and NO interface prototype object, so there is no §3.7.3 tag to
+   find. DOM's NodeFilter is one, node_filter.c builds exactly that, and it stays a hand-written row because
+   nothing in the corpus can state it otherwise. */
+const declaringFiles = new Map();
+for (const [path, names] of env.declaresIface)
+  for (const n of names) {
+    if (!declaringFiles.has(n)) declaringFiles.set(n, []);
+    declaringFiles.get(n).push(path.replace(BROWSER + "/", ""));
+  }
+const AUDITED = new Map();
+for (const [iface, where] of Object.entries(INTERFACES))
+  AUDITED.set(iface, Array.isArray(where) ? where : [where]);
+/* A NAMED PROPERTIES OBJECT IS NOT AN INTERFACE, and Web IDL §3.7.5 is what says so: its class string is the
+   interface's identifier concatenated with "Properties", so window.c tagging one "WindowProperties" is the
+   spec being OBEYED and not an interface being declared, and no IDL defines it because none is meant to. This
+   reads the spec's own composition rule back rather than matching a name: the suffix counts only when what
+   remains is an interface this index actually carries and the whole is not itself one. */
+const namedProps = [];
+const derivedIfaces = [];
+for (const [iface, files] of declaringFiles) {
+  if (AUDITED.has(iface)) continue;
+  const host = iface.endsWith("Properties") ? iface.slice(0, -"Properties".length) : "";
+  if (host && byName.has(host) && !byName.has(iface)) { namedProps.push(`${iface} (§3.7.5 of ${host})`); continue; }
+  AUDITED.set(iface, files);
+  derivedIfaces.push(iface);
+}
+/* An interface the corpus declares that NO spec in @webref/idl defines. Its member list would be empty, so it
+   would audit as complete with nothing installed to compare against — a false COMPLETE minted by the audit
+   itself. Named, never skipped: either the tag misspells an interface, or the spec is one webref does not
+   carry and the row has to say so. */
+const noIdl = [];
+
+for (const [iface, paths] of AUDITED) {
   const file = paths.join(" + ");
   let src = "", missing = [], present = [];
   for (const one of paths) {
@@ -707,6 +759,7 @@ for (const [iface, where] of Object.entries(INTERFACES)) {
   // all). A component must implement its real surface and DFAIL loud on an unbuilt member, never opaque-shrug it.
   const bannedShrug = /JS_SetPrototype\s*\([^)]*\bg_opaque\b/.test(src);
   const spec = members(iface);
+  if (!spec.length && !byName.has(iface)) { noIdl.push([iface, file]); continue; }
   /* A CONDITIONAL member — one the component DECLARES this user agent must not have (idl_members_excluded). It
      is not a gap and it is not installed, so it is neither counted nor dropped: it is named, with the spec
      sentence that excludes it, so nobody works it off the ABSENT list and builds a member the spec forbids.
@@ -796,6 +849,18 @@ if (unbuiltSeen.length) {
 }
 defect("interfaces whose component is missing and whose absence is undeclared", unmapped.length);
 defect("STALE UNBUILT declarations", stale.length);
+/* THE SET IS DERIVED, so an interface can no longer go unaudited for want of a row — this says how many the
+   derivation brought in, unconditionally, because zero is the armed state and a rising ABSENT total beside a
+   nonzero count here is the audit seeing MORE, never the engine regressing. */
+console.log(`[idl-audit] audited set — ${AUDITED.size} interfaces: ${AUDITED.size - derivedIfaces.length} from ` +
+            `rows, ${derivedIfaces.length} derived from a §3.7.3 tag or §3.7.1 interface object with no row` +
+            (derivedIfaces.length ? `: ${derivedIfaces.join(", ")}` : "") +
+            (namedProps.length ? ` | not interfaces: ${namedProps.join(", ")}` : ""));
+defect("interfaces the corpus declares that no spec in @webref/idl defines", noIdl.length);
+for (const [iface, file] of noIdl)
+  console.log(`[idl-audit] ${iface} (${file}): the corpus DECLARES this interface and no spec webref carries ` +
+              `defines it — its member list would be empty, so it would read COMPLETE against nothing. Either ` +
+              `the §3.7.3 tag names an interface that does not exist, or the spec is one webref does not ship.`);
 for (const [iface, file] of unmapped)
   console.log(`[idl-audit] ${iface}: component ${file} not found and NOT declared unbuilt — either the row names ` +
               `a path that moved (the audit for a shipping interface is silently not running) or the interface ` +
