@@ -41,8 +41,9 @@
  *     because it comes off the same sequence `disable internals` does.
  *   - ARIAMixin's EIGHT element-reflecting members (`ariaActiveDescendantElement` and the seven
  *     `FrozenArray<Element>?` ones). They are not content-attribute reflections at all — they are the
- *     "explicitly set attr-element" machinery, which is its own mechanism with its own lifetime rules. The 46
- *     `DOMString?` members are real reflections into §4.13.7.4's internal content attribute map and are here.
+ *     "explicitly set attr-element" machinery, which is its own mechanism with its own lifetime rules. The 44
+ *     `DOMString?` members are real reflections into §4.13.7.4's internal content attribute map and are here,
+ *     over the ONE list core/dom/aria_mixin.h states.
  *   - Resetting the form owner when some OTHER element's `id` changes, or when an element with an ID enters or
  *     leaves the document. Those triggers need a document-level id index, which this engine does not have
  *     (`getElementById` walks), and a tree walk per `id` write is not that index.
@@ -61,6 +62,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/idl_iter.h"
+#include "core/dom/aria_mixin.h"   /* ARIA_STRING_MEMBERS — §4.13.7.4 reflects the SAME list Element does */
 #include "core/dom/attr_list.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
@@ -704,53 +706,12 @@ static const JSTrampStepDef js_ei_report_validity_def = {
  * ARIAMixin member on an ElementInternals reads and writes exactly that map, under the CONTENT ATTRIBUTE's own
  * name — which is what makes `internals.ariaLabel` and `internals.role` the DEFAULT semantics the page author
  * can still override with the real `aria-label` and `role` attributes. */
-#define ARIA_MEMBERS(X) \
-    X("role",                        "role") \
-    X("ariaAtomic",                  "aria-atomic") \
-    X("ariaAutoComplete",            "aria-autocomplete") \
-    X("ariaBrailleLabel",            "aria-braillelabel") \
-    X("ariaBrailleRoleDescription",  "aria-brailleroledescription") \
-    X("ariaBusy",                    "aria-busy") \
-    X("ariaChecked",                 "aria-checked") \
-    X("ariaColCount",                "aria-colcount") \
-    X("ariaColIndex",                "aria-colindex") \
-    X("ariaColIndexText",            "aria-colindextext") \
-    X("ariaColSpan",                 "aria-colspan") \
-    X("ariaCurrent",                 "aria-current") \
-    X("ariaDescription",             "aria-description") \
-    X("ariaDisabled",                "aria-disabled") \
-    X("ariaExpanded",                "aria-expanded") \
-    X("ariaHasPopup",                "aria-haspopup") \
-    X("ariaHidden",                  "aria-hidden") \
-    X("ariaInvalid",                 "aria-invalid") \
-    X("ariaKeyShortcuts",            "aria-keyshortcuts") \
-    X("ariaLabel",                   "aria-label") \
-    X("ariaLevel",                   "aria-level") \
-    X("ariaLive",                    "aria-live") \
-    X("ariaModal",                   "aria-modal") \
-    X("ariaMultiLine",               "aria-multiline") \
-    X("ariaMultiSelectable",         "aria-multiselectable") \
-    X("ariaOrientation",             "aria-orientation") \
-    X("ariaPlaceholder",             "aria-placeholder") \
-    X("ariaPosInSet",                "aria-posinset") \
-    X("ariaPressed",                 "aria-pressed") \
-    X("ariaReadOnly",                "aria-readonly") \
-    X("ariaRelevant",                "aria-relevant") \
-    X("ariaRequired",                "aria-required") \
-    X("ariaRoleDescription",         "aria-roledescription") \
-    X("ariaRowCount",                "aria-rowcount") \
-    X("ariaRowIndex",                "aria-rowindex") \
-    X("ariaRowIndexText",            "aria-rowindextext") \
-    X("ariaRowSpan",                 "aria-rowspan") \
-    X("ariaSelected",                "aria-selected") \
-    X("ariaSetSize",                 "aria-setsize") \
-    X("ariaSort",                    "aria-sort") \
-    X("ariaValueMax",                "aria-valuemax") \
-    X("ariaValueMin",                "aria-valuemin") \
-    X("ariaValueNow",                "aria-valuenow") \
-    X("ariaValueText",               "aria-valuetext")
+/* THE LIST IS ARIAMixin'S, STATED ONCE, in core/dom/aria_mixin.h. It was copied out here, and two copies
+   of one spec list is the defect that list exists to prevent: WAI-ARIA adds a member and one of the two
+   interfaces that INCLUDE the mixin grows it. The reflected TARGET differs (§4.13.7.4's internal content
+   attribute map here, the element's own attributes there) and the member list cannot. */
 #define ARIA_ROW(member, attr) { member, attr },
-static const struct { const char *member, *attr; } ARIA[] = { ARIA_MEMBERS(ARIA_ROW) };
+static const struct { const char *member, *attr; } ARIA[] = { ARIA_STRING_MEMBERS(ARIA_ROW) };
 #define ARIA_N ((int)(sizeof(ARIA) / sizeof(ARIA[0])))
 
 /* The element's internal content attribute map, created on first use. OWNED. */

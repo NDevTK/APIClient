@@ -42,7 +42,14 @@ static const struct { const char *idl, *attr; int plural; } ARIA_ELS[] = { ARIA_
 #define ARIA_EL_N ((int)(sizeof(ARIA_ELS) / sizeof(ARIA_ELS[0])))
 
 /* The per-element state slot: a Symbol nobody published, so §2.6.1's explicit value is not a string property of
-   this engine's invention sitting where `Object.keys` reports it. */
+   this engine's invention sitting where `Object.keys` reports it.
+   THE REFERENCE IS STRONG WHERE §2.6.1 SAYS WEAK — a KNOWN DEVIATION, stated here because nothing can assert
+   it: the spec holds "a weak reference to the given value" so an assigned element that leaves the tree can be
+   collected, and this holds an ordinary reference from the assigning element's wrapper. No page can observe the
+   difference (weakness is unobservable to script, and no member here is reachable from a FinalizationRegistry
+   or a WeakRef), so it is a LIFETIME cost and not a wrong answer: an element assigned to `ariaOwnsElements`
+   lives as long as the element that names it. It becomes real the day this engine grows weak references at the
+   host level, and that is the diff that removes this paragraph. */
 static JSValue g_state_key = JS_UNDEFINED;
 static JSAtom  g_atom_state = JS_ATOM_NULL;
 /* Declared once per AGENT, installed per realm. */
