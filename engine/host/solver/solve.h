@@ -72,11 +72,16 @@ const char *solve_resume_candidate(const char *src, const char *sink_name);
    the sink is safe. An array for the same reason the @H surface is one — result.h owns the document.
 
    "HOW FAR THE SEARCH GOT" IS TWO NUMBERS AND USED TO BE ONE THAT COULD NOT SAY IT. `tried` is raised where a
-   candidate is SEEDED, so it is fixed the instant the flow is created; `reached` is raised where that
-   candidate's own bytes ARRIVE at this sink. A search reporting `tried:5,reached:0` has five flows queued
-   somewhere in the middle of a document nobody has explored far enough, and one reporting `tried:5,reached:5`
-   had every breakout delivered and broke out of nothing — opposite verdicts, needing opposite work, which the
-   single number reported identically.
+   candidate is SEEDED, so it is fixed the instant the flow is created; `reached` is raised where a BREAKOUT's
+   own bytes ARRIVE at this sink. A search reporting `tried:5,reached:0` has five flows queued somewhere in the
+   middle of a document nobody has explored far enough, and one reporting `tried:5,reached:5` had every
+   breakout delivered and broke out of nothing — opposite verdicts, needing opposite work, which the single
+   number reported identically.
+   `reached` COUNTS BREAKOUTS AND NOT CONTEXT PROBES, and the distinction is the whole value of the field: a
+   probe carries an inert locator and cannot fire by construction, so counting its arrival makes `reached:1`
+   mean either "the probe got here and the breakout has not run" or "the breakout got here and failed" — the
+   two readings the field exists to separate. A derived class's probe arrival is already stated by `tried >= 2`
+   (its breakouts exist only because the probe returned them), so nothing is lost and nothing is stated twice.
 
    THE FIRED ENTRY IS §S(d)'s REPRODUCTION ENVELOPE, and every field of it is a POSITIVE statement whose ABSENCE
    is equally positive — never a gap to be read as a default:

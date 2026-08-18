@@ -52,9 +52,19 @@ static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand
    neither. That is the defaulted-field defect: a question whose answer is fixed at seed time, read as a
    measurement of progress.
    `reached` is raised at the ONE point that observes the answer — the candidate's own bytes arriving at its
-   own sink, which is exactly the locator/marker partition the verifying branches already make — so
-   `reached:0` beside `tried:N` says "no candidate of this search has re-executed as far as the sink yet" and
-   nothing else can. */
+   own sink — so `reached:0` beside `tried:N` says "no BREAKOUT of this search has re-executed as far as the
+   sink yet" and nothing else can.
+   IT COUNTS BREAKOUT ARRIVALS AND NOT PROBE ARRIVALS, and counting both is a mistake this field was
+   introduced with — the same one-number-two-mechanisms defect it exists to end, committed inside the
+   instrument built to end it. The context PROBE carries an inert locator and cannot fire by construction, so
+   a search whose probe had arrived and whose derived breakout had not yet run reported `reached:1`,
+   indistinguishable from a search whose breakout arrived and failed to break out. Those are the two readings
+   the field was added to separate. Measured: a full-document run reported arrival for all five sink classes
+   while only ONE of them — the URL class, which has no probe — was saying anything at all.
+   THE PROBE'S ARRIVAL IS NOT LOST, because it was never this field's to carry: a derived class's breakout
+   EXISTS only because the probe run returned one, so `tried >= 2` already states it and a second copy of one
+   fact is a second copy that can be behind. The fire branch asserts that implication rather than restating
+   it. */
 typedef struct {
     char *src; int sink; int tried; int reached;
     /* THE BREAKOUTS THIS SINK'S SEARCH HAS, IN ORDER, AND HOW MANY OF THEM ARE ALREADY FLOWS. A derived-context
@@ -383,6 +393,22 @@ static void queue_derived(void *user, const char *breakout) { push_breakout((Can
    class has its own search over that very write, with its own derived breakouts.
    It was an abort because only the probe half could reach it. The firing half can, so the answer is the
    partition rather than the crash — the same shape as `concolic_is(arg)` above it. */
+/* A BREAKOUT OF THIS SEARCH JUST ARRIVED AT ITS OWN SINK — the ONE place `reached` moves, so the three sink
+   classes cannot come to disagree about what the number counts, which is exactly how it came to count the
+   context probe in two of them and not in the third.
+   THE ASSERTION IS THE IMPLICATION `reached` NO LONGER RESTATES. A derived class's breakout exists only
+   because its context probe ran and returned one, so a search holding nothing but its own probe cannot have
+   produced the bytes that just arrived — and a single-context class states its vectors at detection and has no
+   probe, so it is exempt BY CONSTRUCTION rather than by an exception written into the condition. */
+static void breakout_arrived(Cand *e) {
+    DCHECK(e != NULL, "a breakout arrived at no search — the caller resolved one before reading the bytes");
+    DCHECK(sink_class(e->sink)->derive == SINK_DERIVE_NONE || e->npl > 1,
+           "a derived-context sink recorded a BREAKOUT arriving while its search holds nothing but its own "
+           "context probe — a breakout of such a class exists only because the probe run returned one, so "
+           "these bytes were not built by this search");
+    e->reached++;
+}
+
 static Cand *candidate_search(int sink) {
     Flow *f = flow_running();
     int created = 0;
@@ -421,11 +447,9 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
                used to queue whatever string reached the sink, tested only by "the value is not concolic" —
                which is also true of every literal the page evals — so each candidate flow re-ran the page's own
                code at a cost of the page's evals times the number of breakouts tried. */
-            /* AND EITHER BRANCH IS THE ARRIVAL — see `reached`. The two tests below are already the exact
-               partition that says this candidate's OWN bytes are in the string, so counting the observation
-               where it is made costs nothing and is the only place it can be made honestly. */
-            if (strstr(code, SOLVE_JS_LOCATOR))  { e->reached++; derive_js_context(e, code); }
-            else if (strstr(code, "X9"))         { e->reached++; fire_js(code, strlen(code)); }
+            /* ONLY THE BREAKOUT BRANCH IS AN ARRIVAL — see `reached`, and see what counting both cost. */
+            if (strstr(code, SOLVE_JS_LOCATOR))  derive_js_context(e, code);
+            else if (strstr(code, "X9"))         { breakout_arrived(e); fire_js(code, strlen(code)); }
             JS_FreeCString(ctx, code);
         }
         return;                                 /* g_fired reflects the PoC once this flow drains its queue */
@@ -522,7 +546,7 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
            the marker alone identifies its bytes: `CANDS_URL`'s vectors are the only strings this search ever
            injects and both carry X9. */
         if (url) {
-            if (strstr(url, "X9")) { e->reached++; url_fire(ctx, url); }
+            if (strstr(url, "X9")) { breakout_arrived(e); url_fire(ctx, url); }
             JS_FreeCString(ctx, url);
         }
         return;
@@ -553,8 +577,8 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
                concolic", which is also true of every literal the page writes. So each candidate flow built a
                whole document and parsed EVERY innerHTML in the page — the fixture's own markup, once per
                candidate — and the cost is the page's markup times the number of breakouts tried. */
-            if (strstr(html, SOLVE_HTML_LOCATOR)) { e->reached++; derive_html_context(e, html); }
-            else if (strstr(html, "X9"))          { e->reached++; html_fire(html); }
+            if (strstr(html, SOLVE_HTML_LOCATOR)) derive_html_context(e, html);
+            else if (strstr(html, "X9"))          { breakout_arrived(e); html_fire(html); }
             JS_FreeCString(ctx, html);
         }
         return;
