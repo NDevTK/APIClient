@@ -22,19 +22,17 @@
 
 enum { SINK_EVAL = 0, SINK_HTML = 1, SINK_URL = 2 };   /* JS / HTML / URL context -> different candidate set + fire oracle */
 
-/* THE RUNNING FLOW's fire flag and candidate mode. These were file-scope globals, which is only correct while
-   one candidate runs start-to-finish with nothing else scheduled — the shape the verify driver has and the BFS
-   does not. Reached through the running flow so a preemption cannot cross them. A NULL flow (baseline setup)
-   has neither, and the accessors say so rather than inventing a value. */
+/* THE RUNNING FLOW's candidate mode. This was a file-scope global, which is only correct while one candidate
+   runs start-to-finish with nothing else scheduled — the shape the verify driver has and the BFS does not.
+   Reached through the running flow so a preemption cannot cross it. A NULL flow (baseline setup) has none, and
+   the accessor says so rather than inventing a value. */
 /* EVERY @S CANDIDATE FLOW SEEDED. A candidate RE-RUNS the page, so this number times the page's cost is most of
    what an @S search spends — and it is what says whether a run got slower because there were more searches or
    because each search grew. Reported beside the switch count for that reason: one number cannot decompose. */
 static int g_cands_seeded;
 int solve_candidate_count(void) { return g_cands_seeded; }
 
-static int *fired_slot(void)     { Flow *f = flow_running(); return f ? &f->cand_fired : NULL; }
 static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand_verifying; }
-static void set_fired(void)      { int *p = fired_slot(); if (p) *p = 1; }
 
 /* A detected sink awaiting fire-verification. `seeded` is per SINK, not per session: a sink discovered late —
    inside a lazily-imported chunk, inside an injected <script src> — is discovered after the frontier has already
@@ -64,6 +62,12 @@ static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
 typedef struct SinkClass SinkClass;
 static const SinkClass *sink_class(int sink);
 static const char      *sink_name(int sink);
+static int              sink_class_of_name(const char *name);
+/* …AND THE STORE, declared here for the ONE caller that stands above it: the fire marker. The marker is
+   installed by solve_init, which is above the table, and it is where a finding is now MADE — so the
+   declaration goes where the table's already are rather than the marker being moved below the store and
+   solve_init below that. */
+static void record_sink(int cls, const char *source, const char *poc);
 
 /* A FIRE-VERIFIED PoC. The sink is held as its CLASS, not as its display name: every fact the reproduction
    envelope states — the CSP question, the Trusted Types question, what makes the breakout run — is a fact
@@ -72,7 +76,31 @@ static const char      *sink_name(int sink);
 typedef struct { int cls; char *source; char *poc; } Finding;   /* verified PoCs only */
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
-static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) { (void)ctx; (void)t; (void)c; (void)v; set_fired(); return JS_UNDEFINED; }
+/* THE MARKER, AND THE FINDING IS MADE HERE BECAUSE THIS IS WHERE THE PROOF HAPPENS. §@S: only FIRING proves a
+   PoC — X9 actually CALLING is the whole of the oracle — so the instant this runs there is nothing left to
+   wait for and nothing left to check.
+   IT USED TO SET A FLAG that solve_flow_end turned into a finding at FLOW_STEP_DONE, and that made an emitted
+   PoC conditional on the flow REACHING COMPLETION — which §NO BOUNDS says no flow owes anybody, and which
+   this engine already breaks in two more ways on purpose: cold.c drops `cand_fired` on a park (deliberately,
+   so a resumed candidate re-proves itself), and flow_remove frees a SOLD flow's substitution without passing
+   through solve_flow_end at all. Three ways to observe the proof and discard it, none of which said anything —
+   a candidate that fired and then kept exploring, parked, or was paged out reported as a search that had not
+   solved, which is the one verdict §@S forbids being arrived at by omission.
+   A MARKER OUTSIDE A CANDIDATE FLOW IS THE PAGE'S OWN CALL, and that is a partition rather than a swallowed
+   error: X9 is a global the analysed bundle can reach, and a page calling it has proved nothing about a
+   substitution nobody made. It is the same distinction solve_eval_sink makes on the value it is handed. */
+static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
+    Flow *f = flow_running();
+
+    (void)ctx; (void)t; (void)c; (void)v;
+    if (!f || !f->cand_src) return JS_UNDEFINED;   /* the page's own call — no substitution, nothing proved */
+    DCHECK(f->cand_payload && f->cand_sink,
+           "an @S candidate flow fired the marker holding a source but no payload or no sink class — a finding "
+           "IS that triple, so a flow carrying half of it was assembled somewhere that does not go through the "
+           "seeder or the cold tier's rebuild");
+    record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload);
+    return JS_UNDEFINED;
+}
 
 /* THE FIRE. A sink executes attacker-shaped code — `eval(s)`, a `javascript:` navigation, an auto-firing event
    handler in re-parsed HTML — and that code is the PAGE's, so it can hold a loop, an await, a recursion. Running
@@ -547,14 +575,18 @@ void solve_flow_begin(Flow *f) {
     if (f && f->cand_src) f->cand_verifying = 1;
 }
 
-/* FINISHING is a different event from switching out, and only it records. The globals are deliberately NOT
+/* FINISHING IS A DIFFERENT EVENT FROM SWITCHING OUT, AND IT RECORDS NOTHING. It used to be where a fired
+   candidate became a finding, and that is deleted: the fire is recorded at the marker (js_x9), because that
+   is where the proof happens and because a flow owes nobody completion. The globals are deliberately NOT
    cleared here: the next switch-in installs the next flow's state, and clearing in two places is how the
-   asymmetry above got in. */
+   asymmetry above got in.
+   WHAT IS LEFT DEAD BY THAT AND IS NOT THIS FILE'S TO REMOVE: `Flow.cand_fired` (solver/flow.h) is now
+   written by nothing, so engine.c's sibling copy of it and cold.c's deliberate drop of it are both statements
+   about a field that no longer carries anything. They go with the call to this function, and this function
+   with them. */
 void solve_flow_end(Flow *f) {
     if (!f || !f->cand_src) return;
     f->cand_verifying = 0;
-    if (f->cand_fired)
-        record_sink(sink_class_of_name(f->cand_sink), f->cand_src, f->cand_payload);
 }
 
 /* ── @S JSON emit (C-native) ── the writer is core/json_buf.h's, which this file and endpoint.c each used to
