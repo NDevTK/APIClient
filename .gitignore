@@ -94,3 +94,10 @@ engine/.work/z3/
 # the Web Platform Tests checkout (engine/wpt.mjs) — the browser half's oracle, cloned on demand like the corpus
 engine/.work/wpt/
 engine/.work/wpt-gaps.json
+
+# A LANE'S FROZEN WORKTREE, PARKED INSIDE THE REPO. `git worktree add` anywhere under the checkout leaves a
+# full tree git reports as untracked — 111MB when this was written — so one `git add -A` stages the whole
+# thing, and CLAUDE.md's ban on `git clean` in a shared checkout means nobody may tidy it away either. Ignored
+# rather than removed: a worktree here is registered in .git/worktrees and an agent may be working in it.
+# Put new ones in the scratchpad; this entry exists so the ones already here cannot be committed by accident.
+base/
