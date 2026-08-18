@@ -2277,9 +2277,16 @@ void element_init(JSContext *ctx)
     g_id_toggle_attr = idl_method_id(ctx, TOGGLE, 2, js_el_attr_op, 2);
     idl_optional_from(1);   /* §4.9: `toggleAttribute(qualifiedName, optional force)` */
     {
+        /* ELEMENT TIMING's `partial interface Element` is one member and that member is a whole reflection:
+           `[CEReactions, Reflect] attribute DOMString elementTiming`, whose content attribute name §2.6.2 takes
+           from the IDL name ASCII-lowercased. The attribute is a MARKER — it names an element the Element
+           Timing observer should report — so mirroring it is not a stub standing in for behaviour, it is the
+           entirety of what the IDL declares here; PerformanceElementTiming is a separate interface and is
+           honestly absent. Element's IDL declares no other reflection of its own. */
         static const ElReflect R[] = {
             { "id", "id", REFLECT_STRING }, { "className", "class", REFLECT_STRING },
             { "slot", "slot", REFLECT_STRING },
+            { "elementTiming", "elementtiming", REFLECT_STRING },
         };
         g_refl_n = (int)(sizeof(R) / sizeof(R[0]));
         g_refl_base = element_declare_reflections(ctx, R, g_refl_n);
