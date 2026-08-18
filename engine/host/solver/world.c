@@ -575,6 +575,11 @@ int world_parse(const char *s, WorldId *out, const WorldId **ancestry)
     return n_anc;
 }
 
+/* DOES THIS HANDLE NAME A DOCUMENT — the range every `WorldId.doc` is inside by construction, asked as a
+   PREDICATE so an arrival can state it about a whole ancestry without going through an accessor that aborts.
+   Side-effect-free, which is what lets a DCHECK take it. */
+static bool doc_named(uint32_t doc) { return doc != 0 && doc <= g_docs_n; }
+
 static ForeignSegment *find_segment(WorldId w)
 {
     int i;
@@ -619,6 +624,28 @@ CowDelta *world_segment(JSContext *ctx, WorldId w, const WorldId *ancestry, int 
     DCHECK(w.doc != g_doc, "a world minted in THIS document was looked up as a foreign one — a local flow's "
                            "delta is the flow's own, and a second segment for it is a second timeline");
     DCHECK(!world_is_none(w), "the NONE world was asked for a segment");
+    /* EVERY HANDLE IN THIS ARRIVAL NAMES A DOCUMENT, ASSERTED WHERE THE ARRIVAL IS AND NOT WHERE THE NAME IS
+     * READ. A `WorldId.doc` is this instance's INDEX into its own name table (world.h), so the only way to
+     * obtain one is to intern a NAME — which is exactly what world_parse does with the wire form every real
+     * arrival carries. A fabricated number is in range or it is not, and out of range it reads past the table.
+     * IT WAS UNCHECKED FOR AS LONG AS NOTHING ASKED THE HANDLE WHAT IT NAMED, and that is the whole reason it
+     * belongs here now: this table used to store the WorldId and never resolve it, so a handle naming no
+     * document sat in the segment table indefinitely and surfaced — if ever — three frames away inside
+     * world_doc_name, under a message about SERIALIZING. The park made the question real (a segment keeps the
+     * vector it was materialized from, and writing one resolves every handle in it), and the first thing it
+     * found was a fixture inventing `doc = 7` against a one-document table. Asked before the early return
+     * below, because an arrival naming nothing is wrong whether or not its segment already exists, and asked
+     * of the ANCESTRY too, which nothing has ever checked: a bad ancestor handle silently fails to match any
+     * segment and the world materializes from the baseline, losing every write the real ancestor held. */
+    DCHECK(doc_named(w.doc),
+           "a foreign world's segment was asked for under a document handle that names no document — a handle "
+           "is this instance's index into its own name table, so the only way to have one is to have interned "
+           "a NAME (world_parse does it for every arrival); a number chosen by a caller reads past the table");
+    for (i = 0; i < n_anc; i++)
+        DCHECK(doc_named(ancestry[i].doc),
+               "a world vector's ANCESTOR names no document in this instance's table — the scan below would "
+               "simply fail to match it and materialize this world from the baseline, silently dropping every "
+               "write the ancestor's segment holds");
     if (s) return s->delta;
 
     /* MATERIALIZE. The nearest ancestor present wins; the scan relies on world_ancestry's nearest-first order,

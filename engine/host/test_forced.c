@@ -2144,15 +2144,24 @@ static void document_policy_selftest(void)
     dom_document_destroy(plain);
 }
 
-/* THE CROSS-INSTANCE HALF OF THE COW DELTA. One WASM instance is one document regardless of origin, so a flow
-   that scripts an iframe or a popup owns segments in two instances; the delta cannot travel (it names its
-   targets by live heap pointers) so the world's NAME travels and the peer builds its own segment.
+/* THE CROSS-INSTANCE HALF OF THE COW DELTA. One WASM instance is one ORIGIN-KEYED AGENT CLUSTER, so a flow
+   that scripts a CROSS-ORIGIN iframe or popup owns segments in two instances (a same-origin child is a second
+   realm in this same heap and needs none of this); the delta cannot travel — it names its targets by live heap
+   pointers — so the world's NAME travels and the peer builds its own segment.
    This exercises the peer's half against worlds minted as if by another document — the sender's half is
    exercised by every fork the fixture below performs, since flow_add mints and engine_fork_finalize forks. */
 static void world_registry_selftest(JSContext *ctx)
 {
-    /* Worlds minted "elsewhere": doc 7, a chain root -> parent -> child. This instance is doc 1. */
-    WorldId root = { 7, 1 }, parent = { 7, 2 }, child = { 7, 3 }, stranger = { 7, 99 };
+    /* THE PEER'S DOCUMENT, INTERNED THROUGH THE ONE DOOR THAT MINTS A HANDLE. A `WorldId.doc` is this
+       instance's INDEX into its own name table (solver/world.h), never a number a caller picks: every real
+       arrival reaches world_segment through world_parse, which interns the NAME the wire form carries. This
+       fixture wrote `{ 7, 1 }` — a handle into a table holding exactly one document — and it survived only
+       because nothing ever asked the handle what it named. The park asks: a segment now keeps the VECTOR it
+       was materialized from, and writing one resolves every handle in it. So this was not a fixture that
+       exercised a rare state, it was a fixture MODELLING A DOCUMENT THAT DOES NOT EXIST, and the assert that
+       caught it is the one that makes the wire form mean anything. */
+    const uint32_t peer = world_doc_intern("peer");
+    WorldId root = { peer, 1, 0 }, parent = { peer, 2, 0 }, child = { peer, 3, 0 }, stranger = { peer, 99, 0 };
     WorldId anc_child[2], anc_parent[1];
     CowDelta *d_root, *d_parent, *d_child, *d_stranger;
 
@@ -2182,6 +2191,43 @@ static void world_registry_selftest(JSContext *ctx)
        here, so it starts from the baseline like any other. */
     d_stranger = world_segment(ctx, stranger, anc_parent, 1);
     CHECK(d_stranger != NULL, "an unknown ancestry must still yield a baseline segment");
+
+    /* THE PARK'S HALF, AND THIS IS THE ONLY PLACE IN THE SMOKE IT CAN RUN — a foreign segment needs a peer,
+     * and this fixture is one instance. What a park writes for a segment is the VECTOR it was materialized
+     * from (solver/world.h), so two things have to be true and neither is visible from the record count:
+     *   - THE VECTOR NAMES THE WORLD BACK. world_parse is world_serialize's inverse and the park's rebuild is
+     *     exactly `world_parse` then `world_segment`, so a vector that round-trips to a different world
+     *     rebuilds a segment under a name no sender uses.
+     *   - THE ORDER IS MATERIALIZATION ORDER. A segment forks the nearest ancestor PRESENT when it is built,
+     *     so an ancestor is always earlier, and the resumed session rebuilds in one forward pass. */
+    {
+        WorldId want[4]; const char *const *v; const WorldId *banc; WorldId back; int n, i;
+
+        want[0] = root; want[1] = parent; want[2] = child; want[3] = stranger;
+        n = world_segments_park(&v);
+        CHECK(n == 4, "the park must carry every foreign segment this instance holds — one dropped here is a "
+                      "peer document's timeline lost at the tier that exists to save it");
+        for (i = 0; i < n; i++) {
+            world_parse(v[i], &back, &banc);
+            CHECK(world_eq(back, want[i]),
+                  "a parked segment's vector must name the world it was materialized for, in materialization "
+                  "order — the rebuild is world_parse then world_segment, so a vector that names something "
+                  "else rebuilds a segment under a name no sender will ever use");
+        }
+        /* AND REMOVING A MIDDLE ONE MUST NOT MOVE A DESCENDANT ABOVE ITS OWN ANCESTOR. A swap-remove from the
+           tail would put `stranger` where `parent` was, and the resumed session's forward pass would then meet
+           `child` before `root` and rebuild it from the baseline — losing the ancestor's writes silently, the
+           same loss a truncated vector causes, arriving from the other side. */
+        world_release(ctx, parent);
+        n = world_segments_park(&v);
+        CHECK(n == 3, "releasing one segment must remove exactly one");
+        world_parse(v[0], &back, &banc);
+        CHECK(world_eq(back, root), "the segment table's order is materialization order and a release keeps it");
+        world_parse(v[1], &back, &banc);
+        CHECK(world_eq(back, child),
+              "a released segment was swapped out from the tail rather than removed in place, so a descendant "
+              "now stands above its own ancestor and a resumed session would rebuild it from the baseline");
+    }
 
     world_release(ctx, child);
     CHECK(!world_has_segment(child), "a released world must no longer hold a segment");
