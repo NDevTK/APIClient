@@ -58,7 +58,7 @@ static JSClassID g_conn_class;
 static int       g_ready;
 static JSRuntime *g_conn_rt;
 static int g_id_close = -1, g_id_create_store = -1, g_id_delete_store = -1, g_id_transaction = -1;
-/* §5.1 step 10.6's rendezvous — see the header. */
+/* §5.1 step 10.5's and §5.3 step 9's rendezvous — see the header. */
 static void (*g_closed_hook)(JSContext *ctx, JSValueConst connection);
 
 /* ---- the record ---------------------------------------------------------------------------------------- */
@@ -200,8 +200,9 @@ bool idb_connection_is_closed(JSContext *ctx, JSValueConst connection)
 void idb_connection_set_closed_hook(void (*on_closed)(JSContext *ctx, JSValueConst connection))
 {
     DCHECK(g_closed_hook == NULL || on_closed == NULL,
-           "§5.1 step 10.6's rendezvous was registered twice — one component performs §5.1, and a second "
-           "registration would silently replace the algorithm that is waiting on a connection to close");
+           "§5.1 step 10.5's rendezvous was registered twice — one component performs §5.1 and §5.3, and a "
+           "second registration would silently replace the algorithm that is waiting on a connection to "
+           "close");
     g_closed_hook = on_closed;
 }
 

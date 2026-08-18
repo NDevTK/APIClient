@@ -42,8 +42,8 @@ JSValue idb_connection_store_set(JSContext *ctx, JSValueConst connection);
    `createObjectStore` refuse on. */
 bool idb_connection_close_pending(JSContext *ctx, JSValueConst connection);
 
-/* §5.2's "once they are complete, connection is CLOSED" — the state §5.1 step 10.6 waits for, which is close
-   pending AND no transaction created using this connection still live. */
+/* §5.2's "once they are complete, connection is CLOSED" — the state §5.1 step 10.5 and §5.3 step 9 wait for,
+   which is close pending AND no transaction created using this connection still live. */
 bool idb_connection_is_closed(JSContext *ctx, JSValueConst connection);
 
 /* §5.2's CLOSE A DATABASE CONNECTION, without the forced flag: §4.4's `close()` is its only caller, and the
@@ -52,11 +52,12 @@ bool idb_connection_is_closed(JSContext *ctx, JSValueConst connection);
    parameter every caller passes false for. */
 void idb_connection_close(JSContext *ctx, JSValueConst connection);
 
-/* WHO IS TOLD WHEN A CONNECTION BECOMES CLOSED. §5.1 step 10.6 — "wait until all connections in
-   openConnections are closed" — is the one wait in this standard that no queue can discharge: it is satisfied
-   by the PAGE calling `close()`, or by the last transaction of an already-close-pending connection finishing,
-   both of which happen in a later task. So the algorithm that is waiting registers here, and the two sites
-   that can close a connection tell it. Registered once, by §5.1's component. */
+/* WHO IS TOLD WHEN A CONNECTION BECOMES CLOSED. §5.1 step 10.5 and §5.3 step 9 — "wait until all connections
+   in openConnections are closed", the same sentence in both — are the one wait in this standard that no queue
+   can discharge: it is satisfied by the PAGE calling `close()`, or by the last transaction of an
+   already-close-pending connection finishing, both of which happen in a later task. So the algorithm that is
+   waiting registers here, and the two sites that can close a connection tell it. Registered once, by the
+   component that performs both of those algorithms. */
 void idb_connection_set_closed_hook(void (*on_closed)(JSContext *ctx, JSValueConst connection));
 
 /* §5.2 step 3's other half: idb_transaction.c reports every transaction that reaches FINISHED, because "wait
