@@ -15,6 +15,27 @@
 /* Run the page's scripts as one code flow: each script `bodies[i]` is its OWN program (JS_FlowNew — faithful
    per-<script> scope, NEVER concatenated), run in document order, sharing globals + the flow's COW delta. */
 
+/* WHERE IN THE FLOW'S OWN PROGRAM SEQUENCE A QUEUED PROGRAM LANDS. It is a SPEC fact about the operation that
+ * caused the program, not a scheduling preference, which is why the CALLER states it and the queue never
+ * guesses — the same sentence engine_queue_into already makes about which flow and which document.
+ *   DYN_POS_APPEND is what a TASK is. An `error`/`load` event fired at an element, a `javascript:` navigation
+ * (HTML §7.4.2.2 "Beginning navigation" queues a global task on the navigation and traversal task source to
+ * reach §7.4.2.3.2), a §8.6 string timer, a lazy chunk's reply, a document's own sequence being filled one
+ * entry at a time: each of those is queued and runs when the sequence reaches it, and a task queue is FIFO,
+ * so the TAIL is its position.
+ *   DYN_POS_IMMEDIATE is where a program the RUNNING program caused runs. HTML §4.12.1.1 "Processing model"
+ * ends "prepare the script element" with "Otherwise, immediately execute the script element el, even if other
+ * scripts are already executing"; ECMAScript §19.2.1.1 PerformEval pushes evalContext, evaluates the body,
+ * pops it, and returns that completion INTO the call expression. Both say the caused program runs before the
+ * next thing the sequence holds — never after everything it holds.
+ *   THE DEFAULT USED TO BE APPEND AND WAS NEVER STATED, and that is how a proof this solver had ALREADY
+ * CONSTRUCTED became conditional on the flow draining the whole rest of the document. §@S records a finding at
+ * the marker precisely so nothing waits for a flow to reach completion (solver/solve.c says so at js_x9); a
+ * fired PoC placed at the tail of an unbounded sequence reintroduces exactly that wait one layer down, where
+ * no assert was looking. A kill, a park or an eviction then loses the proof FIRST, and reports it as a search
+ * that has not solved — the one verdict §@S forbids being arrived at by omission. */
+typedef enum { DYN_POS_APPEND, DYN_POS_IMMEDIATE } DynPos;
+
 /* Queue a script body to run in the CURRENT flow after the current script, sharing its globals + COW delta.
    Three callers, and they are one thing — code the page caused to run: a DYNAMICALLY-LOADED body (a lazy
    chunk / injected <script> / import()), a `setTimeout` STRING handler, and the classic scripts of a DOCUMENT
@@ -27,8 +48,19 @@
    session's, and a program compiled in the wrong realm is closed over the wrong Window — it defines the
    child's globals on its creator and reads the creator's back as the child's. There is no default: the caller
    knows which document's code it is holding, and a scheduler that guessed would guess the same way for every
-   document this agent has. */
+   document this agent has.
+   EVERY ONE OF THOSE THREE IS A TASK, so this entry is DYN_POS_APPEND and cannot be asked for anything else:
+   a lazy chunk's reply, a §8.6 string handler and a document's own sequence each run when the sequence reaches
+   them. The one script source that is NOT a task has its own entry below. */
 void engine_queue_script(uint32_t doc, const char *body);
+/* …AND THE ONE THAT IS NOT. HTML §4.12.1.1 "Processing model": an inline classic script whose element a page
+   INSERTED reaches the end of "prepare the script element" — "Otherwise, immediately execute the script
+   element el, even if other scripts are already executing" — and "execute the script element" then runs the
+   classic script right there. So it takes the slot AFTER the program that inserted it rather than the tail,
+   and nothing the sequence already holds may run in between. Separate from engine_queue_script rather than a
+   flag on it, because the two are different spec steps and the four callers of that one must not be able to
+   pick this by accident. */
+void engine_queue_script_immediate(uint32_t doc, const char *body);
 /* THE SAME POSITION IN THE SAME SEQUENCE, FOR A SCRIPT WHOSE SOURCE IS AN ADDRESS. §4.12.1 fixes an external
    script's position against the scripts written around it — a `pending parsing-blocking script` blocks the
    tokenizer (§13.2.6.4.8), and the `list of scripts that will execute when the document has finished parsing`
@@ -41,8 +73,13 @@ void engine_queue_script(uint32_t doc, const char *body);
 void engine_queue_docscript_url(uint32_t doc, const char *url);
 /* An @S CANDIDATE, queued as the program it would be if it fired. Same queue, one difference: it is ALLOWED not
    to compile, because most breakouts do not fit most sink contexts and a candidate that does not parse simply
-   never fires. A page script that does not compile still asserts. */
-void engine_queue_candidate(const char *body);
+   never fires. A page script that does not compile still asserts.
+   `pos` IS THE SINK'S OWN SEMANTICS AND NOT THE SOLVER'S PREFERENCE, which is the whole reason it is a
+   parameter here. An eval sink IS ECMAScript §19.2.1.1 PerformEval, so its code runs inside the call
+   expression — IMMEDIATE. A markup sink's auto-firing `onerror`/`onload` and a URL sink's `javascript:`
+   navigation are TASKS, so they take the tail like every other task — APPEND. §@S's "the firing vector is
+   chosen per sink from its real semantics" is the same sentence about the same table. */
+void engine_queue_candidate(const char *body, DynPos pos);
 /* A `javascript:` URL's SCRIPT SOURCE, queued as the program HTML §7.4.2.3.2's evaluate-a-javascript:-URL runs.
    Same queue, and it is the same thing — code the page caused to run — but it differs from a page <script> at
    both ends of that program's life, which is why it is its own entry point rather than a third caller of the

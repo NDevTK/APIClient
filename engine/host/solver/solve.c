@@ -131,11 +131,18 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
    The sunk code is simply MORE CODE IN THIS FLOW — the same thing a lazy chunk is — so it is queued as another
    program of the running flow and the ONE BFS runs it, preemptible and parkable like every other. The candidate
    re-run drains its queue before finishing, so the flow's own fire flag still answers when it completes. */
-static void fire_js(const char *src, size_t len) {
+/* AND WHERE IN THAT FLOW'S SEQUENCE IT GOES IS THE SINK'S OWN SEMANTICS, which is why it is a parameter rather
+   than one answer for all three. §@S already says the firing vector is chosen per sink from its real
+   semantics; the POSITION is part of that vector and was the half nobody stated. It went to the tail for every
+   sink, so a PoC this search had already CONSTRUCTED could only be proved after the flow had run every
+   remaining program of the document — which puts the proof back behind flow completion, the exact dependency
+   js_x9's own comment above records as removed. The marker still records the finding the instant it runs; this
+   is about when it gets to run. */
+static void fire_js(const char *src, size_t len, DynPos pos) {
     char *body = malloc(len + 1);
     CHECK(body, "solve: OOM queueing a fired PoC body");
     memcpy(body, src, len); body[len] = 0;
-    engine_queue_candidate(body);
+    engine_queue_candidate(body, pos);
     free(body);
 }
 
@@ -448,8 +455,12 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
                which is also true of every literal the page evals — so each candidate flow re-ran the page's own
                code at a cost of the page's evals times the number of breakouts tried. */
             /* ONLY THE BREAKOUT BRANCH IS AN ARRIVAL — see `reached`, and see what counting both cost. */
+            /* IMMEDIATE, because that is what this sink IS. ECMAScript §19.2.1.1 PerformEval pushes
+               evalContext, evaluates the body, pops it and returns that completion into the call expression —
+               so the code an eval sink is handed runs before the next statement of the program that called it,
+               never after the rest of the document. */
             if (strstr(code, SOLVE_JS_LOCATOR))  derive_js_context(e, code);
-            else if (strstr(code, "X9"))         { breakout_arrived(e); fire_js(code, strlen(code)); }
+            else if (strstr(code, "X9"))         { breakout_arrived(e); fire_js(code, strlen(code), DYN_POS_IMMEDIATE); }
             JS_FreeCString(ctx, code);
         }
         return;                                 /* g_fired reflects the PoC once this flow drains its queue */
@@ -478,7 +489,8 @@ static void html_fire_walk(lxb_dom_node_t *node) {
             for (int h = 0; H[h]; h++) {
                 size_t vl = 0;
                 const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)H[h], strlen(H[h]), &vl);
-                if (v && vl) fire_js((const char *)v, vl);
+                /* APPEND: an event handler fires from a TASK, so it takes the tail like every other task. */
+                if (v && vl) fire_js((const char *)v, vl, DYN_POS_APPEND);
             }
         }
         if (n->first_child) { n = n->first_child; continue; }
@@ -530,7 +542,10 @@ static void url_fire(JSContext *ctx, const char *url) {
     while (*url == ' ' || *url == '\t' || *url == '\n') url++;   /* leading whitespace is ignored by the URL parser */
     if (!strncasecmp(url, "javascript:", 11)) {
         const char *js = url + 11;
-        fire_js(js, strlen(js));
+        /* APPEND: HTML §7.4.2.2 "Beginning navigation" queues a global task on the navigation and traversal
+           task source to navigate to a javascript: URL, so §7.4.2.3.2's evaluation is a TASK — the same
+           position engine_queue_javascript_url gives the real one. */
+        fire_js(js, strlen(js), DYN_POS_APPEND);
     }
 }
 /* location = arg (or el.href = arg): a URL-context sink. */

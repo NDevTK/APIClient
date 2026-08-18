@@ -2277,7 +2277,12 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
    program the page CAUSED to run belongs to the flow that ran the code, and a JOINED document's own scripts
    belong to the boot flow this engine mints for that document before any of it has run. Both are members of the
    one frontier; only one of them has the thread. */
-static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind kind, char *token) {
+/* AND WHERE IN THAT SEQUENCE IT LANDS IS A PARAMETER FOR THE IDENTICAL REASON (engine.h's DynPos): the slot a
+   caused program takes is a step of the SPEC of the operation that caused it, so only the caller knows it, and
+   a queue that appended by default gave every one of them the same answer — the tail — including the two the
+   spec runs before anything else in the sequence. */
+static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind kind, char *token, DynPos pos) {
+    int at;
     /* A PROGRAM QUEUED WITH NO FLOW IS A DROPPED PROGRAM, and it used to leave silently. There is no global
        queue to fall back to — the frontier IS the queue — so the caller is the one that has to name the flow
        whose sequence this program joins: an injected <script>'s insertion, a document's own load job, a fired
@@ -2309,18 +2314,75 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
         f->dyn_token = realloc(f->dyn_token, (size_t)f->dyn_cap * sizeof(char *));
         CHECK(f->dyn && f->dyn_cand && f->dyn_doc && f->dyn_token, "engine: OOM dynamic-script queue");
     }
-    f->dyn[f->dyn_n] = strdup(body); CHECK(f->dyn[f->dyn_n], "engine: OOM dynamic-script body");
-    f->dyn_cand[f->dyn_n] = (unsigned char)kind;
-    f->dyn_doc[f->dyn_n] = doc;
-    f->dyn_token[f->dyn_n] = token;   /* MOVED: one allocation from engine_perform to flow_answer_perform */
+    at = f->dyn_n;
+    if (pos == DYN_POS_IMMEDIATE) {
+        /* "IMMEDIATELY" IS A POSITION RELATIVE TO THE RUNNING PROGRAM, so it is meaningless for any other
+           flow: the slot is the one after the cursor of the flow that HAS the thread. Queued into a sibling it
+           would name a position in a sequence that flow is nowhere near. */
+        DCHECK(f == flow_running(),
+               "a program was queued to run IMMEDIATELY into a flow that is not the running one — "
+               "`immediately` names the slot after the program that caused it, and the causing program is in "
+               "the running flow, so this row would interpose into a stranger's sequence at its cursor");
+        /* THE CURSOR ITSELF WHEN THERE IS NO PROGRAM, THE SLOT AFTER IT WHEN THERE IS. `frame` is exactly
+           "inside a program" (flow.h) — flow_step runs a job only under `!f->frame` — so a script element a
+           page inserts from a `.then` reaction is at the cursor, where the sequence has nothing yet, and one
+           inserted from a running <script> is at the slot after it. One expression, both cases, and neither is
+           the tail. */
+        at = (f->frame ? f->script_i + 1 : f->script_i) - g_sess_n;
+        /* THE ONE POSITION THIS REPRESENTATION CANNOT NAME, and it is a capability rather than a bad call. The
+           cursor walks the SESSION document's static sequence [0, g_sess_n) and only then this flow's own rows,
+           so there is no slot between document script i and i+1 for a program script i caused: a page that
+           `eval`s or injects a <script> from anything but its LAST <script> has nowhere to put it. Every part
+           of the fix is already asked for three times over — html_script.c, engine_join_document above and
+           core/frame/navigable.c each DFAIL for a ScriptType column on this queue — so build the ONE sequence:
+           give the dyn table its `type` and `src` columns and seed every flow with the document's own scripts
+           as rows, at which point g_sess_bodies/g_sess_types/g_sess_srcs and this offset all go away. */
+        /* BOTH BOUNDS ARE `CHECK`, AND THAT IS THE RELEASE RULE RATHER THAN AN EXCEPTION TO IT. A DCHECK
+           vanishes in release, and what these two guard is the INDEX of the write below — a negative or
+           past-the-end slot is a memmove and four stores outside the arrays, which is the data integrity CHECK
+           exists for. §Offensive-programming's release exemption says the identical error is ALSO correct in
+           release when it names a capability that is not supportable outside development, which is exactly
+           what the first of the two is. */
+        CHECK(at >= 0,
+              "a program must run IMMEDIATELY at a slot inside the session document's own script sequence, "
+              "which this queue cannot address — the flow's rows begin only after that sequence ends. Give "
+              "the flow ONE sequence: the document's scripts as rows of the dyn table with the ScriptType and "
+              "src columns three DFAILs in this engine already ask for, and this offset disappears with them");
+        CHECK(at <= f->dyn_n,
+              "a program's IMMEDIATE slot is past the end of the flow's own queue — the cursor names the row "
+              "the flow is at, so the slot after it is at most one past the last row, and a larger index "
+              "means the cursor and the queue disagree about how many programs this flow has");
+        /* A ROW THAT SHIFTS IS A ROW SOMEBODY MAY BE HOLDING THE INDEX OF. engine_pending_docscript records an
+           ABSOLUTE sequence position on the register and flow_drain_pending writes the fetched source into
+           `f->dyn[scriptI - g_sess_n]`, so an interposition below an outstanding one would deliver a document's
+           script text into the wrong row — a program silently replaced by another document's bytes. It cannot
+           happen (a flow parks on one of those with NO frame and cannot leave that slot until the reply fills
+           it, and `frame` is the same predicate the position above is derived from), which is exactly why it is
+           asserted rather than handled. */
+        DCHECK(at == f->dyn_n || pending_count_kind(f->pending, FLOW_PENDING_DOCSCRIPT) == 0,
+               "a program was interposed into a flow that is still owed an external document script — that "
+               "reply names its slot by ABSOLUTE index, so the shift would deliver the fetched source into "
+               "whichever row moved into that position");
+    }
+    if (at < f->dyn_n) {
+        size_t tail = (size_t)(f->dyn_n - at);
+        memmove(&f->dyn[at + 1],       &f->dyn[at],       tail * sizeof(char *));
+        memmove(&f->dyn_cand[at + 1],  &f->dyn_cand[at],  tail);
+        memmove(&f->dyn_doc[at + 1],   &f->dyn_doc[at],   tail * sizeof(uint32_t));
+        memmove(&f->dyn_token[at + 1], &f->dyn_token[at], tail * sizeof(char *));
+    }
+    f->dyn[at] = strdup(body); CHECK(f->dyn[at], "engine: OOM dynamic-script body");
+    f->dyn_cand[at] = (unsigned char)kind;
+    f->dyn_doc[at] = doc;
+    f->dyn_token[at] = token;   /* MOVED: one allocation from engine_perform to flow_answer_perform */
     f->dyn_n++;
 }
 
-static void engine_queue(uint32_t doc, const char *body, DynKind kind) {
+static void engine_queue(uint32_t doc, const char *body, DynKind kind, DynPos pos) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
     DCHECK(f != NULL, "a program was queued with no flow running — a program is a work item of the ONE "
                       "frontier and there is no member to give it to, so it would be dropped without a trace");
-    engine_queue_into(f, doc, body, kind, NULL);
+    engine_queue_into(f, doc, body, kind, NULL, pos);
 }
 
 /* WHICH KIND THE PROGRAM AT `script_i` IS, asked at the two places that need it — the compile and the resume.
@@ -2341,11 +2403,28 @@ static uint32_t flow_dyn_doc(const Flow *f, int n) {
     return f->dyn_doc[f->script_i - n];
 }
 
-void engine_queue_script(uint32_t doc, const char *body) { engine_queue(doc, body, DYN_PAGE_SCRIPT); }
+/* EVERY SOURCE THAT REACHES THIS ONE IS A TASK — a lazy chunk's reply, a §8.6 string handler, a document's own
+   sequence — so the tail IS its position, and the entry cannot be asked for another (engine.h's DynPos). */
+void engine_queue_script(uint32_t doc, const char *body) { engine_queue(doc, body, DYN_PAGE_SCRIPT, DYN_POS_APPEND); }
+
+/* …AND THE ONE SCRIPT SOURCE THAT IS NOT A TASK. HTML §4.12.1.1 "Processing model" ends "prepare the script
+   element" with "Otherwise, immediately execute the script element el, even if other scripts are already
+   executing" — so an inline classic script a page INSERTED runs at the slot after the program that inserted it,
+   and everything the sequence already holds runs after it. This engine had the classification (html_script.c
+   computes SCRIPT_SCHED_IMMEDIATE and its own DCHECK names this very step) and then queued the result at the
+   tail, which is the position of the one destination §4.12.1 says it does NOT take. */
+void engine_queue_script_immediate(uint32_t doc, const char *body) {
+    engine_queue(doc, body, DYN_PAGE_SCRIPT, DYN_POS_IMMEDIATE);
+}
 
 /* …AND ITS EXTERNAL SIBLING, which takes the same position with only an ADDRESS — see DYN_SCRIPT_SRC. The
-   caller resolved the URL because §4.4's API base URL belongs to the document whose element it is. */
-void engine_queue_docscript_url(uint32_t doc, const char *url) { engine_queue(doc, url, DYN_SCRIPT_SRC); }
+   caller resolved the URL because §4.4's API base URL belongs to the document whose element it is.
+   APPEND, and that is §4.12.1's own answer rather than a default: this entry is the `list of scripts that will
+   execute in order as soon as possible`, whose elements hold their places against one another, so a new one
+   goes behind the ones already there. */
+void engine_queue_docscript_url(uint32_t doc, const char *url) {
+    engine_queue(doc, url, DYN_SCRIPT_SRC, DYN_POS_APPEND);
+}
 
 /* AN @S CANDIDATE, queued as the program it would be if it fired. It is the same queue because it IS the same
    thing — code the page caused to run — but it carries the one difference that matters: it is allowed not to
@@ -2355,7 +2434,10 @@ void engine_queue_docscript_url(uint32_t doc, const char *url) { engine_queue(do
    value substituted for one source. It is stated here rather than taken as a parameter because there is no
    other document it could be — a breakout that fired in a child navigable is a candidate seeded against that
    document, which is a session of that document's instance. */
-void engine_queue_candidate(const char *body) { engine_queue(g_sess_doc, body, DYN_CANDIDATE); }
+/* AND `pos` IS THE SINK'S OWN SEMANTICS — see engine.h. An eval sink's code is ECMAScript §19.2.1.1
+   PerformEval, which evaluates the body inside the call expression; a markup sink's auto-firing handler and a
+   URL sink's `javascript:` navigation are tasks. The caller knows which sink fired, so the caller says. */
+void engine_queue_candidate(const char *body, DynPos pos) { engine_queue(g_sess_doc, body, DYN_CANDIDATE, pos); }
 
 /* HTML §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL, steps 6-7 — "let script be the result of creating a classic
    script given scriptSource … let evaluationStatus be the result of running the classic script script". The
@@ -2365,7 +2447,12 @@ void engine_queue_candidate(const char *body) { engine_queue(g_sess_doc, body, D
    targetNavigable's active document's relevant settings object" — and that document is not always the
    session's: a `<form action="javascript:…" target=frame>` runs its program in the FRAME's realm, where the
    globals it writes are the ones a later script of that document reads. */
-void engine_queue_javascript_url(uint32_t doc, const char *body) { engine_queue(doc, body, DYN_JAVASCRIPT_URL); }
+/* APPEND, and HTML §7.4.2.2 "Beginning navigation" is why: it reaches this case by "Queue a global task on the
+   navigation and traversal task source given navigable's active window to navigate to a javascript: URL". The
+   evaluation this row runs is therefore a TASK, and it takes the tail like every other one. */
+void engine_queue_javascript_url(uint32_t doc, const char *body) {
+    engine_queue(doc, body, DYN_JAVASCRIPT_URL, DYN_POS_APPEND);
+}
 
 /* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one
    of these is the page's own code — an IDL getter, a page's setter, a page's function — which a C activation
@@ -2426,7 +2513,7 @@ static void flow_perform(JSContext *ctx, Flow *f)
     {
         char *own = strdup(token);
         CHECK(own != NULL, "engine: OOM moving a cross-agent operation's rendezvous token onto its program");
-        engine_queue_into(f, doc, remote_op_program(rctx, op), DYN_CROSS_AGENT_OP, own);
+        engine_queue_into(f, doc, remote_op_program(rctx, op), DYN_CROSS_AGENT_OP, own, DYN_POS_APPEND);
     }
     remote_op_free(op);
     JS_FreeCString(ctx, record);
@@ -3667,7 +3754,7 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
                "and solver/flow.h's dyn arrays), the way the document's own sequence carries one, so flow_step "
                "routes it to §8.1.3.3's module entry");
         if (bodies[i]) {
-            engine_queue_into(f, doc, bodies[i], DYN_PAGE_SCRIPT, NULL);
+            engine_queue_into(f, doc, bodies[i], DYN_PAGE_SCRIPT, NULL, DYN_POS_APPEND);
             continue;
         }
         DCHECK(srcs[i] != NULL,
@@ -3695,7 +3782,7 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
                the element, which needs a task on this document rather than anything here. */
             if (!abs_url) continue;
             /* AT ITS POSITION, holding only its address until the reply fills it — see DYN_SCRIPT_SRC. */
-            engine_queue_into(f, doc, abs_url, DYN_SCRIPT_SRC, NULL);
+            engine_queue_into(f, doc, abs_url, DYN_SCRIPT_SRC, NULL, DYN_POS_APPEND);
             free(abs_url);
         }
     }
