@@ -22,8 +22,10 @@
  * to be closed before an upgrade runs. A copy taken here would be a second answer to one question, and
  * `createObjectStore` would then have to write both.
  *
- * WHAT IS ABSENT AND WHY. `objectStoreNames` needs a DOMStringList, which this engine does not have — it is
- * honestly ABSENT and the IDL gap auditor lists it. `transaction()` used to stand beside it, and for a
+ * WHAT WAS ABSENT AND WHY IT NO LONGER IS. `objectStoreNames` needed a DOMStringList, which the engine now has
+ * as HTML §2.6.5's own component, and an ORDER, which §2's create a sorted name list owns for all three of its
+ * consumers. Its set is THIS FILE's — §2.1.1's object store set — which is why the member lives here and not
+ * beside §2.1's storage model. `transaction()` used to stand beside it, and for a
  * different reason: its `storeNames` is Web IDL §3.2.25's `(DOMString or sequence<DOMString>)`, whose arm is
  * chosen by ? GetMethod(V, %Symbol.iterator%) — a property read of the PAGE'S value, which a body cannot
  * perform because a C activation hosting the page's getter is the drive-to-completion this engine aborts on.
@@ -42,6 +44,7 @@
 #include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_key_path.h"
+#include "core/indexeddb/idb_name_list.h"
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_transaction.h"
 #include "core/realm.h"
@@ -308,6 +311,38 @@ static JSValue js_conn_get_version(JSContext *ctx, JSValueConst this_val, int ma
     (void)magic;
     if (!conn_brand(ctx, this_val)) return JS_EXCEPTION;
     return JS_NewFloat64(ctx, idb_connection_version(ctx, this_val));
+}
+
+/* "The objectStoreNames getter steps are: let names be a list of the names of the object stores in this's
+   OBJECT STORE SET. Return the result (a DOMStringList) of creating a sorted name list with names."
+   IT IS THE CONNECTION'S SET AND NOT THE DATABASE'S — §2.1.1's, "initialized to the set of object stores in
+   the associated database when the connection is created" — which is the same distinction §4.5's `indexNames`
+   draws for the handle's index set, and it is why this member is here and not in the storage model.
+   THE SET IS KEYED BY NAME (a store is filed under its own), so the names ARE its own property keys and the
+   stores are never read. The ORDER is not this member's: §2's create a sorted name list owns it, because the
+   set's own order is an implementation detail and a wrong sort passes every length and containment check a
+   test writes. A NEW LIST PER READ, which that algorithm's "return a NEW DOMStringList" is: a list a page took
+   before `createObjectStore` ran keeps the contents it had. */
+static JSValue js_conn_get_store_names(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue set, names;
+    JSPropertyEnum *keys = NULL;
+    uint32_t count = 0, i;
+
+    (void)magic;
+    if (!conn_brand(ctx, this_val)) return JS_EXCEPTION;
+    set = idb_connection_store_set(ctx, this_val);
+    names = JS_NewArray(ctx);
+    CHECK(!JS_IsException(names), "IndexedDB: §4.4's list of object store names could not be allocated");
+    CHECK(JS_GetOwnPropertyNames(ctx, &keys, &count, set, JS_GPN_STRING_MASK) == 0,
+          "IndexedDB: a connection's object store set could not be enumerated");
+    for (i = 0; i < count; i++)
+        JS_DefinePropertyValueUint32(ctx, names, i, JS_AtomToString(ctx, keys[i].atom), JS_PROP_C_W_E);
+    for (i = 0; i < count; i++)
+        JS_FreeAtom(ctx, keys[i].atom);
+    js_free(ctx, keys);
+    JS_FreeValue(ctx, set);
+    return idb_sorted_name_list(ctx, names);
 }
 
 /* "The close() method steps are to run close a database connection with this connection." */
@@ -683,6 +718,7 @@ static void idb_connection_install_realm(JSContext *ctx)
     event_target_install_handlers(ctx, proto, EH_IDB_DATABASE);
     idl_install_accessor(ctx, proto, "name", js_conn_get_name, 0, -1);
     idl_install_accessor(ctx, proto, "version", js_conn_get_version, 0, -1);
+    idl_install_accessor(ctx, proto, "objectStoreNames", js_conn_get_store_names, 0, -1);
     idl_install_method(ctx, proto, "transaction", 1, g_id_transaction);
     idl_install_method(ctx, proto, "close", 0, g_id_close);
     idl_install_method(ctx, proto, "createObjectStore", 1, g_id_create_store);
