@@ -53,6 +53,7 @@
 #include "core/html/form_data_event.h"
 #include "core/html/html_form.h"
 #include "core/html/dom_string_map.h"
+#include "core/html/global_attributes.h"
 #include "core/html/declarative_shadow.h"
 
 static JSClassID g_html_class;      /* HTMLElement.prototype's per-realm slot */
@@ -449,6 +450,11 @@ void html_element_init(JSContext *ctx)
        because the members are HTMLTemplateElement's, which is what this file owns the table of; the algorithm
        is declarative_shadow.c's. */
     declarative_shadow_init(ctx);
+    /* HTML's ENUMERATED global attributes — §3.2.6.3's `translate`, §6.8.5's `spellcheck`, §6.8.6's
+       `writingSuggestions`, §6.8.8's `autocorrect` and §6.8.1's two. Declared here because every one of them is
+       an HTMLElement member, which is what this file owns the table of; the §2.3.3 state algorithm and the
+       ancestor walks are core/html/global_attributes.c's. */
+    global_attributes_declare(ctx);
     /* §3.2.2 dataset — on HTMLElement, which is where the IDL puts it. */
     dom_string_map_init(ctx);
     g_dataset_key = JS_NewAtom(ctx, "__datasetSlot");
@@ -487,6 +493,9 @@ void html_element_install_protos(JSContext *ctx)
        the CSSOM's, so each side owns its half. */
     cssom_install_style_attribute(ctx, html_p);
     idl_install_accessor(ctx, html_p, "dataset", js_html_dataset, 0, -1);
+    /* The six §3.2.6/§6.8 global attributes whose IDL attribute COMPUTES a value from the tree rather than
+       mirroring one attribute — installed onto THIS realm's prototype like every other member. */
+    global_attributes_install(ctx, html_p);
     /* §4.13.2 `ElementInternals attachInternals()` — an HTMLElement member, installed on THIS realm's
        prototype like every other. */
     element_internals_install_html_members(ctx, html_p);
@@ -666,6 +675,7 @@ void html_element_free(JSRuntime *rt)
     hyperlink_free();
     node_set_element_resolver(NULL);
     dom_string_map_free(rt);
+    global_attributes_free();
     declarative_shadow_free();
     html_form_free(rt);
     html_dialog_free(rt);
