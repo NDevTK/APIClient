@@ -66,7 +66,7 @@ static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand
    fact is a second copy that can be behind. The fire branch asserts that implication rather than restating
    it. */
 typedef struct {
-    char *src; int sink; int tried; int reached;
+    char *src; int sink; int tried; int reached; int turns;
     /* THE BREAKOUTS THIS SINK'S SEARCH HAS, IN ORDER, AND HOW MANY OF THEM ARE ALREADY FLOWS. A derived-context
        sink does not KNOW its breakouts when it is detected — a probe run reads them off the sink's own parse —
        so the list GROWS after seeding has already happened, and a one-shot "this sink is seeded" latch cannot
@@ -293,6 +293,16 @@ void solve_init(JSContext *ctx) {
    caught the duplicate, but the collision was the smaller half of the problem — "pending" means the replies a
    flow is waiting on in one component and a detected-but-unsolved sink in this one, and one word carrying two
    meanings across two vocabularies is how a set of names goes wrong. What this returns is one sink's SEARCH. */
+/* THE SEARCH FOR A (source, class) IF THERE IS ONE — the READ half, separate from sink_search because
+   find-or-CREATE is the wrong primitive for a caller that is merely observing. Opening a search is an EVENT
+   (it credits the running flow with a new attacker-source-reaches-sink), so a lookup that created one would
+   both fabricate a search with no breakouts and pay a flow for discovering nothing. */
+static Cand *search_of(const char *src, int sink) {
+    for (int i = 0; i < g_pending_n; i++)
+        if (g_pending[i].sink == sink && !strcmp(g_pending[i].src, src)) return &g_pending[i];
+    return NULL;
+}
+
 static Cand *sink_search(const char *src, int sink, int *created) {
     Cand *e;
 
@@ -310,6 +320,7 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     e->sink = sink;
     e->tried = 0;
     e->reached = 0;
+    e->turns = 0;
     e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0;
     *created = 1;
     flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
@@ -688,7 +699,27 @@ int solve_seed_candidates(JSContext *ctx) {
 void solve_flow_begin(Flow *f) {
     concolic_set_candidate(f ? f->cand_src : NULL, f ? f->cand_payload : NULL);
     endpoint_suppress(f && f->cand_src ? 1 : 0);
-    if (f && f->cand_src) f->cand_verifying = 1;
+    if (f && f->cand_src) {
+        f->cand_verifying = 1;
+        /* AND THE SEARCH IS GIVEN A TURN — counted HERE because this is the one point at which a candidate of
+           it is about to execute, and because `reached:0` cannot otherwise be read. `tried` says candidates
+           were SEEDED and `reached` says a breakout ARRIVED at the sink; with both of those a search reporting
+           `tried:2,reached:0` is either a search whose flows the WFQ has never once given the thread to, or one
+           whose flows have run and have not got as far as the sink. Those take opposite actions — the first is
+           a scheduling question, the second a distance-through-the-document one — and the pair could not tell
+           them apart. Measured on this fixture: the @S sinks sit 866 statements into a script whose START is
+           where every lane appends, while --min's sit 3 statements in and arrive; which of the two explains it
+           is exactly what this number decides.
+           IT IS SWITCH-INS AND NOT DISTINCT FLOWS, which is what makes it a scheduling fact rather than a
+           second copy of `tried`: a candidate preempted and resumed twenty times has been given twenty turns,
+           and that is the thing being asked about. */
+        Cand *e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+        DCHECK(e != NULL,
+               "a candidate flow was switched in for a sink search this session has no entry for — a candidate "
+               "exists only because detection opened one, and a cold-resumed one re-registers before it runs "
+               "(solve_resume_candidate), so an absent entry means the search was dropped under a live flow");
+        if (e) e->turns++;
+    }
 }
 
 /* FINISHING IS A DIFFERENT EVENT FROM SWITCHING OUT, AND IT RECORDS NOTHING. It used to be where a fired
@@ -801,6 +832,11 @@ char *solve_json_array(JSContext *ctx) {
            breakout that arrived and did not work — `reached:0` is the first, anything else is the second. */
         json_buf_puts(&b, ",\"reached\":");
         snprintf(t, sizeof t, "%d", g_pending[i].reached); json_buf_puts(&b, t);
+        /* …AND HOW MANY TURNS THE SCHEDULER HAS GIVEN IT, which is what makes `reached:0` readable: with
+           `turns:0` this search's candidates have never once held the thread, and with `turns:N` they have run
+           and have not got as far as the sink. One is a WFQ question and the other is a distance question. */
+        json_buf_puts(&b, ",\"turns\":");
+        snprintf(t, sizeof t, "%d", g_pending[i].turns); json_buf_puts(&b, t);
         /* The parked entry carries the DECLARATION, not the envelope: a search that has not solved has no
            vector to state and no PoC to reproduce, so `firesOn`/`cspBlocks`/`trustedTypes` would be claims
            about a PoC that does not exist. What it does carry is the whole source declaration — the bytes a

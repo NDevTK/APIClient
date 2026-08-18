@@ -64,7 +64,7 @@ const char *solve_resume_candidate(const char *src, const char *sink_name);
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
-     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M
+     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
@@ -82,6 +82,11 @@ const char *solve_resume_candidate(const char *src, const char *sink_name);
    mean either "the probe got here and the breakout has not run" or "the breakout got here and failed" — the
    two readings the field exists to separate. A derived class's probe arrival is already stated by `tried >= 2`
    (its breakouts exist only because the probe returned them), so nothing is lost and nothing is stated twice.
+   `turns` IS THE THIRD, AND IT IS WHAT MAKES `reached:0` READABLE AT ALL. Seeded, arrived and SCHEDULED are
+   three different facts: `tried:2,reached:0,turns:0` is a search the WFQ has never once given the thread to,
+   and `tried:2,reached:0,turns:900` is one whose flows have run and have not got as far as the sink. The first
+   is a scheduling question and the second a distance-through-the-document one, they take opposite actions, and
+   with two numbers they were the same report.
 
    THE FIRED ENTRY IS §S(d)'s REPRODUCTION ENVELOPE, and every field of it is a POSITIVE statement whose ABSENCE
    is equally positive — never a gap to be read as a default:
