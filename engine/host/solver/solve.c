@@ -43,8 +43,20 @@ static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand
    that a flag cannot tell apart. It counts RUNS and not breakouts, because for a derived-context sink the
    first of them is the CONTEXT PROBE, which re-runs the whole page exactly as a breakout does and is the run
    that produced every breakout after it — reporting it as free would say the search cost less than it did. */
+/* …AND `reached` IS THE ONE THAT SAYS HOW FAR IT GOT, WHICH `tried` DOES NOT AND WAS BEING READ AS. `tried` is
+   raised where a candidate is SEEDED, so it is fixed the moment the flow is created and says nothing about
+   whether that flow ever executed: a search whose candidates are all still queued somewhere in the middle of
+   the document reports the same number as one whose every candidate re-ran the page, arrived at the sink, and
+   failed to break out. Those are opposite verdicts — the first is a document that has not been explored far
+   enough, the second is a solver gap — and solve.h's own sentence ("how far the search got") was true of
+   neither. That is the defaulted-field defect: a question whose answer is fixed at seed time, read as a
+   measurement of progress.
+   `reached` is raised at the ONE point that observes the answer — the candidate's own bytes arriving at its
+   own sink, which is exactly the locator/marker partition the verifying branches already make — so
+   `reached:0` beside `tried:N` says "no candidate of this search has re-executed as far as the sink yet" and
+   nothing else can. */
 typedef struct {
-    char *src; int sink; int tried;
+    char *src; int sink; int tried; int reached;
     /* THE BREAKOUTS THIS SINK'S SEARCH HAS, IN ORDER, AND HOW MANY OF THEM ARE ALREADY FLOWS. A derived-context
        sink does not KNOW its breakouts when it is detected — a probe run reads them off the sink's own parse —
        so the list GROWS after seeding has already happened, and a one-shot "this sink is seeded" latch cannot
@@ -245,8 +257,8 @@ void solve_init(JSContext *ctx) {
     /* THE TWO DERIVED CLASSES' LOCATORS ARE THE PARTITION BETWEEN THEIR PROBES, so neither may contain the
        other. A page that writes one attacker source into BOTH an eval sink and a markup sink runs each class's
        probe straight past the other class's sink, and a locator one substring-test could confuse would make
-       that sink derive a context for a search that never asked for it — which probe_search would then report as
-       a crash in the machinery rather than as what it is. */
+       that sink derive a context for a search that never asked for it. candidate_search declines the write on
+       the CLASS, so the two would then disagree about which search owns it. */
     DCHECK(!strstr(SOLVE_JS_LOCATOR, SOLVE_HTML_LOCATOR) && !strstr(SOLVE_HTML_LOCATOR, SOLVE_JS_LOCATOR),
            "the @S markup and JS context locators are not distinct — one contains the other, so the substring "
            "test that routes a probe's output to its own derivation answers for both");
@@ -280,6 +292,7 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     CHECK(e->src, "solve: OOM pending");
     e->sink = sink;
     e->tried = 0;
+    e->reached = 0;
     e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0;
     *created = 1;
     flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
@@ -332,6 +345,14 @@ static void record_sink(int cls, const char *source, const char *poc) {
     if (g_sinks_n >= g_sinks_cap) { g_sinks_cap = g_sinks_cap ? g_sinks_cap * 2 : 8; g_sinks = realloc(g_sinks, (size_t)g_sinks_cap * sizeof(Finding)); CHECK(g_sinks, "solve: OOM @S store"); }
     Finding *f = &g_sinks[g_sinks_n++];
     f->cls = cls; f->source = strdup(source ? source : "?"); f->poc = strdup(poc);
+    /* AND THE FLOW THAT PROVED IT IS PAID FOR IT. sink_search already credits a sink merely being DETECTED,
+       which is the weakest @S observation there is, while the strongest — a fire-verified PoC, the thing this
+       half of the tool exists to produce — credited nothing at all. That is not only an inconsistency inside
+       this file: a candidate flow records no endpoints by design (endpoint_suppress), so before this line its
+       reward was zero for its whole life and it competed on the optimism term alone, which is capped at 1.0,
+       against exploring flows whose reward is unbounded. The flow that just proved an exploit is the last one
+       a WFQ should be aging out. */
+    flow_credit_emit(1.0);
 }
 
 /* THE CONTEXT PROBE CAME BACK — the observation §@S(2) asks for, and the reason a derived sink's breakouts are
@@ -341,38 +362,47 @@ static void record_sink(int cls, const char *source, const char *poc) {
    constructs that state's minimal escape; every escape joins THIS sink's search and the next drain seeds it. */
 static void queue_derived(void *user, const char *breakout) { push_breakout((Cand *)user, breakout); }
 
-/* THE SEARCH A RUNNING PROBE BELONGS TO. These three assertions are about the CANDIDATE MACHINERY and not
-   about any parser, so they are stated ONCE for every derived-context class rather than re-written per class —
-   which is how a second class would otherwise end up with one of the three subtly different. */
-static Cand *probe_search(int sink) {
+/* THE SEARCH THE RUNNING CANDIDATE BELONGS TO — asked by BOTH halves of a verifying run, the context probe
+   that DERIVES and the breakout that FIRES, because both are the same question. These assertions are about the
+   CANDIDATE MACHINERY and not about any parser, so they are stated ONCE rather than re-written per class,
+   which is how a second class would otherwise end up with one of them subtly different.
+   NULL MEANS THIS SINK IS NOT THIS CANDIDATE'S, and that is a PARTITION and not a swallowed condition. A flow
+   carries ONE substitution for ONE (source, sink class), and one source can feed two classes: the full fixture
+   writes `location.hash` into an eval sink and, two statements later, into a markup sink. So the eval
+   candidate's `';X9()//` arrives at the markup write as well. Deriving there would file breakouts against a
+   search that never asked for them — which the class assertion has always said, as an abort — and FIRING there
+   would record a MARKUP breakout under the EVAL class: a finding whose sink is not the sink it fired at, which
+   §@S(d) cannot reproduce and a reader cannot tell from a real one. Nothing is lost by declining: the other
+   class has its own search over that very write, with its own derived breakouts.
+   It was an abort because only the probe half could reach it. The firing half can, so the answer is the
+   partition rather than the crash — the same shape as `concolic_is(arg)` above it. */
+static Cand *candidate_search(int sink) {
     Flow *f = flow_running();
     int created = 0;
     Cand *e;
 
     DCHECK(f && f->cand_src && f->cand_sink,
-           "an @S context locator reached a sink outside a candidate flow — nothing but a probe flow injects "
-           "one, so a string carrying it was built by something that is not this search");
-    DCHECK(sink_class_of_name(f->cand_sink) == sink,
-           "an @S context locator reached one sink class while the running candidate belongs to another — one "
-           "flow carries one substitution, so the breakouts derived here would be filed against a search that "
-           "never asked for them. The classes' locators are distinct strings precisely so a page writing one "
-           "source into two sink kinds cannot reach this");
+           "an @S candidate's own bytes reached a sink outside a candidate flow — nothing but a candidate run "
+           "injects them, so a string carrying one was built by something that is not this search");
+    if (sink_class_of_name(f->cand_sink) != sink) return NULL;
     e = sink_search(f->cand_src, sink, &created);
     DCHECK(!created,
-           "the sink a context probe is running for was not on the pending list — the probe exists only "
-           "because detection put it there, so an absent entry means this search was dropped and the breakouts "
-           "about to be derived have no seeded flow to belong to");
+           "the sink a candidate is running for was not on the pending list — the candidate exists only "
+           "because detection put it there, so an absent entry means this search was dropped and what is about "
+           "to be derived or recorded has no seeded flow to belong to");
     return e;
 }
 
 /* §12 for the eval sink, §13.2.5 for the markup one — the SAME observation read by the parser that owns the
    sink's language. */
-static void derive_js_context(const char *code)   { solve_js_breakouts(code, queue_derived, probe_search(SINK_EVAL)); }
-static void derive_html_context(const char *html) { solve_html_breakouts(html, queue_derived, probe_search(SINK_HTML)); }
+static void derive_js_context(Cand *e, const char *code)   { solve_js_breakouts(code, queue_derived, e); }
+static void derive_html_context(Cand *e, const char *html) { solve_html_breakouts(html, queue_derived, e); }
 
 void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {                          /* candidate run: the arg is the injected+wrapped CONCRETE code */
+        Cand *e;
         if (concolic_is(arg)) return;           /* injection didn't reach this read -> not our candidate */
+        if (!(e = candidate_search(SINK_EVAL))) return;   /* another class's search owns this write */
         const char *code = JS_ToCString(ctx, arg);
         if (code) {
             /* THE SAME PARTITION THE MARKUP SINK MAKES, and for the same two reasons. Each candidate kind is
@@ -384,8 +414,11 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
                used to queue whatever string reached the sink, tested only by "the value is not concolic" —
                which is also true of every literal the page evals — so each candidate flow re-ran the page's own
                code at a cost of the page's evals times the number of breakouts tried. */
-            if (strstr(code, SOLVE_JS_LOCATOR))  derive_js_context(code);
-            else if (strstr(code, "X9"))         fire_js(code, strlen(code));
+            /* AND EITHER BRANCH IS THE ARRIVAL — see `reached`. The two tests below are already the exact
+               partition that says this candidate's OWN bytes are in the string, so counting the observation
+               where it is made costs nothing and is the only place it can be made honestly. */
+            if (strstr(code, SOLVE_JS_LOCATOR))  { e->reached++; derive_js_context(e, code); }
+            else if (strstr(code, "X9"))         { e->reached++; fire_js(code, strlen(code)); }
             JS_FreeCString(ctx, code);
         }
         return;                                 /* g_fired reflects the PoC once this flow drains its queue */
@@ -447,9 +480,19 @@ static void url_fire(JSContext *ctx, const char *url) {
 /* location = arg (or el.href = arg): a URL-context sink. */
 void solve_url_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {
+        Cand *e;
         if (concolic_is(arg)) return;
+        if (!(e = candidate_search(SINK_URL))) return;   /* another class's search owns this write */
         const char *url = JS_ToCString(ctx, arg);
-        if (url) { url_fire(ctx, url); JS_FreeCString(ctx, url); }
+        /* THE SAME PARTITION THE OTHER TWO CLASSES MAKE, and this sink was missing it. Every non-concolic URL
+           the page wrote during a candidate run went to url_fire — including the page's OWN `javascript:`
+           hrefs, whose JS was then queued as a program once per candidate. This class has no context probe, so
+           the marker alone identifies its bytes: `CANDS_URL`'s vectors are the only strings this search ever
+           injects and both carry X9. */
+        if (url) {
+            if (strstr(url, "X9")) { e->reached++; url_fire(ctx, url); }
+            JS_FreeCString(ctx, url);
+        }
         return;
     }
     if (!concolic_is(arg)) return;
@@ -462,7 +505,9 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
    HTML and fires its handlers. */
 void solve_html_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {
+        Cand *e;
         if (concolic_is(arg)) return;   /* injection didn't reach this write */
+        if (!(e = candidate_search(SINK_HTML))) return;   /* another class's search owns this write */
         const char *html = JS_ToCString(ctx, arg);
         if (html) {
             /* TWO CANDIDATE KINDS REACH THIS WRITE, and each is told apart by the bytes IT injects — which the
@@ -476,8 +521,8 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
                concolic", which is also true of every literal the page writes. So each candidate flow built a
                whole document and parsed EVERY innerHTML in the page — the fixture's own markup, once per
                candidate — and the cost is the page's markup times the number of breakouts tried. */
-            if (strstr(html, SOLVE_HTML_LOCATOR)) derive_html_context(html);
-            else if (strstr(html, "X9")) html_fire(html);
+            if (strstr(html, SOLVE_HTML_LOCATOR)) { e->reached++; derive_html_context(e, html); }
+            else if (strstr(html, "X9"))          { e->reached++; html_fire(html); }
             JS_FreeCString(ctx, html);
         }
         return;
@@ -680,6 +725,11 @@ char *solve_json_array(JSContext *ctx) {
         json_buf_puts(&b, ",\"source\":"); json_buf_str(&b, g_pending[i].src);
         json_buf_puts(&b, ",\"search\":\"parked\",\"tried\":");
         snprintf(t, sizeof t, "%d", g_pending[i].tried); json_buf_puts(&b, t);
+        /* …AND HOW MANY OF THOSE RUNS GOT HERE, which is the half `tried` cannot state (see the field). The
+           two together are the only thing that tells a document nobody has explored far enough apart from a
+           breakout that arrived and did not work — `reached:0` is the first, anything else is the second. */
+        json_buf_puts(&b, ",\"reached\":");
+        snprintf(t, sizeof t, "%d", g_pending[i].reached); json_buf_puts(&b, t);
         /* The parked entry carries the DECLARATION, not the envelope: a search that has not solved has no
            vector to state and no PoC to reproduce, so `firesOn`/`cspBlocks`/`trustedTypes` would be claims
            about a PoC that does not exist. What it does carry is the whole source declaration — the bytes a

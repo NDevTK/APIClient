@@ -64,12 +64,19 @@ const char *solve_resume_candidate(const char *src, const char *sink_name);
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
-     parked search  `{"sink":..,"source":..,"search":"parked","tried":N
+     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
    own declaration. There is deliberately no "verified":false — the entry states what was searched, never that
    the sink is safe. An array for the same reason the @H surface is one — result.h owns the document.
+
+   "HOW FAR THE SEARCH GOT" IS TWO NUMBERS AND USED TO BE ONE THAT COULD NOT SAY IT. `tried` is raised where a
+   candidate is SEEDED, so it is fixed the instant the flow is created; `reached` is raised where that
+   candidate's own bytes ARRIVE at this sink. A search reporting `tried:5,reached:0` has five flows queued
+   somewhere in the middle of a document nobody has explored far enough, and one reporting `tried:5,reached:5`
+   had every breakout delivered and broke out of nothing — opposite verdicts, needing opposite work, which the
+   single number reported identically.
 
    THE FIRED ENTRY IS §S(d)'s REPRODUCTION ENVELOPE, and every field of it is a POSITIVE statement whose ABSENCE
    is equally positive — never a gap to be read as a default:
