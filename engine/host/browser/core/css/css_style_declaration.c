@@ -1855,7 +1855,7 @@ static JSValue js_cssd_camel_set(JSContext *ctx, JSValueConst this_val, JSValueC
     return JS_UNDEFINED;
 }
 
-/* ---- THE DESCRIPTOR INTERFACES: CSS Fonts §12.1's CSSFontFaceDescriptors and CSSOM §6.4.7's
+/* ---- THE DESCRIPTOR INTERFACES: CSS Fonts 5 §9.1's CSSFontFaceDescriptors and CSSOM §6.4.7's
  * CSSPageDescriptors -----------------------------------------------------------------------------------------
  *
  * EACH LIST IS TYPED OUT BECAUSE THERE IS NO REGISTRY TO GENERATE IT FROM, and that is the opposite of the
@@ -1863,19 +1863,49 @@ static JSValue js_cssd_camel_set(JSContext *ctx, JSValueConst this_val, JSValueC
  * "supported CSS property" set §6.6.1 states them over. A DESCRIPTOR is not a property: `src` and
  * `unicode-range` are accepted nowhere but inside an `@font-face` rule and `size` nowhere but inside an
  * `@page`, lexbor's registry has no entry for any of them, and each set is closed by the IDL rather than by
- * what this engine implements. So each spec's own names are its list, and each name carries the two spellings
- * the IDL declares (`fontFamily` and `font-family`, `marginTop` and `margin-top`) — a name that is already one
- * word (`src`, `size`, `marks`, `bleed`, `margin`) has one.
+ * what this engine implements.
+ *
+ * BOTH SPELLINGS ARE WRITTEN OUT, because the IDL DECLARES BOTH — `fontFamily` and `font-family` are two
+ * attributes of the interface, not one attribute and a convenience — and a table that carried only the dashed
+ * one and ran §6.6.1's CSS-property-to-IDL-attribute algorithm over it at install time would be DERIVING a list
+ * the spec STATES. The derivation is not even total for the properties it was borrowed from: §6.6.1 declares
+ * `cssFloat` as its own attribute, which no dash-to-camel walk produces. A name that is already one word
+ * (`src`, `size`, `marks`, `bleed`, `margin`) has ONE attribute, and its two columns say so by coinciding.
  *
  * TWO TABLES, ONE MAGIC SPACE. The attribute bodies below are shared: a descriptor is read through
  * getPropertyValue and written through setProperty whichever interface declared it, so what an install has to
  * carry is only WHICH NAME, and the magic indexes the two tables read end to end. A second pair of bodies over
  * a second table would be the same twenty lines twice, and the two copies would be free to disagree about
- * §6.6.1's own paths. */
-static const char *const FONT_FACE_DESCRIPTORS[] = {
-    "src", "font-family", "font-style", "font-weight", "font-stretch", "font-width", "unicode-range",
-    "font-feature-settings", "font-variation-settings", "font-named-instance", "font-display",
-    "font-language-override", "ascent-override", "descent-override", "line-gap-override",
+ * §6.6.1's own paths. Each table is nonetheless installed from ITS OWN name, never through a shared pointer
+ * or a magic range: which interface declares a descriptor is exactly the fact `pageRule.style.src` being
+ * undefined rests on, so the two lists must not be reachable as one.
+ *
+ * CSS Fonts Module Level 5 §9.1's `interface CSSFontFaceDescriptors : CSSStyleDeclaration`, whose forty-one
+ * attributes are these twenty-one names. Level 4 §12.1 declares the same interface with SIX names fewer —
+ * `font-size`, `size-adjust` and §6.10's four synthesis-position overrides — and Level 5 is the level webref
+ * extracts, so this list is Level 5's. */
+static const struct { const char *dashed; const char *camel; } FONT_FACE_DESCRIPTORS[] = {
+    { "src",                            "src" },
+    { "font-family",                    "fontFamily" },
+    { "font-style",                     "fontStyle" },
+    { "font-weight",                    "fontWeight" },
+    { "font-stretch",                   "fontStretch" },
+    { "font-width",                     "fontWidth" },
+    { "font-size",                      "fontSize" },
+    { "size-adjust",                    "sizeAdjust" },
+    { "unicode-range",                  "unicodeRange" },
+    { "font-feature-settings",          "fontFeatureSettings" },
+    { "font-variation-settings",        "fontVariationSettings" },
+    { "font-named-instance",            "fontNamedInstance" },
+    { "font-display",                   "fontDisplay" },
+    { "font-language-override",         "fontLanguageOverride" },
+    { "ascent-override",                "ascentOverride" },
+    { "descent-override",               "descentOverride" },
+    { "line-gap-override",              "lineGapOverride" },
+    { "superscript-position-override",  "superscriptPositionOverride" },
+    { "subscript-position-override",    "subscriptPositionOverride" },
+    { "superscript-size-override",      "superscriptSizeOverride" },
+    { "subscript-size-override",        "subscriptSizeOverride" },
 };
 #define FONT_FACE_DESCRIPTOR_N ((int)(sizeof(FONT_FACE_DESCRIPTORS) / sizeof(FONT_FACE_DESCRIPTORS[0])))
 
@@ -1884,9 +1914,16 @@ static const char *const FONT_FACE_DESCRIPTORS[] = {
    that is the interface saying what CSS Paged Media §4.3 says: a page context holds page properties, so
    `pageRule.style.transform` is not a member and `pageRule.style.cssFloat` is undefined — which is what
    css/cssom/page-descriptors.html reads directly. */
-static const char *const PAGE_DESCRIPTORS[] = {
-    "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
-    "size", "page-orientation", "marks", "bleed",
+static const struct { const char *dashed; const char *camel; } PAGE_DESCRIPTORS[] = {
+    { "margin",           "margin" },
+    { "margin-top",       "marginTop" },
+    { "margin-right",     "marginRight" },
+    { "margin-bottom",    "marginBottom" },
+    { "margin-left",      "marginLeft" },
+    { "size",             "size" },
+    { "page-orientation", "pageOrientation" },
+    { "marks",            "marks" },
+    { "bleed",            "bleed" },
 };
 #define PAGE_DESCRIPTOR_N ((int)(sizeof(PAGE_DESCRIPTORS) / sizeof(PAGE_DESCRIPTORS[0])))
 #define DESCRIPTOR_N (FONT_FACE_DESCRIPTOR_N + PAGE_DESCRIPTOR_N)
@@ -1898,8 +1935,8 @@ static const char *cssd_descriptor(int magic)
 {
     DCHECK(magic >= 0 && magic < DESCRIPTOR_N,
            "a descriptor attribute ran with a magic neither descriptor table has");
-    if (magic < FONT_FACE_DESCRIPTOR_N) return FONT_FACE_DESCRIPTORS[magic];
-    return PAGE_DESCRIPTORS[magic - FONT_FACE_DESCRIPTOR_N];
+    if (magic < FONT_FACE_DESCRIPTOR_N) return FONT_FACE_DESCRIPTORS[magic].dashed;
+    return PAGE_DESCRIPTORS[magic - FONT_FACE_DESCRIPTOR_N].dashed;
 }
 
 /* Both halves forward exactly as §6.6.1's do — the getter is getPropertyValue and the setter is setProperty
@@ -2368,35 +2405,6 @@ void cssom_init(JSContext *ctx)
     realm_declare_intrinsic(cssom_install_proto);
 }
 
-/* ONE DESCRIPTOR INTERFACE'S ATTRIBUTES, over the magic range `[first, first + n)` that is its table. BOTH
-   SPELLINGS ARE INSTALLED because the IDL declares both — `fontFamily` and `font-family` are two attributes of
-   the interface, not one attribute and a convenience, and so are `marginTop` and `margin-top` — and the dashed
-   one is exactly what css/cssom/cssstyledeclaration-cssfontrule.tentative.html reads (`"unicode-range" in
-   style`) and what css/cssom/page-descriptors.html asserts as an own property of the prototype. A name that is
-   already one word has two spellings that COINCIDE, so one attribute is defined for it. */
-static void cssd_install_descriptors(JSContext *ctx, JSValueConst proto, int first, int n)
-{
-    int d;
-
-    for (d = first; d < first + n; d++) {
-        const char *name = cssd_descriptor(d);
-        char camel[48];
-        size_t i, j = 0;
-        bool up = false;
-
-        idl_install_accessor(ctx, proto, name, js_cssd_descriptor_get, d, g_desc_set_id[d]);
-        for (i = 0; name[i]; i++) {
-            if (name[i] == '-') { up = true; continue; }
-            DCHECK(j + 1 < sizeof(camel), "a descriptor's camel-cased spelling outgrew its buffer");
-            camel[j++] = up ? (char)toupper((unsigned char)name[i]) : name[i];
-            up = false;
-        }
-        camel[j] = 0;
-        if (strcmp(camel, name) != 0)
-            idl_install_accessor(ctx, proto, camel, js_cssd_descriptor_get, d, g_desc_set_id[d]);
-    }
-}
-
 /* FOUR INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, because four specs split them. §6.6.1's
    `interface CSSStyleProperties : CSSStyleDeclaration` carries `cssFloat` and the per-property camel-cased
    attributes; CSS Fonts §12.1's `interface CSSFontFaceDescriptors : CSSStyleDeclaration` carries the fifteen
@@ -2411,6 +2419,7 @@ void cssom_install_proto(JSContext *ctx)
 {
     JSValue base, proto, descriptors, page, prev;
     uintptr_t id;
+    int d;
 
     DCHECK(g_ready, "a realm asked for the declaration-block prototypes before the interfaces were declared");
     prev = JS_GetClassProto(ctx, g_cssd_class);
@@ -2449,22 +2458,45 @@ void cssom_install_proto(JSContext *ctx)
             up = false;
         }
         camel[j] = 0;
-        /* §CSSOM's one exception: `float` is a reserved word in some bindings, so its attribute is `cssFloat`. */
-        if (strcmp(camel, "float") == 0) strcpy(camel, "cssFloat");
         idl_install_accessor(ctx, proto, camel, js_cssd_camel_get, (int)id, g_camel_set_id[id]);
+        /* §6.6.1's `cssFloat` IS A SECOND ATTRIBUTE OVER THE SAME PROPERTY, NOT A RENAME OF THE FIRST. The
+           CSS-property-to-IDL-attribute algorithm this loop runs has NO float case — it uppercases after a
+           dash and nothing else — so it produces `float`, and §6.6.1 then declares `cssFloat` separately,
+           defined to invoke setProperty "with float as first argument". Renaming here DELETED `float`, so
+           `element.style.float` was undefined in this engine and it is a property of every browser. */
+        if (strcmp(camel, "float") == 0)
+            idl_install_accessor(ctx, proto, "cssFloat", js_cssd_camel_get, (int)id, g_camel_set_id[id]);
     }
 
-    /* CSS Fonts §12.1's CSSFontFaceDescriptors.prototype and CSSOM §6.4.7's CSSPageDescriptors.prototype, each
-       over the magic range that is its own table. */
+    /* CSS Fonts 5 §9.1's CSSFontFaceDescriptors.prototype and CSSOM §6.4.7's CSSPageDescriptors.prototype,
+       each over ITS OWN table. Both spellings are installed because the IDL declares both, and the dashed one
+       is exactly what css/cssom/cssstyledeclaration-cssfontrule.tentative.html reads (`"unicode-range" in
+       style`) and what css/cssom/page-descriptors.html asserts as an own property of the prototype. The
+       `strcmp` is not a guard against a bad name: it is the one-word case, where the IDL declares a single
+       attribute and the table's two columns coincide to say so. */
     descriptors = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(descriptors), "CSSFontFaceDescriptors.prototype could not be allocated");
     idl_interface_tag(ctx, descriptors, "CSSFontFaceDescriptors");
-    cssd_install_descriptors(ctx, descriptors, 0, FONT_FACE_DESCRIPTOR_N);
+    for (d = 0; d < FONT_FACE_DESCRIPTOR_N; d++) {
+        idl_install_accessor(ctx, descriptors, FONT_FACE_DESCRIPTORS[d].dashed, js_cssd_descriptor_get, d,
+                             g_desc_set_id[d]);
+        if (strcmp(FONT_FACE_DESCRIPTORS[d].camel, FONT_FACE_DESCRIPTORS[d].dashed) != 0)
+            idl_install_accessor(ctx, descriptors, FONT_FACE_DESCRIPTORS[d].camel, js_cssd_descriptor_get, d,
+                                 g_desc_set_id[d]);
+    }
 
     page = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(page), "CSSPageDescriptors.prototype could not be allocated");
     idl_interface_tag(ctx, page, "CSSPageDescriptors");
-    cssd_install_descriptors(ctx, page, FONT_FACE_DESCRIPTOR_N, PAGE_DESCRIPTOR_N);
+    for (d = 0; d < PAGE_DESCRIPTOR_N; d++) {
+        int m = FONT_FACE_DESCRIPTOR_N + d;
+
+        idl_install_accessor(ctx, page, PAGE_DESCRIPTORS[d].dashed, js_cssd_descriptor_get, m,
+                             g_desc_set_id[m]);
+        if (strcmp(PAGE_DESCRIPTORS[d].camel, PAGE_DESCRIPTORS[d].dashed) != 0)
+            idl_install_accessor(ctx, page, PAGE_DESCRIPTORS[d].camel, js_cssd_descriptor_get, m,
+                                 g_desc_set_id[m]);
+    }
 
     JS_SetClassProto(ctx, g_cssd_class, proto);
     realm_value_set(ctx, g_declaration_proto_slot, base);
