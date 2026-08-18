@@ -898,10 +898,14 @@ report(STAGES);
      - the record crossing the TYPED, VALIDATED wire — `content.mojom.Renderer` declares `route`, `perform`,
        `hostAnswerRemote` and `worldGone`, and route.mjs reaches those entries by raw `ccall`, so the validator
        that assumes the renderer is hostile has never seen a routed record. That belongs in the stage ABOVE,
-       which already holds two mojo-bound instances, and its precondition is not met yet either: that stage
-       calls `init`/`getBundleId`/`teardown` and never `begin`/`step`, so NO FLOW HAS EVER RUN behind the frame
-       boundary. Driving one peer's frontier over the wire until it emits its first `navigable.create` notice
-       is the next diff, and if the notice does not cross, that is the finding;
+       which already holds two mojo-bound instances. ITS PRECONDITION IS NOW MET AND WAS NOT WHEN THIS LIST WAS
+       WRITTEN: that stage called `init`/`getBundleId`/`teardown` and never `begin`/`step`, so no flow had ever
+       run behind the frame boundary and a routing phase would have asserted against a peer with no frontier to
+       route into. Phase 4 drives one renderer's frontier over the wire — a cross-origin `window.open`, which
+       core/frame/navigable.c ANNOUNCES rather than creates because the child is in another agent cluster — and
+       reads the `navigable.create` notice back through the typed boundary, asserting its seven fields against
+       that record's own grammar. What is still unwritten is the record travelling the other way: `Route`,
+       `Perform` and `HostAnswerRemote` are declared and the validator has still never seen one;
      - the routing DECISION and the origin stamp — bridge.js's, exercised by nothing, and NOT closed by adding
        a phase above: a gate that models `holderOf` the way route.mjs does is honest only if it says so. What
        would close it is bridge.js's router becoming loadable without the chrome extension APIs and IndexedDB

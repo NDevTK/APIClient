@@ -471,10 +471,133 @@ try {
          'slot and every transition mutates only after it, so a counter that moved here is a burial the table ' +
          'performed on a renderer it had just refused to recognise');
 
-  /* ── PHASE 4 — THE IDS, ACCOUNTED FOR. Every id this table ever minted is registered, terminated or failed
+  /* ── PHASE 4 — A FLOW RUNNING BEHIND THE FRAME BOUNDARY, WHICH NOTHING IN THIS TREE HAD EVER DONE.
+     Every instance this layer has ever provisioned was `init`'d, asked for its bundle id and its stats, and
+     torn down: `begin` and `step` were never called through the mojo wire by anything. So the phases above
+     prove the transport carries a renderer INTO EXISTENCE and prove nothing whatever about a renderer doing
+     WORK, and any assertion about a record routed BETWEEN two renderers written before this one would be an
+     assertion against a peer that has never had a frontier to route into.
+     WHAT IS NEW HERE IS THE WIRE, NOT THE SEAM. route.mjs already drives a frontier and already routes a
+     `navigable.create` — by raw `ccall` into a module it instantiated itself. The entries that carry a routed
+     record are DECLARED methods of `content.mojom.Renderer` (`Route`, `Perform`, `HostAnswerRemote`,
+     `WorldGone`), and the validator that exists because SECURITY.md calls the renderer the hostile peer has
+     never seen one of them. This phase is the first half of closing that: a real flow, in a sandboxed
+     opaque-origin frame, whose one-way notice crosses the typed boundary and is READ on this side.
+     THE DOCUMENT IS THE SMALLEST ONE THAT MUST EMIT THE NOTICE. A cross-origin `window.open` puts the child in
+     another agent cluster, so navigable.c announces it rather than creating it here — one `engine_host_notify`,
+     nothing negotiated, nothing to park on. No fetch, no read back, no post: this phase asserts that a flow RAN
+     and that its notice CROSSED, and every statement beyond that belongs to the phase that provisions the peer.
+     TERMINATION IS AN EMITTED OUTPUT AND NOT A STEP CAP (§NO BOUNDS). The drive ends when the notice arrives —
+     which is the whole claim — or when the engine itself reports ENGINE_STEP_DONE, which is the engine saying
+     its frontier drained; a drained frontier that announced nothing is the FINDING, printed as one. There is
+     deliberately no third exit: a drive that neither emits nor drains is a HANG, and it must be reported by the
+     harness's own hang signal rather than folded into this stage's verdict, because a step budget here could not
+     tell a flow that is working from one that is stuck (§Testing: measure the thing the invariant is about). */
+  console.log(`${TAG} ── phase 4: a flow behind the frame boundary ──`);
+  const OPENER_ADDR = 'https://opener.renderer.gate/app/index.html';
+  const CHILD_ADDR = 'https://peer.renderer.gate/child';
+  const OPENER_DOC = '<!doctype html><script>window.open("' + CHILD_ADDR + '","child");</script>';
+  const opener = await self.rendererLaunch('gate-group' + NUL + new URL(OPENER_ADDR).origin);
+  noteId(opener.routingId, 'phase 4');
+  /* THE FIVE ARGUMENTS ARE `qjs_init`'s, and they are the same five the probe passes: the document as BYTES,
+     §4.4's address, the name this agent's root document is known by, the response's header field lines (empty
+     — this document had no response) and §8.1.3.1's top-level creation URL, which for a root document is its
+     own address. */
+  const initReply = await opener.renderer.init(new TextEncoder().encode(OPENER_DOC), OPENER_ADDR, 'opener', '',
+                                               OPENER_ADDR);
+  if (initReply.rc !== 0)
+    fail(`the renderer refused the document phase 4 handed it (rc=${initReply.rc}) — every precondition in ` +
+         '`qjs_init` aborts rather than returning, so a non-zero return is a contract that changed');
+  /* THE EMPTY STRING IS A FRESH FRONTIER, which the mojom declares is a different thing from a resumed one
+     that happened to hold nothing. This gate has no residue to replay. */
+  await opener.renderer.begin('');
+  let create = null, steps = 0, drained = false;
+  while (create === null) {
+    const st = await opener.renderer.step();
+    steps++;
+    /* THE REQUESTS FLOWS ARE PARKED ON, ANSWERED THE WAY THE PRODUCTION CONSUMER ANSWERS THEM — one
+       `METHOD<TAB>URL` line each, and the reply record crossing as JSON with the BODY BESIDE IT as bytes,
+       because §2.2.5 makes a response's body a byte sequence and every way of putting one inside JSON is an
+       encode or a decode run by the zone that fetched. `computedType` is this zone's own decision and is
+       asserted rather than defaulted at the far end: this zone minted the two characters below and
+       `application/json` is what it computed them to be. */
+    for (const line of (await opener.renderer.getPending()).requests.split('\n').filter(Boolean)) {
+      const tab = line.indexOf('\t');
+      if (tab <= 0) fail(`a pending line carries no METHOD, which is half the request's identity: ${line}`);
+      const method = line.slice(0, tab), u = line.slice(tab + 1);
+      console.log(`${TAG}   pending: ${method} ${u}`);
+      await opener.renderer.provide(
+        method, u,
+        JSON.stringify({ status: 200, statusText: 'OK', headers: [],
+                         urlList: [new URL(u, OPENER_ADDR).href], computedType: 'application/json' }),
+        new TextEncoder().encode('{}'));
+    }
+    /* DRAINED BY THE READ, so a notice this zone does not act on is one nothing else will ever see. */
+    for (const n of (await opener.renderer.getHostNotices()).notices.split('\n').filter(Boolean)) {
+      const f = n.split('\t');
+      console.log(`${TAG}   notice: ${f[0]} ${f.slice(1, 4).join(' ')}`);
+      if (f[0] === 'navigable.create' && create === null) create = f;
+    }
+    if (create !== null) break;
+    if (st.code === 0) { drained = true; break; }
+  }
+  if (create === null)
+    fail(`the opener's frontier reported DONE after ${steps} step(s) without ever announcing a child ` +
+         'navigable — a cross-origin `window.open` puts the child in another agent cluster, so ' +
+         'core/frame/navigable.c announces it with a one-way notice and the host provisions the instance ' +
+         'under that name. A drive that drained without one is either a flow that never ran behind the frame ' +
+         'boundary or a notice that did not survive the typed wire, and until this phase existed neither ' +
+         `would have been visible to anything (drained=${drained})`);
+  /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — `navigable.create<TAB>child<TAB>creator<TAB>addr<TAB>
+     origin<TAB>topLevelCreationURL<TAB>policy`, built by core/frame/navigable.c. The policy is LAST because it
+     is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle field.
+     THE FIELD COUNT IS CHECKED FIRST because every read below it would otherwise be `undefined` compared
+     against a string, which is a false PASS shaped exactly like a real one. */
+  if (create.length < 7)
+    fail(`the create notice carries ${create.length} field(s) where the record has seven — ` +
+         `\`${create.join(' | ')}\``);
+  if (create[3] !== CHILD_ADDR)
+    fail(`the child navigable was announced at \`${create[3]}\` and this document opened \`${CHILD_ADDR}\` — ` +
+         'the address is what the peer instance would be provisioned to load, so an operation that took it ' +
+         'from anywhere but the call that named it would materialize the wrong document');
+  if (create[4] !== new URL(CHILD_ADDR).origin)
+    fail(`the child's origin was announced as \`${create[4]}\` and its address serializes to ` +
+         `\`${new URL(CHILD_ADDR).origin}\` — the origin is the peer's PRINCIPAL and is the half of the agent ` +
+         'cluster key SECURITY.md requires to be browser-stated');
+  if (create[2] !== 'opener')
+    fail(`the notice names \`${create[2]}\` as the creator and this document was init'd as \`opener\` — the ` +
+         'creator is what says which instance the child is a child OF, and a wrong one routes the peer\'s ' +
+         'answers to a document that did not open it');
+  if (create[1] === create[2] || create[1] === '')
+    fail(`the child navigable was announced under the creator's own name (\`${create[1]}\`) — the name is ` +
+         'minted in the creating instance and is the whole of how the host knows which instance to provision ' +
+         'and route to');
+  if (create[5] === '')
+    fail('the create notice carries no top-level creation URL — HTML §8.1.3.1 makes it the creator\'s to ' +
+         'state and the peer cannot derive it, so an empty one is a document the peer would build with no ' +
+         'answer for a fact it is required to have');
+  /* THE POLICY IS EMPTY AND THAT IS AN ENGINE INVARIANT, NOT THIS GATE'S PREFERENCE. navigable.c DCHECKs that
+     a CROSS-INSTANCE child inherits no CSP, because the notice carries the policy TEXT without CSP §2.2's
+     self-origin for that list — so a non-empty one here is that capability gap arriving, and it is worth a
+     line of its own rather than being read past. */
+  if (create[6] !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(6).join('\t')}\`) — navigable.c ` +
+         'states that a cross-instance clone carries the policy text WITHOUT its self-origin, so the peer ' +
+         'would resolve `self` against the CHILD\'s address instead of the creator\'s origin');
+  console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +
+              `announced at ${create[3]} (origin ${create[4]}, tlu ${create[5]}) by creator \`${create[2]}\``);
+  /* NO `teardown()` HERE, AND THAT IS DELIBERATE RATHER THAN AN OMISSION. `Teardown` is the call that makes the
+     runtime walk gc_obj_list and report a leaked GC object; this frontier is mid-flight ON PURPOSE — the drive
+     stopped at the notice — so its live flow state is reachable and a walk would report it as a leak. The
+     probe in phase 1 tears down instances whose work is finished, which is where that check belongs. Removing
+     the frame is the whole teardown of the instance either way: the module dies with the document. */
+  opener.destroy();
+  registryLine('after phase 4');
+
+  /* ── PHASE 5 — THE IDS, ACCOUNTED FOR. Every id this table ever minted is registered, terminated or failed
      to launch, so the three counts must account for the whole id space it issued. The registry asserts that
      after every mutation; this is the same arithmetic read from outside, over the ids this gate actually saw. */
-  console.log(`${TAG} ── phase 4: routing ids ──`);
+  console.log(`${TAG} ── phase 5: routing ids ──`);
   const end = registryLine('final');
   const sorted = mintedIds.slice().sort((a, b) => a - b);
   console.log(`${TAG}   ids observed: ${sorted.join(',')}   nextRoutingId=${end.reg.nextRoutingId}`);
@@ -503,6 +626,7 @@ if (_workerErrors.length)
 console.log(`${TAG} OK — two cross-origin renderers provisioned through the registry (bundle ids ` +
             `${probe.peers.map((p) => p.bundleId).join(' ')}), all three CHECK-class refusals fired and cost ` +
             `nothing (a second renderer for a live cluster, an id never minted, a renderer reported dead ` +
-            `twice), ids minted ${mintedIds.join(',')} and never reused`);
+            `twice), a flow ran behind the frame boundary and its navigable.create notice crossed the typed ` +
+            `wire, ids minted ${mintedIds.join(',')} and never reused`);
 shutdown();
 process.exit(0);
