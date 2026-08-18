@@ -173,6 +173,9 @@ const got = [];     /* every /got the receiving page fetched — one per message
    and not the asking flow's request id, because an id is unique only inside the instance that minted it and two
    askers may hold the same number — which is exactly the fact only the routing zone has. */
 const reads = new Map();
+/* Tokens the peer handed back rather than answering. Kept as a COUNT rather than a silence: a retraction and
+   a lost operation look identical from here, and only the notice tells them apart. */
+const retracted = [];
 /* The completions performing instances have emitted, by token, until the asker is handed each one. */
 const answers = new Map();
 /* Every `/closed` the ASKING page fetched — `a`'s own report of what `w.closed` answered, collected apart from
@@ -323,6 +326,26 @@ async function drainNotices(e) {
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
        minted. Held rather than delivered here: the asker is another instance and this loop is inside its step. */
     else if (f[0] === 'remoteop.answer') answers.set(f[1], f.slice(2).join('\t'));
+    /* AN OPERATION HANDED BACK, because the instance holding it PARKED before performing it. The record and
+       the token do NOT have one lifetime and that is the whole reason this arm exists: the record is text
+       whose names are global (documents, world vectors), while the TOKEN is a name in THIS zone's namespace
+       and dies with this zone's session. So a parked engine cannot carry the token into its recipe and answer
+       it later — a resumed engine would emit a completion under a name no zone ever minted. It hands the
+       operation back instead, and the asking flow — still suspended, and still reporting its request every
+       step because engine_host_requests deliberately does not dedupe — simply asks again.
+       FORGETTING IS THE ACTION. Dropping the read from this map is what lets the next step re-route it; there
+       is no store, no cross-session mapping, and nothing to persist. One notice per DISTINCT token, because
+       one operation is attached to every live timeline and per-flow notices would repeat one hand-back across
+       a frontier of thousands. */
+    else if (f[0] === 'remoteop.retracted') {
+      if (f.length < 2 || !f[1]) fail(`a remoteop.retracted notice carried no token: ${n}`);
+      const r = reads.get(f[1]);
+      if (!r) fail(`a retracted token names no read this zone asked: ${f[1]}`);
+      if (r.answered) fail(`a retracted token names a read already ANSWERED — the peer performed it and then ` +
+                           `handed it back, so a completion and a retraction both exist for ${f[1]}`);
+      retracted.push(f[1]);
+      reads.delete(f[1]);
+    }
     /* A WORLD OF THIS INSTANCE IS GONE — its flow left the frontier, or the whole session parked — so every
        peer holding a COW segment keyed on that name can drop it. BROADCAST, and that is the design rather than
        this driver being lazy: the sending engine deliberately does not record which peers a flow reached,
