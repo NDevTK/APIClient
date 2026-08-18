@@ -435,6 +435,13 @@ static const JSClassExoticMethods WINDOW_PROPS_EXOTIC = {
 static const JSClassDef WINDOW_PROPS_CLASS = { "WindowProperties", NULL, NULL, NULL, &WINDOW_PROPS_EXOTIC };
 static JSClassID g_window_props_class;
 
+/* THE SAME FOUR TOUCH HANDLERS core/html/html_element.c excludes, and for the same reason — this interface
+   includes the same `GlobalEventHandlers`, so §Touch Events Level 2's "this mixin must not be implemented"
+   reaches it too. The list is stated HERE rather than shared from there because idl_members_excluded reads the
+   interface name as a literal at the call and resolves its table per file; one list named from three sites is
+   not expressible, and html_element.c says so where it declares its own. */
+static const char *const TOUCH_EXCLUDED[] = { "ontouchstart", "ontouchend", "ontouchmove", "ontouchcancel" };
+
 
 /* THE CLASSES ARE THE AGENT'S, THE PROTOTYPES ARE THE REALM'S — and that line is Web IDL's, not a convenience.
    A class id is a registration in the JSRuntime and there is one runtime per agent; a PROTOTYPE is an object,
@@ -596,6 +603,12 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        list, which is how the WPT runner came to have none of them: every unqualified `onload = f` in the
        corpus wrote a plain own property that nothing ever fired. A member of Window is installed by Window. */
     event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);
+    idl_members_excluded(ctx, g, "Window", TOUCH_EXCLUDED,
+                         (int)(sizeof(TOUCH_EXCLUDED) / sizeof(TOUCH_EXCLUDED[0])),
+                         "Touch Events Level 2, `Extensions to the GlobalEventHandlers mixin`: \"For user "
+                         "agents where expose legacy touch event APIs is false, this mixin must not be "
+                         "implemented.\" This agent's `expose legacy touch event APIs` is false — TouchEvent, "
+                         "Touch and TouchList are absent, so a touch handler would have nothing to be handed");
     JS_FreeValue(ctx, gp);   /* the realm's class-proto slot and the chain hold it now */
 }
 

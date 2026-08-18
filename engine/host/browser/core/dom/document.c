@@ -1884,6 +1884,13 @@ static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment 
            g_id_create_walker = -1, g_id_create_range = -1, g_id_create_event = -1,
            g_id_create_cdata = -1, g_id_create_pi = -1, g_id_doc_ctor = -1, g_id_adopt_node = -1,
            g_id_title_set = -1, g_id_dir_set = -1;
+/* THE SAME FOUR TOUCH HANDLERS core/html/html_element.c excludes, and for the same reason — this interface
+   includes the same `GlobalEventHandlers`, so §Touch Events Level 2's "this mixin must not be implemented"
+   reaches it too. The list is stated HERE rather than shared from there because idl_members_excluded reads the
+   interface name as a literal at the call and resolves its table per file; one list named from three sites is
+   not expressible, and html_element.c says so where it declares its own. */
+static const char *const TOUCH_EXCLUDED[] = { "ontouchstart", "ontouchend", "ontouchmove", "ontouchcancel" };
+
 
 static void document_declare_members(JSContext *ctx)
 {
@@ -2270,6 +2277,12 @@ void document_install_proto(JSContext *ctx)
     document_install_members(ctx, proto);
     /* §3.1.1's IDL includes GlobalEventHandlers and adds onreadystatechange / onvisibilitychange. */
     event_target_install_handlers(ctx, proto, EH_GLOBAL | EH_DOCUMENT);
+    idl_members_excluded(ctx, proto, "Document", TOUCH_EXCLUDED,
+                         (int)(sizeof(TOUCH_EXCLUDED) / sizeof(TOUCH_EXCLUDED[0])),
+                         "Touch Events Level 2, `Extensions to the GlobalEventHandlers mixin`: \"For user "
+                         "agents where expose legacy touch event APIs is false, this mixin must not be "
+                         "implemented.\" This agent's `expose legacy touch event APIs` is false — TouchEvent, "
+                         "Touch and TouchList are absent, so a touch handler would have nothing to be handed");
     /* §4.5: `Document includes ParentNode` — not ChildNode, because a document has no parent to be removed
        from — and `NonElementParentNode`, the same getElementById DocumentFragment includes. */
     node_install_parent_mixin(ctx, proto);
