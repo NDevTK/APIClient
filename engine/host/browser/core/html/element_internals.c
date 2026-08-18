@@ -39,11 +39,11 @@
  *     one shadow root §4.13.7.2 hides from it, which is a WRONG answer rather than a partial one, so the
  *     member stays ABSENT until the field is readable. §4.13.4's `disable shadow` boolean is collected anyway,
  *     because it comes off the same sequence `disable internals` does.
- *   - ARIAMixin's EIGHT element-reflecting members (`ariaActiveDescendantElement` and the seven
- *     `FrozenArray<Element>?` ones). They are not content-attribute reflections at all — they are the
- *     "explicitly set attr-element" machinery, which is its own mechanism with its own lifetime rules. The 44
- *     `DOMString?` members are real reflections into §4.13.7.4's internal content attribute map and are here,
- *     over the ONE list core/dom/aria_mixin.h states.
+ *   - ARIAMixin's EIGHT element-reflecting members WERE on this list, on the grounds that the "explicitly set
+ *     attr-element" machinery is its own mechanism. It is — and it now EXISTS, so they are built: §2.6.1 makes
+ *     the reflected target a parameter of one algorithm, and this file states its four target algorithms below
+ *     rather than carrying a second copy of the walk. The 44 `DOMString?` members are reflections into
+ *     §4.13.7.4's internal content attribute map and are here, over the ONE list core/dom/aria_mixin.h states.
  *   - Resetting the form owner when some OTHER element's `id` changes, or when an element with an ID enters or
  *     leaves the document. Those triggers need a document-level id index, which this engine does not have
  *     (`getElementById` walks), and a tree walk per `id` write is not that index.
@@ -52,6 +52,7 @@
  * algorithm is a STEP of HTML §4.10.22.4, which now exists as form_entry_list.c; its step 5.3 performs the
  * construction and element_internals_submission_value below is what it reads. That is what carries a
  * form-associated custom element's value into an @H record. */
+#include <stdlib.h>
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -59,6 +60,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "solver/concolic.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/idl_iter.h"
@@ -768,6 +770,86 @@ static JSValue js_internals_aria_set(JSContext *ctx, JSValueConst this_val, JSVa
     return JS_UNDEFINED;
 }
 
+/* ---- §2.6.1's FOUR ALGORITHMS FOR AN ElementInternals TARGET ------------------------------------------------
+ *
+ * The eight ELEMENT-REFLECTING members used to be on this file's honestly-absent list, on the grounds that they
+ * are "their own mechanism with their own lifetime rules". That was true and is no longer a reason: the
+ * mechanism EXISTS, in core/dom/aria_mixin.c, and §2.6.1 already states the only thing that differs between the
+ * two interfaces that include the mixin — the reflected target's four algorithms. So this component states its
+ * four and the members are the SAME machine, rather than a second copy of a walk, a shadow-including-ancestor
+ * filter and a FrozenArray cache.
+ *
+ * WHAT DIFFERS, EXACTLY, AND WHY EACH IS THE STANDARD'S SENTENCE AND NOT A CONVENIENCE:
+ *   - "get the element" is the TARGET ELEMENT, not the receiver — so the ids resolve in that element's root and
+ *     the ancestor filter walks its ancestors, which is what makes `internals.ariaLabelledByElements` name
+ *     elements in the custom element's own tree. It is also §3.7.5's BRAND: an object with no target slot is
+ *     not an ElementInternals, and the mixin throws the TypeError for it.
+ *   - The content attribute is §4.13.7.4's INTERNAL CONTENT ATTRIBUTE MAP, not the element's attributes — which
+ *     is what makes these the DEFAULT semantics the page author can still override with the real markup.
+ *   - There are NO attribute change steps: §2.6.1 states them "for element reflected targets only", and this
+ *     map has no other writer to invalidate an explicit value. aria_mixin_attribute_changed is not called from
+ *     here and must not be.
+ * The explicitly set attr-element(s) and the cached FrozenArray belong to the ElementInternals object itself
+ * (§2.6.1 gives them to the reflected target), and the mixin keeps them on whichever object it is handed — so
+ * they ride this object's own COW state exactly as the map above does. */
+static JSValue ei_aria_element(JSContext *ctx, JSValueConst target)
+{
+    return ei_target(ctx, target);   /* §4.13.7.1's target element, and the brand test in one — see ei_target */
+}
+
+static char *ei_aria_attr_get(JSContext *ctx, JSValueConst target, const char *name)
+{
+    JSValue el = ei_target(ctx, target), map, v;
+    char *out = NULL;
+
+    if (!JS_IsObject(el)) { JS_FreeValue(ctx, el); return NULL; }
+    map = ei_aria_map(ctx, el, false);
+    v = JS_IsObject(map) ? JS_GetPropertyStr(ctx, map, name) : JS_UNDEFINED;
+    if (!JS_IsUndefined(v) && !JS_IsNull(v) && !JS_IsException(v)) {
+        /* The bytes a member needs from a value that may be UNKNOWN EXTERNAL INPUT — an unknown denotes its
+           SHAPE, which is the same rule §4.2.4's getElementById reads its argument under. */
+        const char *c = concolic_name_cstr(ctx, v);
+
+        if (c) { out = strdup(c); JS_FreeCString(ctx, c); }
+    }
+    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, map);
+    JS_FreeValue(ctx, el);
+    return out;
+}
+
+static void ei_aria_attr_set(JSContext *ctx, JSValueConst target, const char *name, const char *value)
+{
+    JSValue el = ei_target(ctx, target), map;
+
+    if (!JS_IsObject(el)) { JS_FreeValue(ctx, el); return; }
+    map = ei_aria_map(ctx, el, true);
+    JS_SetPropertyStr(ctx, map, name, JS_NewString(ctx, value ? value : ""));
+    JS_FreeValue(ctx, map);
+    JS_FreeValue(ctx, el);
+}
+
+static void ei_aria_attr_del(JSContext *ctx, JSValueConst target, const char *name)
+{
+    JSValue el = ei_target(ctx, target), map;
+    JSAtom a;
+
+    if (!JS_IsObject(el)) { JS_FreeValue(ctx, el); return; }
+    map = ei_aria_map(ctx, el, false);
+    if (JS_IsObject(map)) {
+        a = JS_NewAtom(ctx, name);
+        CHECK(a != JS_ATOM_NULL, "an ARIA content attribute name could not be interned");
+        JS_DeleteProperty(ctx, map, a, 0);
+        JS_FreeAtom(ctx, a);
+    }
+    JS_FreeValue(ctx, map);
+    JS_FreeValue(ctx, el);
+}
+
+static const AriaTargetOps EI_ARIA_OPS = {
+    ei_aria_element, ei_aria_attr_get, ei_aria_attr_set, ei_aria_attr_del
+};
+
 /* ---- §4.13.2 attachInternals() ------------------------------------------------------------------------------ */
 
 static JSValue js_html_attach_internals(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
@@ -981,6 +1063,10 @@ void element_internals_declare(JSContext *ctx)
     g_id_set_clear = idl_method_id(ctx, NONE, 0, js_states_member, SET_CLEAR);
     for (i = 0; i < ARIA_N; i++)
         g_id_aria_set[i] = idl_setter_id(ctx, IDL_DOMSTRING_NULLABLE, false, js_internals_aria_set, i);
+    /* §2.6.1's reflected target, declared beside the members that use it. The eight element-reflecting members
+       are DECLARED by the mixin (one declaration per target kind), so nothing is declared here for them —
+       this states the four algorithms that make this interface one of the two targets. */
+    aria_mixin_declare_target(ARIA_TARGET_INTERNALS, &EI_ARIA_OPS);
     g_set_pair_handle = idl_pair_iter_declare(ctx, &EI_SET_PAIR_OPS);
     realm_declare_intrinsic(element_internals_install_protos);
     g_ready = 1;
@@ -1011,6 +1097,9 @@ static void element_internals_install_protos(JSContext *ctx)
     idl_install_accessor(ctx, proto, "states", js_internals_get, EI_STATES, -1);
     for (i = 0; i < ARIA_N; i++)
         idl_install_accessor(ctx, proto, ARIA[i].member, js_internals_aria_get, i, g_id_aria_set[i]);
+    /* ARIAMixin's eight ELEMENT-REFLECTING members, over this interface's four target algorithms. The 44 above
+       are reflections into a MAP and stay this component's own; these are one algorithm shared with Element. */
+    aria_mixin_install_elements(ctx, proto, ARIA_TARGET_INTERNALS);
     JS_SetClassProto(ctx, g_internals_class, proto);
 
     proto = JS_NewObject(ctx);
