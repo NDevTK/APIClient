@@ -331,7 +331,8 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
    `<meta>` policies alone. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
-                           const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags)
+                           const char *csp, const char *csp_self_origin, const char *about_base_url,
+                           SandboxFlags sandbox_flags)
 {
     lxb_html_document_t *dom;
     JSContext *cctx;
@@ -375,6 +376,16 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
     cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, top_level_url, origin_serialized(origin), csp,
                            csp_self_origin, sandbox_flags, doc, nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
+    /* HTML §7.4's ABOUT BASE URL, WRITTEN BEFORE ANYTHING RESOLVES A URL IN THIS DOCUMENT. It is §2.4.3's
+       fallback base URL for a Document addressed `about:blank`, so §4.2.3's freeze and every relative
+       reference read it — which is why it is set here, between the realm's construction and the scripts
+       seeded below, rather than left for the first reader. document_set_about_base_url asserts the half of
+       that ordering it can see (nothing has frozen a base element's URL yet).
+       IT DOES NOT GO THROUGH THE RealmBuilder, and that is deliberate rather than a shortcut: the builder is
+       the HOST's — it declares which platform surface a document of this build gets — and whose base URL a
+       created Document inherits is a fact about the OPERATION §7.4 is performing, which is this component's.
+       A host cannot answer it and would have to be told, which is a second protocol for one fact. */
+    if (about_base_url && *about_base_url) document_set_about_base_url(cctx, about_base_url);
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
         JSContext **g = realloc(g_realms, (size_t)cap * sizeof *g);
@@ -469,6 +480,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     const Origin *origin, *tlo;
     JSValue bodyv = JS_UNDEFINED, cspv = JS_UNDEFINED;
     const char *self_origin = NULL;
+    const char *about_base = NULL;
     bool inherited = false;
     size_t body_len = 0;
     JSContext *cctx;
@@ -546,6 +558,20 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                "list a struct of policies AND an origin, so the two travel together or the clone arrives "
                "unable to resolve `'self'`");
     }
+    /* §7.4.5's ABOUT BASE URL for THIS navigation — "if url matches about:blank or about:srcdoc, set
+       aboutBaseURL to initiatorBaseURL" — which is why the INITIATOR's base URL rides the job and is used only
+       when the destination is an `about:` URL. `fetches` is exactly that test already made, from the other
+       side: a destination with a response has one, and §2.4.3 gives its Document a null about base URL. */
+    if (!fetches) {
+        /* ASKED OF THE VALUE AND NOT OF THE STRING IT CONVERTS TO. `JS_ToCString(JS_NULL)` answers "null" —
+           a five-character URL that parses — so a job that carried no base would have set one silently. The
+           absent case is a JS_NULL slot, which is a question about the slot. */
+        DCHECK(JS_IsString(step_arg(&s->hdr, 5)),
+               "§7.4.2.2 navigated to an `about:` destination with no INITIATOR base URL on the job — §7.4.5 "
+               "takes the about base URL from the initiator, and without it every relative URL in the loaded "
+               "Document resolves against `about:blank`, whose opaque path makes the parse FAIL");
+        about_base = JS_ToCString(ctx, step_arg(&s->hdr, 5));
+    }
     if (window_proxy_materialized(proxy)) {
         doc = world_mint_doc(window_proxy_doc(proxy));
         world_doc_adopt(doc);
@@ -591,9 +617,10 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "§7.3.1's determine-the-origin for a navigation to the point the response arrives (here), keeping "
            "the enqueue-time answer only for the `about:` destinations that have no response");
     cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, (const char *)body, body_len, csp,
-                           inherited ? self_origin : origin_serialized(origin), final_flags);
+                           inherited ? self_origin : origin_serialized(origin), about_base, final_flags);
     window_proxy_navigate(ctx, proxy, cctx, doc, addr, tlu, tlo, origin);
     JS_FreeCString(ctx, self_origin);
+    JS_FreeCString(ctx, about_base);
     JS_FreeCString(ctx, csp);
     /* NO `JS_FreeCString(ctx, body)`: `body` points INTO `bodyv`'s own buffer and owns nothing, so its whole
        lifetime is that value's — which is why the release below must stay AFTER navigable_realm. */
@@ -652,15 +679,20 @@ static int g_nav_load_stepid = -1;
  * it: it put §7.4 step 14's load on quickjs's global list, which this engine never drains, so every page whose
  * own markup carried an `<iframe src>` aborted at the first line of the scheduler's session — which asserts
  * exactly that a job may not already be queued when a session begins. */
+/* `about_base` is §7.4.5's INITIATOR BASE URL, carried for the same reason the inherited policy beside it is:
+   a destination that matches `about:blank` has no response to take a base from, and by the time the JOB runs
+   the only document it could ask is the one being replaced. §CLAUDE.md's "an operation that becomes a work
+   item takes its inputs with it" is exactly this field. NULL for a destination that fetches. */
 static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const char *addr, const Origin *origin,
-                                   const char *inherit_csp, const Origin *inherit_csp_self_origin)
+                                   const char *inherit_csp, const Origin *inherit_csp_self_origin,
+                                   const char *about_base)
 {
-    JSValueConst argv[5];
-    JSValue fn, url, org, csp, self;
+    JSValueConst argv[6];
+    JSValue fn, url, org, csp, self, about;
 
     if (g_nav_load_stepid < 0)
         g_nav_load_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_nav_load_def);
-    fn = JS_NewCFunction2(ctx, NULL, "load", 5, JS_CFUNC_step, g_nav_load_stepid);
+    fn = JS_NewCFunction2(ctx, NULL, "load", 6, JS_CFUNC_step, g_nav_load_stepid);
     CHECK(!JS_IsException(fn), "the document-load job's callee could not be allocated");
     url = JS_NewString(ctx, addr);
     CHECK(!JS_IsException(url), "the document-load job's address could not be allocated");
@@ -682,12 +714,21 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
            "list a struct of policies AND an origin, and the clone that travels is the whole list");
     self = inherit_csp ? JS_NewString(ctx, origin_serialized(inherit_csp_self_origin)) : JS_NULL;
     CHECK(!JS_IsException(self), "the document-load job's inherited self-origin could not be allocated");
+    /* THE INITIATOR'S BASE URL, RESOLVED NOW AND NOT IN THE JOB — the same sentence the address above is
+       resolved by: by the time the job runs, the document it would ask is the one being replaced. */
+    DCHECK(about_base == NULL || *about_base,
+           "a document load was enqueued with an EMPTY about base URL — §7.4.5's null is the absence of the "
+           "value, which is what a destination that fetches has, and an empty string is neither");
+    about = about_base ? JS_NewString(ctx, about_base) : JS_NULL;
+    CHECK(!JS_IsException(about), "the document-load job's about base URL could not be allocated");
     argv[0] = proxy;
     argv[1] = url;
     argv[2] = org;
     argv[3] = csp;
     argv[4] = self;
-    JS_EnqueueCallTask(ctx, fn, 5, argv);   /* §7.4.2.2: the navigation and traversal task source */
+    argv[5] = about;
+    JS_EnqueueCallTask(ctx, fn, 6, argv);   /* §7.4.2.2: the navigation and traversal task source */
+    JS_FreeValue(ctx, about);
     JS_FreeValue(ctx, self);
     JS_FreeValue(ctx, csp);
     JS_FreeValue(ctx, org);
@@ -746,8 +787,13 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
            "is a host-routed provisioning like §7.4's create notice and not a realm this agent can build");
     /* §7.2.6: a destination with no response inherits the INITIATOR's policy — this document's — and CSP
        §2.2 makes that clone the whole LIST, so the origin its `'self'` resolves against goes with it. */
+    /* §7.4.5: "if url matches about:blank or about:srcdoc, set aboutBaseURL to initiatorBaseURL" — the
+       INITIATOR is the document whose script ran, which is this realm, and its base URL is what a relative URL
+       inside the loaded `about:blank` Document must resolve against. It is decided HERE for the reason the
+       address above is decided here rather than in the job. */
     navigable_load_enqueue(ctx, proxy, addr, origin, policy_container_csp(document_policy(ctx)),
-                           policy_container_self_origin(document_policy(ctx)));
+                           policy_container_self_origin(document_policy(ctx)),
+                           strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL);
     free(addr);
     return JS_DupValue(ctx, proxy);
 }
@@ -1091,6 +1137,17 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                                     origin of its own that a policy could name, which is precisely the case
                                     CSP §2.2's self-origin exists for. */
                                  csp_self,
+                                 /* §7.4's `creatorBaseURL`: "if creator is non-null, set creatorBaseURL to
+                                    creator's DOCUMENT BASE URL" — this realm is the creator, and the initial
+                                    about:blank Document this navigable is created with takes it as its ABOUT
+                                    BASE URL. Taken now rather than at materialization, for the reason the
+                                    policy container is: a srcless child's realm is built later and by
+                                    whichever same-origin document reads through it first, whose base URL is
+                                    not the creator's. It is the creator's BASE URL and not its ADDRESS, so a
+                                    creator carrying `<base href>` passes the base on — which is what makes
+                                    `open()` from such a page resolve its child's relative URLs the way a
+                                    browser does. */
+                                 document_base_url(ctx),
                                  /* HTML §8.1.3.1's TOP-LEVEL CREATION URL, and §7.4 states it from both ends.
                                     A CHILD navigable is NESTED, so its documents' environments inherit their
                                     creator's — this document's, read off its own realm — and an `about:blank`
@@ -1139,8 +1196,10 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            because it is one spec fact about the scheme rather than a protocol between them. */
         if (strncmp(addr, "about:", 6) != 0)
             /* §7.2.6: the CREATOR's, for §7.4's create — the whole list, text and self-origin together. */
+            /* NO ABOUT BASE URL: the `if` above admits only a destination that is not an `about:` URL, so
+               §7.4.5's aboutBaseURL stays null — §2.4.3's answer for a Document that comes from a response. */
             navigable_load_enqueue(ctx, proxy, addr, origin, csp,
-                                   policy_container_self_origin(creator_policy));
+                                   policy_container_self_origin(creator_policy), NULL);
     } else {
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what

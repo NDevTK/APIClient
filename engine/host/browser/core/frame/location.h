@@ -36,10 +36,14 @@ void location_free(void);
    reach through the global with JS_GetPropertyStr, which would abort at the getter. */
 JSValue location_object(JSContext *ctx);
 
-/* HTML'S API BASE URL IS THE DOCUMENT'S ADDRESS, and it is read from the DOCUMENT — document_base_url(ctx) —
-   rather than recorded here. This component kept a module-static copy that every install overwrote, which was
-   one answer for a heap that now holds one realm per same-origin document: materializing a popup rewrote its
-   OPENER'S base, so the opener's next relative fetch resolved against the popup's address. A per-realm fact
-   stored per agent is the same defect as `name` having had two sources, and the Document already holds it. */
+/* §7.2.4's LOCATION URL IS THE DOCUMENT'S ADDRESS — "a Location object has an associated url, which is this
+   Location object's relevant Document's URL" — and it is read from the DOCUMENT (document_url(ctx)) rather
+   than recorded here. This component kept a module-static copy that every install overwrote, which was one
+   answer for a heap that now holds one realm per same-origin document: materializing a popup rewrote its
+   OPENER'S copy, so the opener's next relative fetch resolved against the popup's address. A per-realm fact
+   stored per agent is the same defect as `name` having had two sources, and the Document already holds it.
+   IT IS THE ADDRESS AND NOT §2.4.3's DOCUMENT BASE URL, which this header used to call the same thing. They
+   differ exactly when a page ships `<base href>`: HTML §8.1.5.1's API base URL moves and `location.href` does
+   not, so a Location reading the base URL would report an address the navigable was never at. */
 
 #endif

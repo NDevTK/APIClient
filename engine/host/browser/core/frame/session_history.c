@@ -1190,7 +1190,7 @@ static void sh_restore_history_object_state(JSContext *ctx, JSValueConst entry)
  * the address alone would call that one initial and silently turn its pushState into a replaceState. */
 static bool sh_is_initial_about_blank(JSContext *ctx)
 {
-    const char *url = document_base_url(ctx);
+    const char *url = document_url(ctx);
 
     if (!url || strcmp(url, "about:blank") != 0) return false;
     return !window_proxy_ever_navigated(document_window_proxy(ctx));
@@ -1640,7 +1640,7 @@ void session_history_install_document(JSContext *ctx)
     }
     sh_serialize_primitive(ctx, JS_NULL, &nul);
     sh_serialize_primitive(ctx, JS_UNDEFINED, &undef);
-    entry = sh_entry_new(ctx, document_base_url(ctx), sh_document_state_new(ctx), sh_state_buffer(ctx, &nul),
+    entry = sh_entry_new(ctx, document_url(ctx), sh_document_state_new(ctx), sh_state_buffer(ctx, &nul),
                          sh_state_buffer(ctx, &undef), "auto");
     structured_data_free(ctx, &undef);
     structured_data_free(ctx, &nul);

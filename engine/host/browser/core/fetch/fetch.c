@@ -50,10 +50,12 @@ static const FetchProvider *g_provider;
    platform-less build rather than a base this component invented. */
 bool fetch_parse_url(JSContext *ctx, UrlRecord *rec, const char *url, size_t len)
 {
-    /* THE BASE IS THE READING REALM'S DOCUMENT ADDRESS, asked of the Document rather than of a module-static
-       copy. HTML says "the current settings object's API base URL", and with one realm per same-origin
-       document the current settings object is whichever realm is running: an opener and a popup have two
-       addresses, and one stored copy answers with whichever installed last. */
+    /* THE BASE IS THE READING REALM'S DOCUMENT BASE URL, asked of the Document rather than of a module-static
+       copy. HTML says "the current settings object's API base URL", which §8.1.5.1 defines as "the current
+       BASE URL of window's associated Document" — §2.4.3's document base URL, so a page shipping
+       `<base href="/app/v2/">` moves every `fetch("api/users")` in it and this is the line that carries that.
+       With one realm per same-origin document the current settings object is whichever realm is running: an
+       opener and a popup have two, and one stored copy answers with whichever installed last. */
     const char *base_str = document_base_url(ctx);
     UrlRecord base;
     bool ok;

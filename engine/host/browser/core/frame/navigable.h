@@ -155,9 +155,16 @@ void navigable_set_realm_builder(RealmBuilder b);
    for the same reason `csp` is and answering a question the container cannot: §7.2's create gives the initial
    about:blank the navigable's CREATION sandboxing flags, and §7.4.5's navigation gives its Document the UNION
    of those and the response policy's CSP-derived flags. */
+/* `about_base_url` is HTML §7.4's ABOUT BASE URL for the Document this builds — `creatorBaseURL` for §7.2's
+   initial `about:blank`, and §7.4.5's INITIATOR base URL for a navigation whose destination is an `about:`
+   URL. NULL for every Document that comes from a response, which is §2.4.3's null and the ordinary case. It is
+   a parameter and not a read off anything, for the reason `csp_self_origin` beside it is: whose base URL it is
+   belongs to the OPERATION (the creator's for a create, the initiator's for a navigation) and never to the
+   navigable being filled. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
-                           const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags);
+                           const char *csp, const char *csp_self_origin, const char *about_base_url,
+                           SandboxFlags sandbox_flags);
 
 /* THE AGENT'S HALF: §7.4's `open` member, declared once. */
 void navigable_init(JSContext *ctx);

@@ -47,6 +47,7 @@
 #include "core/html/trusted_types.h"
 #include "core/html/declarative_shadow.h"
 #include "core/html/html_script.h"
+#include "core/html/html_base_element.h"
 #include "core/html/html_style_element.h"
 #include "core/html/media_element.h"
 #include "core/html/fragment_serializer.h"
@@ -1554,9 +1555,12 @@ static int       g_reflect_n;
  *
  * THE BASE IS THE ELEMENT'S NODE DOCUMENT'S, which is what the algorithm says ("relative to element's node
  * document") and is NOT document_base_url — that one is the RUNNING REALM's active document, so an element
- * parsed by DOMParser or living in a template's contents owner would resolve against the wrong address. §4.4's
- * baseURI asks the same question of the same node and answers it with document_url_of; this asks it once more
+ * parsed by DOMParser or living in a template's contents owner would resolve against the wrong document. §4.4's
+ * baseURI asks the same question of the same node and answers it with the same function; this asks it once more
  * rather than keeping a second idea of where a node lives.
+ * AND IT IS THAT DOCUMENT'S BASE URL, NOT ITS ADDRESS. This read the ADDRESS, so `<base href="/app/v2/">`
+ * changed nothing about `img.src`, `a.href` or `script.src` — the members through which the whole endpoint
+ * surface of a page is read back — and every one of them reported a URL the page's own markup had replaced.
  *
  * A FAILED PARSE IS THE RAW VALUE. Step 2's serialization is skipped "if urlString is not failure", and step 3
  * then returns the content attribute converted to a SCALAR VALUE STRING — the USVString conversion the return
@@ -1576,7 +1580,7 @@ static int       g_reflect_n;
 static JSValue el_reflect_url(JSContext *ctx, lxb_dom_element_t *el, JSValue raw, const char *member)
 {
     JSValue concrete = concolic_is(raw) ? concolic_example(ctx, raw) : JS_DupValue(ctx, raw);
-    const char *base = document_url_of(lxb_dom_interface_node(el)->owner_document);
+    const char *base = document_base_url_of(lxb_dom_interface_node(el)->owner_document);
     UrlRecord u, b;
     const char *s;
     size_t len = 0;
@@ -2303,6 +2307,12 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        attribute now names. Here for the reason `src` and `async` above are: a content attribute has more than
        one spelling and the IDL setter answers for exactly one of them. */
     aria_mixin_attribute_changed(rctx, el, ns, local);
+    /* HTML §4.2.3's SECOND SITUATION: "the base element is the first base element in tree order with an href
+       content attribute in its Document, and its href content attribute is changed". Here for the reason
+       `src` and `async` above are — a content attribute has more than one spelling and the IDL setter answers
+       for exactly one of them — and this member has three (`b.href =`, `setAttribute`, `attributes.href.value
+       =`), all of which move where every relative URL in the document resolves. */
+    html_base_element_attr_changed(rctx, el, ns, local);
 }
 
 JSValue element_wrap(JSContext *ctx, lxb_dom_element_t *el)
@@ -2455,6 +2465,11 @@ void element_init(JSContext *ctx)
     node_add_tree_hook(element_range_steps);
     node_add_tree_hook(element_iterator_pre_remove);
     node_add_tree_hook(element_slot_steps);
+    /* HTML §4.2.3's FIRST SITUATION, BEFORE element_tree_changed. That hook PREPARES an inserted `<script>`,
+       which resolves its `src` against the document base URL — so inserting `<div><base href=x><script
+       src=y></div>` must freeze the base before the script is prepared, or the one script the markup put
+       after the base is the one script that does not see it. */
+    node_add_tree_hook(html_base_element_tree_steps);
     node_add_tree_hook(element_tree_changed);
     /* §4.3's RECORD IS QUEUED LAST, which is where §4.2.3 numbers it: insert step 8 follows step 7's insertion
        steps and custom-element reactions, and remove steps 15-16 follow the removing steps and the
@@ -2468,6 +2483,7 @@ void element_init(JSContext *ctx)
     element_view_init(ctx);   /* CSSOM VIEW §6's `partial interface Element`, installed on the prototype below */
     custom_elements_init(ctx);
     html_script_init(ctx);    /* §4.12.1's `already started` slot, which the fragment parse below writes */
+    html_base_element_init(ctx);   /* §4.2.3's `href` setter, whose getter is not a reflection */
     cssom_init(ctx);          /* CSSStyleDeclaration, which HTMLElement's `style` attribute names */
     css_style_sheet_init(ctx);   /* CSSOM §6.1's StyleSheet and CSSStyleSheet, which a `<style>` element creates */
     /* CSSOM §4.4's MediaList, BEFORE the rules: §7.3's `media` is [PutForwards=mediaText] and css_rule.c reads
@@ -2609,6 +2625,7 @@ void element_free(JSRuntime *rt)
     cssom_free(rt);
     selector_match_free();   /* after every component that can still match a selector */
     custom_elements_free(rt);
+    html_base_element_free();
     html_script_free(rt);
     mutation_observer_free(rt);
     range_free(rt);

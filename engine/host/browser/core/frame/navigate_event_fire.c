@@ -167,7 +167,7 @@ static bool nef_hash_change(JSContext *ctx, JSValueConst classic, const char *ta
     if (!same_document) return false;
     url_record_init(&cur);
     url_record_init(&dst);
-    CHECK(url_parse(&cur, document_base_url(ctx), strlen(document_base_url(ctx)), NULL),
+    CHECK(url_parse(&cur, document_url(ctx), strlen(document_url(ctx)), NULL),
           "this realm's document address is not a URL — the host captured something this engine cannot make a "
           "principal out of");
     CHECK(url_parse(&dst, target, strlen(target), NULL),

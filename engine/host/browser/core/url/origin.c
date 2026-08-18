@@ -387,20 +387,9 @@ char *origin_serialize_of_url(const UrlRecord *u)
 
 /* ---- HTML §7.3.1's DETERMINE THE ORIGIN ------------------------------------------------------------------- */
 
-/* HTML §2.4.1: "A URL matches about:blank if its scheme is `about`, its path contains a single string `blank`,
-   its username and password are the empty string, and its host is null" — its query and fragment MAY be
-   non-null, which is why they are not tested. "A URL matches about:srcdoc if its scheme is `about`, its path
-   contains a single string `srcdoc`, its QUERY IS NULL, its username and password are the empty string, and
-   its host is null." A non-special scheme's path is the record's opaque path, which is where `blank` lands. */
-static bool url_matches_about(const UrlRecord *u, const char *what, bool query_must_be_null)
-{
-    if (!u->scheme || strcmp(u->scheme, "about")) return false;
-    if (!u->opaque_path || strcmp(u->opaque_path, what)) return false;
-    if (u->username && *u->username) return false;
-    if (u->password && *u->password) return false;
-    if (query_must_be_null && u->query) return false;
-    return u->host.kind == URL_HOST_NULL;
-}
+/* HTML §2.4.1's TWO MATCH RELATIONS live in core/url/url.c now — §7.3.1 is no longer their only asker.
+   §2.4.3's fallback base URL asks the same two questions of the same records, and two copies of a relation
+   this precise (the query is tested for one and deliberately not for the other) is how they drift apart. */
 
 const Origin *origin_determine(const UrlRecord *url, bool sandboxed_origin, const Origin *source)
 {

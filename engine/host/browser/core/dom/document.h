@@ -93,9 +93,37 @@ bool document_fully_active(JSContext *ctx);
    exactly this object out of the child's realm — the two documents are one agent, so it is a pointer and not
    a message. */
 JSValueConst document_object(JSContext *ctx);
-/* §4.4 baseURI's answer: the document's address. ONE component owns what this document's URL is — two answers
-   to that question is how they drift apart. */
+/* HTML §8.1.5.1's API BASE URL of this realm — "return the current BASE URL of window's associated Document",
+   which HTML §2.4.2's parse a URL resolves every relative reference against. It is §2.4.3's DOCUMENT BASE URL
+   and NOT the document's address: this header used to say the address, the code used to return it, and both
+   were wrong for every page shipping a `<base href>`. ONE component owns it, so two answers cannot drift. */
 const char *document_base_url(JSContext *ctx);
+/* THIS REALM'S ACTIVE DOCUMENT'S ADDRESS — §4.5's `document.URL`. A DIFFERENT question from the one above, and
+   the caller has to say which it is asking: §7.2.4's Location url, §7.2.5's can-have-its-URL-rewritten,
+   §7.4.4's "let newURL be document's URL" and §8.1's blob origin are all about the ADDRESS, and every one of
+   them read `document_base_url` while the two happened to be the same string. BORROWED. */
+const char *document_url(JSContext *ctx);
+/* THE SAME §2.4.3 ANSWER FOR ONE DOCUMENT rather than for the running realm — what DOM §4.4's `baseURI` reads
+   ("this's node document's document base URL") and what HTML §2.6.1's URL reflections resolve against
+   ("relative to element's node document"). A second Document of this agent — a DOMParser parse, an XHR
+   responseXML, a createHTMLDocument — has its own, and answering from the realm gives it the wrong one.
+   BORROWED: the record owns the bytes. */
+const char *document_base_url_of(const lxb_dom_document_t *dom);
+/* §2.4.3's FALLBACK BASE URL — a SEPARATE answer, and the one §4.2.3 freezes a `<base href>` against ("thus,
+   the base element isn't affected by itself"). §7.4's about base URL for an `about:blank`/`about:srcdoc`
+   Document created by a creator, otherwise the document's address. BORROWED. */
+const char *document_fallback_base_url_of(const lxb_dom_document_t *dom);
+/* §4.2.3's FROZEN BASE URL, STORED — the pair (which base element, what it froze to). core/html/html_base_element.c
+   owns the algorithm that decides when to write it and is its only writer; this is the storage, beside the
+   address it is not. `el` NULL with `url` NULL says the document has no base element with an href. The element
+   is COMPARED and never dereferenced — see the definition. */
+void document_set_frozen_base_url(lxb_dom_document_t *dom, lxb_dom_element_t *el, const char *url);
+lxb_dom_element_t *document_frozen_base_element(const lxb_dom_document_t *dom);
+/* HTML §7.4's ABOUT BASE URL of THIS realm's Document — `creatorBaseURL` for the initial `about:blank` a
+   navigable is created with, and §7.4.5's initiator base URL for an `about:` navigation. WRITE-ONCE, by the
+   operation that CREATED the Document and before its tree is walked; a Document created from a response never
+   receives one, which is §2.4.3's null. */
+void document_set_about_base_url(JSContext *ctx, const char *url);
 /* HTML §3.1.1's "the encoding" of this realm's active document, as an id in the Encoding registry
    (core/encoding/encoding.h). It is what HTML §4.12.1 falls back to when a `<script>` carries no `charset`
    attribute — "let encoding be el's node document's the encoding" — and therefore what HTML §8.1.4.2's fetch a
@@ -156,9 +184,11 @@ JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, 
    see the definition for why the flow's delta may not own it. */
 lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_document_t *doc);
 
-/* §4.4 baseURI's answer FOR ONE NODE: its NODE DOCUMENT's address. Not the same as document_base_url the moment
-   a second Document exists — that one is the REALM's active document, which is HTML's "API base URL" and is
-   what a fetch, a hyperlink and a navigation resolve against. */
+/* §4.5's `document.URL` FOR ONE DOCUMENT: its ADDRESS. NOT what DOM §4.4's `baseURI` answers — that is the
+   document BASE URL (document_base_url_of above), which this used to be mistaken for; the address is only
+   §2.4.3's LAST step, and a document carrying a `<base href>` or an about base URL answers neither of the
+   earlier two with it. This is what RFC 6265's request-uri, §4.4's clone-a-Document and §7.4.4's URL and
+   history update steps are about. */
 const char *document_url_of(const lxb_dom_document_t *dom);
 /* §4.5's CONTENT TYPE — the string `document.contentType` answers, as a fact about ONE document rather than
    about the running realm. It is the field §4.4's "clone a single node" copies onto a Document's copy ("set
@@ -206,6 +236,10 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
    than on demand because §7.4 clones it for an about:blank child at the moment that child is created, which
    may be before anything else has asked. BORROWED. */
 const PolicyContainer *document_policy(JSContext *ctx);
+/* THE SAME CONTAINER AS A FACT ABOUT ONE DOCUMENT, which is how CSP states every question over it ("let CSP
+   list be DOCUMENT's global object's csp list"). §4.2.3's freeze runs for an element whose node document is
+   routinely not the running realm's active one. BORROWED; NULL for a document with no browsing context. */
+const PolicyContainer *document_policy_of(const lxb_dom_document_t *dom);
 
 /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET for this realm's Document — the set §7.2's create or §7.4.5's
  * navigation handed it, unchanged since.

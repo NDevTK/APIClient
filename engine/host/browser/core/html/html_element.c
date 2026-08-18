@@ -41,6 +41,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/html_style_element.h"
 #include "core/html/html_script.h"
+#include "core/html/html_base_element.h"
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
 #include "core/dom/slot.h"
@@ -176,7 +177,12 @@ static const ElReflect R_META[]   = {
     { "name", "name", REFLECT_STRING }, { "content", "content", REFLECT_STRING },
     { "httpEquiv", "http-equiv", REFLECT_STRING }, { "media", "media", REFLECT_STRING },
 };
-static const ElReflect R_BASE[]   = { { "href", "href", REFLECT_STRING }, { "target", "target", REFLECT_STRING } };
+/* NO `href` HERE. §4.2.3 defines its getter as its own algorithm — parse the content attribute against the
+   document's FALLBACK base URL, "thus, the base element isn't affected by other base elements or itself" —
+   which is neither a string reflection (what stood here, answering the raw attribute) nor §2.6.1's URL
+   reflection (which resolves against the document BASE url, so the second of two `<base href>` elements
+   would report the FIRST one's answer). core/html/html_base_element.c owns it, beside the freeze. */
+static const ElReflect R_BASE[]   = { { "target", "target", REFLECT_STRING } };
 static const ElReflect R_SOURCE[] = {
     { "src", "src", REFLECT_URL }, { "type", "type", REFLECT_STRING },
     { "srcset", "srcset", REFLECT_STRING }, { "sizes", "sizes", REFLECT_STRING },
@@ -603,6 +609,11 @@ void html_element_install_protos(JSContext *ctx)
            an attribute — handed the prototype for the reason §4.2.6's `disabled` is. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLScriptElement"))
             html_script_install(ctx, p);
+        /* §4.2.3's `href`, which parses against the document's FALLBACK base URL rather than mirroring an
+           attribute or resolving against the document base URL — handed the prototype for the reason
+           §4.12.1's `async` is. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLBaseElement"))
+            html_base_element_install(ctx, p);
         /* THE `[SameObject] readonly attribute DOMTokenList` REFLECTIONS, each on the interface whose IDL
            declares it. They are not reflections in R_* above because those produce a STRING: `link.rel` is the
            attribute's value and `link.relList` is §7.1's token list over the same attribute, and a page uses

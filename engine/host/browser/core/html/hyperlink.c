@@ -39,22 +39,34 @@
 #include "core/frame/window_features.h"
 #include "quickjs-step.h"
 
-/* §4.6.3 "reinitialize url": parse the href content attribute against the document's base URL. Returns false
-   when there is no href or it does not parse — the url is then null, which every member has an answer for.
+/* §4.6.3 "reinitialize url": "set element's url to the result of encoding-parsing a URL given element's href
+   content attribute's value, RELATIVE TO ELEMENT'S NODE DOCUMENT" — which is §2.4.3's DOCUMENT BASE URL of the
+   document the element is IN. Both halves of that changed here: it asked the RUNNING REALM's active document
+   (the wrong document for an `<a>` in a DOMParser tree, or in a second Document of this agent), and that
+   function answered with the document's ADDRESS rather than its base URL (wrong for every page carrying a
+   `<base href>`, which is exactly the markup that exists to move where `a.href` points).
+   Returns false when there is no href or it does not parse — the url is then null, which every member has an
+   answer for.
    `raw_href` receives the attribute's VALUE (owned; JS_NULL when absent), which is a CONCOLIC when a flow
    stashed an attacker string there — the parse then runs on its concrete EXAMPLE and js_link_get DERIVES the
    member from it, keeping the provenance. Reading it as BYTES here is what dropped the triple. */
 static bool hyperlink_url(JSContext *ctx, JSValueConst el, UrlRecord *out, JSValue *raw_href)
 {
     JSValue href = element_attr_get_value(ctx, el, "href");
+    lxb_dom_node_t *node = node_of(el);
     JSValue concrete;
-    const char *base_url = document_base_url(ctx);
+    const char *base_url;
     const char *s;
     size_t len = 0;
     UrlRecord base;
     bool have_base, ok = false;
 
     url_record_init(out);
+    DCHECK(node != NULL && node->owner_document != NULL,
+           "§4.6.3's reinitialize url ran for something that is not a node, or a node with no node document — "
+           "the members are installed on HTMLAnchorElement/HTMLAreaElement prototypes, so a receiver that is "
+           "neither reached them through a path that did not brand it");
+    base_url = document_base_url_of(node->owner_document);
     if (JS_IsNull(href) || JS_IsException(href)) goto done;
 
     /* A concolic with no example yet has no bytes to parse, and §4.6.3 has no step that invents them: the url

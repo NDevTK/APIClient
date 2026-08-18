@@ -150,7 +150,7 @@ static void loc_url(JSContext *ctx, UrlRecord *rec)
 {
     /* THE DOCUMENT OWNS WHAT ITS ADDRESS IS, and it asserts that it has one — a realm whose Document was never
        installed aborts THERE, at the origin of the fact, rather than in a second copy of the same check here. */
-    const char *addr = document_base_url(ctx);
+    const char *addr = document_url(ctx);
 
     /* THE ADDRESS GOES THROUGH THE REAL PARSER, which initialises the record itself. A hand-rolled splitter
        stood here once — strstr("://"), strrchr(':'), fixed 256-byte buffers — and it was wrong wherever a URL

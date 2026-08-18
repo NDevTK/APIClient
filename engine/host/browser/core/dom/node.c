@@ -1330,13 +1330,15 @@ static JSValue js_node_facts(JSContext *ctx, JSValueConst this_val, int magic)
            document and the fragment, which is why a walk-up loop uses this one and stops on its own. */
         return (n->parent && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT) ? node_wrap(ctx, n->parent) : JS_NULL;
     default:
-        /* §4.4: THE NODE DOCUMENT's document base URL, serialized — the node's own document and not the realm's
+        /* §4.4: THE NODE DOCUMENT's DOCUMENT BASE URL, serialized — the node's own document and not the realm's
            active one, which stopped being the same question the moment §4.5.1's factories could build a second
-           Document. `foreignDoc.createElement("a").baseURI` is `about:blank`, not the page's address. No <base>
-           support yet, so it is that document's address — asked of the component that owns it rather than
-           re-derived here, because two answers to "what is this document's URL" is how they drift apart. */
+           Document. `foreignDoc.createElement("a").baseURI` is `about:blank`, not the page's address. It is
+           HTML §2.4.3's answer and NOT the address: this line read the ADDRESS, so `baseURI` in a page that
+           ships `<base href>` reported a URL the page's own markup had replaced. Asked of the component that
+           owns it rather than re-derived here, because two answers to "what is this document's base URL" is
+           how they drift apart. */
         DCHECK(magic == 3, "a Node fact was declared with a magic this table does not name");
-        return JS_NewString(ctx, document_url_of(n->owner_document));
+        return JS_NewString(ctx, document_base_url_of(n->owner_document));
     }
 }
 

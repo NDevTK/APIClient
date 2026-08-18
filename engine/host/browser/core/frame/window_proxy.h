@@ -51,6 +51,15 @@ void window_proxy_free(JSContext *ctx);
    A CREATION FACT, like `is_popup`: no flow can change it, so unlike `url` there is nothing here for the delta
    to capture, and the per-flow answer comes from the INPUTS — an `<iframe sandbox>`'s attribute is a DOM read
    in the creating flow's own delta, and the navigable that read produced belongs to that flow. */
+/* `creator_base_url` is HTML §7.4's `creatorBaseURL` — "if creator is non-null, set creatorBaseURL to
+   creator's document base URL" — which §7.2's create-a-new-browsing-context-and-document gives the initial
+   `about:blank` Document as its ABOUT BASE URL. NULL is the real answer for a navigable with no creator (the
+   root) and for one created with an address (its Document comes from a response). It rides here for the
+   reason `creator_csp` does: the initial Document is materialized lazily and by whichever same-origin
+   document reads through the navigable first, whose base URL is not the creator's. It is the creator's BASE
+   URL and not its address — a creator that ships `<base href>` passes on the base.
+   WITHOUT IT a relative URL in a srcless `<iframe>` or a bare `open()` resolves against `about:blank`, whose
+   path is opaque, so the URL parser FAILS rather than producing a wrong answer. */
 /* `creator_csp_self_origin` is CSP §2.2's SELF-ORIGIN of that cloned policy list, SERIALIZED, and it rides
    here because §2.2 makes a CSP list a struct of policies AND an origin — carrying only the text would hand
    the initial about:blank a policy with no `'self'` to resolve. It is the CREATOR's and not this navigable's:
@@ -59,7 +68,8 @@ void window_proxy_free(JSContext *ctx);
    where `creator_csp` is — the self proxy, whose realm the host already built. */
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
                          bool is_popup, SandboxFlags creation_sandbox_flags, const char *creator_csp,
-                         const char *creator_csp_self_origin, const char *top_level_url,
+                         const char *creator_csp_self_origin, const char *creator_base_url,
+                         const char *top_level_url,
                          const Origin *top_level_origin, JSValueConst parent, JSValueConst opener);
 
 /* §7.1.5's creation sandboxing flags for this navigable — see window_proxy_new. Asked only of a LOCAL proxy:

@@ -307,7 +307,7 @@ static int blob_url_find(JSContext *ctx, JSValueConst q, const char *url, size_t
 char *blob_url_create(JSContext *ctx, JSValueConst obj)
 {
     UrlRecord base;
-    const char *base_str = document_base_url(ctx);
+    const char *base_str = document_url(ctx);
     char *origin = NULL, *url;
     size_t n;
     uint32_t mint = 0, slot, have;

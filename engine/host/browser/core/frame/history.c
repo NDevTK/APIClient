@@ -216,7 +216,7 @@ bool history_document_can_have_url_rewritten(JSContext *ctx, const char *target_
            "absolute URL by the time they ask");
     url_record_init(&doc_url);
     url_record_init(&target);
-    CHECK(url_parse(&doc_url, document_base_url(ctx), strlen(document_base_url(ctx)), NULL),
+    CHECK(url_parse(&doc_url, document_url(ctx), strlen(document_url(ctx)), NULL),
           "this realm's document address is not a URL — the host captured something this engine cannot make a "
           "principal out of");
     CHECK(url_parse(&target, target_url, strlen(target_url), NULL),
@@ -330,7 +330,7 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
     /* STEP 4: "let newURL be document's URL." */
     url_record_init(&doc_url);
     url_record_init(&target);
-    CHECK(url_parse(&doc_url, document_base_url(ctx), strlen(document_base_url(ctx)), NULL),
+    CHECK(url_parse(&doc_url, document_url(ctx), strlen(document_url(ctx)), NULL),
           "this realm's document address is not a URL — the host captured something this engine cannot make a "
           "principal out of");
 

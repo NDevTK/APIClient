@@ -35,6 +35,8 @@
 #include "core/html/media_element.h"
 #include "core/html/html_style_element.h"
 #include "core/html/html_script.h"   /* §4.12.1.1's `force async`: the stamp every parser makes */
+#include "core/html/html_base_element.h"   /* §4.2.3's frozen base URL, whose two facts this record holds */
+#include "core/url/url.h"                  /* §2.4.3's fallback base URL asks whether an address matches about: */
 #include "core/dom/dom_token_list.h"
 #include "core/dom/collections.h"
 #include "core/dom/mutation_observer.h"
@@ -145,7 +147,33 @@ typedef struct Document {
     /* §4.5's `[SameObject] readonly attribute DOMImplementation implementation`. SameObject is what makes this
        a field rather than a fresh object per read: a page holds `document.implementation` and compares it. */
     JSValue              impl;
-    char                 url[2048]; /* the document's address, which §4.4 baseURI reads */
+    char                 url[2048]; /* the document's ADDRESS — §4.5's `document.URL`, and NOT its base URL */
+    /* HTML §2.4.3's DOCUMENT BASE URL IS NOT THE ADDRESS, and this record used to hold only the address and
+     * answer both questions with it — so every relative URL in a page shipping `<base href="/app/v2/">`
+     * resolved against the wrong path, silently, with nothing in the engine able to notice.
+     *
+     * TWO FIELDS BECAUSE §2.4.3 IS TWO ALGORITHMS. `frozen`/`frozen_el` are §4.2.3's FROZEN BASE URL and the
+     * base element it belongs to; `about` is §7.4's ABOUT BASE URL, which is what the FALLBACK base URL
+     * answers with for a Document created at `about:blank` or `about:srcdoc` BY A CREATOR — the creator's own
+     * base URL, without which a relative URL in a srcless frame resolves against `about:blank` and fails to
+     * parse at all. The ADDRESS is the third and is the fallback's last step.
+     *
+     * `frozen_el` IS COMPARED AND NEVER DEREFERENCED. It answers one question — "is the element that is NOW
+     * first in tree order the one this URL was frozen for" — and §4.2.3's own situations keep it live: a
+     * removal that takes the frozen element out of the document runs the removing steps, which recompute and
+     * replace it. So the pointer can never outlive its element, and nothing here would notice if it did,
+     * which is the design rather than an accident: reading through it is what would make this a lifetime
+     * problem, and there is no read.
+     *
+     * ONE STRUCT BECAUSE IT IS ONE COW CAPTURE. Both are POD — an element POINTER and two byte arrays, no
+     * JSValue anywhere — which is exactly what solver/cow.h reserves cow_capture_host_state's raw byte capture
+     * for, and the same latch `url` above already is. A flow that appends a `<base href>` changes where every
+     * subsequent URL in ITS world resolves and in no sibling's. */
+    struct {
+        lxb_dom_element_t *frozen_el;
+        char               frozen[2048];
+        char               about[2048];   /* the empty string IS §7.4's null — a URL is never empty */
+    } base;
     char                 content_type[32];   /* §4.5 contentType — what this document was created as */
     /* HTML §3.1.1's "Each Document has an encoding (an encoding), used for the document's character encoding"
        — an id in the Encoding registry (core/encoding), and the fact HTML §4.12.1 falls back to when a
@@ -1124,11 +1152,171 @@ lxb_dom_node_t *document_root_node(JSContext *ctx)
     return d ? lxb_dom_interface_node(d->dom->dom_document.element) : NULL;
 }
 
+/* ---- HTML §2.4.3 "DOCUMENT BASE URLS" -------------------------------------------------------------------
+ *
+ * THREE ALGORITHMS, AND THE ENGINE ANSWERED ALL OF THEM WITH THE ADDRESS. §2.4.3 defines a Document's
+ * FALLBACK BASE URL (the srcdoc case, the about:blank case, then the address) and its DOCUMENT BASE URL (the
+ * first base element's frozen URL, else the fallback); §4.2.3 defines the FREEZE that fills the first. What
+ * stood here was the address alone, which is only the fallback's LAST step — so `<base href>` did nothing at
+ * all, and a Document at about:blank resolved relative URLs against a URL that cannot be a base.
+ *
+ * THE FREEZE ITSELF LIVES IN core/html/html_base_element.c, because it is an algorithm about an ELEMENT and
+ * this file owns what a Document HAS. The split is the one core/dom/document.c already makes with §4.12.1's
+ * scripts and §4.8.5's iframes: the DOM half stores, the element's own component decides. */
+
+/* §2.4.3's FALLBACK BASE URL of one Document — the URL §4.2.3 freezes a `<base href>` AGAINST, which is why it
+   is a separate answer from the document base URL and not a synonym for it ("thus, the base element isn't
+   affected by itself"). BORROWED. */
+const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
+{
+    const Document *d = doc_rec(dom);
+
+    DCHECK(d != NULL, "§2.4.3's fallback base URL was asked of a document with no record — a tree that came "
+                      "from neither document_install nor document_new has no address, no about base URL and "
+                      "no way to answer");
+    /* STEPS 1 AND 2 read the document's ABOUT BASE URL, and both require it to be non-null: step 1 ASSERTS it
+       for an iframe srcdoc document, step 2 tests it for a document whose URL matches about:blank. A null one
+       (the empty string here) therefore cannot reach either, so the parse those steps need is performed only
+       when there is an about base URL to return — which for a document created from a response is never. */
+    if (d->base.about[0]) {
+        UrlRecord u;
+        bool about;
+
+        url_record_init(&u);
+        CHECK(url_parse(&u, d->url, strlen(d->url), NULL),
+              "a document's own address is not a URL — §2.4.3 asks whether it MATCHES about:blank, which is a "
+              "question about a URL record, and this record's address never parsed");
+        /* HTML §2.4.1's two match relations, asked in §2.4.3's order. A document created AT about:blank whose
+           address later moved (§7.4.4's URL and history update steps — `history.pushState` from an inherited
+           origin) stops matching, and step 3's address is then the answer even though the about base URL is
+           still there: the two are separate facts and the standard tests both. */
+        about = url_matches_about(&u, "srcdoc", /*query_must_be_null*/ true) ||
+                url_matches_about(&u, "blank", /*query_must_be_null*/ false);
+        url_record_free(&u);
+        if (about) return d->base.about;
+    } else {
+        /* STEP 1's ASSERT, stated where the standard states it: "assert: document's about base URL is
+           non-null" for an iframe srcdoc document. The cheap prefix test rather than a parse, because this is
+           the branch taken by every document in the engine and the assert must not cost one. */
+        DCHECK(strncmp(d->url, "about:srcdoc", 12) != 0,
+               "§2.4.3 step 1's assert failed: an iframe srcdoc Document has a NULL about base URL. A srcdoc "
+               "document has no address of its own to fall back to — every relative URL in it, and every "
+               "`<base href>` it carries, would resolve against `about:srcdoc` — so whoever created this "
+               "Document must give it §7.4's about base URL (the srcdoc iframe's node document's base URL)");
+    }
+    return d->url;   /* STEP 3: "return document's URL" */
+}
+
+/* §2.4.3's DOCUMENT BASE URL of one Document — the answer DOM §4.4's `baseURI`, HTML §2.4.2's parse-a-URL and
+   §8.1.5.1's API base URL all name. A fact about THAT DOCUMENT and not about the running realm, which stopped
+   being the same question the moment §4.5.1's factories could build a second Document. BORROWED. */
+const char *document_base_url_of(const lxb_dom_document_t *dom)
+{
+    const Document *d = doc_rec(dom);
+
+    DCHECK(d != NULL, "§2.4.3's document base URL was asked of a document with no record");
+    /* STEP 1: "if document has no descendant base element that has an href attribute, then return document's
+       fallback base URL." STEP 2: "otherwise, return the FROZEN BASE URL of the first base element in document
+       that has an href attribute, in tree order" — which is the element this record names, kept in step by
+       §4.2.3's own situations (core/html/html_base_element.c). */
+    if (!d->base.frozen_el) return document_fallback_base_url_of(dom);
+    DCHECK(d->base.frozen[0] != '\0',
+           "a document names a base element whose FROZEN BASE URL is the empty string — §4.2.3's set the "
+           "frozen base URL ends in either a serialized URL record or the document's fallback base URL, and "
+           "neither is empty, so this pair was written by something that is not that algorithm");
+    return d->base.frozen;
+}
+
 const char *document_base_url(JSContext *ctx)
 {
     Document *d = doc_here(ctx);
-    DCHECK(d->url[0] != '\0', "a node's baseURI was read before the document was installed");
+    DCHECK(d->url[0] != '\0', "this realm's API base URL was read before its document was installed");
+    return document_base_url_of(lxb_dom_interface_document(d->dom));
+}
+
+/* THIS REALM'S ACTIVE DOCUMENT'S ADDRESS — §4.5's `document.URL`, and a DIFFERENT question from the one above.
+ * It is separated now because it was not before, and the conflation was invisible while the base URL WAS the
+ * address: `document_base_url` answered both, so §7.2.4's "this Location object's relevant Document's URL",
+ * §7.2.5's can-have-its-URL-rewritten, §7.4.4's "let newURL be document's URL" and §8.1's blob origin all read
+ * a function whose name says base URL. The moment `<base href>` works, every one of those would have started
+ * reporting the base instead — `location.href` would answer the markup's base URL, and a blob URL would carry
+ * a CDN's origin. Which question a caller is asking is now something it has to say. */
+const char *document_url(JSContext *ctx)
+{
+    Document *d = doc_here(ctx);
+
+    DCHECK(d->url[0] != '\0', "this realm's document address was read before its document was installed");
     return d->url;
+}
+
+lxb_dom_element_t *document_frozen_base_element(const lxb_dom_document_t *dom)
+{
+    const Document *d = doc_rec(dom);
+
+    DCHECK(d != NULL, "§4.2.3's frozen base element was asked of a document with no record");
+    return d->base.frozen_el;
+}
+
+/* §4.2.3's FROZEN BASE URL, STORED — see the field, and core/html/html_base_element.c for the algorithm that
+   decides WHEN this is called. `el` NULL with `url` NULL is "this document has no base element with an href",
+   which §2.4.3 step 1 answers with the fallback base URL. */
+void document_set_frozen_base_url(lxb_dom_document_t *dom, lxb_dom_element_t *el, const char *url)
+{
+    Document *d = doc_rec(dom);
+
+    DCHECK(d != NULL, "§4.2.3's frozen base URL was set on a document with no record");
+    DCHECK((el == NULL) == (url == NULL),
+           "§4.2.3's frozen base URL was set with an element and no URL, or a URL and no element — the pair is "
+           "one fact ('a base element … HAS a frozen base URL'), and a document that held half of it would "
+           "either answer §2.4.3 step 2 with nothing or hold a base URL belonging to no element");
+    DCHECK(url == NULL || url[0] != '\0',
+           "§4.2.3's frozen base URL was set to the empty string — the algorithm ends in either a serialized "
+           "URL record or the document's fallback base URL, and neither is ever empty");
+    DCHECK(url == NULL || strlen(url) < sizeof d->base.frozen,
+           "a frozen base URL is longer than the record can hold — it is a fixed buffer here, exactly as the "
+           "document's address is, so a longer one would be silently truncated and every relative URL in the "
+           "page would resolve against a prefix. BUILD IT: make both an allocated string, released with the "
+           "record and never freed on a change (a parked flow's captured bytes still name the old one)");
+    DCHECK(JS_IsObject(d->doc_obj),
+           "§4.2.3's frozen base URL was set before the document's `document` object existed — the object is "
+           "what owns the bytes the flow's delta captures, so there would be nothing to keep them alive for a "
+           "parked flow");
+    cow_capture_host_state(d->realm, d->doc_obj, &d->base, sizeof d->base);
+    d->base.frozen_el = el;
+    if (url) snprintf(d->base.frozen, sizeof d->base.frozen, "%s", url);
+    else     d->base.frozen[0] = '\0';
+}
+
+/* §7.4's ABOUT BASE URL, which "create a new browsing context and document" gives the initial `about:blank` as
+ * `creatorBaseURL` and §7.4.5 gives an `about:` navigation from its initiator. WRITE-ONCE, at creation, by the
+ * operation that created the Document — never by anything the page can reach.
+ *
+ * IT IS AN INPUT OF THE OPERATION AND NOT A READ OFF THE TARGET, which is why the caller states it: whose base
+ * URL it is depends on WHICH operation is running (the CREATOR's for a create, the INITIATOR's for a
+ * navigation) and never on the state of the navigable being filled — the same sentence §7.2.6's inherited
+ * policy container is stated with, one field over. */
+void document_set_about_base_url(JSContext *ctx, const char *url)
+{
+    Document *d = doc_here(ctx);
+
+    DCHECK(url != NULL && url[0] != '\0',
+           "§7.4's about base URL was set to nothing — a null one is the ABSENCE of this call, which is what "
+           "every Document created from a response has, rather than a value to write");
+    DCHECK(d->base.about[0] == '\0',
+           "§7.4's about base URL was written twice for one Document — it is a CREATION item, decided by the "
+           "operation that made the Document and fixed for its life, so a second writer is a second answer to "
+           "which document created this one");
+    DCHECK(d->base.frozen_el == NULL,
+           "§7.4's about base URL was set for a Document that has ALREADY FROZEN a base element's URL — §4.2.3 "
+           "freezes AGAINST the fallback base URL, which this call changes, so that element is frozen to an "
+           "answer this Document never had. Set the about base URL where the Document is CREATED, before its "
+           "tree is walked, rather than after");
+    DCHECK(strlen(url) < sizeof d->base.about,
+           "an about base URL is longer than the record can hold — see document_set_frozen_base_url's twin");
+    DCHECK(JS_IsObject(d->doc_obj),
+           "§7.4's about base URL was set before the document's `document` object existed");
+    cow_capture_host_state(ctx, d->doc_obj, &d->base, sizeof d->base);
+    snprintf(d->base.about, sizeof d->base.about, "%s", url);
 }
 
 /* HTML §3.1.1's "the encoding" of this realm's active document — see document.h. ONE component owns what a
@@ -2125,6 +2313,18 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
 
 const PolicyContainer *document_policy(JSContext *ctx) { return doc_here(ctx)->policy; }
 
+/* THE SAME CONTAINER AS A FACT ABOUT ONE DOCUMENT — CSP §6.3.1.1 step 1 is stated that way ("let CSP list be
+   DOCUMENT's global object's csp list"), and §4.2.3's freeze runs for an element whose node document is
+   routinely not the running realm's active one (a DOMParser tree, a second Document of this agent). NULL for a
+   document with no browsing context, which is the same answer as a list of zero policies. */
+const PolicyContainer *document_policy_of(const lxb_dom_document_t *dom)
+{
+    const Document *d = doc_rec(dom);
+
+    DCHECK(d != NULL, "a document's policy container was asked of a tree with no record");
+    return d->policy;
+}
+
 SandboxFlags document_active_sandbox_flags(JSContext *ctx) { return doc_here(ctx)->sandbox_flags; }
 
 JSValueConst document_window_proxy(JSContext *ctx)
@@ -2450,7 +2650,18 @@ JSValue document_new(JSContext *ctx, lxb_html_document_t *dom, const char *url, 
        exploration arm. A creation made while capture is OFF is BASELINE — the boot flow's creations are the
        baseline by definition — and the realm that made it is what outlives it. */
     if (!dom_cow_note_created_document(dom)) doc_realm_owns(ctx, d);
-    return doc_finish(ctx, d);
+    {
+        /* HTML §4.2.3 FOR THE TREE THIS DOCUMENT WAS HANDED, for the reason document_install runs the same
+           walk: a `DOMParser.parseFromString` and an XHR `responseXML` are PARSED markup, so their
+           `<base href>` is already in the tree and no chokepoint ever saw it — and DOM §4.4's `baseURI` on
+           their nodes is that document's document base URL, not its address. AFTER the record's wrapper
+           exists (doc_finish returns it), because the freeze captures into the flow's delta against the
+           `document` object; the walk is therefore between the two rather than folded into either. */
+        JSValue w = doc_finish(ctx, d);
+
+        html_base_element_parsed(ctx, lxb_dom_interface_node(dom));
+        return w;
+    }
 }
 
 /* HTML §4.12.3's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT — the Document that owns the template contents of
@@ -2511,8 +2722,8 @@ const char *document_url_of(const lxb_dom_document_t *dom)
 {
     Document *d = doc_rec(dom);
 
-    DCHECK(d != NULL, "a node's baseURI was read in a document with no record — §4.4 reads the NODE DOCUMENT's "
-                      "address, and a tree that came from neither document_install nor document_new has none");
+    DCHECK(d != NULL, "a document's ADDRESS was read in a document with no record — a tree that came from "
+                      "neither document_install nor document_new has none");
     return d->url;
 }
 
@@ -2687,6 +2898,13 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* HTML tree construction produces attributes in the NULL namespace; lexbor stamps them with the element's
        namespace instead, and only here — on the tree the parse just built — are the two distinguishable. */
     dom_attr_normalize_parsed(lxb_dom_interface_node(dom));
+    /* HTML §4.2.3 FOR THE TREE THE PARSER BUILT, AND FIRST AMONG THESE WALKS. A browser sets the frozen base
+       URL as tree construction inserts the element, so a `<base href>` in the page's own markup is in force
+       before anything else in the document resolves a URL — and every walk below resolves one: §4.8.5's
+       iframe walk resolves `src` into a child navigable's address, §4.8.11.2's media walk resolves `src`, and
+       the script inventory resolves every `<script src>`. It is after dom_attr_normalize_parsed because the
+       `href` this reads is an attribute in the NULL namespace, which is what that call makes true. */
+    html_base_element_parsed(ctx, lxb_dom_interface_node(dom));
     /* HTML §4.12.1.1's `force async` — "set to false by the HTML parser and the XML parser on script elements
        they insert". A lexbor parse has no per-token hook, so the parser's stamp happens on the tree it built,
        here, before the document's first script can read `async`. NOT inert: a document parse's scripts run. It

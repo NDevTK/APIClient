@@ -251,6 +251,24 @@ void url_record_init(UrlRecord *u)
     u->port = -1;
 }
 
+/* HTML §2.4.1: "A URL matches about:blank if its scheme is `about`, its path contains a single string `blank`,
+   its username and password are the empty string, and its host is null" — its query and fragment MAY be
+   non-null, which is why they are not tested. "A URL matches about:srcdoc if its scheme is `about`, its path
+   contains a single string `srcdoc`, its QUERY IS NULL, its username and password are the empty string, and
+   its host is null." A non-special scheme's path is the record's opaque path, which is where `blank` lands.
+   IT IS HERE AND NOT IN core/url/origin.c, where it began, because it has two askers now: §7.3.1's determine
+   the origin and §2.4.3's fallback base URL. The asymmetry between the two relations (one tests the query, the
+   other must not) is exactly the detail a second copy loses. */
+bool url_matches_about(const UrlRecord *u, const char *what, bool query_must_be_null)
+{
+    if (!u->scheme || strcmp(u->scheme, "about")) return false;
+    if (!u->opaque_path || strcmp(u->opaque_path, what)) return false;
+    if (u->username && *u->username) return false;
+    if (u->password && *u->password) return false;
+    if (query_must_be_null && u->query) return false;
+    return u->host.kind == URL_HOST_NULL;
+}
+
 void url_record_free(UrlRecord *u)
 {
     int i;
