@@ -962,9 +962,12 @@ bool css_shorthand_complete_for(const char *longhand)
        not answer for one of its own longhands. It used to be a per-call read of an `expands` flag whose only
        FALSE was `border-color`, and the flag is gone with the gap.
        A name absent from this list is not "probably fine": it is a question nobody has answered, and the
-       answer decides whether a `margin: 0` two lines up was read or ignored. */
+       answer decides whether a `margin: 0` two lines up was read or ignored.
+       `white-space` is a LONGHAND here on CSS 2.1 §16.6's statement of it, and no shorthand in this table sets
+       it; css-text-4's decomposition into `white-space-collapse`/`text-wrap-mode` names two properties lexbor's
+       registry does not carry, so there is no expansion for this file to take apart. */
     static const char *const RECORDED[] = {
-        "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color",
+        "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color", "white-space",
         "margin-top", "margin-right", "margin-bottom", "margin-left",
         "padding-top", "padding-right", "padding-bottom", "padding-left",
         "width", "height", "min-width", "max-width", "min-height", "max-height",

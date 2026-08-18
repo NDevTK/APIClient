@@ -426,7 +426,8 @@ bool css_computed_models(const char *name)
     DCHECK(name != NULL, "the computed-value model question was asked about a NULL property name");
     return strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0 ||
            strcmp(name, "display") == 0 || strcmp(name, "float") == 0 || strcmp(name, "position") == 0 ||
-           strcmp(name, "box-sizing") == 0 || css_computed_models_length(name) ||
+           strcmp(name, "box-sizing") == 0 || strcmp(name, "white-space") == 0 ||
+           css_computed_models_length(name) ||
            css_border_side_of(name, "style") >= 0;
 }
 
@@ -523,9 +524,13 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
        value: as specified" (`box-sizing`'s line is "specified keyword"), and a keyword has no absolutization to
        do — so the specified value IS the answer here rather than a stand-in for one. css-backgrounds-3 §3.2
        gives `border-*-style` the same line ("specified keyword"), which is what lets `border-top-width`'s rule
-       above read its sibling with no second derivation in between. */
+       above read its sibling with no second derivation in between. css-text-3's `white-space` carries the same
+       line ("Computed value: specified keyword") and is asked for by CSS 2.1 §9.2.2.1's question about which
+       inter-element white space is collapsed away — the one the block-flow walk asks of a text child. css-text-4
+       redefines it as a shorthand of `white-space-collapse`/`text-wrap-mode`, neither of which lexbor's property
+       registry carries, so §16.6's longhand is the one this engine can answer. */
     DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0 ||
-               css_border_side_of(name, "style") >= 0,
+               strcmp(name, "white-space") == 0 || css_border_side_of(name, "style") >= 0,
            "a property this component claims to model reached the as-specified arm without a `Computed value: "
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "
            "apart");
