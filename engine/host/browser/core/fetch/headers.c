@@ -891,7 +891,16 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
        have gone out missing exactly the headers the page set. Then it was the [[Get]] with `JS_IsFunction` on
        the result, which is a different question AGAIN: GetMethod makes a PRESENT non-callable a TypeError, so
        `new Headers({[Symbol.iterator]: 1})` walked the record arm — quietly, and to an empty list — where the
-       standard throws. The three steps that decide that are ECMAScript's and are stated once, in idl_iter.c. */
+       standard throws. The three steps that decide that are ECMAScript's and are stated once, in idl_iter.c.
+       AND THE METHOD IS HANDED ON, NOT RE-READ. §3.2.25 Union types' sequence arm is "Let method be
+       ? GetMethod(V, %Symbol.iterator%). If method is not undefined, return the result of creating a sequence
+       of that type from V AND METHOD", and §3.2.21.1 Creating a sequence from an iterable takes "an iterable
+       iterable and an iterator getter method". This freed the answer and let the cursor read @@iterator again,
+       which is TWO [[Get]]s of the page's value for ONE conversion: a Proxy `get` trap counts them, and an
+       accessor may hand the second call a different function — so the sequence would be built by an iterator
+       the union never inspected and never type-checked. idl_iter.h declares iter_cursor_init_from_method for
+       exactly this entry and idl_args.c's `(DOMString or sequence<DOMString>)` union already uses it; this was
+       the one union in the tree that did not. */
     if (f->phase == FILL_ITER_ASKED) {
         JSValue itf;
         r = step_getprop_run(ctx, h, init, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR), in, &itf, out_cb, out_argc);
@@ -899,9 +908,14 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         if (r < 0) return -1;
         in = JS_UNDEFINED;
         r = idl_get_method(ctx, itf, "a Headers init's @@iterator");
-        JS_FreeValue(ctx, itf);
-        if (r < 0) return -1;
-        f->phase = r ? FILL_SEQ_PAIR : FILL_KEY_PAIR;
+        if (r <= 0) {
+            JS_FreeValue(ctx, itf);
+            if (r < 0) return -1;
+            f->phase = FILL_KEY_PAIR;
+        } else {
+            iter_cursor_init_from_method(ctx, &f->outer, itf);   /* CONSUMES `itf` */
+            f->phase = FILL_SEQ_PAIR;
+        }
     }
 
     /* THE SEQUENCE ARM: `sequence<sequence<ByteString>>`. The outer cursor yields one PAIR per turn and the
@@ -944,10 +958,25 @@ int headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst 
         }
         {
             size_t kn_len = 0, kv_len = 0;
-            const char *kn = JS_ToCStringLen(ctx, &kn_len, f->item[0]);
-            const char *kv = JS_ToCStringLen(ctx, &kv_len, f->item[1]);
+            const char *kn, *kv;
             char *norm = NULL;
             int bad;
+            /* THE ELEMENT CONVERSION THIS ARM DOES NOT ISSUE. Web IDL §3.2.21.1 Creating a sequence from an
+               iterable converts every element to T, and T here is ByteString: for an OBJECT that is ToString,
+               which is the PAGE'S code and therefore a request (step_tostring_run), exactly as the record arm
+               below issues it for a value. Coercing it from C instead drives the page to completion inside a
+               step machine, which is what the preempt hook aborts on — so the shape crashes here, at the item
+               that carries it, rather than deep in a driver. A CONCOLIC item is the same missing half from the
+               other side: the record arm projects its shape (an external value must not be de-tainted into a
+               concrete-looking header) and this arm has no such projection. */
+            DCHECK(!JS_IsObject(f->item[0]) && !JS_IsObject(f->item[1]),
+                   "a Headers init pair carried an OBJECT item — Web IDL §3.2.21.1's element conversion to "
+                   "ByteString is a ToString, and this arm has no step_tostring_run for it");
+            DCHECK(!concolic_is(f->item[0]) && !concolic_is(f->item[1]),
+                   "a Headers init pair carried a CONCOLIC item — this arm has no shape projection, so the "
+                   "coercion below would de-taint external input into a header the report states as observed");
+            kn = JS_ToCStringLen(ctx, &kn_len, f->item[0]);
+            kv = JS_ToCStringLen(ctx, &kv_len, f->item[1]);
             if (!kn || !kv) {
                 if (kn) JS_FreeCString(ctx, kn);
                 if (kv) JS_FreeCString(ctx, kv);

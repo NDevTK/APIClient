@@ -39,6 +39,12 @@ void iter_cursor_init_from_method(JSContext *ctx, IterCursor *c, JSValue method)
            "an iterable cursor was planted with an @@iterator that is not callable — ECMAScript's GetMethod "
            "answers undefined for null and undefined and throws a TypeError for anything else, so the caller "
            "has already decided this and there is nothing here to fall back to");
+    /* AND IT HOLDS NOTHING YET. The init below MEMSETS, so a cursor planted mid-walk drops its iterator, its
+       `next` and its last result rather than releasing them — a leak the runtime's GC walk sees and no call
+       site names. IT_GET_ITERFN is the one phase at which nothing has been written, including the park inside
+       the @@iterator read, so the phase alone states the invariant for a zeroed state and an init'd one alike. */
+    DCHECK(c->phase == IT_GET_ITERFN,
+           "an iterable cursor was planted with a method while it was already walking a source of its own");
     iter_cursor_init(c);
     c->iterfn = method;
     c->phase = IT_CALL_ITERFN;
