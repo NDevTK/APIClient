@@ -279,7 +279,7 @@ async function service(e) {
          on the read — which is the correct behaviour for an unanswered request and is exactly the state a
          Level-1 eviction finds a flow in. */
       if (withholdReads) { console.log(`  [${e.tag}] WITHHELD — the asking flow stays suspended at the read`); continue; }
-      for (let i = 0; i < 400 && !answers.has(key); i++) if (!(await service(holder))) break;
+      await pumpUntil(holder, () => answers.has(key));
       if (!answers.has(key)) { console.log(`  NOT ANSWERED: ${key}`); continue; }
       /* RELAYED VERBATIM. The completion is in the engines' own grammar and this zone does not read it: a value
          that is an OBJECT is a NAME in the answering agent's namespace, which means nothing out here. */
@@ -298,6 +298,24 @@ async function service(e) {
   }
   await drainNotices(e);
   return r !== 0;
+}
+
+/* PUMP UNTIL THE THING HAPPENS OR THE PEER SAYS IT IS DONE — and NOT for a count of steps. Four loops here
+   carried `i < 400` (one `i < 4000`), which is a STEP CAP: §NO BOUNDS forbids one, and the exemption the
+   harness backstop enjoys does not reach it. That exemption is for a harness refusing to wait forever for a
+   PROCESS it launched, reported through a different signal; this is a driver deciding how much of a flow's
+   own execution it is willing to watch, silently, and then reporting `NOT ANSWERED` — a truncation wearing a
+   measurement's clothes. A peer whose answer legitimately needs one more step than the count was a FALSE
+   NEGATIVE, and the number 400 was never derived from anything.
+   Both real terminators were already here and neither needed a counter: the emitted output arriving, and
+   `service` returning false, which is the peer's own statement (ENGINE_STEP_DONE) that its frontier drained.
+   §@S's rule that only EMITTED OUTPUT proves a flow is done is the same rule. A peer that neither emits nor
+   drains is a HANG, and a hang is the harness's `RUN_BACKSTOP_MS` to report through its own signal — which is
+   exactly where a driver's patience belongs, and the shape the browser-process gate's phase 4 chose
+   independently ("termination is an emitted output, not a step cap ... deliberately no third exit"). */
+async function pumpUntil(target, done) {
+  while (!done()) if (!(await service(target))) return false;
+  return true;
 }
 
 /* THE ONE-WAY NOTICES, DRAINED — factored out of the step because the PARK takes its last one outside a step.
@@ -398,7 +416,7 @@ async function routePending() {
     console.log(`routing world ${p.world} -> [${target.tag}] as origin ${p.origin}`);
     target.M.ccall('qjs_route', 'void', ['number','number'], [target.cs(p.record), target.cs(p.origin)]);
     const before = got.length;
-    for (let i = 0; i < 400 && got.length === before; i++) if (!(await service(target))) break;
+    await pumpUntil(target, () => got.length !== before);
     if (got.length === before) console.log(`  NOT DELIVERED: ${p.world}`);
   }
 }
@@ -437,7 +455,7 @@ if (!aLive)
    completion an ORPHAN rather than a question nobody started: `b` installs the asking world's segment, runs
    the IDL getter as a flow on its own frontier and emits `remoteop.answer` — and by the time it does, the
    instance that asked has been parked and torn down. */
-for (let i = 0; i < 400 && !answers.size; i++) if (!(await service(engines[1]))) break;
+await pumpUntil(engines[1], () => answers.size > 0);
 
 const parked = engines[0];
 const postsAtPark = posts.length;
@@ -459,7 +477,7 @@ const orphanCompletions = [...answers.keys()];
 withholdReads = false;
 engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue);
 console.log(`phase 4: resumed as [${engines[0].tag}] from the residue; [${engines[1].tag}] never left memory`);
-for (let i = 0; i < 4000 && !closedReports.length; i++) {
+while (!closedReports.length) {
   if (!(await service(engines[0]))) break;
   await routePending();
 }
