@@ -832,6 +832,26 @@ function localDefs(body) {
      braces hid html_element.c's `JSAtom a = JS_NewAtom(ctx, "content")` inside the block that installs it. */
   const stmts = splitTop(body, ";", false);
   let stmtAt = 0;
+  /* WHAT THIS SAW AND COULD NOT ATTRIBUTE TO A NAME — the ledger the analysis above reads so that "there is no
+     definition here" and "there is one I could not read" stop being the same answer. An LHS that is not a bare
+     identifier is one of two things, and which is a C FACT rather than a judgement:
+       - a path through `->`, or a leading `*`, writes the object a POINTER points at. The variable's own value
+         is unchanged, so there is genuinely no definition here and nothing to record. 3645 of the corpus's
+         4628 such assignments are this. (A leading `*` with a TYPE before it — `JSValue *p = &v` — is a
+         declaration and keeps its definition; the dereference is the one that starts with the `*`.)
+       - a path of `[…]`/`.` on a bare name changes what that name holds if it is an ARRAY or a STRUCT and does
+         not if it is a POINTER. This parser does not read declarations, so it cannot say which: 983 of them,
+         over 223 distinct names. That is a REFUSAL, recorded by NAME and OFFSET so a query that depends on the
+         name at or after this point can be told it is standing on something unread rather than on nothing. */
+  const unread = new Map();
+  const unreadable = (lhsText, at) => {
+    const s = lhsText.trim();
+    if (s.includes("->") || s.startsWith("*")) return;
+    const base = s.match(/^([A-Za-z_]\w*)\s*[[.]/);
+    if (!base) return;
+    if (!unread.has(base[1])) unread.set(base[1], []);
+    unread.get(base[1]).push(at);
+  };
   /* The declarator list, split on commas — but NOT when the statement is an aggregate initialiser, whose
      commas separate ELEMENTS. Braces are not counted here either: a statement that opens a block carries an
      unmatched `{`, and counting it hid the second declarator of `JSAtom a = …, r = …` inside such a block. */
@@ -841,11 +861,13 @@ function localDefs(body) {
     for (const decl of decls) {
       const eq = decl.indexOf("=");
       if (eq >= 0 && !"=!<>+-*/&|^%".includes(decl[eq + 1]) && !"=!<>+-*/&|^%".includes(decl[eq - 1])) {
-        const lhs = decl.slice(0, eq).trim().match(/([A-Za-z_]\w*)$/);
+        const lhsText = decl.slice(0, eq);
+        const deref = lhsText.trim().startsWith("*");
+        const lhs = deref ? null : lhsText.trim().match(/([A-Za-z_]\w*)$/);
         if (lhs) {
           if (!map.has(lhs[1])) map.set(lhs[1], []);
           map.get(lhs[1]).push({ at: declAt + eq, rhs: decl.slice(eq + 1) });
-        }
+        } else if (!deref) unreadable(lhsText, declAt + eq);
       }
       declAt += decl.length + 1;                  /* the comma splitTop removed */
     }
@@ -879,6 +901,8 @@ function localDefs(body) {
     stmtAt += stmt.length + 1;                    /* the semicolon splitTop removed */
   }
   for (const defs of map.values()) defs.sort((a, b) => a.at - b.at);
+  for (const ats of unread.values()) ats.sort((a, b) => a - b);
+  map.unread = unread;                            /* the refusals, read by the query that would depend on them */
   return map;
 }
 
@@ -1159,6 +1183,40 @@ export function loadEnvironment(root) {
     while (i + 1 < d.length && d[i + 1].at <= at) i++;
     return i;
   };
+  /* ---- THE REFUSAL LEDGER ------------------------------------------------------------------------------- */
+
+  /* A PRIMITIVE THAT CANNOT READ ITS INPUT MUST BE ABLE TO SAY SO, AND THE ANALYSIS ABOVE IT MUST NOT BE
+     ABLE TO CONFUSE "there is nothing here" WITH "there is something I could not read". Every defect this
+     reader has had is one instance of that confusion — a string scan crediting a member because the word
+     appeared in the file, `lastIndexOf("struct")` matching inside a longer identifier, `PLATFORM[i].install`
+     not matching an identifier-call pattern, a `for` header eaten by a top-level semicolon split. Each
+     produced a PLAUSIBLE answer where a refusal was owed, and each was found by someone chasing a wrong
+     number rather than by the gate. `matchAt` is the one primitive that already has the posture: it returns
+     -1 and its header says why. This is that posture made general.
+     A refusal is recorded WHERE THE ANSWER IS DEPENDED ON, never where it is parsed and never where it is
+     merely keyed. The corpus has 983 assignments this parser cannot attribute; `tagKey` touches 195 of them
+     because it keys EVERY named identifier an edge could run through, including `double rgb[3]` and `char
+     out[N]` — asking about a name is not depending on the answer, and counting those would rebuild the noise
+     this file deletes. The dependencies are the two questions whose answer is an INTERFACE: which interface a
+     member's install target is (`interfacesOf`), and which interface a §3.7.1 interface object was built
+     over (`ifaceObjects`). A refusal at either is a member or an identity decided on unread ground. */
+  const refusals = [];
+  const refusalSeen = new Set();
+  const refuse = (primitive, path, f, at, what, why) => {
+    const k = `${primitive}|${path}|${f.name}|${what}|${at}`;
+    if (refusalSeen.has(k)) return;
+    refusalSeen.add(k);
+    refusals.push({ primitive, file: path, line: lineOf(sources.get(path).orig, f.start + Math.max(at, 0)),
+                    fn: f.name, what, why });
+  };
+  const refuseUnread = (path, f, v, at) => {
+    const ats = defsFor(path, f).unread.get(v);
+    if (!ats || ats[0] > at) return;
+    refuse("localDefs", path, f, at, v,
+           `which object \`${v}\` holds here is UNREAD — an earlier assignment writes it through an index or ` +
+           `a member path, and whether that changes what \`${v}\` names depends on its declaration, which ` +
+           `this parser does not read`);
+  };
   const tagKey = (path, f, v, at) => key(path, f.name, `${v}#${versionAt(defsFor(path, f), v, at)}`);
   const paramKey = (fnName, p) => key("", fnName, p);
   const classKey = (path, c) => key(path, "@class", c);
@@ -1241,6 +1299,7 @@ export function loadEnvironment(root) {
         const obj = stripDup(site.args[IFACE_OBJECT.obj] || "");
         const names = R.strings(site.args[IFACE_OBJECT.iface] || "", locals);
         if (named(obj) && names) {
+          refuseUnread(path, f, obj, site.at);
           ifaceObjects.push({ node: at(obj, site.at), ifaces: names, file: path, line: lineAt(site.at) });
           declares(path, names);
         }
@@ -1423,7 +1482,7 @@ export function loadEnvironment(root) {
 
   return { macros, typedefs, sources, resolver, forms, fnsOf,
            tags, tagKey: (path, f, v, at) => tagKey(path, f, v, at), tagIssues, tagChecks, interfaceTables,
-           recordContradictions, declaresIface, ints };
+           recordContradictions, declaresIface, ints, refusals, refuseUnread };
 }
 
 /* EVERY INSTALLED MEMBER, ATTRIBUTED TO THE INTERFACE ITS TARGET IS — one record per (member, site), carrying
@@ -1442,6 +1501,7 @@ export function installedMembers(paths, env) {
     const v = stripDup(targetExpr || "");
     if (!/^[A-Za-z_]\w*$/.test(v))
       return { ifaces: [], candidates: [], why: `the install target \`${(targetExpr || "").trim()}\` is not a named object` };
+    env.refuseUnread(path, f, v, off - f.start);
     const m = env.tags.get(env.tagKey(path, f, v, off - f.start));
     if (!m || !m.size)
       return { ifaces: [], candidates: [], why: `no interface tag reaches \`${v}\`` };

@@ -830,6 +830,22 @@ if (elsewhere.length) {
                 .map(([f, n]) => `${f.replace(BROWSER + "/", "")}×${n}`).join(", ")}`);
 }
 
+/* THE GAP REPORT ON THE READER, one level below the gap report on the audit. Every category above reports a
+   question the ANALYSIS declined to answer; this one reports a question a PARSING PRIMITIVE could not read and
+   the analysis then stood on anyway. That distinction is the whole of this reader's soundness and it has been
+   broken four times — a string scan crediting a member because the word appeared in the file, `lastIndexOf`
+   matching inside a longer identifier, an indirect call matching no identifier-call pattern, a `for` header
+   eaten by a top-level semicolon split. None was caught by a gate; each was found by someone chasing a wrong
+   number, because a primitive that guesses hands the analysis a PLAUSIBLE answer and the refusal machinery
+   above it never gets to run. A primitive that cannot read its input now says so, and a refusal is counted
+   only where the analysis DEPENDS on the answer — which interface a member's target is, and which interface a
+   §3.7.1 interface object was built over. Zero is the armed state, not an absent check. */
+defect("facts a parsing primitive could not read that the analysis then depended on", env.refusals.length);
+console.log(`[idl-audit] reader refusals — ${env.refusals.length} fact(s) a parsing primitive could not read ` +
+            `and an interface question then depended on`);
+for (const r of env.refusals)
+  console.log(`[idl-audit]   ${r.file.replace(BROWSER + "/", "")}:${r.line}  ${r.fn}()  ${r.primitive}: ${r.why}`);
+
 /* THE OTHER HALF OF THE AUDIT'S GAP REPORT ON ITSELF — an install whose member name IS decided but whose
    TARGET's interface is not. It is the same rule one level down: counted, it credits a member to whichever row
    happened to name the file (the file-granular lie); dropped, it opens a gap that is filled. So it is named,
