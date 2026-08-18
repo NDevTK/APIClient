@@ -91,6 +91,37 @@ function probeFlips(out) {
   }
   return rows;
 }
+/* THE ORDERING, MEASURED — engine.c's @WFQ line (solver/flow.h's WfqCensus).
+   THE VERDICT BELOW USED TO ASSERT THIS CAUSE, which is the defect this function's own history already names
+   one paragraph up: a reporter claiming which of two causes held, from evidence it did not have. "This is the
+   WFQ's value ordering rather than the budget" is a statement about the two terms flow_weight is made of, and
+   nothing in @COLD or @H carries either of them. The engine now emits them, so the claim is either supported
+   by a number or it is not made.
+   THE READING IS THE REWARD SPREAD AGAINST 1.0, because 1.0 is the optimism term's ENTIRE range: a frontier
+   whose rewards differ by more than that is one whose ends the bonus can no longer reorder, so its bottom
+   waits on the aging term alone — FLOW_AGE_RATE, about one point per second of unproductive thread time, per
+   member ahead of it. `valZero` says whether anything is actually down there; a from-baseline flow (a
+   candidate session, a joined document's boot flow) enters at reward 0 and is exactly that population.
+   Same field contract as @COLD: the names are engine.c's printf, and an absent one throws rather than being
+   silently compared as undefined. */
+const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmit", "unrun"];
+function wfqReading(out) {
+  const s = [];
+  for (const m of out.matchAll(/^@WFQ (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
+  if (!s.length) return { ordered: false, text: "no @WFQ census in this run's output" };
+  const w = s[s.length - 1];
+  for (const f of WFQ_FIELDS)
+    if (typeof w[f] !== "number")
+      throw new Error(`[build] the @WFQ census has no numeric \`${f}\` — this discriminator reads ` +
+                      `${WFQ_FIELDS.join(", ")} and engine.c's printf is what decides they exist; a renamed ` +
+                      `field must be renamed here rather than silently compared as undefined.`);
+  return {
+    ordered: w.valMax - w.valMin > 1 && w.valZero > 0,
+    text: `@WFQ: ${w.members} members, reward ${w.valMin}..${w.valMax} (top ${w.valTop}), ${w.valZero} at ` +
+          `reward 0, ${w.selfEmit} emitted since birth, ${w.unrun} never charged for the thread`,
+  };
+}
+
 function hungCause(out) {
   const s = [];
   for (const m of out.matchAll(/^@COLD (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
@@ -116,13 +147,22 @@ function hungCause(out) {
     : `@H: ${flipped.length} row(s) reached 1 across the last ${h.length - Math.floor((h.length - 1) / 2)} of ` +
       `${h.length} samples, ${zero.length} still 0` + (zero.length ? ` (${zero.join(" ")})` : "");
 
+  const wfq = wfqReading(out);
   if (b.finished > a.finished && b.blocked === 0 && b.owed === 0 && h.length >= 2 && flipped.length === 0)
-    return `WORK THAT ADVANCES NO STATEMENT (${span}; ${hspan}) — flows retired steadily and not one probe row ` +
-           `reached 1 across half the run, so this is the WFQ's value ordering rather than the budget, and more ` +
-           `time would buy more of the same. The rows still 0 name what nothing scheduled was working toward.`;
+    return `WORK THAT ADVANCES NO STATEMENT (${span}; ${hspan}; ${wfq.text}) — flows retired steadily and not ` +
+           `one probe row reached 1 across half the run, so more time buys more of the same. ` +
+           (wfq.ordered
+             ? `The reward spread is wider than the optimism term's whole range and members are sitting at ` +
+               `reward 0, so the ORDER is the inherited reward's: those members are reached only as the aging ` +
+               `term gives back about one point per second of unproductive thread time, per member ahead of them.`
+             : `The @WFQ census does NOT show a reward-ordered frontier — its ends are within one optimism ` +
+               `bonus of each other — so the reward term is not what is holding this run, and that census is ` +
+               `the measurement to start from.`) +
+           ` The rows still 0 name what nothing scheduled was working toward.`;
   if (b.finished > a.finished && b.blocked === 0 && b.owed === 0)
-    return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET (${span}; ${hspan}) — flows were still finishing when ` +
-           `the kill landed, nothing was waiting on the host, and the probe table was still advancing.`;
+    return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET (${span}; ${hspan}; ${wfq.text}) — flows were still ` +
+           `finishing when the kill landed, nothing was waiting on the host, and the probe table was still ` +
+           `advancing.`;
   if (b.finished === a.finished && b.flows > a.flows)
     return `a STALL (${span}; ${hspan}) — no flow finished across half the run while the live flow count rose, ` +
            `so work is being admitted and not retired.`;

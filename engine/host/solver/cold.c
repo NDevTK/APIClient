@@ -706,6 +706,12 @@ static Flow *park_flow_add(JSContext *ctx, double val, int before, long flows)
            "a rebuilt flow did not land at the end of the frontier — a resume APPENDS, so anything else means "
            "a live member was displaced by a parked one and is now unreachable");
     fl->val = val;
+    /* A RESUME IS A REBUILD AND NOT AN EMISSION, so every point of that reward was INHERITED from the session
+       that parked it — this flow has produced nothing yet in this one. It is the same statement the fork makes
+       (flow.c's flow_fork_inherit), made at the other place a flow is handed another flow's account, so the
+       census row counting members that have emitted something themselves does not read a whole resumed
+       frontier as productive on the strength of last session's findings. */
+    fl->val_born = val;
     return fl;
 }
 

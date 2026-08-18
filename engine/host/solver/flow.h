@@ -67,6 +67,16 @@ typedef struct Flow {
        same kind of thing to everything downstream. */
     double val;            /* accumulated emitted VALUE (new @H + @S) — the WFQ's reward term, ONE POINT PER
                               EMISSION (both detectors credit exactly 1.0) */
+    /* HOW MUCH OF `val` THIS FLOW DID NOT EARN — the reward it INHERITED, at the instant it was forked or
+       rebuilt. It ranks nothing and has exactly one reader, flow_wfq_census below, because `val` alone cannot
+       answer the question a frontier that retires flows steadily without emitting anything poses: whether its
+       members are producing and being outranked, or coasting on an ancestor's findings. `val` is copied at
+       every fork (flow_fork_inherit) and restored by the cold tier, so it is monotone down a fork chain and
+       says what an ANCESTRY emitted; `val - val_born` is what THIS flow emitted, and a frontier where that is
+       zero for every member is one whose whole reward ordering was decided before any of them existed.
+       0 for a from-baseline flow (the first flow, a joined document's boot flow, a candidate session), which
+       is the truth about one: it inherited nothing, so all of its reward is its own from the start. */
+    double val_born;
     /* THE AGING TERM, AND ITS UNIT IS THE WHOLE OF WHETHER THE TERM WORKS. Thread time in MICROSECONDS burned
        since this flow's last emit — never a step/opcode/visit count. A count is not commensurate with `val`
        above: a step used to be a whole drain and became one unit of work, so the same charge billed a flow the
@@ -310,6 +320,40 @@ int flow_owes_answer(const Flow *f);
 
 /* The WFQ priority of a flow (higher = run sooner). Pure function of the flow's reward/aging/visit state. */
 double flow_weight(const Flow *f);
+
+/* WHAT THE ORDERING IS MADE OF — the census that turns "the WFQ's value ordering" from a claim into a number.
+ *
+ * The engine already reports how much work is happening (@PROGRESS's switches/forks) and how much of it
+ * RETIRES (@COLD's `finished`), and a run in which both climb while the fixture's own probe table stops
+ * advancing is a run in which every member of the frontier is doing something that emits nothing. Neither
+ * stream can say WHY, because neither reads either term the pick is made of, and the shape of the question is
+ * specific: flow_weight is reward + optimism − aging, and THE OPTIMISM TERM'S ENTIRE RANGE IS 1.0 — one
+ * emission. A member whose reward is a point below another's is therefore outranked no matter how long it has
+ * waited, and it is reached only by the aging term, which gives back FLOW_AGE_RATE per microsecond the other
+ * flow's chain burns without emitting. The reward SPREAD over the frontier is the whole of whether the
+ * optimism term can still order anything, and nothing measured it.
+ *
+ * `val_zero` IS THE ROW THAT NAMES A POPULATION rather than a statistic. A from-baseline flow enters at reward
+ * 0 (flow_add's zeros) — a candidate session, a joined document's boot flow, the first flow — so its weight is
+ * at most 1.0 for its whole life, and a candidate records no endpoints by design (endpoint_suppress) so the
+ * only thing that can raise its reward is the very sink it is trying to reach. Beside `val_max` the pair says
+ * exactly where those members sit in the order.
+ *
+ * PURE MEASUREMENT: one scan, no reference taken, nothing mutated — safe between scheduler steps, which is
+ * where the progress stream asks it. It decides NOTHING; every member keeps its weight and its place. */
+typedef struct {
+    long members;      /* live members of the frontier — the denominator for every count below */
+    double val_min;    /* the reward term's range over the frontier. A spread above 1.0 is the statement that */
+    double val_max;    /* the optimism bonus can no longer reorder its ends: only aging reaches the bottom. */
+    double val_top;    /* …and flow_best's own reward, so the top of the order is named rather than inferred */
+    long val_zero;     /* members that inherited nothing and have emitted nothing — ceiling 1.0 (see above) */
+    long self_emit;    /* members with val > val_born: they emitted something THEMSELVES rather than inheriting
+                          it. Zero here while `finished` climbs is work that advances no statement. */
+    long unrun;        /* members with cpu == 0 — never charged for the thread, or emitted since they last
+                          were. flow_pick's own definition of an unrun flow, read here rather than restated. */
+    int64_t svc_max;   /* the largest service notch in the frontier — who is actually consuming the thread */
+} WfqCensus;
+void flow_wfq_census(WfqCensus *out);
 
 /* The highest-priority flow in the frontier, or NULL if empty — EVERY member, whether or not it can currently
    make progress. It answers the host's Level-1 question (this document's best weight) and the census's; the

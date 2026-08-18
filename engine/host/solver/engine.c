@@ -4663,6 +4663,24 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                        (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes) / 1024,
                        JS_StepMachineCount(JS_GetRuntime(g_sess_ctx)));
             }
+            /* AND WHAT THE ORDER ITSELF IS MADE OF (solver/flow.h's WfqCensus). @PROGRESS says how much work is
+               happening and @COLD says how much of it RETIRES, and a run in which both climb while the
+               fixture's probe table stops advancing is one whose entire frontier is doing something that emits
+               nothing — a state neither line can explain, because neither reads either term the pick is made
+               of. THE READING IS `valMax - valMin` AGAINST 1.0, the optimism term's entire range: a spread
+               wider than that is a frontier whose ends the bonus can no longer reorder, so the order is the
+               reward's and the bottom waits on the aging term alone (one point per second of unproductive
+               thread time, per member ahead of it). `valZero` names who is down there — a from-baseline flow
+               enters at reward 0, which is every candidate session and every joined document's boot flow — and
+               `selfEmit` says whether anything in the frontier has emitted since it was born at all. */
+            {
+                WfqCensus w;
+                flow_wfq_census(&w);
+                printf("@WFQ {\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
+                       "\"valZero\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,\"svcMax\":%lld}\n",
+                       w.members, w.val_min, w.val_max, w.val_top,
+                       w.val_zero, w.self_emit, w.unrun, (long long)w.svc_max);
+            }
             /* CREATED IS NOT LIVE, AND A COUNTER THAT CANNOT TELL THEM APART CANNOT NAME A LEAK. A run whose
                created-flow count climbs with the switch count is either CHURN (each flow finishes and the
                frontier stays small) or ACCUMULATION (the frontier itself grows) — two different defects with

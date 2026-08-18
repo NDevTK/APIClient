@@ -147,6 +147,13 @@ void flow_credit_emit(double v) {
                     "findings at one point each, and a zero credit resets the aging that outranks a monopolizer "
                     "while adding nothing to weigh it against");
     if (!g_running) return;
+    /* THE INHERITED HALF MAY NEVER EXCEED THE WHOLE, asserted where the whole moves. `val_born` is what this
+       flow was handed at its fork or its rebuild and `val` is what it holds now, so a flow standing above its
+       own birth mark is one whose two writers ran in the wrong order — and the only symptom would be a census
+       row reporting that nothing in the frontier has ever emitted anything. */
+    DCHECK(g_running->val_born <= g_running->val,
+           "a flow holds more inherited reward than reward — its birth mark was written after its account, so "
+           "the census cannot tell what this flow emitted from what it was handed");
     g_running->val += v;
     g_running->cpu = 0;   /* emitted -> no longer a CPU-burning monopolizer */
     /* …AND THE BIRTH MARK WITH IT, because the mark is what this flow OWES the flow that forked it and the
@@ -214,9 +221,23 @@ void flow_age_running(int64_t us) {
  * dislodge it (flow_pick seeds the incumbent and takes a STRICT comparison), and it ranks BELOW every flow that
  * has consumed less service — which is exactly the backlog. This is start-time fair queueing's rule and not a
  * new policy: a continuation of an active flow enters at that flow's virtual time, never at the system's, or
- * any flow can reset its own virtual clock by splitting. A genuinely from-baseline flow (the first flow, a
+ * any flow can reset its own virtual clock by splitting.
+ *
+ * WHAT IT DOES TO A FROM-BASELINE FLOW IS NOT WHAT THIS PARAGRAPH USED TO CLAIM, and the claim was checkable
+ * against the formula three functions below it. It said "a genuinely from-baseline flow (the first flow, a
  * candidate session, a cold resume) still enters at zero and still outranks everything, which is what
- * §scheduler's "a never-run flow is never starved" is about.
+ * §scheduler's 'a never-run flow is never starved' is about". Such a flow enters at reward 0 and service 0,
+ * so its weight is EXACTLY 1.0 — the optimism term's whole range — and it outranks a flow of reward V only
+ * once THAT flow's chain has burned (V − 1) / FLOW_AGE_RATE microseconds since its last emit: about a second
+ * of unproductive thread time per point, for each such member, since aging is per flow. Inheritance makes
+ * `val` monotone down every fork chain, so on a document whose exploration has emitted V findings the entire
+ * tree below that prefix sits above 1.0 and a from-baseline flow is reached when that tree DRAINS — not when
+ * the optimism term decides it is starved. That is a real ordering with a real justification (the tree is
+ * where the emissions came from) and it is NOT the guarantee the deleted sentence made, so it is written down
+ * as what it is. §scheduler's "never starved" is true among members of EQUAL reward and among no others.
+ * WHICH OF THE TWO A RUN IS IN IS NOW A MEASUREMENT rather than either sentence: flow_wfq_census reports the
+ * reward spread over the frontier and how many members sit at reward 0, and engine.c emits it as @WFQ beside
+ * @PROGRESS and @COLD.
  *
  * AND INHERITANCE IS ONLY HALF OF IT — the other half is that the sibling stays ATTACHED. Copying the two terms
  * says where the arm enters; it says nothing about where the thread time the arm goes on to burn ends up, and
@@ -230,7 +251,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
     /* NOTHING MAY HAVE BEEN CREDITED OR CHARGED FIRST, because the inheritance ASSIGNS both terms. A caller
        that ran the sibling — or credited it — before handing it its account would have run it at a rank nobody
        chose, and the assignment would then silently erase whatever that run produced. */
-    DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->born == 0,
+    DCHECK(sib->val == 0.0 && sib->val_born == 0.0 && sib->cpu == 0 && sib->born == 0,
            "a forked sibling was credited or charged before it inherited its parent's account — it was ranked, "
            "and possibly run, at a weight that belongs to no flow, and this assignment throws that away");
     /* AND IT MAY NOT ALREADY STAND UNDER A FLOW IN THE FORK TREE. flow_new mints a root node, so a non-NULL
@@ -240,6 +261,11 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
            "a forked sibling already stood under a flow in the fork tree — it is being given a second parent, "
            "so the service it sheds when it departs is charged to a chain it was never part of");
     sib->val = parent->val;
+    /* …AND THE MARK THAT SAYS IT WAS INHERITED. `val` is the whole of the sibling's reward and none of it is
+       its own, so this is the quantity the census subtracts to ask what a member has emitted since it began —
+       the one question `val` cannot answer once it is copied down a fork chain. Written here, beside the copy
+       it describes, so a term the fork carries cannot acquire one without acquiring the other. */
+    sib->val_born = parent->val;
     sib->cpu = parent->cpu;
     /* THE BIRTH MARK: the service this sibling INHERITED, which the parent's own `cpu` above already records.
        What it hands back when it departs is what it burned BEYOND this, so the shared prefix is charged to the
@@ -838,6 +864,43 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            "entire accumulated reward is worth, while a never-run flow was waiting — the aging term is no longer "
            "commensurate with the reward it is subtracted from, so a monopolizer cannot sink");
     return best;
+}
+
+/* WHAT THE ORDERING IS MADE OF — see flow.h for what each row answers and why `val` alone cannot answer it.
+ *
+ * IT IS A SEPARATE SCAN AND NOT A FIFTH QUESTION FOR flow_pick, which is the opposite of the rule one function
+ * up and is deliberate: flow_pick's four questions are all the ORDER, so they must share one comparator or
+ * they can disagree about which flow runs. This one decides nothing and reads the order's INPUTS, so sharing
+ * that scan would mean giving the pick accumulators it does not need and a shape a census could drift into
+ * steering. It calls flow_weight for nothing at all — it reports the two terms, never their sum.
+ *
+ * `val_top` IS flow_best's OWN reward, so the top of the census and the top of the order are the same flow by
+ * construction rather than by two scans agreeing. */
+void flow_wfq_census(WfqCensus *out) {
+    Flow *top;
+    int i;
+
+    DCHECK(out != NULL, "the WFQ was asked to report its ordering into nothing");
+    out->members = g_flows_n;
+    out->val_min = out->val_max = out->val_top = 0.0;
+    out->val_zero = out->self_emit = out->unrun = 0;
+    out->svc_max = 0;
+    for (i = 0; i < g_flows_n; i++) {
+        const Flow *f = g_flows[i];
+        int64_t s = flow_service_notch(f);
+
+        DCHECK(f->val_born <= f->val,
+               "a member of the frontier holds more inherited reward than reward — its birth mark and its "
+               "account disagree, so `self_emit` below counts something that was never an emission");
+        if (i == 0 || f->val < out->val_min) out->val_min = f->val;
+        if (i == 0 || f->val > out->val_max) out->val_max = f->val;
+        if (f->val == 0.0) out->val_zero++;
+        if (f->val > f->val_born) out->self_emit++;
+        if (f->cpu == 0) out->unrun++;
+        if (s > out->svc_max) out->svc_max = s;
+    }
+    top = flow_best();
+    if (top) out->val_top = top->val;
 }
 
 /* The four questions, each a seed, a filter or a direction over the one scan above. */
