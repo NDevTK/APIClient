@@ -491,6 +491,33 @@ static const char *HTML =
     " Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, 'src') === undefined &&"
     " typeof Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src').get === 'function'"
     " ? 'isone' : 'wrong'));"
+    /* §2.6.1's `unsigned long` reflection, whose two fallbacks are DIFFERENT STEPS. `<td>` declares a range
+       starting at 0 for rowspan and 1 for colspan, and a default of 1 for both — so an in-range 0 and an
+       unparseable value give different answers on the same element, which one "fallback" number cannot. */
+    "var itd = document.createElement('td');"
+    "fetch('/api/ulabsent?v=' + (itd.colSpan === 1 && itd.rowSpan === 1 ? 'isdflt' : 'wrong'));"
+    "itd.setAttribute('rowspan', '0'); itd.setAttribute('colspan', '0');"
+    /* rowspan 0 is IN RANGE; colspan 0 is below its minimum and CLAMPS up, not to the default (they agree at
+       1 here, so the discriminating pair is rowspan's 0-vs-1). */
+    "fetch('/api/ulrange?v=' + (itd.rowSpan === 0 && itd.colSpan === 1 ? 'isrange' : 'wrong'));"
+    "itd.setAttribute('rowspan', 'x');"
+    "fetch('/api/uldflt?v=' + (itd.rowSpan === 1 ? 'isdflt2' : 'wrong'));"
+    /* An overflowing digit run is ABOVE the maximum, not a parse error — the clamp, never the default. */
+    "itd.setAttribute('rowspan', '99999999999999999999999');"
+    "fetch('/api/uloverflow?v=' + (itd.rowSpan === 65534 ? 'isclamp' : 'wrong'));"
+    /* THE SETTER DOES NOT CLAMP: "clamped to the range has no effect on the setter steps", so the attribute
+       holds 5000 and only the read pulls it to 1000. A setter that clamped would store 1000 and the two
+       assertions below would agree with each other and with a browser on neither. */
+    "itd.colSpan = 5000;"
+    "fetch('/api/ulset?v=' + (itd.getAttribute('colspan') === '5000' && itd.colSpan === 1000"
+    " ? 'isnoclamp' : 'wrong'));"
+    /* A value the IDL's own unsigned-long conversion leaves above 2147483647 is out of the setter's window, so
+       the DEFAULT is written — not a wrap and not a clamp. */
+    "itd.colSpan = 3000000000;"
+    "fetch('/api/ulwindow?v=' + (itd.getAttribute('colspan') === '1' ? 'isdefaultwritten' : 'wrong'));"
+    /* headingOffset has a range and NO default, so its fallback is the range's minimum. */
+    "var ihd = document.createElement('div'); ihd.setAttribute('headingoffset', 'x');"
+    "fetch('/api/ulmin?v=' + (ihd.headingOffset === 0 && ihd.headingReset === false ? 'ismin' : 'wrong'));"
     /* §3.2.2 click() is "fire a synthetic pointer event named click" — the SAME dispatch, so a handler wired
        with onclick sees an untrusted, cancelable, bubbling event and preventDefault reaches the caller. */
     "var ck = 0; var ckt = null; idv.onclick = function(e){ ck++; ckt = e; e.preventDefault(); };"
@@ -3621,6 +3648,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "\"/api/refurlrel\"",    "isrel"   },
         { "\"/api/refurlbad\"",    "israw"   },
         { "\"/api/refurlproto\"",  "isone"   },
+        /* §2.6.1's unsigned long: the range and the default are separate steps, overflow clamps rather than
+           falling to the default, and the SETTER does neither. */
+        { "\"/api/ulabsent\"",   "isdflt"   },
+        { "\"/api/ulrange\"",    "isrange"  },
+        { "\"/api/uldflt\"",     "isdflt2"  },
+        { "\"/api/uloverflow\"", "isclamp"  },
+        { "\"/api/ulset\"",      "isnoclamp"},
+        { "\"/api/ulwindow\"",   "isdefaultwritten" },
+        { "\"/api/ulmin\"",      "ismin"    },
         { "\"/api/click\"",      "isclick" },   /* §3.2.2 click() through the one dispatch machine */
         { "\"/api/cascade\"",    "isspec"  },   /* specificity beats document order — the cascade, not a list */
         { "\"/api/cssinline\"",  "isinline"},   /* inline layers over the author cascade */
