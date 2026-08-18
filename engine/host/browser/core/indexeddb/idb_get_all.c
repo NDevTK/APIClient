@@ -70,13 +70,13 @@
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
 #include "core/idl_args.h"
+#include "core/indexeddb/idb_cursor.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_get_all.h"
 #include "core/indexeddb/idb_index.h"
@@ -87,13 +87,11 @@
 #include "core/indexeddb/idb_transaction.h"
 #include "core/structured_clone.h"
 
-const char *const IDB_CURSOR_DIRECTION_VALUES[5] = { "next", "nextunique", "prev", "prevunique", NULL };
-
 const IdlDictMember IDB_GET_ALL_OPTIONS[3] = {
     /* §3.2.17 step 4.1 reads a dictionary's own members LEXICOGRAPHICALLY, which idl_args.c asserts:
        "count" < "direction" < "query". Declared in any other order this aborts at every runtime init. */
     { "count", IDL_UNRESTRICTED_DOUBLE },
-    { "direction", IDL_ENUM, false, IDB_CURSOR_DIRECTION_VALUES, 0, NULL, IDL_DEFAULT_STRING, "next" },
+    { "direction", IDL_ENUM, false, IDB_CURSOR_DIRECTIONS, 0, NULL, IDL_DEFAULT_STRING, "next" },
     { "query", IDL_ANY, false, NULL, 0, NULL, IDL_DEFAULT_NULL },
 };
 
@@ -384,12 +382,12 @@ static int js_idb_get_all_operation(JSContext *ctx, void *st, JSValue cb_result,
 
     STEP_ARM(GA_ITEM);
     {
-        bool descending = dir == IDB_DIR_PREV || dir == IDB_DIR_PREVUNIQUE;
-        bool unique = dir == IDB_DIR_NEXTUNIQUE || dir == IDB_DIR_PREVUNIQUE;
+        bool descending = dir == IDB_CURSOR_DIR_PREV || dir == IDB_CURSOR_DIR_PREVUNIQUE;
+        bool unique = dir == IDB_CURSOR_DIR_NEXTUNIQUE || dir == IDB_CURSOR_DIR_PREVUNIQUE;
         uint32_t i;
 
         JS_FreeValue(ctx, cb_result);
-        DCHECK(dir >= IDB_DIR_NEXT && dir <= IDB_DIR_PREVUNIQUE,
+        DCHECK(dir >= IDB_CURSOR_DIR_NEXT && dir <= IDB_CURSOR_DIR_PREVUNIQUE,
                "§5.12's operation was minted with a direction that is not one of §2.10's four");
         /* "If count is specified and there are more than count records in range, only the first count will be
            retrieved" — over the records this direction yields, which is why the clamp is on what has been
@@ -476,34 +474,6 @@ static bool ga_potentially_valid_key_range(JSContext *ctx, JSValueConst v)
     return r != IDB_KEY_INVALID_TYPE;
 }
 
-/* §5.12 step 9's `queryOrOptions["direction"]`, as the enumerator §2.10 names. The member's declaration has
-   already run §3.2.18 — ToString and then membership in `IDBCursorDirection` — so what arrives is one of the
-   four strings and anything else is this engine disagreeing with its own declaration. */
-static int ga_direction_of(JSContext *ctx, JSValueConst v)
-{
-    const char *s;
-    int i;
-
-    DCHECK(JS_IsString(v), "§5.12 step 9 read a `direction` that is not a string — the member declares it as "
-                           "an IDBCursorDirection, so §3.2.18's conversion and its default have both already "
-                           "run by the time this reads it");
-    s = JS_ToCString(ctx, v);
-    CHECK(s != NULL, "IndexedDB: §5.12's direction could not be read");
-    for (i = 0; IDB_CURSOR_DIRECTION_VALUES[i]; i++)
-        if (!strcmp(s, IDB_CURSOR_DIRECTION_VALUES[i])) {
-            JS_FreeCString(ctx, s);
-            return i;
-        }
-    JS_FreeCString(ctx, s);
-    /* ALWAYS FATAL, and not a DCHECK with a "next" behind it: a `?:` past this would make an unvalidated
-       string silently mean "next" in a release build, so every direction-dependent answer below — the order
-       the records come back in — would be decided by a value nothing checked. §3.2.18 makes an unrecognised
-       value a TypeError at the DECLARATION, so one arriving here means the member was declared without its
-       enumeration, which is a data-integrity failure of this engine's own IDL and not a page's input. */
-    CHECK_FAIL("§5.12 step 9 read a `direction` that IDBCursorDirection does not list — the member's "
-               "declaration is missing its IDL_ENUM values, so §3.2.18's membership test never ran");
-}
-
 int idb_get_all_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w,
                            JSValueConst source, JSValueConst tx, bool is_index, int kind,
                            JSValueConst query_or_options, bool options_converted,
@@ -521,7 +491,7 @@ int idb_get_all_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w,
     w->tx = JS_DupValue(ctx, tx);
     w->is_index = is_index ? 1 : 0;
     w->kind = (uint8_t)kind;
-    w->direction = IDB_DIR_NEXT;                                              /* STEP 7 */
+    w->direction = IDB_CURSOR_DIR_NEXT;                                              /* STEP 7 */
     w->count = count_arg;
     w->has_count = has_count_arg ? 1 : 0;
 
@@ -583,7 +553,7 @@ int idb_get_all_walk_start(JSContext *ctx, JSStepHdr *hdr, IdbGetAllWalk *w,
             }
             w->has_count = 1;
         }
-        w->direction = (uint8_t)ga_direction_of(ctx, dv);      /* "Set direction to …["direction"]" */
+        w->direction = (uint8_t)idb_cursor_direction_of(ctx, dv);   /* "Set direction to queryOrOptions[direction]" */
         JS_FreeValue(ctx, cv);
         JS_FreeValue(ctx, dv);
     }

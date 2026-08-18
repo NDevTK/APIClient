@@ -9,6 +9,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/idl_args.h"
+#include "core/indexeddb/idb_cursor.h"
 #include "core/indexeddb/idb_key_range.h"
 
 /* Declared ONCE PER AGENT: the retrieve-multiple step machine §5.12's operation is. */
@@ -20,11 +21,9 @@ void idb_get_all_free(JSRuntime *rt);
    member declares rather than three bodies that could drift. §6.2's and §6.3's switch names the three. */
 enum { IDB_GET_ALL_VALUE = 0, IDB_GET_ALL_KEY, IDB_GET_ALL_RECORD };
 
-/* §2.10's CURSOR DIRECTION, as the four values `IDBCursorDirection` lists. It is here rather than beside §2.10
-   because §5.12 is the first algorithm to take one; a cursor takes the same four and must take THESE, or two
-   components disagree about what "prevunique" means. The strings are the enumeration's own, in IDL order. */
-enum { IDB_DIR_NEXT = 0, IDB_DIR_NEXTUNIQUE, IDB_DIR_PREV, IDB_DIR_PREVUNIQUE };
-extern const char *const IDB_CURSOR_DIRECTION_VALUES[5];   /* NULL-terminated, for an IDL_ENUM declaration */
+/* §2.10's CURSOR DIRECTION is core/indexeddb/idb_cursor.h's — its value list, the enum that indexes it and
+   the one decode. §4.9 is where the enumeration is DECLARED, so §5.12 borrows it rather than restating four
+   identifiers that would silently disagree the day a value moved. */
 
 /* §4.5's `IDBGetAllOptions`, DECLARED ONCE. Six members across two files take one, and a dictionary written
  * twice is two answers to one IDL — the members are in §3.2.17's read order, which is LEXICOGRAPHIC (count,

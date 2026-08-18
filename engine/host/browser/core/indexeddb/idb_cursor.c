@@ -74,10 +74,10 @@
 #define CU_REQUEST        "request"
 #define CU_KEY_ONLY       "keyOnly"
 
-/* §4.9's IDBCursorDirection, as the four things the engine actually branches on. The STRING is what `direction`
-   answers with and what the IDL converted, and it is stored rather than this enum for that reason; this is the
-   decode §6.7 step 9.1's switch is written over. */
-enum { CU_DIR_NEXT = 0, CU_DIR_NEXTUNIQUE, CU_DIR_PREV, CU_DIR_PREVUNIQUE };
+/* §4.9's IDBCursorDirection, as the four things the engine actually branches on. The STRING is what
+   `direction` answers with and what the IDL converted, and it is stored rather than the enum for that reason.
+   The enum that indexes this list and the decode that produces it are in the header, because §6.2's and
+   §6.3's retrieve-multiple branch on the same four and two enums over one list is one fact answered twice. */
 const char *const IDB_CURSOR_DIRECTIONS[] = { "next", "nextunique", "prev", "prevunique", NULL };
 
 static JSValue g_key;
@@ -156,21 +156,35 @@ static bool cu_flag(JSContext *ctx, JSValueConst c, const char *field)
 
 /* §2.10's DIRECTION, decoded. The string is the field, because that is what §4.9's getter answers with and what
    the IDL's enumeration already checked; this is the one place it becomes a branch. */
-static int cu_direction(JSContext *ctx, JSValueConst c)
+int idb_cursor_direction_of(JSContext *ctx, JSValueConst v)
 {
-    JSValue d = cu_get(ctx, c, CU_DIRECTION);
-    const char *s = JS_ToCString(ctx, d);
+    const char *s;
     int i;
 
-    JS_FreeValue(ctx, d);
-    CHECK(s != NULL, "IndexedDB: a cursor's direction could not be read");
+    DCHECK(JS_IsString(v), "§4.9's direction was decoded from something that is not a string — §3.2.18's "
+                           "conversion and the enumeration's own default have both already run by the time "
+                           "anything reads one");
+    s = JS_ToCString(ctx, v);
+    CHECK(s != NULL, "IndexedDB: a direction could not be read");
     for (i = 0; IDB_CURSOR_DIRECTIONS[i]; i++)
         if (!strcmp(s, IDB_CURSOR_DIRECTIONS[i])) { JS_FreeCString(ctx, s); return i; }
     JS_FreeCString(ctx, s);
-    DFAIL("a cursor holds a direction that is not one of §4.9's four IDBCursorDirection values — the IDL's "
-          "enumeration check is what makes that impossible, so the field was written by something that did "
-          "not go through it");
-    return CU_DIR_NEXT;
+    /* ALWAYS FATAL, and not a DCHECK with a `return IDB_CURSOR_DIR_NEXT` behind it: that `?:` past a broken
+       invariant would make an unvalidated string silently mean "next" in a release build, so §6.7's iteration
+       order AND §6.2's record order would both be decided by a value nothing checked. §3.2.18's enumeration
+       check is what makes an unrecognised value impossible, so one arriving here means a member was declared
+       without its value list — this engine's own IDL disagreeing with itself, not a page's input. */
+    CHECK_FAIL("a direction that §4.9's IDBCursorDirection does not list reached the decode — the member or "
+               "the field that produced it never went through §3.2.18's enumeration check");
+}
+
+static int cu_direction(JSContext *ctx, JSValueConst c)
+{
+    JSValue d = cu_get(ctx, c, CU_DIRECTION);
+    int i = idb_cursor_direction_of(ctx, d);
+
+    JS_FreeValue(ctx, d);
+    return i;
 }
 
 /* §2.10's SOURCE — "an index or an object store from the cursor's SOURCE HANDLE. If the cursor's source handle
@@ -452,7 +466,7 @@ static int js_idb_iterate_operation(JSContext *ctx, void *st, JSValue cb_result,
            for a unique direction — so an operation that reached here violating either is that member not
            having run its own steps. */
         DCHECK(JS_IsUndefined(primary_key) ||
-               (s->is_index && (s->dir == CU_DIR_NEXT || s->dir == CU_DIR_PREV)),
+               (s->is_index && (s->dir == IDB_CURSOR_DIR_NEXT || s->dir == IDB_CURSOR_DIR_PREV)),
                "§6.7 step 3: a cursor iteration was given a primaryKey while its source is not an index, or "
                "while its direction is one of the two unique ones. §4.9's continuePrimaryKey steps 4 and 5 "
                "are the two InvalidAccessErrors that make that unreachable");
@@ -494,8 +508,8 @@ static int js_idb_iterate_operation(JSContext *ctx, void *st, JSValue cb_result,
         uint32_t at;
         bool hit;
 
-        fwd = (s->dir == CU_DIR_NEXT || s->dir == CU_DIR_NEXTUNIQUE);
-        unique = (s->dir == CU_DIR_NEXTUNIQUE || s->dir == CU_DIR_PREVUNIQUE);
+        fwd = (s->dir == IDB_CURSOR_DIR_NEXT || s->dir == IDB_CURSOR_DIR_NEXTUNIQUE);
+        unique = (s->dir == IDB_CURSOR_DIR_NEXTUNIQUE || s->dir == IDB_CURSOR_DIR_PREVUNIQUE);
         /* §2.7.2 gives one object store to one read/write transaction at a time and an operation is ONE task,
            so nothing may add to or remove from this list across the scan — a record appearing behind the
            cursor is a record this iteration would step straight past. */
@@ -522,7 +536,7 @@ static int js_idb_iterate_operation(JSContext *ctx, void *st, JSValue cb_result,
             JS_FreeValue(ctx, rvalue);
             return JS_STEP_YIELD;   /* the same stage, one record further along */
         }
-        if (s->dir == CU_DIR_PREVUNIQUE) {
+        if (s->dir == IDB_CURSOR_DIR_PREVUNIQUE) {
             /* "If TEMP RECORD is defined, let found record be the FIRST record in records whose key is equal
                to temp record's key." The note beside it is what this second scan buys: "iterating with
                prevunique visits the same records that nextunique visits, but in reverse order" — so the
@@ -546,7 +560,7 @@ static int js_idb_iterate_operation(JSContext *ctx, void *st, JSValue cb_result,
     {
         JSValue rkey, rvalue;
 
-        DCHECK(s->dir == CU_DIR_PREVUNIQUE,
+        DCHECK(s->dir == IDB_CURSOR_DIR_PREVUNIQUE,
                "§6.7's prevunique tail was entered for another direction — it is the only arm of step 9.1 "
                "that searches twice");
         DCHECK(!JS_IsUndefined(s->temp_key), "§6.7's prevunique tail was entered with no temp record — the "
@@ -880,7 +894,7 @@ static int js_cu_continue(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
             position = cu_get(ctx, hdr->this_val, CU_POSITION);
             if (!JS_IsUndefined(position)) {
                 c = idb_key_compare(ctx, s->key, position);
-                if ((dir == CU_DIR_NEXT || dir == CU_DIR_NEXTUNIQUE) ? (c <= 0) : (c >= 0)) {
+                if ((dir == IDB_CURSOR_DIR_NEXT || dir == IDB_CURSOR_DIR_NEXTUNIQUE) ? (c <= 0) : (c >= 0)) {
                     JS_FreeValue(ctx, position);
                     JS_ThrowDOMException(ctx, "DataError",
                                          "the key is not ahead of the cursor's position in its direction");
@@ -969,7 +983,7 @@ static int js_cu_continue_pk(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             {
                 int dir = cu_direction(ctx, hdr->this_val);
 
-                if (dir != CU_DIR_NEXT && dir != CU_DIR_PREV) {                   /* STEP 5 */
+                if (dir != IDB_CURSOR_DIR_NEXT && dir != IDB_CURSOR_DIR_PREV) {                   /* STEP 5 */
                     JS_FreeValue(ctx, tx);
                     JS_ThrowDOMException(ctx, "InvalidAccessError",
                                          "continuePrimaryKey is only defined for a next or prev cursor");
@@ -1024,12 +1038,12 @@ static int js_cu_continue_pk(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         os_position = cu_get(ctx, hdr->this_val, CU_OS_POSITION);
         if (!JS_IsUndefined(position)) {
             c = idb_key_compare(ctx, s->key, position);
-            if (dir == CU_DIR_NEXT ? (c < 0) : (c > 0))                              /* STEPS 13-14 */
+            if (dir == IDB_CURSOR_DIR_NEXT ? (c < 0) : (c > 0))                              /* STEPS 13-14 */
                 bad = true;
             else if (c == 0 && !JS_IsUndefined(os_position)) {                       /* STEPS 15-16 */
                 int p = idb_key_compare(ctx, primary_key, os_position);
 
-                if (dir == CU_DIR_NEXT ? (p <= 0) : (p >= 0))
+                if (dir == IDB_CURSOR_DIR_NEXT ? (p <= 0) : (p >= 0))
                     bad = true;
             }
         }

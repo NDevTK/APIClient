@@ -18,6 +18,17 @@ void idb_cursor_free(JSRuntime *rt);
    the four identifiers would be four answers to what the enumeration admits. NULL-terminated, static. */
 extern const char *const IDB_CURSOR_DIRECTIONS[];
 
+/* THE SAME ENUMERATION AS THE BRANCH EVERY CONSUMER WRITES — the index of each value in the list above, which
+   is what makes the two one declaration rather than two that could be reordered apart. §6.7's iterate-a-cursor
+   and §6.2/§6.3's retrieve-multiple each switch on all four, and a second enum in either would silently
+   disagree with this list the day a value moved. */
+enum { IDB_CURSOR_DIR_NEXT = 0, IDB_CURSOR_DIR_NEXTUNIQUE, IDB_CURSOR_DIR_PREV, IDB_CURSOR_DIR_PREVUNIQUE };
+
+/* §3.2.18's ENUMERATION, DECODED — the one place a direction string becomes a branch. `v` is the string the
+   IDL's conversion has already checked against the list, so an unrecognised one is this engine disagreeing
+   with its own declaration and is ALWAYS fatal rather than silently meaning "next". */
+int idb_cursor_direction_of(JSContext *ctx, JSValueConst v);
+
 /* §4.5's and §4.6's `openCursor`/`openKeyCursor` step "let cursor be A NEW CURSOR with its source handle set to
  * this, undefined position, direction set to direction, got value flag set to false, undefined key and value,
  * range set to range, and key only flag set to …" — every field that step names, and nothing derived.
