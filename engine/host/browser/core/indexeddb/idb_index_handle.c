@@ -8,13 +8,14 @@
  * its associated object store handle"). So this file stores no transaction: it asks the store handle, and one
  * answer cannot disagree with itself.
  *
- * WHAT IS ABSENT AND WHY — ONE NAMED CONSTRUCT PER MEMBER, so the next diff starts from building the construct
- * rather than from re-deriving which one is missing:
- *   - `getAll()`, `getAllKeys()`, `getAllRecords()` wait on §5.12 CREATING A REQUEST TO RETRIEVE MULTIPLE ITEMS,
- *     over the `IDBGetAllOptions` dictionary §4.5 declares, and on §6.3's retrieve-multiple-items-from-an-index;
- *     `getAllRecords()` additionally waits on §4.8 The IDBRecord interface.
- *   - `openCursor()`, `openKeyCursor()` wait on §2.10 CURSOR and §6.7 Cursor iteration operation.
- * Each absent member is a TypeError naming itself, which the IDL gap auditor lists.
+ * NOTHING OF §4.6 IS ABSENT ANY MORE, and this paragraph used to be the list of what was. It named two
+ * constructs and both have since been built — §2.10 Cursor with §6.7 Cursor iteration for
+ * `openCursor`/`openKeyCursor`, and §5.12 Creating a request to retrieve multiple items with §6.3's
+ * retrieve-multiple-items-from-an-index and §4.8's IDBRecord for `getAll`/`getAllKeys`/`getAllRecords` — so
+ * every member the interface declares is installed and answers with a computed value. The list is kept as
+ * this sentence rather than deleted, because the next member added to this IDL needs somewhere to say what it
+ * is waiting on, and because a paragraph naming absences that no longer exist sends its reader to build
+ * something twice.
  *
  * THE MEMBERS THAT ARE HERE ARE MACHINES for §4.5's reason: `index.get([1, 2])` converts an Array exotic object
  * through §2.9's convert-a-value-to-a-key-range, whose step 3 is §7.4's array arm — the page's own code. */
@@ -29,6 +30,7 @@
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/indexeddb/idb_cursor.h"
+#include "core/indexeddb/idb_get_all.h"
 #include "core/indexeddb/idb_database.h"
 #include "core/indexeddb/idb_index.h"
 #include "core/indexeddb/idb_index_handle.h"
@@ -52,6 +54,7 @@ static int       g_ready;
 static JSRuntime *g_ix_rt;
 static int g_id_get = -1, g_id_get_key = -1, g_id_count = -1, g_setter_name = -1;
 static int g_id_open_cursor = -1, g_id_open_key_cursor = -1;
+static int g_id_get_all = -1, g_id_get_all_keys = -1, g_id_get_all_records = -1;
 /* §4.6's `openCursor` and `openKeyCursor` are one algorithm differing in the KEY ONLY FLAG the cursor is
    created with — the same magic §4.5's pair carries, for the same reason. */
 enum { IX_WITH_VALUE = 0, IX_KEY_ONLY = 1 };
@@ -316,6 +319,90 @@ static int js_ix_get(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValue
 static const IdlStepDecl IX_GET_STEP = {
     js_ix_get, sizeof(IdbIndexQueryState), js_ix_query_visit, NULL,
     "Indexed Database §4.6 IDBIndex.get / .getKey", IXG_STEPS
+};
+
+/* ---- §4.6's GETALL, GETALLKEYS and GETALLRECORDS ------------------------------------------------------------
+ *
+ * "The getAll(queryOrOptions, count) method steps are: return the result of CREATING A REQUEST TO RETRIEVE
+ * MULTIPLE ITEMS with the current Realm record, this, "value", queryOrOptions, and count if given. Rethrow any
+ * exceptions." §4.6 states the three exactly as §4.5 does, so this is §4.5's body with two operands changed:
+ * the refusals are `ix_check`'s (which ALSO refuses when the index's referenced object store was deleted —
+ * §4.6 states that and §4.5 does not), and the source is an INDEX, which is what sends §5.12 step 10 to §6.3's
+ * retrieve-multiple rather than §6.2's.
+ *
+ * The two files hold two bodies and not one shared one for the reason every other member pair here does: the
+ * refusal set is the interface's, and a body that took a "which handle am I" flag would be a recognizer
+ * standing where two interfaces' own steps belong. What IS shared is §5.12 itself, which is
+ * core/indexeddb/idb_get_all.h's block — the algorithm the standard writes once. */
+#define IXGA_STAGES(X) \
+    X(IXGA_BEGIN, "Indexed Database §4.6 getAll / getAllKeys / getAllRecords, which is §5.12 steps 1-5 — ONE " \
+                  "O(1) engine action: Web IDL §3.2.4.7's [EnforceRange] range test on the positional count " \
+                  "(which precedes the member's own steps, because an argument is converted first), then " \
+                  "source and transaction are this's, a deleted index or object store is an " \
+                  "InvalidStateError and an inactive transaction is a TransactionInactiveError — and §5.12 " \
+                  "steps 6-9 begin") \
+    IDB_GET_ALL_ALGO_STAGES(X, IXGA_R, "Indexed Database §4.6 getAll / getAllKeys / getAllRecords") \
+    X(IXGA_REQUEST, "Indexed Database §5.12 steps 10-11, after the O(1) tail steps 8-9's conversion ends in — " \
+                    "ONE O(1) engine action: an invalid key is that conversion's DataError, the operation is " \
+                    "an algorithm to run retrieve multiple items from an index, and the request is the result " \
+                    "of asynchronously executing it")
+enum { IDL_STEP_STAGE_BASE(IXGA_STAGES) IXGA_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const IXGA_STEPS[] = { IXGA_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+static void js_ix_get_all_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    idb_get_all_walk_visit(ctx, st, v);
+}
+
+static int js_ix_get_all(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdbGetAllWalk *w = st;
+
+    STEP_DISPATCH(IXGA_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(IXGA_BEGIN);
+    {
+        JSValue index = JS_UNDEFINED, tx = JS_UNDEFINED;
+        uint32_t count = 0;
+        /* `optional [EnforceRange] unsigned long count` — absent when the page passed nothing or undefined,
+           which is §5.12's "count IF GIVEN". `getAllRecords` declares no second argument at all. */
+        bool has_count = argc > 1 && !JS_IsUndefined(argv[1]);
+        int r;
+
+        JS_FreeValue(ctx, cb_result);
+        if (!ix_brand(ctx, hdr->this_val)) return JS_STEP_ABRUPT;
+        /* WEB IDL CONVERTS AN ARGUMENT BEFORE THE OPERATION'S OWN STEPS, so [EnforceRange]'s refusal precedes
+           §5.12 step 2's: `deletedIndex.getAll(q, -1)` is a TypeError and not an "InvalidStateError". */
+        if (has_count && idb_get_all_count_enforce_range(ctx, argv[1], &count) < 0)
+            return JS_STEP_ABRUPT;
+        if (ix_check(ctx, hdr->this_val, &index, &tx) < 0)                            /* §5.12 STEPS 1-5 */
+            return JS_STEP_ABRUPT;
+        r = idb_get_all_walk_start(ctx, hdr, w, index, tx, /*is_index*/ true, idl_step_magic(hdr),
+                                   argv[0], idl_step_magic(hdr) == IDB_GET_ALL_RECORD,
+                                   count, has_count, IXGA_R_LENGTH, IXGA_REQUEST);   /* §5.12 STEPS 6-9 */
+        JS_FreeValue(ctx, index);
+        JS_FreeValue(ctx, tx);
+        return r;
+    }
+
+    STEP_ARM(IXGA_R_LENGTH);
+    STEP_ARM(IXGA_R_BEGIN);
+    STEP_ARM(IXGA_R_HOP);
+    STEP_ARM(IXGA_R_ENTRY);
+    STEP_ARM(IXGA_R_SUBKEY);
+    STEP_ARM(IXGA_R_LEAVE);
+        return idb_get_all_walk_run(ctx, hdr, w, cb_result, IXGA_R_LENGTH, out_cb, out_argc);
+
+    STEP_ARM(IXGA_REQUEST);
+        JS_FreeValue(ctx, cb_result);
+        *presult = idb_get_all_walk_take(ctx, w, hdr->this_val);                     /* §5.12 STEPS 10-11 */
+        return JS_IsException(*presult) ? JS_STEP_ABRUPT : JS_STEP_DONE;
+}
+
+static const IdlStepDecl IX_GET_ALL_STEP = {
+    js_ix_get_all, sizeof(IdbGetAllWalk), js_ix_get_all_visit, NULL,
+    "Indexed Database §4.6 IDBIndex.getAll / .getAllKeys / .getAllRecords", IXGA_STEPS
 };
 
 /* "The count(query) method steps are: ... let range be the result of converting a value to a key range with
@@ -632,10 +719,13 @@ static void idb_index_handle_install_realm(JSContext *ctx)
     idl_install_accessor(ctx, proto, "keyPath", js_ix_get_key_path, 0, -1);
     idl_install_accessor(ctx, proto, "multiEntry", js_ix_get_flag, 1, -1);
     idl_install_accessor(ctx, proto, "unique", js_ix_get_flag, 0, -1);
-    /* IN §4.6'S OWN ORDER, minus the members whose algorithms do not exist. `count`'s one argument is optional,
-       so Web IDL §3.7.7 makes its `length` 0. */
+    /* IN §4.6'S OWN ORDER — all of it now. A member's `length` is Web IDL §3.7.7's, the number of REQUIRED
+       arguments, which is 0 for every one whose sole argument is optional. */
     idl_install_method(ctx, proto, "get", 1, g_id_get);
     idl_install_method(ctx, proto, "getKey", 1, g_id_get_key);
+    idl_install_method(ctx, proto, "getAll", 0, g_id_get_all);
+    idl_install_method(ctx, proto, "getAllKeys", 0, g_id_get_all_keys);
+    idl_install_method(ctx, proto, "getAllRecords", 0, g_id_get_all_records);
     idl_install_method(ctx, proto, "count", 0, g_id_count);
     idl_install_method(ctx, proto, "openCursor", 0, g_id_open_cursor);
     idl_install_method(ctx, proto, "openKeyCursor", 0, g_id_open_key_cursor);
@@ -659,6 +749,14 @@ void idb_index_handle_init(JSContext *ctx)
     /* `openCursor(optional any query, optional IDBCursorDirection direction = "next")` and its key-only twin —
        the same two positions §4.5's pair declares, and the same §3.2.18 enumeration in the second. */
     static const IdlArgType CURSOR_ARGS[2] = { IDL_ANY, IDL_ENUM };
+    /* `getAll(optional any queryOrOptions, optional [EnforceRange] unsigned long count)` and
+       `getAllRecords(optional IDBGetAllOptions options = {})` — §4.5's declarations exactly, for the same
+       reasons: the first position is `any` so §5.12's own branch is the member's step, and the count is
+       IDL_UNRESTRICTED_DOUBLE so the declaration runs §3.2.7's ToNumber and the body runs [EnforceRange]'s
+       range. The dictionary's member list is core/indexeddb/idb_get_all.h's, declared once for both
+       interfaces. */
+    static const IdlArgType GET_ALL_ARGS[2] = { IDL_ANY, IDL_UNRESTRICTED_DOUBLE };
+    static const IdlArgType GET_ALL_RECORDS_ARGS[1] = { IDL_DICT };
 
     DCHECK(!g_ready, "idb_index_handle_init ran twice — one instance is one document is one agent");
     g_key = JS_NewSymbol(ctx, "idbIndexState", false);
@@ -669,6 +767,17 @@ void idb_index_handle_init(JSContext *ctx)
           "IDBIndex: the per-realm prototype slot could not be declared");
     g_id_get = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &IX_GET_STEP, IX_GET_REFERENCED);
     g_id_get_key = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &IX_GET_STEP, IX_GET_KEY);
+    /* ONE DECLARATION PER MEMBER over ONE body: §4.6 states the three as one algorithm differing in `kind`,
+       so the kind is the declaration's MAGIC. */
+    g_id_get_all = idl_method_id_step(ctx, GET_ALL_ARGS, 2, NULL, 0, &IX_GET_ALL_STEP, IDB_GET_ALL_VALUE);
+    idl_optional_from(0);                        /* both positions are optional; the member's length is 0 */
+    g_id_get_all_keys = idl_method_id_step(ctx, GET_ALL_ARGS, 2, NULL, 0, &IX_GET_ALL_STEP, IDB_GET_ALL_KEY);
+    idl_optional_from(0);
+    g_id_get_all_records = idl_method_id_step(ctx, GET_ALL_RECORDS_ARGS, 1, IDB_GET_ALL_OPTIONS,
+                                              (int)(sizeof IDB_GET_ALL_OPTIONS /
+                                                    sizeof IDB_GET_ALL_OPTIONS[0]),
+                                              &IX_GET_ALL_STEP, IDB_GET_ALL_RECORD);
+    idl_optional_from(0);                        /* `optional IDBGetAllOptions options = {}` */
     g_id_count = idl_method_id_step(ctx, QUERY_ARGS, 1, NULL, 0, &IX_COUNT_STEP, 0);
     idl_optional_from(0);                        /* `count(optional any query)` */
     g_id_open_cursor = idl_method_id_step(ctx, CURSOR_ARGS, 2, NULL, 0, &IX_OPEN_CURSOR_STEP, IX_WITH_VALUE);
