@@ -58,6 +58,7 @@
 #include "core/indexeddb/idb_key_range.h"
 #include "core/indexeddb/idb_object_store.h"
 #include "core/indexeddb/idb_open.h"
+#include "core/indexeddb/idb_record.h"
 #include "core/indexeddb/idb_request.h"
 #include "core/indexeddb/idb_transaction.h"
 #include "core/indexeddb/idb_version_change_event.h"
@@ -123,6 +124,7 @@ static void d_storage_manager(JSContext *c, const PlatformAgent *a) { (void)a; s
 static void d_fs_access(JSContext *c, const PlatformAgent *a) { (void)a; file_system_access_init(c); }
 static void d_file_picker(JSContext *c, const PlatformAgent *a) { (void)a; file_picker_init(c); }
 static void d_idb_key_range(JSContext *c, const PlatformAgent *a) { (void)a; idb_key_range_init(c); }
+static void d_idb_record(JSContext *c, const PlatformAgent *a) { (void)a; idb_record_init(c); }
 static void d_indexed_db(JSContext *c, const PlatformAgent *a) { (void)a; indexed_db_init(c); }
 static void d_idb_database(JSContext *c, const PlatformAgent *a) { (void)a; idb_database_init(c); }
 static void d_idb_transaction(JSContext *c, const PlatformAgent *a) { (void)a; idb_transaction_init(c); }
@@ -456,6 +458,12 @@ static const PlatformComponent PLATFORM[] = {
        child navigable reaches THAT one rather than a second, and what a C static holds for the agent is freed
        against the runtime here (core/platform.h's third column) rather than in each host's own teardown. */
     { "idb_key_range",       d_idb_key_range,       NULL },
+    /* §2.12's RECORD SNAPSHOT with §4.8's IDBRecord over it, beside §2.9's key range because it is the same
+       kind of row: a value type of this standard, holding no agent-lifetime state, installing one interface
+       per realm. It is declared before every row that MINTS one — §6.2's and §6.3's retrieve-multiple arms,
+       reached from §4.5's and §4.6's members — because core/realm.h runs the per-realm installs in
+       DECLARATION order and a snapshot built in a realm with no IDBRecord.prototype crashes at the mint. */
+    { "idb_record",          d_idb_record,          NULL },
     { "indexed_db",          d_indexed_db,          NULL },
     { "idb_database",        d_idb_database,        NULL,        r_idb_database },
     /* §2.7's TRANSACTION and §2.8's REQUEST, in that order because a request is placed against a transaction
