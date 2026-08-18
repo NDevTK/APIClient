@@ -3433,12 +3433,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        code. It is a claim about §5.11's clone and §6.1 step 4's serialization, not about transactions at all —
        a store that de-tainted on the way in would emit the EXAMPLE and read as a perfectly healthy endpoint. */
     int idbrec_tt = strstr(js, "ConstraintError:first1:over21:made77gone:undoneAD") != NULL;
-    int idbtaint_tt = param_value_has(js, "/api/idbrec", "t", "{hash}");
+    int idbtaint_tt = param_value_has(js, "/api/idbrec", "t", LOCATION_HASH_SHAPE);
     /* THE CONTROL, read off the same endpoint record: the same source, the same param list, no store in
-       between. `{hash}` is §Solver's display SHAPE for this source (solver/concolic.h) and not a name invented
-       here, so a 0 on BOTH means the loss is upstream of Indexed Database and a 0 on `t` alone means §5.11's
-       clone or §6.1 step 4's serialization is where the triple collapses to its example. */
-    int lochash_tt = param_value_has(js, "/api/idbrec", "h", "{hash}");
+       between. A 0 on BOTH means the loss is upstream of Indexed Database and a 0 on `t` alone means §5.11's
+       clone or §6.1 step 4's serialization is where the triple collapses to its example.
+       AND THE SHAPE IS THE COMPONENT'S OWN TOKEN, WHICH IS WHY BOTH ROWS READ 0 FOR EVERY RUN THEY HAVE
+       EXISTED FOR. They asked for `{hash}` — a spelling nothing in this tree writes. It was the shape of the
+       in-C `concolic_new(ctx, "{hash}", "{hash}", …)` these two rows were first written over, and when the
+       fixture became the page's own `location.hash` the source's real shape (`{location.hash}`, and it is
+       core/frame/location.h that spells it) was never carried across. So the control's 0 did not localise the
+       loss upstream of the store: there was no loss. `location.hash` reached the @H param carrying its domain
+       the whole time, and a row asserting a name no producer writes reports a healthy mechanism as broken
+       forever — which is exactly the defect `idb-open` above is annotated for, one file away. Bound to the
+       macro now: a probe cannot ask about a spelling the component does not have. */
+    int lochash_tt = param_value_has(js, "/api/idbrec", "h", LOCATION_HASH_SHAPE);
 
     /* THE NAVIGATOR GATES. A UA sniff and a touch check are where a real bundle hides its other endpoints, and
        both are exactly the shape that would be LOST if the member were bare-concrete: the example decides one
@@ -3631,15 +3639,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        so `';X9()//` arrives intact and fires — and it fires through `'#';X9()//'`, the leading `#` included.
        Before the transform existed the payload was handed over raw, so this fired for the wrong reason and an
        HTML-context breakout through the same source would have fired too, which a browser would not. */
-    int s_loc = strstr(ss, "\"source\":\"location.hash\"") && strstr(ss, "';X9()//");
+    int s_loc = strstr(ss, "\"source\":\"" LOCATION_HASH_SRC "\"") && strstr(ss, "';X9()//");
     /* THE NEGATIVE HALF, and it is an assertion about the REPORT, not about a missing line. The same source
        into an HTML sink must produce NO PoC — the fragment set encodes `<`, so every HTML candidate arrives as
        `%3C` and parses as text — and must still be REPORTED, as a parked search carrying the encode set that
        defeated it. Asserting only "no PoC" would also pass if the sink were never detected, which is the false
        negative this half exists to catch; asserting the parked entry says the sink WAS reached and searched. */
-    int s_park = strstr(ss, "\"sink\":\"innerHTML\",\"source\":\"location.hash\",\"search\":\"parked\"")
+    int s_park = strstr(ss, "\"sink\":\"innerHTML\",\"source\":\"" LOCATION_HASH_SRC "\",\"search\":\"parked\"")
               && strstr(ss, "\"sourceEncodes\":\" \\\"<>`\"")
-              && !strstr(ss, "\"source\":\"location.hash\",\"poc\":\"<");
+              && !strstr(ss, "\"source\":\"" LOCATION_HASH_SRC "\",\"poc\":\"<");
 
     /* THE PROBES, DECLARED ONCE. This was a 46-term conjunction and a separate printf listing 43 of them, which
        is two hand-maintained lists of the same thing — so a probe could be computed and joined to NEITHER, and

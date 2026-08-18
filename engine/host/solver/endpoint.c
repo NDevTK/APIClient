@@ -65,8 +65,22 @@ static int g_suppress = 0;   /* a candidate/verify re-run's requests are @S arti
 void endpoint_init(void) { g_eps = NULL; g_eps_n = 0; g_eps_cap = 0; g_suppress = 0; }
 void endpoint_suppress(int on) { g_suppress = on ? 1 : 0; }
 
+/* THE ADDRESS AS THE SURFACE PRINTS IT — a concolic's SHAPE, a concrete URL's own bytes.
+   THE `s ? s : "{}"` THAT STOOD HERE WAS A MASK OVER AN IMPOSSIBLE STATE, and it is the exact shape §Fix-the-
+   ROOT forbids: concolic_alloc copies a shape for every value it mints and CHECKs the copy, so a live concolic
+   ALWAYS has one and this branch could never run. What it would have done if it ever did is the reason it must
+   not be a `?:` — `{}` is the unnameable hole path_scan mints nothing for, so a URL that had lost its display
+   form would be emitted as a literal address with no param under it and read as a perfectly ordinary endpoint.
+   That is the silent wrong answer this surface is most dangerous for, so it aborts at the read instead. */
 static char *url_display(JSContext *ctx, JSValueConst url) {
-    if (concolic_is(url)) { const char *s = concolic_shape_c(url); return strdup(s ? s : "{}"); }
+    if (concolic_is(url)) {
+        const char *s = concolic_shape_c(url);
+        DCHECK(s != NULL, "a concolic URL reached the @H surface with no display shape — every concolic is "
+                          "minted with one, so this value lost its domain somewhere between its source and "
+                          "this record, and the endpoint would be emitted as a literal address with no hole "
+                          "in it and nothing to say a param went missing");
+        return strdup(s);
+    }
     const char *s = JS_ToCString(ctx, url);
     char *r = strdup(s ? s : "?");
     if (s) JS_FreeCString(ctx, s);

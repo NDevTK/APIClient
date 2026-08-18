@@ -1,7 +1,7 @@
 /* The CONCOLIC VALUE — the atom of the forced-execution solver (rebuilt clean on upstream quickjs).
  *
  * A concolic value is NOT a binary "opaque" sentinel. It is a triple:
- *   - SOURCE identity   : where the value came from (an attacker source "{hash}", a reply field, injected state)
+ *   - SOURCE identity   : where the value came from (an attacker source "location.hash", a reply field, state)
  *   - CONSTRAINT domain : what the value can be, narrowed by every predicate the flow took (accumulated elsewhere)
  *   - EXAMPLE           : a concrete value when the code pins/computes/learns one (else absent)
  *
@@ -24,7 +24,9 @@ void concolic_init(JSContext *ctx);
 void concolic_free(void);
 
 /* Mint a concolic value AT A SOURCE — the root of a derivation, where an unknown enters the program. `shape`
-   is the @H/@S display form ("{hash}", "/api/{region}"); `src` is the PROVENANCE (may equal shape), which is
+   is the @H/@S display form ("{location.hash}", "/api/{region}"); a DECLARED source's shape is its provenance
+   in braces and concolic_source_wrap asserts that, so a component spells the pair from ONE token of its own
+   (core/frame/location.h) and never two literals; `src` is the PROVENANCE (may equal shape), which is
    also this value's IDENTITY because nothing derived it; `example` (consumed) is the concrete example or
    JS_UNDEFINED when none is known yet. Returns a new owned JSValue. A value produced BY an operation over an
    unknown is not minted here — the operator's own hook composes its identity from its operands. */

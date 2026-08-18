@@ -3,6 +3,21 @@
 #define ENGINE_HOST_BROWSER_CORE_FRAME_LOCATION_H
 #include "quickjs.h"
 
+/* THE TWO SOURCES THIS COMPONENT OWNS, SPELLED ONCE. A source is TWO strings that must agree — the PROVENANCE
+   `location.hash` that concolic_declare_source registers and every @S record names, and the DISPLAY SHAPE
+   `{location.hash}` the @H surface reports a param's value as — and they were three separate string literals
+   inside location.c with nothing tying them together. So a consumer had no token to bind to and had to retype
+   the spelling: the offscreen invented a `{hash}|{search}|{pm}|{reply}` taxonomy (deleted, see
+   solver/concolic.h), and test_forced.c's `loc-hash-param` row asserted `{hash}` — a name READ in one place and
+   WRITTEN in none, which reads 0 forever while every mechanism under it is correct.
+   THE SHAPE IS COMPOSED FROM THE PROVENANCE HERE, so the pair cannot drift, and solver/concolic.c asserts that
+   composition at the mint for EVERY declared source (all five spell `{` src `}`). A consumer of either half
+   uses these and never a literal of its own. */
+#define LOCATION_HASH_SRC     "location.hash"
+#define LOCATION_HASH_SHAPE   "{" LOCATION_HASH_SRC "}"
+#define LOCATION_SEARCH_SRC   "location.search"
+#define LOCATION_SEARCH_SHAPE "{" LOCATION_SEARCH_SRC "}"
+
 /* Declared ONCE PER AGENT: the two attacker SOURCES this component owns and how a browser delivers each (a
    source's delivery is a fact about the COMPONENT, not about a document), the brand class, the per-realm slot,
    and the per-realm install this REGISTERS. §7.2.4 gives every Window "a unique instance of a Location object,

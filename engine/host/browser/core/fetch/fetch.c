@@ -495,12 +495,18 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, JSValueConst method,
         return promise;
     /* THE CONCRETE PROJECTION IS ASKED FOR EXPLICITLY. A URL built out of unknown external input is a CONCOLIC,
        and the ToString boundary owes C a real string rather than one — so this edge reads the concolic's own
-       SHAPE, which is the display form the @H surface reports ("/api/{hash}"). Coercing it generically would
-       either crash at that boundary or, worse, quietly de-taint the URL. */
+       SHAPE, which is the display form the @H surface reports ("/api/{location.hash}"). Coercing it
+       generically would either crash at that boundary or, worse, quietly de-taint the URL. */
     if (concolic_is(url)) {
-        /* the SHAPE, made a real string first, so there is exactly ONE ownership rule for `u` below. */
+        /* the SHAPE, made a real string first, so there is exactly ONE ownership rule for `u` below. A live
+           concolic always HAS one (solver/concolic.c mints it with the value), so the `: "{}"` that stood here
+           guarded a state that cannot arise and would have sent this request to an address spelled `{}`. */
         const char *sh = concolic_shape_c(url);
-        JSValue sv = JS_NewString(ctx, sh ? sh : "{}");
+        JSValue sv;
+        DCHECK(sh != NULL, "a concolic URL reached §5.4 with no display shape — the shape is what this edge "
+                           "sends in place of an address it cannot know, so a value that has lost it would be "
+                           "fetched as the two characters an unnameable hole prints as");
+        sv = JS_NewString(ctx, sh);
         u = JS_ToCString(ctx, sv);
         JS_FreeValue(ctx, sv);
     } else {

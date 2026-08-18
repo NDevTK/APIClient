@@ -485,13 +485,18 @@ static JSValue js_form_elements(JSContext *ctx, JSValueConst this_val, int magic
  * EXECUTES it in this document. */
 
 /* ONE ENTRY's value as display text: a concolic contributes its SHAPE, exactly as a concolic URL does when it
-   reaches endpoint_record — so `input.value = location.hash` submits as `q={hash}` and the finding says where
-   the value came from rather than inventing one. */
+   reaches endpoint_record — so `input.value = location.hash` submits as `q={location.hash}` and the finding
+   says where the value came from rather than inventing one. THE SHAPE IS THE COMPONENT'S OWN TOKEN
+   (core/frame/location.h's LOCATION_HASH_SHAPE) and this sentence used to print `{hash}`, a spelling no
+   producer in this tree writes — which is the same invented name a probe row then asserted and read 0 on. */
 static void fb_value(JSContext *ctx, FormBuf *b, JSValueConst v)
 {
     if (concolic_is(v)) {
         const char *sh = concolic_shape_c(v);
-        fb_str(b, sh ? sh : "{}");
+        DCHECK(sh != NULL, "a form entry's concolic value reached §4.10.22.4 with no display shape — every "
+                           "concolic is minted with one, so this entry would submit as the unnameable hole "
+                           "and the finding would name no source for a value an attacker controls");
+        fb_str(b, sh);
         return;
     }
     {

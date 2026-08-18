@@ -1363,10 +1363,42 @@ void concolic_install_source_overlay(void)
    use at all, which is what grew a second Location out of the address.
    `computed` is CONSUMED, and it becomes the source's EXAMPLE: the value is opaque for control flow and still
    knows what it concretely is, which is §solver's whole triple rather than a choice between the two. */
+/* AND A DECLARED SOURCE'S TWO HALVES MUST AGREE, ASSERTED AT THE MINT — the invariant this seam exists to hold
+   and the one nothing checked. A source is a PROVENANCE (`location.hash`, what an @S record names and what
+   concolic_declare_source registers) and a DISPLAY SHAPE (`{location.hash}`, what the @H surface prints as a
+   param's value), and every component that declares a browser delivery spells the second as the first in
+   braces: location's two, document.cookie, document.referrer, and file_system's `{file:NAME}`. That was five
+   independent string literals agreeing by hand.
+   THE COST OF NOT ASSERTING IT IS A CONSUMER THAT CANNOT SPELL THE SOURCE, and it has been paid twice. The
+   offscreen grew a `{hash}|{search}|{pm}|{reply}` taxonomy against a shape this engine has never emitted (see
+   this file's header), and test_forced.c's `loc-hash-param` row asked whether `location.hash` reaches an @H
+   param as `{hash}` — a spelling no producer writes — so it read 0 while the shape, the provenance, the `+`
+   propagation and the emission were all intact. A row that can only be 0 is worse than a crash: it names a
+   mechanism as broken and sends the next reader into it.
+   IT IS SCOPED TO DECLARED SOURCES ON PURPOSE. An UNdeclared one legitimately carries a shape that is not its
+   name — `{hidden|visible}` is a DOMAIN and `navigator.userAgent` is a member path — and §Solver's rule is that
+   a shape states what the value can be. What a DECLARED source additionally owes is a hole the report and the
+   PoC can both name, which is exactly `{` src `}`. */
 JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src, JSValue computed)
 {
     if (!g_source_overlay)
         return computed;
+#if APICLIENT_DEV
+    if (src && concolic_source_encodes(src)) {
+        char *hole = shapef("{%s}", src);
+        static char msg[400];
+
+        snprintf(msg, sizeof msg,
+                 "the attacker source `%s` was minted with the display shape `%s`, and the one its own "
+                 "declaration spells is `%s`. A declared source's shape is its provenance in braces — that is "
+                 "what makes it a hole an @H param and an @S envelope can both name — so this is a second "
+                 "spelling of one fact, and the consumer that reads the other one reports a mechanism as "
+                 "broken forever. Spell both halves from the component's own token (core/frame/location.h)",
+                 src, shape ? shape : "(none)", hole);
+        DCHECK(shape && !strcmp(shape, hole), msg);
+        free(hole);
+    }
+#endif
     return concolic_new(ctx, shape, src, computed);
 }
 

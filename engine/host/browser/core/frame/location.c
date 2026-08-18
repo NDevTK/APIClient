@@ -244,10 +244,10 @@ static JSValue js_loc_get(JSContext *ctx, JSValueConst this_val, int magic)
        time, so a source minted once could never receive one and its sink would be detected and never
        fire-verified. */
     case LOC_SEARCH:
-        v = concolic_source_wrap(ctx, "{location.search}", "location.search", loc_component(ctx, &rec, true));
+        v = concolic_source_wrap(ctx, LOCATION_SEARCH_SHAPE, LOCATION_SEARCH_SRC, loc_component(ctx, &rec, true));
         break;
     case LOC_HASH:
-        v = concolic_source_wrap(ctx, "{location.hash}", "location.hash", loc_component(ctx, &rec, false));
+        v = concolic_source_wrap(ctx, LOCATION_HASH_SHAPE, LOCATION_HASH_SRC, loc_component(ctx, &rec, false));
         break;
     default:
         DFAIL("a Location member was read with a magic no member of this file declares — the magic IS the "
@@ -444,8 +444,8 @@ void location_init(JSContext *ctx)
     /* BOTH ARE CARRIED IN THE VICTIM'S OWN ADDRESS, which is what makes them the two single-navigation sources
        — the attacker writes one URL and the victim's load of it is the whole PoC. The component each rides is
        the `prefix` already declared, so the reproduction needs nothing this line does not already say. */
-    concolic_declare_source(LOC_COMPONENT, "location.hash", " \"<>`", '#', SRC_DELIVER_ADDRESS);
-    concolic_declare_source(LOC_COMPONENT, "location.search", " \"#<>'", '?', SRC_DELIVER_ADDRESS);
+    concolic_declare_source(LOC_COMPONENT, LOCATION_HASH_SRC, " \"<>`", '#', SRC_DELIVER_ADDRESS);
+    concolic_declare_source(LOC_COMPONENT, LOCATION_SEARCH_SRC, " \"#<>'", '?', SRC_DELIVER_ADDRESS);
 
     JS_NewClassID(JS_GetRuntime(ctx), &g_loc_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_loc_class, &d) == 0,
