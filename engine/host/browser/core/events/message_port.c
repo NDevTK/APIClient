@@ -64,10 +64,24 @@ typedef struct {
 } PortData;
 
 static JSClassID g_port_class;
-/* §9.4.3's MessageChannel HAS A CLASS ID and holds nothing in it. The class is not storage here, it is the
-   per-realm PROTOTYPE SLOT quickjs already keeps for every class — the same mechanism JS_SetClassProto gives
-   MessagePort — so the two interfaces' prototypes are found the same way rather than one of them being a
-   module static that answers every realm out of whichever built it first. */
+/* §9.4.3's MessageChannel HOLDS ITS TWO PORTS, which is the whole of its state: the constructor's steps are
+   "Set this's port 1 to a new MessagePort", the same for port 2, and entangle them, and the `port1` getter
+   steps are "return this's port 1". They are INTERNAL SLOTS, so they live in the class's record.
+   THE COMMENT HERE SAID THE CLASS "holds nothing in it" AND THAT A MessageChannel "has no state beyond the
+   pair" — the pair IS the state, and with nowhere to keep it the ports could only be own DATA properties of
+   the channel, which is Web IDL §3.7.6 wrong twice over: an attribute is an ACCESSOR, and a regular attribute
+   of an interface that is not [Global] lives on the INTERFACE PROTOTYPE OBJECT rather than on the instance.
+   Both are page-observable, and the enumerability is the one to state carefully: at flags 0 the own property
+   was NOT enumerable, and `Object.keys(new MessageChannel())` is `[]` in a browser too — because the members
+   are on the PROTOTYPE, not because they are hidden. What differs is `for (const k in chan)`, which walks the
+   chain and yields `port1` and `port2` in a browser and nothing here, and
+   `Object.getOwnPropertyDescriptor(MessageChannel.prototype, "port1")`, which is a getter in a browser and
+   was `undefined` here.
+   THE RECORD IS WRITTEN ONCE, BY THE CONSTRUCTING FLOW, AND NEVER AGAIN — both members are readonly and there
+   is no setter — so it needs no COW capture: the delta captures state a flow WRITES, and the object is
+   flow-local at the one moment its ports are stored. */
+typedef struct { JSValue port1, port2; } ChanData;
+
 static JSClassID g_chan_class;
 static JSRuntime *g_mp_rt;
 static int       g_chan_ctor_stepid = -1;
@@ -169,6 +183,26 @@ static void port_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, d->entangled);
     JS_FreeValueRT(rt, d->queue);
     free(d);
+}
+
+/* §9.4.3's two slots are OWNED by the channel, so they are released with it and marked while it lives — the
+   ports outlive the channel in every page that keeps one, and a mark that missed them would collect a port a
+   page still holds through `chan.port1`. */
+static void chan_finalizer(JSRuntime *rt, JSValue val)
+{
+    ChanData *d = JS_GetOpaque(val, g_chan_class);
+    if (!d) return;
+    JS_FreeValueRT(rt, d->port1);
+    JS_FreeValueRT(rt, d->port2);
+    free(d);
+}
+
+static void chan_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
+{
+    ChanData *d = JS_GetOpaque(val, g_chan_class);
+    if (!d) return;
+    JS_MarkValue(rt, d->port1, mark_func);
+    JS_MarkValue(rt, d->port2, mark_func);
 }
 
 static void port_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
@@ -531,6 +565,22 @@ JSValue message_port_pair(JSContext *ctx, JSValue *port2)
     return p1;
 }
 
+/* §9.4.3's `port1` and `port2` getter steps — "return this's port 1" / "return this's port 2", which are the
+   two slots the channel holds. ONE getter with the magic naming which, because they are one algorithm over
+   two slots and a second copy is a second place to be wrong.
+   THE BRAND CHECK IS THE SPEC'S: §3.7.6's getter throws a TypeError when the receiver does not implement the
+   interface, and `MessageChannel.prototype.port1` read off the prototype itself is exactly that case — the
+   prototype is an ordinary object and carries no channel record. */
+static JSValue js_chan_port(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    ChanData *d = JS_GetOpaque(this_val, g_chan_class);
+
+    if (!d)
+        return JS_ThrowTypeError(ctx, "Illegal invocation");
+    DCHECK(magic == 0 || magic == 1, "§9.4.3 declares two ports and this getter was minted for a third");
+    return JS_DupValue(ctx, magic ? d->port2 : d->port1);
+}
+
 /* WHERE THIS MACHINE RESTS. §9.4.3's constructor is three steps, none of which can reach the page's code —
    two new MessagePorts and the entanglement — so the machine has one stage and never returns to it. */
 #define CHAN_CTOR_STAGES(X) \
@@ -563,10 +613,15 @@ static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     if (JS_IsException(obj)) return -1;
     p1 = message_port_pair(ctx, &p2);
     if (JS_IsException(p1)) { JS_FreeValue(ctx, obj); return -1; }
-    /* [SameObject] readonly attributes: the same two ports every time, so they are OWN data properties rather
-       than accessors over a record — a MessageChannel has no state beyond the pair. */
-    JS_DefinePropertyValueStr(ctx, obj, "port1", p1, 0);
-    JS_DefinePropertyValueStr(ctx, obj, "port2", p2, 0);
+    /* §9.4.3 steps 1-2: "Set this's port 1 to a new MessagePort", the same for port 2. The channel OWNS both
+       from here; chan_finalizer releases them and §3.7.6's two accessors on the prototype read them. */
+    {
+        ChanData *d = calloc(1, sizeof *d);
+        CHECK(d != NULL, "message port: OOM building a MessageChannel");
+        d->port1 = p1;
+        d->port2 = p2;
+        JS_SetOpaque(obj, d);
+    }
     *presult = obj;
     return 0;
 }
@@ -581,7 +636,7 @@ static const IdlStepDecl js_chan_ctor_decl = {
 void message_port_init(JSContext *ctx)
 {
     JSClassDef pd = { "MessagePort", .finalizer = port_finalizer, .gc_mark = port_gc_mark };
-    JSClassDef cd = { "MessageChannel" };
+    JSClassDef cd = { "MessageChannel", .finalizer = chan_finalizer, .gc_mark = chan_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
 
     /* NOT `if (g_mp_rt == rt) return;`. This component has exactly ONE declaration site — core/platform.c's
@@ -648,6 +703,10 @@ void message_port_install_protos(JSContext *ctx)
     chan_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(chan_p), "MessageChannel.prototype could not be allocated");
     idl_interface_tag(ctx, chan_p, "MessageChannel");
+    /* §9.4.3's two members, where Web IDL §3.7.6 puts a regular attribute of an interface that is not
+       [Global]: on the INTERFACE PROTOTYPE OBJECT. They were own data properties of each channel. */
+    idl_install_accessor(ctx, chan_p, "port1", js_chan_port, 0, -1);
+    idl_install_accessor(ctx, chan_p, "port2", js_chan_port, 1, -1);
     JS_SetClassProto(ctx, g_chan_class, chan_p);
 }
 

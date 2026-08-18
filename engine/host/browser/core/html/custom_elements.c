@@ -2863,9 +2863,11 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
     reg = ce_registry_new(ctx, false);
     realm_value_set(ctx, g_registry_slot, JS_DupValue(ctx, reg));
     /* §4.13.4's Window `customElements` getter returns "this's associated Document's custom element registry",
-       and a realm has exactly one document for its whole life — so the value is fixed and the accessor would
-       compute the same answer forever. */
-    JS_SetPropertyStr(ctx, (JSValue)global, "customElements", reg);
+       and a realm has exactly one document for its whole life — so the value is fixed. THAT IS NOT A REASON TO
+       WRITE A DATA PROPERTY, which is what stood here: Web IDL §3.7.6 defines every attribute as an accessor
+       and says nothing about whether its value changes, so a fixed value is installed as an accessor OVER a
+       fixed value. The data property this was had no getter to read and was writable enough to replace. */
+    idl_install_value_attribute(ctx, (JSValue)global, "customElements", reg, IDL_ATTR_REGULAR);
     /* §3.7.1's INTERFACE OBJECT — constructible now, which is the whole of `new CustomElementRegistry()`. */
     {
         JSValue ctor = JS_NewCFunction2(ctx, (JSCFunction *)js_ce_registry_ctor, "CustomElementRegistry", 0,

@@ -121,6 +121,35 @@ static JSValue js_win_length(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewInt32(ctx, iframe_child_navigable_count(ctx));
 }
 
+/* §7.2.2.4's `frameElement` getter steps: "Let current be this's node navigable. If current is null, then
+   return null. Let container be current's container. If container is null, then return null. If container's
+   node document's origin is not same origin-domain with the current settings object's origin, then return
+   null. Return container."
+   A TOP-LEVEL NAVIGABLE IS NESTED THROUGH NOTHING, so its container is null and so is the answer — that half
+   is a real computation and it is the one this engine can make. The other half is not a value: a CHILD
+   navigable HAS a container element and this engine holds no edge from a navigable back to it (html_iframe.c
+   carries element -> navigable and nothing carries the reverse), so there is nothing here to return.
+   IT WAS A FIXED `JS_NULL` INSTALLED ON EVERY REALM, which answered the top-level case correctly and every
+   child navigable WRONGLY, as a plain data property, with a comment calling null "the real answer for what
+   this is". It is the real answer for a top-level navigable and a lie for a frame — and the engine grew child
+   navigables under it. The missing edge is named at the read rather than papered over with the answer that
+   happens to be right at the top of the tree.
+   §7.2.1 same origin-domain: within one instance the question cannot fail, because an instance IS an
+   origin-keyed agent cluster — a cross-origin child navigable is a different instance and its container is
+   not in this heap at all. */
+static JSValue js_win_frame_element(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue parent = window_proxy_parent_navigable(ctx, document_window_proxy(ctx));
+
+    (void)this_val; (void)magic;
+    if (JS_IsUndefined(parent)) return JS_NULL;   /* nested through nothing */
+    JS_FreeValue(ctx, parent);
+    DFAIL("§7.2.2.4's frameElement was read in a CHILD navigable, whose container element this engine cannot "
+          "reach: html_iframe.c holds element -> navigable and nothing holds navigable -> element. Build that "
+          "edge (the container is what §7.2.6's create was handed) and return it here");
+    return JS_NULL;
+}
+
 /* §7.2.2.4's BROWSING-CONTEXT LINKS, each answered by this realm's navigable — see window_proxy.h.
  *
  * The mapping between a window's two spellings — another navigable is its PROXY, this one is the global — is
@@ -520,7 +549,11 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        global and that `frames`, `parent` and `opener` therefore "are declared on the prototype like every
        other member". [LegacyUnforgeable] decides the ATTRIBUTES (non-configurable, so a page cannot shadow or
        delete), never the LOCATION; on a [Global] interface there is no other location. */
-    JS_DefinePropertyValueStr(ctx, g, "window", JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
+    /* §3.7.6 makes it an ACCESSOR — every attribute is one, and [LegacyUnforgeable] decides only that it is
+       not configurable. It was a data property, which is the right VALUE behind the wrong kind of property:
+       `Object.getOwnPropertyDescriptor(window, "window").get` is a function in every browser and was undefined
+       here. */
+    idl_install_value_attribute(ctx, g, "window", JS_DupValue(ctx, global), IDL_ATTR_UNFORGEABLE);
     /* `self` is [Replaceable], not [LegacyUnforgeable] — `window` is the unforgeable one. A page may
        overwrite `self` and the IDL says so; a fixed own value said it could not. */
     idl_install_replaceable_value(ctx, g, "self", JS_DupValue(ctx, global));
@@ -556,9 +589,8 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     /* §7.2.2.5's six user-interface bars. */
     bar_prop_install(ctx, g);
 
-    /* §7.2.2.4 `frameElement` — the element this navigable is nested THROUGH. A top-level navigable is nested
-       through nothing, so it is null: the real answer for what this is, not a placeholder for one. */
-    JS_SetPropertyStr(ctx, g, "frameElement", JS_NULL);
+    /* §7.2.2.4 `frameElement` — the element this navigable is nested THROUGH. */
+    idl_install_accessor(ctx, g, "frameElement", js_win_frame_element, 0, -1);
 
     /* `closed` is a GETTER over the NAVIGABLE's per-flow state, because close() changes it. */
     idl_install_accessor(ctx, g, "closed", js_win_closed, 0, -1);

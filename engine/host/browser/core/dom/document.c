@@ -2615,7 +2615,10 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     /* §4.4 a Document is an EventTarget through Node, so addEventListener comes down the prototype chain now
        rather than being installed here. */
 
-    JS_SetPropertyStr(ctx, (JSValue)global, "document", JS_DupValue(ctx, doc));
+    /* §3.7.6 makes an attribute an ACCESSOR and §3.4.10's [LegacyUnforgeable] makes this one non-configurable;
+       JS_SetPropertyStr wrote a data property at its default flags, so `window.document` had no getter and was
+       WRITABLE — `window.document = x` replaced the binding a page cannot shadow in any browser. */
+    idl_install_value_attribute(ctx, (JSValue)global, "document", JS_DupValue(ctx, doc), IDL_ATTR_UNFORGEABLE);
     /* HELD, not borrowed: `doc` is this function's own reference and the global got a DUP of it, so the
        component owns one of the two and document_free is what releases it. The comment here used to say
        "borrowed", and a reference nobody released kept the Document — and through it the wrapped tree and the

@@ -652,6 +652,23 @@ typedef JSValue (*IdlGetter)(JSContext *ctx, JSValueConst this_val, int magic);
 /* §3.7.1's INTERFACE OBJECT for an interface that declares NO constructor: a function object whose `prototype`
    is `proto` and whose call and construct both throw a TypeError. The one way to build one — a NULL C function
    pointer is not "no constructor", it is a crash where the spec says TypeError. */
+/* §3.7.6 computes ONE field from §3.4.10's [LegacyUnforgeable]: "Let configurable be false if attr is
+   unforgeable and true otherwise". Nothing else about an attribute differs, so the extended attribute is this
+   one argument rather than a second install function. */
+typedef enum {
+    IDL_ATTR_REGULAR,       /* §3.7.6: [[Configurable]] true */
+    IDL_ATTR_UNFORGEABLE,   /* §3.4.10 [LegacyUnforgeable]: [[Configurable]] false */
+} IdlAttrForge;
+
+/* A READONLY ATTRIBUTE WHOSE VALUE THE REALM ALREADY HOLDS: `window`, `document`, `customElements`, a
+   MessageChannel's ports. §3.7.6 makes every attribute an ACCESSOR, and a value that never changes is still
+   one — the alternative that reads plausible (a data property, since the getter would compute the same answer
+   forever) answers getOwnPropertyDescriptor wrongly and, from JS_SetPropertyStr, is WRITABLE, so a page can
+   replace a member the spec does not let it touch. Not idl_install_replaceable_value: that installs §3.7.6's
+   [Replaceable] setter and these members are readonly. Takes ownership of `value`. */
+void idl_install_value_attribute(JSContext *ctx, JSValueConst target, const char *name, JSValue value,
+                                 IdlAttrForge forge);
+
 JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst proto);
 /* §3.11.1's LEGACY CALLBACK INTERFACE OBJECT — what a callback interface on which constants are defined puts
    on the global. It is a BUILT-IN FUNCTION OBJECT ("Let F be CreateBuiltinFunction(steps, 0, id, « », realm)"

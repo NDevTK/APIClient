@@ -2772,8 +2772,13 @@ static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int ar
 
 /* The getter for the FIXED-VALUE form: the value is the function's data, so the realm owns it for as long as
    the getter does and there is no slot on the target to keep in step with it. */
-static JSValue idl_replaceable_get_value(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                         int magic, JSValue *data)
+/* THE GETTER FOR AN ATTRIBUTE WHOSE VALUE THE ENGINE ALREADY HOLDS — the realm's own Document, its global,
+   its one custom element registry. It reads no state and runs none of the page's code; the value rides on the
+   function as its data, which is what makes it per-REALM rather than a module static answering every realm out
+   of whichever built it first. Shared by §3.7.6's [Replaceable] form and the readonly one below, because it is
+   the same getter and there is no second thing for it to be. */
+static JSValue idl_held_value_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                  int magic, JSValue *data)
 {
     (void)this_val; (void)argc; (void)argv; (void)magic;
     return JS_DupValue(ctx, data[0]);
@@ -2809,11 +2814,37 @@ void idl_install_replaceable(JSContext *ctx, JSValueConst target, const char *na
 
 void idl_install_replaceable_value(JSContext *ctx, JSValueConst target, const char *name, JSValue value)
 {
-    JSValue g = JS_NewCFunctionData2(ctx, idl_replaceable_get_value, name, 0, 0, 1, (JSValueConst *)&value);
+    JSValue g = JS_NewCFunctionData2(ctx, idl_held_value_get, name, 0, 0, 1, (JSValueConst *)&value);
 
     CHECK(!JS_IsException(g), "a replaceable attribute's getter could not be allocated");
     JS_FreeValue(ctx, value);   /* the getter holds its own reference */
     idl_define_replaceable(ctx, target, name, g);
+}
+
+/* §3.7.6's READONLY ATTRIBUTE OVER A VALUE THE REALM ALREADY HOLDS — the primitive four members needed and
+   none of them had, which is why four of them were plain data properties instead.
+   §3.7.6 defines EVERY attribute as `PropertyDescriptor{[[Getter]], [[Setter]], [[Enumerable]]: true,
+   [[Configurable]]: configurable}` and computes that last field as "false if attr is unforgeable and true
+   otherwise". Nothing in it is conditional on whether the VALUE can change — and "the value is fixed, so an
+   accessor would compute the same answer forever" is precisely the argument three independent authors reached
+   here, each writing a data property that answers getOwnPropertyDescriptor wrongly and, where it came from
+   JS_SetPropertyStr, is writable enough for a page to replace the member outright.
+   THE [Replaceable] FORM ABOVE IS THE WRONG NEIGHBOUR TO REACH FOR: it installs §3.7.6's replaceable setter,
+   and `window`, `document` and a MessageChannel's ports are not [Replaceable] — a page assigning to one must
+   not replace it. This form has NO setter, which is what readonly means. */
+void idl_install_value_attribute(JSContext *ctx, JSValueConst target, const char *name, JSValue value,
+                                 IdlAttrForge forge)
+{
+    JSValue g = JS_NewCFunctionData2(ctx, idl_held_value_get, name, 0, 0, 1, (JSValueConst *)&value);
+    JSAtom a;
+
+    CHECK(!JS_IsException(g), "an attribute's held-value getter could not be allocated");
+    JS_FreeValue(ctx, value);   /* the getter holds its own reference */
+    a = JS_NewAtom(ctx, name);
+    DCHECK(a != JS_ATOM_NULL, "an IDL attribute name could not be interned");
+    JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, JS_UNDEFINED,
+                            JS_PROP_ENUMERABLE | (forge == IDL_ATTR_UNFORGEABLE ? 0 : JS_PROP_CONFIGURABLE));
+    JS_FreeAtom(ctx, a);
 }
 
 /* THE ONE PLACE A STEP MEMBER IS MINTED. A member is DECLARED (which builds its pool entry) before it is
