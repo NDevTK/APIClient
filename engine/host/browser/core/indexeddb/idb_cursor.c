@@ -1301,16 +1301,24 @@ static JSValue js_cu_get_request(JSContext *ctx, JSValueConst this_val, int magi
 }
 
 /* §4.9's IDBCursorWithValue: "the value getter steps are to return this's CURRENT VALUE." It is installed on
-   that interface's prototype alone, so a key-only cursor does not have it — which is §4.9's own last sentence
-   and not an omission. */
+ * that interface's prototype alone, so a key-only cursor does not have it — which is §4.9's own last sentence
+ * ("a cursor that has its key only flag set to FALSE implements the IDBCursorWithValue interface as well").
+ *
+ * ITS BRAND IS THE NARROWER CLASS AND NOT `idb_cursor_is`, which is Web IDL §3.7.5 and not pedantry: a page
+ * reaches this getter off IDBCursorWithValue.prototype with any receiver it likes
+ * (`Object.getOwnPropertyDescriptor(IDBCursorWithValue.prototype, "value").get.call(keyOnlyCursor)`), and
+ * §3.7.6 makes that a TypeError because the receiver does not IMPLEMENT the interface the member is declared
+ * on. The shared brand would have accepted it and answered `undefined` — a key-only cursor reporting a value
+ * attribute it does not have — so the check is the one the interface declares. */
 static JSValue js_cu_get_value(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)magic;
-    if (!cu_brand(ctx, this_val)) return JS_EXCEPTION;
+    if (JS_GetClassID(this_val) != g_cursor_wv_class)
+        return JS_ThrowTypeError(ctx, "an IDBCursorWithValue member was reached on something that is not an "
+                                      "IDBCursorWithValue");
     DCHECK(!cu_flag(ctx, this_val, CU_KEY_ONLY),
-           "§4.9's `value` was reached on a cursor whose KEY ONLY flag is true. The member is installed on "
-           "IDBCursorWithValue.prototype and a key-only cursor is an IDBCursor, so the only way here is a "
-           "cursor minted with the wrong class");
+           "a cursor wearing IDBCursorWithValue has its KEY ONLY flag set — §4.9's last sentence makes those "
+           "the same fact, and idb_cursor_new picks the class from that flag");
     return cu_get(ctx, this_val, CU_VALUE);
 }
 
