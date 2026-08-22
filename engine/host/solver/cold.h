@@ -89,7 +89,11 @@ void cold_census(ColdCensus *out);
  *   - the path constraint       — re-derived at the gates that produced it, which also re-derives the PINS;
  *   - the lazily-loaded chunks  — re-fetched, so a resumed flow reads TODAY's chunk;
  *   - the replies the host owes — re-issued by the replaying code, so they carry today's answers;
- *   - the queued jobs           — re-enqueued by the same reactions, on the same flow's queue.
+ *   - the queued jobs           — re-enqueued by the same reactions, on the same flow's queue, WHICH IS TRUE
+ *                                 of every job the replayed program CAUSES and of nothing else. A job handed
+ *                                 in from OUTSIDE that program has no cause in the replay to re-cause it, and
+ *                                 this engine makes exactly one: the §9.3.3 task a routed cross-document
+ *                                 delivery becomes. cold_park_flow refuses that flow and says what closes it.
  * The last three are why §Time-travel-resume says a resumed flow "re-derives example VALUES from CURRENT
  * sources": the path is the snapshot's, the data is today's, and that is the point of the tool rather than a
  * concession. What CANNOT be regenerated is asserted at the park rather than quietly written out wrong.

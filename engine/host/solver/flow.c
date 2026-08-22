@@ -327,7 +327,7 @@ void flow_release(JSContext *ctx, Flow *f) {
        the precise shape §Offensive-programming calls the concealment rather than the symptom. It belongs behind
        `paged` like the rest: the cold tier writes the queue as 'm' records, so a WRITTEN flow's deliveries are
        in its recipe and an unwritten one's are being dropped. */
-    DCHECK(f->paged || (f->park_fn == NULL && f->frame == NULL && f->njob == 0 &&
+    DCHECK(f->paged || (f->park_fn == NULL && f->frame == NULL && flow_job_pending(f) == 0 &&
                         pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
            "a flow was released holding WORK — a parked continuation, a suspended frame, queued reactions, "
            "replies the host still owed it, or a peer's routed message — and it was never written to the cold "
@@ -386,11 +386,10 @@ void flow_release(JSContext *ctx, Flow *f) {
     free(f->dyn_token); f->dyn_token = NULL;
     free(f->dyn_pos); f->dyn_pos = NULL;
     f->dyn_n = f->dyn_cap = 0;
-    for (int k = 0; k < f->njob; k++) {   /* any undrained microtask/task jobs */
-        for (int a = 0; a < f->jobs[k].argc; a++) JS_FreeValue(ctx, f->jobs[k].argv[a]);
-        free(f->jobs[k].argv);
-    }
-    free(f->jobs); f->jobs = NULL; f->njob = 0; f->jobcap = 0;
+    /* AND THE UNDRAINED MICROTASKS AND TASKS — one release for the array and every record it names, exactly
+       as the three queues above. That they are gone at all is asserted at the top of this function; this is
+       the release, not the check. */
+    JS_FreeValue(ctx, f->jobs); f->jobs = JS_UNDEFINED;
     /* AND ITS WORLD DIES WITH IT, WHICH IS THE ONE THING A RELEASE OWES SOMEBODY ELSE'S INSTANCE. Every other
        line above gives back memory this process owns; this one is the only state a released flow leaves in
        ANOTHER heap. A peer that has ever been posted to or read by this flow holds a COW segment keyed on its
@@ -580,6 +579,9 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     /* …AND THE DELIVERY QUEUE, the same sentence a third time: no peer posts to most documents, and an Array
        per flow would put a JSObject on the heap for every member of a frontier that reached 29550 here. */
     f->deliver_q = JS_UNDEFINED;
+    /* …AND THE JOB QUEUE, the same sentence a fourth time: most flows are enqueued nothing, and an Array per
+       flow would put a JSObject on the heap for every member of a frontier that reached 29550 here. */
+    f->jobs = JS_UNDEFINED;
     /* …and the register's own context, named HERE because this is the one point every flow passes through.
        Putting it in each host's setup would be the hand-copied list build.mjs warns about. */
     pending_set_ctx(ctx);
@@ -712,6 +714,251 @@ JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent) {
         JS_SetPropertyUint32(ctx, out, (uint32_t)i, JS_GetPropertyUint32(ctx, parent->deliver_q, (uint32_t)i));
     cow_engine_write_end();
     return out;
+}
+
+/* ───────────────────────────── THE JOB QUEUE ─────────────────────────────
+ * See flow.h for what a record is and why each part of it is there. Everything that ever happens to the queue
+ * is in this block, so the Array's shape has one reader.
+ *
+ * THE CALLEE TABLE. quickjs's job functions are statics of the interpreter and the host sees them only as
+ * pointers arriving at the enqueue hook, so a name for one can only be minted on FIRST SIGHT. Four of them
+ * exist in this program (promise_reaction_job, js_promise_resolve_thenable_job, js_dynamic_import_job, and
+ * host_call_job for every platform edge); the table is generous and CRASHES rather than growing, because a
+ * fifth arriving is a fact about the interpreter that should be read by a person and not absorbed. A code
+ * address is stable for the process, so the table needs no teardown — and it is deliberately NOT reset with
+ * the frontier: an ordinal handed out in one session must not be re-used for a different callee in the next
+ * while any record still names it. */
+#define FLOW_JOB_FN_MAX 16
+static JSJobFunc *g_job_fn[FLOW_JOB_FN_MAX];
+static int g_job_fn_n;
+
+static int job_fn_id(JSJobFunc *fn) {
+    int i;
+
+    DCHECK(fn != NULL, "a job was queued with no callee — there is nothing for the pick to run and the record "
+                       "would be a work item that can never be performed");
+    for (i = 0; i < g_job_fn_n; i++)
+        if (g_job_fn[i] == fn) return i;
+    CHECK(g_job_fn_n < FLOW_JOB_FN_MAX,
+          "flow: more distinct job callees than this engine knows how to name — the table is what keeps a "
+          "raw function pointer out of the queue's records, so a new one is an interpreter edge to read");
+    g_job_fn[g_job_fn_n] = fn;
+    return g_job_fn_n++;
+}
+
+/* THE RECORD'S LAYOUT, stated once. The header is fixed-width and the arguments follow it, so `argc` is a
+   length subtraction and never a stored count that can disagree with what is there. */
+enum { JOB_FN = 0, JOB_TASK, JOB_EXTERNAL, JOB_GLOBAL, JOB_HDR };
+
+/* THE PROVENANCE BRACKET — see flow.h. A static rather than a field on the flow because it is a property of
+   the CONVERSION in flight, not of the timeline: exactly one can be open, which is what the asserts say. */
+static int g_job_external;
+
+void flow_job_external_begin(void) {
+    DCHECK(!g_job_external, "a second routed record was being turned into local work while the first was still "
+                            "in flight — a delivery is made from flow_step with no frame, so two cannot "
+                            "overlap, and a nested bracket would mark the wrong jobs external");
+    g_job_external = 1;
+}
+
+void flow_job_external_end(void) {
+    DCHECK(g_job_external, "the external-work bracket was closed without being opened — the pair is what says "
+                           "which jobs a replay would not re-cause");
+    g_job_external = 0;
+}
+
+int flow_job_pending(const Flow *f) {
+    JSValue v;
+    int n;
+
+    if (!JS_IsObject(f->jobs)) return 0;
+    v = JS_GetPropertyStr(pending_ctx(), f->jobs, "length");
+    DCHECK(JS_VALUE_GET_TAG(v) == JS_TAG_INT,
+           "a flow's job queue has no small-integer length — it is the engine's own Array and nothing outside "
+           "flow_job_push appends");
+    n = JS_VALUE_GET_INT(v);
+    JS_FreeValue(pending_ctx(), v);
+    return n;
+}
+
+/* ONE ENTRY, BORROWED — the accessor every reader in this block goes through, so the record's shape is
+   asserted in one place however many of them there are. The caller OWNS the reference it gets back. */
+static JSValue job_entry(const Flow *f, int i) {
+    JSValue e = JS_GetPropertyUint32(pending_ctx(), f->jobs, (uint32_t)i);
+
+    DCHECK(JS_IsObject(e), "a flow's job queue held something that is not a job record — it is this engine's "
+                           "own Array and nothing outside flow_job_push appends");
+    return e;
+}
+
+static int job_field_int(JSValueConst e, int field) {
+    JSValue v = JS_GetPropertyUint32(pending_ctx(), e, (uint32_t)field);
+    int n;
+
+    DCHECK(JS_VALUE_GET_TAG(v) == JS_TAG_INT,
+           "a job record's header field is not a small integer — the header is written whole at the push, so "
+           "one that is not there is a record something other than this file built");
+    n = JS_VALUE_GET_INT(v);
+    JS_FreeValue(pending_ctx(), v);
+    return n;
+}
+
+int flow_job_microtask(const Flow *f) {
+    int n = flow_job_pending(f), i;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = job_entry(f, i);
+        int task = job_field_int(e, JOB_TASK);
+
+        JS_FreeValue(pending_ctx(), e);
+        if (!task) return 1;
+    }
+    return 0;
+}
+
+void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task) {
+    JSValue e;
+    int i;
+
+    DCHECK(argc >= 0, "a job was queued with a negative argument count");
+    DCHECK(argc == 0 || argv != NULL, "a job was queued claiming arguments it did not bring");
+    e = JS_NewArray(ctx);
+    CHECK(!JS_IsException(e),
+          "flow: OOM allocating a queued job — a dropped reaction corrupts async exploration, and it is "
+          "invisible from outside: it looks exactly like a page that registered no handler");
+    cow_engine_write_begin();
+    JS_SetPropertyUint32(ctx, e, JOB_FN, JS_NewInt32(ctx, job_fn_id(fn)));
+    JS_SetPropertyUint32(ctx, e, JOB_TASK, JS_NewInt32(ctx, task ? 1 : 0));
+    JS_SetPropertyUint32(ctx, e, JOB_EXTERNAL, JS_NewInt32(ctx, g_job_external));
+    /* THE KEY §7.5.10 "Destroying documents"'s step 7 COMPARES, held as a reference — see flow.h.
+       JS_GetGlobalObject is the realm's identity and the one thing about it that is a JS value; a destroyed
+       document's jobs are then found by comparing two objects rather than two pointers, one of which used to
+       be able to be freed underneath the comparison. */
+    JS_SetPropertyUint32(ctx, e, JOB_GLOBAL, JS_GetGlobalObject(ctx));
+    for (i = 0; i < argc; i++)
+        JS_SetPropertyUint32(ctx, e, (uint32_t)(JOB_HDR + i), JS_DupValue(ctx, argv[i]));
+    if (!JS_IsObject(f->jobs)) {
+        JS_FreeValue(ctx, f->jobs);
+        f->jobs = JS_NewArray(ctx);
+        CHECK(!JS_IsException(f->jobs), "flow: OOM allocating a flow's job queue");
+    }
+    JS_SetPropertyUint32(ctx, f->jobs, (uint32_t)flow_job_pending(f), e);
+    cow_engine_write_end();
+}
+
+JSValue flow_job_take(JSContext *ctx, Flow *f) {
+    int n = flow_job_pending(f), pick = 0, i;
+    JSValue e;
+
+    DCHECK(n > 0, "a job was taken from a flow whose queue is empty — the caller tested the queue to get here, "
+                  "so the two reads have come apart");
+    /* THE CHECKPOINT RULE, and it is the whole reason this is not a FIFO pop. Within a queue the order is
+       arrival order; ACROSS the two, a task may not begin while this flow still holds a microtask. */
+    while (pick < n) {
+        JSValue c = job_entry(f, pick);
+        int task = job_field_int(c, JOB_TASK);
+
+        JS_FreeValue(ctx, c);
+        if (!task) break;
+        pick++;
+    }
+    if (pick == n) pick = 0;   /* nothing but tasks: the checkpoint is done, run the earliest task */
+    e = job_entry(f, pick);
+    cow_engine_write_begin();
+    for (i = pick + 1; i < n; i++)
+        JS_SetPropertyUint32(ctx, f->jobs, (uint32_t)(i - 1), JS_GetPropertyUint32(ctx, f->jobs, (uint32_t)i));
+    JS_SetPropertyStr(ctx, f->jobs, "length", JS_NewInt32(ctx, n - 1));
+    cow_engine_write_end();
+    return e;
+}
+
+JSValue flow_job_run(JSContext *ctx, JSValueConst entry) {
+    JSValue stack[8], *args = stack, r;
+    JSValue len = JS_GetPropertyStr(ctx, entry, "length");
+    int argc, i, id;
+
+    DCHECK(JS_VALUE_GET_TAG(len) == JS_TAG_INT, "a job record has no small-integer length");
+    argc = JS_VALUE_GET_INT(len) - JOB_HDR;
+    JS_FreeValue(ctx, len);
+    DCHECK(argc >= 0, "a job record is shorter than its own header — the header is written whole at the push");
+    id = job_field_int(entry, JOB_FN);
+    DCHECK(id >= 0 && id < g_job_fn_n,
+           "a job record names a callee this session never saw — the table is append-only and an ordinal is "
+           "minted at the push, so an ordinal past its end is a record from another session");
+    if (argc > (int)(sizeof stack / sizeof *stack)) {
+        args = malloc(sizeof(*args) * (size_t)argc);
+        CHECK(args != NULL, "flow: OOM building a queued job's argument vector — the job is on the frontier "
+                            "and the WFQ may never drop a work item");
+    }
+    for (i = 0; i < argc; i++)
+        args[i] = JS_GetPropertyUint32(ctx, entry, (uint32_t)(JOB_HDR + i));
+    r = g_job_fn[id](ctx, argc, (JSValueConst *)args);
+    for (i = 0; i < argc; i++)
+        JS_FreeValue(ctx, args[i]);
+    if (args != stack) free(args);
+    return r;
+}
+
+int flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm) {
+    int n = flow_job_pending(f), keep = 0, i;
+    JSValue global;
+
+    if (n == 0) return 0;
+    DCHECK(realm != NULL, "destroy a document step 7 was asked to remove the tasks of no realm at all");
+    global = JS_GetGlobalObject(realm);
+    cow_engine_write_begin();
+    /* COMPACTED IN ONE FORWARD PASS rather than spliced per hit: the walk that used this queue removed from
+       the middle with a memmove per removal, which is the same answer at N times the cost and one more index
+       to get wrong. Survivors keep their arrival order, which is what the task source guarantees the page. */
+    for (i = 0; i < n; i++) {
+        JSValue e = job_entry(f, i);
+        JSValue g = JS_GetPropertyUint32(ctx, e, JOB_GLOBAL);
+        int mine;
+
+        DCHECK(JS_IsObject(g), "a job record carries no enqueuing realm — §7.5.10 step 7 keys on it, so a "
+                               "record without one can neither be dropped with its document nor safely left "
+                               "queued");
+        mine = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(global);
+
+        JS_FreeValue(ctx, g);
+        if (mine) { JS_FreeValue(ctx, e); continue; }
+        JS_SetPropertyUint32(ctx, f->jobs, (uint32_t)keep++, e);
+    }
+    JS_SetPropertyStr(ctx, f->jobs, "length", JS_NewInt32(ctx, keep));
+    cow_engine_write_end();
+    JS_FreeValue(ctx, global);
+    return n - keep;
+}
+
+JSValue flow_job_fork(JSContext *ctx, const Flow *parent) {
+    int n = flow_job_pending(parent), i;
+    JSValue out;
+
+    /* THE ARM INHERITS THE QUEUE, and its absence was a real bug one layer down from the delivery queue's: an
+       arm forked with a `.then` already attached silently never ran it, and it surfaced as a rejection
+       reported unhandled in the arm whose `.catch` job never arrived. An empty queue forks as JS_UNDEFINED —
+       the common case stays a tag test, and flow_job_push mints the Array again if the arm is ever enqueued. */
+    if (n == 0) return JS_UNDEFINED;
+    out = JS_NewArray(ctx);
+    CHECK(!JS_IsException(out), "flow: OOM forking a flow's job queue — an arm that lost it is a timeline whose "
+                                "reactions never run, which the WFQ is forbidden to do to a work item");
+    cow_engine_write_begin();
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(ctx, out, (uint32_t)i, JS_GetPropertyUint32(ctx, parent->jobs, (uint32_t)i));
+    cow_engine_write_end();
+    return out;
+}
+
+int flow_job_external(const Flow *f) {
+    int n = flow_job_pending(f), i, k = 0;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = job_entry(f, i);
+
+        k += job_field_int(e, JOB_EXTERNAL) ? 1 : 0;
+        JS_FreeValue(pending_ctx(), e);
+    }
+    return k;
 }
 
 /* THE OPERATION QUEUE'S LENGTH — see flow.h. The context is the pending register's, for the reason that file
@@ -1119,7 +1366,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
     DCHECK(f->frame == NULL && f->park_fn == NULL,
            "a flow was removed holding a live frame or a parked continuation — its whole activation chain, and "
            "everything those frames close over, would be retained by a handle nothing will ever free");
-    DCHECK(f->njob == 0 && f->jobs == NULL && JS_IsUndefined(f->pending) && JS_IsUndefined(f->perform_q) &&
+    DCHECK(JS_IsUndefined(f->jobs) && JS_IsUndefined(f->pending) && JS_IsUndefined(f->perform_q) &&
            JS_IsUndefined(f->deliver_q),
            "a flow was removed still holding queued jobs, pending host replies, unstarted cross-agent "
            "operations or routed cross-document messages — each is a work item on the one frontier, and the "

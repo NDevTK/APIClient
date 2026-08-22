@@ -228,18 +228,6 @@ void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx))
     g_checkpoint_hook = fn;
 }
 
-/* Does this flow still hold a MICROTASK? The checkpoint is over exactly when it does not — a task on the queue
-   is the NEXT turn of the event loop and not part of this checkpoint, which is the same distinction
-   flow_run_one_job's pick already makes. */
-static int flow_has_microtask(const Flow *f)
-{
-    int i;
-
-    for (i = 0; i < f->njob; i++)
-        if (!f->jobs[i].task) return 1;
-    return 0;
-}
-
 /* THE SESSION. The dispatch loop is not a function that drains — it is a state machine its HOST steps, because
    the cooperative-quantum yield in CLAUDE.md's §scheduler is exactly that: after a bounded wall-clock slice the
    scheduler RETURNS so the one thread pumps its message port, streams findings, interleaves other documents,
@@ -1212,11 +1200,20 @@ static void flow_deliver(JSContext *ctx, Flow *f)
            "a delivery ran in the receiving flow's timeline alone while the sending world holds writes in this "
            "instance — the message arrives at a document missing everything its sender did here. Build the join "
            "of the two deltas that engine_route names");
+    /* THE ONE PLACE WORK ENTERS THIS FLOW FROM OUTSIDE ITS OWN PROGRAM, and the tasks the dispatch below
+       enqueues are marked as such. Every other job on a flow's queue is caused by code the flow ran — a
+       `.then` it attached, a timer it set, a fetch it issued — so a replay of that code re-causes it, which is
+       the whole of cold.h's claim for the queue. A ROUTED RECORD was handed to this timeline by the trusted
+       zone; nothing in the replayed program produces it, so the task it becomes is the one work item on this
+       queue a recipe does not regenerate. Bracketed here rather than recognised at the park, because WHERE the
+       work came from is knowable only at the moment it arrives. */
+    flow_job_external_begin();
     if (!strcmp(dup, "windowproxy.post"))
         window_message_route(rctx, tail, world_doc_name(w.doc), origin);
     else
         DFAIL("a record was routed with an op no component receives — the sending half emits it, so the "
               "receiving half is the unbuilt one; build it rather than dropping the delivery");
+    flow_job_external_end();
     free(dup);
     JS_FreeCString(ctx, record);
     JS_FreeCString(ctx, origin);
@@ -2199,34 +2196,12 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        thing the WFQ is forbidden to do; a fork that drops them is the same violation with a different spelling.
        It surfaced as a rejection reported unhandled in the arm whose `.catch` job never arrived — the report
        was right about its own world, and its world was missing a job. */
-    if (parent->njob) {
-        sib->jobs = malloc((size_t)parent->njob * sizeof(FlowJob));
-        CHECK(sib->jobs, "engine: OOM inheriting the queued jobs at a fork");
-        for (int i = 0; i < parent->njob; i++) {
-            FlowJob *sj = &parent->jobs[i], *dj = &sib->jobs[i];
-            /* THE REALM THAT ENQUEUED IT COMES WITH IT. This was the one field of the five the copy did not
-               name, and `sib->jobs` is a bare malloc, so every job a fork inherited carried a WILD realm
-               pointer. Nothing reads it until §7.5.10 step 7 destroys a document — and then the comparison is
-               against garbage, so the inherited reactions of the destroyed document are not removed (they run
-               later against a Document whose browsing context is null) or an unrelated job matches by accident
-               and a work item the WFQ may never drop is freed instead. Borrowed, exactly as it is at the
-               enqueue: the agent owns its realms. */
-            dj->ctx = sj->ctx;
-            dj->fn = sj->fn;
-            dj->argc = sj->argc;
-            dj->task = sj->task;
-            dj->argv = sj->argc ? malloc((size_t)sj->argc * sizeof(JSValue)) : NULL;
-            CHECK(!sj->argc || dj->argv, "engine: OOM inheriting a queued job's arguments at a fork");
-            for (int a = 0; a < sj->argc; a++) dj->argv[a] = JS_DupValue(ctx, sj->argv[a]);
-            /* A FIELD ADDED TO FlowJob IS AN OBLIGATION HERE, and nothing but this says so — the struct copy is
-               written out field by field precisely so a new one is visible, which is exactly how the omission
-               above survived. The realm is the one field with an answer that can be checked. */
-            DCHECK(dj->ctx != NULL, "a queued job was inherited at a fork with no realm — §7.5.10 step 7 keys on "
-                                    "it, so a job without one can neither be dropped with its document nor "
-                                    "safely left queued");
-        }
-        sib->njob = sib->jobcap = parent->njob;
-    }
+    /* SAME SPLIT AS THE THREE QUEUES BELOW, AND THERE IS NOTHING LEFT TO COPY BY HAND. This used to be a
+       field-by-field deep copy — a malloc for the arm's entry array, a malloc for each job's arguments and a
+       dup per argument — under a comment saying that a field added to the struct was an obligation here that
+       nothing but that comment enforced. The struct is gone: the arm gets its own ARRAY naming the parent's
+       RECORDS, so the inheritance costs one refcount per job and there is no field to forget. */
+    sib->jobs = flow_job_fork(ctx, parent);
     /* THE ARRAY IS COPIED AND THE RECORDS ARE SHARED. The array has to be per-flow: the host walks EVERY
        flow's register from outside any flow's delta (engine_provide fills whichever flows parked on a REQUEST,
        engine_host_requests joins what is outstanding across all of them), and each arm removes an entry when
@@ -2886,18 +2861,9 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
     DCHECK(f != NULL, "a job was enqueued with no flow running — there is no global drain, so it would be "
                       "dropped: seed it as a flow on the frontier instead of declining it here");
     if (!f) return 0;
-    if (f->njob >= f->jobcap) {
-        f->jobcap = f->jobcap ? f->jobcap * 2 : 4;
-        f->jobs = realloc(f->jobs, (size_t)f->jobcap * sizeof(FlowJob));
-        CHECK(f->jobs, "engine: OOM flow job queue — a dropped reaction corrupts async exploration");
-    }
-    FlowJob *j = &f->jobs[f->njob++];
     DCHECK(ctx != NULL, "a job was enqueued with no realm — §7.5.10 step 7 removes a destroyed document's tasks "
                         "by comparing this, so a job without one outlives its document");
-    j->ctx = ctx; j->fn = fn; j->argc = argc; j->task = is_task;
-    j->argv = argc ? malloc((size_t)argc * sizeof(JSValue)) : NULL;
-    if (argc) CHECK(j->argv, "engine: OOM job argv");
-    for (int i = 0; i < argc; i++) j->argv[i] = JS_DupValue(ctx, argv[i]);
+    flow_job_push(ctx, f, fn, argc, argv, is_task);
     return 1;   /* host owns it */
 }
 
@@ -2920,13 +2886,7 @@ static int engine_drop_jobs(JSContext *ctx) {
     for (int k = 0; ; k++) {
         Flow *f = flow_at(k);
         if (!f) break;
-        for (int i = f->njob - 1; i >= 0; i--) {
-            if (f->jobs[i].ctx != ctx) continue;
-            for (int a = 0; a < f->jobs[i].argc; a++) JS_FreeValue(ctx, f->jobs[i].argv[a]);
-            free(f->jobs[i].argv);
-            memmove(f->jobs + i, f->jobs + i + 1, (size_t)(--f->njob - i) * sizeof(FlowJob));
-            dropped++;
-        }
+        dropped += flow_job_drop_realm(ctx, f, ctx);
     }
     engine_reclaim_set(prev_reclaim);
     return dropped;
@@ -2937,13 +2897,9 @@ static int engine_drop_jobs(JSContext *ctx) {
    a TASK may not begin while this flow still holds a microtask — a plain FIFO ran `setTimeout(f, 0)` in the
    middle of a promise chain, which is the one ordering the event loop exists to forbid. */
 static void flow_run_one_job(JSContext *ctx, Flow *f) {
-    int pick = 0;
-    while (pick < f->njob && f->jobs[pick].task) pick++;
-    if (pick == f->njob) pick = 0;   /* nothing but tasks: the checkpoint is done, run the earliest task */
-    FlowJob j = f->jobs[pick];
-    memmove(f->jobs + pick, f->jobs + pick + 1, (size_t)(--f->njob - pick) * sizeof(FlowJob));
+    JSValue job = flow_job_take(ctx, f);   /* the pick IS the checkpoint rule — see flow.h */
     g_jobs_run++;
-    JSValue r = j.fn(ctx, j.argc, (JSValueConst *)j.argv);   /* the reaction runs in this flow's timeline */
+    JSValue r = flow_job_run(ctx, job);    /* the reaction runs in this flow's timeline */
     /* A JOB THAT THREW IS A PAGE ERROR, exactly like a script that threw, and this dropped it. A promise
        reaction, a queueMicrotask callback and a delivered message all run here — so an uncaught throw inside
        any of them vanished: no report, no result entry, nothing to say the page's own code had failed. It also
@@ -2955,8 +2911,10 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
         JS_FreeValue(ctx, e);
     }
     JS_FreeValue(ctx, r);
-    for (int i = 0; i < j.argc; i++) JS_FreeValue(ctx, j.argv[i]);
-    free(j.argv);
+    /* THE RECORD'S REFERENCE, NOT ITS CONTENTS. A fork gives every arm an Array naming the same records, so
+       the arguments belong to the record and go when the LAST arm's reference does — an arm that freed them
+       here would empty a job its sibling has not run yet. */
+    JS_FreeValue(ctx, job);
 }
 
 /* IS A MICROTASK CHECKPOINT DUE BEFORE THIS FLOW'S NEXT PROGRAM?
@@ -2979,7 +2937,7 @@ static void flow_run_one_job(JSContext *ctx, Flow *f) {
 static int flow_checkpoint_due(const Flow *f, int n) {
     int row;
 
-    if (!flow_has_microtask(f)) return 0;
+    if (!flow_job_microtask(f)) return 0;
     row = f->script_i - n;
     if (row >= 0 && row < f->dyn_n) {
         DCHECK(f->dyn_pos != NULL,
@@ -3177,14 +3135,14 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                     return FLOW_STEP_OWED;
                 }
             }
-            else if (f->njob > 0) {
+            else if (flow_job_pending(f) > 0) {
                 /* WHAT IS LEFT ON THE QUEUE HERE IS A TASK — HTML §8.1.7.3 "Processing model" step 1, run the
                    oldest runnable task. The checkpoint above is the only thing that consumes a microtask and it
                    runs before every program, so a microtask on the queue at this point is one it declined to
                    run, and the only reason it declines is the immediate row that the arm above this one would
                    have compiled. There is no such row here (the cursor is past the end of the sequence), which
                    is why this is an assertion and not a second pick rule. */
-                DCHECK(!flow_has_microtask(f),
+                DCHECK(!flow_job_microtask(f),
                        "a task was about to begin while this flow still held a microtask — the checkpoint runs "
                        "before every program in the sequence, so reaching the end of the sequence with one "
                        "outstanding means a program ran in front of the checkpoint it owed");
@@ -3239,7 +3197,7 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    turn, so reaching here with a job still on it means one of them returned first and the job
                    is about to be dropped with the flow — silently, because a dropped reaction looks exactly
                    like a page that registered no handler. Asserted at the one place "finished" is decided. */
-                DCHECK(f->njob == 0, "a flow finished holding queued jobs — a promise reaction, a timer "
+                DCHECK(flow_job_pending(f) == 0, "a flow finished holding queued jobs — a promise reaction, a timer "
                                      "callback or a delivered message would be dropped with it");
                 /* …AND A FLOW OF A REFERENCED DOCUMENT MAY NOT FINISH AT ALL — engine.h's engine_set_referenced.
                    Having nothing left to run is not being done when a peer can still ask this timeline
@@ -3576,7 +3534,7 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
        reports host-owed. The release below DOES free both, because an EVICTED flow legitimately holds them (the
        cold tier's recipe re-enqueues the reactions and re-issues the requests as it replays). So the assertion
        has to stand HERE, where "finished" is the claim being made, and not there. */
-    DCHECK(f->njob == 0, "a finishing flow still held queued jobs — its promise reactions and timer callbacks "
+    DCHECK(flow_job_pending(f) == 0, "a finishing flow still held queued jobs — its promise reactions and timer callbacks "
                          "are being dropped, and the release below is what would hide that");
     DCHECK(pending_count(f->pending) == 0,
            "a finishing flow still held pending host replies — a flow awaiting one is parked, not finished, "
@@ -4263,7 +4221,7 @@ static int engine_sched_slice(void) {
                half of the same sentence, asked of the runtime because the flow is switched IN here and the
                slot is its own (JS_TakeParkedFlow/JS_PutParkedFlow carry it across a switch). */
             if (g_checkpoint_hook && r != FLOW_STEP_DONE && !cur->frame &&
-                !JS_HasParkedFlow(JS_GetRuntime(ctx)) && !flow_has_microtask(cur))
+                !JS_HasParkedFlow(JS_GetRuntime(ctx)) && !flow_job_microtask(cur))
                 g_checkpoint_hook(ctx);
             /* THE CHARGE, AND IT IS CHARGED TO THE FLOW THAT RAN. `flow_age_running` bills whoever the registry
                says is running, and that is only the flow this step advanced while nothing between the switch-in
@@ -4552,7 +4510,7 @@ static int engine_sched_slice(void) {
        closes the session over the survivors. A reaction still on one of their queues is dropped exactly as it
        would be at finish, and only the finish case was being checked, so the wider one was invisible. */
     for (int i = 0; i < flow_count(); i++) {
-        DCHECK(flow_at(i)->njob == 0,
+        DCHECK(flow_job_pending(flow_at(i)) == 0,
                "the frontier was declared exhausted while a live flow still held queued jobs — its promise "
                "reactions, timer callbacks and delivered messages die with the session");
         /* AND THE SAME RULE FOR A ROUTED RECORD, which is a work item exactly as a job is. flow_finish asserts

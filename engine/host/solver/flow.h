@@ -20,18 +20,6 @@
 #include "solver/world.h"
 #include "solver/pending.h"   /* the replies the host still owes this flow — a JS Array, not a malloc'd list */
 
-/* One queued microtask/reaction job owned by a flow (routed here by the job-enqueue hook, not a global list):
-   the quickjs job function + its dup'd arguments, run under the flow's COW at the point its queue says. */
-/* A queued job of this flow's, and WHICH of HTML 8.1.7's two queues it came from. `task` is not a label: the
-   event loop performs a microtask checkpoint between one task and the next, so a task may not run while this
-   flow still holds a microtask. One array keeps the two in a single arrival order — which is what a task source
-   needs among its own tasks — and the pick applies the checkpoint rule. */
-/* `ctx` IS THE REALM THAT ENQUEUED IT — a document is one realm, and HTML §7.5.10 step 7 removes every task
-   whose document is a destroyed one WITHOUT running it. quickjs records the same field on the entries it keeps
-   itself; a job the host TOOK has to carry it too, or a destroyed document's reactions stay queued and run
-   against a Document whose browsing context is null. BORROWED: the agent owns its realms. */
-typedef struct { JSContext *ctx; JSJobFunc *fn; int argc; JSValue *argv; int task; } FlowJob;
-
 /* A NODE OF THE FORK TREE, AND THE ONLY THING IN A FLOW THAT OUTLIVES IT. It exists for one sentence: the thread
    time a DEPARTING flow burned has to reach the flow that FORKED it, because §scheduler prices the aging term
    against a monopolizer and a fork chain is one monopolizer wearing N names. OPAQUE here on purpose — a rank
@@ -241,8 +229,22 @@ typedef struct Flow {
     /* ASYNC-AS-FLOW: this flow's OWN queued microtasks AND tasks, run under its live COW so a reaction runs in
        the timeline that enqueued it. A MICROTASK runs at the checkpoint HTML §8.1.4.4 "Calling scripts" owes
        once the program that queued it has left the stack — which is BEFORE the flow's next program, not after
-       its last one — and a TASK runs when the sequence is exhausted (engine.c's flow_checkpoint_due). */
-    FlowJob *jobs; int njob, jobcap;
+       its last one — and a TASK runs when the sequence is exhausted (engine.c's flow_checkpoint_due). One array
+       keeps both in a single arrival order — which is what a task source needs among its own tasks — and the
+       pick (flow_job_take) applies the checkpoint rule.
+       A JS ARRAY OF IMMUTABLE JOB RECORDS, and it was the LAST malloc'd platform queue on a Flow — a
+       `FlowJob *` grown by realloc, each entry holding a malloc'd `JSValue *argv` beside two raw pointers.
+       The three reasons pending.h gives for the register below it are the same three here and every one of
+       them was live: the runtime's leak walk cannot see a `JSValue *argv` (the values in it are GC objects the
+       walk reaches only through a root it has, and a bare malloc is not one), a per-job malloc crossed neither
+       a park nor a fork, and the FORK deep-copied every entry — a malloc per job plus a dup per argument —
+       where an Array naming the parent's entries costs one refcount each. It also had FOUR hand-maintained
+       sites (the enqueue, the fork's field-by-field copy, §7.5.10's drop and the release's free loop), the
+       middle one of which carried a comment saying in as many words that a field added to the struct was an
+       obligation nothing but that comment enforced. There is no struct left to add a field to.
+       JS_UNDEFINED for a flow that has never been enqueued one, which keeps flow_job_pending a tag test —
+       asked at every suspend point the interpreter offers, exactly as the register below it is. */
+    JSValue jobs;
     /* FETCH-AWAIT: this flow's OWN live (pending) fetches and the synchronous requests it is blocked on,
        resolved when the flow's scripts+microtasks stall (the network completing). A JS ARRAY of plain records
        (solver/pending.h) rather than a malloc'd list, because CLAUDE.md §State-isolation says so in as many
@@ -355,6 +357,70 @@ void    flow_deliver_push(JSContext *ctx, Flow *f, const char *record, const cha
 JSValue flow_deliver_take(JSContext *ctx, Flow *f);
 JSValue flow_deliver_entry(const Flow *f, int i);
 JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent);
+
+/* THIS FLOW'S JOB QUEUE, AND EVERYTHING THAT EVER HAPPENS TO IT — declared beside the field for the reason the
+ * delivery queue's four are: the queue has MORE THAN ONE client (engine.c enqueues, picks and drops; cold.c
+ * counts) and a second client reading the Array's shape is always the one missing the assert. A record is
+ * never edited after it is pushed, which is what lets a fork SHARE the entries and hand each arm its own Array.
+ *
+ * WHAT A RECORD IS, and why each part of it is there:
+ *   - THE CALLEE, NAMED. A JSJobFunc is a static of the interpreter (promise_reaction_job,
+ *     js_promise_resolve_thenable_job, js_dynamic_import_job, and host_call_job for every platform edge), so
+ *     the host cannot enumerate them and names them by ARRIVAL instead — an ordinal into a table this file
+ *     keeps. The point is not that the ordinal is portable (it is NOT: it is minted in arrival order within
+ *     one session, which is the session-local-name defect cold.c refuses for a rendezvous token and for a
+ *     WorldId generation), it is that NOTHING IN THE RECORD IS A POINTER. What a park would still have to
+ *     write is then a NAME, and the reason it cannot is the next line rather than this one.
+ *   - THE ARGUMENTS, as ordinary elements. This is what a park cannot carry and what makes the queue
+ *     un-parkable today: a promise reaction's arguments ARE the reaction's capability functions, a delivered
+ *     message's are the event init record holding a WindowProxy, and none of them has an identity outside this
+ *     session — the same sentence cold.h writes about the pending register's `resolve`. A replay regenerates
+ *     them for every job whose CAUSE is inside the replayed program, which is all of them except one; see
+ *     cold_park_flow for the exception and for what closes it.
+ *   - THE ENQUEUING REALM'S GLOBAL OBJECT, which is the key HTML §7.5.10 "Destroying documents"'s destroy a
+ *     document step 7 uses: a task whose document has been destroyed is removed WITHOUT running. It is the
+ *     realm's global rather than its JSContext* because the record must hold no pointer, and holding it as
+ *     a REFERENCE also closes what the borrowed pointer left open — a realm freed without the drop hook
+ *     running left every job of it holding a dangling key the next §7.5.10 walk would compare against.
+ *   - WHETHER IT IS A TASK, which is not a label: the event loop performs a microtask checkpoint between one
+ *     task and the next, so a task may not run while this flow still holds a microtask.
+ *   - WHERE THE WORK CAME FROM. A job the replaying program causes is regenerated by the replay; a job caused
+ *     by something OUTSIDE it is not, and the only such job in this engine is the one a routed cross-document
+ *     delivery becomes (engine.c's flow_deliver, which brackets the conversion with flow_job_external_begin /
+ *     _end). Recorded at the push, so an entry stays immutable, and read only by the park.
+ *
+ * Every mutation runs inside cow_engine_write_begin/end, for pending.h's reason exactly: this is the
+ * SCHEDULER's record about a flow, and §7.5.10's drop walks EVERY flow from inside the running one's delta —
+ * a delta that captured it would put a dropped job back on the queue the moment a sibling switched in. */
+int  flow_job_pending(const Flow *f);
+/* DOES IT STILL HOLD A MICROTASK? The checkpoint is over exactly when it does not — a task on the queue is the
+   NEXT turn of the event loop and not part of this checkpoint, which is the same distinction the pick makes. */
+int  flow_job_microtask(const Flow *f);
+/* APPEND, with `argv` dup'd into the record. `task` picks which of HTML §8.1.7 "Event loops"' two queues. */
+void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task);
+/* THE PICK, WHICH IS HTML §8.1.7.3 "Processing model"'s MICROTASK CHECKPOINT AND NOT A FIFO POP — the
+   oldest microtask if there is one, else the oldest task. Removed from the queue and returned OWNED; a plain
+   FIFO ran `setTimeout(f, 0)` in the middle of a promise chain, which is the one ordering the event loop
+   exists to forbid. */
+JSValue flow_job_take(JSContext *ctx, Flow *f);
+/* RUN ONE — the callee called with its own arguments. The record's shape has exactly one reader and this is
+   it, so a caller holds an opaque entry and never an argument vector. Returns the callee's result, owned. */
+JSValue flow_job_run(JSContext *ctx, JSValueConst entry);
+/* HTML §7.5.10 "Destroying documents", destroy a document step 7, for ONE flow: remove every job whose
+   enqueuing realm is `realm`, WITHOUT running it.
+   Returns how many went. */
+int  flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm);
+/* THE ARM'S OWN QUEUE — a new Array naming the parent's RECORDS. The array is per-flow (each arm runs its jobs
+   at its own rate under its own delta); the records are shared, because none of them ever changes. */
+JSValue flow_job_fork(JSContext *ctx, const Flow *parent);
+/* THE WORK THIS FLOW'S QUEUE HOLDS THAT A REPLAY WOULD NOT RE-CAUSE — see the record's last bullet. Read by
+   the park, which may not write it down and may not silently drop it either. */
+int  flow_job_external(const Flow *f);
+/* THE BRACKET THAT MARKS IT. Everything enqueued between these two calls came from outside the replayed
+   program. Nests nowhere: a delivery is made from flow_step with no frame, so no second conversion can be in
+   flight, and that is asserted rather than counted. */
+void flow_job_external_begin(void);
+void flow_job_external_end(void);
 
 /* HOW MANY CROSS-AGENT OPERATIONS THIS FLOW HAS BEEN ASKED AND NOT YET STARTED — the length of `perform_q`,
    asked here rather than read at the call sites so the queue's shape has one reader. 0 for the JS_UNDEFINED an

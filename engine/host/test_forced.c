@@ -2292,6 +2292,187 @@ static void world_registry_selftest(JSContext *ctx)
 }
 
 
+/* ===== THE FLOW'S JOB QUEUE — HTML §8.1.7 "Event loops"' two queues, held as one JS Array =====
+ *
+ * A Flow's queue was the last malloc'd platform queue in this engine. What this exercises is the four things
+ * that were hand-maintained around the struct it used to be, each of which is now one call:
+ *   - the PICK is §8.1.7's microtask checkpoint and not a FIFO pop — a task may not begin while the flow still
+ *     holds a microtask, which is the one ordering the event loop exists to forbid;
+ *   - a FORK gives the arm its OWN Array naming the parent's RECORDS, so consuming or appending on one arm
+ *     leaves the other exactly where it was, and the inheritance costs a refcount rather than a malloc per job
+ *     plus a dup per argument;
+ *   - §7.5.10 "Destroying documents"'s destroy a document step 7 removes every task of a destroyed document
+ *     WITHOUT running it, keyed on the enqueuing REALM, and the survivors keep their arrival order;
+ *   - the PROVENANCE bracket says which jobs a replay would not re-cause, which is what cold_park_flow reads.
+ *
+ * A ZEROED Flow ON THE STACK rather than a member of the frontier, deliberately: these five functions touch
+ * exactly one field, so the fixture is the narrow interface CLAUDE.md asks a component to be exercised through
+ * — a registry flow would drag a world, a delta and a release path into a test about a queue. */
+static int g_tf_job_seen[8], g_tf_job_n;
+
+static JSValue tf_job_note(JSContext *ctx, int argc, JSValueConst *argv)
+{
+    int32_t n = -1;
+
+    CHECK(argc == 1, "the job queue handed a callee an argument count its record did not carry");
+    JS_ToInt32(ctx, &n, argv[0]);
+    CHECK(g_tf_job_n < (int)(sizeof g_tf_job_seen / sizeof *g_tf_job_seen), "too many jobs ran");
+    g_tf_job_seen[g_tf_job_n++] = n;
+    return JS_UNDEFINED;
+}
+
+/* A SECOND CALLEE, so the table hands out two ordinals and a record naming one cannot be run by the other. */
+static JSValue tf_job_count(JSContext *ctx, int argc, JSValueConst *argv)
+{
+    (void)argv;
+    return JS_NewInt32(ctx, 1000 + argc);
+}
+
+static void tf_job_push_int(JSContext *ctx, Flow *f, int n, int task)
+{
+    JSValue v = JS_NewInt32(ctx, n);
+
+    flow_job_push(ctx, f, tf_job_note, 1, (JSValueConst *)&v, task);
+    JS_FreeValue(ctx, v);
+}
+
+static void tf_job_run_all(JSContext *ctx, Flow *f)
+{
+    while (flow_job_pending(f)) {
+        JSValue e = flow_job_take(ctx, f);
+        JSValue r = flow_job_run(ctx, e);
+
+        JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, e);
+    }
+}
+
+static void flow_job_selftest(JSContext *ctx)
+{
+    Flow a, b;
+    JSValue e, r;
+    int dropped;
+
+    /* THE QUEUE'S OWN CONTEXT, which flow_add names for every real flow (solver/flow.c) and which this
+       fixture must name for itself because it builds no flow — the readers hold a Flow and nothing else. */
+    pending_set_ctx(ctx);
+    memset(&a, 0, sizeof a); a.jobs = JS_UNDEFINED;
+    memset(&b, 0, sizeof b); b.jobs = JS_UNDEFINED;
+    CHECK(flow_job_pending(&a) == 0 && !flow_job_microtask(&a) && flow_job_external(&a) == 0,
+          "an untouched flow's queue must answer empty from its JS_UNDEFINED without ever minting an Array");
+
+    /* ARRIVAL ORDER WITHIN A QUEUE, CHECKPOINT ORDER ACROSS THEM. Queued task 1, microtask 2, task 3,
+       microtask 4; §8.1.7.3 "Processing model" performs a microtask checkpoint at the end of each task, so
+       both microtasks run before either task and each pair keeps the order it arrived in. */
+    tf_job_push_int(ctx, &a, 1, 1);
+    tf_job_push_int(ctx, &a, 2, 0);
+    tf_job_push_int(ctx, &a, 3, 1);
+    tf_job_push_int(ctx, &a, 4, 0);
+    CHECK(flow_job_pending(&a) == 4, "four pushes must be four records");
+    CHECK(flow_job_microtask(&a), "a queue holding a microtask must say so — the checkpoint is over exactly "
+                                  "when it does not");
+
+    /* THE FORK, TAKEN WITH THE PARENT'S QUEUE FULL. Both arms must see their own copy of all four. */
+    b.jobs = flow_job_fork(ctx, &a);
+    CHECK(flow_job_pending(&b) == 4, "an arm forked over a full queue must inherit every job — dropping one is "
+                                     "the work item the WFQ may never drop, and it surfaces only as a reaction "
+                                     "that never ran");
+
+    /* MUTATING ONE ARM MUST NOT TOUCH THE OTHER — the whole reason the ARRAY is per-flow while the RECORDS are
+       shared. The arm takes two jobs and appends a fifth; the parent must still hold exactly its four. */
+    e = flow_job_take(ctx, &b); JS_FreeValue(ctx, e);
+    e = flow_job_take(ctx, &b); JS_FreeValue(ctx, e);
+    tf_job_push_int(ctx, &b, 9, 1);
+    CHECK(flow_job_pending(&b) == 3, "an arm's take and push must land on its own Array");
+    CHECK(flow_job_pending(&a) == 4,
+          "a sibling arm's consumption changed the parent's queue — the two arms are sharing one Array, so one "
+          "timeline's reactions are being run out of another's");
+
+    /* AND THE ORDER, RUN. */
+    g_tf_job_n = 0;
+    tf_job_run_all(ctx, &a);
+    CHECK(g_tf_job_n == 4 && g_tf_job_seen[0] == 2 && g_tf_job_seen[1] == 4 &&
+          g_tf_job_seen[2] == 1 && g_tf_job_seen[3] == 3,
+          "a task began while the flow still held a microtask — a plain FIFO runs `setTimeout(f, 0)` in the "
+          "middle of a promise chain, which is the one ordering §8.1.7's checkpoint exists to forbid");
+    CHECK(flow_job_pending(&a) == 0, "a drained queue must be empty");
+
+    /* THE ARM'S RECORDS SURVIVED THE PARENT DRAINING ITS OWN — the shared entries are alive because the arm's
+       Array still names them, which is the refcount the fork bought instead of a deep copy. The arm's two
+       takes above consumed ITS microtasks (2 then 4, by the same checkpoint rule), so what it holds is the two
+       tasks it inherited and the one it appended, in arrival order: 1, 3, 9. That the parent then ran 2 and 4
+       out of the SAME records is the sharing — a deep copy would have given each arm its own pair. */
+    g_tf_job_n = 0;
+    tf_job_run_all(ctx, &b);
+    CHECK(g_tf_job_n == 3 && g_tf_job_seen[0] == 1 && g_tf_job_seen[1] == 3 && g_tf_job_seen[2] == 9,
+          "an arm ran the wrong records after its parent drained the queue they were forked from");
+
+    /* A SECOND CALLEE, AND A RECORD WITH NO ARGUMENTS AT ALL. The callee is named by an ordinal into a table
+       this session mints on first sight, so two distinct callees must not collapse onto one name. */
+    flow_job_push(ctx, &a, tf_job_count, 0, NULL, 0);
+    e = flow_job_take(ctx, &a);
+    r = flow_job_run(ctx, e);
+    {
+        int32_t got = -1;
+        JS_ToInt32(ctx, &got, r);
+        CHECK(got == 1000, "a job record named the wrong callee, or carried arguments it was never given");
+    }
+    JS_FreeValue(ctx, r);
+    JS_FreeValue(ctx, e);
+
+    /* HTML §7.5.10 "Destroying documents", destroy a document STEP 7 — every task of the destroyed document
+       removed WITHOUT running.
+       The key is the enqueuing realm, and there is exactly one realm in this fixture, so the whole queue goes
+       and the count is the answer document_lifecycle.c asserts on. */
+    tf_job_push_int(ctx, &a, 5, 1);
+    tf_job_push_int(ctx, &a, 6, 0);
+    dropped = flow_job_drop_realm(ctx, &a, ctx);
+    CHECK(dropped == 2 && flow_job_pending(&a) == 0,
+          "destroy a document step 7 left a destroyed document's tasks queued — each of them runs page code "
+          "in a Document whose browsing context is null");
+    CHECK(flow_job_drop_realm(ctx, &a, ctx) == 0,
+          "a second drop of the same realm found more — the walk is not seeing all of the queue");
+
+    /* AN ARGUMENT LIST LONGER THAN THE VECTOR flow_job_run KEEPS ON THE STACK — `setTimeout(f, a, b, …)`
+       queues the callee plus every extra argument, so this is a shape the page reaches and the only branch in
+       the run path the cases above do not. The record carries them all and the callee must see exactly them:
+       an argument vector is where the step machines' two ownership bugs both lived. */
+    {
+        JSValue many[12];
+        int i;
+
+        for (i = 0; i < 12; i++) many[i] = JS_NewInt32(ctx, i);
+        flow_job_push(ctx, &a, tf_job_count, 12, (JSValueConst *)many, 0);
+        for (i = 0; i < 12; i++) JS_FreeValue(ctx, many[i]);
+        e = flow_job_take(ctx, &a);
+        r = flow_job_run(ctx, e);
+        {
+            int32_t got = -1;
+            JS_ToInt32(ctx, &got, r);
+            CHECK(got == 1012, "a job whose arguments did not fit the run path's stack vector reached its "
+                               "callee with the wrong count");
+        }
+        JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, e);
+    }
+
+    /* THE PROVENANCE BRACKET — what the park reads. Work the replayed program causes is regenerated by the
+       replay; work handed in from outside it is not, and only the arrival knows which. */
+    tf_job_push_int(ctx, &a, 7, 1);
+    CHECK(flow_job_external(&a) == 0, "a job the flow's own code queued must not be marked external");
+    flow_job_external_begin();
+    tf_job_push_int(ctx, &a, 8, 1);
+    flow_job_external_end();
+    CHECK(flow_job_external(&a) == 1,
+          "a job queued while a routed record was being turned into local work was not marked — the park would "
+          "then write a recipe that resumes this document one message short with nothing to say so");
+
+    tf_job_run_all(ctx, &a);
+    JS_FreeValue(ctx, a.jobs); a.jobs = JS_UNDEFINED;
+    JS_FreeValue(ctx, b.jobs); b.jobs = JS_UNDEFINED;
+}
+
+
 /* ===== A FLOW THAT BLOCKS ON THE HOST, which is the shape a cross-document read has =====
  *
  * `iframe.contentWindow.document.body` must answer at its own call site, and one instance is one document, so
@@ -4246,6 +4427,7 @@ int main(int argc, char **argv) {
     concolic_init(ctx);
     flow_registry_init("fixture");   /* one document in this fixture; the world namespace is named by it */
     world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
+    flow_job_selftest(ctx);         /* §8.1.7's two queues, §7.5.10 step 7, and the fork's copy-on-nothing */
     endpoint_init();
     solve_init(ctx);
 
