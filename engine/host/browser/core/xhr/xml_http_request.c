@@ -73,6 +73,7 @@
 #include "core/url/url_search_params.h"
 #include "core/xhr/progress_event.h"
 #include "core/xhr/xml_http_request.h"
+#include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/engine.h"
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
@@ -140,6 +141,31 @@ static const uint16_t XHR_VALS[] = {
     XO(response_headers), XO(status_text), XO(response_url), XO(received), XO(response_object),
 };
 static const CowRecord XHR_REC = { sizeof(XhrData), XHR_VALS, (int)(sizeof(XHR_VALS) / sizeof(XHR_VALS[0])) };
+
+/* THE BYTES AN UNKNOWN ARGUMENT CROSSES AS. Web IDL's DOMString / ByteString / USVString conversion PASSES
+   unknown external input THROUGH untouched — idl_args.c states why, and it is deliberate: opacity has to
+   survive a coercion or the value stops forking control flow and stops being solvable at a sink — so a member
+   body that wants BYTES must ask for the concolic's own display SHAPE. That is the projection Fetch's §5.4
+   URL and Headers' value already take. Coercing one instead reaches §7.1.19 ToString, which owes C a real
+   JSString and has no answer for an unknown: that abort is what ended a real axios page at its first request,
+   on this member's `url`. `plen` may be NULL, exactly as JS_ToCString's is; the result is released with
+   JS_FreeCString either way. */
+static const char *xhr_arg_cstring(JSContext *ctx, JSValueConst v, size_t *plen)
+{
+    const char *sh, *r;
+    JSValue sv;
+
+    if (!concolic_is(v))
+        return JS_ToCStringLen(ctx, plen, v);
+    sh = concolic_shape_c(v);
+    DCHECK(sh != NULL, "unknown external input reached an XMLHttpRequest argument with no display shape — the "
+                       "shape is what this edge uses in place of bytes it cannot know, so a value that has "
+                       "lost it would be requested at an address spelled as an unnameable hole");
+    sv = JS_NewString(ctx, sh);
+    r = JS_ToCStringLen(ctx, plen, sv);
+    JS_FreeValue(ctx, sv);
+    return r;
+}
 
 static XhrData *xhr_of(JSValueConst v)
 {
@@ -522,7 +548,7 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         }
         JS_FreeCString(ctx, m);
         /* Steps 5-6: encoding-parse the URL against the relevant settings object's API base URL. */
-        u = JS_ToCString(ctx, step_arg(hdr, 1));
+        u = xhr_arg_cstring(ctx, step_arg(hdr, 1), NULL);
         if (!u) { js_free(ctx, norm); return JS_STEP_ABRUPT; }
         url_record_init(&rec);
         ok = fetch_parse_url(ctx, &rec, u, strlen(u));
@@ -615,8 +641,8 @@ static JSValue js_xhr_set_request_header(JSContext *ctx, JSValueConst this_val, 
         return JS_ThrowDOMException(ctx, "InvalidStateError", "setRequestHeader() before open()");
     if (d->send_invoked)
         return JS_ThrowDOMException(ctx, "InvalidStateError", "setRequestHeader() after send()");
-    name = argc > 0 ? JS_ToCStringLen(ctx, &name_len, argv[0]) : NULL;
-    value = argc > 1 ? JS_ToCStringLen(ctx, &value_len, argv[1]) : NULL;
+    name = argc > 0 ? xhr_arg_cstring(ctx, argv[0], &name_len) : NULL;
+    value = argc > 1 ? xhr_arg_cstring(ctx, argv[1], &value_len) : NULL;
     if (!name || !value) {
         if (name) JS_FreeCString(ctx, name);
         if (value) JS_FreeCString(ctx, value);
