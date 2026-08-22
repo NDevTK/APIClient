@@ -1362,14 +1362,25 @@ async function loadVirtualSchema(service, methodId, initialData = null) {
 
     currentSchema = schema;
 
-    // Auto-determine Content-Type from learned schema
-    if (schema.contentTypes?.length) {
-      currentContentType = schema.contentTypes[0];
-    } else if (schema.endpoint?.contentType) {
-      currentContentType = schema.endpoint.contentType;
-    } else {
-      currentContentType = "application/json";
-    }
+    /* THE CONTENT-TYPE HAS ONE PRODUCER AND IT NEVER ANSWERS NOTHING. resolveEndpointSchema
+       (lib/send.js) collects the discovery method's observed types, adds each probe's, and when
+       neither named one substitutes application/json + the two protobuf types — so a schema that
+       reached this line (it carries a `method`, checked above) always carries a non-empty
+       contentTypes. The two branches that stood here guessed past that producer anyway.
+       `schema.endpoint.contentType` read a name the endpoint projection DELIBERATELY stopped
+       carrying: send.js's own comment lists contentType among five fields it dropped because
+       lib/merge.js — the extension's only `endpoints.set` — writes {url, method, host, path,
+       service, source, pageUrl, requiredHeaders, pathParams, firstSeen} and never a content type.
+       So that branch had been reading `undefined` off a six-field allowlist, and the
+       "application/json" tail behind it restated send.js's own first substitute where nothing
+       could reach it. A reader whose producer was deleted is dead code that reads as a feature;
+       what belongs here is the assertion, not the guess. */
+    DCHECK(Array.isArray(schema.contentTypes) && schema.contentTypes.length > 0,
+           "GET_ENDPOINT_SCHEMA answered a method with no contentTypes — resolveEndpointSchema " +
+           "(lib/send.js) substitutes three media types when neither the discovery method nor a " +
+           "probe observed one, so an empty list is that producer broken and the Send panel would " +
+           "post this body under a Content-Type nothing learned");
+    currentContentType = schema.contentTypes[0];
 
     // Auto-set body mode: GraphQL if URL matches, otherwise form
     if (isGraphQLUrl(currentRequestUrl)) {
@@ -1384,6 +1395,11 @@ async function loadVirtualSchema(service, methodId, initialData = null) {
     renderKeySelector();
     renderServiceOriginHint();
   } catch (err) {
+    // An invariant abort travels ON through here (check.js RETHROW_FATAL). The GET_ENDPOINT_SCHEMA
+    // sendMessage genuinely can reject — the offscreen document is not answering — and that IS the
+    // "Error loading schema" state this hint is for; the assertion above is not, and without this
+    // line it would render in the same hint and read as a transport hiccup.
+    RETHROW_FATAL(err);
     console.error("Error loading virtual schema:", err);
     document.getElementById("send-form-fields").innerHTML =
       `<div class="hint">Error loading schema: ${esc(err.message)}</div>`;
