@@ -75,6 +75,7 @@
 #include "core/xhr/xml_http_request.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
+#include "solver/endpoint.h"   /* the @H surface — every request host-edge funnels one endpoint into it */
 #include "solver/engine.h"
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
@@ -90,6 +91,13 @@ typedef struct {
     JSValue upload;            /* the XMLHttpRequestUpload object (owned) */
     JSValue method;            /* request method — a JS string, JS_NULL before open() */
     JSValue url;               /* request URL, serialized — a JS string, JS_NULL before open() */
+    /* THE URL AS THE PAGE COMPUTED IT, which the serialization above cannot be. §3.5.1 step 10 sets the request
+       URL to the PARSED url, so `url` is a `url_serialize` result and a plain string has no example behind it.
+       `fetch()` keeps both for exactly this reason (core/fetch/fetch.c §5.4: the CONCOLIC goes to the @H
+       surface, its SHAPE goes to the network edge), and an address an XMLHttpRequest built out of unknown
+       input must reach that surface the same way or the endpoint is a hole with no value in it. JS_NULL where
+       open() was handed a plain string — a POSITIVE statement (this address is exactly what `url` says). */
+    JSValue url_src;
     JSValue author_headers;    /* author request headers — an Array of [name, value] */
     JSValue request_body;      /* request body — a JS string, or JS_NULL */
     JSValue override_mime;     /* override MIME type — a JS string, or JS_NULL */
@@ -137,7 +145,7 @@ static int g_run_stepid = -1;      /* the fetch/response lifecycle machine, mint
    the same list the finalizer frees and the gc_mark walks. */
 #define XO(f) (uint16_t)offsetof(XhrData, f)
 static const uint16_t XHR_VALS[] = {
-    XO(upload), XO(method), XO(url), XO(author_headers), XO(request_body), XO(override_mime),
+    XO(upload), XO(method), XO(url), XO(url_src), XO(author_headers), XO(request_body), XO(override_mime),
     XO(response_headers), XO(status_text), XO(response_url), XO(received), XO(response_object),
 };
 static const CowRecord XHR_REC = { sizeof(XhrData), XHR_VALS, (int)(sizeof(XHR_VALS) / sizeof(XHR_VALS[0])) };
@@ -599,6 +607,11 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             d->url = JS_NewString(ctx, ser ? ser : "");
             free(ser);
         }
+        /* AND THE ARGUMENT ITSELF, kept beside the serialization for the @H surface — see `url_src`. Held only
+           when it carries something the serialization does not: a plain string IS its own parse, so storing
+           one would make every endpoint carry a second copy of its own address. */
+        JS_FreeValue(ctx, d->url_src);
+        d->url_src = concolic_is(step_arg(hdr, 1)) ? JS_DupValue(ctx, step_arg(hdr, 1)) : JS_NULL;
         url_record_free(&rec);
         d->synchronous = async ? 0 : 1;
         /* Step 12: only a state that is not already opened fires. */
@@ -1360,6 +1373,79 @@ static char *xhr_request_op(JSContext *ctx, XhrData *d)
     return json_buf_take(&b);
 }
 
+/* THE ENDPOINT THIS OBJECT IS ABOUT TO REQUEST, onto the @H surface — the tool's headline output, and this
+   component was not on it. Every request host-edge funnels one endpoint into `endpoint_record`
+   (solver/endpoint.h) and there were five such edges across six call sites — `fetch()`, a form submission
+   (one site for its GET and one for its POST), a taint-carrying `<script src>`, a reply's decoded URLs and a
+   multipart batch's sub-requests. Not this one. So a page whose
+   client is axios — whose browser adapter IS XMLHttpRequest, and which is what a large share of real bundles
+   ship — learned NOTHING, and the zero it produced was indistinguishable from a page with no API at all. A
+   fixture calling `api.get('/users', {params:{page:2}})` emitted 0 endpoints against 8889 flows; the same
+   request written as `fetch()` emitted 1.
+ *
+ * §3.5.6 step 5 IS THE PLACE, because that is where the spec itself assembles `req` out of exactly these four
+ * — "method: this's request method / URL: this's request URL / header list: this's author request headers /
+ * body: this's request body" — so nothing here re-derives what the record already holds. Before §4.1 decides
+ * WHO answers, for the same reason `fetch()` records before its own network edge: a `data:` URL this agent
+ * resolves itself is a request the page made, and an endpoint is what the page's code composed, never what
+ * came back.
+ *
+ * THE CONTENT-TYPE IS READ OFF THE AUTHOR HEADERS AND NOWHERE ELSE. `fetch()` has to consult §5.4 step 37.4's
+ * extracted type because its own list may not name one; here step 4 has already SET `Content-Type` into the
+ * author request headers (the `text/html;charset=UTF-8` / `application/xml;charset=UTF-8` /
+ * extractedContentType branches), so by this line the list is the whole answer and a second source would be a
+ * second way of being right. */
+static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
+{
+    uint32_t n = hl_len(ctx, d->author_headers), i;
+    EndpointHeader *eh = NULL;
+    const char **owned = NULL;   /* the 2n cstrings borrowed for the call, freed together after it */
+    EndpointBody eb;
+    const EndpointBody *ebp = NULL;
+    const char *mc = NULL, *method = "GET";
+    char *body_ct = NULL;
+    const char *body = NULL;
+    size_t body_len = 0;
+
+    DCHECK(!JS_IsNull(d->url), "an XMLHttpRequest reached §3.5.6's request record with no URL — send() runs "
+                               "only on an `opened` object and §3.5.1 step 10 is what opens one");
+    if (JS_IsString(d->method)) {
+        mc = JS_ToCString(ctx, d->method);
+        if (mc) method = mc;
+    }
+    if (n) {
+        eh = js_malloc(ctx, sizeof(*eh) * (size_t)n);
+        owned = js_malloc(ctx, sizeof(*owned) * (size_t)n * 2);
+        CHECK(eh != NULL && owned != NULL, "XMLHttpRequest: OOM projecting the author headers onto the @H "
+                                           "surface — a dropped endpoint is a hole in the frontier");
+        for (i = 0; i < n; i++) {
+            JSValue pair = JS_GetPropertyUint32(ctx, d->author_headers, i);
+            JSValue nv = JS_GetPropertyUint32(ctx, pair, 0), vv = JS_GetPropertyUint32(ctx, pair, 1);
+            owned[i * 2] = JS_ToCString(ctx, nv);
+            owned[i * 2 + 1] = JS_ToCString(ctx, vv);
+            eh[i].name = owned[i * 2] ? owned[i * 2] : "";
+            eh[i].value = owned[i * 2 + 1] ? owned[i * 2 + 1] : "";
+            JS_FreeValue(ctx, nv); JS_FreeValue(ctx, vv); JS_FreeValue(ctx, pair);
+        }
+    }
+    if (!JS_IsNull(d->request_body)) {
+        body = JS_ToCStringLen(ctx, &body_len, d->request_body);
+        body_ct = hl_get(ctx, d->author_headers, "content-type");
+        if (body) { eb.mime = body_ct; eb.bytes = body; eb.len = body_len; ebp = &eb; }
+    }
+    /* The CONCOLIC where open() was given one, so the surface reports the shape AND the example it carries;
+       the serialization otherwise, which for a plain address is the same string §3.5.1 step 10 parsed. */
+    endpoint_record(ctx, method, JS_IsNull(d->url_src) ? d->url : d->url_src, eh, (int)n, ebp);
+    if (body) JS_FreeCString(ctx, body);
+    free(body_ct);
+    if (owned) {
+        for (i = 0; i < n * 2; i++) if (owned[i]) JS_FreeCString(ctx, owned[i]);
+        js_free(ctx, owned);
+    }
+    js_free(ctx, eh);
+    if (mc) JS_FreeCString(ctx, mc);
+}
+
 /* Fetch §4.1 MAIN FETCH, for the request §3.5.6 sends, as far as it is answered inside this agent. Returns true
    when the request is one this agent answers ITSELF — the response is already on the record when it does,
    either as a reply taken or as the network error §3 says the response starts as — so the trusted host is owed
@@ -1466,6 +1552,8 @@ static int js_xhr_run_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
         s->cb[0] = s->cb[1] = s->cb[2] = s->cb[3] = JS_UNDEFINED;
         s->transmitted = s->length = 0;
         if (mode == XHR_MODE_ERROR) { s->hdr.stage = XR_ERR_BEGIN; goto error_steps; }
+        /* §3.5.6 step 5's request record, onto the @H surface, before §4.1 chooses who answers it. */
+        xhr_record_endpoint(ctx, d);
         /* Fetch §4.1: main fetch decides WHO answers. A request this agent answers itself — a port §2.9 blocks,
            or a scheme §4.3 resolves here — has its response on the record already and owes the host nothing, so
            the wait below has nothing to wait for. */
@@ -2048,7 +2136,7 @@ static int js_xhr_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     d = calloc(1, sizeof *d);
     CHECK(d != NULL, "XMLHttpRequest: OOM building an XMLHttpRequest");
     d->upload = upload;
-    d->method = d->url = d->request_body = d->override_mime = d->response_object = JS_NULL;
+    d->method = d->url = d->url_src = d->request_body = d->override_mime = d->response_object = JS_NULL;
     d->author_headers = JS_NewArray(ctx);
     d->response_headers = JS_NewArray(ctx);
     d->status_text = JS_NewString(ctx, "");
