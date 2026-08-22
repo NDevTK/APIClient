@@ -389,10 +389,29 @@ typedef struct {
      * is what is costing the run, and it separates three states that look identical from outside: served and
      * progressing (distance — build the fitness), never served (starvation — the ordering), and served while
      * pinned at zero (a candidate being RESTARTED rather than resumed, which no amount of thread time fixes). */
-    long cand_members;    /* members carrying a payload substitution — a candidate session */
+    long cand_members;    /* members carrying a payload substitution — a candidate session OR A FORK OF ONE,
+                             because engine.c copies the substitution to the sibling: a candidate that branches
+                             is two candidates. So this is the SEARCH's whole live population, and @PROGRESS's
+                             `candidates` (the searches SEEDED) is its root count. The pair is a shape test the
+                             two numbers make together and neither makes alone: cands == roots * 2^cand_dec_max
+                             is a COMPLETE UNIFORM binary tree, which is every candidate stopping at the same
+                             depth, and any other value is a ragged one, which is candidates at different
+                             depths. Measured once at 144 against 9 roots and a depth of 4 — 9 * 2^4 exactly. */
     long cand_unrun;      /* …of those, how many have NEVER been charged for the thread */
     int64_t cand_svc_max; /* …and the most service any one of them has consumed */
-    long cand_dec_max;    /* …and the deepest decision vector any one of them stands on */
+    /* THE DEEPEST DECISION VECTOR AMONG THEM — AND IT COUNTS GATES, NOT STATEMENTS, which is a correction to
+       what this row said when it was added. It claimed to be "how many gates it has replayed and therefore how
+       deep into the program it is", and the second half does not follow from the first: a flow records a slot
+       only at a branch it had not already decided, so a candidate can execute eight hundred statements and
+       stand on four decisions, or four statements and stand on four. Read alone the number is uninterpretable
+       in the exact way that matters — `cand_dec_max: 4` against a runway of 866 statements reads as "the
+       floor" and as "four of the five gates on the path" with the same digit, and those take opposite actions.
+       `dec_max` below is the denominator that makes it a reading: an exploring flow that runs the document to
+       its end stands on the whole gate sequence, so the RATIO is how far through the gates the best candidate
+       has got. Neither number is worth printing without the other. */
+    long cand_dec_max;
+    long dec_max;         /* the deepest decision vector of ANY member — the gate sequence's own length, which
+                             is what the row above is a fraction of */
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 
