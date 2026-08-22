@@ -16,6 +16,17 @@
    claim that this clock is not a CPU clock is CHECKED rather than assumed. */
 #if defined(__EMSCRIPTEN__)
 
+/* THE DAY THE TRANSPORT ARRIVES, THIS BRANCH IS THE WRONG ONE, AND A BUILD IS THE CHEAPEST PLACE TO SAY SO.
+   Shared linear memory is the whole of what the asynchronous edge is missing here (quantum.h), so a link that
+   HAS it must not quietly keep the polling-only host beside it: the slice would still be evaluated only at
+   whichever raise the page's own bytecode happens to reach, and the flag would look like it had bought
+   something. */
+#if defined(__EMSCRIPTEN_SHARED_MEMORY__)
+#error "solver/quantum.c: this wasm link HAS shared memory, so the cooperative quantum can finally have an \
+asynchronous edge — build the watchdog thread (it stores the yield request through the address of the main \
+thread's own thread-local copy of that byte; see quantum.h) rather than linking this polling-only branch."
+#endif
+
 static int64_t g_slice_start_us;
 static int  g_slice_open;
 static int  g_clock_checked;
@@ -33,8 +44,9 @@ int64_t quantum_thread_us(void)
 
 const char *quantum_measure(void)
 {
-    return "wall (this host has NO cpu clock and NO asynchronous edge — a single-threaded wasm instance is "
-           "interruptible only from shared memory; see solver/quantum.h)";
+    return "wall (this host has NO cpu clock and NO asynchronous edge — the engine's realm is an opaque "
+           "origin, never crossOriginIsolated, so it cannot hand a watchdog thread the shared memory that "
+           "thread would raise the request through; see solver/quantum.h)";
 }
 
 int quantum_measure_is_cpu(void) { return 0; }

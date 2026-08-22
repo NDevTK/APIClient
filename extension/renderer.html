@@ -341,6 +341,36 @@
         return {};   /* emscripten's async form: the exports arrive through `ok` */
       },
     });
+    /* THE COOPERATIVE QUANTUM HAS NO ASYNCHRONOUS EDGE IN THIS REALM, AND THIS IS THE ONLY PLACE THAT CAN SEE
+       WHY. engine/host/solver/quantum.h's emscripten branch is built on that absence: the yield request is
+       polled at EVERY dispatch, so the suspend point is universal — but the only things that RAISE one are the
+       flow's own bytecode (a back-edge, a call, a fork), so the slice is evaluated when the page next offers
+       one of those and not when the budget actually runs out. What would end that is a WATCHDOG THREAD storing
+       the request byte in the engine's own linear memory from outside its instruction stream.
+       WHAT BLOCKS IT IS ONE THING AND IT IS NOT THE FLAG, which is the correction this line exists to carry —
+       quantum.h used to price the transport as `-pthread` plus cross-origin isolation ON THE OFFSCREEN
+       DOCUMENT, and the engine has not run there since every instance became a renderer. Measured here, on
+       real Chrome: this realm CAN construct a shared WebAssembly.Memory and CAN create a Worker, and the
+       Worker's `postMessage` of that memory throws `DataCloneError: SharedArrayBuffer transfer requires
+       self.crossOriginIsolated`. So the gate is the AGENT CLUSTER's cross-origin isolation, and this frame's
+       agent cluster is keyed on an OPAQUE origin — renderer.html is in manifest.sandbox.pages, whose CSP
+       `sandbox` directive forces that, and it is the security boundary rather than an incidental. An opaque
+       origin is same-origin with nothing, so it is never isolated: measured `crossOriginIsolated === false`
+       with the manifest's COOP at `same-origin-allow-popups` AND at `same-origin`, and with this frame's
+       sandbox attribute as shipped, widened with allow-same-origin, and removed entirely. The same watchdog
+       runs end to end in the offscreen document at BOTH COOP values (worker created, memory transferred,
+       Atomics.wait returned, its store read back on the main thread) — which is the point: the flip would
+       provision the transport in a document the engine does not run in, and would sever every live-verify
+       popup's opener to do it.
+       THE FAILURE IS GOOD NEWS AND THE MESSAGE SAYS SO — the shape of quantum.c's clock check. An absence
+       stated in prose is one nobody re-measures; asserted on the browser's OWN gate it ends by crashing, in
+       the realm that would host the thing that has become buildable. */
+    DCHECK(self.crossOriginIsolated !== true,
+           "this renderer's agent cluster is cross-origin isolated now, so it may transfer shared memory to a " +
+           "Worker — the cooperative quantum can finally have an asynchronous edge " +
+           "(engine/host/solver/quantum.h): build the watchdog thread that raises the yield request from " +
+           "outside the flow's instruction stream, instead of leaving the slice to be noticed at whichever " +
+           "back-edge, call or fork the page happens to reach next");
   }
 
   /* THE WORKING SET, WHICH IS THIS FRAME'S TO STATE AND NOBODY ELSE'S. `HEAPU8.length` is the view over the

@@ -35,14 +35,36 @@
  *         the day a real CPU clock appears the assert names the switch to make instead of the wall clock
  *         quietly staying.
  *       - a single-threaded WASM instance cannot be interrupted mid-call by anything. The host's JS is
- *         run-to-completion, so it cannot reach the instance while ccall("qjs_step") is on the stack; a
- *         periodic export called BETWEEN steps is by definition not mid-call and answers a different question.
- *         The only agent that could raise the request from outside the flow's instruction stream is a second
- *         thread writing the request byte in SHARED linear memory, which needs -pthread/-sSHARED_MEMORY (so a
- *         SharedArrayBuffer, so cross-origin isolation on the offscreen document) AND the address of the main
- *         thread's own thread-local copy of that byte. That is the transport requirement, named; until it is
- *         provisioned the extension's raise sources are the interpreter's own (back-edge, call, fork), and this
- *         host's slice is bounded by the wall clock read at whichever of those the flow next reaches.
+ *         run-to-completion, so it cannot reach the instance while the step call is on the stack; a periodic
+ *         export called BETWEEN steps is by definition not mid-call and answers a different question. The only
+ *         agent that could raise the request from outside the flow's instruction stream is a second thread
+ *         storing the request byte in the engine's linear memory, which must then be SHARED: -pthread /
+ *         -sSHARED_MEMORY, plus the address of the main thread's own thread-local copy of that byte.
+ *         WHAT BLOCKS THAT IS NOT THE FLAG, AND THIS PARAGRAPH USED TO PRICE IT AGAINST THE WRONG DOCUMENT.
+ *         It said "so a SharedArrayBuffer, so cross-origin isolation on the offscreen document". The engine has
+ *         not run in the offscreen document since every instance became a RENDERER: renderer-host.js forks one
+ *         `<iframe sandbox="allow-scripts" src="renderer.html">` per agent cluster, and renderer.html is in
+ *         manifest.sandbox.pages, whose CSP `sandbox` directive gives that document an OPAQUE origin — the
+ *         security boundary itself, not an incidental. MEASURED IN THAT REALM ON REAL CHROME: a shared
+ *         WebAssembly.Memory CONSTRUCTS and grows there, and `new Worker` succeeds — what fails is handing the
+ *         memory across, with `DataCloneError: SharedArrayBuffer transfer requires self.crossOriginIsolated`.
+ *         So the gate is the AGENT CLUSTER's cross-origin isolation, and an opaque origin is same-origin with
+ *         nothing, so it is never isolated: `crossOriginIsolated === false` there under the manifest's COOP at
+ *         `same-origin-allow-popups` AND at `same-origin`, with the frame's sandbox attribute as shipped,
+ *         widened with allow-same-origin, and removed entirely. The identical watchdog runs END TO END in the
+ *         offscreen document at BOTH COOP values (worker created, memory transferred, Atomics.wait returned,
+ *         its store read back on the main thread), which is exactly the point: the flip provisions the
+ *         transport where the engine is not, and it is not free — measured under `same-origin` a live verify's
+ *         `window.open` still navigated and the sink's proof relay still fired, but the openee's
+ *         `window.opener` was null (HTML 7.1.3 "Cross-origin opener policies": under "same-origin" an
+ *         auxiliary browsing context "will appear closed to the opener"), which is the handle a postMessage
+ *         delivery arm would need. THE REQUIREMENT IS THEREFORE `self.crossOriginIsolated` IN THE ENGINE'S OWN
+ *         REALM, which this project cannot buy without giving up the boundary that realm exists to be.
+ *         renderer.html asserts on that exact gate, so the day it opens the crash names the watchdog to build;
+ *         quantum.c #errors if this branch is ever linked WITH shared memory.
+ *         Until then the extension's raise sources are the interpreter's own (back-edge, call, fork) — the
+ *         yield poll is at every dispatch, so the SUSPEND POINT is universal and only the RAISE is not — and
+ *         this host's slice is bounded by the wall clock read at whichever of those the flow next reaches.
  *     quantum_measure() answers with that, in one string, so no message anywhere restates it and goes stale.
  *
  * The slice is a FLOOR ON SHARING, never a cap: nothing is dropped, starved, skipped, reordered or forgotten
