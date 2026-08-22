@@ -264,7 +264,12 @@ async function cmdStart(args) {
      defect this project keeps finding in its own instruments. The two errors above were sitting in that
      discarded stream the whole time. Detached still works: the child gets an fd, not a pipe to this process,
      so nothing keeps node alive and nothing blocks when the buffer would have filled. */
-  const chromeLog = path.join(path.dirname(PROFILE_DIR), "harness-chrome.log");
+  /* DOT-PREFIXED, because .gitignore's `testing/.*.out` rule exists for exactly this and its own comment says
+     so — "a run's captured stdout". The first spelling of this line put the file at `testing/harness-chrome.log`,
+     which is tracked ground: it showed up as untracked in every `git status` in a shared checkout that several
+     agents read, which is noise they would each have had to dismiss. Reuse the rule rather than add a second
+     one to keep in step with it. */
+  const chromeLog = path.join(path.dirname(PROFILE_DIR), ".harness-chrome.out");
   let chromeFd = "ignore";
   try { chromeFd = fs.openSync(chromeLog, "w"); } catch { /* a read-only dir is not a reason to refuse to launch */ }
   const chromeProc = spawn(chromePath, chromeArgs, {
