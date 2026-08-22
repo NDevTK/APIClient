@@ -244,9 +244,15 @@ int         concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq);
 int         concolic_rel_hook(JSContext *ctx, JSValue *sp, int op);
 /* JSConcolicHooks.type_of — `typeof` an unknown is an unknown string, so the comparison forks. */
 JSValue     concolic_typeof_hook(JSContext *ctx, JSValueConst v);   /* JS_UNINITIALIZED = not concolic, run the real typeof */
-/* JSConcolicHooks.arith / .to_str — ToNumber and ToString over unknown input, answered by the OPERATOR (the
-   conversion boundary owes C a real primitive). The result keeps the source; the example is the REAL op run on
-   the operands' examples, or absent when there is nothing concrete to run. */
+/* JSConcolicHooks.arith / .to_str — §7.1.4 ToNumber ( arg ) and §7.1.19 ToString ( arg ) over unknown input,
+   answered by the OPERATOR (the conversion boundary owes C a real primitive). The result keeps the source; the
+   example is the REAL op run on the operands' examples, or absent when there is nothing concrete to run.
+   `.to_str` IS 22.1.1.1 String ( value ) AND NOT ToString EVERYWHERE, and the distinction is what keeps this
+   from becoming a second name for concolic_builtin_hook: `String(x)` is the algorithm whose result IS the
+   coercion, while every builtin that merely CONSUMES the string derives ITS OWN result from the operand, named
+   by its own operation. The engine reaches that second derivation from the one sub-sequence all of them coerce
+   through (step_tostring_run's JS_STEP_UNKNOWN), so there is one derivation per question rather than one hook
+   per call site. */
 int         concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops);
 JSValue     concolic_tostr_hook(JSContext *ctx, JSValueConst v);
 /* JSConcolicHooks.key_read — `obj[x]` with an unknown key reads an unknown property. */

@@ -911,8 +911,8 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
    over an unknown. */
 static char *cstr_dup(JSContext *ctx, JSValueConst v);   /* defined with the + hook below */
 
-/* 7.1.4 ToNumber AND 7.1.17 ToString OVER UNKNOWN INPUT — answered where the operator computes, never at the
- * conversion boundary, which owes C a real primitive.
+/* §7.1.4 ToNumber ( arg ) AND §7.1.19 ToString ( arg ) OVER UNKNOWN INPUT — answered where the operator
+ * computes, never at the conversion boundary, which owes C a real primitive.
  *
  * The RESULT keeps the SOURCE, so `-location.hash` still forks a later branch and still solves at a later sink;
  * a value that collapsed to NaN or "[object Object]" here would end the exploration at the first coercion, which
@@ -1016,8 +1016,12 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
     return 1;
 }
 
-/* 7.1.17 ToString over unknown input: unknown, source kept, example computed by actually stringifying the
-   example when there is one. */
+/* §7.1.19 ToString ( arg ) over unknown input: unknown, source kept, example computed by actually stringifying
+   the example when there is one.
+   IT IS THE ANSWER FOR 22.1.1.1 String ( value ) AND FOR NOTHING ELSE, which is what the shape says: `String(x)`
+   is the algorithm whose RESULT is the coercion. A builtin that merely CONSUMES the string derives its own
+   result instead, named by its own operation — concolic_builtin_hook, reached from the engine's one shared
+   ToString sub-sequence (JS_STEP_UNKNOWN). Two derivations, not two spellings of one. */
 JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
     const char *src, *root, *sh, *f[1];
     char *shape, *ident;
