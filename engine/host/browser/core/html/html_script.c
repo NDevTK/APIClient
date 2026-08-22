@@ -39,6 +39,8 @@ static int     g_id_set_async = -1;   /* the `async` setter's pool id — declar
    where an agent's one-per-runtime state is minted; the steps themselves are beside the getter. */
 static JSValue js_script_set_async(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic);
 
+static void script_children_changed(JSContext *ctx, lxb_dom_node_t *parent);
+
 void html_script_init(JSContext *ctx)
 {
     DCHECK(g_atom_started == JS_ATOM_NULL, "html_script_init ran twice in one runtime — the slot key is a "
@@ -53,6 +55,9 @@ void html_script_init(JSContext *ctx)
     g_atom_force_async = JS_ValueToAtom(ctx, g_force_async_key);
     CHECK(g_atom_force_async != JS_ATOM_NULL, "the script force-async slot key could not be interned");
     g_id_set_async = idl_setter_id(ctx, IDL_BOOLEAN, false, js_script_set_async, 0);
+    /* §4.12.1.1's children changed steps — the third of the three doors into `prepare`. See
+       script_children_changed for why only having the second one silently lost every text-injected chunk. */
+    node_add_children_changed_hook(script_children_changed);
 }
 
 void html_script_free(JSRuntime *rt)
@@ -216,11 +221,57 @@ void html_script_install(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "async", js_script_async, 0, g_id_set_async);
 }
 
+/* HTML §4.12.1.1 "Processing model": "The script HTML element POST-CONNECTION STEPS, given insertedNode, are:
+ * 1. If insertedNode is parser-inserted, then return. 2. Prepare the script element given insertedNode."
+ *
+ * IT IS THE ENTRY POINT, AND THIS FILE HAD ONE CALLER FOR THREE OF THEM. The comment below already said "a page
+ * loads code conditionally in three ways and this is the second", and only the second was wired: `prepare` was
+ * reached from DOM §4.2.3's insertion steps and from nowhere else. The spec reaches these same steps from the
+ * CHILDREN CHANGED STEPS and from the ATTRIBUTE CHANGE STEPS as well, and both of those are ordinary
+ * lazy-loader idioms that this engine silently dropped:
+ *
+ *     s = document.createElement("script"); document.body.appendChild(s); s.src = "/chunk.js";
+ *     s = document.createElement("script"); document.body.appendChild(s); s.textContent = code;
+ *
+ * In both, the append prepares an element with no source and queues nothing, and the line that actually names
+ * the code arrives afterwards — so the chunk was never fetched, never run and never reported, which is the
+ * exact defect the paragraph below records for the insertion half and the exact surface this tool exists to
+ * reach. Parser-inserted is step 1's own question and the answer here is structurally NO: a parser-inserted
+ * script is prepared by html_script_parsed on the document scan, and an element reaching either of the two
+ * callers below was mutated by script after the parse. */
+static void script_post_connection(JSContext *ctx, lxb_dom_element_t *el)
+{
+    /* "The HTML element post-connection steps only run when the inserted element is still CONNECTED" — a
+       script mutated while detached prepares when it is inserted, through the insertion half, and preparing it
+       here as well would run one element's code twice. */
+    if (!node_is_connected(lxb_dom_interface_node(el))) return;
+    html_script_prepare(ctx, el);
+}
+
+/* §4.12.1.1: "The script CHILDREN CHANGED STEPS given changedNode are: 1. If the script element is not
+   connected, then return. 2. Run the script HTML element post-connection steps, given changedNode."
+   The hook is handed the PARENT whose child list changed, which for this family IS changedNode — the script
+   element whose text was written. */
+static void script_children_changed(JSContext *ctx, lxb_dom_node_t *parent)
+{
+    if (!script_is(parent)) return;
+    script_post_connection(ctx, lxb_dom_interface_element(parent));
+}
+
 void html_script_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                               const char *val)
 {
     if (!script_is(lxb_dom_interface_node(el))) return;
-    if (ns != NULL || !local || strcmp(local, "async")) return;   /* the `async` CONTENT attribute, null namespace */
+    if (ns != NULL || !local) return;   /* "If namespace is not null, then return." */
+    /* §4.12.1.1's attribute change steps: "If localName is `src`, value is not null, and element is connected,
+       then run the script HTML element post-connection steps, given element." REMOVING `src` is not one of
+       them — the step asks for a non-null value — so a page that clears the attribute loads nothing, which is
+       what it does in a browser. */
+    if (!strcmp(local, "src")) {
+        if (val) script_post_connection(ctx, el);
+        return;
+    }
+    if (strcmp(local, "async")) return;   /* the `async` CONTENT attribute, null namespace */
     if (!val) return;   /* "when an async attribute is ADDED" — removing one does not set the flag back */
     script_set_force_async(ctx, lxb_dom_interface_node(el), false);
 }
