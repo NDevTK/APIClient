@@ -119,6 +119,15 @@ static JSContext           *g_ctx;
 static int                  g_begun;
 static int                  g_done;
 
+/* THE DOCUMENT THIS INSTANCE LAST ANSWERED WITH, HELD BECAUSE THE ANSWER IS A POINTER AND THE HOST CANNOT FREE
+ * ONE. `result_json` composes a FRESH malloc'd document per call and says so (solver/result.h: "caller frees"),
+ * and the trusted zone reads this ABI's string returns through a binding that copies the C string and drops the
+ * address it copied from — so that obligation is discharged HERE or by nobody, and it was nobody. Holding it is
+ * not a cache: it is what makes this entry answer the way every other `const char *` entry in this file already
+ * does, with a buffer the ANSWERING side owns and the host may read until it asks again, which is the only
+ * arrangement that survives a boundary no pointer comes back across. */
+static char                *g_result;
+
 /* THE DOCUMENTS THAT JOINED THIS AGENT AFTER IT WAS ROOTED — `qjs_join`'s realms and trees, held because THIS
  * host is what gives them back. It is not a registry and does not answer any question about the agent: the
  * world registry names documents, `navigable.c` owns the §7.4 child realms, and these two arrays exist for the
@@ -690,11 +699,23 @@ QJS_EXPORT int qjs_step(void)
     return r;
 }
 
-/* The ONE result document, serialized directly from the C findings — the host does one JSON.parse of it. */
+/* The ONE result document, serialized directly from the C findings — the host does one JSON.parse of it.
+   The composition is THIS ENTRY'S to own from the moment it exists: the previous answer is released before a
+   new one is asked for, and the last one goes at teardown with everything else this file allocated. */
 QJS_EXPORT const char *qjs_result(void)
 {
     DCHECK(g_begun, "qjs_result was asked of an engine that never ran");
-    return result_json(g_ctx);
+    free(g_result);   /* the previous answer — the host has either read it or not, and either way it asked again */
+    g_result = result_json(g_ctx);
+    /* AT THE ORIGIN, WHERE THE COMPOSITION FAILED. The bridge asserts on the far side that the document is a
+       non-empty string, which is one boundary too late and dev-only: a null crosses this ABI as the EMPTY
+       STRING (the binding converts the address it is given, and address zero converts to ""), so the failure
+       arrives there wearing the shape of an engine that ran and found nothing. result_json answers nothing only
+       when the composition could not be ALLOCATED, which is CLAUDE.md's always-fatal case exactly — this page's
+       whole finding set dropped at the one line that reports it. */
+    CHECK(g_result != NULL, "the result document could not be composed — every endpoint and every verified sink "
+                            "this page produced is discarded with it");
+    return g_result;
 }
 
 QJS_EXPORT void qjs_teardown(void)
@@ -849,6 +870,12 @@ QJS_EXPORT void qjs_teardown(void)
     g_joined_n = g_joined_cap = 0;
     dom_document_destroy(g_dom);
     g_dom = NULL;
+    /* THE LAST ANSWER, whose bytes are this file's and not the runtime's — freed here for the same reason the
+       joined arrays above are, and it belongs after them because it is the only allocation of this host that
+       outlives the context it was composed from. The host has already read it: qjs_result is asked BEFORE
+       teardown precisely because the document is built out of the realm this entry frees. */
+    free(g_result);
+    g_result = NULL;
     g_begun = 0;
     g_done = 0;
 }
@@ -1166,7 +1193,24 @@ QJS_EXPORT void qjs_request_park(void)
    step resumes is the one this was called on. */
 QJS_EXPORT void qjs_emit_partial(void)
 {
+    char *js;
     DCHECK(g_begun, "qjs_emit_partial was asked of an engine that never ran");
-    printf("@RESULT %s\n", result_json(g_ctx));
+    /* THE DOCUMENT IS THIS LINE'S TO FREE, AND DROPPING IT WAS A LEAK THE HOST READ BACK AS ITS OWN
+       MEASUREMENT. It is composed fresh per call, the host calls this on a fixed cadence for the whole of a
+       long analysis, and the document GROWS with the finding set — so what leaked was the running total of
+       every snapshot an engine had ever emitted, largest in the engine that had run longest and found most.
+       No leak report names it (these are malloc'd bytes, not runtime objects), and the host cannot see it as a
+       leak either: every ABI reply carries HEAPU8.length as `workingSetBytes`, the pool sums those into the
+       working-set floor it admits new engines and pages parked frontiers against, so the most productive
+       instance reported itself as the fattest and was paged out first — for memory holding nothing at all. */
+    js = result_json(g_ctx);
+    /* Same allocation failure, same always-fatal case as qjs_result's, and it is asserted here rather than
+       left to the printf: `%s` over a null pointer is undefined, and where it prints at all it prints a line
+       the host's JSON.parse rejects — the snapshot merge would discard the findings this call exists to
+       stream, at the moment the engine could still have reported them. */
+    CHECK(js != NULL, "a partial result document could not be composed — the findings this engine has "
+                      "accumulated so far are dropped, and the merge that would have surfaced them is skipped");
+    printf("@RESULT %s\n", js);
+    free(js);
     fflush(stdout);
 }
