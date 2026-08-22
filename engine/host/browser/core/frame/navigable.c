@@ -894,70 +894,114 @@ void navigable_evaluate_javascript_url(JSContext *ctx, const char *url)
  * with, which has no iframes, so there is nothing below it to walk — see window_proxy.h. */
 static JSValue g_group = JS_UNDEFINED;   /* the browsing context group's top-level traversables (baseline) */
 
-/* THE WALK IS ITERATIVE, over an explicit worklist, and that is the rule rather than a preference: a tree walk
+/* THE ONE WALK OVER THE NAVIGABLE TREE, in HTML §7.3.1.5 "Related navigable collections" order, as an Array of
+   WindowProxy (owned). Every navigable reachable from `root`, `root` first.
+   PRE-ORDER, and that is the spec's own construction rather than a choice: inclusive descendant navigables of a
+   Document is «that Document's node navigable» followed by its DESCENDANT navigables, and the descendants step
+   walks the navigable containers in shadow-including tree order EXTENDING with each one's content navigable's
+   active document's INCLUSIVE descendant navigables — one container's whole subtree before the next container,
+   which is depth-first pre-order. §7.3.1.5 states the contract it wants callers to read: "The return values of
+   these algorithms are ordered so that parents appears before their children. Callers rely on this ordering."
+   Children are pushed in REVERSE so they pop in tree order; a stack walked forwards reports a container's
+   frames back to front.
+   THE WALK IS ITERATIVE, over an explicit worklist, and that is the rule rather than a preference: a tree walk
    written as a self-call is C-to-C recursion whose depth is the PAGE's iframe nesting, which is the page's to
    choose — the same reason every call in this engine trampolines onto the heap. The worklist IS the stack, in a
    place a walk can be measured and, when this becomes a step machine, suspended.
-   BREADTH-FIRST, which is also the spec's answer rather than an accident of the loop: §7.1 wants the navigable
-   NEAREST the source, so a name on a child must win over the same name three frames down another branch. */
-static JSValue nav_find_in_tree(JSContext *ctx, JSValueConst root, const char *name)
-{
-    JSValue queue = JS_NewArray(ctx), hit = JS_UNDEFINED;
-    uint32_t head = 0, tail = 0;
-
-    CHECK(!JS_IsException(queue), "navigable: OOM walking the navigable tree");
-    JS_SetPropertyUint32(ctx, queue, tail++, JS_DupValue(ctx, root));
-    while (head < tail && JS_IsUndefined(hit)) {
-        JSValue proxy = JS_GetPropertyUint32(ctx, queue, head++);
-        const char *nm;
-
-        if (!window_proxy_is(proxy) || window_proxy_closed(ctx, proxy)) { JS_FreeValue(ctx, proxy); continue; }
-        /* §7.4 gave this navigable its name and §7.11 lets a document rename its own — one record, read here. */
-        nm = window_proxy_name(proxy);
-        if (nm && !strcmp(nm, name)) { hit = proxy; break; }
-        if (window_proxy_materialized(proxy)) {
-            JSContext *realm = window_proxy_realm(ctx, proxy);
-            int i, n = iframe_child_navigable_count(realm);
-            for (i = 0; i < n; i++)
-                JS_SetPropertyUint32(ctx, queue, tail++, iframe_child_navigable(realm, i));
-        }
-        JS_FreeValue(ctx, proxy);
-    }
-    JS_FreeValue(ctx, queue);
-    return hit;
-}
-
-/* See navigable.h. PRE-ORDER, so the children are pushed in REVERSE and pop in tree order — a stack walked
-   forwards would report a container's frames back to front. */
-JSValue navigable_tree_order(JSContext *ctx)
+   IT FILTERS ONLY WHAT IS NOT A NAVIGABLE TO VISIT AT ALL — something that is not a WindowProxy, and a closed
+   one, which §7.3.1.6 destroyed. Everything else is EMITTED and each caller applies its OWN filter; what they
+   share is the ORDER, which is the spec's and not theirs.
+   IT DOES NOT MATERIALIZE ANYTHING: an unmaterialized navigable still holds the initial about:blank Document
+   it was created with, which has no navigable containers, so "not materialized" and "no children" are one
+   answer (window_proxy.h). That test is also what keeps a PEER's navigable out of the descent — a proxy over a
+   document this agent does not hold carries no realm, so window_proxy_realm, which crashes for one, is never
+   reached with one. */
+static JSValue nav_preorder(JSContext *ctx, JSValueConst root)
 {
     JSValue out = JS_NewArray(ctx), stack = JS_NewArray(ctx);
     uint32_t nout = 0, ntop = 0;
 
     CHECK(!JS_IsException(out) && !JS_IsException(stack),
-          "navigable: OOM walking this agent's navigables");
-    JS_SetPropertyUint32(ctx, stack, ntop++,
-                         window_proxy_top_navigable(ctx, document_window_proxy(ctx)));
+          "navigable: OOM walking the navigable tree");
+    JS_SetPropertyUint32(ctx, stack, ntop++, JS_DupValue(ctx, root));
     while (ntop > 0) {
         JSValue proxy = JS_GetPropertyUint32(ctx, stack, --ntop);
-        JSContext *realm;
-        int i, n;
 
         JS_SetPropertyUint32(ctx, stack, ntop, JS_UNDEFINED);
-        if (!window_proxy_is(proxy) || window_proxy_closed(ctx, proxy) || window_proxy_is_remote(proxy) ||
-            !window_proxy_materialized(proxy)) {
-            JS_FreeValue(ctx, proxy);
-            continue;
+        if (!window_proxy_is(proxy) || window_proxy_closed(ctx, proxy)) { JS_FreeValue(ctx, proxy); continue; }
+        if (window_proxy_materialized(proxy)) {
+            JSContext *realm;
+            int i, n;
+
+            /* ASSERTED BEFORE THE REALM IS ASKED FOR, because window_proxy_realm CRASHES for a peer's and would
+               then report the descent as a missing capability rather than as this walk's broken assumption. */
+            DCHECK(!window_proxy_is_remote(proxy),
+                   "a navigable this agent does not hold answered as materialized — the walk would descend "
+                   "into a peer's document out of this heap");
+            realm = window_proxy_realm(ctx, proxy);
+            DCHECK(realm != NULL, "a materialized navigable answered with no realm — window_proxy_materialized "
+                                  "is what says one is there to answer with");
+            n = iframe_child_navigable_count(realm);
+            for (i = n - 1; i >= 0; i--)
+                JS_SetPropertyUint32(ctx, stack, ntop++, iframe_child_navigable(realm, i));
         }
-        realm = window_proxy_realm(ctx, proxy);
-        DCHECK(realm != NULL, "a materialized navigable answered with no realm — window_proxy_materialized "
-                              "is what says one is there to answer with");
-        n = iframe_child_navigable_count(realm);
-        for (i = n - 1; i >= 0; i--)
-            JS_SetPropertyUint32(ctx, stack, ntop++, iframe_child_navigable(realm, i));
         JS_SetPropertyUint32(ctx, out, nout++, proxy);   /* the list takes this reference */
     }
     JS_FreeValue(ctx, stack);
+    return out;
+}
+
+/* HTML §7.3.1.7 "Navigable target names", find a navigable by target name: "For each navigable of the inclusive
+   descendant navigables of documentToSearch … if navigable's target name is name, then return navigable." The
+   FIRST match in §7.3.1.5's order wins, and that order is pre-order — for a root with children A and B where A
+   has a child named `t` and B is itself named `t`, the answer is A's child. It was breadth-first here, which
+   answered B, justified by a claim that the spec wants the navigable NEAREST the source; §7.3.1.7 and §7.3.1.5
+   contain no such notion, so the comment that said so is gone with the loop it described.
+   IT FILTERS NOTHING nav_preorder emits. An UNMATERIALIZED navigable is a candidate — §7.3.1.7 reads a target
+   name off the navigable's active session history entry's document state, which the create stated, and no part
+   of that needs a realm. It is exactly the window `open(url, "t")` made that nothing has read through yet, so
+   skipping it would open a SECOND window under a name that is already taken. */
+static JSValue nav_find_in_tree(JSContext *ctx, JSValueConst root, const char *name)
+{
+    JSValue all = nav_preorder(ctx, root), hit = JS_UNDEFINED, len;
+    uint32_t i, n = 0;
+
+    len = JS_GetPropertyStr(ctx, all, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n && JS_IsUndefined(hit); i++) {
+        JSValue proxy = JS_GetPropertyUint32(ctx, all, i);
+        /* §7.4 gave this navigable its name and §7.11 lets a document rename its own — one record, read here. */
+        const char *nm = window_proxy_name(proxy);
+
+        if (nm && !strcmp(nm, name)) hit = proxy;
+        else JS_FreeValue(ctx, proxy);
+    }
+    JS_FreeValue(ctx, all);
+    return hit;
+}
+
+/* See navigable.h. The ORDER is nav_preorder's; what is this walk's own is the FILTER — a navigable this
+   instance has not materialized has no document to run a lifecycle for, and a peer's is not this agent's to
+   answer for at all. */
+JSValue navigable_tree_order(JSContext *ctx)
+{
+    JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
+    JSValue all = nav_preorder(ctx, top), out = JS_NewArray(ctx), len;
+    uint32_t i, n = 0, nout = 0;
+
+    JS_FreeValue(ctx, top);
+    CHECK(!JS_IsException(out), "navigable: OOM walking this agent's navigables");
+    len = JS_GetPropertyStr(ctx, all, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n; i++) {
+        JSValue proxy = JS_GetPropertyUint32(ctx, all, i);
+
+        if (window_proxy_is_remote(proxy) || !window_proxy_materialized(proxy)) JS_FreeValue(ctx, proxy);
+        else JS_SetPropertyUint32(ctx, out, nout++, proxy);   /* the list takes this reference */
+    }
+    JS_FreeValue(ctx, all);
     return out;
 }
 
@@ -969,7 +1013,8 @@ static JSValue navigable_choose_name(JSContext *ctx, const char *name)
     JSValue len;
 
     JS_FreeValue(ctx, top);
-    if (!JS_IsUndefined(hit)) return hit;   /* the source's own tree first — the nearest match is the spec's */
+    if (!JS_IsUndefined(hit)) return hit;   /* §7.3.1.7 searches subtreesToSearch before the group, and returns
+                                               the first match rather than the best — there is no ranking. */
     DCHECK(JS_IsArray(g_group), "the browsing context group's list was read before navigable_init built it");
     len = JS_GetPropertyStr(ctx, g_group, "length");
     JS_ToUint32(ctx, &n, len);
