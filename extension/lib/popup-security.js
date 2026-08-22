@@ -93,6 +93,67 @@ function _encodeSentence(item) {
        + "candidate needing those bytes arrives escaped";
 }
 
+// WHICH QUESTION A PARKED SEARCH IS STUCK ON, which is the whole content of the parked card and which one
+// number could never say. `solve.h` emits four fields for exactly this and the panel rendered none of them,
+// so two states needing OPPOSITE work printed byte-identically:
+//   * `turns:0` — the WFQ has never once given this search the thread. Nothing has RUN, so "N breakouts run"
+//     was itself false: `tried` is raised where a candidate is SEEDED (solve_seed_candidates), `turns` where
+//     one is switched in (solve_flow_begin). This is a scheduling question.
+//   * `turns:N, reached:0` — the candidates have held the thread and their bytes have not ARRIVED at the sink.
+//     A distance-through-the-document question, and the opposite action from the one above.
+//   * `reached:M, fires:0` — they arrived and none reached an EXECUTABLE position: the source's own transform
+//     defeated the breakout. A question about the BYTES.
+//   * `reached:M, fires:F>0` — a program EXISTS and has not been run yet. That belongs to the flow's sequence,
+//     and this card becomes a fired PoC when it runs.
+// `fires` ABSENT is the fifth statement, not a missing fourth: solve.c emits it only for a class whose
+// `queues_fire` is set, and the eval class evaluates its own argument (ECMAScript §19.2.1 eval ( source ), and
+// §20.2.1.1.1 CreateDynamicFunction ( ctor, newTarget, kind, paramArgs, bodyArg ) for the Function form), so
+// there is no queue to count. A `0` written there would read as "nothing executable" when it means "nothing to
+// queue" — which is why this reads the absence positively rather than defaulting it.
+function _parkedProgress(item) {
+  if (item.turns === 0)
+    return 'the scheduler has not yet given this search a turn — its ' + item.tried + ' candidate'
+         + (item.tried === 1 ? " is" : "s are") + ' seeded and queued and NOTHING has run yet, so this is a '
+         + 'scheduling state and not a search that failed';
+  if (item.reached === 0)
+    return 'its candidates have held the thread ' + item.turns + ' time' + (item.turns === 1 ? "" : "s")
+         + ' and none of their bytes has ARRIVED at the sink — the flows run and do not get this far through '
+         + 'the document';
+  if (item.fires === undefined)
+    return item.reached + ' breakout' + (item.reached === 1 ? " arrived" : "s arrived") + ' at the sink and '
+         + 'did not fire — this sink EVALUATES its own argument, so there is no queued program to count and '
+         + 'the escape did not survive into executable syntax';
+  if (item.fires === 0)
+    return item.reached + ' breakout' + (item.reached === 1 ? "" : "s") + ' arrived at the sink and NONE '
+         + 'reached an executable position — the source\'s own transform defeated the breakout, so the bytes '
+         + 'land as text the parse never runs. This is a question about the payload, not about the schedule';
+  return item.fires + ' executable program' + (item.fires === 1 ? "" : "s") + ' queued from ' + item.reached
+       + ' arrival' + (item.reached === 1 ? "" : "s") + ' and not yet run — the breakout EXISTS; this card '
+       + 'becomes a fired PoC when the flow that holds it is scheduled';
+}
+
+// WHAT THE SEARCH ACTUALLY RAN, which is the field of the four that is not a count — and the state a parked
+// search is most often in (arrived, did not fire) is a question about the BYTES that no quantity answers.
+// Returns HTML (it emits <code>), so callers place it WITHOUT esc().
+//
+// AN EMPTY LIST IS A POSITIVE STATEMENT AND NOT A HOLE. solve.c raises `tried` for a COLD-RESUMED candidate
+// (solve_resume_candidate) whose payload rides the resumed flow rather than this session's record, and its own
+// DCHECK permits `npl == 0 || tried > 0` for exactly that reason. So an empty list beside a non-zero `tried`
+// says the candidates came back from the cold tier, never that the search constructed nothing.
+//
+// WHICH ENTRY IS THE INERT CONTEXT PROBE IS NOT RE-DERIVED HERE. solve.h says the probe is told apart by
+// carrying no marker, and the marker vocabulary is the engine's; guessing it from the ORDER ("entry 0") would
+// be this view restating a producer fact it cannot check, which is the drift the whole card exists to end.
+function _payloadList(item) {
+  if (!item.payloads.length) return "";
+  var out = '<div class="card-poc"><span class="poc-lbl" title="the candidates this search has run, as the '
+          + 'search built them — never as the browser delivers them; the source\'s own transform is stated '
+          + 'separately, beside this">candidates run</span>';
+  for (var i = 0; i < item.payloads.length; i++)
+    out += ' <code class="poc-payload">' + esc(item.payloads[i]) + '</code>';
+  return out + '</div>';
+}
+
 // Stable key for a FIRED finding card within a tab. The engine emits one record per (sink, source); key by
 // that + the script the sink lives in.
 //
@@ -140,7 +201,14 @@ function renderSecurityPanel() {
          count, so the panel went on badging a policy-dead vector HIGH — the same visible consequence as the
          recorded `cspBlocked` defect, reached through the cache in front of the fix instead of through the
          read;
-       - `tried` rising is the parked card's whole content.
+       - `tried` alone is NOT the parked card's whole content, and while this key said it was, the four fields
+         that carry the card's actual verdict could each move on their own with the fingerprint unchanged:
+         `turns` rising from 0 is the moment "the WFQ has never scheduled this" becomes "it runs and does not
+         get there", `reached` rising is "arrived", `fires` rising is "an executable program now exists", and a
+         new entry in `payloads` is the one thing a reader can act on. A streamed partial that moves only those
+         — which is exactly what a search making progress without seeding a new candidate looks like — landed
+         on the early return below and never re-rendered. Same defect as the `cspBlocks` one above: the cache
+         in front of the fix.
      So the key is built from exactly the fields a card's claim is computed from. It is not a change detector
      over rendered HTML: each name here is one the card reads. */
   const fpParts = [];
@@ -156,9 +224,14 @@ function renderSecurityPanel() {
     for (let j = 0; j < sinks.length; j++) {
       const s = sinks[j];
       // JSON, not a delimiter-joined string: a `poc` is an attacker payload and may hold any byte this file
-      // would use as a separator, so a hand-rolled key is one the PAGE picks collisions in.
+      // would use as a separator, so a hand-rolled key is one the PAGE picks collisions in — and `payloads`
+      // goes in WHOLE for the same reason, since it is a list of attacker payloads and any join over it is
+      // that same collision one level down. `fires` is carried as itself, not as a boolean: absent (the eval
+      // class, which queues nothing) and 0 (arrived, nothing executable) are the two statements the parked
+      // card renders differently, and `!!s.fires` collapses them onto each other.
       fpParts.push([findings[i].sourceUrl, s.sink, s.source, s.search, s.tried, s.poc,
-                    !!s.cspBlocks, !!s.trustedTypes]);
+                    !!s.cspBlocks, !!s.trustedTypes,
+                    s.reached, s.turns, s.fires === undefined ? null : s.fires, s.payloads]);
     }
   }
   const fp = JSON.stringify(fpParts);
@@ -234,12 +307,20 @@ function renderSecurityPanel() {
 
     // THE CARD READS THE RECORD THE ENGINE ACTUALLY EMITS. `solve_json_array` (engine/host/solver/solve.c)
     // writes {sink, source, poc, firesOn, cspBlocks?, trustedTypes?, sourceEncodes?, delivery?,
-    // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, sourceEncodes?, delivery?,
-    // deliveryPrefix?} for a parked one — and nothing else. This card used to read `shape`, `evidence`,
-    // `cspBlocked`, `cspReason` and `csp`: five names from a contract that no longer exists, so every card
-    // silently dropped its source line AND its CSP verdict, and the live-verify button (gated on `shape`)
-    // could not appear for any finding the engine has ever emitted. A bridge edge asserts its contract, per
-    // CLAUDE.md §Architecture, so drift like that crashes where it is born instead of quietly rendering less.
+    // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, reached, turns, fires?,
+    // payloads, sourceEncodes?, delivery?, deliveryPrefix?} for a parked one. This card used to read `shape`,
+    // `evidence`, `cspBlocked`, `cspReason` and `csp`: five names from a contract that no longer exists, so
+    // every card silently dropped its source line AND its CSP verdict, and the live-verify button (gated on
+    // `shape`) could not appear for any finding the engine has ever emitted. A bridge edge asserts its
+    // contract, per CLAUDE.md §Architecture, so drift like that crashes where it is born instead of quietly
+    // rendering less.
+    //
+    // THIS ENUMERATION USED TO END "— and nothing else", AND THAT WAS FALSE OF THE PARKED SHAPE FOR AS LONG AS
+    // IT STOOD: `reached`, `turns`, `fires` and `payloads` crossed the whole relay verbatim and were read by
+    // nothing in the tree, and this sentence is why nobody looked — it reads as authoritative and is checkable
+    // by one grep, which is the stale-DFAIL failure mode sitting in the popup. A prose statement of a
+    // producer's contract is a claim about ANOTHER file, so it is re-derived from that file when it is
+    // touched, never repeated from memory.
     DCHECK(item.sink && item.source && item.poc,
       "an @S record reached the popup without sink/source/poc — solve_json_array emits all three for a fired "
       + "sink, so a card is about to claim a working PoC it cannot show (sink=" + item.sink + " source="
@@ -342,10 +423,28 @@ function renderSecurityPanel() {
     html += '<div class="section-header">Reached, search parked <span class="badge badge-status">' + parked.length + '</span></div>';
     for (var pi = 0; pi < parked.length; pi++) {
       var pe = parked[pi], pit = pe.item;
+      // THE FOUR PROGRESS FIELDS ARE ASSERTED BESIDE `tried`, BECAUSE THE CARD'S SENTENCE IS COMPUTED FROM ALL
+      // FIVE. solve_json_array writes `reached`, `turns` and `payloads` UNCONDITIONALLY on the parked shape, so
+      // an absent one is that serializer or the relay broken — and a default there would print a confident
+      // "the scheduler has never given this search a turn" about a search that has run 900 of them, which is
+      // the opposite instruction to the reader. `fires` is the one that is legitimately absent and is read as
+      // the positive statement it is (see _parkedProgress); asserted only for its TYPE, so a name that arrives
+      // as something other than a count still crashes here rather than rendering as one.
       DCHECK(pit.sink && pit.source && typeof pit.tried === "number",
         "a parked @S record reached the popup without sink/source/tried — solve_json_array emits all three, "
         + "and without `tried` the card would say '0 breakouts run' about a search that has run (sink="
         + pit.sink + " source=" + pit.source + ")");
+      DCHECK(typeof pit.reached === "number" && typeof pit.turns === "number" && Array.isArray(pit.payloads),
+        "a parked @S record reached the popup without reached/turns/payloads — solve_json_array emits all "
+        + "three on every parked entry, so absence is that serializer or the relay to this panel broken, and "
+        + "the card is about to state WHICH question this search is stuck on out of numbers it does not have "
+        + "(sink=" + pit.sink + " source=" + pit.source + " reached=" + JSON.stringify(pit.reached)
+        + " turns=" + JSON.stringify(pit.turns) + ")");
+      DCHECK(pit.fires === undefined || typeof pit.fires === "number",
+        "a parked @S record carries a `fires` that is not a count — the field is emitted only for a sink class "
+        + "whose breakout becomes a QUEUED program, and its absence is the statement that this class evaluates "
+        + "its own argument; anything else is a third meaning this card has no sentence for (sink=" + pit.sink
+        + " fires=" + JSON.stringify(pit.fires) + ")");
       var pEnc = _encodeSentence(pit);   // already HTML — see _encodeSentence
       var pSrc = pe.sourceUrl && /^https?:\/\//i.test(pe.sourceUrl)
         ? '<a href="' + esc(pe.sourceUrl) + '" target="_blank" title="' + esc(pe.sourceUrl) + '">' + esc(pe.srcLabel) + '</a>'
@@ -355,10 +454,20 @@ function renderSecurityPanel() {
         + esc(pit.sink) + ' &larr; <code>' + esc(pit.source) + '</code></div>'
         // No `|| 0` beside `tried`: the DCHECK above states it is a number, and 0 is a real value this card
         // must be able to say (a sink reached but not yet searched) rather than one a default manufactures.
-        + '<div class="card-dims">' + esc(String(pit.tried)) + ' breakout' + (pit.tried === 1 ? "" : "s")
-        + ' run, none fired'
+        //
+        // "N breakouts run, none fired" STOOD HERE AND WAS TWO WRONG CLAIMS IN ONE LINE. `tried` is raised at
+        // SEED time, so "run" was false of every search the WFQ had not yet scheduled; and "none fired" is the
+        // only thing every parked entry has in common, so the sentence said nothing that the PARKED badge one
+        // line above had not already said. What the reader needs is WHICH of the four states this is, because
+        // they take opposite work — that is _parkedProgress, computed from the fields the engine has been
+        // emitting all along.
+        + '<div class="card-dims">' + esc(String(pit.tried)) + ' candidate' + (pit.tried === 1 ? "" : "s")
+        + ' seeded &middot; ' + esc(_parkedProgress(pit))
         + (pEnc ? ' — ' + pEnc : "")
         + '</div>'
+        // THE BYTES, because the state this search is most often in is a question about them — see
+        // _payloadList for why an empty list is a statement rather than a gap.
+        + _payloadList(pit)
         // The parked entry carries the SOURCE DECLARATION, not an envelope: there is no PoC yet, so there is
         // no firing vector or policy verdict to state about one. What it can say is how the attacker would
         // have to reach the victim if a candidate ever fires — which is the same declared fact the fired card
