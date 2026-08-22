@@ -59,6 +59,7 @@ static JSValue   g_registry = JS_UNDEFINED;   /* the open channels, in creation 
 static JSValue   g_deliver_fn = JS_UNDEFINED;
 static JSRuntime *g_bc_rt;
 static int       g_ctor_stepid = -1;
+static int       g_deliver_stepid = -1;   /* §9.5's delivery task, as a machine */
 static int       g_id_post = -1, g_id_close = -1;   /* the agent's pool entries; the objects are each realm's */
 
 /* NO OWNED JSValues: the name is an atom, which is not a GC object, and it is written once at construction and
@@ -94,48 +95,114 @@ static int registry_len(JSContext *ctx, uint32_t *pn)
 
 /* ---- delivery ----------------------------------------------------------------------------------------------
  *
- * §9.5 step 6: one TASK per destination, on the DOM manipulation task source. The closed check happens IN the
- * task, not when the list is built — a channel closed between the post and its delivery receives nothing, and
- * the corpus asserts exactly that. */
-static JSValue js_chan_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    JSValueConst dest = argc > 0 ? argv[0] : JS_UNDEFINED;
-    JSValueConst buf  = argc > 1 ? argv[1] : JS_UNDEFINED;
-    ChanData *c = chan_of(dest);
-    StructuredData sd;
-    JSValue data, ev;
-    JSContext *rctx;
-    size_t blen = 0;
+ * §9.5's postMessage step 9: one TASK per destination, on the DOM manipulation task source. The closed check
+ * happens IN the task, not when the list is built — a channel closed between the post and its delivery
+ * receives nothing, and the corpus asserts exactly that.
+ *
+ * THE FIRE IS INSIDE THAT TASK, WHICH IS WHY THE CALLEE IS A STEP MACHINE. §9.5's queued steps END in "fire an
+ * event named message at destination, using MessageEvent" — synchronous, in the task the deserialize happened
+ * in — so the dispatch is event_target_fire_run, the request reach into §2.9, and not a second enqueue. A
+ * plain C callee had no other option, because a fire it cannot park on is a fire it must queue, and queuing it
+ * put every `message` listener behind whatever tasks were already standing. */
 
-    (void)this_val;
-    if (!c || c->closed)
-        return JS_UNDEFINED;
-    sd.buf = JS_GetArrayBuffer(ctx, &blen, buf);
-    sd.len = blen;
-    DCHECK(sd.buf != NULL, "a broadcast task held something that is not the bytes it stored");
-    /* §9.5: THE DESERIALIZE AND THE EVENT BELONG TO THE DESTINATION CHANNEL'S REALM — each destination gets
-       its own copy of the message in its own realm, which is what makes a broadcast to two documents two
-       independent deliveries rather than one shared object graph. */
-    rctx = c->realm;
-    DCHECK(rctx != NULL, "a broadcast reached a channel without the realm it was constructed in");
-    data = structured_deserialize(rctx, &sd);
-    if (JS_IsException(data)) {
-        JS_FreeValue(rctx, JS_GetException(rctx));
-        ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, origin_serialized(origin_agent()),
-                               JS_UNDEFINED, JS_UNDEFINED);
-    } else {
-        /* §9.5: the origin is the SENDER'S, and a broadcast has no source and no ports — the bus is named, not
-           addressed, so there is nothing to reply to. */
-        /* §9.4.4's `origin` is a STRING by IDL — the serialization of the SENDER's origin, which within one
-           origin-keyed agent is this agent's. One record, in core/url/origin.c, rather than a copy here. */
-        ev = message_event_new(rctx, "message", data, origin_serialized(origin_agent()), JS_UNDEFINED,
-                               JS_UNDEFINED);
-        JS_FreeValue(rctx, data);
+#define CHAN_DELIVER_STAGES(X) \
+    X(BD_DESERIALIZE, "HTML §9.5 postMessage step 9.1-9.3 (the destination's closed flag, and " \
+                      "StructuredDeserialize into the destination's relevant realm)") \
+    X(BD_FIRE,        "HTML §9.5 postMessage step 9.4 (fire an event named message at destination, using " \
+                      "MessageEvent, with its origin initialized to the sender's)")
+enum { CHAN_DELIVER_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const CHAN_DELIVER_STEPS[] = { CHAN_DELIVER_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr   hdr;
+    uint8_t     fphase;   /* the fire request's own phase */
+    JSValue     ev;       /* the MessageEvent, minted at BD_DESERIALIZE and held across the suspension (owned) */
+    EventFireCb cb;       /* the fire request's buffer — the type carries §2.9's argument count */
+} ChanDeliverTask;
+
+static int js_chan_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    ChanDeliverTask *s = st;
+    JSValueConst dest = step_arg(&s->hdr, 0);
+    ChanData *c = chan_of(dest);
+    JSContext *rctx;
+    int r;
+
+    STEP_DISPATCH(CHAN_DELIVER_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(BD_DESERIALIZE);
+    {
+        JSValueConst buf = step_arg(&s->hdr, 1);
+        StructuredData sd;
+        JSValue data;
+        size_t blen = 0;
+        int k;
+
+        JS_FreeValue(ctx, cb_result);
+        /* EVERY OWNED FIELD BEFORE THE FIRST THING THAT CAN FAIL — the failure path tears this machine down
+           through js_chan_deliver_visit, which frees exactly what the state holds. */
+        s->ev = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+        s->fphase = 0;
+        if (!c || c->closed)
+            return JS_STEP_DONE;
+        sd.buf = JS_GetArrayBuffer(ctx, &blen, buf);
+        sd.len = blen;
+        DCHECK(sd.buf != NULL, "a broadcast task held something that is not the bytes it stored");
+        /* §9.5: THE DESERIALIZE AND THE EVENT BELONG TO THE DESTINATION CHANNEL'S REALM — each destination
+           gets its own copy of the message in its own realm, which is what makes a broadcast to two documents
+           two independent deliveries rather than one shared object graph. */
+        rctx = c->realm;
+        DCHECK(rctx != NULL, "a broadcast reached a channel without the realm it was constructed in");
+        data = structured_deserialize(rctx, &sd);
+        if (JS_IsException(data)) {
+            JS_FreeValue(rctx, JS_GetException(rctx));
+            s->ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, origin_serialized(origin_agent()),
+                                      JS_UNDEFINED, JS_UNDEFINED);
+        } else {
+            /* §9.5: the origin is the SENDER'S, and a broadcast has no source and no ports — the bus is
+               named, not addressed, so there is nothing to reply to. */
+            /* §9.1 "The MessageEvent interface" declares `origin` a USVString — the serialization of the
+               SENDER's origin, which within one origin-keyed agent is this agent's. One record, in
+               core/url/origin.c, not a copy here. */
+            s->ev = message_event_new(rctx, "message", data, origin_serialized(origin_agent()), JS_UNDEFINED,
+                                      JS_UNDEFINED);
+            JS_FreeValue(rctx, data);
+        }
+        if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        STEP_GOTO(s->hdr.stage, BD_FIRE, &s->fphase, NULL);
+        return JS_STEP_YIELD;
     }
-    if (JS_IsException(ev)) return JS_EXCEPTION;
-    event_target_fire(rctx, dest, ev, JS_UNDEFINED);
-    return JS_UNDEFINED;
+
+    STEP_ARM(BD_FIRE);
+    DCHECK(c != NULL, "§9.5's delivery resumed at its fire with no channel record — the deserialize stage is "
+                      "the only way to this stage and it answers DONE for a destination that has none");
+    rctx = c->realm;
+    DCHECK(JS_IsObject(s->ev), "§9.5's delivery resumed at its fire with no MessageEvent to dispatch");
+    r = event_target_fire_run(rctx, &s->fphase, STEP_CB(s->cb), dest, s->ev, JS_UNDEFINED, cb_result,
+                              NULL, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    JS_FreeValue(rctx, s->ev);
+    s->ev = JS_UNDEFINED;
+    return JS_STEP_DONE;
 }
+
+static void js_chan_deliver_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    ChanDeliverTask *s = st;
+    int k;
+
+    v->val(ctx, &s->ev);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
+}
+
+static const JSTrampStepDef js_chan_deliver_def = {
+    sizeof(ChanDeliverTask), js_chan_deliver_step, NULL, 0,
+    .visit = js_chan_deliver_visit,
+    .algorithm = "HTML §9.5 the broadcast delivery task",
+    .steps = CHAN_DELIVER_STEPS
+};
 
 /* ---- the members -------------------------------------------------------------------------------------------- */
 
@@ -156,8 +223,8 @@ static JSValue js_chan_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
 
     (void)magic;
     if (!c) return JS_ThrowTypeError(ctx, "not a BroadcastChannel");
-    /* §9.5 step 1: posting on a closed channel is an InvalidStateError — not a silent no-op, because a page
-       that closed and kept posting has a bug it should be told about. */
+    /* §9.5's postMessage step 2: posting on a closed channel is an InvalidStateError — not a silent no-op,
+       because a page that closed and kept posting has a bug it should be told about. */
     if (c->closed)
         return JS_ThrowDOMException(ctx, "InvalidStateError", "the channel is closed");
     if (structured_serialize(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &sd) < 0)
@@ -172,8 +239,9 @@ static JSValue js_chan_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
         ChanData *dc;
         if (JS_IsException(d)) { JS_FreeValue(ctx, buf); return JS_EXCEPTION; }
         dc = JS_GetOpaque(d, g_chan_class);
-        /* §9.5 step 4: same name, still open, and NOT the sender. The identity test is what makes a page that
-           posts on its own channel not hear itself, which is the first thing every user of this relies on. */
+        /* §9.5's postMessage steps 6 and 7: same name, still open, and NOT the sender. The identity test is
+           what makes a page that posts on its own channel not hear itself, which is the first thing every
+           user of this relies on. */
         if (dc && !dc->closed && JS_VALUE_GET_PTR(d) != JS_VALUE_GET_PTR(this_val) &&
             dc->name == c->name) {
             JSValueConst args[2];
@@ -284,7 +352,9 @@ void broadcast_channel_init(JSContext *ctx)
 
     g_registry = JS_NewArray(ctx);
     CHECK(!JS_IsException(g_registry), "the BroadcastChannel registry could not be allocated");
-    g_deliver_fn = JS_NewCFunction(ctx, js_chan_deliver, "", 2);
+    g_deliver_stepid = JS_RegisterStepDef(rt, &js_chan_deliver_def);
+    DCHECK(g_deliver_stepid >= 0, "§9.5's delivery machine could not be declared against this runtime");
+    g_deliver_fn = JS_NewCFunction2(ctx, NULL, "", 2, JS_CFUNC_step, g_deliver_stepid);
     CHECK(JS_IsFunction(ctx, g_deliver_fn), "the broadcast delivery task's callee could not be allocated");
 
     {
@@ -297,6 +367,7 @@ void broadcast_channel_init(JSContext *ctx)
     agent_state_value("broadcast_channel", &g_registry, "§9.5's registry of open channels");
     agent_state_value("broadcast_channel", &g_deliver_fn, "§9.5's delivery-task callee, one per agent");
     agent_state_id("broadcast_channel", &g_ctor_stepid, "§9.5's constructor machine");
+    agent_state_id("broadcast_channel", &g_deliver_stepid, "§9.5's delivery task machine");
     realm_declare_intrinsic(broadcast_channel_install_proto);
 }
 
@@ -349,5 +420,5 @@ void broadcast_channel_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_deliver_fn);
     g_registry = g_deliver_fn = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
     g_bc_rt = NULL;
-    g_ctor_stepid = -1;
+    g_ctor_stepid = g_deliver_stepid = -1;
 }

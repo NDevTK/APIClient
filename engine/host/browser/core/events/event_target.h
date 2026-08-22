@@ -212,8 +212,15 @@ bool event_target_has_any_listener(JSContext *ctx, JSValueConst target);
 void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
                                  int (*run)(JSContext *ctx, JSValueConst el, JSValueConst ev,
                                             uint8_t *phase, uint32_t *req));
-/* The ENGINE firing its own event at `target`. One §2.9 dispatch, reached as a queued task because the callers
-   are plain C the scheduler drives. The propagation path is derived from the target's ancestors — there is no
+/* The ENGINE firing its own event at `target`, ON A TASK SOURCE. One §2.9 dispatch, and the caller's standard
+   is what selects this reach rather than the request one below: it is for a caller whose spec says "QUEUE a
+   task … to fire an event named X" and for no other. A fire the standard states as a bare synchronous step —
+   HTML §3.1.5 "Reporting document loading status"' `readystatechange`, §6.2 "Page visibility"'s
+   `visibilitychange`, the fires INSIDE the queued task of §9.3.3 "Posting messages", §9.4.4 "Message ports"
+   and §9.5 "Broadcasting to other browsing contexts" — belongs to event_target_fire_run, whose caller is
+   already a step machine. Queuing one of those here does not make it "asynchronous rather than synchronous",
+   it puts the page's listener AFTER work the standard puts it before.
+   The propagation path is derived from the target's ancestors — there is no
    `bubble_to` to pass, because the window is the document's parent and the spec already says so.
    It takes the EVENT, not a type and two flags: §2.9 dispatches an event, and a caller with a DERIVED one
    (PromiseRejectionEvent) has no way to hand it over if this mints its own. `ev` is CONSUMED. */

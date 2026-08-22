@@ -1397,7 +1397,13 @@ static int document_readiness(JSContext *ctx);
    the corpus registers it, so a page waiting for "interactive" through the event rather than through the
    property waited for ever. Step 3's load timing info is HONESTLY ABSENT — its two fields belong to
    §Navigation-Timing's `PerformanceNavigationTiming`, which this build does not have, so there is nothing here
-   to write them onto and no member that could read them back. */
+   to write them onto and no member that could read them back.
+   STEP 4 IS A BARE FIRE — "fire an event named readystatechange at document", with no queue around it — and
+   the queue is at the CALLER: §13.2.7 "The end" step 7 runs "update the current document readiness to
+   'complete'" and the `load` fire inside ONE queued global task. That fire is event_target_fire_run's shape
+   and not this one, and it stays this one only because document_done_stage below is a plain C body the
+   scheduler drives rather than a step machine — which is the same statement as "the readiness transition
+   cannot suspend on a `readystatechange` listener", and it is what has to change. */
 static void document_set_ready(JSContext *ctx, int stage)
 {
     Document *d = doc_here(ctx);

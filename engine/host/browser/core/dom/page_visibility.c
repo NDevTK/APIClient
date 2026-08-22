@@ -74,9 +74,15 @@ void page_visibility_update(JSContext *ctx, bool hidden)
     DCHECK(JS_IsObject(rec), "a realm was asked to update a visibility state it has no record for");
     JS_SetPropertyStr(ctx, rec, "hidden", JS_NewInt32(ctx, hidden ? 1 : 0));   /* step 2 */
     JS_FreeValue(ctx, rec);
-    /* THE PAGE VISIBILITY CHANGE STEPS: `visibilitychange` at the DOCUMENT, bubbling. Queued rather than
-       dispatched inline, because §6.2's caller is an algorithm step and the listeners are the page's code —
-       event_target_fire is the queued reach, which is a first-class flow like every other job. */
+    /* §6.2's LAST STEP: `visibilitychange` at the DOCUMENT, bubbling. IT IS A BARE FIRE — "fire an event named
+       visibilitychange at document, with its bubbles attribute initialized to true" — and the QUEUE is at
+       §6.2's other caller, the system visibility state change, which "queues a global task on the user
+       interaction task source … to update the visibility state". This engine's one caller is §7.5.9 step 9.3,
+       inside the unload task, so the task is already standing and the fire is the synchronous one.
+       IT IS STILL THE QUEUED REACH, and that is a real ordering defect rather than a stylistic one: §7.5.9
+       fires `unload` after step 9.3, so a queued `visibilitychange` arrives AFTER the `unload` listener the
+       spec puts it before. The fix is event_target_fire_run and this function becoming a REQUEST — its one
+       caller (core/frame/document_lifecycle.c's js_unload_step) is already a step machine that can park. */
     event_target_fire(ctx, document_object(ctx), event_new(ctx, "visibilitychange", true, false), JS_UNDEFINED);
 }
 

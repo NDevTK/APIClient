@@ -2025,20 +2025,38 @@ static JSValue dispatch_fn_new(JSContext *ctx)
     return fn;
 }
 
-/* THE ENGINE FIRING ITS OWN EVENT — `load`, `DOMContentLoaded`, `abort`. It builds the event and hands it to
-   the SAME §2.9 machine, reached as a queued task because its callers are plain C the scheduler drives and
-   cannot park. That is the whole fix: this used to walk the listener list ITSELF and enqueue each listener as
+/* THE ENGINE FIRING ITS OWN EVENT ON A TASK SOURCE — the reach for a caller whose standard says "QUEUE a task
+   … to fire an event named X": HTML §13.2.7 "The end" for `DOMContentLoaded` and `load`, §4.11.4 "The dialog
+   element" for `close`, §4.10.5.4 "Common input element APIs" for `cancel`, §7.4.6.2 "Updating the document"
+   for `hashchange`, Permissions §6.3.4 "onchange attribute" for `change`. It builds the event and hands it to
+   the SAME §2.9 machine event_target_fire_run reaches; what differs between the two is WHICH of HTML §8.1.7
+   "Event loops" queues the dispatch lands on, and that is the standard's choice at the call site rather than
+   this component's.
+   IT WAS A MICROTASK, AND HTML §8.1.7.3 "Processing model" IS WHY THAT IS NOT A SMALLER VERSION OF THE SAME
+   THING: the microtask checkpoint drains BEFORE the next task begins, so every fire queued here — the whole
+   document lifecycle among them — ran AHEAD of every task already standing: an expired `setTimeout(f,0)`, a
+   delivered `postMessage`, a queued navigation. quickjs.h's own contract states the rule ("choosing the wrong
+   one is not a performance detail: it reorders what the page observes") and this file chose the wrong one for
+   every engine-initiated dispatch there is.
+   THERE IS NO THIRD REACH, and that is what stops the choice being made again: no standard queues a MICROTASK
+   to fire an event, so a caller is either one HTML queues a task for (this) or one whose fire is a bare
+   synchronous step of an algorithm already running (event_target_fire_run, below). A caller that cannot park
+   and whose fire is synchronous is not a third case — it is a caller that is not yet a step machine.
+   That is the whole fix: this used to walk the listener list ITSELF and enqueue each listener as
    its own job, which was a second implementation of §2.9 beside the machine — one that could not see
    stopImmediatePropagation (each listener was a separate job with no walk between them), could not bubble
    properly (the caller passed the window in by hand as `bubble_to`), and could not answer whether anything
-   cancelled. There is one dispatch now; what differs between the two reach-paths is only whether the caller
-   can park, which is a property of the CALLER and not of the algorithm.
+   cancelled. There is one dispatch now.
    The event stays TRUSTED, which is what distinguishes one the engine fired from one the page dispatched. */
 void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueConst target_override)
 {
     JSValueConst argv[3];
     JSValue fn;
 
+    /* §2.9 dispatches AT an event target, and a queued fire is the one reach whose caller has already returned
+       by the time the dispatch runs — so a target that is not an object arrives at the machine with nothing
+       left to name the caller that supplied it. Asked here, at the enqueue, which is that caller's own line. */
+    DCHECK(JS_IsObject(target), "an engine fire was queued at something that is not an event target");
     if (JS_IsException(ev)) { JS_FreeValue(ctx, ev); return; }
     argv[0] = target;
     argv[1] = ev;
@@ -2053,9 +2071,11 @@ void event_target_fire(JSContext *ctx, JSValueConst target, JSValue ev, JSValueC
        only fires HTML gives it to — would have reported the Window where the spec says the Document. */
     argv[2] = target_override;
     fn = dispatch_fn_new(ctx);
-    /* A JOB, so the dispatch runs as a call-root flow: preemptible, forkable and parkable like any other
-       program, which is what every listener body needs and what a C activation cannot host. */
-    JS_EnqueueCallJob(ctx, fn, 3, argv);
+    /* A TASK, on HTML §8.1.7.2 "Queuing tasks"' half of the event loop — the queue the callers' standards name.
+       It is still a call-root flow, so it is preemptible, forkable and parkable like any other program, which
+       is what every listener body needs and what a C activation cannot host; the queue decides only WHEN the
+       event loop begins it relative to the microtasks and tasks already outstanding. */
+    JS_EnqueueCallTask(ctx, fn, 3, argv);
     JS_FreeValue(ctx, fn);
     JS_FreeValue(ctx, ev);
 }

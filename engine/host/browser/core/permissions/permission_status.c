@@ -293,7 +293,10 @@ static int psc_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
     JS_SetPropertyStr(ctx, slots, PS_GENERATION, JS_NewInt32(ctx, gen + 1));
     JS_FreeValue(ctx, slots);
     /* STEP 4: "queue a task on the permissions task source to fire an event named change at status" —
-       event_target_fire is that queued §2.9 dispatch, run as a job so every listener body is a flow. */
+       event_target_fire is that queued §2.9 dispatch, and it is on HTML §8.1.7.2 "Queuing tasks"' task half
+       of the event loop, which is the half §6.3.4 names. It ran as a MICROTASK, which put this `change` ahead
+       of every task already standing — a permission a page revoked while a timer was pending was observed in
+       the wrong order relative to that timer. */
     event_target_fire(ctx, status, event_new(ctx, "change", false, false), JS_UNDEFINED);
     /* AND ASK AGAIN. A permission the user changed once is a permission the user may change again, and the
        next generation is its own predicate — see the chain's comment above. */

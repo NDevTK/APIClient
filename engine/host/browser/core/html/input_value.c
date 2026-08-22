@@ -54,6 +54,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/css/css_color.h"
 #include "core/dom/attr_list.h"
 #include "core/dom/node.h"
@@ -729,32 +730,130 @@ void input_files_clear(JSContext *ctx, JSValueConst wrap)
  *         initialized to true.
  *      3. Fire an event named change at the input element, with the bubbles attribute initialized to true."
  *
- * The two fires are ELEMENT TASKS, which in this engine is what event_target_fire enqueues: each dispatch is a
- * first-class flow the one scheduler drives, so a listener's body — loop, await, generator — suspends and
- * resumes like any other program instead of running inside a C activation that cannot park. */
+ * THERE IS ONE TASK AND ITS THREE STEPS ARE INSIDE IT, which is why this is a machine and not three calls. The
+ * store, the `input` fire and the `change` fire are ONE turn of the event loop: nothing the page queued behind
+ * this may run between them, and `input` is the very last thing to run before `change`. Written as a store plus
+ * two queued fires — which is what this was — they were three separate items, and anything already standing on
+ * the queue ran in the gaps. The two fires are therefore event_target_fire_run, the synchronous request reach
+ * into §2.9, and the machine is what makes that possible: a listener's body suspends and resumes like any other
+ * program, and this task suspends with it. */
+
+#define INPUT_FILES_STAGES(X) \
+    X(IFU_SELECT, "HTML §4.10.5.1.17 update the file selection step 1 (update element's selected files so " \
+                  "that it represents the user's selection)") \
+    X(IFU_INPUT,  "HTML §4.10.5.1.17 update the file selection step 2 (fire an event named input at the " \
+                  "input element, with bubbles and composed initialized to true)") \
+    X(IFU_CHANGE, "HTML §4.10.5.1.17 update the file selection step 3 (fire an event named change at the " \
+                  "input element, with bubbles initialized to true)")
+enum { INPUT_FILES_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const INPUT_FILES_STEPS[] = { INPUT_FILES_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr   hdr;
+    uint8_t     fphase;   /* the fire request's own phase — one at a time, reset between the two */
+    JSValue     ev;       /* the event of the stage in flight, held across the suspension (owned) */
+    EventFireCb cb;       /* the fire request's buffer — the type carries §2.9's argument count */
+} InputFilesTask;
+
+static int g_files_task_stepid = -1;
+
+static int js_input_files_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    InputFilesTask *s = st;
+    JSValueConst wrap = step_arg(&s->hdr, 0);
+    int r;
+
+    STEP_DISPATCH(INPUT_FILES_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(IFU_SELECT);
+    {
+        lxb_dom_element_t *el = iv_file_control(wrap);
+        JSValue tv;
+        int k;
+
+        JS_FreeValue(ctx, cb_result);
+        /* EVERY OWNED FIELD BEFORE THE FIRST THING THAT CAN FAIL — the failure path tears this machine down
+           through js_input_files_visit, which frees exactly what the state holds. */
+        s->ev = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+        s->fphase = 0;
+        DCHECK(el != NULL, "§4.10.5.1.17's queued element task ran on a control that is not in the File Upload "
+                           "state — the element is this task's own argument, taken where the task was queued");
+        iv_files_store(ctx, el, step_arg(&s->hdr, 1));   /* step 1 */
+        /* Step 2's event. `composed` is not one of event_new's arguments because most engine fires do not set
+           it; the derived form takes it, and Event.prototype is the interface §4.10.5.1.17 names ("fire an
+           event named input" with no interface given is a plain Event). */
+        tv = JS_NewString(ctx, "input");
+        CHECK(!JS_IsException(tv), "input: the `input` event type could not be allocated");
+        s->ev = event_new_derived(ctx, event_proto(ctx), tv, /*bubbles*/ true, /*cancelable*/ false,
+                                  /*composed*/ true, /*trusted*/ true);
+        JS_FreeValue(ctx, tv);
+        if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        STEP_GOTO(s->hdr.stage, IFU_INPUT, &s->fphase, NULL);
+        return JS_STEP_YIELD;
+    }
+
+    STEP_ARM(IFU_INPUT);
+    DCHECK(JS_IsObject(s->ev), "§4.10.5.1.17's task resumed at its `input` fire with no event to dispatch");
+    r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), wrap, s->ev, JS_UNDEFINED, cb_result,
+                              NULL, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    JS_FreeValue(ctx, s->ev);
+    /* Step 3's event. `change` does not compose — it stops at the shadow boundary, which is what the standard
+       says by initialising only `bubbles`. */
+    s->ev = event_new(ctx, "change", /*bubbles*/ true, /*cancelable*/ false);
+    if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+    s->fphase = 0;   /* the request is spent; the next stage's fire asks with its own cursor at rest */
+    STEP_GOTO(s->hdr.stage, IFU_CHANGE, &s->fphase, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(IFU_CHANGE);
+    DCHECK(JS_IsObject(s->ev), "§4.10.5.1.17's task resumed at its `change` fire with no event to dispatch");
+    r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), wrap, s->ev, JS_UNDEFINED, cb_result,
+                              NULL, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    JS_FreeValue(ctx, s->ev);
+    s->ev = JS_UNDEFINED;
+    return JS_STEP_DONE;
+}
+
+static void js_input_files_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    InputFilesTask *s = st;
+    int k;
+
+    v->val(ctx, &s->ev);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
+}
+
+static const JSTrampStepDef js_input_files_def = {
+    sizeof(InputFilesTask), js_input_files_step, NULL, 0,
+    .visit = js_input_files_visit,
+    .algorithm = "HTML §4.10.5.1.17 update the file selection",
+    .steps = INPUT_FILES_STEPS
+};
+
 void input_files_update(JSContext *ctx, JSValueConst wrap, JSValueConst files)
 {
-    lxb_dom_element_t *el = iv_file_control(wrap);
-    JSValue tv;
+    JSValueConst argv[2];
+    JSValue fn;
 
     DCHECK(file_list_is(ctx, files),
            "§4.10.5.1.17's update the file selection was given something that is not a FileList — the user's "
            "selection is a list of File objects and file_device_select is what produces one");
-    if (!el) return;
-    iv_files_store(ctx, el, files);   /* step 1 */
-    /* Step 2. `composed` is not one of event_new's arguments because most engine fires do not set it; the
-       derived form takes it, and Event.prototype is the interface §4.10.5.1.17 names ("fire an event named
-       input" with no interface given is a plain Event). */
-    tv = JS_NewString(ctx, "input");
-    CHECK(!JS_IsException(tv), "input: the `input` event type could not be allocated");
-    event_target_fire(ctx, wrap,
-                      event_new_derived(ctx, event_proto(ctx), tv, /*bubbles*/ true, /*cancelable*/ false,
-                                        /*composed*/ true, /*trusted*/ true),
-                      JS_UNDEFINED);
-    JS_FreeValue(ctx, tv);
-    /* Step 3. `change` does not compose — it stops at the shadow boundary, which is what the standard says by
-       initialising only `bubbles`. */
-    event_target_fire(ctx, wrap, event_new(ctx, "change", /*bubbles*/ true, /*cancelable*/ false), JS_UNDEFINED);
+    if (!iv_file_control(wrap)) return;
+    DCHECK(g_files_task_stepid >= 0,
+           "§4.10.5.1.17's task was queued before input_value_declare declared its machine");
+    /* THE CALLEE IS MINTED IN THE ENQUEUING REALM: a C function runs in the realm that DEFINED it, and this
+       one fires two events at an element of THIS document. */
+    fn = JS_NewCFunction2(ctx, NULL, "updateFileSelection", 2, JS_CFUNC_step, g_files_task_stepid);
+    CHECK(!JS_IsException(fn), "§4.10.5.1.17's element task callee could not be allocated");
+    argv[0] = wrap;
+    argv[1] = files;
+    JS_EnqueueCallTask(ctx, fn, 2, argv);   /* §4.10.5.1.17: the user interaction task source */
+    JS_FreeValue(ctx, fn);
 }
 
 uint32_t input_files_pick(JSContext *ctx, JSValueConst wrap)
@@ -1242,6 +1341,11 @@ void input_value_declare(JSContext *ctx)
     idl_optional_from(0);
     g_id_step_down = idl_method_id(ctx, ONE_LONG, 1, js_input_step, IV_STEP_DOWN);
     idl_optional_from(0);
+    /* §4.10.5.1.17's ELEMENT TASK, declared where every other declaration of this component is. A step def is
+       registered against the RUNTIME — there is one machine and every realm's task carries the same id. */
+    g_files_task_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_input_files_def);
+    DCHECK(g_files_task_stepid >= 0,
+           "§4.10.5.1.17's element task machine could not be declared against this runtime");
 }
 
 void input_value_install(JSContext *ctx, JSValueConst input_proto)
@@ -1260,6 +1364,7 @@ void input_value_install(JSContext *ctx, JSValueConst input_proto)
 
 void input_value_free(void)
 {
+    g_files_task_stepid = -1;
     g_id_files_set = -1;
     g_id_value_as_number = -1;
     g_id_value_as_date = -1;

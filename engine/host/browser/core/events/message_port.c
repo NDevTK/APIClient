@@ -1,4 +1,4 @@
-/* MessagePort AND MessageChannel — HTML §9.4.2 and §9.4.3.
+/* MessagePort AND MessageChannel — HTML §9.4.4 "Message ports" and §9.4.2 "Message channels".
  *
  * WHAT A PORT IS. Two ports are ENTANGLED: what you post into one is delivered at the other. That is the whole
  * of the interface, and it is the local half of every cross-document channel — an iframe or a popup is a second
@@ -18,7 +18,7 @@
  * page that only calls addEventListener('message') and never start() receives nothing. Everything already
  * queued is delivered when the queue is enabled, in order.
  *
- * A PORT CROSSES A PORT. §9.4.2's transfer steps and transfer-receiving steps are below: `postMessage(m,
+ * A PORT CROSSES A PORT. §9.4.4's transfer steps and transfer-receiving steps are below: `postMessage(m,
  * [port])` MOVES that port's queue and its entanglement onto a new object at the other end and detaches the
  * one that was sent, which is what fills the delivered event's `ports`. */
 #include <stdlib.h>
@@ -26,6 +26,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -37,8 +38,8 @@
 #include "solver/cow.h"
 
 typedef struct {
-    JSValue entangled;   /* §9.4.2's entangled port, or JS_UNDEFINED once closed (owned) */
-    /* §9.4.2's PORT MESSAGE QUEUE: an Array of ArrayBuffers, each one message as StructuredSerialize left it,
+    JSValue entangled;   /* §9.4.4's entangled port, or JS_UNDEFINED once closed (owned) */
+    /* §9.4.4's PORT MESSAGE QUEUE: an Array of ArrayBuffers, each one message as StructuredSerialize left it,
        and `head` how many have been taken. §4.2's stream queue is the same shape for the same reasons, and the
        reasons are why this is NOT the malloc'd linked list it started as:
          - A QUEUED MESSAGE IS FRONTIER DATA. It is immutable, it belongs to the flow that will read it, and it
@@ -53,18 +54,18 @@ typedef struct {
          - The collector owns the bytes, so there is no second ownership contract to get wrong. */
     JSValue queue;
     uint32_t head;
-    /* §9.4.2's RELEVANT REALM — the realm this port was created in. §9.4.2's delivery creates its
+    /* §9.4.4's RELEVANT REALM — the realm this port was created in. §9.4.4's delivery creates its
        MessageEvent "in the relevant realm of the port", and the delivery task's callee is ONE function object
        for the agent, so the ctx it runs under is whichever realm minted that callee and never the port's. A
        port handed to a child document delivered every message as an event belonging to the parent.
        BORROWED: the agent owns its realms and releases them with itself, exactly as a WindowProxy's is. */
     JSContext *realm;
-    uint8_t enabled;     /* §9.4.2: the queue starts DISABLED */
-    uint8_t detached;    /* §9.4.2's [[Detached]], set by close() */
+    uint8_t enabled;     /* §9.4.4: the queue starts DISABLED */
+    uint8_t detached;    /* §9.4.4's [[Detached]], set by close() */
 } PortData;
 
 static JSClassID g_port_class;
-/* §9.4.3's MessageChannel HOLDS ITS TWO PORTS, which is the whole of its state: the constructor's steps are
+/* §9.4.2's MessageChannel HOLDS ITS TWO PORTS, which is the whole of its state: the constructor's steps are
    "Set this's port 1 to a new MessagePort", the same for port 2, and entangle them, and the `port1` getter
    steps are "return this's port 1". They are INTERNAL SLOTS, so they live in the class's record.
    THE COMMENT HERE SAID THE CLASS "holds nothing in it" AND THAT A MessageChannel "has no state beyond the
@@ -86,6 +87,7 @@ static JSClassID g_chan_class;
 static JSRuntime *g_mp_rt;
 static int       g_chan_ctor_stepid = -1;
 static int       g_id_post = -1, g_id_start = -1, g_id_close = -1;   /* the AGENT's pool entries */
+static int       g_deliver_stepid = -1;         /* §9.4.4's delivery task, as a machine */
 static JSValue   g_deliver_fn = JS_UNDEFINED;   /* the queued delivery task's callee */
 
 /* THE RECORD TIME-TRAVELS. `enabled` and the queue head are state a flow writes where no property hook can see
@@ -185,7 +187,7 @@ static void port_finalizer(JSRuntime *rt, JSValue val)
     free(d);
 }
 
-/* §9.4.3's two slots are OWNED by the channel, so they are released with it and marked while it lives — the
+/* §9.4.2's two slots are OWNED by the channel, so they are released with it and marked while it lives — the
    ports outlive the channel in every page that keeps one, and a mark that missed them would collect a port a
    page still holds through `chan.port1`. */
 static void chan_finalizer(JSRuntime *rt, JSValue val)
@@ -217,64 +219,130 @@ static void port_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
 
 /* ---- delivery ----------------------------------------------------------------------------------------------
  *
- * §9.4.2's delivery task: deserialize, then fire `message` at the port. It is a TASK on the port message queue
+ * §9.4.4's delivery task: deserialize, then fire `message` at the port. It is a TASK on the port message queue
  * — HTML's own words — so it is enqueued through the task half of the event loop and every microtask
- * outstanding runs before it, which is what a page observes when it posts and then awaits. */
+ * outstanding runs before it, which is what a page observes when it posts and then awaits.
+ *
+ * THE FIRE IS INSIDE THE TASK, WHICH IS WHY THIS IS A STEP MACHINE. §9.4.4's message port post message steps
+ * step 7 queues ONE task and its last step is "fire an event named message at messageEventTarget" — the same
+ * task the deserialize happened in — so the dispatch is event_target_fire_run, the request reach into §2.9,
+ * and not a second enqueue. Enqueued a second time, the listener ran behind every task already standing:
+ * `port.postMessage(x); setTimeout(f, 0)` ran `f` FIRST, which is the reverse of the standard and of every
+ * browser. A plain C callee had no other option, because a fire it cannot park on is a fire it must queue —
+ * so the task's callee is a machine, exactly as §4.11.4's dialog toggle task is. */
 
-static JSValue js_port_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+#define PORT_DELIVER_STAGES(X) \
+    X(PD_TAKE, "HTML §9.4.4 the message port post message steps step 7.1-7.6 (take the message off the port " \
+               "message queue and StructuredDeserializeWithTransfer it into the port's relevant realm)") \
+    X(PD_FIRE, "HTML §9.4.4 the message port post message steps step 7.7 (fire an event named message at the " \
+               "message event target, using MessageEvent)")
+enum { PORT_DELIVER_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const PORT_DELIVER_STEPS[] = { PORT_DELIVER_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr   hdr;
+    uint8_t     fphase;   /* the fire request's own phase */
+    JSValue     ev;       /* the MessageEvent, minted at PD_TAKE and held across the suspension (owned) */
+    EventFireCb cb;       /* the fire request's buffer — the type carries §2.9's argument count */
+} PortDeliverTask;
+
+static int js_port_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
-    JSValueConst port = argc > 0 ? argv[0] : JS_UNDEFINED;
+    PortDeliverTask *s = st;
+    JSValueConst port = step_arg(&s->hdr, 0);
     PortData *d = port_of(port);
-    JSValue data, ev, entry, buf, ports = JS_UNDEFINED;
-    StructuredWithTransfer swt;
     JSContext *rctx;
-    uint32_t n = 0;
-    size_t blen = 0;
+    int r;
 
-    (void)this_val;
-    /* The port may have been closed, or its queue disabled again, between the enqueue and now — the task is in
-       the queue and the state is the port's, so the state is what decides. */
-    if (!d || !d->enabled || !port_queue_len(ctx, d, &n) || d->head >= n)
-        return JS_UNDEFINED;
-    entry = JS_GetPropertyUint32(ctx, d->queue, d->head);
-    d->head++;
-    /* The Array's own elements, read with no page code in the way: this component built them and nothing else
-       can reach them. The bytes are BORROWED for the deserialize — the buffer owns them. */
-    buf = JS_GetPropertyUint32(ctx, entry, 0);
-    swt.holders = JS_GetPropertyUint32(ctx, entry, 1);
-    JS_FreeValue(ctx, entry);
-    swt.data.buf = JS_GetArrayBuffer(ctx, &blen, buf);
-    swt.data.len = blen;
-    DCHECK(swt.data.buf != NULL, "a port's queue held something that is not the serialized message it stored");
-    /* §9.4.2: THE DESERIALIZE AND THE EVENT BELONG TO THE PORT'S REALM, not to whichever realm minted the
-       one delivery callee this agent has. */
-    rctx = d->realm;
-    DCHECK(rctx != NULL, "a port was delivered to without the realm it was created in");
-    data = structured_deserialize_transfer(rctx, &swt, &ports);
-    JS_FreeValue(ctx, buf);
-    JS_FreeValue(ctx, swt.holders);
-    if (JS_IsException(data)) {
-        /* §9.4.2: a message that cannot be deserialized fires `messageerror` rather than `message`. This
-           engine's deserializer only fails where its own writer and reader disagree, which crashes instead —
-           so reaching here means the exception came from somewhere else and is the page's to see. */
-        JS_FreeValue(rctx, JS_GetException(rctx));
-        JS_FreeValue(rctx, ports);
-        ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, "", JS_UNDEFINED, JS_UNDEFINED);
-    } else {
-        /* §9.4.2: `ports` is `newPorts` — the MessagePorts among the [[TransferredValues]] that ARRIVED with
-           this message, in order. A transferred ArrayBuffer is in the same list and is not one of them. */
-        JSValue new_ports = message_event_ports_of(rctx, ports);
-        JS_FreeValue(rctx, ports);
-        if (JS_IsException(new_ports)) { JS_FreeValue(rctx, data); return JS_EXCEPTION; }
-        ev = message_event_new(rctx, "message", data, "", JS_UNDEFINED, new_ports);
-        JS_FreeValue(rctx, data);
-        JS_FreeValue(rctx, new_ports);
+    STEP_DISPATCH(PORT_DELIVER_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(PD_TAKE);
+    {
+        JSValue data, entry, buf, ports = JS_UNDEFINED;
+        StructuredWithTransfer swt;
+        uint32_t n = 0;
+        size_t blen = 0;
+        int k;
+
+        JS_FreeValue(ctx, cb_result);
+        /* EVERY OWNED FIELD IS ON THE STATE BEFORE ANYTHING THAT CAN FAIL — the failure path tears this
+           machine down through js_port_deliver_visit, which frees exactly what the state holds, and a zeroed
+           block is not a block of JS_UNDEFINEDs. */
+        s->ev = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+        s->fphase = 0;
+        /* The port may have been closed, or its queue disabled again, between the enqueue and now — the task
+           is in the queue and the state is the port's, so the state is what decides. */
+        if (!d || !d->enabled || !port_queue_len(ctx, d, &n) || d->head >= n)
+            return JS_STEP_DONE;
+        entry = JS_GetPropertyUint32(ctx, d->queue, d->head);
+        d->head++;
+        /* The Array's own elements, read with no page code in the way: this component built them and nothing
+           else can reach them. The bytes are BORROWED for the deserialize — the buffer owns them. */
+        buf = JS_GetPropertyUint32(ctx, entry, 0);
+        swt.holders = JS_GetPropertyUint32(ctx, entry, 1);
+        JS_FreeValue(ctx, entry);
+        swt.data.buf = JS_GetArrayBuffer(ctx, &blen, buf);
+        swt.data.len = blen;
+        DCHECK(swt.data.buf != NULL, "a port's queue held something that is not the serialized message it stored");
+        /* §9.4.4: THE DESERIALIZE AND THE EVENT BELONG TO THE PORT'S REALM, not to whichever realm minted the
+           one delivery callee this agent has. */
+        rctx = d->realm;
+        DCHECK(rctx != NULL, "a port was delivered to without the realm it was created in");
+        data = structured_deserialize_transfer(rctx, &swt, &ports);
+        JS_FreeValue(ctx, buf);
+        JS_FreeValue(ctx, swt.holders);
+        if (JS_IsException(data)) {
+            /* §9.4.4: a message that cannot be deserialized fires `messageerror` rather than `message`. This
+               engine's deserializer only fails where its own writer and reader disagree, which crashes instead
+               — so reaching here means the exception came from somewhere else and is the page's to see. */
+            JS_FreeValue(rctx, JS_GetException(rctx));
+            JS_FreeValue(rctx, ports);
+            s->ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, "", JS_UNDEFINED, JS_UNDEFINED);
+        } else {
+            /* §9.4.4: `ports` is `newPorts` — the MessagePorts among the [[TransferredValues]] that ARRIVED
+               with this message, in order. A transferred ArrayBuffer is in the same list and is not one. */
+            JSValue new_ports = message_event_ports_of(rctx, ports);
+            JS_FreeValue(rctx, ports);
+            if (JS_IsException(new_ports)) { JS_FreeValue(rctx, data); return JS_STEP_ABRUPT; }
+            s->ev = message_event_new(rctx, "message", data, "", JS_UNDEFINED, new_ports);
+            JS_FreeValue(rctx, data);
+            JS_FreeValue(rctx, new_ports);
+        }
+        if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        STEP_GOTO(s->hdr.stage, PD_FIRE, &s->fphase, NULL);
+        return JS_STEP_YIELD;
     }
-    if (JS_IsException(ev))
-        return JS_EXCEPTION;
-    event_target_fire(rctx, port, ev, JS_UNDEFINED);
-    return JS_UNDEFINED;
+
+    STEP_ARM(PD_FIRE);
+    DCHECK(d != NULL, "§9.4.4's delivery resumed at its fire with no port record — the take stage is the only "
+                      "way to this stage and it answers DONE for a port that has none");
+    rctx = d->realm;
+    DCHECK(JS_IsObject(s->ev), "§9.4.4's delivery resumed at its fire with no MessageEvent to dispatch");
+    r = event_target_fire_run(rctx, &s->fphase, STEP_CB(s->cb), port, s->ev, JS_UNDEFINED, cb_result,
+                              NULL, out_cb, out_argc);
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    JS_FreeValue(rctx, s->ev);
+    s->ev = JS_UNDEFINED;
+    return JS_STEP_DONE;
 }
+
+static void js_port_deliver_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    PortDeliverTask *s = st;
+    int k;
+
+    v->val(ctx, &s->ev);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
+}
+
+static const JSTrampStepDef js_port_deliver_def = {
+    sizeof(PortDeliverTask), js_port_deliver_step, NULL, 0,
+    .visit = js_port_deliver_visit,
+    .algorithm = "HTML §9.4.4 the port message queue delivery task",
+    .steps = PORT_DELIVER_STEPS
+};
 
 /* Enqueue one delivery task for `port`. One task per message, so a queue enabled with three messages in it
    delivers three times and each is its own turn of the event loop, which is what the standard's "add a task"
@@ -287,7 +355,7 @@ static void port_enqueue_delivery(JSContext *ctx, JSValueConst port)
     JS_EnqueueCallTask(ctx, g_deliver_fn, 1, args);
 }
 
-/* §9.4.2's "enable this's port message queue": everything already in it becomes a task, in order. */
+/* §9.4.4's "enable this's port message queue": everything already in it becomes a task, in order. */
 static void port_enable(JSContext *ctx, JSValueConst port, PortData *d)
 {
     uint32_t n = 0, i;
@@ -300,7 +368,7 @@ static void port_enable(JSContext *ctx, JSValueConst port, PortData *d)
 
 /* ---- the members -------------------------------------------------------------------------------------------- */
 
-/* §9.4.2's MESSAGE PORT POST MESSAGE STEPS, in the standard's order — and the order is the algorithm.
+/* §9.4.4's MESSAGE PORT POST MESSAGE STEPS, in the standard's order — and the order is the algorithm.
  *
  * targetPort IS READ AT STEP 1, before anything is transferred, because the transfer list may CONTAIN it: the
  * standard's step 4 calls that case `doomed`, transfers the port anyway and then delivers nothing, which is a
@@ -319,10 +387,10 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
     (void)magic;
     if (!d)
         return JS_ThrowTypeError(ctx, "not a MessagePort");
-    /* §9.4.2 STEP 1 of `postMessage`: targetPort is the port this one is entangled with, TAKEN NOW. */
+    /* §9.4.4 STEP 1 of `postMessage`: targetPort is the port this one is entangled with, TAKEN NOW. */
     target = JS_DupValue(ctx, d->entangled);
 
-    /* §9.4.2's second argument is either the transfer SEQUENCE or a StructuredSerializeOptions whose
+    /* §9.4.4's second argument is either the transfer SEQUENCE or a StructuredSerializeOptions whose
        `transfer` member is one — the two overloads the standard still carries. Whichever it is, it is
        MATERIALIZED once: the three questions below and §2.7.7's two loops are five walks of one list, and a
        page-supplied one can answer each of them differently. */
@@ -336,7 +404,7 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
     }
     JS_FreeValue(ctx, raw);
 
-    /* §9.4.2 STEPS 2-4. A transfer list naming THIS port is a DataCloneError; one naming the TARGET dooms the
+    /* §9.4.4 STEPS 2-4. A transfer list naming THIS port is a DataCloneError; one naming the TARGET dooms the
        message. Both are here rather than in the transfer steps because only the post knows which ports it is
        between, and both precede any detaching — a page that catches the error still has a working port. */
     n = structured_transfer_len(ctx, transfer);
@@ -355,7 +423,7 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
         }
     }
 
-    /* §9.4.2 STEP 5: SERIALIZE NOW, and run the transfer steps. The throw belongs to this call, not to the
+    /* §9.4.4 STEP 5: SERIALIZE NOW, and run the transfer steps. The throw belongs to this call, not to the
        delivery task — a page's try/catch around postMessage is where the standard puts the DataCloneError. It
        happens even when there is no target, which is why it precedes the null check. */
     if (structured_serialize_transfer(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, transfer, &swt) < 0) {
@@ -365,7 +433,7 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
     }
     JS_FreeValue(ctx, transfer);
 
-    /* §9.4.2 STEP 6: a port with nothing on the other end posts into nowhere, and neither does a doomed one —
+    /* §9.4.4 STEP 6: a port with nothing on the other end posts into nowhere, and neither does a doomed one —
        and neither is an error. The transfer has still HAPPENED in both cases: the standard detaches before it
        looks at the target, so a page that transfers into a closed port does not get its port back. */
     t = JS_IsUndefined(target) ? NULL : port_of(target);
@@ -402,7 +470,7 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
-/* §9.4.2's `start()`. */
+/* §9.4.4's `start()`. */
 static JSValue js_port_start(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     PortData *d = port_of(this_val);
@@ -412,7 +480,7 @@ static JSValue js_port_start(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
-/* §9.4.2's `close()`: detach, and disentangle the pair — BOTH sides, because entanglement is symmetric and a
+/* §9.4.4's `close()`: detach, and disentangle the pair — BOTH sides, because entanglement is symmetric and a
    port left pointing at a closed one would keep queueing messages nobody will ever read. */
 static JSValue js_port_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
@@ -430,7 +498,7 @@ static JSValue js_port_close(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
-/* §9.4.2: setting `onmessage` ENABLES the port message queue. It is the platform's one event handler attribute
+/* §9.4.4: setting `onmessage` ENABLES the port message queue. It is the platform's one event handler attribute
    whose setter has a side effect, and it is why a page that assigns onmessage never has to call start() while
    a page that only uses addEventListener('message') must. The BRAND TEST is here rather than in event_target.c
    so that file does not have to know what a MessagePort is — every other target's handlers reach this and are
@@ -445,7 +513,7 @@ static void port_handler_set(JSContext *ctx, JSValueConst target, const char *na
         port_enable(ctx, target, d);
 }
 
-/* ---- §9.4.2's TRANSFER STEPS ---------------------------------------------------------------------------------
+/* ---- §9.4.4's TRANSFER STEPS ---------------------------------------------------------------------------------
  *
  * A transferred port is MOVED, not copied: the queue and the entanglement leave the old object and arrive at a
  * new one, and the old one is detached. The holder is a three-element Array — the queue, how much of it has
@@ -465,7 +533,7 @@ static JSValue port_transfer_out(JSContext *ctx, JSValueConst v)
     JSValue h;
 
     DCHECK(d != NULL, "the port transfer steps ran on something that is not a MessagePort");
-    /* §9.4.2: transferring a detached port is a DataCloneError. So is transferring the port a message is being
+    /* §9.4.4: transferring a detached port is a DataCloneError. So is transferring the port a message is being
        posted THROUGH, which the caller checks — it has the source in hand and this does not. */
     if (d->detached)
         return JS_ThrowDOMException(ctx, "DataCloneError", "the port has been closed");
@@ -504,7 +572,7 @@ static JSValue port_transfer_in(JSContext *ctx, JSValueConst holder)
       JS_ToUint32(ctx, &head, hv);
       JS_FreeValue(ctx, hv); }
     d->head = head;
-    /* §9.4.2: the arriving port's queue starts DISABLED however full it is — the receiver must start() it or
+    /* §9.4.4: the arriving port's queue starts DISABLED however full it is — the receiver must start() it or
        set onmessage, exactly as for a port it made itself. */
     d->enabled = 0;
     remote = JS_GetPropertyUint32(ctx, holder, TH_REMOTE);
@@ -520,7 +588,7 @@ static JSValue port_transfer_in(JSContext *ctx, JSValueConst holder)
     return obj;
 }
 
-/* §2.7.7's `interfaceName` for this interface's data holders, which is the identifier of §9.4.2's primary
+/* §2.7.7's `interfaceName` for this interface's data holders, which is the identifier of §9.4.4's primary
    interface and nothing else — §2.7.8 picks these two steps back out by it. */
 static const StructuredTransferable PORT_TRANSFERABLE = {
     "MessagePort", message_port_is, port_transfer_out, port_transfer_in
@@ -542,7 +610,7 @@ static JSValue port_new(JSContext *ctx)
     d = calloc(1, sizeof *d);
     CHECK(d != NULL, "message port: OOM building a MessagePort");
     d->entangled = d->queue = JS_UNDEFINED;
-    d->realm = ctx;   /* §9.4.2's relevant realm, taken where the port is created */
+    d->realm = ctx;   /* §9.4.4's relevant realm, taken where the port is created */
     port_track(d);
     JS_SetOpaque(obj, d);
     return obj;
@@ -565,7 +633,7 @@ JSValue message_port_pair(JSContext *ctx, JSValue *port2)
     return p1;
 }
 
-/* §9.4.3's `port1` and `port2` getter steps — "return this's port 1" / "return this's port 2", which are the
+/* §9.4.2's `port1` and `port2` getter steps — "return this's port 1" / "return this's port 2", which are the
    two slots the channel holds. ONE getter with the magic naming which, because they are one algorithm over
    two slots and a second copy is a second place to be wrong.
    THE BRAND CHECK IS THE SPEC'S: §3.7.6's getter throws a TypeError when the receiver does not implement the
@@ -577,22 +645,22 @@ static JSValue js_chan_port(JSContext *ctx, JSValueConst this_val, int magic)
 
     if (!d)
         return JS_ThrowTypeError(ctx, "Illegal invocation");
-    DCHECK(magic == 0 || magic == 1, "§9.4.3 declares two ports and this getter was minted for a third");
+    DCHECK(magic == 0 || magic == 1, "§9.4.2 declares two ports and this getter was minted for a third");
     return JS_DupValue(ctx, magic ? d->port2 : d->port1);
 }
 
-/* WHERE THIS MACHINE RESTS. §9.4.3's constructor is three steps, none of which can reach the page's code —
+/* WHERE THIS MACHINE RESTS. §9.4.2's constructor is three steps, none of which can reach the page's code —
    two new MessagePorts and the entanglement — so the machine has one stage and never returns to it. */
 #define CHAN_CTOR_STAGES(X) \
     X(CHAN_CTOR_PAIR = IDL_STEP_FIRST, \
-      "HTML §9.4.3 new MessageChannel() steps 1-3 (this's port 1 and port 2, then entangle them)")
+      "HTML §9.4.2 new MessageChannel() steps 1-3 (this's port 1 and port 2, then entangle them)")
 enum { CHAN_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const CHAN_CTOR_STEPS[] = { CHAN_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct { int unused; } JSChanCtorState;
 static void js_chan_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 
-/* §9.4.3's `new MessageChannel()`. It takes no arguments and reads nothing of the page's, so its body runs to
+/* §9.4.2's `new MessageChannel()`. It takes no arguments and reads nothing of the page's, so its body runs to
    completion; it is declared through the IDL machine because that is how a constructor is declared here. */
 static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
@@ -601,7 +669,7 @@ static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 
     (void)st; (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
-    DCHECK(hdr->stage == CHAN_CTOR_PAIR, "the MessageChannel constructor resumed at a stage §9.4.3 does not have");
+    DCHECK(hdr->stage == CHAN_CTOR_PAIR, "the MessageChannel constructor resumed at a stage §9.4.2 does not have");
     if (JS_IsUndefined(hdr->this_val))
         return JS_ThrowTypeError(ctx, "constructor MessageChannel requires 'new'"), -1;
     {
@@ -613,7 +681,7 @@ static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
     if (JS_IsException(obj)) return -1;
     p1 = message_port_pair(ctx, &p2);
     if (JS_IsException(p1)) { JS_FreeValue(ctx, obj); return -1; }
-    /* §9.4.3 steps 1-2: "Set this's port 1 to a new MessagePort", the same for port 2. The channel OWNS both
+    /* §9.4.2 steps 1-2: "Set this's port 1 to a new MessagePort", the same for port 2. The channel OWNS both
        from here; chan_finalizer releases them and §3.7.6's two accessors on the prototype read them. */
     {
         ChanData *d = calloc(1, sizeof *d);
@@ -628,7 +696,7 @@ static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
 
 static const IdlStepDecl js_chan_ctor_decl = {
     js_chan_ctor_step, sizeof(JSChanCtorState), js_chan_visit, NULL,
-    "HTML §9.4.3 new MessageChannel()", CHAN_CTOR_STEPS
+    "HTML §9.4.2 new MessageChannel()", CHAN_CTOR_STEPS
 };
 
 /* ---- install -------------------------------------------------------------------------------------------- */
@@ -642,7 +710,7 @@ void message_port_init(JSContext *ctx)
     /* NOT `if (g_mp_rt == rt) return;`. This component has exactly ONE declaration site — core/platform.c's
        row — so the test could never be true, and what it could do was hand a second agent the class ids, the
        pool entries and the delivery callee a dead runtime issued. See core/agent_state.h. */
-    DCHECK(g_mp_rt == NULL, "message_port_init ran twice — §9.4.2's classes are declared once per AGENT");
+    DCHECK(g_mp_rt == NULL, "message_port_init ran twice — §9.4.4's classes are declared once per AGENT");
     g_mp_rt = rt;
     JS_NewClassID(rt, &g_port_class);
     JS_NewClass(rt, g_port_class, &pd);
@@ -659,25 +727,28 @@ void message_port_init(JSContext *ctx)
     g_chan_ctor_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_chan_ctor_decl, 0);
     realm_declare_intrinsic(message_port_install_protos);
 
-    g_deliver_fn = JS_NewCFunction(ctx, js_port_deliver, "", 1);
+    g_deliver_stepid = JS_RegisterStepDef(rt, &js_port_deliver_def);
+    DCHECK(g_deliver_stepid >= 0, "§9.4.4's delivery machine could not be declared against this runtime");
+    g_deliver_fn = JS_NewCFunction2(ctx, NULL, "", 1, JS_CFUNC_step, g_deliver_stepid);
     CHECK(JS_IsFunction(ctx, g_deliver_fn), "the port delivery task's callee could not be allocated");
     event_target_set_handler_hook(port_handler_set);
-    /* §9.4.2's interface is [Transferable], and this is where it says so. The registry is
+    /* §9.4.4's interface is [Transferable], and this is where it says so. The registry is
        core/structured_clone.c's own state and that component releases it whole — a row is a pointer to the
        `static const` above and this file allocated nothing. */
     structured_register_transferable(&PORT_TRANSFERABLE);
-    agent_state_ptr("message_port", &g_mp_rt, "the runtime §9.4.2's classes were declared in, and the latch");
-    agent_state_class("message_port", &g_port_class, "§9.4.2's MessagePort class");
-    agent_state_class("message_port", &g_chan_class, "§9.4.3's MessageChannel class");
+    agent_state_ptr("message_port", &g_mp_rt, "the runtime §9.4.4's classes were declared in, and the latch");
+    agent_state_class("message_port", &g_port_class, "§9.4.4's MessagePort class");
+    agent_state_class("message_port", &g_chan_class, "§9.4.2's MessageChannel class");
     agent_state_value("message_port", &g_deliver_fn, "the queued port delivery task's callee");
-    agent_state_id("message_port", &g_chan_ctor_stepid, "§9.4.3's constructor machine");
-    agent_state_id("message_port", &g_id_post, "§9.4.2's postMessage declaration");
-    agent_state_id("message_port", &g_id_start, "§9.4.2's start declaration");
-    agent_state_id("message_port", &g_id_close, "§9.4.2's close declaration");
+    agent_state_id("message_port", &g_chan_ctor_stepid, "§9.4.2's constructor machine");
+    agent_state_id("message_port", &g_deliver_stepid, "§9.4.4's port delivery task machine");
+    agent_state_id("message_port", &g_id_post, "§9.4.4's postMessage declaration");
+    agent_state_id("message_port", &g_id_start, "§9.4.4's start declaration");
+    agent_state_id("message_port", &g_id_close, "§9.4.4's close declaration");
     agent_state_ptr("message_port", &g_ports, "the live-port table §7.5.10 step 4 counts");
 }
 
-/* §9.4.2's AND §9.4.3's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. `postMessage` is the member that makes
+/* §9.4.4's AND §9.4.2's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. `postMessage` is the member that makes
    this an answer and not an identity: a shared one would serialize and deliver under the realm that built it,
    so a port handed to a child document would carry the parent's realm into every message it sent. */
 void message_port_install_protos(JSContext *ctx)
@@ -692,8 +763,8 @@ void message_port_install_protos(JSContext *ctx)
     port_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(port_p), "MessagePort.prototype could not be allocated");
     idl_interface_tag(ctx, port_p, "MessagePort");
-    /* §9.4.2: `interface MessagePort : EventTarget` — the listeners and the two handler attributes. */
-    event_target_chain(ctx, port_p);   /* §9.4.2: `MessagePort : EventTarget` */
+    /* §9.4.4: `interface MessagePort : EventTarget` — the listeners and the two handler attributes. */
+    event_target_chain(ctx, port_p);   /* §9.4.4: `MessagePort : EventTarget` */
     event_target_install_handlers(ctx, port_p, EH_PORT);
     idl_install_method(ctx, port_p, "postMessage", 1, g_id_post);
     idl_install_method(ctx, port_p, "start", 0, g_id_start);
@@ -703,7 +774,7 @@ void message_port_install_protos(JSContext *ctx)
     chan_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(chan_p), "MessageChannel.prototype could not be allocated");
     idl_interface_tag(ctx, chan_p, "MessageChannel");
-    /* §9.4.3's two members, where Web IDL §3.7.6 puts a regular attribute of an interface that is not
+    /* §9.4.2's two members, where Web IDL §3.7.6 puts a regular attribute of an interface that is not
        [Global]: on the INTERFACE PROTOTYPE OBJECT. They were own data properties of each channel. */
     idl_install_accessor(ctx, chan_p, "port1", js_chan_port, 0, -1);
     idl_install_accessor(ctx, chan_p, "port2", js_chan_port, 1, -1);
@@ -735,7 +806,7 @@ void message_port_free(JSRuntime *rt)
     /* NOT `if (!g_mp_rt) return;`. The release is the inverse of the DECLARATION and rides the same row of
        core/platform.c's one list, whose declare pass is unconditional and whose table asserts that a release
        row has a declare. */
-    DCHECK(g_mp_rt == rt, "§9.4.2's port machinery was released against a runtime that is not the one it "
+    DCHECK(g_mp_rt == rt, "§9.4.4's port machinery was released against a runtime that is not the one it "
                           "declared in — every value below would have its reference subtracted from a runtime "
                           "that never took it");
     /* §8.1.7.2'S HANDLER-SET HOOK IS GIVEN BACK BY THE COMPONENT THAT CLAIMED IT, which is this one. The slot
@@ -749,7 +820,7 @@ void message_port_free(JSRuntime *rt)
     g_mp_rt = NULL;
     g_port_class = g_chan_class = 0;
     g_id_post = g_id_start = g_id_close = -1;
-    g_chan_ctor_stepid = -1;
+    g_chan_ctor_stepid = g_deliver_stepid = -1;
     /* THE LIST GOES WITH THE AGENT, and it must be EMPTY by the time it does: every entry names a PortData the
        collector has not finalized, so a non-empty list here is a port the runtime teardown is about to leak. */
     DCHECK(g_ports_n == 0, "MessagePorts were still live when the agent released its port machinery — each one "

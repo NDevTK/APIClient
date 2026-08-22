@@ -1,4 +1,4 @@
-/* window.postMessage — HTML §9.4.4's WINDOW POST MESSAGE STEPS.
+/* window.postMessage — HTML §9.3.3 "Posting messages", the WINDOW POST MESSAGE STEPS.
  *
  * WHAT IT IS FOR HERE. Two things, and the second is the one that matters to this project.
  *
@@ -13,8 +13,8 @@
  * unsatisfiable cross-origin and suppresses the finding. None of that can be reached until the event exists
  * with a real origin on it, which is what this file puts there.
  *
- * THE TARGET IS A NAVIGABLE'S ACTIVE WINDOW, WHICH IS WHY IT TAKES A WindowProxy. §9.4.4's first step is "let
- * targetWindow be this's browsing context's active Window", and with a cross-document target that Window is in
+ * THE TARGET IS A NAVIGABLE'S ACTIVE WINDOW, WHICH IS WHY IT TAKES A WindowProxy. §9.3.3's steps are given a
+ * targetWindow and the member runs them on `this`; with a cross-document target that Window is in
  * another agent — under this engine's one-WASM-instance-per-document rule, another WASM instance. The proxy is
  * where that indirection lives (see window_proxy.c) and it is why `source` on the event is a proxy rather than
  * a Window: the receiver holds a handle to the SENDER'S NAVIGABLE, not to a Window object it could never have.
@@ -30,6 +30,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"
 #include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -51,10 +52,11 @@
    The document handle is the identity, and window_proxy.c owns the mapping. */
 static JSValueConst win_proxy(JSContext *ctx) { return document_window_proxy(ctx); }
 static JSValue g_deliver_fn = JS_UNDEFINED;
+static int     g_deliver_stepid = -1;   /* §9.3.3's queued delivery task, as a machine */
 
 /* One queued post: the message, the origin check it still owes, and the target. Held as a JS Array for the
    reason a port's queue is one — it is frontier data, it has to park, and the collector should own it. */
-/* PQ_SOURCE IS CAPTURED AT THE POST, not read at the delivery. §9.4.4 step 7.3's `source` is the INCUMBENT
+/* PQ_SOURCE IS CAPTURED AT THE POST, not read at the delivery. §9.3.3 step 8.3's `source` is the INCUMBENT
    settings object's global — the window that CALLED postMessage — and the delivery task has no way to know
    that later: its callee is one function object for the agent, so the ctx it runs under is whichever realm
    minted it, and reading the sender from there named the first document for every post in the instance. This
@@ -66,7 +68,7 @@ static JSValue g_deliver_fn = JS_UNDEFINED;
    answering it from the receiver's own origin would tell a page that a foreign message came from itself. */
 enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_SENDER_ORIGIN, PQ_N };
 
-/* §9.4.4 step 7.1: the origin check happens IN THE TASK, not at the call — the target may have navigated
+/* §9.3.3 step 8.1: the origin check happens IN THE TASK, not at the call — the target may have navigated
    between the post and the delivery, and the standard checks the origin it has THEN. `want` is the serialized
    target origin, or NULL for "*"; `have` is the target document's ORIGIN RECORD.
    THE TWO SIDES ARE NOT THE SAME KIND OF THING, and that asymmetry is the standard's rather than a shortcut:
@@ -80,88 +82,155 @@ static bool origin_matches(const char *want, const Origin *have)
     return origin_is_serialized_tuple(have, want);
 }
 
-static JSValue js_window_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-    JSValueConst target = argc > 0 ? argv[0] : JS_UNDEFINED;   /* the target WindowProxy */
-    JSValueConst entry  = argc > 1 ? argv[1] : JS_UNDEFINED;
-    StructuredWithTransfer swt;
-    JSValue buf, want, data, ev, source, sender_origin, ports = JS_UNDEFINED;
-    JSContext *tctx;
-    const char *want_s = NULL, *from = NULL;
-    size_t blen = 0;
+/* §9.3.3's QUEUED TASK, AS A MACHINE. The window post message steps queue ONE global task on the posted
+ * message task source and its LAST step is "fire an event named message at targetWindow" — synchronous, in the
+ * task the origin check and the deserialize happened in. So the dispatch is event_target_fire_run, the request
+ * reach into §2.9, and not a second enqueue: enqueued again, a `message` listener ran behind every task already
+ * standing, so `frame.postMessage(x, "*"); setTimeout(f, 0)` ran `f` first. A plain C callee had no other
+ * option, because a fire it cannot park on is a fire it must queue. */
+#define WM_DELIVER_STAGES(X) \
+    X(WD_DESERIALIZE, "HTML §9.3.3 the window post message steps step 8.1-8.6 (the targetOrigin check, and " \
+                      "StructuredDeserializeWithTransfer into the target window's realm)") \
+    X(WD_FIRE,        "HTML §9.3.3 the window post message steps step 8.7 (fire an event named message at " \
+                      "targetWindow, using MessageEvent)")
+enum { WM_DELIVER_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const WM_DELIVER_STEPS[] = { WM_DELIVER_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-    (void)this_val;
-    want = JS_GetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN);
-    if (!JS_IsNull(want)) {
-        want_s = JS_ToCString(ctx, want);
-        if (!want_s) { JS_FreeValue(ctx, want); return JS_EXCEPTION; }
-    }
-    /* The origin the target has NOW — read through the proxy, so a flow that navigated it sees its own. */
-    if (!origin_matches(want_s, window_proxy_origin(target))) {
+typedef struct {
+    JSStepHdr   hdr;
+    uint8_t     fphase;   /* the fire request's own phase */
+    JSValue     ev;       /* the MessageEvent, minted at WD_DESERIALIZE and held across the suspension (owned) */
+    EventFireCb cb;       /* the fire request's buffer — the type carries §2.9's argument count */
+} WmDeliverTask;
+
+static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    WmDeliverTask *s = st;
+    JSValueConst target = step_arg(&s->hdr, 0);   /* the target WindowProxy */
+    JSContext *tctx;
+    int r;
+
+    STEP_DISPATCH(WM_DELIVER_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(WD_DESERIALIZE);
+    {
+        JSValueConst entry = step_arg(&s->hdr, 1);
+        StructuredWithTransfer swt;
+        JSValue buf, want, data, source, sender_origin, ports = JS_UNDEFINED;
+        const char *want_s = NULL, *from = NULL;
+        size_t blen = 0;
+        int k;
+
+        JS_FreeValue(ctx, cb_result);
+        /* EVERY OWNED FIELD BEFORE THE FIRST THING THAT CAN FAIL — the failure path tears this machine down
+           through js_window_deliver_visit, which frees exactly what the state holds. */
+        s->ev = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+        s->fphase = 0;
+        want = JS_GetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN);
+        if (!JS_IsNull(want)) {
+            want_s = JS_ToCString(ctx, want);
+            if (!want_s) { JS_FreeValue(ctx, want); return JS_STEP_ABRUPT; }
+        }
+        /* The origin the target has NOW — read through the proxy, so a flow that navigated it sees its own. */
+        if (!origin_matches(want_s, window_proxy_origin(target))) {
+            if (want_s) JS_FreeCString(ctx, want_s);
+            JS_FreeValue(ctx, want);
+            return JS_STEP_DONE;   /* §9.3.3 step 8.1: not same origin, so nothing is delivered */
+        }
         if (want_s) JS_FreeCString(ctx, want_s);
         JS_FreeValue(ctx, want);
-        return JS_UNDEFINED;   /* §9.4.4 step 7.1.3: not same origin, so nothing is delivered */
-    }
-    if (want_s) JS_FreeCString(ctx, want_s);
-    JS_FreeValue(ctx, want);
 
-    /* §9.4.4 step 7: THE DESERIALIZE AND THE EVENT BELONG TO THE TARGET'S REALM. The standard says "in
-       targetWindow's relevant realm" for both, and it is not pedantry here: the deserialized objects and the
-       MessageEvent are handed to the RECEIVING document's code, so building them under the delivery callee's
-       own realm gave a child document a message whose every object belonged to the parent. */
-    tctx = window_proxy_realm(ctx, target);
-    DCHECK(tctx != NULL, "a window message was delivered to a navigable this agent holds no realm for");
-    source = JS_GetPropertyUint32(ctx, entry, PQ_SOURCE);   /* the sender's proxy, taken at the post */
-    sender_origin = JS_GetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN);
-    from = JS_ToCString(ctx, sender_origin);
-    DCHECK(from != NULL, "a queued window message carried no sender origin — §9.4.4's `origin` is the one field "
-                         "a page's check is written against");
-    buf = JS_GetPropertyUint32(ctx, entry, PQ_DATA);
-    swt.holders = JS_GetPropertyUint32(ctx, entry, PQ_HOLDERS);
-    swt.data.buf = JS_GetArrayBuffer(ctx, &blen, buf);
-    swt.data.len = blen;
-    DCHECK(swt.data.buf != NULL, "a queued window message held something that is not the bytes it stored");
-    data = structured_deserialize_transfer(tctx, &swt, &ports);
-    JS_FreeValue(ctx, buf);
-    JS_FreeValue(ctx, swt.holders);
+        /* §9.3.3 step 8: THE DESERIALIZE AND THE EVENT BELONG TO THE TARGET'S REALM. The standard says "in
+           targetWindow's relevant realm" for both, and it is not pedantry here: the deserialized objects and
+           the MessageEvent are handed to the RECEIVING document's code, so building them under the delivery
+           callee's own realm gave a child document a message whose every object belonged to the parent. */
+        tctx = window_proxy_realm(ctx, target);
+        DCHECK(tctx != NULL, "a window message was delivered to a navigable this agent holds no realm for");
+        source = JS_GetPropertyUint32(ctx, entry, PQ_SOURCE);   /* the sender's proxy, taken at the post */
+        sender_origin = JS_GetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN);
+        from = JS_ToCString(ctx, sender_origin);
+        DCHECK(from != NULL, "a queued window message carried no sender origin — §9.3.3's `origin` is the one "
+                             "field a page's check is written against");
+        buf = JS_GetPropertyUint32(ctx, entry, PQ_DATA);
+        swt.holders = JS_GetPropertyUint32(ctx, entry, PQ_HOLDERS);
+        swt.data.buf = JS_GetArrayBuffer(ctx, &blen, buf);
+        swt.data.len = blen;
+        DCHECK(swt.data.buf != NULL, "a queued window message held something that is not the bytes it stored");
+        data = structured_deserialize_transfer(tctx, &swt, &ports);
+        JS_FreeValue(ctx, buf);
+        JS_FreeValue(ctx, swt.holders);
 
-    if (JS_IsException(data)) {
-        JS_FreeValue(tctx, JS_GetException(tctx));
-        JS_FreeValue(tctx, ports);
-        ev = message_event_new(tctx, "messageerror", JS_UNDEFINED, from, source, JS_UNDEFINED);
-    } else {
-        /* §9.4.4 steps 7.2 and 7.3: the origin is the SENDER'S and the source is the sender's WindowProxy —
-           which is what a handler's `event.origin` check is about, and the whole reason this event is worth
-           anything to the solver. `ports` is `newPorts`: the MessagePorts among the [[TransferredValues]], so a
-           transferred ArrayBuffer arrives inside `data` and is not one of them. */
-        JSValue new_ports = message_event_ports_of(tctx, ports);
-        JS_FreeValue(tctx, ports);
-        if (JS_IsException(new_ports)) {
+        if (JS_IsException(data)) {
+            JS_FreeValue(tctx, JS_GetException(tctx));
+            JS_FreeValue(tctx, ports);
+            s->ev = message_event_new(tctx, "messageerror", JS_UNDEFINED, from, source, JS_UNDEFINED);
+        } else {
+            /* §9.3.3 steps 8.2 and 8.3: the origin is the SENDER'S and the source is the sender's WindowProxy
+               — which is what a handler's `event.origin` check is about, and the whole reason this event is
+               worth anything to the solver. `ports` is `newPorts`: the MessagePorts among the
+               [[TransferredValues]], so a transferred ArrayBuffer arrives inside `data` and is not one. */
+            JSValue new_ports = message_event_ports_of(tctx, ports);
+            JS_FreeValue(tctx, ports);
+            if (JS_IsException(new_ports)) {
+                JS_FreeValue(tctx, data);
+                JS_FreeCString(ctx, from);
+                JS_FreeValue(ctx, sender_origin);
+                JS_FreeValue(ctx, source);
+                return JS_STEP_ABRUPT;
+            }
+            s->ev = message_event_new(tctx, "message", data, from, source, new_ports);
             JS_FreeValue(tctx, data);
-            JS_FreeCString(ctx, from);
-            JS_FreeValue(ctx, sender_origin);
-            JS_FreeValue(ctx, source);
-            return JS_EXCEPTION;
+            JS_FreeValue(tctx, new_ports);
         }
-        ev = message_event_new(tctx, "message", data, from, source, new_ports);
-        JS_FreeValue(tctx, data);
-        JS_FreeValue(tctx, new_ports);
+        JS_FreeCString(ctx, from);
+        JS_FreeValue(ctx, sender_origin);
+        JS_FreeValue(ctx, source);
+        if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        STEP_GOTO(s->hdr.stage, WD_FIRE, &s->fphase, NULL);
+        return JS_STEP_YIELD;
     }
-    JS_FreeCString(ctx, from);
-    JS_FreeValue(ctx, sender_origin);
-    JS_FreeValue(ctx, source);
-    if (JS_IsException(ev)) return JS_EXCEPTION;
-    /* Fired at the WINDOW, which is the target proxy's active Window — the same read a flow that navigated the
-       navigable would answer differently, and the reason the proxy is the thing held rather than the Window. */
+
+    STEP_ARM(WD_FIRE);
+    /* THE REALM AND THE WINDOW ARE RESOLVED TOGETHER, at the moment the dispatch is made — a pair that
+       disagreed would fire this document's event under another document's ctx. Re-reading them across the
+       yield above is sound where holding one of the two would not be: the proxy's active document is per-flow
+       state under the COW delta, and this flow has not navigated it between the two stages, so what another
+       flow's navigation did is invisible here by construction. */
+    tctx = window_proxy_realm(ctx, target);
+    DCHECK(tctx != NULL, "§9.3.3's delivery resumed at its fire with no realm for the target navigable");
+    DCHECK(JS_IsObject(s->ev), "§9.3.3's delivery resumed at its fire with no MessageEvent to dispatch");
     {
         JSValue w = window_proxy_window(tctx, target);
-        event_target_fire(tctx, w, ev, JS_UNDEFINED);
+
+        r = event_target_fire_run(tctx, &s->fphase, STEP_CB(s->cb), w, s->ev, JS_UNDEFINED, cb_result,
+                                  NULL, out_cb, out_argc);
         JS_FreeValue(tctx, w);
     }
-    return JS_UNDEFINED;
+    if (r > 0) return r;
+    if (r < 0) return JS_STEP_ABRUPT;
+    JS_FreeValue(tctx, s->ev);
+    s->ev = JS_UNDEFINED;
+    return JS_STEP_DONE;
 }
 
-/* §9.4.4 STEP 7 ACROSS INSTANCES — an EMISSION, and every part of that word is load-bearing.
+static void js_window_deliver_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    WmDeliverTask *s = st;
+    int k;
+
+    v->val(ctx, &s->ev);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
+}
+
+static const JSTrampStepDef js_window_deliver_def = {
+    sizeof(WmDeliverTask), js_window_deliver_step, NULL, 0,
+    .visit = js_window_deliver_visit,
+    .algorithm = "HTML §9.3.3 the posted message task source delivery task",
+    .steps = WM_DELIVER_STEPS
+};
+
+/* §9.3.3 STEP 8 ACROSS INSTANCES — an EMISSION, and every part of that word is load-bearing.
  *
  * The bytes are already serialized and immutable, so nothing has to un-send this when the posting flow parks or
  * is outranked, and it needs no COW capture: that is why a message crosses as an emission rather than as shared
@@ -222,7 +291,7 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     CHECK(n > 0 || blen == 0, "the base64 buffer was sized wrong for this message");
     b64[n] = 0;
 
-    /* §9.4.4 step 7.1's origin check is the RECEIVER'S to make — it tests the target's origin at DELIVERY, and
+    /* §9.3.3 step 8.1's origin check is the RECEIVER'S to make — it tests the target's origin at DELIVERY, and
        the target may navigate between this call and then — so the requested target origin travels rather than
        being resolved here. "*" is the spec's any-origin, and an absent one means the same. */
     if (!JS_IsNull(want) && !JS_IsUndefined(want))
@@ -240,7 +309,7 @@ static void window_message_send_remote(JSContext *ctx, JSValueConst target, JSVa
     JS_FreeValue(ctx, buf);
 }
 
-/* THE INBOUND HALF: a message the trusted zone ROUTED here from another instance. It is the same §9.4.4 step 7
+/* THE INBOUND HALF: a message the trusted zone ROUTED here from another instance. It is the same §9.3.3 step 8
    task the local path enqueues, built from the wire fields instead of from a call — which is the point, because
    a delivery that took a different path would be a second implementation of the one thing this file does.
  *
@@ -340,7 +409,7 @@ void window_message_route(JSContext *ctx, const char *tail, const char *sender_d
     free(want);
 }
 
-/* §9.4.4's `WindowPostMessageOptions.targetOrigin` DEFAULT, STATED ONCE and read from two places that must not
+/* §9.3.3's `WindowPostMessageOptions.targetOrigin` DEFAULT, STATED ONCE and read from two places that must not
    drift. The declaration places it on the converted dictionary (§3.2.17 step 4.1.5), so `postMessage(m, {})`
    arrives here carrying it; a call passing NO second argument never reaches the conversion at all, and §3.6
    step 15 answers that with `optional WindowPostMessageOptions options = {}`'s own default — a dictionary
@@ -348,7 +417,7 @@ void window_message_route(JSContext *ctx, const char *tail, const char *sender_d
    sender's own origin, not to "*", which is what a second literal here would quietly have made it. */
 #define POST_TARGET_ORIGIN_DEFAULT "/"
 
-/* §9.4.4's `postMessage(message, options)` and the legacy `postMessage(message, targetOrigin, transfer)`.
+/* §9.3.3's `postMessage(message, options)` and the legacy `postMessage(message, targetOrigin, transfer)`.
  *
  * THE ARGUMENTS ARRIVE CONVERTED, AND THE OVERLOAD IS ALREADY RESOLVED. Both of this member's second-argument
  * shapes were read from C: `targetOrigin` with a JS_GetPropertyStr and a ToString on whatever came back, and
@@ -363,7 +432,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     JSValue transfer = JS_UNDEFINED, tov, want = JS_NULL, entry, buf;
     StructuredWithTransfer swt;
     const char *to = NULL;
-    /* §9.4.4 POSTS TO THE WINDOW IT WAS CALLED ON, and the receiver is how that is known. This discarded
+    /* §9.3.3 POSTS TO THE WINDOW IT WAS CALLED ON, and the receiver is how that is known. This discarded
        `this_val` and always delivered to THIS window, so `iframe.contentWindow.postMessage(m, "*")` — which is
        most of the real uses of this method — fired the message at the sender. Nothing could be routed by a
        target that was never read. `window.postMessage(...)` calls it on the global, which is this navigable's
@@ -374,12 +443,12 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     DCHECK(!JS_IsUndefined(target), "postMessage ran before this window's WindowProxy existed");
     /* UNKNOWN EXTERNAL INPUT CROSSES A DECLARED POSITION AS ITSELF, which means §3.6 chose NO overload for it
        and there is no arm to read back. It is not a wrong value to route past — the target origin decides
-       §9.4.4 step 7.1's same-origin check, so a concolic one makes BOTH deliveries feasible and the post is a
+       §9.3.3 step 8.1's same-origin check, so a concolic one makes BOTH deliveries feasible and the post is a
        FORK rather than one queue entry. That mechanism does not exist, and the alternative every earlier
        version of this line took was to fall into the dictionary arm and read `targetOrigin` off the attacker's
        own value, which manufactures a plausible datum out of a measurement nobody made. */
     if (concolic_is(second))
-        DFAIL("postMessage was given a CONCOLIC target origin — §9.4.4 step 4 parses it and step 7.1 compares "
+        DFAIL("postMessage was given a CONCOLIC target origin — §9.3.3 step 5 parses it and step 8.1 compares "
               "it against the target document's origin, so an unpinned one leaves both the delivered and the "
               "dropped arm feasible. Fork the post: queue the entry under each arm of the origin comparison, "
               "the way a branch on unknown external input forks anywhere else, rather than deciding it here");
@@ -390,7 +459,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
        member's default, which the argument machine now materializes (core/idl_args.c,
        idl_type_is_dictionary). The sentence that used to stand here said `undefined` reached this body and
        that idl_dict_get answered the defaults for it — it does not: it answers UNDEFINED, so
-       `window.postMessage(msg)` read an undefined target origin where §9.4.4 reads the IDL's "/". The assert
+       `window.postMessage(msg)` read an undefined target origin where §9.3.3 reads the IDL's "/". The assert
        is what keeps that from coming back silently. */
     DCHECK(JS_IsString(second) || JS_IsObject(second),
            "postMessage's second argument reached the body as neither a string nor a dictionary — "
@@ -426,12 +495,12 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     JS_FreeValue(ctx, tov);
     if (!to) { JS_FreeValue(ctx, transfer); return JS_EXCEPTION; }
 
-    /* §9.4.4 step 4. "*" is any origin; "/" is the SENDER's own; anything else is a URL whose origin is taken,
-       and a URL that does not parse is a SyntaxError — which is thrown HERE, at the call, because it is the
-       page's mistake and not the delivery's.
+    /* §9.3.3 steps 4 and 5. "*" is any origin; "/" is the SENDER's own (step 4); anything else is a URL
+       whose origin is taken (step 5), and a URL that does not parse is a SyntaxError — which is thrown HERE,
+       at the call, because it is the page's mistake and not the delivery's.
        THERE IS NO "THE PAGE NAMED NO ORIGIN" CASE. It used to read `to && …`, which made an absent
        `targetOrigin` mean "*" — the widest possible delivery, arrived at by a C null rather than by anything
-       the IDL says. §9.4.4 has no such state: the member's default IS "/", so a page that writes neither
+       the IDL says. §9.3.3 has no such state: the member's default IS "/", so a page that writes neither
        argument posts to its own origin. */
     if (strcmp(to, "*") != 0) {
         if (!strcmp(to, "/")) {
@@ -441,7 +510,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
                express — and it is a real page doing a legal thing (a `data:` document posting to itself), not
                an invariant violation, so what is missing is a mechanism and not a check. */
             if (origin_is_opaque(origin_agent()))
-                DFAIL("§9.4.4's `/` target origin was used by a document whose origin is OPAQUE. `/` means THE "
+                DFAIL("§9.3.3's `/` target origin was used by a document whose origin is OPAQUE. `/` means THE "
                       "SENDER'S OWN ORIGIN, and §7.1.1 step 1 makes that origin same origin with itself, so the "
                       "delivery must succeed — but the post queue carries the requested origin as a "
                       "SERIALIZATION (it may cross an instance, where a record cannot go) and every opaque "
@@ -467,7 +536,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     }
     JS_FreeCString(ctx, to);
 
-    /* §9.4.4 step 6: serialize and transfer NOW — the DataCloneError belongs to this call. */
+    /* §9.3.3 step 7: serialize and transfer NOW — the DataCloneError belongs to this call. */
     if (structured_serialize_transfer(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, transfer, &swt) < 0) {
         JS_FreeValue(ctx, transfer);
         JS_FreeValue(ctx, want);
@@ -485,10 +554,11 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     JS_SetPropertyUint32(ctx, entry, PQ_DATA, buf);
     JS_SetPropertyUint32(ctx, entry, PQ_HOLDERS, JS_DupValue(ctx, swt.holders));
     JS_SetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN, want);
-    /* §9.4.4 step 7.3's source, read HERE where the caller's realm is the one running. */
+    /* §9.3.3 step 8.3's source, read HERE where the caller's realm is the one running. */
     JS_SetPropertyUint32(ctx, entry, PQ_SOURCE, JS_DupValue(ctx, win_proxy(ctx)));
-    /* §9.4.4's `origin` IS A STRING BY IDL — "the serialization of the origin of the incumbent settings
-       object" — so this is one of the places a serialization is the ANSWER rather than a lost identity. */
+    /* §9.1 "The MessageEvent interface" declares `origin` a USVString — "the serialization of the origin of
+       the incumbent settings object" — so this is one of the places a serialization is the ANSWER rather than
+       a lost identity. */
     JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, origin_serialized(origin_agent())));
     structured_with_transfer_free(ctx, &swt);
 
@@ -507,7 +577,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
         JS_FreeValue(ctx, entry);
         return JS_UNDEFINED;
     }
-    /* §9.4.4 step 7: a TASK on the posted-message task source. Not a microtask — a page that posts and then
+    /* §9.3.3 step 8: a TASK on the posted message task source. Not a microtask — a page that posts and then
        awaits observes its own continuation first, which is the ordering the event loop's two halves exist for. */
     {
         JSValueConst args[2];
@@ -522,7 +592,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
 
 static int g_id_post = -1;
 
-/* §9.4.4's `postMessage` ON THIS REALM'S WindowProxy PROTOTYPE. It is declared into core/realm.h's list AFTER
+/* §9.3.3's `postMessage` ON THIS REALM'S WindowProxy PROTOTYPE. It is declared into core/realm.h's list AFTER
    window_proxy's own entry, which is what makes the object it goes onto already exist. */
 void window_message_install_proto(JSContext *ctx)
 {
@@ -538,11 +608,11 @@ void window_message_install_proto(JSContext *ctx)
     JS_FreeValue(ctx, proto);
 }
 
-/* §9.4.4's `postMessage`, DECLARED ONCE PER AGENT — a member has one pool entry, and every realm's prototype
+/* §9.3.3's `postMessage`, DECLARED ONCE PER AGENT — a member has one pool entry, and every realm's prototype
    carries that same one. */
 void window_message_init(JSContext *ctx)
 {
-    /* §9.4.4's TWO OVERLOADS, AS ONE DECLARATION — the longest type list the effective overload set has, with
+    /* §9.3.3's TWO OVERLOADS, AS ONE DECLARATION — the longest type list the effective overload set has, with
        the position the two split at carrying that split as its type:
 
            undefined postMessage(any message, USVString targetOrigin, optional sequence<object> transfer = []);
@@ -568,14 +638,17 @@ void window_message_init(JSContext *ctx)
        release column asserts its own `_init` did not run twice; this one asserted nothing, so a second
        declaration would have overwritten the callee below with nothing left holding the first — the exact leak
        the paragraph under this one records, arriving by the other door. */
-    DCHECK(g_id_post < 0, "window_message_init ran twice — §9.4.4's declaration is made once per AGENT");
-    g_deliver_fn = JS_NewCFunction(ctx, js_window_deliver, "", 2);
+    DCHECK(g_id_post < 0, "window_message_init ran twice — §9.3.3's declaration is made once per AGENT");
+    g_deliver_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_window_deliver_def);
+    DCHECK(g_deliver_stepid >= 0, "§9.3.3's delivery machine could not be declared against this runtime");
+    g_deliver_fn = JS_NewCFunction2(ctx, NULL, "", 2, JS_CFUNC_step, g_deliver_stepid);
     CHECK(JS_IsFunction(ctx, g_deliver_fn), "the window delivery task's callee could not be allocated");
     g_id_post = idl_method_id_dict(ctx, POST_ARGS, 3, POST_OPTS,
                                    (int)(sizeof POST_OPTS / sizeof POST_OPTS[0]), js_window_post, 0);
     idl_optional_from(1);
-    agent_state_id("window_message", &g_id_post, "§9.4.4's postMessage declaration, and the declaration latch");
-    agent_state_value("window_message", &g_deliver_fn, "§9.4.4's delivery-task callee, one per agent");
+    agent_state_id("window_message", &g_id_post, "§9.3.3's postMessage declaration, and the declaration latch");
+    agent_state_value("window_message", &g_deliver_fn, "§9.3.3's delivery-task callee, one per agent");
+    agent_state_id("window_message", &g_deliver_stepid, "§9.3.3's delivery task machine");
     realm_declare_intrinsic(window_message_install_proto);
 }
 
@@ -597,11 +670,12 @@ void window_message_install(JSContext *ctx, JSValueConst global, const char *ori
 }
 
 
-/* §9.4.4's delivery callee is ONE function object for the whole agent, so it is released against the RUNTIME —
+/* §9.3.3's delivery callee is ONE function object for the whole agent, so it is released against the RUNTIME —
    which is also what puts it on core/platform.h's release column instead of in each host's own teardown. */
 void window_message_free(JSRuntime *rt)
 {
     JS_FreeValueRT(rt, g_deliver_fn);
     g_deliver_fn = JS_UNDEFINED;
+    g_deliver_stepid = -1;
     g_id_post = -1;   /* the latch the init above consults — see core/agent_state.h */
 }
