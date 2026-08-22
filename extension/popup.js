@@ -1100,21 +1100,32 @@ function renderDataPanel() {
              "an API key reached the popup with no source context — extractKeysFromText takes it as a required " +
              "argument and lib/popup-handlers.js switches on it to decide the key's injection point, so a " +
              "missing one is that producer broken (key type=" + info.name + ")");
-      /* THE COUNT IS THE COUNT. `info.requestCount || eps.length || 0` substituted the size of the ENDPOINT
-         SET for the request count whenever the count was 0 — a fabricated measurement wearing the "req"
-         label, and it hid the state of the field completely: grep finds NO writer that ever increments an
-         API-key entry's requestCount (lib/keys.js initialises it to 0, mergeToGlobal takes the max of two
-         zeroes, serializeApiKeyEntry carries it, three DCHECKs guard its type). So the badge has never once
-         shown a request count. `learn.js`'s requestCount is a different record's (a method's `_stats`). The
-         honest read is rendered unconditionally, because 0 is a real value about a key that was seen in a
-         reply and never sent back — and the endpoints the key WAS seen against get their own line below,
-         which is the fact that number was standing in for. */
-      DCHECK(typeof info.requestCount === "number",
-             "an API key reached the popup with no numeric requestCount — serializeApiKeyEntry asserts and " +
-             "writes it on every entry, so a missing one is that projection broken");
+      /* THE BADGE'S UNIT IS A SIGHTING, NOT A REQUEST. What stood here said "grep finds NO writer that ever
+         increments an API-key entry's requestCount" and "the badge has never once shown a request count" —
+         a claim about THIS TREE that this tree stopped making true: lib/keys.js runs `keyData.requestCount++`
+         on every match it records. It is the stale-DFAIL shape with no crash to retire it, accurate about the
+         defect it described and wrong about the code, and it read as authoritative enough to send the next
+         reader to build an incrementer that is already there.
+         What the surviving producer counts is one per PATTERN MATCH per scanned string, and
+         extractKeysFromText is called on the request URL, on EACH request header, on response bodies, on
+         WebSocket frames, on postMessage bodies, on decoded protobuf/gRPC field values, and again on every
+         nested base64 level of any of those — so a key echoed three times in one reply counts three, and a key
+         that only ever arrived in a received postMessage counts although no request ever carried it. Across
+         documents mergeToGlobal takes the MAX of two running totals rather than a sum, so a cumulative entry
+         reads as the most any ONE document's scan saw. "N req" was therefore a wrong unit over a real number,
+         which is the same lie as a fabricated one and harder to catch; the badge states the unit it has, and
+         the endpoints the key was seen against keep their own line below.
+         The FIELD is still spelled `requestCount` where it is produced (lib/keys.js), merged (lib/merge.js)
+         and projected (lib/serialize.js) — the same wrong unit, one rename across those three, not this
+         consumer's to make. */
+      DCHECK(Number.isInteger(info.requestCount) && info.requestCount >= 0,
+             "an API key reached the popup with a sighting count that is not a whole non-negative number — " +
+             "lib/keys.js initialises it to 0 and only ever `++`s it, mergeToGlobal takes the max of two such " +
+             "numbers and serializeApiKeyEntry asserts and writes it on every entry, so anything else is one " +
+             "of those producers having changed under this badge (key type=" + info.name + ")");
       html += `<div class="card">
         <div class="card-label">${esc(info.name)} <span class="badge badge-source" title="where this key was found — the request/response context it was matched in">${esc(info.source)}</span>
-          <span class="badge badge-status">${esc(String(info.requestCount))} req</span>
+          <span class="badge badge-status" title="how many times this key's pattern matched in text this extension scanned — one per match per scanned string (the request URL, each request header, each response, WebSocket and postMessage body, each decoded protobuf field, and every nested base64 level of those). It is not a count of requests, and across documents it is the most any one document's scan saw.">${esc(String(info.requestCount))}&times; seen</span>
         </div>
         <div class="card-value">${esc(key)}</div>`;
 
