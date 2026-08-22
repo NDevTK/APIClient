@@ -535,7 +535,17 @@ async function cmdGoto(args) {
     // status is an unexpected state — fail hard so the broken server is seen, not papered over.
     const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
     if (!resp) throw new Error("goto " + url + " returned NO response (server unreachable / net error) — fix the fixture server before testing");
-    if (!resp.ok()) throw new Error("goto " + url + " -> HTTP " + resp.status() + " (not OK) — the target/fixture server is broken; refusing to analyse an error page");
+    /* 304 IS A DELIVERED DOCUMENT, and `resp.ok()` says otherwise. Puppeteer's `ok()` is 200-299, so a
+       conditional request the browser satisfied FROM CACHE — which is what a real site serves on the second
+       visit within one profile — was refused here as "the target server is broken". That is the mirror of
+       the failure this guard was written for: the guard exists so a Chrome error page is never analysed as a
+       passing run, and it had started rejecting a page that loaded perfectly. The fixture era hid it, because
+       a local fixture server sends no validators and never answers 304.
+       The test is therefore "did a document arrive", not "is the status in the 2xx window". Redirects do not
+       appear here at all — puppeteer follows them and reports the FINAL response — so the honest set is 2xx
+       plus 304, and everything else still fails loud. */
+    const okStatus = resp.ok() || resp.status() === 304;
+    if (!okStatus) throw new Error("goto " + url + " -> HTTP " + resp.status() + " (not a delivered document) — the target/fixture server is broken; refusing to analyse an error page");
     await page.bringToFront();
     log("navigated to " + page.url() + " [" + resp.status() + "]");
   });
