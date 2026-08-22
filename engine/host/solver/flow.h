@@ -261,17 +261,32 @@ typedef struct Flow {
        Carried beside the other three because they are one park: taken together at the switch out, put back
        together at the switch in, and released together at flow_release. */
     void *park_ctx; void *park_fn; void *park_free; void *park_opaque;
-    /* A ROUTED CROSS-DOCUMENT DELIVERY — the record the trusted zone handed this instance, and the SENDER's
-       origin, which only that zone may stamp (SECURITY.md: an origin the untrusted engine computed for a
-       foreign message is a forgery every `event.origin` check in every bundle would then trust). A delivery is
-       a WORK ITEM ON THE ONE FRONTIER and this is how it is carried. It is attached to EVERY live flow of the
-       receiving document, because a document's state IS its flows: the page's `message` listener was registered
-       by a script, so it lives in the delta of the flow that ran it, and a delivery made anywhere else arrives
-       at a document where nothing is listening. The flow's next step consumes the record, and the task that
-       step enqueues lands on that flow's own queue like any other job — which is why the queue is per-flow.
-       Both owned; NULL on a flow with nothing to deliver, and NULL again the moment the delivery is made. */
-    char *deliver;
-    char *deliver_origin;
+    /* THE ROUTED CROSS-DOCUMENT DELIVERIES THIS TIMELINE HAS BEEN HANDED AND NOT YET MADE — each the record
+       the trusted zone routed here, paired with the SENDER's origin, which only that zone may stamp
+       (SECURITY.md: an origin the untrusted engine computed for a foreign message is a forgery every
+       `event.origin` check in every bundle would then trust). A delivery is a WORK ITEM ON THE ONE FRONTIER
+       and this is how it is carried. It is attached to EVERY live flow of the receiving document, because a
+       document's state IS its flows: the page's `message` listener was registered by a script, so it lives in
+       the delta of the flow that ran it, and a delivery made anywhere else arrives at a document where nothing
+       is listening. Each flow makes its own delivery when it next steps, under its own delta, and the task
+       that step enqueues lands on that flow's own queue — which is why the queue is per-flow.
+       IT IS A FIFO AND NOT A SLOT, for the reason the operation queue below it is one and for a stronger one:
+       HTML §9.3.3 "Posting messages" ends the window post message steps by QUEUEING A GLOBAL TASK on the
+       posted message task source, and §8.1.7.1 "Definitions" gives a task a SOURCE precisely to "group and
+       serialize related tasks" — so two posts from one sender are two tasks the page observes IN ORDER, not
+       two alternatives one of which may overwrite the other. A slot made the second post an abort, and it is
+       on the shortest path there is: one sender posting twice. Only senders whose worlds CONTRADICT may not
+       share a timeline, and that is a FORK rather than a queue entry — asserted at the arrival, where both
+       vectors are in one hand (engine_route).
+       A JS ARRAY OF IMMUTABLE [record, senderOrigin] PAIRS, for the three reasons pending.h gives for the
+       register beside it and CLAUDE.md §State-isolation states in as many words: the runtime's leak walk
+       cannot see a `char *`, a pair of raw pointers crosses neither a park nor an instance while text does,
+       and a fork that shares the pairs by reference costs one refcount each instead of strdup'ing every byte.
+       The pairs are what let this queue PARK: a flow holding one had no legal move under RAM pressure while it
+       was two malloc'd strings the cold tier could not write (cold.c's park writes them as 'm' records now).
+       JS_UNDEFINED on a flow with nothing to deliver, which is nearly all of them, so the common case stays a
+       tag test. */
+    JSValue deliver_q;
     /* A CROSS-AGENT OPERATION THIS INSTANCE WAS ASKED TO PERFORM — the record the asking instance wrote
        (core/frame/remote_op.h) and the trusted zone's rendezvous TOKEN for the flow that is waiting on it.
        IT IS THE SAME SHAPE AS THE DELIVERY ABOVE AND FOR THE SAME REASON, with one thing added: a delivery is
@@ -319,6 +334,27 @@ long flow_created_count(void);
    than runnable — otherwise the scheduler re-enters it immediately and it spins on an answer that cannot
    arrive while it holds the thread. */
 int flow_blocked(const Flow *f);
+
+/* HOW MANY ROUTED CROSS-DOCUMENT DELIVERIES THIS FLOW IS HOLDING — the length of `deliver_q`, asked here
+   rather than read at the call sites so the queue's shape has ONE reader (the twin below says what a second
+   reader costs: it is always the one missing the tag assert). 0 for the JS_UNDEFINED an untouched flow
+   carries, which is nearly all of them. */
+int flow_deliver_pending(const Flow *f);
+
+/* …AND THE THREE THINGS THAT EVER HAPPEN TO THAT QUEUE, WHICH LIVE HERE BECAUSE THE FIELD DOES. An entry is
+ * never edited after it is pushed, so there are exactly three: APPEND at arrival, TAKE from the front at the
+ * delivery, and a FORK that gives an arm its own Array naming the same entries. They are declared beside the
+ * field rather than kept private to the scheduler because the queue has MORE THAN ONE client — engine.c
+ * routes and delivers, cold.c writes it out and reads it back — and a second client writing the Array is the
+ * two-readers-of-one-shape defect this file names one paragraph down: the second is always the one missing
+ * the assert. Every mutation runs inside cow_engine_write_begin/end, because this is the SCHEDULER's record
+ * about a flow, written from outside any flow's delta (engine_route walks every flow) — a delta that captured
+ * it would put a delivered message back on the queue the moment a sibling switched in.
+ * `flow_deliver_take` and `flow_deliver_entry` hand back an entry the CALLER owns and frees. */
+void    flow_deliver_push(JSContext *ctx, Flow *f, const char *record, const char *sender_origin);
+JSValue flow_deliver_take(JSContext *ctx, Flow *f);
+JSValue flow_deliver_entry(const Flow *f, int i);
+JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent);
 
 /* HOW MANY CROSS-AGENT OPERATIONS THIS FLOW HAS BEEN ASKED AND NOT YET STARTED — the length of `perform_q`,
    asked here rather than read at the call sites so the queue's shape has one reader. 0 for the JS_UNDEFINED an

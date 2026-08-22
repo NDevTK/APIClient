@@ -322,11 +322,16 @@ void flow_release(JSContext *ctx, Flow *f) {
        run_scheduler, main.c tears the instance down, and flow_registry_free releases survivors that are
        suspended mid-frame with replies outstanding. That abort is the point: it names the flows a run threw
        away at the moment it threw them, which no counter, no census line and no result field has ever said. */
+    /* A ROUTED DELIVERY IS ON THAT LIST NOW, and it was the one work item this walk never mentioned: flow_remove
+       silently `free`d the record and the sender origin, so a peer's message died here with nothing to say so —
+       the precise shape §Offensive-programming calls the concealment rather than the symptom. It belongs behind
+       `paged` like the rest: the cold tier writes the queue as 'm' records, so a WRITTEN flow's deliveries are
+       in its recipe and an unwritten one's are being dropped. */
     DCHECK(f->paged || (f->park_fn == NULL && f->frame == NULL && f->njob == 0 &&
-                        pending_count(f->pending) == 0),
-           "a flow was released holding WORK — a parked continuation, a suspended frame, queued reactions or "
-           "replies the host still owed it — and it was never written to the cold tier, so nothing replays it "
-           "and every one of those is a work item the ONE frontier just dropped");
+                        pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
+           "a flow was released holding WORK — a parked continuation, a suspended frame, queued reactions, "
+           "replies the host still owed it, or a peer's routed message — and it was never written to the cold "
+           "tier, so nothing replays it and every one of those is a work item the ONE frontier just dropped");
     /* AND THE PARK IS RELEASED HERE, BECAUSE THE SLOT OWNS IT. Three lines used to null these fields under
        the claim that "`opaque` is an activation reachable from the frame chain released just below, so what
        goes is the intention to resume it and not the memory." That was false at every one of the three sites
@@ -363,6 +368,9 @@ void flow_release(JSContext *ctx, Flow *f) {
        pager), because a dropped record is a peer suspended forever and freeing it quietly is how that stays
        invisible; this is the release, not the check. */
     JS_FreeValue(ctx, f->perform_q); f->perform_q = JS_UNDEFINED;
+    /* AND THE ROUTED DELIVERIES, one release for the array and every [record, senderOrigin] pair it names. That
+       they are gone at all is asserted above and by the caller, never cleaned up quietly here. */
+    JS_FreeValue(ctx, f->deliver_q); f->deliver_q = JS_UNDEFINED;
     cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
     /* THE HEAD BEFORE THE CHAIN BELOW IT: a head node inserted under a segment's node is that node's child, and
        a child must be freed before the parent it hangs under is freed deep. */
@@ -569,6 +577,9 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     /* …AND THE OPERATION QUEUE, empty for the same reason and stated the same way: a peer asks this document
        nothing at all in most sessions, and JS_UNDEFINED is not what a calloc leaves behind. */
     f->perform_q = JS_UNDEFINED;
+    /* …AND THE DELIVERY QUEUE, the same sentence a third time: no peer posts to most documents, and an Array
+       per flow would put a JSObject on the heap for every member of a frontier that reached 29550 here. */
+    f->deliver_q = JS_UNDEFINED;
     /* …and the register's own context, named HERE because this is the one point every flow passes through.
        Putting it in each host's setup would be the hand-copied list build.mjs warns about. */
     pending_set_ctx(ctx);
@@ -604,6 +615,104 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
    a second representation of the same fact, and the two drift at exactly the sites (fork, drain, release) that
    are already the hardest to keep in step. The register is short — it is one flow's outstanding requests. */
 int flow_blocked(const Flow *f) { return pending_blocked(f->pending); }
+
+/* THE DELIVERY QUEUE'S LENGTH — see flow.h. Same context and same tag assert as the operation queue below it,
+   because it is the same shape: an Array this engine appends to and nothing outside it touches. */
+int flow_deliver_pending(const Flow *f) {
+    JSValue v;
+    int n;
+
+    if (!JS_IsObject(f->deliver_q)) return 0;
+    v = JS_GetPropertyStr(pending_ctx(), f->deliver_q, "length");
+    DCHECK(JS_VALUE_GET_TAG(v) == JS_TAG_INT,
+           "a flow's delivery queue has no small-integer length — it is the engine's own Array and nothing "
+           "outside it appends");
+    n = JS_VALUE_GET_INT(v);
+    JS_FreeValue(pending_ctx(), v);
+    return n;
+}
+
+/* THE UNMADE-DELIVERY FIFO ITSELF — see flow.h for the shape and for why all three mutators live beside the
+   field. An entry is an immutable two-element [record, senderOrigin] Array; nothing edits one after the push,
+   so append / take-from-the-front / fork is the whole of it. */
+void flow_deliver_push(JSContext *ctx, Flow *f, const char *record, const char *sender_origin) {
+    JSValue e;
+
+    DCHECK(record != NULL && *record, "a routed delivery was queued with no record");
+    DCHECK(sender_origin != NULL && *sender_origin,
+           "a routed delivery was queued with no SENDER ORIGIN — only the trusted zone may stamp one, and it "
+           "is the field every `event.origin` check in every bundle is written against");
+    e = JS_NewArray(ctx);
+    CHECK(!JS_IsException(e), "flow: OOM allocating a routed delivery — a dropped record is a message a peer "
+                              "sent and this document never received, which the page cannot tell from having "
+                              "registered no handler");
+    cow_engine_write_begin();
+    JS_SetPropertyUint32(ctx, e, 0, JS_NewString(ctx, record));
+    JS_SetPropertyUint32(ctx, e, 1, JS_NewString(ctx, sender_origin));
+    if (!JS_IsObject(f->deliver_q)) {
+        JS_FreeValue(ctx, f->deliver_q);
+        f->deliver_q = JS_NewArray(ctx);
+        CHECK(!JS_IsException(f->deliver_q), "flow: OOM allocating a flow's delivery queue");
+    }
+    JS_SetPropertyUint32(ctx, f->deliver_q, (uint32_t)flow_deliver_pending(f), e);
+    cow_engine_write_end();
+}
+
+/* TAKE THE OLDEST, which is the whole of why this is a queue and not a set: HTML §9.3.3 "Posting messages"
+   ends the window post message steps by queueing a global task on the posted message task source, and
+   §8.1.7.1 "Definitions" gives a task a source in order to "group and serialize related tasks" — so the order
+   two messages arrived in is the order the page must observe them in. A swap-remove would hand the page one
+   sender's second message before its first. */
+JSValue flow_deliver_take(JSContext *ctx, Flow *f) {
+    int n = flow_deliver_pending(f), i;
+    JSValue e;
+
+    DCHECK(n > 0, "a delivery was taken from a flow whose queue is empty — the caller tested the queue to get "
+                  "here, so the two reads have come apart");
+    e = flow_deliver_entry(f, 0);
+    cow_engine_write_begin();
+    for (i = 1; i < n; i++)
+        JS_SetPropertyUint32(ctx, f->deliver_q, (uint32_t)(i - 1),
+                             JS_GetPropertyUint32(ctx, f->deliver_q, (uint32_t)i));
+    JS_SetPropertyStr(ctx, f->deliver_q, "length", JS_NewInt32(ctx, n - 1));
+    cow_engine_write_end();
+    return e;
+}
+
+/* ONE ENTRY, WITHOUT CONSUMING IT — the accessor both non-consuming readers go through (engine_route compares
+   the arriving record's world against every queued one, the cold tier writes them out), so the pair's shape is
+   asserted in ONE place however many callers read it. */
+JSValue flow_deliver_entry(const Flow *f, int i) {
+    JSValue e;
+
+    DCHECK(i >= 0 && i < flow_deliver_pending(f),
+           "a flow's delivery queue was read past its end — the caller asked it for its length to get here");
+    e = JS_GetPropertyUint32(pending_ctx(), f->deliver_q, (uint32_t)i);
+    DCHECK(JS_IsObject(e), "a flow's delivery queue held something that is not a [record, senderOrigin] pair — "
+                           "it is this engine's own Array and nothing outside flow_deliver_push appends");
+    return e;
+}
+
+/* THE ARM'S OWN QUEUE — a new Array naming the parent's ENTRIES. The arm is that timeline continued, so a
+   message that arrived in this document before the branch arrived in the arm too, and it makes its own
+   delivery under its own delta: the multiplicity §7.2.1 has when a document's state is its flows, not one
+   message delivered twice. The ARRAY is per-flow because each arm consumes at its own rate; the ENTRIES are
+   shared because none of them ever changes. An empty queue forks as JS_UNDEFINED — the common case stays a
+   tag test, and flow_deliver_push mints the Array again if the arm is ever routed one. */
+JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent) {
+    int n = flow_deliver_pending(parent), i;
+    JSValue out;
+
+    if (n == 0) return JS_UNDEFINED;
+    out = JS_NewArray(ctx);
+    CHECK(!JS_IsException(out), "flow: OOM forking a flow's delivery queue — an arm that lost it is a timeline "
+                                "the peer's message never reached");
+    cow_engine_write_begin();
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(ctx, out, (uint32_t)i, JS_GetPropertyUint32(ctx, parent->deliver_q, (uint32_t)i));
+    cow_engine_write_end();
+    return out;
+}
 
 /* THE OPERATION QUEUE'S LENGTH — see flow.h. The context is the pending register's, for the reason that file
    gives for holding one at all: the callers that matter (the scheduler's pick, the teardown asserts) hold a
@@ -1010,9 +1119,11 @@ void flow_remove(JSContext *ctx, Flow *f) {
     DCHECK(f->frame == NULL && f->park_fn == NULL,
            "a flow was removed holding a live frame or a parked continuation — its whole activation chain, and "
            "everything those frames close over, would be retained by a handle nothing will ever free");
-    DCHECK(f->njob == 0 && f->jobs == NULL && JS_IsUndefined(f->pending) && JS_IsUndefined(f->perform_q),
-           "a flow was removed still holding queued jobs, pending host replies or unstarted cross-agent "
-           "operations — each is a work item on the one frontier, and the WFQ may never drop one");
+    DCHECK(f->njob == 0 && f->jobs == NULL && JS_IsUndefined(f->pending) && JS_IsUndefined(f->perform_q) &&
+           JS_IsUndefined(f->deliver_q),
+           "a flow was removed still holding queued jobs, pending host replies, unstarted cross-agent "
+           "operations or routed cross-document messages — each is a work item on the one frontier, and the "
+           "WFQ may never drop one");
     DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dyn_doc == NULL && f->dyn_token == NULL &&
            f->dyn_pos == NULL && f->dec_blob == NULL && f->pin_blob == NULL,
            "a flow was removed with its lazily-loaded chunk bodies or its suspended decision/pin blobs still "
@@ -1020,7 +1131,10 @@ void flow_remove(JSContext *ctx, Flow *f) {
     for (int i = 0; i < g_flows_n; i++) {
         if (g_flows[i] == f) {
             JS_FreeValue(ctx, f->fn);
-            free(f->deliver); free(f->deliver_origin);
+            /* THE ROUTED RECORD AND ITS ORIGIN STAMP USED TO BE FREED HERE, and that free is gone rather than
+               converted: it ran on a work item the frontier was dropping and made the drop invisible, which is
+               the one thing this file's asserts exist to stop. The queue is released in flow_release beside
+               the operation queue, and its emptiness is asserted just above. */
             /* THE CANDIDATE IT WAS VERIFYING. Both strings are this flow's own copies, and the only other place
                that frees them is the frontier's teardown — which walks the flows that are STILL THERE, so a
                flow removed here took them with it into nothing. `cand_sink` is static text and is not one. */

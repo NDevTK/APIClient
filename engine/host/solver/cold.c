@@ -7,6 +7,7 @@
 #include "solver/concolic.h"
 #include "solver/world.h"
 #include "solver/solve.h"     /* …and the @S sink table a parked candidate's class is re-bound through */
+#include "solver/pending.h"   /* the session's context, which a flow's JS-valued queues are read through */
 #include "check.h"
 
 #include <stdio.h>
@@ -73,8 +74,11 @@ void cold_census(ColdCensus *out)
         out->misc_bytes += (long)sizeof(Flow);
         if (f->cand_src) out->misc_bytes += (long)strlen(f->cand_src) + 1;
         if (f->cand_payload) out->misc_bytes += (long)strlen(f->cand_payload) + 1;
-        if (f->deliver) out->misc_bytes += (long)strlen(f->deliver) + 1;
-        if (f->deliver_origin) out->misc_bytes += (long)strlen(f->deliver_origin) + 1;
+        /* THE ROUTED DELIVERIES ARE NOT COUNTED HERE, and the two `strlen` rows that were are gone with the
+           two `char *` they measured. The queue is a JS Array of [record, senderOrigin] pairs now, so its
+           bytes are quickjs's and its strings are shared with everything else that names them — the same
+           reason the unstarted-operation queue beside it contributes nothing to this walk, and the same rule
+           the pending register keeps by asking ITSELF (pending_bytes) rather than restating its shape here. */
         if (f->jobs) out->misc_bytes += (long)f->jobcap * (long)sizeof(FlowJob);
     }
 
@@ -195,9 +199,10 @@ static void park_gen_rec(void)
     park_rec(rec);
 }
 
-/* ATTACKER TEXT CROSSES AS HEX, and it is the one thing in this document whose charset the grammar cannot
-   state. Every other field is composed of digits by this file and park_rec asserts exactly that. A BREAKOUT
-   can contain anything: `';X9()//` holds
+/* TEXT THIS FILE DID NOT COMPOSE CROSSES AS HEX, and it is the one thing in this document whose charset the
+   grammar cannot state. Every other field is composed of digits by this file and park_rec asserts exactly
+   that. Two kinds reach here and neither has a charset: an @S BREAKOUT, and a ROUTED RECORD with the TABs of
+   its own transport fields and a peer's base64 payload in it. A BREAKOUT can contain anything: `';X9()//` holds
    the ';' this file joins records with, an HTML breakout holds the '"' the transport quotes each record with,
    and a payload that survives a filter may be any byte at all. So the choice is a charset PREDICATE that three
    separate consumers would have to be kept in step with — this grammar, the JSON render, and cold_resume's
@@ -233,16 +238,16 @@ static char *park_unhex(const char *p, const char *end)
     char *out;
 
     DCHECK(n > 0 && (n & 1) == 0,
-           "a parked @S candidate's text is empty or has an odd number of hex digits — it was truncated on the "
-           "way out or split on the way back, and half a breakout substitutes nothing while still reporting as "
-           "a candidate that was tried");
+           "a hex field of the park document is empty or has an odd number of digits — it was truncated on the "
+           "way out or split on the way back. Half an @S breakout substitutes nothing while still reporting as "
+           "a candidate that was tried; half a routed record is a message that decodes to bytes no peer sent");
     out = malloc(n / 2 + 1);
     CHECK(out, "the cold tier could not rebuild a parked candidate's text");
     for (i = 0; i < n; i += 2) {
         int hi = park_hexval(p[i]), lo = park_hexval(p[i + 1]);
         DCHECK(hi >= 0 && lo >= 0,
-               "a parked @S candidate's text is not lower-case hex — this file wrote it and nothing else may, "
-               "so the document did not come from this engine's park");
+               "a hex field of the park document is not lower-case hex — this file wrote it and nothing else "
+               "may, so the document did not come from this engine's park");
         out[i / 2] = (char)((hi << 4) | lo);
     }
     out[n / 2] = 0;
@@ -346,6 +351,35 @@ static void park_rec_world(const char *vector)
     park_open_rec();
     park_str("w");
     park_hex(vector);
+}
+
+/* AN UNMADE ROUTED DELIVERY — one record per [record, senderOrigin] pair still on the flow's queue, written
+   immediately AFTER the 'f' or 'c' record of the flow that holds it and belonging to it. A message a peer sent
+   is the one work item on this frontier that NO REPLAY can re-derive: the asking side of a host request
+   re-issues it and a reaction is re-enqueued by the code that queued it, but nothing in the receiving document
+   re-sends someone else's message. So it crosses as what it is — both halves are TEXT, which is exactly what
+   the refusal this replaces named as the way out.
+   BOUND BY POSITION AND NOT BY AN ORDINAL, unlike the segments: a segment is SHARED (a base is named by every
+   chain above it) and so needs a name, while a delivery belongs to exactly one flow and is written with it.
+   The reader binds each to the flow it last rebuilt and refuses an 'm' that has no flow before it, which is
+   the whole of what the binding can get wrong.
+   ORDER IS THE QUEUE'S ORDER, because it is the order the page must observe (HTML §9.3.3 "Posting messages"
+   queues each post on the posted message task source, which §8.1.7.1 "Definitions" serializes) — so the
+   records are written front-first and the reader appends in the order it reads them.
+   BOTH FIELDS CROSS AS HEX for park_hex's own reason: a routed record holds the TABs of its own transport
+   fields and a base64 payload, and a serialized origin is whatever origin_serialize wrote — neither is a
+   charset this grammar can state, and a ';' in either would split the record in two on the way back. */
+static void park_rec_deliver(const char *record, const char *sender_origin)
+{
+    DCHECK(record != NULL && *record && sender_origin != NULL && *sender_origin,
+           "a routed delivery was written to the park document missing its record or the sender ORIGIN the "
+           "trusted zone stamped — the origin is the one field every `event.origin` check in every bundle is "
+           "written against, and this zone may not invent one on the way back in");
+    park_open_rec();
+    park_str("m");
+    park_hex(record);
+    park_str(",");
+    park_hex(sender_origin);
 }
 
 /* THE SEGMENT ORDINALS — the cross-tier NAME of a frozen decision segment, valid only inside one park document
@@ -522,11 +556,10 @@ void cold_park_flow(Flow *f)
     /* WHAT A RECIPE CANNOT CARRY IS ASSERTED HERE, at the one point where it would otherwise be written
        out wrong — never softened into a flow that resumes as something else. An @S CANDIDATE SESSION used to
        be on this list; it is a record kind now (park_rec_cand below), which is what the crash asked for. */
-    DCHECK(f->deliver == NULL,
-           "a flow holding a routed cross-document record was parked — the peer's message is not in its "
-           "recipe and no replay can invent one, so it is dropped exactly as it would be at a finish. A "
-           "delivery is a work item on the one frontier: park it as one (the record and the sender origin "
-           "the trusted zone stamped are both text) or refuse the park while one is outstanding");
+    /* A ROUTED DELIVERY USED TO BE ON THIS LIST TOO, and it is off it for the reason the candidate is: it is a
+       record kind now ('m', park_rec_deliver below), which is what that crash asked for in as many words —
+       "park it as one (the record and the sender origin the trusted zone stamped are both text)". A document
+       with an outstanding cross-document delivery had NO LEGAL MOVE under RAM pressure while this stood. */
     /* AND THE OTHER HALF OF THAT SHAPE, WHICH OWES AN ANSWER. flow.h says a cross-agent operation "is the same
        shape as the delivery above and for the same reason, with one thing added" — the asking instance's flow
        is SUSPENDED on the answer this one's program will produce. Dropping the record therefore does not merely
@@ -605,6 +638,31 @@ void cold_park_flow(Flow *f)
         park_rec(rec);
         g_parked_census.flows++;
         break;
+    }
+    /* …AND THE MESSAGES THIS TIMELINE WAS HANDED AND HAS NOT DELIVERED, immediately after its own record and
+       in queue order, because the reader binds each to the flow it last rebuilt. Written for BOTH kinds: a
+       candidate session is an ordinary member of the frontier and a peer posts to it like any other. */
+    {
+        JSContext *qctx = pending_ctx();
+        int q = flow_deliver_pending(f), k;
+
+        for (k = 0; k < q; k++) {
+            JSValue e = flow_deliver_entry(f, k);
+            JSValue rv = JS_GetPropertyUint32(qctx, e, 0);
+            JSValue ov = JS_GetPropertyUint32(qctx, e, 1);
+            const char *record = JS_ToCString(qctx, rv);
+            const char *origin = JS_ToCString(qctx, ov);
+
+            CHECK(record != NULL && origin != NULL,
+                  "the cold tier could not read a routed delivery off the flow it is parking — a message that "
+                  "cannot be written is one the resumed session never receives");
+            park_rec_deliver(record, origin);
+            JS_FreeCString(qctx, record);
+            JS_FreeCString(qctx, origin);
+            JS_FreeValue(qctx, rv);
+            JS_FreeValue(qctx, ov);
+            JS_FreeValue(qctx, e);
+        }
     }
     f->paged = 1;   /* its recipe exists: flow_release may now let its parked continuation go (flow.h) */
 }
@@ -778,6 +836,10 @@ void cold_resume(JSContext *ctx, const char *recipes)
     const char *p = recipes;
     const int before = flow_count();
     int gen_seen = 0;
+    /* THE FLOW AN 'm' RECORD BELONGS TO — the one this pass last rebuilt, which is the binding the writer
+       states by writing a flow's deliveries immediately after it. NULL until the first 'f' or 'c', so an 'm'
+       that arrives before one is refused rather than attached to whatever came next. */
+    Flow *last_flow = NULL;
 
     DCHECK(recipes != NULL && *recipes != '\0',
            "the cold tier was asked to resume an empty park document — a document with no residue DELETES its "
@@ -937,6 +999,31 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
             flows++; g_resumed.flows++;
+            last_flow = fl;
+        } else if (kind == 'm') {
+            /* A MESSAGE A PEER SENT AND THIS DOCUMENT HAD NOT YET RECEIVED, put back on the queue of the flow
+               it belonged to, in the order it was written — which is the order the page must observe (HTML
+               §9.3.3 "Posting messages" / §8.1.7.1 "Definitions"), and the reason this appends rather than
+               choosing a position. Both halves come back as TEXT and the ORIGIN is one of them: it is the
+               trusted zone's stamp and this file may not re-derive it, so a residue that lost it would leave
+               the resumed session inventing the one field every `event.origin` check is written against. */
+            const char *comma;
+            char *record, *origin;
+
+            DCHECK(last_flow != NULL,
+                   "a park document holds a routed delivery before any flow — an 'm' record belongs to the "
+                   "flow written immediately before it, so one at the head of the document names nothing and "
+                   "would be attached to whichever flow happened to come next");
+            for (comma = q; comma < end && *comma != ','; comma++)
+                ;
+            DCHECK(comma < end,
+                   "a parked routed delivery has no field after its record — the sender ORIGIN the trusted "
+                   "zone stamped is the second half of this record and no reader may invent one");
+            record = park_unhex(q, comma);
+            origin = park_unhex(comma + 1, end);
+            flow_deliver_push(ctx, last_flow, record, origin);
+            free(record);
+            free(origin);
         } else if (kind == 'c') {
             /* AN @S CANDIDATE SESSION COMES BACK AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand for what
                crosses and, just as load-bearing, which two candidate fields deliberately do not. Everything the
@@ -1014,6 +1101,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl->dec_blob = decide_blob_new(sid >= 0 ? seg[sid] : NULL);
             fl->pin_blob = concolic_pins_blob_empty();
             flows++; g_resumed.cands++;
+            last_flow = fl;
         } else {
             /* 'd' IS NOT AN ARM ANY MORE AND IS NOT SILENTLY IGNORED EITHER. It named an engine-seeded
                DISCOVERY PROBE — one flow per candidate document address — and active discovery is the trusted
@@ -1022,8 +1110,8 @@ void cold_resume(JSContext *ctx, const char *recipes)
                the letter is named in the abort so a reader is told which capability wrote it rather than being
                told the document is corrupt. */
             DFAIL("a park record names a kind this grammar does not have — the recipe holds a GENERATION ('g'), "
-                  "FOREIGN WORLD SEGMENTS ('w'), SEGMENTS ('s'), FLOWS ('f') and @S CANDIDATE SESSIONS ('c') "
-                  "and nothing else. A 'd' record "
+                  "FOREIGN WORLD SEGMENTS ('w'), SEGMENTS ('s'), FLOWS ('f'), @S CANDIDATE SESSIONS ('c') and "
+                  "UNMADE ROUTED DELIVERIES ('m') and nothing else. A 'd' record "
                   "is a DISCOVERY PROBE written by a session in which the engine seeded its own document "
                   "fetches; that flow kind no longer exists, so this residue predates the change or came from "
                   "another writer");

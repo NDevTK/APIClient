@@ -858,6 +858,82 @@ void engine_world_gone(JSContext *ctx, const char *world)
     world_release(ctx, w);
 }
 
+/* THE WORLD FIELD OF A ROUTED RECORD, copied out NUL-terminated. Every routed record is
+   `<op>\t<doc>\t<worlds>\t<tail>` (engine_route takes the same three fields apart), and a queued entry holds
+   the whole text, so the one thing a second reader of it needs is stated once here. Caller frees. */
+static char *record_worlds_dup(const char *record) {
+    const char *doc, *worlds, *tail;
+    char *out;
+
+    doc = strchr(record, '\t');
+    DCHECK(doc != NULL, "a routed record named no target document");
+    worlds = strchr(doc + 1, '\t');
+    DCHECK(worlds != NULL, "a routed record carried no world vector");
+    worlds++;
+    tail = strchr(worlds, '\t');
+    DCHECK(tail != NULL, "a routed record carried nothing after its transport fields");
+    out = malloc((size_t)(tail - worlds) + 1);
+    CHECK(out != NULL, "engine: OOM reading a routed record's world vector");
+    memcpy(out, worlds, (size_t)(tail - worlds));
+    out[tail - worlds] = 0;
+    return out;
+}
+
+/* DO TWO SENDING WORLDS BELONG TO ONE TIMELINE? A fork RETIRES the fork point and mints a child for BOTH arms
+ * (engine_sibling_assemble), so one sender's world is a continuation of another's exactly when it IS it or
+ * names it as an ancestor, and two arms of one branch are siblings that name each other nowhere. That is the
+ * whole test, and it is decidable here because every arrival carries its own vector.
+ *
+ * THREE PARSES AND NO ALLOCATION FOR THE ANCESTRY, because world_parse publishes its ancestry into ONE buffer
+ * it owns and the next call moves it — so the only thing carried across a parse is a WorldId, which is a
+ * value. Head-vs-head, then b's head against a's ancestry, then a's head against b's.
+ *
+ * SIDE-EFFECT-FREE AT ITS ONE CALL SITE, which is what lets it stand inside a DCHECK: world_parse INTERNS the
+ * document names it reads, and every name in both of these records was interned unconditionally by the
+ * engine_route call that routed it (the world_parse below its transport asserts is a statement, not a
+ * condition), so this reaches only names the local table already holds. */
+static int deliver_worlds_agree(const char *a_rec, const char *b_rec) {
+    char *a_vec = record_worlds_dup(a_rec), *b_vec = record_worlds_dup(b_rec);
+    const WorldId *anc;
+    WorldId aw, bw;
+    int n, k, agree = 0;
+
+    world_parse(b_vec, &bw, &anc);
+    n = world_parse(a_vec, &aw, &anc);
+    if (world_eq(aw, bw)) agree = 1;
+    for (k = 0; !agree && k < n; k++) if (world_eq(anc[k], bw)) agree = 1;   /* b is an ancestor of a */
+    n = world_parse(b_vec, &bw, &anc);
+    for (k = 0; !agree && k < n; k++) if (world_eq(anc[k], aw)) agree = 1;   /* a is an ancestor of b */
+    free(a_vec);
+    free(b_vec);
+    return agree;
+}
+
+/* …ASKED OF A WHOLE QUEUE, which is the form engine_route needs and the reason it is a function rather than a
+   loop written there: everything below this line runs ONLY in a dev build, because the whole call sits inside
+   a DCHECK condition and check.h compiles that to `sizeof`. Written as a loop at the call site it would have
+   read every entry out of the Array in release too, to hand the strings to a check that is not there. (Same
+   reason method_is_token is a function and not `#if APICLIENT_DEV` — the condition must still TYPE-CHECK in
+   release, so the helper has to exist; what must not survive is the work.)
+   AGAINST EVERY OUTSTANDING ENTRY, not just the newest: a queue whose members are pairwise compatible is a
+   chain, and an arrival that contradicts any link of it contradicts the timeline the whole queue describes. */
+static int deliver_queue_agrees(JSContext *ctx, const Flow *f, const char *record) {
+    int q = flow_deliver_pending(f), k, agree = 1;
+
+    for (k = 0; agree && k < q; k++) {
+        JSValue e = flow_deliver_entry(f, k);
+        JSValue rv = JS_GetPropertyUint32(ctx, e, 0);
+        const char *queued = JS_ToCString(ctx, rv);
+
+        CHECK(queued != NULL, "engine: OOM reading a queued delivery's record");
+        agree = deliver_worlds_agree(record, queued);
+        JS_FreeCString(ctx, queued);
+        JS_FreeValue(ctx, rv);
+        JS_FreeValue(ctx, e);
+    }
+    return agree;
+}
+
 /* THE INBOUND HALF OF THE ONE-WAY LINE — a record the trusted zone routed to THIS instance because it holds the
    document the record names. It is the exact text the sending instance emitted as a notice, plus the SENDER's
    ORIGIN, which only that zone may stamp (SECURITY.md: an origin the untrusted engine computed for a foreign
@@ -1000,36 +1076,30 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
                   "a WindowProxy for them: build that before this can be delivered");
     for (int i = 0; i < n; i++) {
         Flow *f = flow_at(i);
-        /* ONE PENDING RECORD PER TIMELINE. Two records on one flow are delivered in sequence into a single
-           timeline, and whether that is right depends ENTIRELY on the senders' worlds — which is the part the
-           instruction here used to get wrong, so it is stated properly before anyone builds against it.
-           TWO MESSAGES FROM ONE WORLD ARE SEQUENTIAL, not alternative: §9.4.4 queues each as a task on the
-           receiving document's queue and the page observes them in order, so "fork a sibling per arrival" is
-           the WRONG mechanism for them — it would turn one sender's two messages into two timelines that each
-           saw one. Only senders whose worlds CONTRADICT (two arms that took opposite branches) may not be
-           merged, and those must fork.
-           THE WORLD GRAPH NOW ANSWERS THAT, and what is missing is no longer a fact but a MECHANISM. A fork
-           retires the fork point and mints a child for BOTH arms (engine_sibling_assemble), so one sender's
-           world is a continuation of another's exactly when it IS it or names it as an ancestor — and every
-           arrival carries its own vector, so the relation is decidable here from what already crossed. What
-           this file cannot yet DO with the answer is the pair of mechanisms: a per-flow record QUEUE for the
-           compatible case (this field holds one, and a second overwriting it is a message the page never sees),
-           and a FORK for the contradictory one — which cannot be taken here, because this runs between
-           scheduler steps with no flow switched in and a sibling may only be assembled with its parent applied
-           (flow_answer_fork says why). Both belong at the delivery, where the receiving flow is running.
+        /* APPENDED, BECAUSE TWO MESSAGES FROM ONE WORLD ARE SEQUENTIAL. HTML §9.3.3 "Posting messages" ends
+           the window post message steps by queueing a global task on the posted message task source, and
+           §8.1.7.1 "Definitions" gives a task a source in order to "group and serialize related tasks" — so
+           the receiving page observes one sender's two posts IN ORDER, and a slot that refused the second was
+           an abort on the shortest path there is. (The section cited here used to be §9.4.4, which is "Message
+           ports" — a whole section away from the one that defines this method.)
+           ONLY SENDERS WHOSE WORLDS CONTRADICT MAY NOT SHARE A TIMELINE, and that is the half still missing.
+           A fork retires the fork point and mints a child for BOTH arms (engine_sibling_assemble), so one
+           sender's world is a continuation of another's exactly when it IS it or names it as an ancestor, and
+           two arms of one branch name each other nowhere — decidable here from the vectors both records carry,
+           which is what deliver_worlds_agree asks. Merging those two into one queue fabricates a timeline
+           neither sender was in; what they need is a FORK, which cannot be taken here because this runs
+           between scheduler steps with no flow switched in and a sibling may only be assembled with its parent
+           applied (flow_answer_fork says why). So the assert stays, over the CONTRADICTORY case alone.
            Driven by engine/route.mjs, whose posts are exactly this: two arms of one branch, each with a world
            that now names the branch rather than one of the arms. */
-        DCHECK(f->deliver == NULL,
-               "a second record was routed to a flow that has not yet made its first. It is NOT automatically a "
-               "merge to prevent: two messages from ONE sending world are sequential tasks the page must see in "
-               "order, and forking a sibling per arrival would be wrong for them. It is only senders whose "
-               "worlds CONTRADICT that may not share a timeline, and the vectors both records carry now answer "
-               "that (a fork retires the fork point, so neither arm is an ancestor of the other). Build the two "
-               "mechanisms the answer needs, at the DELIVERY where the receiving flow is switched in: a per-flow "
-               "record queue for compatible arrivals, and a sibling fork for contradictory ones");
-        f->deliver = strdup(record);
-        f->deliver_origin = strdup(sender_origin);
-        CHECK(f->deliver && f->deliver_origin, "engine: OOM attaching a routed record to a flow");
+        DCHECK(deliver_queue_agrees(ctx, f, record),
+               "two routed records whose sending worlds CONTRADICT were queued on one timeline — neither is "
+               "the other and neither names the other as an ancestor, so they are two arms of one branch, and "
+               "delivering both in sequence hands the page a timeline neither sender was in. Sequential posts "
+               "from one world are what the queue is for; this pair needs a SIBLING FORK, taken at the "
+               "DELIVERY where the receiving flow is switched in (here there is no flow applied and a sibling "
+               "may only be assembled over its parent)");
+        flow_deliver_push(ctx, f, record, sender_origin);
         /* AND IT IS ASKABLE AGAIN. A flow that reported host-owed is out of the pick until the host does
            something for it, and this IS that something: the record is work only the trusted zone could hand it
            (flow.h). A delivery attached to a flow the scheduler will not pick is a message the document never
@@ -1072,15 +1142,35 @@ static JSContext *doc_realm(uint32_t doc)
    carrying something nothing receives. */
 static void flow_deliver(JSContext *ctx, Flow *f)
 {
-    char *dup = f->deliver, *doc, *worlds, *tail;
+    JSValue entry, rv, ov;
+    const char *record, *origin;
+    char *dup, *doc, *worlds, *tail;
     WorldId w;
     const WorldId *anc;
+    uint32_t doc_id;
     int n_anc;
     CowDelta *seg;
     JSContext *rctx;
 
+    /* ASSERTED BEFORE THE QUEUE IS TOUCHED, because the take MUTATES: an abort after it would have consumed a
+       peer's message on the way out, and the frontier's residue would then be missing the very work item the
+       crash is about. */
     DCHECK(flow_running() == f, "a routed delivery was made while another flow was switched in — it would run "
                                 "against that flow's delta and its task would land on that flow's queue");
+    /* THE OLDEST UNMADE DELIVERY, taken from the front and owned here. ONE per step: the record becomes a
+       task at the receiving Window (window_message_route), the step returns, and the next step takes the next
+       one — so two posts from one sender enqueue two tasks in the order they were posted, which is what
+       §9.3.3's task source guarantees the page. */
+    entry = flow_deliver_take(ctx, f);
+    rv = JS_GetPropertyUint32(ctx, entry, 0);
+    ov = JS_GetPropertyUint32(ctx, entry, 1);
+    record = JS_ToCString(ctx, rv);
+    origin = JS_ToCString(ctx, ov);
+    CHECK(record != NULL && origin != NULL,
+          "engine: OOM reading a routed delivery off its queue — a record that cannot be read is a peer's "
+          "message this document never receives");
+    dup = strdup(record);
+    CHECK(dup != NULL, "engine: OOM splitting a routed delivery's transport fields");
     doc = strchr(dup, '\t');    *doc++ = 0;
     worlds = strchr(doc, '\t'); *worlds++ = 0;
     tail = strchr(worlds, '\t'); *tail++ = 0;
@@ -1089,7 +1179,23 @@ static void flow_deliver(JSContext *ctx, Flow *f)
        into this instance's root instead would fire the message at a document the sender never named — a
        message the page never received arriving as if it had, which is the same failure the routing check
        crashes on one level up. */
-    rctx = doc_realm(world_doc_intern(doc));
+    /* …AND IT IS ONE THIS AGENT HOLDS, asked HERE and not only at the arrival, because a delivery that came
+       off the COLD TIER never passed engine_route in this session and nothing else has checked it. It is not a
+       restatement of that check: a resumed flow replays the document from its FIRST SCRIPT, so a record naming
+       a CHILD navigable is taken off the queue before the replay has re-created it, and world_doc_intern mints
+       a handle for a document nobody has adopted. Said here rather than left to doc_realm one line down, whose
+       own DFAIL is about a navigable that EXISTS and has no realm yet and would send the reader to build the
+       node-navigable direction — a true instruction for the wrong cause. What this one names is the ORDER: a
+       parked delivery has to be made where the replay has reached the point the message arrived at, and today
+       it is made before the flow's first program. */
+    doc_id = world_doc_intern(doc);
+    DCHECK(world_doc_hosted(doc_id),
+           "a routed delivery names a document this session does not hold — the record survived the cold tier "
+           "but the DOCUMENT it names has not been re-created yet, because a resumed flow replays from its "
+           "first script and this delivery is taken off the queue before any of it runs. Make a parked "
+           "delivery at the position in the replay where its message arrived, rather than ahead of the "
+           "programs that build the navigable it names");
+    rctx = doc_realm(doc_id);
     /* THE SENDING DOCUMENT IS THE HEAD OF THE WORLD VECTOR — a world is minted by a flow of exactly one
        document, so the vector already names the sender and a second field for it could disagree with it. */
     n_anc = world_parse(worlds, &w, &anc);
@@ -1107,12 +1213,16 @@ static void flow_deliver(JSContext *ctx, Flow *f)
            "instance — the message arrives at a document missing everything its sender did here. Build the join "
            "of the two deltas that engine_route names");
     if (!strcmp(dup, "windowproxy.post"))
-        window_message_route(rctx, tail, world_doc_name(w.doc), f->deliver_origin);
+        window_message_route(rctx, tail, world_doc_name(w.doc), origin);
     else
         DFAIL("a record was routed with an op no component receives — the sending half emits it, so the "
               "receiving half is the unbuilt one; build it rather than dropping the delivery");
-    free(f->deliver); f->deliver = NULL;
-    free(f->deliver_origin); f->deliver_origin = NULL;
+    free(dup);
+    JS_FreeCString(ctx, record);
+    JS_FreeCString(ctx, origin);
+    JS_FreeValue(ctx, rv);
+    JS_FreeValue(ctx, ov);
+    JS_FreeValue(ctx, entry);
 }
 
 /* ---- ASKED TO PERFORM ONE, WHICH IS THE HALF WITH AN ANSWER ---------------------------------------------- */
@@ -1949,7 +2059,9 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
      * THE PARENT ARM USED TO KEEP THE FORK POINT'S NAME, and that is what made this a fork in the flow graph
      * and not in the world graph. Two consequences, and the second one is silent data loss:
      *   - a peer asked "do these two senders contradict?" saw the two arms as ancestor-and-descendant, which is
-     *     the same relation a flow's two SEQUENTIAL posts have — §9.4.4 tasks it must deliver in order. One
+     *     the same relation a flow's two SEQUENTIAL posts have — §9.3.3 "Posting messages" queues each on the
+     *     posted message task source, which §8.1.7.1 "Definitions" serializes, so it must deliver them in
+     *     order (the number here read §9.4.4, which is "Message ports": a whole section away). One
      *     question, two opposite answers, no way to tell which;
      *   - a peer materializes an arm's segment by forking the nearest ancestor it holds, and cow_delta_fork
      *     FREEZES that ancestor's head at that instant. The primary went on writing into the fork point's
@@ -2127,6 +2239,12 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        split as the register above and for the same reason: the ARRAY is per-flow (each arm starts its own copy
        of the operation), the ENTRIES are shared (a [record, token] pair is never edited after it is pushed). */
     sib->perform_q = perform_q_fork(ctx, parent);
+    /* …AND THE UNMADE DELIVERIES BY THE SAME SENTENCE AGAIN, which is the mechanism two asserts used to stand
+       in for: a message that arrived in this timeline before the branch arrived in the arm too, so the arm
+       makes its own delivery under its own delta. That is not one message delivered twice — it is one message
+       arriving in two timelines of a document whose state IS its flows. Same split as the two above: the
+       ARRAY is per-flow (each arm consumes at its own rate), the ENTRIES are shared. */
+    sib->deliver_q = flow_deliver_fork(ctx, parent);
     /* AN UNANSWERED SYNCHRONOUS REQUEST IS RE-ISSUED, NEVER INHERITED. Its answer is computed under the ASKING
        FLOW'S WORLD, and the sibling's world is not the parent's from this instant on — two arms of a fork that
        navigated a frame differently must not resolve to one Window. Sharing the id would deliver one answer
@@ -2163,11 +2281,14 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     void *dec, *pins;
 
     DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
-    /* A DELIVERY IS MADE BEFORE ANY CODE RUNS, so no flow can be AT A BRANCH while still holding its record. If
-       one is, the record would be inherited by the sibling and delivered TWICE — the same message arriving in
-       two timelines of one document, which no peer sent. */
-    DCHECK(parent->deliver == NULL, "a flow forked while still holding a routed record — the sibling would "
-                                    "inherit it and deliver the peer's one message a second time");
+    /* AN UNMADE DELIVERY IS INHERITED RATHER THAN REFUSED, and the assert that refused it is gone with the
+       SLOT it was about — the same correction, and for the same reason, as the unstarted operation two
+       paragraphs down. It claimed no flow could be at a branch still holding a record ("a delivery is made
+       before any code runs"), which was never true of a flow the zone routed to while it was suspended inside
+       a frame: engine_route attaches to EVERY live flow, and a mid-frame one branches with its queue intact.
+       The arm is that timeline continued, so the message that arrived in it arrived in the arm too, and the
+       assembly carries the queue (flow_deliver_fork). Two timelines each delivering once is not one message
+       delivered twice. */
     /* THE SAME SENTENCE FOR AN UNSTARTED OPERATION and the OPPOSITE one for a running answer. A cross-agent
        operation is turned into a program before any code runs, so no flow can be at a branch still holding the
        RECORD — two flows would then perform one operation twice and the peer would get two answers for a
@@ -2233,11 +2354,10 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
                "frame clone below copies the flow's own chain and not that continuation, so the arm would "
                "resume without the activation that asked the question. Carry the parked continuation into the "
                "clone (JS_TakeParkedFlow's pair is what the context switch already does with it)");
-        DCHECK(f->deliver == NULL,
-               "a flow holding a ROUTED DELIVERY got a peer's second answer — the arm is that timeline "
-               "continued, so the message that arrived in it arrived in the arm too, and the assembly does not "
-               "carry the record. Give the arm its own copy of the record and the trusted zone's origin stamp");
-
+        /* A ROUTED DELIVERY IS NOT REFUSED HERE ANY MORE, because the thing the refusal asked for is built:
+           it said "the arm is that timeline continued, so the message that arrived in it arrived in the arm
+           too, and the assembly does not carry the record. Give the arm its own copy" — engine_sibling_assemble
+           forks the delivery queue, so it does. */
         /* TAKEN FROM THE PARENT FIRST, so the arm inherits a list that no longer names it: the arm's copy is
            cleared below in any case, and the parent's must not fork over this answer a second time. */
         completion = pending_extra_pop(e, &av);
@@ -2988,10 +3108,12 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                own classic text. Only the DOCUMENT's own sequence has an element behind it, so only it can say
                MODULE — which is why the row below is the one place this is read. */
             ScriptType stype = SCRIPT_TYPE_CLASSIC;
-            /* THE ROUTED DELIVERY THIS FLOW EXISTS TO MAKE, and it is first because it is the flow's reason to
-               exist: the task it enqueues is what every branch below then finds on the queue. Consumed once —
-               the record is freed and cleared — so a resumed delivery flow falls through to its jobs. */
-            if (f->deliver) { g_step_unit = "routed-delivery"; flow_deliver(ctx, f); return 0; }
+            /* THE ROUTED DELIVERIES THIS FLOW HAS BEEN HANDED, and they are first because the task each one
+               enqueues is what every branch below then finds on the queue. ONE PER STEP, oldest first: each
+               becomes a §9.3.3 task at the receiving Window and the step returns, so the tasks are enqueued in
+               the order the messages were posted and the scheduler re-ranks between them. The queue empties as
+               they are taken, so a flow with none left falls through to its jobs. */
+            if (flow_deliver_pending(f)) { g_step_unit = "routed-delivery"; flow_deliver(ctx, f); return 0; }
             /* AND THE OPERATION A PEER IS PARKED ON, before this flow's own programs for the reason the
                delivery is: it is a work item another agent's flow is suspended at, and it becomes one of THIS
                flow's programs — after which the loop below runs it like any other. */
@@ -3434,8 +3556,10 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
        path ran while it was still suspended and freeing it silently would hide that. */
     DCHECK(f->frame == NULL, "a flow finished with a live preemptible frame — its whole activation chain, and "
                              "everything those frames close over, is retained by a handle nothing will free");
-    DCHECK(f->deliver == NULL, "a delivery flow finished without making its delivery — the record it was seeded "
-                               "with is a message the peer sent and this document never received");
+    DCHECK(flow_deliver_pending(f) == 0,
+           "a flow finished still holding routed deliveries — each is a message a peer sent and this document "
+           "never received, and a page that never receives one is indistinguishable from a page that "
+           "registered no handler");
     /* AND THE SAME FOR AN OPERATION, at both ends of it: a record never turned into a program is a question
        nobody performed, and a token never spent is a peer's flow parked at the line that asked, forever. */
     DCHECK(!flow_owes_answer(f),
@@ -4441,8 +4565,8 @@ static int engine_sched_slice(void) {
                "the frontier was declared exhausted while a live flow still owed a peer the answer to a "
                "cross-agent operation — the asking flow, in another instance, is suspended at the line that "
                "asked and this session is about to end without ever telling it anything");
-        DCHECK(flow_at(i)->deliver == NULL,
-               "the frontier was declared exhausted while a live flow still held a routed record — a peer's "
+        DCHECK(flow_deliver_pending(flow_at(i)) == 0,
+               "the frontier was declared exhausted while a live flow still held routed records — a peer's "
                "message this document never received, dropped with the session");
     }
     engine_session_close();
