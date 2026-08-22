@@ -168,9 +168,17 @@ async function child(docPath, schedName) {
         gateFail("a pending line carries no METHOD — qjs_pending answers `METHOD<TAB>URL` lines and the reply " +
                  "is delivered against both halves");
       const method = line.slice(0, tab), u = line.slice(tab + 1);
+      /* `computedType` IS THIS ZONE'S DECISION, AND WITHOUT IT THIS GATE COULD NOT MEASURE A REPLY AT ALL.
+         The sniff belongs to whoever READ the bytes, so fetch_reply_computed_type asserts the field rather
+         than defaulting it — and this record was written before that field existed. It is the same omission
+         that stopped engine/route.mjs, left behind in the one driver whose whole subject is documents that
+         consume replies: reply_values.html aborted on all four schedules and pin_and_shape.html on `park`,
+         5 of 28 runs, every one inside the harness rather than in anything it was measuring. A `content-type`
+         HEADER is not this field — the header is what the server SAID, this is what the zone DECIDED, which
+         is the whole distinction the record keeps them apart for. The body below is MOCK_BODY, minted here. */
       const reply = { status: 200, statusText: "OK",
                       headers: [["content-type", "application/json"]],
-                      urlList: [new URL(u, url).href] };
+                      urlList: [new URL(u, url).href], computedType: "application/json" };
       e.provide(method, u, reply, MOCK_BODY);
     }
   }
