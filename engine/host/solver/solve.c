@@ -348,9 +348,13 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     e = &g_pending[g_pending_n++];
     e->src = strdup(src);
     CHECK(e->src, "solve: OOM pending");
-    /* NOT LEARNED HERE. This is find-or-create over (source, class) and two of its three callers have no value
-       to read a root off — a candidate arriving at its own sink, and a parked candidate coming back from the
-       cold tier. Detection is the one that does, so add_pending states it and this leaves the honest NULL. */
+    /* NOT LEARNED HERE, because this is find-or-create over (source, class) and its three callers reach the
+       root by three different routes. Detection reads it off the value that arrived (add_pending); a parked
+       candidate coming back from the cold tier takes it out of the record it was rebuilt from
+       (solve_resume_candidate); the third — a candidate arriving at its own sink — has no route to one at all
+       and asserts that it CREATED nothing, so the NULL this line writes is one no reader can reach. Both
+       CREATING callers state the root before the entry is visible to anybody, which is exactly what
+       emit_delivery's assert holds them to. */
     e->root = NULL;
     e->sink = sink;
     e->tried = 0;
@@ -401,8 +405,10 @@ static void add_pending(const char *src, const char *root, int sink) {
     Cand *e = sink_search(src, sink, &created);
     const SinkClass *sc;
 
-    /* BEFORE THE EARLY RETURN, because a search opened by a cold-resumed candidate has no root yet and the
-       detection that finally sees the value may well be the one that finds the entry rather than creates it. */
+    /* BEFORE THE EARLY RETURN, because most detections FIND this entry rather than create it: a source reaches
+       one sink as often as the page writes it, and a cold-resumed candidate opens the search before any
+       exploration flow of this session has re-reached it. On a found entry this call is the EQUALITY assert,
+       which is the whole of what says the two ends of the tier agree about how these bytes arrive. */
     cand_learn_root(e, root);
     if (!created) return;
     sc = sink_class(sink);
@@ -421,18 +427,29 @@ static void record_sink(int cls, const char *source, const char *poc) {
        held once. */
     const Cand *twin = search_of(source, cls);
     DCHECK(twin != NULL, "an @S finding was recorded for a sink that was never detected as pending");
+    /* AND IT HAS ONE, WHICH IS A STATEMENT ABOUT THE SEARCH AND NOT A HOPE ABOUT THIS FINDING. Both doors into
+       g_pending state the root — detection reads it off the value, a cold resume takes it out of the park
+       record — so a NULL here names a third door rather than a search that happens not to know. It was a
+       `(twin && twin->root) ? … : NULL` while the second door did not exist, and that ternary was the quiet
+       half of the same defect: the loud half aborted in emit_delivery naming the missing field, while this one
+       stored a FIRE-VERIFIED PoC with no envelope and said nothing at all. */
+    DCHECK(twin->root != NULL,
+           "the search behind a fire-verified @S PoC never learned how its bytes arrive — the finding is the "
+           "strongest thing this half of the tool emits, and without the root §S(d)'s reproduction envelope "
+           "reports it as an exploit no navigation reaches");
     sink_class(cls);   /* the row exists before anything is stored against it */
     for (int i = 0; i < g_sinks_n; i++) if (g_sinks[i].cls == cls && !strcmp(g_sinks[i].source, source)) return;
     if (g_sinks_n >= g_sinks_cap) { g_sinks_cap = g_sinks_cap ? g_sinks_cap * 2 : 8; g_sinks = realloc(g_sinks, (size_t)g_sinks_cap * sizeof(Finding)); CHECK(g_sinks, "solve: OOM @S store"); }
     Finding *f = &g_sinks[g_sinks_n++];
     f->cls = cls; f->source = strdup(source ? source : "?"); f->poc = strdup(poc);
-    f->root = (twin && twin->root) ? strdup(twin->root) : NULL;
-    /* THE ONLY TWO ALLOCATIONS IN THIS FILE THAT WERE NOT CHECKED, in the one record that must survive. A NULL
+    f->root = strdup(twin->root);
+    /* THE THREE ALLOCATIONS OF THE ONE RECORD THAT MUST SURVIVE, and none of them was checked before. A NULL
        here is not a lost finding, it is a CORRUPT one: `solved` strcmps the source to decide whether to also
        emit the sink as a parked search, and solve_json_array writes the poc straight into the report. Every
        neighbouring allocation — the store's own realloc one line up, the pending entry, each breakout — has
-       carried a CHECK all along. */
-    CHECK(f->source && f->poc && (!twin || !twin->root || f->root),
+       carried a CHECK all along. The root's clause is now the same clause as the other two, because the root
+       is now as unconditional as they are. */
+    CHECK(f->source && f->poc && f->root,
           "solve: OOM storing a fire-verified @S PoC — the finding is the proof, and a half-stored one corrupts "
           "every later read of the report rather than losing it. The delivery ROOT is part of that proof: §S(d) "
           "requires every emitted PoC to carry its reproduction envelope, and a finding that lost its root "
@@ -706,13 +723,50 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
 /* Seed a candidate flow per (sink, breakout) for every sink NOT YET SEEDED, and answer how many were added.
    Idempotent by construction, so the scheduler can ask again every time the frontier drains — which is what a
    sink found by code that only loaded after the first drain needs. */
-/* A PARKED CANDIDATE COMING BACK — see solve.h for why the re-binding and the bookkeeping are ONE call. */
-const char *solve_resume_candidate(const char *src, const char *sink_name) {
-    int i, cls = -1;
+/* THE ROOT OF THE SEARCH A LIVE CANDIDATE BELONGS TO — the park's read half, asked by cold.c at the moment it
+   writes that candidate's recipe.
+   IT IS A FACT ABOUT THE SEARCH AND NOT ABOUT THE FLOW, which is why the flow does not carry one. A root is
+   inherited unchanged through every derivation (see cand_learn_root), so the N candidates of one sink have
+   one root between them and holding a copy on each Flow would be N owned strings that exist only to be
+   asserted equal — plus a dup obligation at every clone, park and free site, which is exactly the shape
+   §Architecture warns produces a field somebody forgets. The park DOCUMENT still writes one copy per record,
+   and that is not the same duplication: a record is rebuilt on its own, by a session that has nothing else,
+   so it has to be whole.
+   THE SEARCH IS ALWAYS THERE TO ASK. A candidate flow exists only because detection opened its search
+   (solve_flow_begin asserts the same thing on every switch-in) and a cold-resumed one re-registers before it
+   runs an opcode, so an absent entry is a search dropped under a live flow rather than a question this file
+   cannot answer. */
+const char *solve_candidate_root(const char *src, const char *sink_name) {
+    Cand *e;
 
     DCHECK(src && *src && sink_name && *sink_name,
-           "a parked @S candidate was rebuilt without a source or without a sink class — its identity IS the "
-           "substitution it carries, so either one missing makes it an exploration flow wearing a payload");
+           "a candidate flow was asked for its delivery root naming no source or no sink class — the pair IS "
+           "the search's key, so either one missing asks about no search at all");
+    e = search_of(src, sink_class_of_name(sink_name));
+    DCHECK(e != NULL,
+           "a candidate flow is being parked for a sink search this session has no entry for — the candidate "
+           "exists only because detection opened one, so an absent entry means the search was dropped while "
+           "one of its flows was still live, and the recipe about to be written names a search nothing reopens");
+    DCHECK(e->root != NULL,
+           "the search a candidate is being parked out of never learned how its bytes arrive — this is the "
+           "last moment the fact exists in this process, and a record written without it resumes into a "
+           "session that reports a fire-verified PoC as one no navigation reproduces");
+    return e->root;
+}
+
+/* A PARKED CANDIDATE COMING BACK — see solve.h for why the re-binding and the bookkeeping are ONE call. */
+const char *solve_resume_candidate(const char *src, const char *root, const char *sink_name) {
+    int i, cls = -1;
+
+    /* THE ROOT IS PART OF THE IDENTITY THAT CROSSES, and it was the part that did not. A resumed candidate
+       opens its search here rather than at a detection — a verifying flow does not detect — so with no root
+       in the record the entry stood at NULL and every emit of it hit emit_delivery's assert: in dev the whole
+       report aborted, and in release the envelope rendered the silence that MEANS "no component carries these
+       bytes" over a payload whose delivery the ended session knew exactly. */
+    DCHECK(src && *src && root && *root && sink_name && *sink_name,
+           "a parked @S candidate was rebuilt without a source, without a delivery root or without a sink "
+           "class — its identity IS the substitution it carries and the route those bytes take to the victim, "
+           "so any one missing makes it an exploration flow wearing a payload, or a payload nothing delivers");
     for (i = 0; i < SINK_CLASS_N; i++)
         if (!strcmp(SINKS[i].name, sink_name)) { cls = i; break; }
     if (cls < 0) {
@@ -731,7 +785,13 @@ const char *solve_resume_candidate(const char *src, const char *sink_name) {
        parked-search entry reports. */
     {
         int created = 0;
-        sink_search(src, cls, &created)->tried++;
+        Cand *e = sink_search(src, cls, &created);
+        /* AND THE ROOT GOES ON BEFORE THE ENTRY IS VISIBLE TO ANY READER, which is what makes this the second
+           of the search's two doors rather than a hole beside the first. On the fifth resumed candidate of one
+           sink this is cand_learn_root's equality assert over what the fourth wrote, which is the only thing
+           that can say a park document's records still agree with each other. */
+        cand_learn_root(e, root);
+        e->tried++;
     }
     /* IT COSTS WHAT A FRESH ONE COSTS, so it counts as one. This number is what says whether a run got slower
        because there were more searches or because each search grew, and a resumed candidate re-runs the whole
@@ -843,19 +903,19 @@ static int solved(int cls, const char *src) {
    AN ABSENT ROOT IS NOT AN UNDECLARED SOURCE. Undeclared is a FACT (server-injected page state is written by
    the attacker directly and no component carries it), and it is what silence here means; a record that never
    learned its root is a record this session cannot answer for, and rendering the two the same way is exactly
-   the lie this change removes. Only one path produces the second, and it is named in the assert. */
+   the lie this change removes. The assert below is now an INVARIANT rather than a work item: both doors into
+   g_pending state the root, so a NULL naming neither of them is a third door. */
 static void emit_delivery(JsonBuf *b, const char *root) {
     const char *enc, *kind = NULL;
     char prefix = 0;
 
     DCHECK(root != NULL,
-           "an @S record is being emitted with no delivery ROOT. Detection reads one off the value and cannot "
-           "fail to (detect_sink asserts it for all three classes), so this record's search was opened by "
-           "solve_resume_candidate instead — a candidate coming back from the cold tier, whose park record "
-           "carries the injection identity and the payload and NOT the root. Add it as a field of cold.c's 'c' "
-           "record (park_rec_cand writes it, the 'c' arm of cold_resume reads it back) and pass it through "
-           "solve_resume_candidate; until then a cross-session resume would report a fire-verified PoC as one "
-           "no navigation reproduces");
+           "an @S record is being emitted with no delivery ROOT. Exactly two paths open a search and both "
+           "state one: detection reads it off the value (detect_sink asserts it for all three classes) and a "
+           "cold resume takes it out of the 'c' record's own root field (cold.c's park_rec_cand writes it, the "
+           "'c' arm of cold_resume reads it back, solve_resume_candidate learns it). So an absent root here is "
+           "a THIRD way into g_pending, and what it costs is the difference between 'no component carries "
+           "these bytes to the victim' and 'this session cannot say' — which the report renders identically");
     enc = concolic_source_encodes(root);
 
     if (enc) { json_buf_puts(b, ",\"sourceEncodes\":"); json_buf_str(b, enc); }

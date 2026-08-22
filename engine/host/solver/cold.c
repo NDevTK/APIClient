@@ -250,10 +250,21 @@ static char *park_unhex(const char *p, const char *end)
 }
 
 /* AN @S CANDIDATE SESSION'S RECIPE. It is an 'f' record — a flow standing on a decision chain, carrying its
-   reward — PLUS the three things that make it a candidate rather than an exploration flow: the SOURCE its
-   payload replaces, the PAYLOAD, and the SINK CLASS its fire is recorded against. It needs both halves: a
-   candidate is an ordinary member of the one frontier, so it can branch and be preempted like anything else,
-   and a record holding only the substitution would resume it from the baseline having lost every arm it took.
+   reward — PLUS the four things that make it a candidate rather than an exploration flow: the SOURCE its
+   payload replaces, the DELIVERY ROOT those bytes reach the victim by, the PAYLOAD, and the SINK CLASS its
+   fire is recorded against. It needs both halves: a candidate is an ordinary member of the one frontier, so it
+   can branch and be preempted like anything else, and a record holding only the substitution would resume it
+   from the baseline having lost every arm it took.
+   THE ROOT IS THE FIELD THIS RECORD WAS MISSING, and it did not degrade — it aborted. A resumed candidate
+   opens its sink search through solve_resume_candidate, and a verifying flow does not DETECT, so nothing else
+   in the resuming session had a value to read a root off: every emit of that search hit solve.c's
+   emit_delivery assert and took the whole @RESULT down with it. In release the same record rendered the
+   silence that MEANS "no component carries or transforms these bytes on the way in" over a payload whose
+   delivery the ended session knew exactly, and a fire-verified PoC took the NULL with it into the finding.
+   IT IS ASKED OF solve.c AND NOT READ OFF THE FLOW, because the root belongs to the SEARCH: it is inherited
+   unchanged through every derivation, so one sink's N candidates have one root between them and a copy on each
+   Flow would be N owned strings whose only content is that they are equal. The document still writes one per
+   record, and that is a different thing — a record is rebuilt alone, so it has to be whole.
    THE PAYLOAD CROSSES AS BYTES, NEVER AS AN INDEX. Today solve.c seeds from fixed literal tables, so a
    candidate's payload is one of a small closed vocabulary and an ordinal into that table would round-trip
    perfectly and be shorter. It is still the wrong record: §@S says the breakout is DERIVED from the real parse
@@ -277,11 +288,21 @@ static void park_rec_cand(const Flow *f, long id)
 {
     char head[96];
     const char *p;
+    const char *root;
 
     DCHECK(f->cand_src && *f->cand_src && f->cand_payload && *f->cand_payload && f->cand_sink,
            "an @S candidate was parked missing part of its substitution — the source, the payload and the sink "
            "class are one identity, and a record holding two of the three resumes a flow that injects nothing "
            "or cannot say what it fired");
+    /* AND THE FOURTH FIELD, which this writer does not hold and asks for — see above for why it lives on the
+       search. solve_candidate_root asserts that the search is there and knows its route; this asserts that
+       what came back is a field the grammar can carry, so a record short of the whole identity cannot be
+       written. */
+    root = solve_candidate_root(f->cand_src, f->cand_sink);
+    DCHECK(root && *root,
+           "an @S candidate was parked with no delivery ROOT — the source, the root, the payload and the sink "
+           "class are ONE identity, and a record holding three of the four resumes a flow that fires and then "
+           "cannot say how the attacker's bytes reach the victim");
     /* THE DISJOINTNESS OF THE THREE IDENTITIES IS NOT ASSERTED HERE ANY MORE — it moved to park_kind_of, which
        is the one place that CHOOSES between them and is therefore the one place asked about every flow rather
        than only about the flows that already reached this writer. */
@@ -300,6 +321,15 @@ static void park_rec_cand(const Flow *f, long id)
     park_str(",");
     park_hex(f->cand_src);
     park_str(",");
+    /* THE ROOT CROSSES AS HEX FOR park_hex's OWN REASON and not because anybody has looked at what a root
+       spells today. It is a source identity like `cand_src` beside it, minted by whichever component declared
+       the source, and the grammar's promise is that no field needs a charset predicate three consumers have to
+       be kept in step with. Two characters a byte is the price of never being right about a set of bytes. */
+    park_hex(root);
+    park_str(",");
+    /* THE PAYLOAD IS LAST AND STAYS LAST. The 'c' arm reads it to the record's `end` and not to a separator,
+       which is what makes it the field a new one goes BEFORE: appended after, its hex would be read as the
+       payload's own and every resumed candidate would inject a string no session ever built. */
     park_hex(f->cand_payload);
 }
 
@@ -910,12 +940,13 @@ void cold_resume(JSContext *ctx, const char *recipes)
         } else if (kind == 'c') {
             /* AN @S CANDIDATE SESSION COMES BACK AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand for what
                crosses and, just as load-bearing, which two candidate fields deliberately do not. Everything the
-               'f' arm does is done here too, because a candidate IS a flow with a path; the three extra fields
-               are what make the replay inject rather than explore. */
+               'f' arm does is done here too, because a candidate IS a flow with a path; the four extra fields
+               are what make the replay inject rather than explore, and say how the injected bytes arrive. */
             long sid;
             double val;
             Flow *fl;
-            const char *sb, *xb;
+            const char *sb, *xb, *rb;
+            char *root;
             char sname[32];
             size_t sl;
 
@@ -942,13 +973,34 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl = park_flow_add(ctx, val, before, flows);
             fl->cand_src = park_unhex(xb, q);
             q = park_comma(q);
+            /* THE ROOT IS READ BEFORE THE PAYLOAD because the payload is read to `end` — see park_rec_cand. */
+            for (rb = q; q < end && *q != ','; q++)
+                ;
+            /* AND A RESIDUE FROM A BUILD THAT WROTE NO ROOT FIELD IS NAMED HERE RATHER THAN LEFT TO THE
+               SEPARATOR CHECK. Such a record ends at its payload, so this scan runs to `end` and the payload's
+               own hex would be taken for the root — park_comma would then refuse it as "not written by this
+               engine", which is true and tells the reader nothing about the real cause. It is a real document
+               sitting in a real IndexedDB, exactly like the 'd' record below, so it is refused by NAME. There
+               is no version field and none is wanted: a record short of a field a reader needs must fail
+               rather than resume a candidate that injects a string no session ever built. */
+            DCHECK(q < end,
+                   "a parked @S candidate has no field after its source — this is a residue from a build whose "
+                   "'c' record carried no delivery ROOT, and every field after the source is one place to the "
+                   "left of where this reader looks for it. Drop the residue and let the frontier re-seed");
+            root = park_unhex(rb, q);
+            q = park_comma(q);
             fl->cand_payload = park_unhex(q, end);
             /* THE SINK BINDS BACK TO THE TABLE'S OWN POINTER, and the same call re-registers the sink as
-               pending-and-tried — solve.h says why those are one call and not two. `cand_verifying` is not set
-               here: solve_flow_begin sets it from `cand_src` on the switch-in, before this flow runs an
-               opcode. `cand_fired` is not set here either, and that is the whole point — the replay has to
-               observe the fire again or nothing is recorded. */
-            fl->cand_sink = solve_resume_candidate(fl->cand_src, sname);
+               pending-and-tried AND tells it how these bytes arrive — solve.h says why those are one call and
+               not three. `cand_verifying` is not set here: solve_flow_begin sets it from `cand_src` on the
+               switch-in, before this flow runs an opcode. `cand_fired` is not set here either, and that is the
+               whole point — the replay has to observe the fire again or nothing is recorded.
+               THE ROOT DOES NOT LAND ON THE FLOW, it lands on the SEARCH, which is the same asymmetry
+               park_rec_cand reads it back out of: one sink's N resumed candidates hand the same root to the
+               same entry and cand_learn_root asserts they agree. So this string is ours to free, and freeing
+               it here is what says the flow never owned it. */
+            fl->cand_sink = solve_resume_candidate(fl->cand_src, root, sname);
+            free(root);
             /* AND IT IS REBUILT EXACTLY AS AN 'f' IS, including a `-` segment. The temptation here is to say
                that `-` means "never scheduled" and leave such a candidate un-started, the way
                solve_seed_candidates leaves a fresh one — but the record CANNOT distinguish that from a flow

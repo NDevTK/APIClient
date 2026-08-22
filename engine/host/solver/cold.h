@@ -136,20 +136,32 @@ void cold_census(ColdCensus *out);
  *                                 refuses it BY NAME rather than reading it as a shorter chain of arms that
  *                                 would all be plausible and all be unverifiable.
  *     f<seg-id|->,<val>           a flow standing on that segment, carrying its WFQ reward
- *     c<seg-id|->,<val>,<sink>,<src-hex>,<payload-hex>
+ *     c<seg-id|->,<val>,<sink>,<src-hex>,<root-hex>,<payload-hex>
  *                                 an @S CANDIDATE SESSION: an 'f' record PLUS the substitution that makes it a
  *                                 candidate rather than an exploration flow. A candidate is an ordinary member
  *                                 of the one frontier, so it branches and is preempted like anything else and
  *                                 needs its path; and its IDENTITY is what it injects, so it needs that too.
  *                                 `sink` is solve.c's sink-class NAME, re-bound to that table's own pointer by
  *                                 solve_resume_candidate (a `cand_sink` is a pointer into static storage and
- *                                 has no identity outside the session that minted it). The source and the
- *                                 payload are ATTACKER TEXT and cross as lower-case HEX — never as an index
- *                                 into solve.c's breakout tables, which §@S's derived-breakout work will
- *                                 delete, and an index into a table that no longer exists is still a valid
- *                                 index. `cand_verifying` and `cand_fired` deliberately do NOT cross; see
- *                                 cold.c's park_rec_cand for why dropping the second is what keeps a recorded
- *                                 PoC an observation rather than an inherited claim.
+ *                                 has no identity outside the session that minted it). The source, the root
+ *                                 and the payload cross as lower-case HEX — the payload is ATTACKER TEXT and
+ *                                 never an index into solve.c's breakout tables, which §@S's derived-breakout
+ *                                 work will delete, and an index into a table that no longer exists is still a
+ *                                 valid index. `cand_verifying` and `cand_fired` deliberately do NOT cross;
+ *                                 see cold.c's park_rec_cand for why dropping the second is what keeps a
+ *                                 recorded PoC an observation rather than an inherited claim.
+ *                                 `root` IS THE DELIVERY PROVENANCE AND NOT A SECOND SPELLING OF `src`. The
+ *                                 source is the injection IDENTITY a payload is substituted at — a DERIVED one
+ *                                 (`{location.hash}.slice()`) included, because that is where the substitution
+ *                                 has to land — while the root is the declared browser source those bytes came
+ *                                 in through, which is what §S(d)'s reproduction envelope is built from. It is
+ *                                 asked of solve.c at both ends rather than read off the Flow, because it is a
+ *                                 fact about the sink SEARCH: one sink's N candidates share one root, and
+ *                                 solve.c's cand_learn_root asserts every record of them agrees. Without this
+ *                                 field the resuming session had NO other way to learn it — a verifying flow
+ *                                 does not detect — so every emit of the search aborted on solve.c's own
+ *                                 assert, and a release build rendered "nothing carries these bytes" over a
+ *                                 payload whose delivery the ended session knew exactly.
  *
  * Ordinals are dense and ascending in EMISSION order, and a base is always emitted before anything that names
  * it, so the rebuild is one forward pass with nothing to patch up.
