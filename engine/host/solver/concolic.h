@@ -27,7 +27,8 @@ void concolic_free(void);
    is the @H/@S display form ("{location.hash}", "/api/{region}"); a DECLARED source's shape is its provenance
    in braces and concolic_source_wrap asserts that, so a component spells the pair from ONE token of its own
    (core/frame/location.h) and never two literals; `src` is the PROVENANCE (may equal shape), which is
-   also this value's IDENTITY because nothing derived it; `example` (consumed) is the concrete example or
+   also this value's IDENTITY because nothing derived it AND its DELIVERY ROOT because a source read is where
+   the bytes entered; `example` (consumed) is the concrete example or
    JS_UNDEFINED when none is known yet. Returns a new owned JSValue. A value produced BY an operation over an
    unknown is not minted here — the operator's own hook composes its identity from its operands. */
 JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue example);
@@ -35,13 +36,40 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
 /* Predicates + accessors — the ONLY concolic test is this domain-carrying one (never a binary know-nothing). */
 int         concolic_is(JSValueConst v);              /* 1 iff v is a concolic value */
 const char *concolic_shape_c(JSValueConst v);         /* display shape (NULL if not concolic) */
-const char *concolic_src_c(JSValueConst v);           /* PROVENANCE: which source (NULL if not concolic) */
+const char *concolic_src_c(JSValueConst v);           /* INJECTION IDENTITY: which source (NULL if not concolic) */
 
-/* IDENTITY — WHICH VALUE THIS IS, and a different question from `concolic_src_c`'s WHERE IT CAME FROM.
+/* THE DELIVERY ROOT — WHICH SOURCE'S COMPONENT PHYSICALLY CARRIED THESE BYTES IN, and the third fact this
+ * record holds, because `src` was answering it and answering it WRONG.
  *
- * Provenance is INHERITED through a derivation (`location.hash.slice(1)` is still the fragment, for injection,
- * for the declared percent-encode set, for what a report names). Identity is COMPOSED at every derivation,
- * because it is what the per-flow path constraint is keyed by and a key must name the value a branch TESTS.
+ * `src` is where an @S candidate is INJECTED, and a derivation is entitled to mint a new one: a field read of
+ * an unknown object is an independently attacker-controlled datum, so concolic_exotic_get names `{state}.admin`
+ * and a candidate substitutes exactly there. `root` is where the bytes ENTERED THE PROGRAM, and a derivation
+ * can never change that: slicing a fragment does not stop it being the victim's own URL fragment.
+ *
+ * ONE FIELD ANSWERED BOTH, AND THE REPORT IT PRODUCED WAS FALSE IN THE WORST DIRECTION. A page doing
+ * `eval("var t='" + location.hash.slice(1) + "';")` was fired by this engine on real Chrome at
+ * `http://127.0.0.1:8781/#';X9()//` — one navigation, the one actually performed — and the popup's
+ * reproduction envelope said "the engine declares no browser delivery for this source — ... there is no
+ * navigation that reproduces it". `.slice` is a field read of the concolic, so concolic_exotic_get minted
+ * `{location.hash}.slice`, the call minted `{location.hash}.slice()`, and the source registry — an exact
+ * strcmp over the declared rows — matched neither. The consumer was right to read absence as a statement
+ * (extension/lib/popup-security.js `_deliverySentence` does exactly what a consumer owes a producer); the
+ * producer had lost the fact.
+ * IT ALSO DECIDED WHAT THE SEARCH DELIVERS, which is the half that is not a reporting bug: concolic_deliver
+ * looks the encode set up too, so a breakout injected at a DERIVED identity was handed to the page RAW —
+ * exactly the false-PoC generator the delivery declaration was introduced to end (see the declaration below),
+ * re-created for every `location.hash.slice(1)` in the world.
+ *
+ * INHERITED UNCHANGED THROUGH EVERY DERIVATION, including the two that mint a new `src`. NULL exactly when
+ * `concolic_src_c` is NULL (concolic_alloc asserts the two are present together), and NULL means these bytes
+ * entered through nothing this engine minted as a source — a positive statement, never a hole to fill. */
+const char *concolic_root_c(JSValueConst v);
+
+/* IDENTITY — WHICH VALUE THIS IS, and a different question from `concolic_src_c`'s WHERE IT IS INJECTED and
+ * from `concolic_root_c`'s WHERE IT CAME FROM.
+ *
+ * Identity is COMPOSED at every derivation, because it is what the per-flow path constraint is keyed by and
+ * a key must name the value a branch TESTS.
  * One field answered both for a long time, and the consequence was silent and in the one direction §Solver-half
  * forbids: `x`, `x*2`, `x < 700` and `x < 300` shared a provenance, so a flow's record of any of them DECIDED
  * the rest and feasible-refinement pruned arms nothing contradicts. A pruned arm emits nothing, so no gate
@@ -187,11 +215,16 @@ int         concolic_source_declared_by(const char *component, const char *src);
    FACT, not a default: server-injected page state (`window.__FLAGS`) is written by the attacker directly and
    no component transforms or carries it, so there is nothing to declare and a consumer must say exactly that
    rather than guess a vector. */
-int         concolic_source_delivery(const char *src, const char **kind, char *prefix);
+/* BOTH OF THESE ARE ASKED ABOUT A `root`, NEVER ABOUT A `src`, AND THE PARAMETER IS NAMED FOR IT. They are an
+   exact strcmp over the declared rows, so a DERIVED identity matches nothing and the answer comes back as the
+   silence that means "this source declared none" — which is a different fact wearing the same shape. That is
+   how a fire-verified fragment XSS was reported as having no navigation that reproduces it. Ask
+   concolic_root_c, whose whole reason for existing is to be the argument here. */
+int         concolic_source_delivery(const char *root, const char **kind, char *prefix);
 /* The bytes this source's component percent-encodes, or NULL if the source declared no delivery (it is handed
    over as-is). A PARKED @S search reports it because it is the constraint every candidate had to survive, and
    it is a FACT read from the declaration rather than a guess at why nothing fired. */
-const char *concolic_source_encodes(const char *src);
+const char *concolic_source_encodes(const char *root);
 
 /* Comparison constraint domain: `x === 'admin'` on a concolic must FORK (not collapse to concrete false), and
    the taken arm pins/negates. */

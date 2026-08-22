@@ -65,8 +65,16 @@ static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand
    EXISTS only because the probe run returned one, so `tried >= 2` already states it and a second copy of one
    fact is a second copy that can be behind. The fire branch asserts that implication rather than restating
    it. */
+/* `src` IS THE INJECTION IDENTITY AND `root` IS THE DELIVERY PROVENANCE, and this record held only the first
+   while emit_delivery asked the registry with it. The registry is an exact strcmp over the DECLARED sources, so
+   a derived identity — `{location.hash}.slice()`, which is what `location.hash.slice(1)` composes and what real
+   code is written in — matched no row, and the envelope's silence was rendered as the positive statement it
+   means for an undeclared source: "the engine declares no browser delivery for this source ... there is no
+   navigation that reproduces it". That was printed under a fire-verified fragment XSS whose reproduction is one
+   navigation, the one the researcher had just performed. The root is a fact about the VALUE, so it is read off
+   the value at the detector (concolic_root_c) and carried here beside the identity, never re-derived from it. */
 typedef struct {
-    char *src; int sink; int tried; int reached; int turns; int fires;
+    char *src; char *root; int sink; int tried; int reached; int turns; int fires;
     /* THE BREAKOUTS THIS SINK'S SEARCH HAS, IN ORDER, AND HOW MANY OF THEM ARE ALREADY FLOWS. A derived-context
        sink does not KNOW its breakouts when it is detected — a probe run reads them off the sink's own parse —
        so the list GROWS after seeding has already happened, and a one-shot "this sink is seeded" latch cannot
@@ -95,7 +103,7 @@ static void record_sink(int cls, const char *source, const char *poc);
    envelope states — the CSP question, the Trusted Types question, what makes the breakout run — is a fact
    about the class, and holding the name meant asking for them with a `strcmp` chain over display text at emit
    time. That chain computed the CSP question and threw the other two away. */
-typedef struct { int cls; char *source; char *poc; } Finding;   /* verified PoCs only */
+typedef struct { int cls; char *source; char *root; char *poc; } Finding;   /* verified PoCs only */
 static Finding *g_sinks = NULL; static int g_sinks_n = 0, g_sinks_cap = 0;
 
 /* THE MARKER, AND THE FINDING IS MADE HERE BECAUSE THIS IS WHERE THE PROOF HAPPENS. §@S: only FIRING proves a
@@ -340,6 +348,10 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     e = &g_pending[g_pending_n++];
     e->src = strdup(src);
     CHECK(e->src, "solve: OOM pending");
+    /* NOT LEARNED HERE. This is find-or-create over (source, class) and two of its three callers have no value
+       to read a root off — a candidate arriving at its own sink, and a parked candidate coming back from the
+       cold tier. Detection is the one that does, so add_pending states it and this leaves the honest NULL. */
+    e->root = NULL;
     e->sink = sink;
     e->tried = 0;
     e->reached = 0;
@@ -368,13 +380,30 @@ static void push_breakout(Cand *e, const char *payload) {
     e->npl++;
 }
 
+/* THE SEARCH LEARNS HOW THE ATTACKER'S BYTES ARRIVE — once, from the value that arrived. A source reaching a
+   sink twice reaches it by the same route both times: the root is inherited unchanged through every derivation,
+   so two values with the same injection identity cannot have entered by two. Asserted rather than overwritten,
+   because if it ever were two the report would state whichever detection ran last. */
+static void cand_learn_root(Cand *e, const char *root) {
+    DCHECK(e && root, "a sink search was told how its bytes arrive by nothing, or was told nothing");
+    if (!e->root) { e->root = strdup(root); CHECK(e->root, "solve: OOM recording a sink's delivery root"); return; }
+    DCHECK(!strcmp(e->root, root),
+           "one sink search has been handed two different delivery ROOTS for one injection identity — the root "
+           "is inherited unchanged through every derivation, so two values spelling the same source cannot have "
+           "entered the program by two different components, and the envelope would report whichever detection "
+           "ran last");
+}
+
 /* A DETECTED SINK OPENS ITS SEARCH. A single-context class states its breakouts; every other class states the
    probe whose run the derivation reads its context from. */
-static void add_pending(const char *src, int sink) {
+static void add_pending(const char *src, const char *root, int sink) {
     int created = 0;
     Cand *e = sink_search(src, sink, &created);
     const SinkClass *sc;
 
+    /* BEFORE THE EARLY RETURN, because a search opened by a cold-resumed candidate has no root yet and the
+       detection that finally sees the value may well be the one that finds the entry rather than creates it. */
+    cand_learn_root(e, root);
     if (!created) return;
     sc = sink_class(sink);
     if (sc->vectors) { for (int c = 0; sc->vectors[c]; c++) push_breakout(e, sc->vectors[c]); }
@@ -385,25 +414,29 @@ static void record_sink(int cls, const char *source, const char *poc) {
     /* A finding is a pending sink that SOLVED, so the two lists are one list in two states — the parked-search
        emit subtracts one from the other by (sink, source) and a finding with no pending twin would report as
        both fired and parked. Asserted at the origin because a future detector that records a PoC without first
-       calling add_pending would otherwise corrupt the report rather than crash. */
-    {
-        int have = 0;
-        for (int i = 0; i < g_pending_n; i++)
-            if (g_pending[i].sink == cls && !strcmp(g_pending[i].src, source)) { have = 1; break; }
-        DCHECK(have, "an @S finding was recorded for a sink that was never detected as pending");
-    }
+       calling add_pending would otherwise corrupt the report rather than crash.
+       AND THE TWIN IS WHERE THE DELIVERY ROOT COMES FROM. A fire is observed at the marker, where the value
+       that carried the attacker's bytes was concrete a long time ago — there is nothing left to read a root
+       off — so the finding takes the one its own search learned at detection. It is the same fact, and it is
+       held once. */
+    const Cand *twin = search_of(source, cls);
+    DCHECK(twin != NULL, "an @S finding was recorded for a sink that was never detected as pending");
     sink_class(cls);   /* the row exists before anything is stored against it */
     for (int i = 0; i < g_sinks_n; i++) if (g_sinks[i].cls == cls && !strcmp(g_sinks[i].source, source)) return;
     if (g_sinks_n >= g_sinks_cap) { g_sinks_cap = g_sinks_cap ? g_sinks_cap * 2 : 8; g_sinks = realloc(g_sinks, (size_t)g_sinks_cap * sizeof(Finding)); CHECK(g_sinks, "solve: OOM @S store"); }
     Finding *f = &g_sinks[g_sinks_n++];
     f->cls = cls; f->source = strdup(source ? source : "?"); f->poc = strdup(poc);
+    f->root = (twin && twin->root) ? strdup(twin->root) : NULL;
     /* THE ONLY TWO ALLOCATIONS IN THIS FILE THAT WERE NOT CHECKED, in the one record that must survive. A NULL
        here is not a lost finding, it is a CORRUPT one: `solved` strcmps the source to decide whether to also
        emit the sink as a parked search, and solve_json_array writes the poc straight into the report. Every
        neighbouring allocation — the store's own realloc one line up, the pending entry, each breakout — has
        carried a CHECK all along. */
-    CHECK(f->source && f->poc, "solve: OOM storing a fire-verified @S PoC — the finding is the proof, and a "
-                               "half-stored one corrupts every later read of the report rather than losing it");
+    CHECK(f->source && f->poc && (!twin || !twin->root || f->root),
+          "solve: OOM storing a fire-verified @S PoC — the finding is the proof, and a half-stored one corrupts "
+          "every later read of the report rather than losing it. The delivery ROOT is part of that proof: §S(d) "
+          "requires every emitted PoC to carry its reproduction envelope, and a finding that lost its root "
+          "reports as one no navigation reaches");
     /* AND THE FLOW THAT PROVED IT IS PAID FOR IT. sink_search already credits a sink merely being DETECTED,
        which is the weakest @S observation there is, while the strongest — a fire-verified PoC, the thing this
        half of the tool exists to produce — credited nothing at all. That is not only an inconsistency inside
@@ -412,6 +445,24 @@ static void record_sink(int cls, const char *source, const char *poc) {
        against exploring flows whose reward is unbounded. The flow that just proved an exploit is the last one
        a WFQ should be aging out. */
     flow_credit_emit(1.0);
+}
+
+/* DETECTION — the tail all three sink classes share, because they ask the value the same two questions and
+   this is the last point at which the value that carried the attacker's bytes still exists.
+   WHICH SOURCE THIS IS is what an @S candidate is injected at, so the record is keyed by the value's own
+   identity — a derived one included, because that is where a substitution has to land.
+   HOW ITS BYTES ARRIVED is a different question and the envelope's, so it is asked with the value's ROOT.
+   Every concolic has one (concolic_alloc asserts a provenance and a root are present together), so an absent
+   one is a value minted somewhere that does not go through that mint, and what it costs is the envelope. */
+static void detect_sink(JSValueConst arg, int cls) {
+    const char *shape = concolic_shape_c(arg);
+    const char *src   = concolic_src_c(arg);
+    const char *root  = concolic_root_c(arg);
+
+    DCHECK(root != NULL,
+           "an attacker value reached a sink carrying no delivery ROOT — the reproduction envelope is built "
+           "from it, and without one this finding would state that nothing carries these bytes to the victim");
+    add_pending(src ? src : (shape ? shape : "?"), root, cls);
 }
 
 /* THE CONTEXT PROBE CAME BACK — the observation §@S(2) asks for, and the reason a derived sink's breakouts are
@@ -512,9 +563,7 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
         return;                                 /* the marker records the PoC when the engine runs these bytes */
     }
     if (!concolic_is(arg)) return;              /* detection: not an attacker source -> not a sink */
-    const char *shape = concolic_shape_c(arg);
-    const char *src = concolic_src_c(arg);
-    add_pending(src ? src : (shape ? shape : "?"), SINK_EVAL);   /* record the source; breakout SEARCHED at verify */
+    detect_sink(arg, SINK_EVAL);   /* record the source; breakout SEARCHED at verify */
 }
 
 /* HTML firing oracle: re-parse the sink output with the REAL Lexbor parser and FIRE the auto-firing event
@@ -614,9 +663,7 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
         return;
     }
     if (!concolic_is(arg)) return;
-    const char *shape = concolic_shape_c(arg);
-    const char *src = concolic_src_c(arg);
-    add_pending(src ? src : (shape ? shape : "?"), SINK_URL);
+    detect_sink(arg, SINK_URL);
 }
 
 /* innerHTML = arg: an HTML-context sink. Detection records the source; the candidate run re-parses the injected
@@ -646,9 +693,7 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
         return;
     }
     if (!concolic_is(arg)) return;
-    const char *shape = concolic_shape_c(arg);
-    const char *src = concolic_src_c(arg);
-    add_pending(src ? src : (shape ? shape : "?"), SINK_HTML);
+    detect_sink(arg, SINK_HTML);
 }
 
 /* Fire-verify every pending source: SEARCH the candidate breakouts — inject each at the source, re-run the
@@ -790,12 +835,31 @@ static int solved(int cls, const char *src) {
    consumer must say exactly that rather than invent a vector. The vocabulary is the engine's: the delivery
    layer switches on these tokens and states its own inability to perform one, but it never decides which
    source uses which — the component that owns the source already did. */
-static void emit_delivery(JsonBuf *b, const char *src) {
-    const char *enc = concolic_source_encodes(src), *kind = NULL;
+/* IT IS ASKED WITH THE ROOT AND NOT WITH THE INJECTION IDENTITY, and the difference is a whole finding. The
+   registry is an exact strcmp over the declared rows: `location.hash` matches and `{location.hash}.slice()` —
+   what `location.hash.slice(1)` composes, and what a page that strips its own `#` therefore reports as — does
+   not, so both halves of the declaration went missing for the derivations real code is written in. See the
+   record above for what the popup then printed.
+   AN ABSENT ROOT IS NOT AN UNDECLARED SOURCE. Undeclared is a FACT (server-injected page state is written by
+   the attacker directly and no component carries it), and it is what silence here means; a record that never
+   learned its root is a record this session cannot answer for, and rendering the two the same way is exactly
+   the lie this change removes. Only one path produces the second, and it is named in the assert. */
+static void emit_delivery(JsonBuf *b, const char *root) {
+    const char *enc, *kind = NULL;
     char prefix = 0;
 
+    DCHECK(root != NULL,
+           "an @S record is being emitted with no delivery ROOT. Detection reads one off the value and cannot "
+           "fail to (detect_sink asserts it for all three classes), so this record's search was opened by "
+           "solve_resume_candidate instead — a candidate coming back from the cold tier, whose park record "
+           "carries the injection identity and the payload and NOT the root. Add it as a field of cold.c's 'c' "
+           "record (park_rec_cand writes it, the 'c' arm of cold_resume reads it back) and pass it through "
+           "solve_resume_candidate; until then a cross-session resume would report a fire-verified PoC as one "
+           "no navigation reproduces");
+    enc = concolic_source_encodes(root);
+
     if (enc) { json_buf_puts(b, ",\"sourceEncodes\":"); json_buf_str(b, enc); }
-    if (concolic_source_delivery(src, &kind, &prefix) && kind) {
+    if (concolic_source_delivery(root, &kind, &prefix) && kind) {
         json_buf_puts(b, ",\"delivery\":"); json_buf_str(b, kind);
         if (prefix) {
             char p[2] = { prefix, 0 };
@@ -852,7 +916,7 @@ char *solve_json_array(JSContext *ctx) {
            no separate `stored` boolean: "is it stored" is not a second fact beside the mechanism, it IS the
            mechanism (a `plant` delivery is two-stage and every other one is a single load), and two fields for
            one fact is precisely the drift that made five names on this record mean nothing. */
-        emit_delivery(&b, g_sinks[i].source);
+        emit_delivery(&b, g_sinks[i].root);
         json_buf_puts(&b, "}");
     }
     for (int i = 0; i < g_pending_n; i++) {
@@ -910,7 +974,7 @@ char *solve_json_array(JSContext *ctx) {
            vector to state and no PoC to reproduce, so `firesOn`/`cspBlocks`/`trustedTypes` would be claims
            about a PoC that does not exist. What it does carry is the whole source declaration — the bytes a
            candidate must survive AND how the attacker would have to reach the victim if one ever fires. */
-        emit_delivery(&b, g_pending[i].src);
+        emit_delivery(&b, g_pending[i].root);
         json_buf_puts(&b, "}");
     }
     json_buf_puts(&b, "]");
@@ -930,8 +994,9 @@ void solve_free(void) {
         for (int c = 0; c < g_pending[i].npl; c++) free(g_pending[i].pl[c]);
         free(g_pending[i].pl);
         free(g_pending[i].src);
+        free(g_pending[i].root);
     }
     free(g_pending); g_pending = NULL; g_pending_n = g_pending_cap = 0;
-    for (int i = 0; i < g_sinks_n; i++) { free(g_sinks[i].source); free(g_sinks[i].poc); }
+    for (int i = 0; i < g_sinks_n; i++) { free(g_sinks[i].source); free(g_sinks[i].root); free(g_sinks[i].poc); }
     free(g_sinks); g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
 }

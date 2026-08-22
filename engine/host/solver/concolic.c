@@ -13,10 +13,15 @@
 
 /* The per-value state hung off the JSObject via JS_SetOpaque.
  *
- * `src` AND `ident` ARE TWO DIFFERENT FACTS, AND ONE FIELD USED TO ANSWER BOTH QUESTIONS.
- *   `src` is PROVENANCE — which attacker source this value ultimately came from. It is deliberately INHERITED
- *   unchanged through the operator derivations, because it is what an @S candidate is injected at, what a
- *   source's declared percent-encode set is looked up by, and what a report names.
+ * `src`, `root` AND `ident` ARE THREE DIFFERENT FACTS, AND ONE FIELD HAS TWICE BEEN CAUGHT ANSWERING TWO.
+ *   `src` is the INJECTION IDENTITY — the source an @S candidate substitutes at. A derivation is entitled to
+ *   mint a new one and two of them do: a field read of an unknown OBJECT is an independently controlled datum
+ *   (`{state}.admin`), and so is the result of calling an unknown.
+ *   `root` is the DELIVERY PROVENANCE — the source whose component physically carried these bytes into the
+ *   program. It is INHERITED unchanged through EVERY derivation, including the two above, because nothing a
+ *   derivation does can change how the attacker got the bytes there. `location.hash.slice(1)` is no longer the
+ *   fragment for INJECTION (the `#` is gone, and concolic_lead_hook says so) and is still the fragment for
+ *   DELIVERY, which is what a reproduction envelope and a percent-encode set are questions about.
  *   `ident` is IDENTITY — WHICH VALUE THIS IS. It is COMPOSED at every derivation, because it is what the
  *   per-flow path constraint is keyed by, and a constraint key must name the value a branch tests.
  * With one field answering both, `x`, `x*2`, `x < 700` and `x < 300` were ONE fact: a flow that decided any of
@@ -28,9 +33,20 @@
  * object or a symbol, a property name that would not convert. That is a POSITIVE statement and not a hole: a
  * value with no identity is never decided from another value's record, so BOTH arms of every branch over it
  * stay. Absence costs forks; a wrong identity costs the arm. */
+/* WITH `src` ANSWERING THE DELIVERY QUESTION TOO, THE REPORT LIED ABOUT A FINDING IT HAD JUST FIRED. A fixture
+ * doing `eval("var t='" + location.hash.slice(1) + "';")` was loaded in real Chrome at
+ * `http://127.0.0.1:8781/#';X9()//`; the sink fired, and the popup's reproduction envelope said "the engine
+ * declares no browser delivery for this source — nothing carries or transforms these bytes on the way in, so
+ * there is no navigation that reproduces it", about a payload delivered in the victim's URL fragment by the
+ * single navigation that had just been performed. The chain is `location.hash` (src `location.hash`, declared)
+ * -> concolic_exotic_get `.slice` (src `{location.hash}.slice`) -> concolic_call `()` (src
+ * `{location.hash}.slice()`), and the registry is an exact strcmp, so it matched nothing. Nothing was broken
+ * on the consumer side: reading absence as "the source declared none" is exactly what a consumer owes a
+ * producer. The producer had thrown the fact away three derivations earlier. */
 typedef struct {
     char *shape;        /* @H/@S display form */
-    char *src;          /* PROVENANCE: the source this value derives from (@S injection, delivery, encode set) */
+    char *src;          /* INJECTION IDENTITY: the source an @S candidate substitutes at */
+    char *root;         /* DELIVERY PROVENANCE: where the bytes ENTERED. Inherited unchanged; NULL iff !src */
     char *ident;        /* IDENTITY: this exact value, composed below. NULL = this engine cannot spell it */
     JSValue example;    /* concrete example, or JS_UNDEFINED */
     int cmp_op;         /* for an EQUALITY RESULT: OPCMP_EQ/NE — `src <op> cmp_tok` (else OPCMP_NONE) */
@@ -157,11 +173,13 @@ static char *ident_of_operand(JSContext *ctx, JSValueConst v)
 
 /* Mint a value DERIVED from an unknown one: `ident` is CONSUMED, `example` is CONSUMED, and the candidate
    substitution applies exactly as it does to a source read (see concolic_new). */
-static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *src, char *ident, JSValue example);
+static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *src, const char *root,
+                                char *ident, JSValue example);
 /* …and the same without the substitution, for a value that is NOT a source read: a comparison RESULT is a
    boolean the operator computed, so handing the attacker's payload back in its place would answer a predicate
    with a string. */
-static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src, char *ident, JSValue example);
+static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src, const char *root,
+                              char *ident, JSValue example);
 
 /* THE PER-FLOW PATH CONSTRAINT. One map carrying every fact this flow has learned about the unknown input it
    read — which is the whole of what a DART/SAGE-lineage constraint is here, because concrete execution grounds
@@ -403,6 +421,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     if (!c) return;
     free(c->shape);
     free(c->src);
+    free(c->root);
     free(c->ident);
     free(c->cmp_tok);
     JS_FreeValueRT(rt, c->example);
@@ -601,10 +620,28 @@ static int concolic_lead_hook(JSValueConst v)
 }
 
 /* THE CANDIDATE AS THE PAGE READS IT. The solver's payload is what the ATTACKER puts in the URL; this is what
-   the browser hands the page, which is the only thing re-execution can honestly decide a breakout against. */
-static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *payload)
+   the browser hands the page, which is the only thing re-execution can honestly decide a breakout against.
+ *
+ * THE TWO HALVES OF THE DECLARATION ARE ASKED WITH TWO DIFFERENT KEYS, because they are facts about two
+ * different things and only one of them survives a derivation.
+ *   The ENCODE SET is a fact about the ROOT: the browser percent-encoded the bytes on the way INTO the address,
+ *   and `location.hash.slice(1)` does not decode them, so a candidate substituted at the slice's RESULT must
+ *   still be the encoded form. Asked with `src` — an exact strcmp that a derived identity never matches — the
+ *   whole set went missing for exactly the derivations real code is written in, and the payload was handed over
+ *   RAW. That is not a reporting gap: an HTML-context breakout containing `<` fired in the model at
+ *   `innerHTML = location.hash.slice(1)` and cannot fire in Chrome, which encodes `<` in a fragment. It is the
+ *   precise false-PoC generator this declaration was introduced to end, arriving through the derivation door.
+ *   The PREFIX is a fact about the INJECTION POINT: `#` is a character the fragment's own value carries, and
+ *   slicing is exactly what removes it (concolic_lead_hook states the same thing from the other side). So it
+ *   comes off `src`'s own row, which a derived identity correctly does not have.
+ * WHEN `src` HAS A ROW AT ALL, IT IS THE ROOT'S ROW — a value carrying a declared source's own name as its
+ * identity is one that inherited it unchanged, so it inherited the root unchanged too. Asserted rather than
+ * assumed: the two facts are threaded from an operand each, and taking them from DIFFERENT operands would
+ * encode for one source and prefix for another with nothing to say so. */
+static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *root, const char *payload)
 {
-    const SourceDelivery *d = NULL;
+    const SourceDelivery *at = NULL;   /* the INJECTION POINT's row, if it has one: the component's prefix */
+    const char *encode;                /* …and the ROOT's percent-encode set, which every derivation inherits */
     const unsigned char *p;
     char *out;
     size_t o = 0, n;
@@ -612,16 +649,23 @@ static JSValue concolic_deliver(JSContext *ctx, const char *src, const char *pay
 
     if (!payload) payload = "";
     for (i = 0; i < g_srcs_n; i++)
-        if (src && !strcmp(g_srcs[i].src, src)) { d = &g_srcs[i]; break; }
-    if (!d) return JS_NewString(ctx, payload);   /* an undeclared source is delivered as itself */
+        if (src && !strcmp(g_srcs[i].src, src)) { at = &g_srcs[i]; break; }
+    encode = concolic_source_encodes(root);
+    DCHECK(!at || (root && !strcmp(root, src)),
+           "a candidate is being delivered at an injection point that names a DECLARED source while its "
+           "delivery root names a different one — the two are threaded from an operand each, so this value "
+           "took them from two, and the payload would be percent-encoded for one source and prefixed for "
+           "the other");
+    if (!at && !encode) return JS_NewString(ctx, payload);   /* nothing carries these bytes: delivered as itself */
+    if (!encode) encode = "";
 
     n = strlen(payload);
     out = reclaim_malloc(n * 3 + 2);
     CHECK(out != NULL, "concolic: OOM delivering a candidate");
-    if (d->prefix) out[o++] = d->prefix;
+    if (at && at->prefix) out[o++] = at->prefix;
     for (p = (const unsigned char *)payload; *p; p++) {
         /* C0 controls and DEL are percent-encoded by every URL component, so they are not in any declared set. */
-        if (*p < 0x20 || *p == 0x7F || strchr(d->encode, (char)*p)) {
+        if (*p < 0x20 || *p == 0x7F || strchr(encode, (char)*p)) {
             static const char HEX[] = "0123456789ABCDEF";
             out[o++] = '%'; out[o++] = HEX[*p >> 4]; out[o++] = HEX[*p & 15];
         } else {
@@ -671,7 +715,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     ident = concolic_ident_compose(".", f, 2);
     if (field) JS_FreeCString(ctx, field);
     if (g_cand_src && !strcmp(shape, g_cand_src)) {          /* candidate run: this source -> the concrete breakout */
-        r = concolic_deliver(ctx, shape, g_cand_payload);
+        r = concolic_deliver(ctx, shape, c->root, g_cand_payload);
         free(shape); free(ident);
         return r;
     }
@@ -681,7 +725,11 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
         free(shape); free(ident);
         return r;
     }
-    r = concolic_alloc(ctx, shape, shape, ident, JS_UNDEFINED);   /* src = the field path (precise @S identity) */
+    /* src = the field path (a precise @S injection point), root = the parent's, unchanged. A field of an
+       unknown object is a datum the attacker controls SEPARATELY — which is why this mints a new injection
+       identity at all — but it is not a datum that arrives by a different route: whatever carried the object's
+       bytes in carried this field's, and a report has to say so. */
+    r = concolic_alloc(ctx, shape, shape, c->root, ident, JS_UNDEFINED);
     free(shape);
     return r;
 }
@@ -693,7 +741,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
  * `ia`/`ib` are the operands' identities in the order the composition wants them and are CONSUMED; `eq_kind`
  * and `tok` are the PIN, which only an equality against a concrete side has (an ordering narrows a domain and
  * determines no value — §Solver-half: a range-gated parameter stays a domain-annotated shape). */
-static JSValue pred_new(JSContext *ctx, const char *op, const char *src, char *ia, char *ib,
+static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const char *root, char *ia, char *ib,
                         int eq_kind, const char *tok)
 {
     const char *f[3];
@@ -712,7 +760,7 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, char *i
     ident = concolic_ident_compose("?", f, 3);
     free(ia); free(ib);
     /* NOT a source read, so no candidate substitution — see concolic_alloc's declaration. */
-    r = concolic_alloc(ctx, "{cmp}", src, ident, JS_UNDEFINED);
+    r = concolic_alloc(ctx, "{cmp}", src, root, ident, JS_UNDEFINED);
     c = JS_GetOpaque(r, g_concolic_class);
     DCHECK(c != NULL, "a comparison result was minted as something that is not a concolic value");
     c->cmp_op = eq_kind;
@@ -733,7 +781,8 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *to
            "an ordering is minted by the relational hook, which composes the engine's own operator id");
     sf[0] = src;
     kf[0] = "s"; kf[1] = tok;   /* the token is a string literal by construction here */
-    return pred_new(ctx, op == OPCMP_NE ? "!=" : "==", src,
+    /* THE COMPONENT'S OWN MEMBER IS A SOURCE READ, so it is its own root exactly as concolic_new's is. */
+    return pred_new(ctx, op == OPCMP_NE ? "!=" : "==", src, src,
                     concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2), op, tok);
 }
 int concolic_cmp(JSValueConst v, const char **psrc, const char **ptok) {
@@ -755,13 +804,14 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq) {
     JSValue a = sp[-2], b = sp[-1];
     int ca = concolic_is(a), cb = concolic_is(b);
     JSValueConst opq, other;
-    const char *src;
+    const char *src, *root;
     char *tok = NULL, *iu, *io;
     JSValue res;
 
     if (!ca && !cb) return 0;
     opq = ca ? a : b; other = ca ? b : a;
     src = concolic_src_c(opq);
+    root = concolic_root_c(opq);   /* THE SAME OPERAND, or the assert at concolic_alloc has two facts about two values */
     if (!concolic_is(other)) { const char *s = JS_ToCString(ctx, other); if (s) { tok = strdup(s); JS_FreeCString(ctx, s); } }
     /* EQUALITY IS SYMMETRIC, so `x === 'a'` and `'a' === x` compose to ONE identity: the unknown operand is
        written first, and where BOTH are unknown the two identities are ordered between themselves. Without
@@ -770,7 +820,7 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq) {
     iu = ident_of_operand(ctx, opq);
     io = ident_of_operand(ctx, other);
     if (ca && cb && iu && io && strcmp(iu, io) > 0) { char *t = iu; iu = io; io = t; }
-    res = pred_new(ctx, is_neq ? "!=" : "==", src, iu, io,
+    res = pred_new(ctx, is_neq ? "!=" : "==", src, root, iu, io,
                    tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE, tok);
     free(tok);
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
@@ -810,7 +860,10 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
     ident = concolic_ident_compose("()", f, argc + 1);
     for (i = 0; i < argc; i++) free(owned[i]);
     free(owned); free(f);
-    r = concolic_derived(ctx, shape, shape, ident, JS_UNDEFINED);
+    /* The RESULT of calling an unknown is a new injection identity — nothing here knows what the call returned,
+       so a candidate substitutes at the call — and it is NOT new bytes: whatever carried the callee's bytes in
+       carried these. This is the derivation the reported defect walked through (`{location.hash}.slice()`). */
+    r = concolic_derived(ctx, shape, shape, c->root, ident, JS_UNDEFINED);
     free(shape);
     return r;
 }
@@ -842,9 +895,9 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     DCHECK(w > 0 && (size_t)w < sizeof opid, "a relational operator's id did not fit its own buffer");
     (void)w;
     {
-        const char *src = concolic_src_c(ca ? a : b);
-        JSValue res = pred_new(ctx, opid, src, ident_of_operand(ctx, a), ident_of_operand(ctx, b),
-                               OPCMP_NONE, NULL);
+        JSValueConst opq = ca ? a : b;
+        JSValue res = pred_new(ctx, opid, concolic_src_c(opq), concolic_root_c(opq),
+                               ident_of_operand(ctx, a), ident_of_operand(ctx, b), OPCMP_NONE, NULL);
         JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
         sp[-2] = res;
     }
@@ -910,12 +963,13 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
     const char *name;
     int unary = 0;
     char *shape, *ident;
-    const char *src;
+    const char *src, *root;
     JSValue example = JS_UNDEFINED, res;
 
     if (!ca && !cb) return 0;
     name = carith_name(op, &unary);
     src = ca ? concolic_src_c(a) : concolic_src_c(b);
+    root = ca ? concolic_root_c(a) : concolic_root_c(b);
 
     /* THE OPERATOR AND ITS OPERANDS ARE THE IDENTITY, and the ARITY is part of it too: `carith_name` spells
        negation and subtraction both `-`, and a one-member composition can never write the same bytes as a
@@ -954,7 +1008,7 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
         JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
     }
 
-    res = concolic_derived(ctx, shape, src ? src : shape, ident, example);
+    res = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape, ident, example);
     free(shape);
     JS_FreeValue(ctx, sp[-nops]);
     if (nops == 2) JS_FreeValue(ctx, sp[-1]);
@@ -965,12 +1019,13 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
 /* 7.1.17 ToString over unknown input: unknown, source kept, example computed by actually stringifying the
    example when there is one. */
 JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
-    const char *src, *sh, *f[1];
+    const char *src, *root, *sh, *f[1];
     char *shape, *ident;
     JSValue ex, example = JS_UNDEFINED, r;
 
     if (!concolic_is(v)) return JS_UNINITIALIZED;
     src = concolic_src_c(v);
+    root = concolic_root_c(v);
     sh = concolic_shape_c(v);
     shape = shapef("String(%s)", sh ? sh : "{}");
     f[0] = concolic_ident_c(v);
@@ -981,7 +1036,7 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
         if (p) { example = JS_NewString(ctx, p); JS_FreeCString(ctx, p); }
     }
     JS_FreeValue(ctx, ex);
-    r = concolic_derived(ctx, shape, src ? src : shape, ident, example);
+    r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape, ident, example);
     free(shape);
     return r;
 }
@@ -992,7 +1047,7 @@ JSValue concolic_tostr_hook(JSContext *ctx, JSValueConst v) {
    regex match over a known query string HAS a concrete answer, and producing it is the next step here), and
    inventing one would be a fabricated observation. */
 JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JSValue example) {
-    const char *src, *sh, *f[2];
+    const char *src, *root, *sh, *f[2];
     char *shape, *ident;
     JSValue r;
 
@@ -1002,13 +1057,14 @@ JSValue concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op, JS
            "is what tells two derivations from one operand apart, and a value that dropped it would be decided "
            "by whichever of them this flow reached first");
     src = concolic_src_c(v);
+    root = concolic_root_c(v);
     sh = concolic_shape_c(v);
     shape = shapef("%s.%s()", sh ? sh : "{}", op);
     f[0] = concolic_ident_c(v); f[1] = op;
     ident = concolic_ident_compose("b", f, 2);
     /* `example` is what the operator got by RUNNING THE REAL OPERATION on this operand's own example. It is
        never computed here and never predicted: the codec really encoded, the parser really parsed. */
-    r = concolic_derived(ctx, shape, src ? src : shape, ident, example);
+    r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape, ident, example);
     free(shape);
     return r;
 }
@@ -1046,12 +1102,13 @@ JSValue concolic_key_name_hook(JSContext *ctx, JSValueConst key) {
    value still forks, and a sink still solves for the key that would reach it. Example-free on purpose: which
    property the attacker names is exactly what is not known, and @H never invents one. */
 JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst key) {
-    const char *src, *f[2];
+    const char *src, *root, *f[2];
     char *shape, *ident, *io, *ik;
     JSValue r;
 
     if (!concolic_is(key)) return JS_UNINITIALIZED;
     src = concolic_src_c(key);
+    root = concolic_root_c(key);
     shape = shapef("{}[%s]", concolic_shape_c(key) ? concolic_shape_c(key) : "{}");
     /* WHICH OBJECT WAS READ IS HALF THE IDENTITY: `a[x]` and `b[x]` are two reads and one must not decide the
        other. An ordinary object has no identity that survives the park a resumed flow replays through, so the
@@ -1061,7 +1118,7 @@ JSValue concolic_key_read_hook(JSContext *ctx, JSValueConst obj, JSValueConst ke
     f[0] = io; f[1] = ik;
     ident = concolic_ident_compose("[]", f, 2);
     free(io); free(ik);
-    r = concolic_derived(ctx, shape, src ? src : shape, ident, JS_UNDEFINED);
+    r = concolic_derived(ctx, shape, src ? src : shape, root ? root : shape, ident, JS_UNDEFINED);
     free(shape);
     return r;
 }
@@ -1076,7 +1133,7 @@ JSValue concolic_typeof_hook(JSContext *ctx, JSValueConst v) {
     shape = shapef("typeof %s", src ? src : "{}");
     f[0] = concolic_ident_c(v);
     ident = concolic_ident_compose("typeof", f, 1);
-    r = concolic_derived(ctx, shape, shape, ident, JS_UNDEFINED);
+    r = concolic_derived(ctx, shape, shape, concolic_root_c(v), ident, JS_UNDEFINED);
     free(shape);
     return r;
 }
@@ -1167,12 +1224,22 @@ void concolic_free(void)
            "reaches its record through this id, and the collection before it marks each example through it");
 }
 
-static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src, char *ident, JSValue example)
+static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src, const char *root,
+                              char *ident, JSValue example)
 {
     JSValue obj;
     Concolic *c;
 
     DCHECK(g_concolic_class != 0, "concolic_new before concolic_init — the class is unregistered");
+    /* THE TWO ARE PRESENT TOGETHER OR ABSENT TOGETHER, asserted at the ONE mint every value goes through. A
+       value that has a provenance HAS a root: either it is a source read, whose root is itself, or it was
+       derived from something that had one. A value with a `src` and no `root` is a derivation that dropped
+       the fact on the way — which is not a crash anywhere, it is a report that names a source and then states
+       that no navigation delivers it. And the reverse would be a root with nothing to inject at. */
+    DCHECK(!!src == !!root,
+           "a concolic value carries a provenance without a delivery ROOT, or a root with no provenance — the "
+           "two are one fact about where the bytes came from and every derivation inherits the second while "
+           "some of them re-mint the first, so a mismatch is a derivation that forgot to thread it");
     obj = JS_NewObjectClass(ctx, g_concolic_class);
     CHECK(!JS_IsException(obj), "concolic: the value object could not be allocated — a dropped concolic "
                                 "collapses a branch to a concrete arm and deletes everything behind the other");
@@ -1182,6 +1249,8 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
     CHECK(c->shape, "concolic: OOM copying a display shape");
     c->src = src ? strdup(src) : NULL;
     CHECK(!src || c->src, "concolic: OOM copying a source's provenance");
+    c->root = root ? strdup(root) : NULL;
+    CHECK(!root || c->root, "concolic: OOM copying a value's delivery root");
     c->ident = ident;       /* consume — NULL means this engine cannot spell the value; see the struct */
     c->example = example;   /* consume */
     c->cmp_op = OPCMP_NONE;
@@ -1189,7 +1258,8 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
     return obj;
 }
 
-static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *src, char *ident, JSValue example)
+static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *src, const char *root,
+                                char *ident, JSValue example)
 {
     /* A CANDIDATE RUN substitutes one source with a breakout. The check lived only in the field-read path, so a
        source installed as a plain property value — location.hash, document.cookie — was minted once at install
@@ -1203,9 +1273,9 @@ static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *s
            real query and fragment, so every candidate re-fire of a URL source leaked a string. */
         JS_FreeValue(ctx, example);
         free(ident);
-        return concolic_deliver(ctx, src, g_cand_payload);
+        return concolic_deliver(ctx, src, root, g_cand_payload);
     }
-    return concolic_alloc(ctx, shape, src, ident, example);
+    return concolic_alloc(ctx, shape, src, root, ident, example);
 }
 
 /* A SOURCE READ — the root of every identity. Its identity IS its provenance, because nothing derived it: this
@@ -1215,7 +1285,9 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
     const char *f[1];
 
     f[0] = src;
-    return concolic_derived(ctx, shape, src, concolic_ident_compose("s", f, 1), example);
+    /* A SOURCE READ IS ITS OWN ROOT — stated here, once, rather than as a second argument every one of the
+       seventeen components that owns a source would have to spell the same way twice. */
+    return concolic_derived(ctx, shape, src, src, concolic_ident_compose("s", f, 1), example);
 }
 
 int concolic_is(JSValueConst v) {
@@ -1230,6 +1302,11 @@ const char *concolic_shape_c(JSValueConst v) {
 const char *concolic_src_c(JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     return c ? c->src : NULL;
+}
+
+const char *concolic_root_c(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    return c ? c->root : NULL;
 }
 
 const char *concolic_ident_c(JSValueConst v) {
@@ -1273,6 +1350,7 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp) {
     char *shape = reclaim_malloc(ln); CHECK(shape, "concolic +: OOM shape concat");
     snprintf(shape, ln, "%s%s", sha, shb);
     const char *src = ca ? concolic_src_c(a) : concolic_src_c(b);
+    const char *root = ca ? concolic_root_c(a) : concolic_root_c(b);
 
     JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
     JSValue exb = cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b);
@@ -1301,7 +1379,7 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp) {
     { const char *f[2]; char *ia = ident_of_operand(ctx, a), *ib = ident_of_operand(ctx, b);
       f[0] = ia; f[1] = ib; ident = concolic_ident_compose("+", f, 2); free(ia); free(ib); }
 
-    JSValue result = concolic_derived(ctx, shape, src, ident, example);   /* consumes example and ident */
+    JSValue result = concolic_derived(ctx, shape, src, root, ident, example);   /* consumes example and ident */
     free(sha); free(shb); free(shape);
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
     sp[-2] = result;
