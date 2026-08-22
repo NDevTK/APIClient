@@ -425,15 +425,21 @@ static void record_sink(int cls, const char *source, const char *poc) {
        that carried the attacker's bytes was concrete a long time ago — there is nothing left to read a root
        off — so the finding takes the one its own search learned at detection. It is the same fact, and it is
        held once. */
+    /* BOTH ARE `CHECK`, BECAUSE BOTH ARE DEREFERENCED TWO LINES DOWN AND A DCHECK IS NOT THERE IN RELEASE.
+       The `(twin && twin->root) ? … : NULL` these replaced was wrong for the reason the paragraph below gives,
+       and deleting it was right — but it had been carrying the null guard, so in release the strdup below went
+       straight through a NULL `twin`. A guard whose removal turns a dev-mode abort into a production segfault
+       is a universal invariant (check.h: data integrity, must not PROCEED), not a should-never-happen; the two
+       allocations on the next line already carry CHECK for the same reason. */
     const Cand *twin = search_of(source, cls);
-    DCHECK(twin != NULL, "an @S finding was recorded for a sink that was never detected as pending");
+    CHECK(twin != NULL, "an @S finding was recorded for a sink that was never detected as pending");
     /* AND IT HAS ONE, WHICH IS A STATEMENT ABOUT THE SEARCH AND NOT A HOPE ABOUT THIS FINDING. Both doors into
        g_pending state the root — detection reads it off the value, a cold resume takes it out of the park
        record — so a NULL here names a third door rather than a search that happens not to know. It was a
        `(twin && twin->root) ? … : NULL` while the second door did not exist, and that ternary was the quiet
        half of the same defect: the loud half aborted in emit_delivery naming the missing field, while this one
        stored a FIRE-VERIFIED PoC with no envelope and said nothing at all. */
-    DCHECK(twin->root != NULL,
+    CHECK(twin->root != NULL,
            "the search behind a fire-verified @S PoC never learned how its bytes arrive — the finding is the "
            "strongest thing this half of the tool emits, and without the root §S(d)'s reproduction envelope "
            "reports it as an exploit no navigation reaches");

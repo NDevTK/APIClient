@@ -13,6 +13,8 @@
  */
 #ifndef ENGINE_HOST_SOLVER_RESULT_H
 #define ENGINE_HOST_SOLVER_RESULT_H
+#include <stddef.h>
+
 #include "quickjs.h"
 
 /* The whole document as a malloc'd JSON string (caller frees):
@@ -32,6 +34,12 @@ void result_page_error(const char *msg);
    them only when they are already strings. A diagnostic that runs the page's code to describe the page's crash
    is a second crash. */
 void result_page_error_value(JSContext *ctx, JSValueConst err);
+/* THE SAME DESCRIPTION, INTO THE CALLER'S BUFFER, because a thrown value has to be readable somewhere other
+   than the findings document. An assert that names a failure and DISCARDS the exception describing it names a
+   problem nobody can act on: `flow_step: a page <script> did not COMPILE` was measured on five of eleven real
+   production bundles and said nothing whatever about WHICH construct the parser refused, while the SyntaxError
+   carrying the construct and its position was freed one line below. Runs no page code, for the reason above. */
+void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz);
 
 /* AND WHO REPORTS ONE AS IT HAPPENS, which is the HOST's question and not this file's. A host that publishes a
    result document reads `pageErrors` out of it at the end (the extension's, and the smoke fixture's), and one

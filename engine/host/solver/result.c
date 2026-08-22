@@ -37,19 +37,23 @@ void result_page_error(const char *msg) {
 
 /* Describe a thrown value WITHOUT running any of the page's code — see result.h. An own slot that is already a
    string is taken as-is; anything else is described by shape alone. */
-void result_page_error_value(JSContext *ctx, JSValueConst err) {
-    char buf[320];
+void result_error_text(JSContext *ctx, JSValueConst err, char *out, size_t outsz) {
+    char *buf = out;
     JSValue name = JS_UNDEFINED, msg = JS_UNDEFINED, stk = JS_UNDEFINED;
     const char *ns = NULL, *ms = NULL, *ss = NULL;
     JSAtom a_name, a_msg;
     int n;
 
+    DCHECK(out != NULL && outsz >= 64,
+           "a thrown value was described into no buffer, or into one too small to hold a name and a message — "
+           "the description is truncated at the caller's size and every caller must give it room to be one");
+    *out = 0;
     if (JS_IsString(err)) {
         const char *s = JS_ToCString(ctx, err);   /* already a string: no coercion runs */
-        if (s) { result_page_error(s); JS_FreeCString(ctx, s); }
+        if (s) { snprintf(out, outsz, "%s", s); JS_FreeCString(ctx, s); }
         return;
     }
-    if (!JS_IsObject(err)) { result_page_error("a non-object, non-string value was thrown"); return; }
+    if (!JS_IsObject(err)) { snprintf(out, outsz, "a non-object, non-string value was thrown"); return; }
 
     a_name = JS_NewAtom(ctx, "name");
     a_msg  = JS_NewAtom(ctx, "message");
@@ -73,17 +77,17 @@ void result_page_error_value(JSContext *ctx, JSValueConst err) {
     if (JS_IsString(name)) ns = JS_ToCString(ctx, name);
     if (JS_IsString(msg))  ms = JS_ToCString(ctx, msg);
     if (JS_IsString(stk))  ss = JS_ToCString(ctx, stk);
-    if (ns && ms)      n = snprintf(buf, sizeof buf, "%s: %s", ns, ms);
-    else if (ms)       n = snprintf(buf, sizeof buf, "%s", ms);
-    else if (ns)       n = snprintf(buf, sizeof buf, "%s", ns);
-    else               n = snprintf(buf, sizeof buf, "an object with no own name/message was thrown");
-    if (ss && n > 0 && (size_t)n < sizeof buf) {
+    if (ns && ms)      n = snprintf(buf, outsz, "%s: %s", ns, ms);
+    else if (ms)       n = snprintf(buf, outsz, "%s", ms);
+    else if (ns)       n = snprintf(buf, outsz, "%s", ns);
+    else               n = snprintf(buf, outsz, "an object with no own name/message was thrown");
+    if (ss && n > 0 && (size_t)n < outsz) {
         /* the first two frames, on one line — the site and its caller, which is what identifies the call. */
         const char *l1 = ss + strspn(ss, " \t\n"), *l1e = l1 + strcspn(l1, "\n");
         const char *l2 = *l1e ? l1e + 1 : l1e, *l2e;
         l2 += strspn(l2, " \t");
         l2e = l2 + strcspn(l2, "\n");
-        snprintf(buf + n, sizeof buf - (size_t)n, "  [%.*s%s%.*s]",
+        snprintf(buf + n, outsz - (size_t)n, "  [%.*s%s%.*s]",
                  (int)(l1e - l1), l1, (l2e > l2 ? " <- " : ""), (int)(l2e - l2), l2);
     }
     if (ns) JS_FreeCString(ctx, ns);
@@ -92,7 +96,12 @@ void result_page_error_value(JSContext *ctx, JSValueConst err) {
     JS_FreeValue(ctx, name);
     JS_FreeValue(ctx, msg);
     JS_FreeValue(ctx, stk);
-    result_page_error(buf);
+}
+
+void result_page_error_value(JSContext *ctx, JSValueConst err) {
+    char buf[320];
+    result_error_text(ctx, err, buf, sizeof buf);
+    result_page_error(buf);   /* an empty description is dropped by result_page_error's own first line */
 }
 
 /* Append RAW (a delimiter this file controls) or ESCAPED (page-supplied text). Escaping the delimiters too was

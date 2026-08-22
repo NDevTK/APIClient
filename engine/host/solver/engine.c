@@ -3232,15 +3232,31 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    promise and is reported by module_report_rejection, exactly as HTML's "set moduleScript's
                    error to rethrow" says. What can still fail before a module starts is 16.2.1.7.1 ParseModule,
                    which is the page's own SyntaxError. */
-                DCHECK(kind != DYN_PAGE_SCRIPT,
-                       "flow_step: a page <script>/chunk did not start — its source did not COMPILE (a classic "
-                       "script's program, or a module script's 16.2.1.7.1 ParseModule)");
                 /* A CROSS-AGENT OPERATION'S PROGRAM IS THE ENGINE'S OWN TEXT (core/frame/remote_op.c), so it
                    parses or this engine wrote it wrong — and skipping it would leave the peer's flow parked on
-                   an answer that is now never coming. */
-                DCHECK(kind != DYN_CROSS_AGENT_OP,
-                       "the program that performs a cross-agent operation did not compile — it is this engine's "
-                       "own text, and skipping it parks the asking flow on an answer nothing will send");
+                   an answer that is now never coming.
+                   BOTH ASSERTS CARRY THE SyntaxError, WHICH IS THE ONLY PART A READER CAN ACT ON. They named
+                   the EVENT and freed the description of it one line below, and the cost was measured: five of
+                   eleven real production bundles (developer.mozilla.org, vuejs.org) abort here, and the abort
+                   said nothing about which construct the parser refused or where. `exc` already carries the
+                   message and, through the error's stack slot, the position — so the DCHECK's own text is where
+                   that belongs, exactly as the reader of a `@WHY` gets a file:line and no stack. */
+#if APICLIENT_DEV
+                if (kind == DYN_PAGE_SCRIPT || kind == DYN_CROSS_AGENT_OP) {
+                    char et[320], why[900];
+
+                    result_error_text(ctx, exc, et, sizeof et);
+                    snprintf(why, sizeof why, "%s — the compile reported: %s",
+                             kind == DYN_PAGE_SCRIPT
+                                 ? "flow_step: a page <script>/chunk did not start — its source did not COMPILE "
+                                   "(a classic script's program, or a module script's 16.2.1.7.1 ParseModule)"
+                                 : "the program that performs a cross-agent operation did not compile — it is "
+                                   "this engine's own text, and skipping it parks the asking flow on an answer "
+                                   "nothing will send",
+                             *et ? et : "(a throw this engine could not describe)");
+                    DFAIL(why);
+                }
+#endif
                 JS_FreeValue(ctx, exc);
                 /* STEP OVER IT. Not advancing left the flow pointing at the same unparseable body, so the next
                    scheduler step compiled it again, and again — the flow could never finish and never made
