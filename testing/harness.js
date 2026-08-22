@@ -6,8 +6,19 @@
 // needs to verify gets driven via the popup's own chrome.runtime
 // .sendMessage surface (or via popup clicks that trigger it).
 //
+// THIS LIST WAS THREE COMMANDS LONG WHILE `CMDS` HELD TWENTY-ONE, and CLAUDE.md is right that a stale
+// description reads as authoritative and sends the next reader to build what is already there. The full set is
+// the `CMDS` table at the bottom of this file, which is the only place that cannot go stale; named here are the
+// ones a reader reaches for. `restart` in particular was undocumented here and is the one CLAUDE.md tells you
+// to use — `start` reuses a stale wasm and a poisoned IndexedDB.
+//
 //   start [port]              launch Chrome with the extension loaded;
 //                             detached so it survives this shell.
+//   restart [port]            the same, after clearing IndexedDB and the code cache first. USE THIS ONE:
+//                             `start` keeps whatever a previous run left, and a stale wasm plus a poisoned
+//                             IDB is a measurement of a program no revision contains.
+//   restart-keep [port]       restart WITHOUT clearing storage — for the cross-session resume question,
+//                             where the residue left by the previous session IS the subject.
 //   page <js-expression>      run JS inside the active web page
 //                             (MAIN world). Cannot read chrome.* —
 //                             the page DOM is what matters.
@@ -235,10 +246,30 @@ async function cmdStart(args) {
        place this harness runs unattended. It is added ONLY when the process really is root, so a developer's
        machine keeps the sandbox — the flag is an environment fact, not a preference. */
     ...(typeof process.getuid === "function" && process.getuid() === 0 ? ["--no-sandbox"] : []),
+    /* AND IT REFUSES TO RUN AT ALL WITH NO DISPLAY, which is the other environment fact and was the one that
+       stopped this harness being runnable here. Chrome's own words, captured by running it by hand:
+         ERROR:ui/ozone/platform/x11/ozone_platform_x11.cc:257] Missing X server or $DISPLAY
+         ERROR:ui/aura/env.cc:246] The platform failed to initialize.  Exiting.
+       so the debug port never opened and every command below it was unreachable. `--headless=new` is the one
+       that matters rather than plain `--headless`: the OLD headless loaded no extensions, which for THIS
+       harness is the whole subject. Verified by hand before landing — new headless serves /json/version and
+       lists `chrome-extension://<our id>/background.js` and `ast-worker.html` as live targets.
+       It is keyed on the DISPLAY being absent, not on a flag, for the same reason `--no-sandbox` is keyed on
+       being root: a developer with a screen keeps their window, and nobody has to remember a switch. */
+    ...(process.platform !== "darwin" && process.platform !== "win32" &&
+        !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? ["--headless=new"] : []),
   ];
+  /* CHROME'S OWN EXPLANATION IS KEPT, because `stdio: "ignore"` threw it away and left this function able to
+     say only "port isn't responding" — a report that names the symptom and discards the cause, which is the
+     defect this project keeps finding in its own instruments. The two errors above were sitting in that
+     discarded stream the whole time. Detached still works: the child gets an fd, not a pipe to this process,
+     so nothing keeps node alive and nothing blocks when the buffer would have filled. */
+  const chromeLog = path.join(path.dirname(PROFILE_DIR), "harness-chrome.log");
+  let chromeFd = "ignore";
+  try { chromeFd = fs.openSync(chromeLog, "w"); } catch { /* a read-only dir is not a reason to refuse to launch */ }
   const chromeProc = spawn(chromePath, chromeArgs, {
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", chromeFd, chromeFd],
     windowsHide: false,
   });
   chromeProc.unref();
@@ -252,6 +283,12 @@ async function cmdStart(args) {
   }
   if (!ready) {
     log(`Chrome launched (pid ${chromeProc.pid}) but port ${port} isn't responding`);
+    /* THE CAUSE, not just the symptom. Chrome states its own refusal and this is where a reader needs it. */
+    try {
+      const tail = fs.readFileSync(chromeLog, "utf8").split("\n").filter(Boolean).slice(-12);
+      if (tail.length) { log(`Chrome said (${chromeLog}):`); for (const l of tail) log(`  ${l}`); }
+      else log(`Chrome wrote nothing to ${chromeLog} — it died before it could explain, or never exec'd`);
+    } catch { log(`could not read ${chromeLog}`); }
     process.exit(1);
   }
 
