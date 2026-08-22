@@ -1,0 +1,86 @@
+[
+  {
+    "type": "browser",
+    "url": ""
+  },
+  {
+    "type": "background_page",
+    "url": "chrome-extension://pfncpmcmkgcohblmpllhofkdpjjbmngl/ast-worker.html"
+  },
+  {
+    "type": "page",
+    "url": "http://127.0.0.1:8765/moat_opaque_iter.html"
+  }
+]
+--- console (22s, 67 lines) ---
+(full 67 lines -> engine/.work/diag-full.log)
+background_page: [AST:combined] Findings for tab=%d: %d protoEnums, %d fieldMaps, %d fetchSites, %d secSinks, %d dangerousPatterns 653593192 0 0 4 0 0
+background_page: [AST:merge] No doc for host=%s â€” registering endpoints only (script: %s) 127.0.0.1 http://127.0.0.1:8765/moat_opaque_iter.html
+background_page: [AST:merge] Fetch sites: %d call sites processed, %d endpoints registered 4 4
+background_page: [evict] dropped %d reviewed document(s) from state.docs 1
+background_page: [AST:combined] Analyzing %d scripts (%d total chars) for tab=%d 0 0 653593192
+background_page: [AST:cache] Cache MISS for tab=%d (%d scripts, key=%sâ€¦) 653593192 0 594d1128b16dd237
+background_page: @ASAN =================================================================
+background_page: @ASAN ==42==ERROR: AddressSanitizer: heap-use-after-free on address 0x0c23b5d4 at pc 0x000c2e7e bp 0x0a8762f0 sp 0x0a8762fc
+background_page: @ASAN READ of size 4 at 0x0c23b5d4 thread T0
+background_page: @ASAN     #0 0x000c2e7e  (this.program+0xc2e7e)
+background_page: @ASAN 
+background_page: @ASAN 0x0c23b5d4 is located 4 bytes inside of 48-byte region [0x0c23b5d0,0x0c23b600)
+background_page: @ASAN freed by thread T0 here:
+background_page: @ASAN     #0 0x00347763 in free+0x347763 (this.program+0x347763)
+background_page: @ASAN     #1 0x0014bd6d in js_def_free+0x14bd6d (this.program+0x14bd6d)
+background_page: @ASAN     #2 0x00003f2a in js_free_rt+0x3f2a (this.program+0x3f2a)
+background_page: @ASAN     #3 0x00072bd0 in free_gc_object+0x72bd0 (this.program+0x72bd0)
+background_page: @ASAN     #4 0x00064ebe in js_free_value_rt+0x64ebe (this.program+0x64ebe)
+background_page: @ASAN     #5 0x00045fbd in JS_CallInternal+0x45fbd (this.program+0x45fbd)
+background_page: @ASAN     #6 0x000f9e51 in JS_EvalFunctionInternal+0xf9e51 (this.program+0xf9e51)
+background_page: @ASAN 
+background_page: @ASAN previously allocated by thread T0 here:
+background_page: @ASAN     #0 0x00347938 in malloc+0x347938 (this.program+0x347938)
+background_page: @ASAN     #1 0x0014bd62 in js_def_malloc+0x14bd62 (this.program+0x14bd62)
+background_page: @ASAN     #2 0x000038f9 in arena_malloc_large+0x38f9 (this.program+0x38f9)
+background_page: @ASAN     #3 0x00076488 in JS_NewObjectFromShape+0x76488 (this.program+0x76488)
+background_page: @ASAN     #4 0x0006550b in js_create_from_ctor+0x6550b (this.program+0x6550b)
+background_page: @ASAN     #5 0x00091ae7 in js_array_constructor+0x91ae7 (this.program+0x91ae7)
+background_page: @ASAN     #6 0x000085a0 in js_call_c_function+0x85a0 (this.program+0x85a0)
+background_page: @ASAN 
+background_page: @ASAN SUMMARY: AddressSanitizer: heap-use-after-free (this.program+0xc2e7a) 
+background_page: @ASAN Shadow bytes around the buggy address:
+background_page: @ASAN   0x0c23b300: fa fa fd fd fd fd fd fa fa fa 00 00 00 00 03 fa
+background_page: @ASAN   0x0c23b380: fa fa 00 00 00 00 00 03 fa fa 00 00 00 00 00 00
+background_page: @ASAN   0x0c23b400: fa fa 00 00 00 00 00 fa fa fa 00 00 00 00 00 00
+background_page: @ASAN   0x0c23b480: fa fa 00 00 00 00 00 05 fa fa 00 00 00 00 00 03
+background_page: @ASAN   0x0c23b500: fa fa 00 00 00 00 04 fa fa fa 00 00 00 00 00 00
+background_page: @ASAN =>0x0c23b580: fa fa fd fd fd fd fd fd fa fa[fd]fd fd fd fd fd
+background_page: @ASAN   0x0c23b600: fa fa fd fd fd fd fd fd fa fa fd fd fd fd fd fd
+background_page: @ASAN   0x0c23b680: fa fa fd fd fd fd fd fd fa fa fd fd fd fd fd fd
+background_page: @ASAN   0x0c23b700: fa fa fd fd fd fd fd fd fa fa fd fd fd fd fd fd
+background_page: @ASAN   0x0c23b780: fa fa fd fd fd fd fd fa fa fa fd fd fd fd fd fd
+background_page: @ASAN   0x0c23b800: fa fa fd fd fd fd fd fd fa fa fd fd fd fd fd fd
+background_page: @ASAN Shadow byte legend (one shadow byte represents 8 application bytes):
+background_page: @ASAN   Addressable:           00
+background_page: @ASAN   Partially addressable: 01 02 03 04 05 06 07 
+background_page: @ASAN   Heap left redzone:       fa
+background_page: @ASAN   Freed heap region:       fd
+background_page: @ASAN   Stack left redzone:      f1
+background_page: @ASAN   Stack mid redzone:       f2
+background_page: @ASAN   Stack right redzone:     f3
+background_page: @ASAN   Stack after return:      f5
+background_page: @ASAN   Stack use after scope:   f8
+background_page: @ASAN   Global redzone:          f9
+background_page: @ASAN   Global init order:       f6
+background_page: @ASAN   Poisoned by user:        f7
+background_page: @ASAN   Container overflow:      fc
+background_page: @ASAN   Array cookie:            ac
+background_page: @ASAN   Intra object redzone:    bb
+background_page: @ASAN   ASan internal:           fe
+background_page: @ASAN   Left alloca redzone:     ca
+background_page: @ASAN   Right alloca redzone:    cb
+background_page: @ASAN ==42==ABORTING
+background_page: 
+==== ENGINE CRASH (teardown) â€” WASM ABORTED, findings DISCARDED, NOT swallowed ====
+Program terminated with exit(1)
+
+background_page: [AST:cache] SKIPPING write for tab=%d (degenerate result: %d resolverErrors, no learned facts) â€” next navigation will retry 653593192 1
+background_page: [AST:resolver] %s: %s engine {"phase":"engine-crash","stage":"teardown","err":"Program terminated with exit(1)"}
+background_page: [AST:combined] No findings for tab=%d 653593192

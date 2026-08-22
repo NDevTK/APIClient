@@ -1,0 +1,395 @@
+/* THE NavigateEvent INTERFACE — HTML §7.2.6.10.1. See navigate_event.h for what is deliberately absent.
+ *
+ *     [Exposed=Window]
+ *     interface NavigateEvent : Event {
+ *       constructor(DOMString type, NavigateEventInit eventInitDict);
+ *       readonly attribute NavigationType navigationType;
+ *       readonly attribute NavigationDestination destination;
+ *       readonly attribute boolean canIntercept;
+ *       readonly attribute boolean userInitiated;
+ *       readonly attribute boolean hashChange;
+ *       readonly attribute AbortSignal signal;
+ *       readonly attribute FormData? formData;
+ *       readonly attribute DOMString? downloadRequest;
+ *       readonly attribute any info;
+ *       readonly attribute boolean hasUAVisualTransition;
+ *       readonly attribute Element? sourceElement;
+ *       undefined intercept(optional NavigationInterceptOptions options = {});
+ *       undefined scroll();
+ *     };
+ *
+ * ELEVEN ATTRIBUTES AND ONE SENTENCE FOR ALL OF THEM: "the navigationType, destination, canIntercept,
+ * userInitiated, hashChange, signal, formData, downloadRequest, info, hasUAVisualTransition, and sourceElement
+ * attributes must return the values they are initialized to." So this file holds ONE slot record and one
+ * magic-indexed getter, and every interesting decision is §7.2.6.10.4's — which is where they are made.
+ *
+ * THE CLASSIC HISTORY API STATE IS THE TWELFTH SLOT AND IS NOT AN IDL MEMBER. §7.2.6.10.1: "each NavigateEvent
+ * has a classic history API state, a serialized state or null. It is only used in some cases where the event's
+ * navigationType is 'push' or 'replace'". §7.2.6.10.4's commit reads it back to hand to the URL and history
+ * update steps, which is the whole of how a `pushState`'s data survives an interception — so it is state of the
+ * event and not of the algorithm that fired it, and it is BYTES because a serialized state crosses a park.
+ *
+ * ITS DICTIONARY DECLARES FOUR DIFFERENT INTERFACE TYPES, which is what made IdlDictMember::iface necessary:
+ * `destination` is a NavigationDestination and `signal` an AbortSignal, both REQUIRED and both branded by the
+ * declaration. The other two — `FormData?` and `Element?` — are NULLABLE interface types, which IDL_INTERFACE
+ * cannot express because it refuses the null the IDL's own `= null` makes ordinary; they follow the precedent
+ * core/html/toggle_event.c and core/html/submit_event.c set and are checked in the body, with the type's whole
+ * rule performed there. */
+#include <stdbool.h>
+#include <string.h>
+
+#include <lexbor/dom/dom.h>
+
+#include "check.h"
+#include "quickjs.h"
+#include "core/dom/abort.h"
+#include "core/dom/node.h"
+#include "core/events/event.h"
+#include "core/events/navigate_event.h"
+#include "core/frame/navigation_destination.h"
+#include "core/html/form_data.h"
+#include "core/idl_args.h"
+#include "core/idl_slots.h"
+#include "core/realm.h"
+#include "core/structured_clone.h"
+
+static JSValue   g_key;         /* the private Symbol this interface's own slots hang off */
+static JSClassID g_nav_ev_class;
+static int       g_ready;
+static int       g_ctor_stepid = -1;
+
+/* §7.2.6.3's `enum NavigationType { "push", "replace", "reload", "traverse" }` — the TYPE of the
+   `navigationType` member, so the list is what the declaration carries and no body re-states it. */
+static const char *const NAVIGATION_TYPE[] = { "push", "replace", "reload", "traverse", NULL };
+
+/* The eleven IDL attributes, plus the one internal slot that is not one. `magic` IS the member. */
+enum { NE_NAVIGATION_TYPE = 0, NE_DESTINATION, NE_CAN_INTERCEPT, NE_USER_INITIATED, NE_HASH_CHANGE, NE_SIGNAL,
+       NE_FORM_DATA, NE_DOWNLOAD_REQUEST, NE_INFO, NE_HAS_UA_VISUAL_TRANSITION, NE_SOURCE_ELEMENT, NE_N };
+static const char *const NE_NAME[] = {
+    "navigationType", "destination", "canIntercept", "userInitiated", "hashChange", "signal",
+    "formData", "downloadRequest", "info", "hasUAVisualTransition", "sourceElement"
+};
+#define NE_CLASSIC_STATE "classicHistoryAPIState"   /* the serialized bytes, or JS_NULL */
+
+static JSValue ne_proto(JSContext *ctx)
+{
+    JSValue proto = JS_GetClassProto(ctx, g_nav_ev_class);
+
+    DCHECK(!JS_IsNull(proto), "NavigateEvent.prototype was asked for in a realm that never ran its per-realm "
+                              "install");
+    return proto;   /* OWNED */
+}
+
+/* `Element?` — asked of the TREE, because every element wrapper in this engine is one node class and the
+   question this member's type asks is narrower than that class. The same test and the same reason as
+   core/html/toggle_event.c's `source`. */
+static bool ne_is_element(JSValueConst v)
+{
+    lxb_dom_node_t *n = node_of(v);
+
+    return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;
+}
+
+/* The slot record of a NavigateEvent. OWNED. */
+static JSValue ne_slots(JSContext *ctx, JSValueConst ev)
+{
+    JSAtom k = JS_ValueToAtom(ctx, g_key);
+    JSValue slots;
+
+    CHECK(k != JS_ATOM_NULL, "NavigateEvent: the slot key could not be resolved to an atom");
+    if (JS_GetOwnSlot(ctx, &slots, ev, k) <= 0) slots = JS_UNDEFINED;
+    JS_FreeAtom(ctx, k);
+    return slots;
+}
+
+static JSValue ne_field(JSContext *ctx, JSValueConst ev, const char *name)
+{
+    JSValue slots = ne_slots(ctx, ev), v;
+
+    DCHECK(JS_IsObject(slots), "a NavigateEvent carried no slot record — every instance is built through "
+                               "ne_init_slots, which places one before it returns");
+    v = JS_GetPropertyStr(ctx, slots, name);
+    JS_FreeValue(ctx, slots);
+    return v;
+}
+
+bool navigate_event_is(JSValueConst v)
+{
+    DCHECK(g_ready, "a value was asked whether it is a NavigateEvent before the interface was declared — the "
+                    "class id the question is asked with is minted by navigate_event_init");
+    return JS_GetClassID(v) == g_nav_ev_class;
+}
+
+JSValue navigate_event_signal(JSContext *ctx, JSValueConst ev)
+{
+    JSValue v;
+
+    DCHECK(navigate_event_is(ev),
+           "§7.2.6.10.4 asked for the abort controller's signal of something that is not a NavigateEvent");
+    v = ne_field(ctx, ev, NE_NAME[NE_SIGNAL]);
+    DCHECK(abort_signal_is(ctx, v),
+           "a NavigateEvent's `signal` slot held something that is not an AbortSignal — both producers place "
+           "one there, the firing algorithm from the event's own abort controller and the constructor from a "
+           "`required AbortSignal signal` the declaration has already branded");
+    return v;
+}
+
+/* ---- the eleven attributes -------------------------------------------------------------------------------- */
+
+static JSValue js_ne_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    DCHECK(g_ready, "a NavigateEvent attribute was read before its init ran");
+    DCHECK(magic >= NE_NAVIGATION_TYPE && magic < NE_N,
+           "a NavigateEvent accessor was installed with a magic this interface has no member for");
+    /* WEB IDL §3.7.5's BRAND. The class is the check, so a getter pulled off the prototype and applied to
+       something else is the TypeError a browser answers with rather than a read of a slot that is not there. */
+    if (JS_GetClassID(this_val) != g_nav_ev_class)
+        return JS_ThrowTypeError(ctx, "a NavigateEvent attribute was read on something that is not one");
+    return ne_field(ctx, this_val, NE_NAME[magic]);
+}
+
+/* The twelve own slots, placed on an event whose Event half is already built. Every value is DUPPED: the
+   destination and the signal are the very objects the algorithm holds, because a page compares
+   `e.signal === e.signal` and passes the destination on.
+   THE ARRAY IS ONE KIND OF VALUE AND THE CALLER FREES ALL OF IT. Both producers build a single JSValue array in
+   which the borrowed arguments have already been dupped, so there is no per-index ownership rule for a later
+   reader to get wrong — which is the shape §C-stack's "a struct copied field-by-field must dup EVERY owned
+   field" is about, one level down. Returns -1 with the throw live. */
+static int ne_init_slots(JSContext *ctx, JSValueConst ev, const JSValue *members, JSValueConst classic)
+{
+    JSValue slots = idl_slots_new(ctx);
+    JSAtom k = JS_ValueToAtom(ctx, g_key);
+    int i;
+
+    if (JS_IsException(slots) || k == JS_ATOM_NULL) {
+        JS_FreeValue(ctx, slots);
+        if (k != JS_ATOM_NULL) JS_FreeAtom(ctx, k);
+        return -1;
+    }
+    for (i = 0; i < NE_N; i++)
+        JS_SetPropertyStr(ctx, slots, NE_NAME[i], JS_DupValue(ctx, members[i]));
+    JS_SetPropertyStr(ctx, slots, NE_CLASSIC_STATE, JS_DupValue(ctx, classic));
+    JS_SetProperty(ctx, (JSValue)ev, k, slots);
+    JS_FreeAtom(ctx, k);
+    return 0;
+}
+
+JSValue navigate_event_new_to_fire(JSContext *ctx, const char *navigation_type, JSValueConst destination,
+                                   bool can_intercept, bool cancelable, bool user_initiated, bool hash_change,
+                                   JSValueConst signal, JSValueConst source_element,
+                                   const StructuredData *classic_state)
+{
+    JSValue members[NE_N];
+    JSValue tv, ev, classic = JS_NULL;
+    int i;
+
+    DCHECK(g_ready, "a navigate event was fired before its interface was declared");
+    DCHECK(navigation_type != NULL, "§7.2.6.10.4 initialized a NavigateEvent's `navigationType` with nothing — "
+                                    "each of its three wrappers passes one of §7.2.6.3's four values");
+    DCHECK(JS_GetClassID(destination) == navigation_destination_class(),
+           "§7.2.6.10.4 initialized a NavigateEvent's `destination` with something that is not a "
+           "NavigationDestination");
+    DCHECK(abort_signal_is(ctx, signal),
+           "§7.2.6.10.4 initialized a NavigateEvent's `signal` with something that is not an AbortSignal — it "
+           "is the event's own abort controller's signal, minted a line earlier");
+    DCHECK(JS_IsNull(source_element) || ne_is_element(source_element),
+           "§7.2.6.10.4 initialized a NavigateEvent's `sourceElement` with something that is neither an Element "
+           "nor null — the attribute is typed `Element?` and the responsible element is a link, a form or a "
+           "submit button");
+    members[NE_NAVIGATION_TYPE] = JS_NewString(ctx, navigation_type);
+    if (JS_IsException(members[NE_NAVIGATION_TYPE])) return members[NE_NAVIGATION_TYPE];
+    if (classic_state) {
+        classic = JS_NewArrayBufferCopy(ctx, classic_state->buf, classic_state->len);
+        CHECK(!JS_IsException(classic), "NavigateEvent: the classic history API state could not be allocated");
+    }
+    members[NE_DESTINATION] = JS_DupValue(ctx, destination);
+    members[NE_CAN_INTERCEPT] = JS_NewBool(ctx, can_intercept);
+    members[NE_USER_INITIATED] = JS_NewBool(ctx, user_initiated);
+    members[NE_HASH_CHANGE] = JS_NewBool(ctx, hash_change);
+    members[NE_SIGNAL] = JS_DupValue(ctx, signal);
+    /* §7.2.6.10.4's push/replace/reload and traverse wrappers both reach the inner algorithm with
+       formDataEntryList null and downloadRequestFilename null, so both members initialize to null — a computed
+       answer about those two call sites and not a placeholder. A FORM SUBMISSION and a DOWNLOAD REQUEST are the
+       two navigations that fill them, and neither algorithm exists in this build. */
+    members[NE_FORM_DATA] = JS_NULL;
+    members[NE_DOWNLOAD_REQUEST] = JS_NULL;
+    /* "If apiMethodTracker is not null, then initialize event's info to apiMethodTracker's info. Otherwise,
+       initialize it to undefined." Every caller reaching this build passes no tracker — §7.2.6.7's methods are
+       the only source of one — so the value is undefined, which is also what the IDL's `any info` with no
+       default gives a page that constructs one. */
+    members[NE_INFO] = JS_UNDEFINED;
+    /* "Initialize event's hasUAVisualTransition to true if a VISUAL TRANSITION, to display a cached rendered
+       state of the document's latest entry, was done by the user agent. Otherwise, initialize it to false."
+       This user agent performs none — the same answer core/frame/session_history.c gives §7.4.6.2's popstate,
+       and for the same reason. */
+    members[NE_HAS_UA_VISUAL_TRANSITION] = JS_FALSE;
+    members[NE_SOURCE_ELEMENT] = JS_DupValue(ctx, source_element);
+
+    /* "Initialize event's type to 'navigate'". §2.2's constructor steps with THIS interface's prototype; the
+       event does not BUBBLE (§7.2.6.10 declares no bubbling and it is fired at the Navigation, which has no
+       tree) and is not COMPOSED. TRUSTED, because the user agent fired it. */
+    tv = JS_NewString(ctx, "navigate");
+    if (JS_IsException(tv)) {
+        ev = tv;
+    } else {
+        ev = event_new_derived(ctx, ne_proto(ctx), tv, /*bubbles*/ false, cancelable, /*composed*/ false,
+                               /*trusted*/ true);
+        JS_FreeValue(ctx, tv);
+        if (!JS_IsException(ev) && ne_init_slots(ctx, ev, members, classic) < 0) {
+            JS_FreeValue(ctx, ev);
+            ev = JS_EXCEPTION;
+        }
+    }
+    for (i = 0; i < NE_N; i++) JS_FreeValue(ctx, members[i]);
+    JS_FreeValue(ctx, classic);
+    return ev;
+}
+
+/* ---- the constructor ----------------------------------------------------------------------------------------
+ *
+ * `constructor(DOMString type, NavigateEventInit eventInitDict)` — and the dictionary is NOT optional, which is
+ * what the arity of 2 states and what makes a one-argument construction a TypeError before this body runs. That
+ * follows from `required NavigationDestination destination` and `required AbortSignal signal`: a dictionary with
+ * a required member has no `= {}` to default to.
+ *
+ * The member list is in Web IDL's conversion order — the INHERITED EventInit members first, then this
+ * dictionary's own lexicographically. That order is observable: a page that throws from one member's getter
+ * pins which of them was read first. */
+static const IdlArgType NE_CTOR_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
+static IdlDictMember NE_INIT[] = {
+    { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN },
+    { "canIntercept",          IDL_BOOLEAN,           false, NULL,            1 },
+    { "destination",           IDL_INTERFACE,         true,  NULL,            1 },
+    { "downloadRequest",       IDL_DOMSTRING_NULLABLE, false, NULL,           1, NULL, IDL_DEFAULT_NULL, NULL },
+    { "formData",              IDL_ANY,               false, NULL,            1, NULL, IDL_DEFAULT_NULL, NULL },
+    { "hasUAVisualTransition", IDL_BOOLEAN,           false, NULL,            1 },
+    { "hashChange",            IDL_BOOLEAN,           false, NULL,            1 },
+    { "info",                  IDL_ANY,               false, NULL,            1 },
+    { "navigationType",        IDL_ENUM,              false, NAVIGATION_TYPE, 1, NULL, IDL_DEFAULT_STRING,
+                                                                                       "push" },
+    { "signal",                IDL_INTERFACE,         true,  NULL,            1 },
+    { "sourceElement",         IDL_ANY,               false, NULL,            1, NULL, IDL_DEFAULT_NULL, NULL },
+    { "userInitiated",         IDL_BOOLEAN,           false, NULL,            1 },
+};
+
+static JSValue js_ne_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValueConst init = argc > 1 ? argv[1] : JS_UNDEFINED;
+    JSValue members[NE_N], ev;
+    int i;
+
+    (void)magic;
+    if (JS_IsUndefined(this_val))
+        return JS_ThrowTypeError(ctx, "constructor NavigateEvent requires 'new'");
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx, "NavigateEvent constructor requires a type and an eventInitDict");
+    for (i = 0; i < NE_N; i++)
+        members[i] = idl_dict_get(ctx, init, NE_NAME[i]);
+    DCHECK(JS_GetClassID(members[NE_DESTINATION]) == navigation_destination_class() &&
+           abort_signal_is(ctx, members[NE_SIGNAL]),
+           "the declared `required NavigationDestination destination` and `required AbortSignal signal` reached "
+           "this body as something else — each brand is its own member's (IdlDictMember::iface), so a wrong "
+           "value is a TypeError before the body is entered");
+    /* `FormData? formData = null` and `Element? sourceElement = null` — NULLABLE interface types, which
+       IDL_INTERFACE cannot express because it refuses the null the `= null` makes ordinary. The rule performed
+       here is the type's, whole: null and undefined are the IDL null, an instance crosses as itself, and
+       anything else is a TypeError. The same placement and the same reason as core/html/toggle_event.c's. */
+    if (JS_IsUndefined(members[NE_FORM_DATA]) || JS_IsNull(members[NE_FORM_DATA])) {
+        JS_FreeValue(ctx, members[NE_FORM_DATA]);
+        members[NE_FORM_DATA] = JS_NULL;
+    } else if (!form_data_is(members[NE_FORM_DATA])) {
+        for (i = 0; i < NE_N; i++) JS_FreeValue(ctx, members[i]);
+        return JS_ThrowTypeError(ctx, "NavigateEventInit member `formData` is not a FormData");
+    }
+    if (JS_IsUndefined(members[NE_SOURCE_ELEMENT]) || JS_IsNull(members[NE_SOURCE_ELEMENT])) {
+        JS_FreeValue(ctx, members[NE_SOURCE_ELEMENT]);
+        members[NE_SOURCE_ELEMENT] = JS_NULL;
+    } else if (!ne_is_element(members[NE_SOURCE_ELEMENT])) {
+        for (i = 0; i < NE_N; i++) JS_FreeValue(ctx, members[i]);
+        return JS_ThrowTypeError(ctx, "NavigateEventInit member `sourceElement` is not an Element");
+    }
+    /* §2.2's constructor steps with THIS interface's prototype — an event the PAGE constructs is untrusted, and
+       §7.2.6.10.1's shared checks read exactly that off `isTrusted` when `intercept()` lands.
+       Its CLASSIC HISTORY API STATE is null: NavigateEventInit declares no member for it, because it is an
+       internal slot §7.2.6.10.4 sets and not something a page may hand over. */
+    ev = event_new_derived(ctx, ne_proto(ctx), argv[0],
+                           idl_dict_bool(ctx, init, "bubbles"),
+                           idl_dict_bool(ctx, init, "cancelable"),
+                           idl_dict_bool(ctx, init, "composed"), /*trusted*/ false);
+    if (!JS_IsException(ev) && ne_init_slots(ctx, ev, members, JS_NULL) < 0) {
+        JS_FreeValue(ctx, ev);
+        ev = JS_EXCEPTION;
+    }
+    for (i = 0; i < NE_N; i++) JS_FreeValue(ctx, members[i]);
+    return ev;
+}
+
+/* ---- install ------------------------------------------------------------------------------------------------ */
+
+void navigate_event_init(JSContext *ctx)
+{
+    JSClassDef d = { "NavigateEvent" };
+
+    DCHECK(!g_ready, "navigate_event_init ran twice — the interface is declared once per AGENT");
+    g_key = JS_NewSymbol(ctx, "navigateEventSlots", false);
+    CHECK(!JS_IsException(g_key), "the NavigateEvent slot key allocation failed");
+    JS_NewClassID(JS_GetRuntime(ctx), &g_nav_ev_class);
+    CHECK(JS_NewClass(JS_GetRuntime(ctx), g_nav_ev_class, &d) == 0,
+          "NavigateEvent: the per-realm prototype slot could not be declared");
+    g_ctor_stepid = idl_method_id_dict(ctx, NE_CTOR_ARGS, 2, NE_INIT,
+                                       (int)(sizeof(NE_INIT) / sizeof(NE_INIT[0])), js_ne_ctor, 0);
+    g_ready = 1;
+    realm_declare_intrinsic(navigate_event_install_protos);
+}
+
+void navigate_event_install_protos(JSContext *ctx)
+{
+    JSValue proto, prev, base, ctor, global;
+    int i;
+
+    DCHECK(g_ready, "a realm asked for NavigateEvent before its init declared it");
+    /* THE TWO REQUIRED INTERFACE MEMBERS CARRY THEIR OWN CLASSES, and they are read HERE rather than at the
+       declaration because a class id is a RUNTIME registration made in core/platform.c's row order: this
+       interface is declared from core/events/event.c's subclass list, which runs BEFORE the `abort` row. A
+       class id is agent-scoped — one per JSRuntime, not one per realm — so reading it at the first realm's
+       install reads the same id every later realm would, and writing it again on each install writes the same
+       value. That is why this is not the module static §per-realm-fact forbids: the fact being answered is the
+       AGENT's, and the assertions inside each class accessor fire if either component has not declared yet. */
+    NE_INIT[4].iface = navigation_destination_class();     /* `destination` */
+    NE_INIT[11].iface = abort_signal_class();              /* `signal` */
+    DCHECK(!strcmp(NE_INIT[4].name, "destination") && !strcmp(NE_INIT[11].name, "signal"),
+           "NavigateEventInit's member list moved under the two indices that carry its interface classes — the "
+           "list is in Web IDL's conversion order, so inserting a member renumbers it and the brands would then "
+           "be attached to the wrong two members");
+    prev = JS_GetClassProto(ctx, g_nav_ev_class);
+    DCHECK(JS_IsNull(prev), "navigate_event_install_protos ran twice in one realm");
+    JS_FreeValue(ctx, prev);
+    base = event_proto(ctx);
+    proto = JS_NewObjectProto(ctx, base);
+    JS_FreeValue(ctx, base);
+    CHECK(!JS_IsException(proto), "NavigateEvent.prototype could not be allocated");
+    idl_interface_tag(ctx, proto, "NavigateEvent");
+    for (i = 0; i < NE_N; i++)
+        idl_install_accessor(ctx, proto, NE_NAME[i], js_ne_get, i, -1);
+    /* §7.2.6.10.1's TWO OPERATIONS ARE NOT INSTALLED — see navigate_event.h. They are the interception half,
+       and the IDL audit reports both as ABSENT rather than this file installing a shape for them. */
+    JS_SetClassProto(ctx, g_nav_ev_class, JS_DupValue(ctx, proto));
+
+    /* §3.7.1's interface object, on THIS realm's global. Its LENGTH is 2: Web IDL §3.7.4.1's length is the
+       number of REQUIRED arguments, and this constructor's dictionary is not optional. */
+    ctor = idl_step_constructor(ctx, "NavigateEvent", 2, g_ctor_stepid);
+    CHECK(!JS_IsException(ctor), "the NavigateEvent interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, proto);
+    JS_FreeValue(ctx, proto);
+    global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "NavigateEvent", ctor);
+    JS_FreeValue(ctx, global);
+}
+
+void navigate_event_free(JSContext *ctx)
+{
+    JS_FreeValue(ctx, g_key);
+    g_key = JS_UNDEFINED;
+    g_ctor_stepid = -1;
+    g_ready = 0;
+}

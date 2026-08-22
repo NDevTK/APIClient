@@ -1,0 +1,840 @@
+/* See platform.h. */
+#include <stdio.h>
+#include <string.h>
+
+#include "check.h"
+#include "core/agent_state.h"
+#include "core/css/media_query_list.h"
+#include "core/dom/abort.h"
+#include "core/dom/document.h"
+#include "core/dom/element.h"
+#include "core/dom/observable.h"
+#include "core/encoding/encoding.h"
+#include "core/encoding/text_stream.h"
+#include "core/events/broadcast_channel.h"
+#include "core/events/error_event.h"
+#include "core/events/event.h"
+#include "core/events/event_target.h"
+#include "core/events/message_event.h"
+#include "core/events/message_port.h"
+#include "core/events/report_exception.h"
+#include "core/fetch/fetch.h"
+#include "core/file/blob.h"
+#include "core/file/file_system.h"
+#include "core/file/file_system_access.h"
+#include "core/file/file_picker.h"
+#include "core/file/file_system_handle.h"
+#include "core/file/file_system_writable.h"
+#include "core/file/storage_manager.h"
+#include "core/frame/agent_cluster.h"
+#include "core/frame/history.h"
+#include "core/frame/navigate_event_fire.h"
+#include "core/frame/navigation.h"
+#include "core/frame/navigation_destination.h"
+#include "core/frame/navigation_history_entry.h"
+#include "core/frame/location.h"
+#include "core/frame/navigable.h"
+#include "core/frame/navigator.h"
+#include "core/frame/remote_object.h"
+#include "core/frame/remote_op.h"
+#include "core/frame/screen.h"
+#include "core/frame/session_history.h"
+#include "core/frame/viewport.h"
+#include "core/frame/visual_viewport.h"
+#include "core/frame/window.h"
+#include "core/frame/window_message.h"
+#include "core/frame/window_proxy.h"
+#include "core/geometry/dom_rect.h"
+#include "core/geometry/dom_rect_list.h"
+#include "core/html/dom_string_list.h"
+#include "core/html/domparser.h"
+#include "core/html/form_data.h"
+#include "core/html/html_iframe.h"
+#include "core/html/unhandled_rejection.h"
+#include "core/indexeddb/idb_connection.h"
+#include "core/indexeddb/idb_cursor.h"
+#include "core/indexeddb/idb_database.h"
+#include "core/indexeddb/idb_index_handle.h"
+#include "core/indexeddb/idb_index_populate.h"
+#include "core/indexeddb/idb_get_all.h"
+#include "core/indexeddb/idb_key_range.h"
+#include "core/indexeddb/idb_object_store.h"
+#include "core/indexeddb/idb_open.h"
+#include "core/indexeddb/idb_record.h"
+#include "core/indexeddb/idb_request.h"
+#include "core/indexeddb/idb_transaction.h"
+#include "core/indexeddb/idb_version_change_event.h"
+#include "core/indexeddb/indexed_db.h"
+#include "core/loader/cookie_jar.h"
+#include "core/loader/module_loader.h"
+#include "core/platform.h"
+#include "core/realm.h"
+#include "core/rendering/animation_frame.h"
+#include "core/rendering/page_reveal.h"
+#include "core/rendering/rendering.h"
+#include "core/streams/queuing_strategy.h"
+#include "core/streams/readable_stream.h"
+#include "core/streams/transform_stream.h"
+#include "core/streams/writable_stream.h"
+#include "core/structured_clone.h"
+#include "core/timing/event_loop.h"
+#include "core/timing/hr_time.h"
+#include "core/timing/timer.h"
+#include "core/url/origin.h"
+#include "core/url/url.h"
+#include "core/url/url_search_params.h"
+#include "core/xhr/xml_http_request.h"
+
+/* ONE COMPONENT, BOTH HALVES. The thunks below exist because a component's declaration takes exactly the facts
+   that component needs and no more — which is right, and is why they cannot share one signature. A thunk is
+   the whole of the adaptation, so the table stays a list of components rather than a list of argument
+   shuffles, and a component whose facts change breaks its own thunk and nothing else. */
+typedef void PlatformDeclare(JSContext *ctx, const PlatformAgent *a);
+typedef void PlatformInstall(JSContext *ctx, JSValueConst g, const PlatformDocument *d);
+/* THE RELEASE TAKES THE RUNTIME, because that is what an AGENT is: a component on this column holds state for
+   the whole agent (that is the entry condition for being on it), and agent state is freed against the runtime
+   the declaration was made in — which platform.c already remembers, so no host has to pass anything. A row that
+   wanted a JSContext would be a per-realm component in the wrong column; those go with their realm. */
+typedef void PlatformRelease(JSRuntime *rt);
+
+typedef struct {
+    const char      *name;      /* the component, as its file is named — every assert below says which */
+    PlatformDeclare *declare;   /* once per AGENT, or NULL for a component another one declares */
+    PlatformInstall *install;   /* once per REALM, or NULL for a component with no per-document members */
+    PlatformRelease *release;   /* once per AGENT at teardown, or NULL for a component that holds no agent state */
+} PlatformComponent;
+
+/* ---- the agent half ------------------------------------------------------------------------------------- */
+
+static void d_url(JSContext *c, const PlatformAgent *a) { (void)a; url_init(c); }
+static void d_usp(JSContext *c, const PlatformAgent *a) { (void)a; usp_init(c); }
+static void d_form_data(JSContext *c, const PlatformAgent *a) { (void)a; form_data_init(c); }
+static void d_readable_stream(JSContext *c, const PlatformAgent *a) { (void)a; readable_stream_init(c); }
+static void d_queuing_strategy(JSContext *c, const PlatformAgent *a) { (void)a; queuing_strategy_init(c); }
+static void d_writable_stream(JSContext *c, const PlatformAgent *a) { (void)a; writable_stream_init(c); }
+static void d_transform_stream(JSContext *c, const PlatformAgent *a) { (void)a; transform_stream_init(c); }
+static void d_blob(JSContext *c, const PlatformAgent *a) { (void)a; blob_init(c); }
+static void d_encoding(JSContext *c, const PlatformAgent *a) { (void)a; encoding_init(c); }
+static void d_text_stream(JSContext *c, const PlatformAgent *a) { (void)a; text_stream_init(c); }
+static void d_event_target(JSContext *c, const PlatformAgent *a) { (void)a; event_target_init(c); }
+static void d_window(JSContext *c, const PlatformAgent *a) { (void)a; window_init(c); }
+static void d_navigator(JSContext *c, const PlatformAgent *a) { (void)a; navigator_init(c); }
+static void d_file_system(JSContext *c, const PlatformAgent *a) { (void)a; file_system_init(c); }
+static void d_fs_writable(JSContext *c, const PlatformAgent *a) { (void)a; fs_writable_init(c); }
+static void d_fs_handle(JSContext *c, const PlatformAgent *a) { (void)a; fs_handle_init(c); }
+static void d_storage_manager(JSContext *c, const PlatformAgent *a) { (void)a; storage_manager_init(c); }
+static void d_fs_access(JSContext *c, const PlatformAgent *a) { (void)a; file_system_access_init(c); }
+static void d_file_picker(JSContext *c, const PlatformAgent *a) { (void)a; file_picker_init(c); }
+static void d_idb_key_range(JSContext *c, const PlatformAgent *a) { (void)a; idb_key_range_init(c); }
+static void d_idb_record(JSContext *c, const PlatformAgent *a) { (void)a; idb_record_init(c); }
+static void d_indexed_db(JSContext *c, const PlatformAgent *a) { (void)a; indexed_db_init(c); }
+static void d_idb_database(JSContext *c, const PlatformAgent *a) { (void)a; idb_database_init(c); }
+static void d_idb_transaction(JSContext *c, const PlatformAgent *a) { (void)a; idb_transaction_init(c); }
+static void d_idb_request(JSContext *c, const PlatformAgent *a) { (void)a; idb_request_init(c); }
+static void d_idb_connection(JSContext *c, const PlatformAgent *a) { (void)a; idb_connection_init(c); }
+static void d_idb_object_store(JSContext *c, const PlatformAgent *a) { (void)a; idb_object_store_init(c); }
+static void d_idb_cursor(JSContext *c, const PlatformAgent *a) { (void)a; idb_cursor_init(c); }
+static void d_idb_index_handle(JSContext *c, const PlatformAgent *a) { (void)a; idb_index_handle_init(c); }
+static void d_idb_index_populate(JSContext *c, const PlatformAgent *a) { (void)a; idb_index_populate_init(c); }
+static void d_idb_get_all(JSContext *c, const PlatformAgent *a) { (void)a; idb_get_all_init(c); }
+static void d_idb_vce(JSContext *c, const PlatformAgent *a) { (void)a; idb_version_change_event_init(c); }
+static void d_idb_open(JSContext *c, const PlatformAgent *a) { (void)a; idb_open_init(c); }
+static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
+static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
+static void d_report_exception(JSContext *c, const PlatformAgent *a) { (void)a; report_exception_init(c); }
+static void d_message_port(JSContext *c, const PlatformAgent *a) { (void)a; message_port_init(c); }
+static void d_xhr(JSContext *c, const PlatformAgent *a) { (void)a; xhr_init(c); }
+static void d_location(JSContext *c, const PlatformAgent *a) { (void)a; location_init(c); }
+static void d_session_history(JSContext *c, const PlatformAgent *a) { (void)a; session_history_init(c); }
+static void d_history(JSContext *c, const PlatformAgent *a) { (void)a; history_init(c); }
+static void d_navigation(JSContext *c, const PlatformAgent *a) { (void)a; navigation_init(c); }
+static void d_navigate_event_fire(JSContext *c, const PlatformAgent *a) { (void)a; navigate_event_fire_init(c); }
+static void d_nav_history_entry(JSContext *c, const PlatformAgent *a) { (void)a; navigation_history_entry_init(c); }
+static void d_nav_destination(JSContext *c, const PlatformAgent *a) { (void)a; navigation_destination_init(c); }
+static void d_screen(JSContext *c, const PlatformAgent *a) { (void)a; screen_init(c); }
+static void d_navigable(JSContext *c, const PlatformAgent *a) { (void)a; navigable_init(c); }
+static void d_event_loop(JSContext *c, const PlatformAgent *a) { (void)a; event_loop_init(c); }
+static void d_timer(JSContext *c, const PlatformAgent *a) { (void)a; timer_init(c); }
+static void d_window_proxy(JSContext *c, const PlatformAgent *a) { (void)a; window_proxy_init(c); }
+static void d_remote_object(JSContext *c, const PlatformAgent *a) { (void)a; remote_object_init(c); }
+static void d_remote_op(JSContext *c, const PlatformAgent *a) { (void)a; remote_op_init(c); }
+static void d_window_message(JSContext *c, const PlatformAgent *a) { (void)a; window_message_init(c); }
+static void d_broadcast_channel(JSContext *c, const PlatformAgent *a) { (void)a; broadcast_channel_init(c); }
+static void d_unhandled_rejection(JSContext *c, const PlatformAgent *a) { (void)a; unhandled_rejection_init(c); }
+static void d_animation_frame(JSContext *c, const PlatformAgent *a) { (void)a; animation_frame_init(c); }
+static void d_page_reveal(JSContext *c, const PlatformAgent *a) { (void)a; page_reveal_init(c); }
+static void d_viewport(JSContext *c, const PlatformAgent *a) { (void)a; viewport_init(c); }
+static void d_visual_viewport(JSContext *c, const PlatformAgent *a) { (void)a; visual_viewport_init(c); }
+static void d_media_query_list(JSContext *c, const PlatformAgent *a) { (void)a; media_query_list_init(c); }
+static void d_rendering(JSContext *c, const PlatformAgent *a) { (void)a; rendering_init(c); }
+static void d_fetch(JSContext *c, const PlatformAgent *a) { (void)a; fetch_init(c); }
+static void d_abort(JSContext *c, const PlatformAgent *a) { (void)a; abort_init(c); }
+static void d_observable(JSContext *c, const PlatformAgent *a) { (void)a; observable_init(c); }
+static void d_dom_rect(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_init(c); }
+static void d_dom_rect_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_list_init(c); }
+static void d_dom_string_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_string_list_init(c); }
+static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_init(c); }
+static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_init(c); }
+static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
+static void d_cookie_jar(JSContext *c, const PlatformAgent *a) { (void)a; cookie_jar_init(c); }
+static void d_domparser(JSContext *c, const PlatformAgent *a) { (void)a; domparser_init(c); }
+/* §16.2.1.9's host hook is the RUNTIME's, which is what an agent is. `import(specifier)` with none installed
+   resolved to nothing at all — no module, no error, no record — and a page that asks to load code and is
+   answered silently is the one shape an unbuilt capability must not have. */
+static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; module_loader_install(JS_GetRuntime(c)); }
+
+/* ---- the agent half, undone ----------------------------------------------------------------------------- */
+
+static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
+static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
+static void r_navigate_event_fire(JSRuntime *rt) { (void)rt; navigate_event_fire_free(); }
+/* §8.1.7.5's list of about-to-be-notified rejections is a live Array a C static holds for the agent, so it is
+   agent state and belongs on this column. It was a line in each host's own teardown instead, the WPT runner's
+   copy did not have it, and the consequence was not a subtle one: EVERY file that gate ran ended on
+   JS_FreeRuntime's gc_obj_list walk with a leaked Array, so a test that had already passed was reported as an
+   abort. That is exactly the drift this column exists to end. */
+static void r_unhandled_rejection(JSRuntime *rt) { unhandled_rejection_free(rt); }
+/* PERMISSIONS §3.2's STORE IS TWO LIVE ARRAYS, and it is reached only through navigator_free — Permissions is
+   declared from navigator_init, so it is released from there, which is right and is exactly why this row has to
+   exist. The WPT runner had no `navigator_free` line, so §3.2's store and the sources record beside it were
+   built for every file that gate ran and freed for none: two leaked GC objects per file, which is enough on its
+   own to end every run on JS_FreeRuntime's leak walk. It is the same defect as the row above, found by the same
+   reading, and the count could not show the first one being fixed while this one was still there — an abort is
+   per FILE, so removing one of several universal leaks moves it by nothing.
+   §6.4.4's UserActivation and Screen come with it: same column, same reason, and a component released from a
+   list one host writes out by hand is a component some other host leaks. */
+static void r_navigator(JSRuntime *rt) { (void)rt; navigator_free(); }
+static void r_screen(JSRuntime *rt) { (void)rt; screen_free(); }
+static void r_storage_manager(JSRuntime *rt) { (void)rt; storage_manager_free(); }
+/* INDEXED DATABASE §2.1's set of databases — one live record per storage key, holding every object store and
+   every record in them. It is the agent's for the reason its row states, so it is freed here. */
+static void r_idb_database(JSRuntime *rt) { idb_database_free(rt); }
+/* Each holds ONE runtime-lifetime value for the agent — the private Symbol its instances' internal slots
+   hang off — and the transaction additionally holds §2.7.2's live set and §2.7.1's cleanup set. A component
+   that mints a runtime-lifetime value owns it, and nothing else can free one: a per-realm value would go with
+   its context, and these belong to the agent. */
+static void r_idb_transaction(JSRuntime *rt) { idb_transaction_free(rt); }
+static void r_idb_request(JSRuntime *rt) { idb_request_free(rt); }
+static void r_idb_connection(JSRuntime *rt) { idb_connection_free(rt); }
+static void r_idb_object_store(JSRuntime *rt) { idb_object_store_free(rt); }
+static void r_idb_cursor(JSRuntime *rt) { idb_cursor_free(rt); }
+static void r_idb_index_handle(JSRuntime *rt) { idb_index_handle_free(rt); }
+static void r_idb_index_populate(JSRuntime *rt) { idb_index_populate_free(rt); }
+static void r_idb_get_all(JSRuntime *rt) { idb_get_all_free(rt); }
+static void r_idb_vce(JSRuntime *rt) { idb_version_change_event_free(rt); }
+static void r_idb_open(JSRuntime *rt) { idb_open_free(rt); }
+/* THE ONE VIRTUAL FILESYSTEM AND THE STANDARDS OVER IT, and this is the row whose absence was measured rather
+   than argued. §2.1's two ROOT DIRECTORY ENTRIES are agent state by the file's own reasoning (storage is keyed
+   by origin and an instance is an origin-keyed agent cluster), and File System Access §3.2.2's recently-picked
+   map is one more. Every one of those five releases was written out by hand into main.c's teardown and again
+   into wpt_runner.c's, and test_forced.c — the entry every gate in this tree actually links — had NONE of
+   them. The runtime's leak walk named the result exactly: `{kind:"directory", name:""}` and
+   `{kind:"directory", name:"local"}` with a null prototype, and §3.2.2's empty map beside them, each held with
+   refcount 1 from OUTSIDE the heap. Behind those three roots the ROOT REALM could never be collected — 2614
+   Functions, 408 shapes and a JSContext at refcount 3108 — so three C statics nobody freed were reported as a
+   whole leaked browser with nothing naming the owner. That is the third column's entire purpose, twice over:
+   a host cannot express the omission, and there is no longer a hand-copied list for it to drift out of. */
+static void r_file_system(JSRuntime *rt) { file_system_free(rt); }
+static void r_fs_writable(JSRuntime *rt) { fs_writable_free(rt); }
+static void r_fs_handle(JSRuntime *rt) { (void)rt; fs_handle_free(); }
+static void r_fs_access(JSRuntime *rt) { (void)rt; file_system_access_free(); }
+static void r_file_picker(JSRuntime *rt) { (void)rt; file_picker_free(); }
+/* THE TWO DELIVERY CALLEES AND §9.5's BUS, found by the same reading and leaked by the same host. Each of these
+   components mints ONE function object for the whole agent — the task callee a queued delivery runs through —
+   and §9.5's registry of open channels is a live Array beside it; the walk named both callees as
+   `Function { length: 2, name: "" }` and the registry as an empty Array. A component that mints a
+   runtime-lifetime value owns it, and this column is where it gives it back. */
+static void r_window_message(JSRuntime *rt) { window_message_free(rt); }
+static void r_broadcast_channel(JSRuntime *rt) { broadcast_channel_free(rt); }
+/* XMLHttpRequest holds the agent's step definitions and, through §5's ProgressEvent, the private Symbol that
+   interface's own slots hang off. main.c freed it, wpt_runner.c and test_forced.c did not. */
+static void r_xhr(JSRuntime *rt) { xhr_free(rt); }
+/* §7.2.6.10.3's NavigationDestination, AND IT IS THE ROW THE AUDIT FOUND RATHER THAN THE LEAK WALK. Its release
+   was written, exported from its header, and CALLED BY NOBODY — not by a host, not by another component — so
+   the private Symbol its internal slots hang off had been leaked by every run this engine had made up to that
+   commit. The walk could not report it: a private Symbol is a JSAtomStruct, which is not on gc_obj_list, so
+   `JS_FreeRuntime`'s object walk does not see it, and the atom walk beside it was behind ENABLE_DUMPS +
+   JS_DUMP_ATOM_LEAKS, a bit no host in this tree ever set. THAT SECOND HALF IS NO LONGER TRUE and the sentence
+   is not left standing: `JS_FreeRuntime`'s atom walk is unconditional now and carries a DCHECK that names the
+   surviving atom by kind and description, so a release this column forgets aborts at the report instead of
+   going unseen. What stays true is the first half — the audit found this row, not a detector — and the reason
+   is the general one: a component released by nobody is what a THIRD copy of a hand-written list produces, and
+   here there was no copy at all. */
+static void r_nav_destination(JSRuntime *rt) { navigation_destination_free(rt); }
+/* §5's four interned field names. fetch was one of the forty-three rows with a declare and an EMPTY third
+   column, and the atom walk named all four on 118 files of an area that touches fetch only incidentally. */
+static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
+/* THE DOM GROUP, WHOSE ROOT IS THE LARGEST CASCADE IN THIS BROWSER. element_free reaches forty-two further
+   releases — node.c's WRAPPER IDENTITY TABLE (a counted reference to every node wrapper ever minted, and a
+   wrapper holds its prototype, which holds the realm), custom_elements' registry backup and active-constructor
+   map, §4.3's pending mutation-record queue, the CSSOM group, the selector engine's lexbor arena, the CSS
+   parser, and the private Symbol every one of slot/shadow_root/element_internals/html_dialog/html_form hangs
+   its internal slots off. Every one of those is a C static held for the AGENT, which is the entry condition for
+   this column, and all of it was written by hand into three host teardowns instead — correct in all three
+   today, and one edit from not being, which is the whole of what happened to the eight components before it.
+   WHAT BLOCKED IT WAS A SIGNATURE AND NOTHING ELSE: the cascade freed against a JSContext, so it could not be
+   a row. It takes a JSRuntime now and reaches the same values through JS_FreeValueRT/JS_FreeAtomRT — the same
+   operation, since JS_FreeValue is JS_FreeValueRT(ctx->rt, v).
+   THE FOUR ROWS MOVE AS A BLOCK, and that is why html_iframe, dom_rect_list and dom_rect come with it rather
+   than after it. Reverse declaration order puts them in exactly the sequence the hand-written lists had them
+   in — iframe, element, dom_rect_list, dom_rect — so nothing about the group's internal order changes; taking
+   only the middle one would have reordered it against its own neighbours.
+   `document` IS here now, and the sentence that used to stand in its place was half a rule read as a whole
+   one. `document_free` really does read `doc_of(ctx)` and clear the realm's own opaque, and it really is a
+   per-realm release that this column cannot express — but that is one of TWO halves this component has, and the
+   other one had no home at all. `document_init` mints §4.5's class, declares fifteen pool entries and two
+   realm-value slots, and declares TEN sub-components; three of those (§4.7, §4.8, §4.2.2) were being released
+   from element_free's cascade, which is a release undoing another row's declaration, and the other seven were
+   released by nobody. It also CLAIMED §13.2.7's document-load lifecycle slot on the ONE frontier — out of the
+   per-DOCUMENT install, so every <iframe> re-claimed it and nothing ever gave it back.
+   THE HALVES RUN AT DIFFERENT PHASES AND NEITHER ORDER IS THIS COLUMN'S TO PICK: a child navigable's
+   document_free is reached from quickjs's realm-teardown hook, which fires inside JS_RunGC or JS_FreeRuntime —
+   both after this whole list. What makes that safe is stated and asserted at document_agent_free rather than
+   arranged here: the per-realm half reads NO static of that file, and §gc's realm-mark hook is deliberately NOT
+   given back, because the collection that runs after this list is exactly what tears those child realms down. */
+/* THE FOURTH THING A COMPONENT CAN HOLD FOR AN AGENT: A SLOT IN ANOTHER COMPONENT. These five were on no
+ * column at all, and the reason was the same signature that kept the DOM group off it — each `_free` took a
+ * JSContext, so it could not be a row, so it stayed a line in three hosts' hand-written teardowns. Not one of
+ * them releases anything a REALM owns: every prototype they build is in that realm's class-proto slot and goes
+ * with the context, and what is left over is class ids, step ids, interned atoms, private Symbols and — the
+ * part no detector could see — CLAIMS, in both directions: a slot one of them holds for somebody else, or a
+ * slot it took in somebody else.
+ *
+ * A CLAIM IS AGENT STATE WHOSE STORAGE IS IN THE OTHER COMPONENT, so it is released by the CLAIMANT and
+ * asserted by the HOLDER. `timer` and `rendering` CLAIM: §8.1.7's timer step and §8.1.7.3's in-parallel half
+ * are slots on the ONE frontier (solver/engine.c, released after the whole platform), and neither was ever
+ * given back — the timer's was not even claimed once, it was re-claimed by every REALM, out of the
+ * per-document install. `event_target` HOLDS four: §2.9's tree walk (core/dom/node.c), §2.9's activation
+ * predicate and behaviour (core/html/hyperlink.c) and HTML §8.1.7.2's handler-set hook
+ * (core/events/message_port.c), and not one of those three claimants released. `structured_clone` holds the
+ * transferable registry, which is one row and a count nothing ever reset. Every one of them is the defect
+ * core/agent_state.h found in Indexed Database §2.7.1's cleanup, and every one is invisible to both of
+ * JS_FreeRuntime's censuses for the reason that file gives.
+ *
+ * REVERSE DECLARATION ORDER IS WHAT MAKES IT WORK, and it works because the claims run the same way as the
+ * values: `element` (whose cascade reaches node.c and hyperlink.c) and `message_port` are both declared AFTER
+ * `event_target`, so all three claims on that component are given back before it is released and its own
+ * asserts are what say so. The hand-written lists had `event_target_free` BEFORE `message_port_free` in two of
+ * the three hosts, which is that order exactly backwards. */
+/* HTML §7.2.4's Location, AND IT IS A CLAIMANT ROW RATHER THAN A HANDLE ROW. Its release was a line in each of
+   the three hosts' hand-written teardowns — the list this file exists to abolish, and the shape that cost the
+   WPT runner §3.2's permission store — while it held the brand for §7.2.4 (never given back at all, which is
+   core/agent_state.h's dom_rect defect) and TWO CLAIMS in solver/concolic.c's source registry: `location.hash`
+   and `location.search`, with the percent-encode set each component applies to an attacker's bytes.
+   THE CLAIMS ARE WHY THE POSITION MATTERS. concolic_free asserts that registry is empty, and the only thing
+   that used to place this release before that assert was three hosts happening to write the lines in that
+   order; on this column it is placed by reverse declaration order, and platform_agent_free runs before
+   solver_agent_free by construction. */
+static void r_location(JSRuntime *rt) { (void)rt; location_free(); }
+static void r_event_target(JSRuntime *rt) { event_target_free(rt); }
+static void r_message_port(JSRuntime *rt) { message_port_free(rt); }
+static void r_timer(JSRuntime *rt) { timer_free(rt); }
+static void r_structured_clone(JSRuntime *rt) { structured_clone_free(rt); }
+static void r_rendering(JSRuntime *rt) { rendering_free(rt); }
+static void r_document(JSRuntime *rt) { document_agent_free(rt); }
+static void r_element(JSRuntime *rt) { element_free(rt); }
+static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
+static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
+static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
+static void r_dom_rect(JSRuntime *rt) { (void)rt; dom_rect_free(); }
+
+/* ---- the document half ---------------------------------------------------------------------------------- */
+
+static void i_url(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; url_install(c, g); }
+static void i_usp(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; usp_install(c, g); }
+static void i_form_data(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; form_data_install(c, g); }
+static void i_readable_stream(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; readable_stream_install(c, g); }
+static void i_queuing_strategy(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; queuing_strategy_install(c, g); }
+static void i_writable_stream(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; writable_stream_install(c, g); }
+static void i_transform_stream(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; transform_stream_install(c, g); }
+static void i_blob(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; blob_install(c, g); }
+static void i_encoding(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; encoding_install(c, g); }
+static void i_text_stream(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; text_stream_install(c, g); }
+/* THE ADDRESS, NOT THE ORIGIN. `window.origin` is §4.7's serialization OF the address, so a host that handed
+   this the origin got a `location`-free Window whose own `origin` was re-derived from a string that was
+   already one — and the WPT runner, the one host whose whole job is measuring fidelity, did exactly that. */
+static void i_window(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_install(c, g, d->url); }
+static void i_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; event_install(c, g); }
+static void i_message_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; message_event_install(c, g); }
+static void i_error_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; error_event_install(c, g); }
+static void i_message_port(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; message_port_install(c, g); }
+static void i_xhr(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; xhr_install(c, g); }
+static void i_navigable(JSContext *c, JSValueConst g, const PlatformDocument *d) { navigable_install(c, g, d->origin); }
+static void i_timer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; timer_install(c, g); }
+static void i_window_message(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_message_install(c, g, d->origin); }
+static void i_broadcast_channel(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; broadcast_channel_install(c, g); }
+static void d_structured_clone(JSContext *c, const PlatformAgent *a) { (void)a; structured_clone_init(c); }
+static void i_structured_clone(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; structured_clone_install(c, g); }
+static void i_unhandled_rejection(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; unhandled_rejection_install(c, g); }
+static void i_animation_frame(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; animation_frame_install(c, g); }
+static void i_page_reveal(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; page_reveal_install(c, g); }
+static void i_media_query_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; media_query_list_install(c, g); }
+static void i_fetch(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; fetch_install(c, g); }
+static void i_abort(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; abort_install(c, g); }
+static void i_observable(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; observable_install(c, g); }
+static void i_dom_rect(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_install(c, g); }
+static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
+static void i_dom_string_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_string_list_install(c, g); }
+static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
+{
+    document_install(c, g, d->dom, d->url, d->csp, d->csp_self_origin, d->sandbox_flags, d->doc_id,
+                     d->nav_proxy);
+}
+static void i_domparser(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; domparser_install(c, g); }
+
+/* THE LIST. ORDER IS DEPENDENCY ORDER and it is ONE order for both halves, which is what keeps a component to
+   one row: a declaration that has to precede another's (EventTarget before Window, because Window.prototype
+   chains to EventTarget.prototype and core/realm.h builds the per-realm prototypes in declaration order) and
+   an install that has to follow it (§7.2.2's event handlers, which sit on the global once the chain is made)
+   would otherwise be two orders and therefore two lists. They are not: §8.1.7.2's handlers are Window's own
+   mixins and window.c installs them, which is where the spec puts them anyway.
+   §4.8.5 is why `document` is last: installing it runs the insertion steps for every <iframe> in the markup,
+   which CREATES a child navigable — so the browsing context, the WindowProxy class and §7.4's create must all
+   already be here. */
+static const PlatformComponent PLATFORM[] = {
+    /* HR-TIME §4's TIME ORIGIN IS THE FIRST FIELD A REALM GETS, and the position is the argument. §4 puts the
+       field on the ENVIRONMENT SETTINGS OBJECT and says it holds "a moment early in the initialization" of it;
+       core/realm.h creates that environment with the realm and stamps §8.1.3.1's top-level creation URL before
+       running this list at all, so the moment named here is the same one, and being first among the intrinsics
+       is what makes it impossible for a later install to stamp a timestamp out of a realm that has no origin
+       yet — which is what DOM §2.5 does for every Event that is ever minted.
+       IT DEPENDS ON NOTHING IN THIS LIST. Its install reads the event loop's virtual clock, and the loop's
+       record is built in the DECLARE pass, which runs to the end before the first realm's intrinsics begin —
+       so a row this early is not a row that reads a half-built agent. */
+    { "hr_time",             d_hr_time,             NULL,        r_hr_time },
+    { "url",                 d_url,                 i_url },
+    { "url_search_params",   d_usp,                 i_usp },
+    { "form_data",           d_form_data,           i_form_data },
+    { "readable_stream",     d_readable_stream,     i_readable_stream },
+    { "queuing_strategy",    d_queuing_strategy,    i_queuing_strategy },
+    { "writable_stream",     d_writable_stream,     i_writable_stream },
+    { "transform_stream",    d_transform_stream,    i_transform_stream },
+    { "blob",                d_blob,                i_blob },
+    { "encoding",            d_encoding,            i_encoding },
+    { "text_stream",         d_text_stream,         i_text_stream },
+    /* §2.7 before §7.2.5, and its per-document half is inside window_install for the reason above. */
+    { "event_target",        d_event_target,        NULL,        r_event_target },
+    /* HTML §7.2.6.5's NavigationHistoryEntry, whose prototype chains to §2.7's and whose CLASS is what
+       §7.2.7.1's `required NavigationHistoryEntry from` brands against — so it is declared before `event`,
+       which is where every Event subclass including that one is declared. */
+    { "navigation_history_entry", d_nav_history_entry, NULL },
+    /* HTML §7.2.6.10.3's NavigationDestination, whose CLASS is what §7.2.6.10.1's `required NavigationDestination
+       destination` brands against — so it is declared before `event`, which is where every Event subclass
+       including NavigateEvent is declared. It inherits nothing, so its own prototype needs no earlier row. */
+    { "navigation_destination", d_nav_destination,   NULL,     r_nav_destination },
+    { "window",              d_window,              i_window },
+    /* §8.10.1's Navigator, and with it Permissions §6 (navigator.permissions), Storage §2 and File System §3
+       (navigator.storage) and §6.4.4's UserActivation. This row is the one whose absence from one host's copy
+       of the list left four standards uncollected by the gate that reports on them. */
+    { "navigator",           d_navigator,           NULL,        r_navigator },
+    /* THE ONE VIRTUAL FILESYSTEM and the File System Standard over it. The MODEL goes first (its two roots are
+       built at this pre-boot baseline, so no flow's creation becomes every sibling's); §2.5's stream after §5's
+       WritableStream, whose prototype it chains to; §2.2-§2.4's handles after the stream, since
+       `createWritable()` mints one; §3's StorageManager after §8.10.1's Navigator, because `navigator.storage`
+       is a partial interface member of the object that component builds. */
+    { "file_system",         d_file_system,         NULL,        r_file_system },
+    { "file_system_writable", d_fs_writable,        NULL,        r_fs_writable },
+    { "file_system_handle",  d_fs_handle,           NULL,        r_fs_handle },
+    { "storage_manager",     d_storage_manager,     NULL,        r_storage_manager },
+    /* FILE SYSTEM ACCESS, a DIFFERENT standard over that same model: §2.2's "file-system" powerful feature and
+       §2.3's two members, then §3's three pickers. Both rows come after `navigator` because Permissions §4's
+       registry — where the feature's row lives — is declared under it, and after `file_system_handle` because
+       §2.3's members install onto the prototype that component builds and core/realm.h runs the per-realm
+       installs in declaration order. */
+    { "file_system_access",  d_fs_access,           NULL,        r_fs_access },
+    { "file_picker",         d_file_picker,         NULL,        r_file_picker },
+    /* HTML §2.6.5's DOMStringList, BEFORE the standard that is currently its only consumer — Indexed Database
+       §4.4, §4.5 and §4.10 each answer with one, and core/realm.h runs the per-realm installs in DECLARATION
+       order, so its prototype must be in a realm before any member below can build a list in it. It is an HTML
+       row and not an Indexed Database one because it is an HTML type; HTML §7.2.5's `ancestorOrigins` is the
+       next consumer and reaches the same component. */
+    { "dom_string_list",     d_dom_string_list,     i_dom_string_list, r_dom_string_list },
+    /* INDEXED DATABASE, in the standard's own dependency order and no further. §2.4's KEY is what §2.2's list
+       of records is sorted by, what §2.9's range is bounded by and what §2.10's cursor walks in, so it is the
+       first thing that standard can have; §4.7's IDBKeyRange is the interface over it, and §4.3's IDBFactory
+       is the door the rest of the standard will be reached through. Neither row has a document half: both
+       install per REALM (core/realm.h), because §3.7 gives every realm its own interface prototype and because
+       the one IDBFactory `indexedDB` answers with is `[SameObject]` per realm.
+       WHAT THE ROWS DO NOT BUILD is honestly absent and says so where a page reaches it: there is no
+       connection, no transaction and no request yet, so `indexedDB.open` is a TypeError naming the member
+       rather than a shape-only object that would report a store nothing wrote to.
+       §2.1's DATABASE is the third row and it is an AGENT row with a RELEASE, which the two above it are not:
+       §2.1 says "each storage key has an associated set of databases", §Security makes an instance an
+       origin-keyed agent cluster, and storage is keyed by origin — so the set is the agent's, a same-origin
+       child navigable reaches THAT one rather than a second, and what a C static holds for the agent is freed
+       against the runtime here (core/platform.h's third column) rather than in each host's own teardown. */
+    { "idb_key_range",       d_idb_key_range,       NULL },
+    /* §2.12's RECORD SNAPSHOT with §4.8's IDBRecord over it, beside §2.9's key range because it is the same
+       kind of row: a value type of this standard, holding no agent-lifetime state, installing one interface
+       per realm. It is declared before every row that MINTS one — §6.2's and §6.3's retrieve-multiple arms,
+       reached from §4.5's and §4.6's members — because core/realm.h runs the per-realm installs in
+       DECLARATION order and a snapshot built in a realm with no IDBRecord.prototype crashes at the mint. */
+    { "idb_record",          d_idb_record,          NULL },
+    { "indexed_db",          d_indexed_db,          NULL },
+    { "idb_database",        d_idb_database,        NULL,        r_idb_database },
+    /* §2.7's TRANSACTION and §2.8's REQUEST, in that order because a request is placed against a transaction
+       and §5.6 asserts its state before it makes one. Both are declared after §2.7's EventTarget above,
+       because each interface prototype CHAINS to that one and core/realm.h builds the per-realm prototypes in
+       declaration order — an interface declared first would chain to a prototype that did not exist yet.
+       Neither has a document half: both install per REALM, since §3.7 gives every realm its own interface
+       prototype and a C member answers in the realm that defined it. */
+    { "idb_transaction",     d_idb_transaction,     NULL,        r_idb_transaction },
+    { "idb_request",         d_idb_request,         NULL,        r_idb_request },
+    /* §2.1.1's CONNECTION with §4.4's IDBDatabase over it, and §2.2.1's OBJECT STORE HANDLE with §4.5's
+       IDBObjectStore. Both are declared AFTER §2.7's EventTarget (IDBDatabase inherits it) and after the two
+       rows above, because core/realm.h runs the per-realm installs in DECLARATION order and each of these
+       interfaces is reached from the ones before it. Both hold one agent-lifetime value — the private Symbol
+       their internal slots hang off — which is what the release column is for. */
+    { "idb_connection",      d_idb_connection,      NULL,        r_idb_connection },
+    { "idb_object_store",    d_idb_object_store,    NULL,        r_idb_object_store },
+    /* §2.6.1's INDEX HANDLE with §4.6's IDBIndex, after §2.2.1's because §4.6's `objectStore` answers with one
+       and §4.5's `createIndex` returns one — and because core/realm.h runs the per-realm installs in
+       DECLARATION order. It holds one agent-lifetime value, the private Symbol its slots hang off. */
+    { "idb_index_handle",    d_idb_index_handle,    NULL,        r_idb_index_handle },
+    /* §2.10's CURSOR with §4.9's IDBCursor and IDBCursorWithValue over it, after §2.2.1's and §2.6.1's
+       handles because a cursor's SOURCE HANDLE is one of those two and §4.9's `source` answers with it — and
+       because core/realm.h runs the per-realm installs in DECLARATION order. It holds one agent-lifetime
+       value, the private Symbol §2.10's eleven fields hang off, plus §6.7's step machine. */
+    { "idb_cursor",          d_idb_cursor,          NULL,        r_idb_cursor },
+    /* §4.5's createIndex NOTE, as the request it says it is — "the index creation itself is processed as an
+       asynchronous request within the upgrade transaction". It holds no interface and installs into no realm:
+       what it declares is ONE step machine, which is agent-lifetime state and is what the release gives back.
+       It is placed after the two rows above because it is reached from §4.5's member and it places its request
+       through §5.6's, both of which are declared by then. */
+    { "idb_index_populate",  d_idb_index_populate,  NULL,        r_idb_index_populate },
+    /* §5.12's CREATING A REQUEST TO RETRIEVE MULTIPLE ITEMS, with §6.2's and §6.3's retrieve-multiple under
+       it. Like the row above it holds no interface and installs into no realm: what it declares is ONE step
+       machine, which is agent-lifetime state and is what the release gives back. It is placed after §2.2.1's
+       and §2.6.1's handles because §4.5's and §4.6's members are what reach it, and after §2.12's IDBRecord
+       row because its "record" arm mints one. */
+    { "idb_get_all",         d_idb_get_all,         NULL,        r_idb_get_all },
+    { "event",               d_event,               i_event },
+    /* §4.2's IDBVersionChangeEvent, and it is HERE rather than beside the other Indexed Database rows for the
+       one reason that decides every position in this list: its prototype chains to Event.prototype, which the
+       row above builds, and core/realm.h runs the per-realm installs in declaration order. §5.1's own
+       machinery follows it, because that is what FIRES three of these events — and because §5.1 registers the
+       two rendezvous idb_connection and idb_transaction declare, so both must already exist. */
+    { "idb_version_change_event", d_idb_vce,        NULL,        r_idb_vce },
+    { "idb_open",            d_idb_open,            NULL,        r_idb_open },
+    /* Declared by the components that own the events they carry; the interface objects are this realm's. */
+    { "message_event",       NULL,                  i_message_event },
+    { "error_event",         NULL,                  i_error_event },
+    { "report_exception",    d_report_exception,    NULL },
+    { "message_port",        d_message_port,        i_message_port, r_message_port },
+    { "xml_http_request",    d_xhr,                 i_xhr,       r_xhr },
+    { "location",            d_location,            NULL,        r_location },
+    /* §7.4.1's state machine BEFORE §7.2.5's History, whose every member reads the record it builds. */
+    { "session_history",     d_session_history,     NULL },
+    { "history",             d_history,             NULL },
+    /* HTML §7.2.6's navigation API, AFTER §7.4.1's state machine whose entries it is a view over. */
+    { "navigation",          d_navigation,          NULL },
+    /* HTML §7.2.6.10.4, which FIRES the navigate event at the Navigation the row above builds — its
+       declaration is the step definition of the commit handler job, which the runtime must know before
+       any navigation enqueues one. It installs no member of its own: the interfaces it builds objects of
+       are `navigation_destination` above and NavigateEvent under `event`. */
+    { "navigate_event_fire", d_navigate_event_fire, NULL,        r_navigate_event_fire },
+    { "screen",              d_screen,              NULL,        r_screen },
+    { "navigable",           d_navigable,           i_navigable },
+    /* HTML §8.1.7's EVENT LOOP, before the task sources that are ordered by it: the virtual clock, §8.1.7.1's
+       last render opportunity time and the insertion order a source breaks its ties by are the LOOP's, and
+       they are per-flow heap state, so the record has to exist before any flow can write one. */
+    { "event_loop",          d_event_loop,          NULL },
+    { "timer",               d_timer,               i_timer,     r_timer },
+    { "window_proxy",        d_window_proxy,        NULL },
+    { "remote_object",       d_remote_object,       NULL },
+    /* The PEER's half of the same seam: what this agent does when it is ASKED to perform one. Its per-realm
+       install captures %Reflect.set%/%Reflect.apply%, so it declares before any component whose install could
+       run page code — which is none of them, and is why it sits beside the asking half rather than at the end. */
+    { "remote_op",           d_remote_op,           NULL },
+    /* AFTER window_proxy: §9.4.4's `postMessage` is installed on the WindowProxy PROTOTYPE. */
+    { "window_message",      d_window_message,      i_window_message, r_window_message },
+    { "broadcast_channel",   d_broadcast_channel,   i_broadcast_channel, r_broadcast_channel },
+    { "structured_clone",    d_structured_clone,    i_structured_clone, r_structured_clone },
+    { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection, r_unhandled_rejection },
+    /* §8.9's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
+    { "animation_frame",     d_animation_frame,     i_animation_frame },
+    { "page_reveal",         d_page_reveal,         i_page_reveal },
+    { "viewport",            d_viewport,            NULL },
+    { "visual_viewport",     d_visual_viewport,     NULL },
+    { "media_query_list",    d_media_query_list,    i_media_query_list },
+    /* AFTER the three whose algorithms update-the-rendering's steps 8 and 10 are. */
+    { "rendering",           d_rendering,           NULL,        r_rendering },
+    { "fetch",               d_fetch,               i_fetch,     r_fetch },
+    { "abort",               d_abort,               i_abort },
+    { "observable",          d_observable,          i_observable },
+    /* GEOMETRY INTERFACES §3 and §4, before the component that returns one. Neither reads anything of the DOM's
+       — a rectangle is four numbers — so their position is decided only by their CONSUMER: CSSOM VIEW §6's
+       `getBoundingClientRect` is installed on Element.prototype by the row below, and it mints a DOMRect out of
+       the element's own realm, so both prototypes must already be in every realm the list has built. */
+    { "dom_rect",            d_dom_rect,            i_dom_rect,  r_dom_rect },
+    { "dom_rect_list",       d_dom_rect_list,       i_dom_rect_list, r_dom_rect_list },
+    { "element",             d_element,             NULL,        r_element },
+    { "html_iframe",         d_iframe,              NULL,        r_iframe },
+    /* RFC 6265 §5.3's COOKIE STORE, before the component whose §3.1.4 members read it. It is the first row with
+       a RELEASE, and the reason is the reason it is a row at all: the store is the USER AGENT's by the
+       standard's own words and an instance is one origin-keyed agent cluster, so it belongs to the JSRuntime
+       and not to any JSContext — which means nothing frees it when a realm goes. */
+    { "cookie_jar",          d_cookie_jar,          NULL,        r_cookie_jar },
+    { "document",            d_document,            i_document,  r_document },
+    /* HTML §8.5.1's DOMParser, AFTER `document` — not because its install needs one (it puts an interface
+       object on the global and nothing else) but because that is what this list's order MEANS: every member of
+       this interface builds a second Document through core/dom/document.h's `document_new`, so the component
+       that owns Documents is what it is declared against. Its own prototype chains to Object.prototype, so no
+       earlier row is required for that half. */
+    { "domparser",           d_domparser,           i_domparser },
+    { "module_loader",       d_module_loader,       NULL },
+};
+static const int PLATFORM_N = (int)(sizeof PLATFORM / sizeof PLATFORM[0]);
+
+/* THE OTHER SIDE OF THE LIST. A list that is only ever RUN is unfalsifiable: every host goes through it, so
+   nothing disagrees with it and a component whose install quietly stops installing anything looks identical to
+   one that works. This is the disagreement — the NAME a component puts on a realm's global, asserted present
+   once the whole list has run.
+ *
+ * It is two-sided in the same way core/idl_args.h's conditional-member exclusion is. A name that is absent
+ * fires with the component that owed it, which is exactly the report the original defect never produced
+ * (`navigator` was missing from the WPT gate's realm and the gate reported numbers for four standards rooted
+ * there). And a row whose component is renamed or removed leaves a name nobody installs, which fires the same
+ * assert from the other direction — so a witness cannot outlive its component the way a comment does.
+ *
+ * The four Window members come from realm intrinsics rather than from an install in this file, and asserting
+ * them HERE is deliberate: this is the point at which the realm is finished, and whether the intrinsic list
+ * and this list agree is precisely the question. */
+static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
+    { "window",                "window" },
+    { "onload",                "event_target" },
+    { "document",              "document" },
+    { "navigator",             "navigator" },
+    { "location",              "location" },
+    { "screen",                "screen" },
+    { "history",               "history" },
+    { "navigation",            "navigation" },
+    { "NavigationHistoryEntry", "navigation_history_entry" },
+    { "NavigationDestination", "navigation_destination" },
+    { "NavigateEvent",         "event" },
+    { "open",                  "navigable" },
+    { "fetch",                 "fetch" },
+    { "setTimeout",            "timer" },
+    { "postMessage",           "window_message" },
+    { "structuredClone",       "structured_clone" },
+    { "requestAnimationFrame", "animation_frame" },
+    { "matchMedia",            "media_query_list" },
+    { "URL",                   "url" },
+    { "URLSearchParams",       "url_search_params" },
+    { "FormData",              "form_data" },
+    { "Blob",                  "blob" },
+    { "TextEncoder",           "encoding" },
+    { "TextDecoderStream",     "text_stream" },
+    { "ReadableStream",        "readable_stream" },
+    { "WritableStream",        "writable_stream" },
+    { "TransformStream",       "transform_stream" },
+    { "CountQueuingStrategy",  "queuing_strategy" },
+    { "Event",                 "event" },
+    { "MessageEvent",          "message_event" },
+    { "ErrorEvent",            "error_event" },
+    { "MessageChannel",        "message_port" },
+    { "XMLHttpRequest",        "xml_http_request" },
+    { "BroadcastChannel",      "broadcast_channel" },
+    { "PromiseRejectionEvent", "unhandled_rejection" },
+    { "PageRevealEvent",       "page_reveal" },
+    { "AbortController",       "abort" },
+    { "DOMRect",               "dom_rect" },
+    { "DOMRectList",           "dom_rect_list" },
+    { "DOMStringList",         "dom_string_list" },
+    { "IDBKeyRange",           "idb_key_range" },
+    { "indexedDB",             "indexed_db" },
+    { "IDBTransaction",        "idb_transaction" },
+    { "IDBRequest",            "idb_request" },
+    { "IDBOpenDBRequest",      "idb_request" },
+    { "IDBDatabase",           "idb_connection" },
+    { "IDBObjectStore",        "idb_object_store" },
+    { "IDBIndex",              "idb_index_handle" },
+    { "IDBVersionChangeEvent", "idb_version_change_event" },
+    { "Observable",            "observable" },
+    { "DOMParser",             "domparser" },
+};
+static const int PLATFORM_WITNESS_N = (int)(sizeof PLATFORM_WITNESS / sizeof PLATFORM_WITNESS[0]);
+
+/* THE AGENT IS ONE RUNTIME AND THE LIST RUNS ONCE IN IT. Every component's own `_init` already asserts it did
+   not run twice; this asserts the same thing about the list, so the report names the LIST rather than whichever
+   component happened to be first. */
+static JSRuntime *g_declared_in;
+
+static void platform_check_table(void)
+{
+    int i, k;
+
+    for (i = 0; i < PLATFORM_N; i++) {
+        DCHECK(PLATFORM[i].name != NULL && *PLATFORM[i].name,
+               "a platform component has no name — every assertion about this list says which component, and "
+               "an unnamed row can only report a number");
+        DCHECK(PLATFORM[i].declare != NULL || PLATFORM[i].install != NULL,
+               "a platform component builds neither an agent half nor a document half — a row that builds "
+               "nothing is a component that is not in this browser, and it must be deleted rather than listed");
+        /* A RELEASE WITHOUT A DECLARATION HAS NOTHING TO RELEASE. Agent state is made by the agent half, so a
+           row that frees without declaring is either freeing another component's state or freeing nothing, and
+           both are worse than either alone. */
+        DCHECK(PLATFORM[i].release == NULL || PLATFORM[i].declare != NULL,
+               "a platform component releases agent state it never declared — the release column is the inverse "
+               "of the DECLARE column, and a row with only the inverse is undoing somebody else's work");
+        for (k = 0; k < i; k++)
+            DCHECK(strcmp(PLATFORM[k].name, PLATFORM[i].name) != 0,
+                   "a platform component is listed twice — its declaration would mint a second class and a "
+                   "second pool entry, and everything already chained to the first would answer out of an "
+                   "object the realm has thrown away");
+    }
+    for (i = 0; i < PLATFORM_WITNESS_N; i++) {
+        int found = 0;
+        for (k = 0; k < PLATFORM_N; k++)
+            if (strcmp(PLATFORM[k].name, PLATFORM_WITNESS[i].component) == 0) { found = 1; break; }
+        DCHECK(found, "a platform witness names a component this list does not have — the component was "
+                      "renamed or removed and the name it used to install is now owed by nobody, which is the "
+                      "state a stale exclusion rots into");
+    }
+}
+
+/* THE THIRD COLUMN'S OWN OTHER SIDE. The witness table above asserts what a component INSTALLS; this asserts
+   what a component HOLDS, and it is the same argument: a release column that is only ever RUN is unfalsifiable,
+   because a release that frees a value and keeps its handle looks exactly like one that works.
+ *
+ * BOTH DIRECTIONS ARE THE SAME MISTAKE SEEN FROM ITS TWO ENDS. A row with a release that declared no agent
+ * state is a release nothing can check — and the four defects core/agent_state.h names were all found by
+ * reading rather than by any detector, which is what "cannot be checked" costs. A row with NO release that
+ * declared agent state is the other one, and it is the shape of every leak this file's comments record: a C
+ * static held for the whole agent with an empty third column, reported eventually as an anonymous Function or
+ * a directory entry with nothing naming its owner. */
+static void platform_check_agent_state(void)
+{
+#if APICLIENT_DEV
+    int i;
+
+    for (i = 0; i < PLATFORM_N; i++) {
+        static char msg[320];
+        int n = agent_state_count(PLATFORM[i].name);
+
+        if (PLATFORM[i].release != NULL && n == 0) {
+            snprintf(msg, sizeof msg,
+                     "%s is on the release column and declared no agent state — the release column is the "
+                     "inverse of the declaration, and a release with nothing declared against it cannot be "
+                     "asserted to have undone anything (core/agent_state.h)", PLATFORM[i].name);
+            DFAIL(msg);
+        }
+        if (PLATFORM[i].release == NULL && n > 0) {
+            snprintf(msg, sizeof msg,
+                     "%s declared agent state and has no release — what a C static holds for the whole agent "
+                     "is freed by nothing when the agent goes, which is what every leak this file's comments "
+                     "record already was", PLATFORM[i].name);
+            DFAIL(msg);
+        }
+    }
+#endif
+}
+
+void platform_agent_init(JSContext *ctx, const PlatformAgent *agent)
+{
+    int i;
+
+    DCHECK(ctx != NULL, "the platform was declared into no realm");
+    DCHECK(agent != NULL, "the platform was declared with no agent facts");
+    DCHECK(agent->origin != NULL && *agent->origin,
+           "an agent was brought up with no PRINCIPAL — §9.5's named bus is keyed by it and §7.2.1 decides "
+           "remoteness by it, so an agent without one cannot answer either question");
+    /* realm_install_intrinsics asserts this too, and asserting it HERE as well is the point: the first realm's
+       intrinsics are the LAST thing this function does, so a host that passed nothing would otherwise be told
+       so from inside a call it did not make, forty declarations after the mistake. */
+    DCHECK(agent->top_level_url != NULL && *agent->top_level_url,
+           "an agent was brought up with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide whether "
+           "the first realm is a SECURE CONTEXT, and Web IDL §3.3.13's members are installed or absent by that "
+           "answer, so this agent's platform surface is undecided");
+    DCHECK(g_declared_in == NULL || g_declared_in != JS_GetRuntime(ctx),
+           "the platform was declared twice in one agent — a declaration is per JSRuntime, and the second one "
+           "re-mints every class id the first realm's objects are already branded with");
+    platform_check_table();
+    g_declared_in = JS_GetRuntime(ctx);
+    /* THE PRINCIPAL BECOMES A RECORD BEFORE ANY COMPONENT IS DECLARED, and it is not a row on the list because
+       it is not a surface: no class, no member, nothing installed into a realm. It is the agent's ORIGIN
+       (core/url/origin.h) — the value §7.2.1's filter, §7.3.1's inheritance and Storage's key are all decided
+       against — and it must exist before the first declaration that asserts it does. ONE adopt per agent is
+       also what gives an opaque principal its IDENTITY: the host states "null", and the nonce minted here is
+       what every document of this agent then shares. */
+    origin_agent_adopt(agent->origin);
+    /* AND THE AGENT'S CLUSTER, IN THE SAME BREATH AND FOR THE SAME REASON. §8.1.2.2's obtain-a-similar-origin-
+       window-agent is what ALLOCATES the agent this whole call is bringing up, and its key is derived from the
+       origin adopted on the line above — so it is not a row on the list either: it installs nothing, and it has
+       to exist before `originAgentCluster`, §7.1.1.2's `document.domain` setter or anything else can ask which
+       cluster this agent is in. Every host reaches it here, which is what stops one host answering a question
+       about a cluster that was never allocated. */
+    agent_cluster_obtain_window_agent(origin_agent(), agent->requests_oac);
+    for (i = 0; i < PLATFORM_N; i++)
+        if (PLATFORM[i].declare)
+            PLATFORM[i].declare(ctx, agent);
+    platform_check_agent_state();
+    /* THE AGENT'S FIRST REALM IS A REALM. Every per-realm intrinsic the components above declared is built
+       here, through the same one call a child navigable's realm makes — so the first document cannot get a
+       different set from the rest, which is the whole failure mode this file and core/realm.h exist to end. */
+    realm_install_intrinsics(ctx, agent->top_level_url);
+}
+
+void platform_agent_free(void)
+{
+    int i;
+
+    DCHECK(g_declared_in != NULL,
+           "the platform was released in an agent that never declared it — there is nothing here to undo, and a "
+           "host that reaches teardown without having reached platform_agent_init did not build this browser");
+    /* REVERSE DECLARATION ORDER, because the forward order is dependency order: a component declared after
+       another may hold a value that component minted, so it must give it up first. */
+    for (i = PLATFORM_N - 1; i >= 0; i--)
+        if (PLATFORM[i].release)
+            PLATFORM[i].release(g_declared_in);
+    /* THE ORIGINS GO LAST, AFTER EVERY COMPONENT THAT NAMES ONE. They are the agent's, not a realm's — a
+       WindowProxy holds one as a POD pointer inside the bytes its COW delta captures — so the whole table is
+       released here, once, when nothing is left that could read it. */
+    agent_cluster_release();   /* the cluster names an origin, so it goes BEFORE the origins it named */
+    origin_release();
+    /* EVERY DECLARED SLOT IS BACK WHERE A FRESH PROCESS WOULD HAVE FOUND IT, asserted here because here is the
+       last instant at which the question has an answer: after this the agent is gone and the next reader of a
+       stale handle is a SECOND agent's `_init`, which consults it precisely to decide that it need not run. */
+    agent_state_check_released();
+    agent_state_reset();
+    g_declared_in = NULL;
+}
+
+void platform_document_install(JSContext *ctx, JSValueConst global, const PlatformDocument *doc)
+{
+    int i;
+
+    DCHECK(ctx != NULL, "a document was installed into no realm");
+    DCHECK(JS_IsObject(global), "a document was installed on something that is not the global object");
+    DCHECK(doc != NULL, "a document was installed with no document facts");
+    DCHECK(doc->dom != NULL, "a document was installed with no parsed tree — `document` is a wrapper over one");
+    DCHECK(doc->url != NULL && *doc->url,
+           "a document was installed with no ADDRESS — a document is loaded FROM somewhere, and §4.4's API "
+           "base URL is what every relative URL the page builds resolves against");
+    DCHECK(doc->origin != NULL && *doc->origin,
+           "a document was installed with no PRINCIPAL — every same-origin check compares it");
+    /* THE TWO FACTS ARE TWO FIELDS, which is the whole of the fix for them: a host with one field passed
+       whichever it had, and the address is the one that decides where `fetch("api/users")` goes. There is no
+       assertion comparing them, because a document AT the origin root legitimately has both the same. */
+    DCHECK(g_declared_in == JS_GetRuntime(ctx),
+           "a document was installed in an agent whose platform was never declared — a per-realm install "
+           "builds this realm's copy of a class the declaration mints, so there is nothing here to copy");
+
+    for (i = 0; i < PLATFORM_N; i++)
+        if (PLATFORM[i].install)
+            PLATFORM[i].install(ctx, global, doc);
+
+#if APICLIENT_DEV
+    for (i = 0; i < PLATFORM_WITNESS_N; i++) {
+        JSAtom a = JS_NewAtom(ctx, PLATFORM_WITNESS[i].name);
+        int has;
+        CHECK(a != JS_ATOM_NULL, "a platform witness name could not be interned");
+        has = JS_HasProperty(ctx, global, a);
+        JS_FreeAtom(ctx, a);
+        CHECK(has >= 0, "a platform witness probe threw — [[HasProperty]] over the global runs no page code");
+        /* The message is the NAME the component owed: a `@WHY` reading `navigator` is a reader standing at the
+           realm that has none, which is the whole report the three copies of this list never produced. */
+        DCHECK(has == 1, PLATFORM_WITNESS[i].name);
+    }
+#endif
+}

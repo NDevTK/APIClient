@@ -1,0 +1,404 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- renderer.html — THE RENDERER DOCUMENT: one WASM engine instance, in a frame the BROWSER isolates.
+
+     WHY A FRAME AT ALL. Two `WebAssembly.Instance`s in one realm is a NAMESPACE, not a sandbox: the host JS
+     holds both `Module` handles and `M.HEAPU8` reads and writes either linear memory. A frame carrying the
+     `sandbox` attribute WITHOUT `allow-same-origin` gets a UNIQUE OPAQUE ORIGIN, which is cross-origin to the
+     extension origin, and Site Isolation is then free to put it in its own renderer process with the OS
+     sandbox around it. SECURITY.md's "the QuickJS/WASM engine is UNTRUSTED, confined to the WASM sandbox + a
+     fixed set of host edges" becomes a fact the browser enforces instead of an import list somebody remembered
+     not to write.
+
+     THIS PAGE LOADS NOTHING BY URL, AND THAT IS FORCED BY THE MANIFEST'S OWN COEP. `cross_origin_embedder_policy:
+     require-corp` is served on EVERY extension resource response (extensions/browser/extension_protocols.cc,
+     GetSecurityPolicyForURL — the value is read off the extension, not off the resource path), so this document
+     enforces require-corp on its own subresources. That same file emits `Access-Control-Allow-Origin: *` and
+     `Cross-Origin-Resource-Policy: cross-origin` ONLY when `send_cors_header` is set, and it is set only for a
+     resource `WebAccessibleResourcesInfo::IsResourceWebAccessible` accepts. Our resources are not web-accessible
+     and must not become so. So from THIS document's opaque origin:
+       • a classic `<script src="renderer.js">` is a no-cors CROSS-ORIGIN load of a response with no CORP header
+         -> under require-corp the policy defaults to `same-origin` -> BLOCKED;
+       • a module script (`<script type=module>` or `import()`) is fetched in CORS mode by HTML's "fetch a single
+         module script" -> `Origin: null` against a response with no ACAO -> BLOCKED;
+       • `fetch("lib/qjs/qjs.wasm")` is the same CORS load -> BLOCKED.
+     A `srcdoc` frame does not escape this: it is a local scheme, so it INHERITS the embedder's policy
+     container — COEP require-corp included — and it inherits the embedder's CSP, which has no 'unsafe-inline',
+     so it could not run this bootstrap either. Neither does dropping the manifest's COEP: the CORS half kills
+     modules and `fetch` regardless, and CLAUDE.md §scheduler costs require-corp as most of what a SharedArrayBuffer
+     transport already has paid for.
+     THEREFORE the trusted zone HANDS this document everything it runs — check.js, the engine's JS glue and the
+     wasm bytes arrive on the boot record — and this file's only job is to be a place inline script may run.
+
+     AND AN `extension_pages` DOCUMENT COULD NOT BE FRAMED AT ALL: that policy ends in `frame-ancestors 'none'`,
+     which is enforced against ANY embedder, this extension's own offscreen included. The `sandbox` policy
+     carries no frame-ancestors, which is why poc-sandbox.html — the same shape, listed the same way, handed its
+     payload by postMessage the same way — is embeddable by the popup today.
+
+     WHICH IS WHY IT IS IN `manifest.sandbox.pages`. That listing is what swaps the `extension_pages` policy
+     (`script-src 'self' 'wasm-unsafe-eval'` — a grant this document cannot use, see above) for the `sandbox`
+     one, whose `'unsafe-inline'` is what lets a bootstrap exist with no URL to load it from, whose
+     `'unsafe-eval'` is what compiles the wasm, and whose `blob:` is what lets `import()` reach the engine glue
+     module built out of the Blob the offscreen delivered. The listing ALSO gives the document a CSP `sandbox`
+     directive, so the opaque origin is stated twice — by the policy and by the embedder's attribute — and the
+     effective sandboxing flags are the union of both restrictions, so the `sandbox="allow-scripts"` the
+     offscreen writes is what removes `allow-popups`/`allow-modals` from what the manifest policy grants.
+
+     THE META POLICY BELOW IS THIS DOCUMENT'S OWN, AND IT CAN ONLY NARROW. Policies combine and every one must
+     allow, so `default-src 'none'` deletes the `connect-src *` the manifest's sandbox policy grants: SECURITY.md
+     puts every analyzer-driven request through safeFetch in the trusted zone, and here there is no reachable
+     network to bypass it with — a property of the document rather than a rule the code follows. `script-src` is
+     restated because `default-src 'none'` would otherwise be what `script-src` falls back to in THIS policy and
+     the bootstrap would not run. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob:">
+<title>renderer</title>
+<script>
+"use strict";
+/* THE RENDERER'S HALF OF THE TRANSPORT, AND IT IS MOJO. It is inline because nothing else can be — see the CSP
+   note above — and it is deliberately the smallest program that can hold a renderer: it accepts the invitation,
+   instantiates the engine out of what the trusted zone delivered, and IMPLEMENTS `content.mojom.Renderer`. It
+   holds NO analysis logic and no policy; SECURITY.md keeps both on the other side of this boundary.
+
+   WHAT WAS DELETED HERE. A hand-rolled `serve`/`docall` pair read a generic `{v,id,op:"call",fn,ret,args,bodies}`
+   record: `fn` named any qjs_* entry, `ret` named its return type, and `args` was a list of SHAPE TAGS this
+   frame trusted to say how each operand should be placed. Not one parameter had a declared type, so the peer
+   whose messages SECURITY.md says must be assumed hostile was the one peer nothing validated — while the mojo
+   validator, which checks declared types and kills the connection on a malformed record, guarded the TRUSTED
+   worker. `content.mojom.Renderer` is that channel typed, and this file's half of it is the ABI table below.
+
+   THE TABLE IS NOT PER-SPELLING PLUMBING, WHICH IS THE OBJECTION THE DELETED CODE WAS BUILT AROUND. That code
+   took the placement off the WIRE precisely so no per-entry branch would live here — and the cost was that the
+   UNTRUSTED side of the boundary was describing its own arguments. What replaces it splits two different facts:
+   the mojom declares what may CROSS (types, nullability, validated at both ends), and the table declares how a
+   declared type becomes ccall operands FOR THIS C ENTRY — a fact about `engine/host/main.c` rather than about
+   the wire, and one no wire type could carry, since whether the entry RETAINS a pointer past the call is the
+   difference between a live document and a use-after-free. The two lists cannot drift apart: the implementation
+   is built by WALKING the interface's own method list, so a mojom method with no binding crashes here naming
+   itself, a binding no method reaches is caught by the count, and every placement is checked against the
+   declared type of the parameter it places. */
+(function () {
+  var M = null;        /* the instantiated renderer module — one per frame, one per agent cluster */
+  var out = [];        /* the engine's stdout/stderr since the last reply; drained into every reply */
+
+  /* THE ENGINE'S OUTPUT BELONGS TO THE TRUSTED ZONE, so it rides every reply rather than being kept here.
+     bridge.js parses @RESULT/@E/@WHY out of exactly these lines and a crash's ROOT line is the last @WHY
+     printed before abort() — if they stayed in the frame a crashed renderer would take its own cause with it.
+     EACH LINE CARRIES THE STREAM IT CAME FROM, `[fd, text]`, and that is the same rule as everything else that
+     crosses here: a record of primitives carrying its TYPE. The two streams are ONE ordered list because the
+     order across them is what the reader uses — engineCrash scans backwards for the LAST @WHY (stderr) printed
+     before the abort, and @RESULT (stdout) may sit either side of it — so splitting them into two arrays would
+     destroy exactly the fact being read. The fd is what lets the trusted zone tee stderr to its console live
+     (the harness `diag` capture, and an ASan report's alloc/free stacks) without teeing every @H line with it. */
+  function drain() { var o = out; out = []; return o; }
+
+  /* A RETAINED STRING: a NUL-terminated pointer that lives for the renderer's lifetime, which is this frame's —
+     the module is destroyed wholesale with the document, so a free list here would be a list nothing could ever
+     read. `qjs_init`/`qjs_join` KEEP the five pointers they are handed (the document, the address, the name,
+     the header field lines, the top-level URL), so an emscripten transient copy there is a use-after-free. */
+  function retainString(s) {
+    var n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n);
+    CHECK(p !== 0, "OOM placing an ABI string argument in the renderer's linear memory");
+    M.stringToUTF8(s, p, n);
+    return p;
+  }
+  /* BYTES ARE PLACED, NEVER ENCODED — the same rule bridge.js states at its own document argument: a document
+     that arrived as a byte sequence must not be run through an encode on the way in. The extra byte is the NUL
+     `qjs_init` strlen()s to; it is retained for retainString's reason. */
+  function retainBytes(b) {
+    var p = M._malloc(b.length + 1);
+    CHECK(p !== 0, "OOM placing an ABI byte argument in the renderer's linear memory");
+    M.HEAPU8.set(b, p);
+    M.HEAPU8[p + b.length] = 0;
+    return p;
+  }
+  /* A BODY IS A (ptr, len) PAIR AND `null` IS A POSITIVE STATEMENT — "this answer carries no body at all", a
+     network error or a load that did not load. The mojom declares it `array<uint8>?` for exactly that and the
+     validator has already refused anything else, so this function never sees a shape it has to guess about. The
+     extra byte exists because `_malloc(0)` may answer 0, and 0 is what the C entry reads as "no body", which a
+     204 is not. The block is FREED after the call: these entries copy what they are given, unlike the two
+     above, and this is the one placement whose lifetime is the call. */
+  function bodyPair(b) {
+    if (b === null) return [0, 0];
+    var p = M._malloc(b.length + 1);
+    CHECK(p !== 0, "OOM placing a fetched body in the renderer's linear memory — the flow parked on this " +
+                   "reply would resume reading a successful response with nothing in it");
+    M.HEAPU8.set(b, p);
+    return [p, b.length];
+  }
+
+  /* ── THE ABI BINDING TABLE: `content.mojom.Renderer`'s methods against `engine/host/main.c`'s QJS_EXPORT
+     bodies. `fn` and `ret` are that entry's C name and return; `out` is the reply field its return becomes, or
+     null for a void entry — which still ANSWERS, because the caller awaits the acknowledgement and a WASM abort
+     inside the call must reach it as a rejection; `place` is one placement per DECLARED parameter, in order.
+
+     THE PLACEMENTS, AND EVERY ONE IS A FACT ABOUT THE C ENTRY:
+       string-retained — malloc'd, UTF-8 written, NUL-terminated, NEVER FREED (the entry keeps the pointer)
+       bytes-retained  — the same retention for a parameter that arrived as bytes, copied without an encode
+       string          — emscripten's own transient copy (what M.ccall("…","string") does), for an entry that
+                         reads the string during the call and keeps nothing
+       number          — passed through; the wasm signature decides i32 or f64, which is why `int32` and
+                         `double` place identically
+       bytes-pair      — expands to TWO operands, the pointer and the length, freed after the call returns
+
+     `qjs_provide` and `qjs_host_answer` are the two entries whose ONE mojom parameter becomes TWO C operands,
+     which is the whole reason a placement is per-parameter rather than per-type. */
+  var ABI = {
+    init:             { fn: "qjs_init",               ret: "number", out: "rc",
+                        place: ["bytes-retained", "string-retained", "string-retained", "string-retained",
+                                "string-retained"] },
+    join:             { fn: "qjs_join",               ret: "number", out: "rc",
+                        place: ["bytes-retained", "string-retained", "string-retained", "string-retained",
+                                "string-retained"] },
+    getBundleId:      { fn: "qjs_bundle_id",          ret: "number", out: "bundleId", place: [] },
+    begin:            { fn: "qjs_begin",              ret: null,     out: null,       place: ["string"] },
+    step:             { fn: "qjs_step",               ret: "number", out: "code",     place: [] },
+    getResult:        { fn: "qjs_result",             ret: "string", out: "result",   place: [] },
+    teardown:         { fn: "qjs_teardown",           ret: null,     out: null,       place: [] },
+    getPending:       { fn: "qjs_pending",            ret: "string", out: "requests", place: [] },
+    getChunks:        { fn: "qjs_chunks",             ret: "string", out: "urls",     place: [] },
+    provide:          { fn: "qjs_provide",            ret: null,     out: null,
+                        place: ["string", "string", "string", "bytes-pair"] },
+    getTopWeight:     { fn: "qjs_top_weight",         ret: "number", out: "weight",   place: [] },
+    setYieldFloor:    { fn: "qjs_set_yield_floor",    ret: null,     out: null,       place: ["number"] },
+    requestPark:      { fn: "qjs_request_park",       ret: null,     out: null,       place: [] },
+    emitPartial:      { fn: "qjs_emit_partial",       ret: null,     out: null,       place: [] },
+    getHostRequests:  { fn: "qjs_host_requests",      ret: "string", out: "requests", place: [] },
+    hostAnswer:       { fn: "qjs_host_answer",        ret: null,     out: null,
+                        place: ["number", "string", "number", "bytes-pair"] },
+    getHostNotices:   { fn: "qjs_host_notices",       ret: "string", out: "notices",  place: [] },
+    route:            { fn: "qjs_route",              ret: null,     out: null,       place: ["string", "string"] },
+    perform:          { fn: "qjs_perform",            ret: null,     out: null,       place: ["string", "string"] },
+    hostAnswerRemote: { fn: "qjs_host_answer_remote", ret: null,     out: null,       place: ["number", "string"] },
+    worldGone:        { fn: "qjs_world_gone",         ret: null,     out: null,       place: ["string"] },
+  };
+
+  /* WHICH DECLARED TYPES A PLACEMENT MAY PLACE. This is the two-sided assert the table needs to be safe: the
+     mojom says what crosses and the table says how it lands, and a binding that placed a `string` where the
+     wire declares `array<uint8>` would hand the entry a pointer into a buffer that was encoded on the way — the
+     exact defect the byte types exist to prevent, and one that produces a plausible shorter document rather
+     than a crash. */
+  var PLACEABLE = {
+    "string-retained": ["string"],
+    "bytes-retained":  ["array<uint8>"],
+    "string":          ["string"],
+    "number":          ["int32", "double"],
+    "bytes-pair":      ["array<uint8>?"],
+  };
+
+  /* ONE ABI CALL, driven by the binding rather than by anything the caller said about its own arguments. The
+     validator has already checked every operand against its declared type before this runs, so what is left
+     here is the placement and the call itself. */
+  function callAbi(e, args) {
+    DCHECK(M !== null,
+           "a renderer was asked for an ABI call before its module was instantiated — the invitation is not " +
+           "accepted until the module exists, so nothing may be asked of an engine that does not");
+    var types = [], vals = [], transient = [], i, pr, v;
+    for (i = 0; i < e.place.length; i++) {
+      if (e.place[i] === "string-retained") { types.push("number"); vals.push(retainString(args[i])); continue; }
+      if (e.place[i] === "bytes-retained")  { types.push("number"); vals.push(retainBytes(args[i])); continue; }
+      if (e.place[i] === "string")          { types.push("string"); vals.push(args[i]); continue; }
+      if (e.place[i] === "number")          { types.push("number"); vals.push(args[i]); continue; }
+      if (e.place[i] === "bytes-pair") {
+        pr = bodyPair(args[i]);
+        if (pr[0]) transient.push(pr[0]);
+        types.push("number"); vals.push(pr[0]);
+        types.push("number"); vals.push(pr[1]);
+        continue;
+      }
+      DFAIL("the ABI binding for " + e.fn + " named a placement this renderer does not perform: `" +
+            e.place[i] + "`");
+      /* RELEASE PATH UNDER THE ASSERT, and it REFUSES rather than continuing: falling through this loop would
+         push no operand for this argument and hand the C entry a call one operand short — every later argument
+         read one slot early, which is a wrong call rather than a missing one. */
+      throw new TypeError("unplaceable ABI argument: " + e.place[i]);
+    }
+    try { v = M.ccall(e.fn, e.ret, types, vals); }
+    finally { for (i = 0; i < transient.length; i++) M._free(transient[i]); }
+    /* THE WORKING SET IS READ AFTER THE CALL, because the call is the only thing that can have grown it. Every
+       reply carries it; a method that also answers a value carries that beside it. */
+    var rec = { workingSetBytes: heapBytes() };
+    if (e.out !== null) rec[e.out] = v;
+    return rec;
+  }
+
+  /* THE IMPLEMENTATION, BUILT BY WALKING THE INTERFACE'S OWN METHOD LIST. Nothing here is written per method,
+     so the two descriptions cannot drift: a mojom method with no binding crashes NAMING ITSELF (rather than
+     reaching a peer as a TypeError inside a message handler, which reaches nobody — the caller stays parked on
+     a reply that is never coming), a binding no method reaches is caught by the count, and every parameter's
+     placement is checked against the type the wire declares for it. */
+  function rendererImpl() {
+    var def = self.mojo.interfaceOf("content.mojom.Renderer"), impl = {}, bound = 0;
+    def.byJs.forEach(function (m) {
+      var e = ABI[m.js];
+      DCHECK(e !== undefined,
+             "content.mojom.Renderer declares `" + m.name + "` and this renderer has no ABI binding for it — " +
+             "an interface is the WHOLE list of its methods and every one of them is a qjs_* entry, so a " +
+             "method without a binding is a capability the trusted zone can call and this frame cannot serve");
+      if (e === undefined) return;   /* release path under the assert */
+      DCHECK(e.place.length === m.params.length,
+             "the ABI binding for " + m.name + " places " + e.place.length + " argument(s) where its mojom " +
+             "declares " + m.params.length + " — a short list hands the C entry a call one operand short and " +
+             "every later argument is read one slot early, which is a wrong call rather than a missing one");
+      for (var i = 0; i < e.place.length; i++) {
+        var ok = PLACEABLE[e.place[i]];
+        DCHECK(ok !== undefined && ok.indexOf(m.params[i].type) >= 0,
+               "the ABI binding for " + m.name + " places parameter `" + m.params[i].name + "` as `" +
+               e.place[i] + "` while its mojom declares `" + m.params[i].type + "` — the placement is how a " +
+               "declared type becomes an operand of this C entry, so a mismatch is that entry being handed " +
+               "something other than what crossed");
+      }
+      DCHECK((e.ret === null) === (e.out === null),
+             m.name + "'s binding names a C return type with no reply field to carry it, or the reverse — a " +
+             "value computed and dropped is a value the caller reads as absent");
+      DCHECK(m.reply !== null && m.reply.length >= 1 &&
+             m.reply[m.reply.length - 1].name === "workingSetBytes",
+             m.name + " does not answer with the working set as its last reply field — every ABI call answers " +
+             "(a void entry still acknowledges, so a WASM abort inside it reaches the caller as a rejection) " +
+             "and every answer carries HEAPU8.length, because a call is the only thing that can grow it");
+      DCHECK(e.out === null ? m.reply.length === 1
+                            : (m.reply.length === 2 && m.reply[0].name === e.out),
+             m.name + "'s reply fields do not match its binding — the entry's return is the reply's FIRST " +
+             "field and the working set is its last, so a reply this frame builds by name would leave a hole");
+      bound++;
+      impl[m.js] = function () { return callAbi(e, Array.prototype.slice.call(arguments)); };
+    });
+    DCHECK(bound === Object.keys(ABI).length,
+           "this renderer holds " + Object.keys(ABI).length + " ABI binding(s) and content.mojom.Renderer " +
+           "declares " + bound + " method(s) — a binding no method reaches is a qjs_* entry the trusted zone " +
+           "has no way to call, which is a capability missing from the WIRE rather than from this file");
+    return impl;
+  }
+
+  /* THE PROCESS'S OWN IPC SURFACE, which is a fact about a PROCESS and not about anything it serves — which is
+     why it is `content.mojom.ChildProcess`, the same interface the browser process's Worker implements, rather
+     than a method bolted onto the ABI. It is what lets a probe outside this frame see that the typing is live
+     on THIS end too: how many pipe endpoints this renderer holds, and of which interfaces. */
+  var CHILD_PROCESS = {
+    getMojoStats: function () {
+      var s = self.mojo.stats();
+      return { remotes: s.remotes.join(","), receivers: s.receivers.join(","), endpoints: s.endpoints };
+    },
+  };
+
+  /* A DELIVERED PROGRAM IS RUN AS WHAT IT IS — a module, reached through a blob: URL minted in THIS document,
+     so the URL's origin is this frame's own opaque one and nothing about it is cross-origin. The URL is
+     released once the import has resolved: the module graph is already loaded and holds no reference to it. */
+  async function importBlob(b) {
+    var u = URL.createObjectURL(b);
+    try { return await import(u); } finally { URL.revokeObjectURL(u); }
+  }
+
+  /* THE PROGRAM THE INVITATION DELIVERED, RUN IN DEPENDENCY ORDER. Each step is what the next one needs, which
+     is why this is a sequence and not a Promise.all: check.js installs the assertion mechanism every line below
+     asserts with; mojo.js is the transport this frame's only channel is made of; mojom.js is VALIDATED as it is
+     declared, so an interface with a repeated ordinal or a type this transport cannot serialize aborts here
+     rather than at the first call; and the engine's glue is what there is anything to serve at all. */
+  async function boot(m) {
+    /* check.js FIRST AND BY ITS OWN BYTES, so this frame asserts with the SAME mechanism as the offscreen and
+       the C engine rather than a second one coined here. It is a classic IIFE over `self`, which is also a
+       valid module body, so importing it installs DCHECK/CHECK/DFAIL exactly as a <script src> would. */
+    await importBlob(m.check);
+    DCHECK(typeof DCHECK === "function" && typeof CHECK === "function",
+           "the boot record's check.js did not install the assertion mechanism — every line below asserts " +
+           "with it, and a renderer that cannot assert is one whose invariant failures are invisible");
+    /* AND THE RECORD SAYS WHAT IT IS, asserted on the first line that CAN assert — the mirror of the embedder's
+       own `hello === 1` check. The window channel carries one record in each direction and each states its
+       kind, so a frame that started booting on something else would be a frame running a program the embedder
+       did not send. It cannot be checked before check.js, because check.js arrives IN this record. */
+    DCHECK(m.v === 1 && m.invitation === 1,
+           "a renderer began booting on a window record that is not an invitation — the embedder posts exactly " +
+           "one, carrying this process's program and the primordial pipe, and anything else reaching here is a " +
+           "frame instantiating whatever it was handed");
+    /* AND THE TRANSPORT, BY THE SAME ROUTE AND FOR THE SAME REASON THE ENGINE TAKES IT. An interface exists
+       only if BOTH ends agree on it, so both ends load ONE description: the offscreen loads these two files by
+       <script src> off its own origin and this frame is handed the identical bytes, which is what makes a
+       version skew a build that packaged two generations rather than a runtime negotiation. */
+    await importBlob(m.mojo);
+    DCHECK(!!self.mojo && typeof self.mojo.Connection === "function" &&
+           typeof self.mojo.interfaceOf === "function",
+           "the invitation's mojo.js did not install the transport — this frame's only channel to the trusted " +
+           "zone is a mojo Connection, so without it there is no way to accept the invitation and no way to be " +
+           "asked anything");
+    await importBlob(m.mojom);
+    DCHECK(m.glue instanceof Blob && m.wasm instanceof Uint8Array,
+           "the boot record did not carry the renderer's program — the engine's JS glue crosses as a Blob " +
+           "carrying its type and the wasm crosses as BYTES, because this document may load neither by URL");
+    var mod = await importBlob(m.glue);
+    DCHECK(typeof mod.default === "function",
+           "the engine glue module exported no factory — build.mjs links the production ABI with " +
+           "-sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createQJS, whose default export is that factory");
+    /* `instantiateWasm` IS THE HOOK THIS BUILD ACTUALLY HAS. `Module.wasmBinary` is declared in the glue and
+       never assigned from the incoming Module, so setting it would silently fall through to findWasmBinary()
+       and a fetch this document cannot make; `instantiateWasm` is read off Module and short-circuits BEFORE
+       any URL is computed, so no address is ever derived from this frame's blob: base. */
+    M = await mod.default({
+      print: function (s) { out.push([1, String(s)]); },
+      printErr: function (s) { out.push([2, String(s)]); },
+      noInitialRun: true,
+      instantiateWasm: function (imports, ok) {
+        WebAssembly.instantiate(m.wasm, imports).then(function (r) { ok(r.instance, r.module); });
+        return {};   /* emscripten's async form: the exports arrive through `ok` */
+      },
+    });
+  }
+
+  /* THE WORKING SET, WHICH IS THIS FRAME'S TO STATE AND NOBODY ELSE'S. `HEAPU8.length` is the view over the
+     ENTIRE linear memory of this instance, and the offscreen's RAM floor is the sum of that number across the
+     pool — a number it used to read straight off the Module it held. There is no Module on that side any more,
+     so the fact rides every reply as `content.mojom.Renderer`'s declared `workingSetBytes`: a call is the only
+     thing that can grow this memory, so the moment a call answers is exactly the moment the number changed, and
+     no extra round trip can be fresher. It is read AFTER the call returns for that reason. A call that ABORTS
+     reports none, and that is a positive statement rather than a hole: the instance whose memory this describes
+     is the thing that broke, so any number for it would be a claim about a dead heap — and the transport says
+     so by killing the connection instead of answering. */
+  function heapBytes() { return M.HEAPU8.length; }
+
+  /* THE INVITATION, ACCEPTED — `mojo::IncomingInvitation::Accept`. It arrives on the WINDOW channel because
+     that is the only channel that exists before a pipe does, and it carries this process's whole program (the
+     three modules and the wasm bytes) plus the primordial pipe. Every message after it rides that pipe, which
+     is point-to-point by construction: no target origin to state, no source to check, and no other listener on
+     this window can see it.
+     THE ONLY TWO ASSERTIONS THIS FRAME MAKES WITHOUT THE MECHANISM ARE HERE, because check.js arrives IN the
+     record being checked. They are bare throws for the same reason check.js's own `fail` is a throw, and they
+     are tagged @E rather than @WHY because they are CHECK-class and not DCHECK-class: who may boot this
+     renderer is a trust boundary, so it must hold in release too. Nothing but the embedder can reach this
+     window — the frame is sandboxed with no opener, no children and no popups — so another source is a
+     should-never-happen and not a case to skip past.
+     A REFUSAL TRAVELS ON THE WINDOW CHANNEL, ALWAYS, and that is not a second transport — it is the invitation
+     channel carrying the two things an invitation channel is for. A bootstrap that failed may have failed AT
+     mojo.js, so a refusal posted over the pipe would be a refusal that needs the very thing it is refusing
+     about; posting it uniformly here means the parent hears about a program that did not load instead of
+     parking forever on an acceptance that is not coming. It drains this process's output with it for the reason
+     every record a child posts does: the last line printed before a failure is what says what broke. */
+  function onInvitation(e) {
+    if (e.source !== parent)
+      throw new Error("@E a renderer received its invitation from a window that is not its embedder");
+    removeEventListener("message", onInvitation);
+    var port = e.ports[0];
+    if (!port) throw new Error("@E a renderer's invitation carried no pipe — every call after boot rides it");
+    boot(e.data).then(
+      function () {
+        /* EXPOSED BEFORE THE ACCEPTANCE, which is browser-process.js's order and is the reason for it: the
+           parent binds nothing until this process has said it started, so an interface registered after the
+           acceptance would leave a window in which a bind request reaches a binder map that does not hold it. */
+        self.mojo.exposeInterface("content.mojom.Renderer", rendererImpl());
+        self.mojo.exposeInterface("content.mojom.ChildProcess", CHILD_PROCESS);
+        var conn = new self.mojo.Connection(
+          { post: function (rec, xfer) { port.postMessage(rec, xfer); },
+            listen: function (cb) { port.onmessage = function (ev) { cb(ev.data); }; } },
+          { role: "child", name: "the offscreen document", drainStdio: drain });
+        conn.acceptInvitation(true, null);
+      },
+      function (err) {
+        parent.postMessage({ v: 1, bootstrapFailed: String((err && err.stack) || err), out: drain() }, "*");
+      });
+  }
+  addEventListener("message", onInvitation);
+  /* "*" IS THE ONLY TARGET ORIGIN THIS FRAME CAN NAME. Its own origin is opaque and postMessage's targetOrigin
+     parses as a URL unless it is "*" or "/", so there is no origin string to state. It is not a broadcast: the
+     message goes to `parent` and to nothing else, and the offscreen matches it by `event.source` — the
+     browser-set WindowProxy of the frame IT created — never by anything this record claims about itself. */
+  parent.postMessage({ v: 1, hello: 1 }, "*");
+})();
+</script>

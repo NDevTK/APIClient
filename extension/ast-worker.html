@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<!-- `frame-src 'self'` IS WHAT LETS THIS DOCUMENT HOLD A RENDERER, and its absence was a block with no
+     symptom on this side: the manifest's extension_pages policy grants `frame-src 'self'`, but policies
+     COMBINE and every one must allow, and this document's own policy names no frame-src at all — so it fell
+     back to `default-src 'none'` and every renderer frame renderer-host.js creates would have been refused by
+     the strictest of the two. It is 'self' and nothing wider: the only address this zone ever frames is
+     renderer.html, on this origin. -->
+<!-- `worker-src 'self'` IS GONE WITH THE LAST WORKER THIS DOCUMENT CREATED. browser-process-host.js started
+     extension/browser-process.js as a dedicated module Worker to hold the renderer registry in WASM; the
+     registry is JavaScript in this realm again (render-process-host.js), nothing here calls `new Worker`, and
+     a grant nobody uses is a capability this document is handing itself for no reason. `default-src 'none'`
+     covers workers, so the refusal is now the default rather than an omission. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; frame-src 'self'; connect-src 'self' https: http: data:">
+<!-- The offscreen document hosts the API-learning BRAIN (offscreen-brain.js, the
+     former service worker) where it has a stable lifetime + IndexedDB. Its lib/*
+     dependencies load first, then the brain — which now ALSO contains the v2 host
+     bridge (merged from the deleted ast-worker.js): it dynamic-import()s the engine
+     WASM and installs self.astDispatch. One trusted file, no split. -->
+<!-- DCHECK/CHECK: the JS mirror of engine/host/check.h, loaded FIRST so every component can fail hard on a
+     violated invariant (dev) exactly like the C engine — the confidence + isolation-testability substrate. -->
+<script src="check.js"></script>
+<!-- MOJO: the IPC primitive, and then the mojom IDL that declares what may cross a process boundary. Loaded
+     immediately after check.js because the IDL is VALIDATED as it is declared (an interface with a repeated
+     ordinal, a parameter carrying no explanation, or a type this transport cannot serialize aborts here rather
+     than at the first call), and before renderer-host.js, which is the one component here that speaks across a
+     process boundary: it hands every renderer frame these same two files as part of its program, because an
+     interface exists only if both ends agree on it and ONE description is what makes that true. There is
+     exactly one boundary left to describe — the untrusted renderer — so there are exactly two interfaces. -->
+<script src="mojo.js"></script>
+<script src="mojom.js"></script>
+<script src="lib/protobuf.js"></script>
+<script src="lib/protocol-parsers.js"></script>
+<script src="lib/discovery.js"></script>
+<script src="lib/openapi-import.js"></script>
+<script src="lib/openapi-export.js"></script>
+<!-- ERROR-BASED SCHEMA LEARNING: the payloads a Google API rejects, and the schema its rejection describes.
+     It reads the `google.rpc.Status` envelope with lib/protobuf.js's codec (loaded above) and issues its
+     probes through the page-context relay its caller injects, so it is loaded before lib/discovery-probe.js,
+     which is the caller. -->
+<script src="lib/req2proto.js"></script>
+<script src="lib/stats.js"></script>
+<script src="lib/chains.js"></script>
+<!-- THE RENDERER REGISTRY (Chromium's RenderProcessHost): which agent clusters have a renderer, what routing id
+     each was given, and SECURITY.md's refusal of a second one for a cluster that already has one — a CHECK,
+     fatal in every build. THIS DOCUMENT IS THE BROWSER PROCESS: it owns the network chokepoint below, the
+     routing between instances, and this decision, and it is JavaScript deliberately, because the component
+     that arbitrates between renderers of different ORIGINS is the one a memory bug would breach a
+     cross-origin boundary in. It was a dedicated Worker holding the table in WASM (browser-process.js +
+     browser-process-host.js, both deleted with the C) reached over content.mojom.RendererHost; the offscreen
+     wrote that Worker's program, so the pipe separated a Map from its only caller. Loaded BEFORE
+     renderer-host.js, which asks it before it materializes anything. -->
+<script src="render-process-host.js"></script>
+<!-- THE single external-fetch function (GET only, no cookies, http(s) only). -->
+
+<script src="lib/safe-fetch.js"></script>
+<script src="lib/schema.js"></script>
+<script src="lib/keys.js"></script>
+<script src="lib/persistence.js"></script>
+<script src="lib/grouping.js"></script>
+<!-- ACTIVE DISCOVERY: fetch an API's PUBLISHED description at the well-known addresses lib/discovery.js
+     names, diff it against the one already held, and — where a service publishes none — fall back to
+     lib/req2proto.js's error probe and build a virtual document out of what the rejection described. Loaded
+     before lib/response-decode.js, which triggers both halves off a captured exchange. -->
+<script src="lib/discovery-probe.js"></script>
+<script src="lib/learn.js"></script>
+<script src="lib/response-decode.js"></script>
+<script src="lib/encode.js"></script>
+<script src="lib/merge.js"></script>
+<script src="lib/send.js"></script>
+<script src="lib/popup-handlers.js"></script>
+<script src="lib/serialize.js"></script>
+<!-- the analysis brain (LOGIC — being deleted into the engine over time). -->
+<script src="offscreen-brain.js"></script>
+<!-- the trusted side of a RENDERER FRAME: provisions renderer.html in a sandboxed (opaque-origin) iframe,
+     hands it the engine program, and relays the qjs_* ABI to it. This is where the WASM load moves to, so it
+     is loaded before the bridge that will call it. -->
+<script src="renderer-host.js"></script>
+<!-- the v2 host bridge: the ONLY irreducible trusted-zone JS (SECURITY.md) — dynamic-import()s the
+     engine WASM lib/qjs/qjs.mjs, drives qjs_step, safe-fetches, persists IDB, installs self.astDispatch. -->
+<script src="bridge.js"></script>

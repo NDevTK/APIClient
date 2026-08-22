@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pin and shape</title>
+<script>
+/* ONE PROBLEM: the two halves of "COMPUTE OR SHAPE, NEVER INVENT", in one document, so that a change which
+ * blurs them is visible as a difference rather than as an opinion.
+ *
+ * CONCRETIZE-ON-PIN. `=== "admin"` PINS the source on the arm that makes it true, so from there the code has
+ * determined the value and the concatenation below computes a REAL one: the endpoint must carry role=admin. */
+var role = __CFG.role;
+if (role === "admin") {
+  fetch("/api/roles?role=" + role);
+}
+
+/* NEVER INVENT. A range gate narrows the DOMAIN and pins nothing, so nothing has determined this value and
+ * the emitted one must stay a domain-annotated SHAPE. Inventing a 6 here fabricates an observed key, which
+ * §H forbids in the same sentence that lets §S solve freely. */
+var limit = __CFG.limit;
+if (limit > 5) {
+  fetch("/api/page?limit=" + limit);
+}
+</script>
