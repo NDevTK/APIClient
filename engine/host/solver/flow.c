@@ -889,9 +889,13 @@ void flow_wfq_census(WfqCensus *out) {
     out->cand_members = out->cand_unrun = out->cand_dec_max = 0;
     out->cand_svc_max = 0;
     out->dec_max = 0;
+    out->w_top = out->w_min = out->cand_w_max = 0.0;
     for (i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
         int64_t s = flow_service_notch(f);
+        /* THE SUM THE PICK USES, not only the terms it is made of — see flow.h for the reading that went wrong
+           without it. One call per member, and this scan still decides nothing. */
+        double w = flow_weight(f);
         /* HOW MANY DECISIONS THIS FLOW STANDS ON, read from wherever its decision state currently lives: a
            parked flow's blob, and decide.c's live globals for the one the scheduler is switched into — the
            same split cold.c's census makes, because there is only one place each can be. Asked of EVERY
@@ -911,10 +915,12 @@ void flow_wfq_census(WfqCensus *out) {
         if (f->val > f->val_born) out->self_emit++;
         if (f->cpu == 0) out->unrun++;
         if (s > out->svc_max) out->svc_max = s;
+        if (i == 0 || w < out->w_min) out->w_min = w;
         /* AND THE SAME QUESTIONS ASKED OF THE CANDIDATES ALONE — see flow.h. `cand_src` is what a candidate
            session IS (the substitution it carries), and engine.c copies it to a sibling, so this counts the
            search's whole live population rather than its roots. */
         if (f->cand_src) {
+            if (!out->cand_members || w > out->cand_w_max) out->cand_w_max = w;
             out->cand_members++;
             if (f->cpu == 0) out->cand_unrun++;
             if (s > out->cand_svc_max) out->cand_svc_max = s;
@@ -922,7 +928,7 @@ void flow_wfq_census(WfqCensus *out) {
         }
     }
     top = flow_best();
-    if (top) out->val_top = top->val;
+    if (top) { out->val_top = top->val; out->w_top = flow_weight(top); }
 }
 
 /* The four questions, each a seed, a filter or a direction over the one scan above. */

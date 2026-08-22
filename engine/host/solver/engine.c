@@ -4748,11 +4748,11 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                 printf("@WFQ {\"members\":%ld,\"valMin\":%.1f,\"valMax\":%.1f,\"valTop\":%.1f,"
                        "\"valZero\":%ld,\"selfEmit\":%ld,\"unrun\":%ld,\"svcMax\":%lld,"
                        "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,"
-                       "\"decMax\":%ld}\n",
+                       "\"decMax\":%ld,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f}\n",
                        w.members, w.val_min, w.val_max, w.val_top,
                        w.val_zero, w.self_emit, w.unrun, (long long)w.svc_max,
                        w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max,
-                       w.dec_max);
+                       w.dec_max, w.w_top, w.w_min, w.cand_w_max);
             }
             /* CREATED IS NOT LIVE, AND A COUNTER THAT CANNOT TELL THEM APART CANNOT NAME A LEAK. A run whose
                created-flow count climbs with the switch count is either CHURN (each flow finishes and the

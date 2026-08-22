@@ -105,7 +105,7 @@ function probeFlips(out) {
    Same field contract as @COLD: the names are engine.c's printf, and an absent one throws rather than being
    silently compared as undefined. */
 const WFQ_FIELDS = ["members", "valMin", "valMax", "valTop", "valZero", "selfEmit", "unrun",
-                    "cands", "candUnrun", "candDecMax", "decMax"];
+                    "cands", "candUnrun", "candDecMax", "decMax", "wTop", "candWMax"];
 function wfqReading(out) {
   const s = [];
   for (const m of out.matchAll(/^@WFQ (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
@@ -121,7 +121,7 @@ function wfqReading(out) {
     text: `@WFQ: ${w.members} members, reward ${w.valMin}..${w.valMax} (top ${w.valTop}), ${w.valZero} at ` +
           `reward 0, ${w.selfEmit} emitted since birth, ${w.unrun} never charged for the thread; ` +
           `${w.cands} @S candidates of which ${w.candUnrun} never ran, deepest one ${w.candDecMax} of ` +
-          `${w.decMax} gates in`,
+          `${w.decMax} gates in; weight ${w.wTop} at the front against ${w.candWMax} for the best candidate`,
   };
 }
 

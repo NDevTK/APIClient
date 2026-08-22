@@ -354,6 +354,16 @@ double flow_weight(const Flow *f);
  * only thing that can raise its reward is the very sink it is trying to reach. Beside `val_max` the pair says
  * exactly where those members sit in the order.
  *
+ * AND IT REPORTS THE WEIGHTS THEMSELVES, which is a reversal of what this comment used to say. It said the
+ * census "calls flow_weight for nothing at all — it reports the two terms, never their sum", on the reasoning
+ * that the terms are what a rank is MADE of. The terms are; the ORDER is the sum, and leaving the sum out
+ * meant every reading of this census had to re-derive flow_weight by hand from `val` and a service notch. That
+ * is not a theoretical cost: a reading of `valMax - valMin > 1` was taken here as "the reward term is ordering
+ * the frontier" on a run whose `valTop` was 0.0 — the spread existed and was not what the pick read, and the
+ * arithmetic that would have shown it (a val=3 member at 448 notches is at weight -2.37, below a from-baseline
+ * flow at 1.0) was done by hand, three exchanges later, by someone who already had both terms in front of them.
+ * The sum the pick actually uses is one call per member and it removes the re-derivation entirely.
+ *
  * PURE MEASUREMENT: one scan, no reference taken, nothing mutated — safe between scheduler steps, which is
  * where the progress stream asks it. It decides NOTHING; every member keeps its weight and its place. */
 typedef struct {
@@ -412,6 +422,29 @@ typedef struct {
     long cand_dec_max;
     long dec_max;         /* the deepest decision vector of ANY member — the gate sequence's own length, which
                              is what the row above is a fraction of */
+
+    /* THE ORDER ITSELF, IN THE UNITS THE PICK USES. `w_top` is what holds the front of the queue and
+     * `cand_w_max` is the best any candidate can offer against it, so the GAP between them is the ordering
+     * question with no arithmetic in front of it.
+     *
+     * WATCH `cand_w_max` ACROSS SERVICE, because that is where the term this engine calls aging stops behaving
+     * like one. A candidate records no endpoints by design (endpoint_suppress) so its reward is 0 until it
+     * fires, and flow_weight for reward 0 is 1/(1+s) - s*Q*RATE: 1.000 unserved, 0.488 after ONE quantum,
+     * -0.029 after ten. Being handed the thread once costs it 0.512 of position and ten times costs it 1.029 —
+     * MORE THAN THE ENTIRE OPTIMISM RANGE. For a flow that cannot emit until it arrives, service is pure
+     * penalty, and a candidate that has had a turn ranks below one that has never had one by more than the
+     * optimism term ever had to give.
+     * THE ROOT IS THAT AGING IS ABSOLUTE AND §scheduler'S SENTENCE IS COMPARATIVE. "A monopolizer that burns
+     * CPU without emitting sinks below productive+unrun flows" is a statement about this flow AGAINST the
+     * others; `served * FLOW_SERVICE_US * FLOW_AGE_RATE` is a statement about this flow alone, so the depth at
+     * which a member sinks does not move with what the rest of the frontier consumed. Ten notches on a frontier
+     * whose busiest member has burned 489 is scored on the same scale as 489 on a quiet one. The primitive that
+     * fixes it is already named in this file and already used at the fork — start-time fair queueing's VIRTUAL
+     * TIME, "a continuation of an active flow enters at that flow's virtual time, never at the system's". The
+     * fork uses it; the aging term does not use it at all. These three numbers are what will show that. */
+    double w_top;         /* flow_best's weight — what holds the front of the queue */
+    double w_min;         /* the lowest weight in the frontier — the other end of the same order */
+    double cand_w_max;    /* the best weight any @S candidate can offer against `w_top` */
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 
