@@ -320,7 +320,11 @@ async function cmdStart(args) {
   }
 
   const port = Number(args[0] || process.env.HARNESS_PORT || DEFAULT_PORT);
+  /* The container states its egress path in the environment; the harness does not invent one. */
+  const proxy = process.env.HARNESS_NO_PROXY === "1" ? null
+    : (process.env.HARNESS_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy || null);
   log(`launching Chrome on port ${port} …`);
+  if (proxy) log(`egress via ${proxy} (TLS capped at 1.2 for the interceptor — see the comment at the flag)`);
 
 
   // Detached process group so the launching shell exiting doesn't
@@ -364,6 +368,26 @@ async function cmdStart(args) {
        being root: a developer with a screen keeps their window, and nobody has to remember a switch. */
     ...(process.platform !== "darwin" && process.platform !== "win32" &&
         !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY ? ["--headless=new"] : []),
+    /* EGRESS THROUGH AN INTERCEPTING PROXY, and the one flag that makes it work, with the reason measured
+       rather than guessed. In a sandboxed agent container all traffic goes through a local CONNECT proxy that
+       terminates TLS. Chrome could not load ANY https origin through it — `ERR_CONNECTION_RESET` direct,
+       `ERR_SSL_PROTOCOL_ERROR` through a relay — while `curl` through the same proxy, as the same user, got
+       200. Narrowed by elimination, each step measured: not the sandbox (root + --no-sandbox reset
+       identically), not the User-Agent (curl carrying Chrome's UA still got 200), not the CONNECT request
+       (Chrome's exact CONNECT bytes replayed to the proxy answered `HTTP/1.1 200 Connection Established`),
+       not QUIC. It is the ClientHello: Chrome 148 offers a post-quantum key share, which makes the hello
+       span records that this interceptor drops. `--disable-features=PostQuantumKyber` no longer names it in
+       148, so the lever that works is capping the version.
+       WHAT THIS COSTS, precisely: the capped leg is Chrome to a LOOPBACK process that is already terminating
+       TLS and reading everything in the clear. The leg that crosses the network is proxy-to-origin, which the
+       proxy negotiates itself and this flag does not touch. So it is not a weakening of transport security to
+       any real peer — but it IS a fidelity difference a page can observe, so it is applied ONLY when a proxy
+       is configured, and never on a developer machine with direct egress.
+       Set HARNESS_NO_PROXY=1 to opt out and see the failure for yourself. */
+    /* Loopback keeps Chrome's DEFAULT bypass: the fixture server and the extension's own pages are local,
+       and routing them through the interceptor would break the very documents under test. An explicit
+       `<-loopback>` here would REMOVE that implicit rule, which is the opposite of what is wanted. */
+    ...(proxy ? [`--proxy-server=${proxy}`, "--disable-quic", "--ssl-version-max=tls1.2"] : []),
   ];
   /* CHROME'S OWN EXPLANATION IS KEPT, because `stdio: "ignore"` threw it away and left this function able to
      say only "port isn't responding" — a report that names the symptom and discards the cause, which is the
