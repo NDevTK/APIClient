@@ -216,6 +216,80 @@ async function cmdRestart(args, keepIdb) {
   await cmdStart(args);
 }
 
+/* WHO CHROME SHOULD RUN AS, answered once. Returns {uid,gid,name} to drop to, or null meaning "run as this
+   process" — which is the normal answer for a developer, who is already unprivileged and whose sandbox works.
+   It returns null for root ONLY when the operator has explicitly allowed an unsandboxed run; every other
+   failure to arrange one THROWS, naming the single command that fixes it. A harness that quietly downgrades
+   its own isolation teaches the next reader that the isolation was never load-bearing. */
+function resolveUnprivileged(chromePath) {
+  if (typeof process.getuid !== "function" || process.getuid() !== 0) return null;   // already unprivileged
+  if (process.env.HARNESS_ALLOW_NO_SANDBOX === "1") {
+    log("WARNING: HARNESS_ALLOW_NO_SANDBOX=1 — Chrome will run as root with --no-sandbox.");
+    log("         The renderer will have Seccomp: 0 and init's user namespace, and this harness drives");
+    log("         attacker-controlled documents. This is an explicit operator choice, not a default.");
+    return null;
+  }
+  const name = process.env.HARNESS_USER || "chromerun";
+  let uid, gid;
+  try {
+    uid = Number(execSync(`id -u ${name}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim());
+    gid = Number(execSync(`id -g ${name}`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim());
+  } catch {
+    throw new Error(
+      `running as root, and the unprivileged account \`${name}\` does not exist. Chrome refuses to run as root\n` +
+      `  with its sandbox on, and this harness will not turn the sandbox off for you — it drives the attacker-\n` +
+      `  controlled documents the tool exists to analyse. Create the account once:\n` +
+      `      useradd -m ${name}\n` +
+      `  or set HARNESS_USER to an existing one, or HARNESS_ALLOW_NO_SANDBOX=1 to accept an unsandboxed run.`);
+  }
+  /* THE TARGET MUST BE ABLE TO EXECUTE THE BROWSER AND WRITE THE PROFILE, and both are checked HERE rather
+     than discovered as a launch that dies with an empty log. puppeteer installs under the invoking user's
+     home, which for root is mode 0700 — so the usual failure is a binary the dropped user cannot reach, and
+     the message says which of the two it was. */
+  try { execSync(`su -s /bin/sh ${name} -c 'test -x ${JSON.stringify(chromePath)}'`, { stdio: "ignore" }); }
+  catch {
+    throw new Error(
+      `\`${name}\` cannot execute ${chromePath} — puppeteer installs under root's home, which is not\n` +
+      `  traversable by anyone else. Point the harness at a readable copy:\n` +
+      `      cp -r "$(dirname ${JSON.stringify(chromePath)})" /opt/chrome-for-testing && chmod -R a+rX /opt/chrome-for-testing\n` +
+      `      HARNESS_CHROME=/opt/chrome-for-testing/$(basename ${JSON.stringify(chromePath)}) node testing/harness.js restart`);
+  }
+  try { fs.mkdirSync(PROFILE_DIR, { recursive: true }); execSync(`chown -R ${uid}:${gid} ${JSON.stringify(PROFILE_DIR)}`); }
+  catch (e) { throw new Error(`could not hand ${PROFILE_DIR} to ${name}: ${e.message}`); }
+  log(`dropping privileges to ${name} (uid ${uid}) so Chrome keeps its sandbox`);
+  return { uid, gid, name };
+}
+
+/* AND THE CLAIM IS CHECKED RATHER THAN ASSERTED. A flag that stops being passed, a kernel that forbids the
+   namespace, a Chrome that degrades quietly — each leaves a harness that reports a sandboxed run and delivers
+   an unsandboxed one, which is worse than never having claimed it. Linux states the answer per process:
+   `Seccomp: 2` is filter mode, and a sandboxed renderer also carries `NoNewPrivs: 1`. */
+function assertRendererSandboxed(expectSandbox) {
+  let renderers = [];
+  try {
+    renderers = execSync("ps -eo pid,args", { stdio: ["ignore", "pipe", "ignore"] }).toString()
+      .split("\n").filter((l) => l.includes("--type=renderer"))
+      .map((l) => Number(l.trim().split(/\s+/)[0])).filter(Boolean);
+  } catch { /* no ps: the check is unavailable, which is not the same as passing — say so below */ }
+  if (!renderers.length) { log("sandbox check: no renderer process yet — nothing to verify against"); return; }
+  const read = (pid, key) => {
+    try {
+      const m = fs.readFileSync(`/proc/${pid}/status`, "utf8").match(new RegExp("^" + key + ":\\s*(\\d+)", "m"));
+      return m ? Number(m[1]) : null;
+    } catch { return null; }
+  };
+  const sandboxed = renderers.filter((p) => read(p, "Seccomp") === 2 && read(p, "NoNewPrivs") === 1);
+  if (expectSandbox && !sandboxed.length) {
+    throw new Error(
+      `the launch asked for a SANDBOXED Chrome and no renderer is sandboxed — checked ${renderers.length}\n` +
+      `  renderer(s), none with Seccomp: 2 and NoNewPrivs: 1. Something downgraded the sandbox silently;\n` +
+      `  do not treat this run's results as taken under one.`);
+  }
+  log(expectSandbox
+    ? `sandbox verified: ${sandboxed.length}/${renderers.length} renderer(s) at Seccomp: 2, NoNewPrivs: 1`
+    : `sandbox NOT in use (${sandboxed.length}/${renderers.length} renderer(s) sandboxed) — as explicitly allowed`);
+}
+
 async function cmdStart(args) {
   const existing = await readLock();
   if (existing) {
@@ -231,10 +305,24 @@ async function cmdStart(args) {
   const port = Number(args[0] || process.env.HARNESS_PORT || DEFAULT_PORT);
   log(`launching Chrome on port ${port} …`);
 
+
   // Detached process group so the launching shell exiting doesn't
   // take Chrome with it. stdio:'ignore' severs pipes; unref() means
   // node can exit without waiting on Chrome.
-  const chromePath = await puppeteer.executablePath();
+  const chromePath = process.env.HARNESS_CHROME || await puppeteer.executablePath();
+  /* THE SANDBOX STAYS ON, AND ROOT IS THE THING THAT GETS FIXED — not the sandbox.
+     This block used to add `--no-sandbox` whenever the process was root, with the argument that a container
+     with no other user is where the harness runs unattended. That argument is wrong for THIS harness in a way
+     it would be merely sloppy for another: the pages it drives are the attacker-controlled documents the whole
+     tool exists to run, and the PoCs it fires are chosen for being executable. Turning off the one boundary
+     between that content and the machine, to avoid making a user account, is the security-shaped version of
+     the defensive fallback CLAUDE.md bans everywhere else.
+     Chrome refuses to run as root with the sandbox on, so the answer is to not be root: `spawn` takes uid/gid,
+     and an unprivileged account costs one `useradd`. Measured here, both instances live at once — the renderer
+     of a dropped-privilege run has `Seccomp: 2` (filter), `NoNewPrivs: 1` and its own user namespace, while a
+     `--no-sandbox` renderer has `Seccomp: 0`, `NoNewPrivs: 0` and init's namespace. That is the difference the
+     flag was quietly making. */
+  const dropTo = resolveUnprivileged(chromePath);
   const chromeArgs = [
     `--disable-extensions-except=${EXT_DIR}`,
     `--load-extension=${EXT_DIR}`,
@@ -242,10 +330,10 @@ async function cmdStart(args) {
     `--user-data-dir=${PROFILE_DIR}`,
     "--no-first-run",
     "--no-default-browser-check",
-    /* CHROME REFUSES TO RUN AS ROOT WITH ITS SANDBOX ON, and a container that has no other user is the one
-       place this harness runs unattended. It is added ONLY when the process really is root, so a developer's
-       machine keeps the sandbox — the flag is an environment fact, not a preference. */
-    ...(typeof process.getuid === "function" && process.getuid() === 0 ? ["--no-sandbox"] : []),
+    /* THE ESCAPE HATCH IS EXPLICIT AND LOUD, never inferred. An operator who genuinely cannot drop privileges
+       says so by setting HARNESS_ALLOW_NO_SANDBOX=1, and every run then prints what was given up. What is gone
+       is the SILENT version, where being root was itself taken as consent. */
+    ...(dropTo ? [] : ["--no-sandbox"]),
     /* AND IT REFUSES TO RUN AT ALL WITH NO DISPLAY, which is the other environment fact and was the one that
        stopped this harness being runnable here. Chrome's own words, captured by running it by hand:
          ERROR:ui/ozone/platform/x11/ozone_platform_x11.cc:257] Missing X server or $DISPLAY
@@ -276,6 +364,7 @@ async function cmdStart(args) {
     detached: true,
     stdio: ["ignore", chromeFd, chromeFd],
     windowsHide: false,
+    ...(dropTo ? { uid: dropTo.uid, gid: dropTo.gid } : {}),
   });
   chromeProc.unref();
   if (!chromeProc.pid) { log("failed to spawn Chrome"); process.exit(1); }
@@ -303,6 +392,10 @@ async function cmdStart(args) {
   // target wins" bug where Chrome's own welcome / built-in extension
   // targets could be picked instead.
   const extId = computeExtensionId(EXT_DIR);
+
+  /* Checked AFTER the port answers, because renderers do not exist until Chrome has something to render, and
+     a check run before them would pass by finding nothing — which is the excluded-test shape. */
+  assertRendererSandboxed(!!dropTo || (typeof process.getuid === "function" && process.getuid() !== 0));
 
   await writeLock({ port, pid: chromeProc.pid, extId, startedAt: Date.now() });
   log(`started. chrome pid=${chromeProc.pid} port=${port} extId=${extId || "(unknown)"}`);
