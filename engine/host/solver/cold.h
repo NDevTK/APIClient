@@ -122,7 +122,19 @@ void cold_census(ColdCensus *out);
  *                                 rather than a fourth writer this grammar has to be kept in step with.
  *                                 EMITTED IN MATERIALIZATION ORDER and rebuilt in it, so an ancestor is
  *                                 already present when the segment forked from it is rebuilt.
- *     s<id>,<base-id|->,<arms>    a frozen segment: its own arms as '0'/'1', over the segment `base-id`
+ *     s<id>,<base-id|->,<slots>   a frozen segment, over the segment `base-id`. Each SLOT is NINE characters:
+ *                                 the arm as '0'/'1', then the eight lower-case hex digits of the QUESTION it
+ *                                 answers — decide.c's 32-bit FNV-1a of the constraint key. The question
+ *                                 crosses the tier because a resumed flow replays at cursor 0 against today's
+ *                                 code and today's replies, so it can ask a different SEQUENCE than the run
+ *                                 that recorded these arms; until the key was here it consumed them anyway,
+ *                                 positionally, taking another predicate's arm at every branch from the
+ *                                 divergence onward and emitting output identical to a clean resume's. There
+ *                                 is no version field and none is wanted: nothing else this grammar writes is
+ *                                 nine characters wide, so a segment field that does not divide by nine is
+ *                                 residue from a writer that recorded arms with no questions, and cold_resume
+ *                                 refuses it BY NAME rather than reading it as a shorter chain of arms that
+ *                                 would all be plausible and all be unverifiable.
  *     f<seg-id|->,<val>           a flow standing on that segment, carrying its WFQ reward
  *     c<seg-id|->,<val>,<sink>,<src-hex>,<payload-hex>
  *                                 an @S CANDIDATE SESSION: an 'f' record PLUS the substitution that makes it a

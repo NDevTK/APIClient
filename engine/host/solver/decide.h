@@ -9,6 +9,7 @@
 #ifndef ENGINE_HOST_SOLVER_DECIDE_H
 #define ENGINE_HOST_SOLVER_DECIDE_H
 
+#include <stdint.h>   /* decide_seg_keys' column type is part of this interface, so it is named here */
 #include "quickjs.h"
 #include "solver/flow.h"
 
@@ -131,10 +132,22 @@ void  decide_blob_free(void *blob);
 const void *decide_blob_seg(const void *blob);          /* the segment a parked flow's decision state stands on */
 const void *decide_seg_base(const void *seg);           /* …and the one below it (NULL at the bottom) */
 int         decide_seg_arms(const void *seg, const signed char **arms);   /* its own arms; returns how many */
+/* …AND WHICH QUESTION EACH OF THOSE ARMS ANSWERS — the same count, in the same order. IT CROSSES THE PARK, and
+   that is the whole point rather than a completeness detail: the divergence this column exists to catch is the
+   CROSS-SESSION one. A resumed flow replays at cursor 0 against today's code and today's replies (decide_blob_new
+   below), so its question sequence is the one most likely to differ from the recorded run's, and a key that
+   died at the park boundary could see everything except that. RAM-only, it would check a hot sibling's single
+   replayed slot and nothing else — and nothing else would check the case the column is for. See decide.c's
+   DecSeg for the width and for what a hash can and cannot promise. */
+const uint32_t *decide_seg_keys(const void *seg);
 /* Rebuild one frozen segment over `base`, holding ONE reference on it exactly as a freeze does. The returned
    segment carries the REBUILDER's reference; release it with decide_seg_release once every flow that stands on
-   the park's chain has taken its own, so a segment nothing references is freed rather than leaked. */
-void       *decide_seg_new(void *base, const signed char *arms, int n);
+   the park's chain has taken its own, so a segment nothing references is freed rather than leaked.
+   `keys` IS REQUIRED AND IS NOT DEFAULTABLE: a segment rebuilt without one would hand every flow standing on it
+   arms whose questions are unknown, and the replay check would have nothing to compare against — the exact
+   §Offensive-programming shape where a consumer's default turns "the producer does not produce this" into a
+   plausible datum. A document that cannot supply it is residue from a writer that predates the column. */
+void       *decide_seg_new(void *base, const signed char *arms, const uint32_t *keys, int n);
 void        decide_seg_release(void *seg);
 /* THE SEGMENT'S NAME IN THE PARK DOCUMENT BEING WRITTEN — -1 until the pager assigns one, and the ordinal
    thereafter. It lives on the SEGMENT rather than in a table the pager keys by address because a park now runs

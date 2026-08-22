@@ -364,6 +364,7 @@ static long park_emit_chain(const void *seg)
         const void *cur = g_walk[--g_walk_n];
         const void *base = decide_seg_base(cur);
         const signed char *arms;
+        const uint32_t *keys = decide_seg_keys(cur);
         int n = decide_seg_arms(cur, &arms), k;
         long bid = base ? decide_seg_park_id(base) : -1;
         char head[64];
@@ -377,13 +378,24 @@ static long park_emit_chain(const void *seg)
         if (bid < 0) park_str("-");
         else { char b[32]; snprintf(b, sizeof b, "%ld", bid); park_str(b); }
         park_str(",");
+        /* A SLOT IS NINE CHARACTERS: the arm, then the eight lower-case hex digits of the question it answers.
+           SELF-DELIMITING AND SEPARATOR-FREE, which is what keeps the field one field — the arms already ran to
+           the end of the record with no count in front of them, and a fixed-width slot preserves that (the
+           reader divides). The key is decide.c's 32-bit FNV-1a of the constraint key, and it is the reason the
+           column crosses at all: the divergence it catches is a resumed flow asking a different question here
+           than the run that recorded this arm, which is a comparison no session can make against the other
+           session's heap. Lower case because park_hexval refuses anything else, deliberately — see park_hex. */
         for (k = 0; k < n; k++) {
-            char c;
+            static const char H[] = "0123456789abcdef";
+            char slot[9];
+            int d;
             DCHECK(arms[k] == 0 || arms[k] == 1,
                    "a decision slot holds something that is not an arm — the vector records 0 or 1 per branch, "
                    "and anything else resumes a flow onto a path it never took");
-            c = (char)('0' + arms[k]);
-            park_raw(&c, 1);
+            slot[0] = (char)('0' + arms[k]);
+            for (d = 0; d < 8; d++)
+                slot[1 + d] = H[(keys[k] >> (28 - 4 * d)) & 15u];
+            park_raw(slot, sizeof slot);
         }
         decide_seg_set_park_id(cur, g_park_segs++);
         g_parked_census.segs++;
@@ -803,38 +815,67 @@ void cold_resume(JSContext *ctx, const char *recipes)
         } else if (kind == 's') {
             long id, bid;
             signed char *arms;
-            int n;
+            uint32_t *keys;
+            int n, span;
 
             id = strtol(q, &ep, 10); q = ep;
             q = park_comma(q);
             if (*q == '-') { bid = -1; q++; }
             else { bid = strtol(q, &ep, 10); q = ep; }
             q = park_comma(q);
-            n = (int)(end - q);
+            span = (int)(end - q);
+            n = span / 9;                       /* one arm char + eight hex digits per slot — see the writer */
             DCHECK(id == seg_n,
                    "a park document names its segments out of order — the ordinals are dense and ascending in "
                    "emission order, and a gap means a segment nothing wrote is about to be stood on");
             DCHECK(bid < id,
                    "a decision segment stands on one that has not been read yet — a base is written before "
                    "every user of it, so this document was not written by this engine's park");
+            /* THE WIDTH IS THE VERSION CHECK, AND IT IS ASKED BEFORE THE COUNT, because a document written
+               before the question-key column has a SHORT field rather than an empty one — two arms are two
+               characters, which divides to zero slots, and asking the count first would report that residue as
+               a segment with no arms and send the reader hunting an empty freeze that never happened. A slot is
+               nine characters and nothing else this grammar writes is, so this is the whole version check and
+               the reason there is no version field. Such a residue's arms are real and its questions are
+               unrecoverable, which is not a document to read arms out of. */
+            DCHECK(span % 9 == 0,
+                   "a park document's decision segment is not a whole number of slots — each slot is an arm "
+                   "character followed by eight hex digits naming the question it answers, so a field that "
+                   "does not divide is residue from a session that recorded arms with no questions. Those arms "
+                   "cannot be checked against a replay and must not be stood on");
             DCHECK(n > 0,
                    "a park document holds a decision segment with no arms — the chain never freezes an empty "
                    "head, so every flow standing on this one would replay its path one decision short");
             arms = malloc((size_t)n);
             CHECK(arms, "the cold tier could not rebuild a parked decision segment's arms");
+            keys = malloc((size_t)n * sizeof *keys);
+            CHECK(keys, "the cold tier could not rebuild the questions a parked decision segment's arms answer");
             for (k = 0; k < n; k++) {
-                DCHECK(q[k] == '0' || q[k] == '1',
+                const char *slot = q + (size_t)k * 9;
+                uint32_t kh = 0;
+                int d;
+                DCHECK(slot[0] == '0' || slot[0] == '1',
                        "a park document holds something that is not an arm — a decision is 0 or 1, and "
                        "anything else resumes a flow onto a path it never took");
-                arms[k] = (signed char)(q[k] - '0');
+                arms[k] = (signed char)(slot[0] - '0');
+                for (d = 1; d <= 8; d++) {
+                    int hv = park_hexval(slot[d]);
+                    DCHECK(hv >= 0,
+                           "a park document holds a decision slot whose question is not lower-case hex — this "
+                           "file wrote it and nothing else may, so the document did not come from this "
+                           "engine's park and the arm beside it names a path this engine cannot verify");
+                    kh = (kh << 4) | (uint32_t)hv;
+                }
+                keys[k] = kh;
             }
             if (seg_n >= seg_cap) {
                 seg_cap = seg_cap ? seg_cap * 2 : 64;
                 seg = realloc(seg, (size_t)seg_cap * sizeof *seg);
                 CHECK(seg, "the cold tier could not grow its rebuilt-segment table");
             }
-            seg[seg_n++] = decide_seg_new(bid >= 0 ? seg[bid] : NULL, arms, n);
+            seg[seg_n++] = decide_seg_new(bid >= 0 ? seg[bid] : NULL, arms, keys, n);
             free(arms);
+            free(keys);
         } else if (kind == 'f') {
             long sid;
             double val;

@@ -8,8 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 
-static void *decide_fork_blob(int cursor, int arm);   /* the sibling's hot decision state (defined below) */
+static void *decide_fork_blob(int cursor, int arm, uint32_t asked);   /* the sibling's hot state (below) */
 
 /* THE DECISION VECTOR IS A CHAIN, NOT A COPY — the fourth and last instance of cow.c's refcounted immutable
  * segment, and the one that was still copying.
@@ -57,11 +58,42 @@ static void *decide_fork_blob(int cursor, int arm);   /* the sibling's hot decis
    table keyed by address would then answer the second segment with the first one's ordinal, and every flow
    standing on it would resume onto a path it never took, silently. A name that dies with the thing it names
    cannot do that: -1 until the pager assigns one, and every construction site below sets it. */
-typedef struct DecSeg { signed char *e; int n, below; struct DecSeg *base; int refcount; long park_id; } DecSeg;
+/* `k` IS WHICH QUESTION EACH ARM ANSWERS, and without it a decision vector is a sequence of answers with no
+   record of what was asked — which is only safe while the replay asks the identical questions in the identical
+   order, and that is precisely what a resume cannot promise. A cold-resumed flow starts at cursor 0 and re-runs
+   the document against TODAY's code and TODAY's replies (decide_blob_new says so, and §Time-travel-resume
+   requires it: "a resumed flow re-derives example VALUES from CURRENT sources"). The moment one question
+   appears, disappears or moves, the cursor is off by one and decide_arm's replay branch hands every subsequent
+   branch the arm belonging to some other predicate — a real arm, in range, satisfying every assert on the path,
+   all of which are RANGE asserts. That is the silent failure, and it is silent in both directions: a clean
+   resume and a scrambled one emit byte-identical output, so no gate this project has could tell them apart.
+   The column is the identity that makes the two distinguishable. It is a CONTENT HASH of the constraint key,
+   for the same reason JSStepHdr::fork_ask_key is one ("The bytes are the only thing that is the same question
+   in every tier") — the key string is heap-allocated per ask and freed immediately, a rebuilt segment has no
+   address at all, and the park document carries text. A hash can only ever fail to CATCH a mismatch, never
+   invent one, which is the property an assert standing over every replayed branch has to have.
+   ONE ALLOCATION HOLDS BOTH COLUMNS: `k` first (so malloc's own alignment is the uint32 array's) and `e`
+   immediately after it, because a second reclaim_malloc per segment is a second allocation per FORK, and this
+   file's whole history is about what per-fork cost does at 16046 flows. `e` is not separately owned and is
+   never separately freed — dec_seg_unref frees `s->k` and that is the whole block. */
+typedef struct DecSeg {
+    uint32_t *k;        /* the asked question per slot; OWNS the block, with `e` inside it */
+    signed char *e;     /* the arms — points into `k`'s allocation at offset n*sizeof(uint32_t) */
+    int n, below; struct DecSeg *base; int refcount; long park_id;
+} DecSeg;
+
+/* WHAT ONE SLOT COSTS in the frozen chain and in the head — stated once, because the census subtracts exactly
+   what the allocation added and a size written twice can disagree with itself. */
+#define DEC_SLOT_BYTES (sizeof(uint32_t) + 1u)
 
 static DecSeg *g_dec_base = NULL;   /* the frozen prefix the running flow stands on (NULL = it has none) */
 static int g_dec_below = 0;         /* slots in that chain — the head's index origin */
+/* THE HEAD IS TWO PARALLEL BUFFERS AND NOT ONE BLOCK, which is the opposite of the frozen segment's layout
+   above and is the right answer for the opposite reason: the head is ONE reusable buffer for the whole session
+   (decide_free owns it), so its allocation count is a constant and its two reallocs cost nothing per fork —
+   while splitting a growing block would have to re-place `e` inside it on every growth. */
 static signed char *g_dec = NULL; static int g_dec_n = 0, g_dec_cap = 0;   /* the head: this flow's own */
+static uint32_t *g_dec_k = NULL;   /* …and which question each of its slots answers */
 static int g_c = 0;
 static JSValue g_cur_fn = JS_UNDEFINED;   /* borrowed from the running Flow (alive for the run) */
 static int g_running = 0;
@@ -79,7 +111,46 @@ static void dec_ensure(int n) {
     while (nc < n) nc *= 2;
     g_dec = reclaim_realloc(g_dec, (size_t)nc);
     CHECK(g_dec, "decide: OOM growing the decision vector — depth is bounded only by the RAM/disk floor");
+    g_dec_k = reclaim_realloc(g_dec_k, (size_t)nc * sizeof *g_dec_k);
+    CHECK(g_dec_k, "decide: OOM growing the decision vector's question keys — an arm whose question is not "
+                   "recorded is an arm a replay cannot check itself against");
     g_dec_cap = nc;
+}
+
+/* THE ASKED QUESTION'S IDENTITY, as 32-bit FNV-1a over the constraint key's bytes.
+ *
+ * IT IS THE ENGINE'S OWN PRECEDENT AND NOT A CHOICE MADE HERE: quickjs.c's step_fork_key hashes an operation
+ * string exactly this way, for exactly this hazard one tier down — "an outcome fork's answer was delivered to a
+ * DIFFERENT question than the one that asked for it" — and states the property that makes it the right shape
+ * for an assert ("A hash can only ever fail to CATCH a mismatch, never invent one"). That mechanism cannot be
+ * reused here because it lives on JSStepHdr, which dies with the frame chain and therefore cannot cross a park;
+ * this column is the same fact recorded on the one part of a snapshot that does cross.
+ *
+ * 32 BITS, AND THE WIDTH IS ARGUED RATHER THAN INHERITED. The likeliest divergence is a SINGLE inserted or
+ * deleted question, after which every remaining slot is misaligned by one — so the check gets many chances,
+ * but the DAMAGE is done at the first misaligned slot and a miss there is the exact silence this column
+ * exists to end. An 8-bit key false-agrees at that slot 1 in 256, which for the product's central claim is a
+ * lottery rather than a check; it saves 3 bytes per slot, and this file's own measurements put the whole frozen
+ * chain at 658 KiB across 16046 flows, so the saving is tens of kilobytes against a 1-in-256 chance of passing
+ * the one event the column is for. A hash the engine already spells at a width it already argued is also the
+ * only way there is ONE answer to "how is a question named" rather than two that drift.
+ *
+ * ZERO IS RESERVED FOR A QUESTION THIS ENGINE CANNOT SPELL — decide_key returns NULL for a value with no
+ * identity (uncertainty, which keeps both arms), and every such branch hashes to 0 and therefore AGREES with
+ * every other such branch. That is not a hole the check should close: two branches the engine cannot tell
+ * apart are two branches it cannot tell apart, and inventing a distinguishing name for them would be a key
+ * that claims knowledge the identity layer does not have. The limit is real, it is stated here, and it is
+ * narrowed by making concolic.c able to spell more identities — never by widening this hash. */
+static uint32_t dec_key_hash(const char *key) {
+    uint32_t h = 2166136261u;
+
+    if (key == NULL)
+        return 0;   /* "no identity this engine can spell" — see above; a zeroed slot already reads as one */
+    while (*key) {
+        h ^= (unsigned char)*key++;
+        h *= 16777619u;
+    }
+    return h ? h : 1u;   /* 0 is reserved, so a key that hashes to it is nudged off the reservation */
 }
 
 /* THE FROZEN CHAIN'S OWN CENSUS — the fourth of the four, counted at the two points a segment's lifetime begins
@@ -99,8 +170,11 @@ static void dec_seg_unref(DecSeg *s) {
            released. A counter that cannot go down is not a census of what is live; it is a total, and asserting
            on it says nothing about the heap. */
         g_dec_seg_live--; g_dec_seg_entries_live -= s->n;
-        g_dec_seg_bytes_live -= (long)sizeof *s + s->n;
-        free(s->e); free(s);
+        g_dec_seg_bytes_live -= (long)sizeof *s + (long)((size_t)s->n * DEC_SLOT_BYTES);
+        /* ONE FREE FOR THE ONE BLOCK. `e` points INSIDE `k`'s allocation (see the struct), so freeing it here
+           would free a pointer the allocator never handed out — the two columns are one owned thing and this
+           is the one site that says so. */
+        free(s->k); free(s);
         s = base;
     }
 }
@@ -131,22 +205,53 @@ static int dec_total(void) { return g_dec_below + g_dec_n; }
    so the chain can be indexed ONCE at decide_resume into the flow that is running — one array for the one
    switched-in flow, never one per parked flow, which is the distinction that made the flat vector the wrong
    shape to park in the first place. */
-static int dec_at(int k) {
+/* …AND IT ANSWERS BOTH COLUMNS IN ONE WALK, through `asked`. The arm and the question that produced it are one
+   fact about one slot, and reading them with two descents of the chain would be two walks that can disagree
+   about which slot they landed on the first time an index calculation moves. */
+static int dec_at(int k, uint32_t *asked) {
     const DecSeg *s;
     DCHECK(k >= 0 && k < dec_total(),
            "a decision was read outside the vector — a branch would take an arm this flow never recorded");
-    if (k >= g_dec_below) return g_dec[k - g_dec_below];
+    if (k >= g_dec_below) { *asked = g_dec_k[k - g_dec_below]; return g_dec[k - g_dec_below]; }
     for (s = g_dec_base; s; s = s->base)
-        if (k >= s->below) return s->e[k - s->below];
+        if (k >= s->below) { *asked = s->k[k - s->below]; return s->e[k - s->below]; }
     DFAIL("a decision index below the head was not in any frozen segment — the chain's `below` offsets and the "
           "head's origin disagree, so the vector has a hole in it");
     return 0;
 }
 
-/* Append one decision to the head. */
-static void dec_append(int arm) {
+/* Append one decision to the head, WITH the question it answers. The two are written by the same statement
+   because a slot whose arm is recorded and whose question is not is exactly the state this column exists to
+   make impossible. */
+static void dec_append(int arm, uint32_t asked) {
     dec_ensure(g_dec_n + 1);
+    g_dec_k[g_dec_n] = asked;
     g_dec[g_dec_n++] = (signed char)arm;
+}
+
+/* AN EMPTY SEGMENT OF `n` SLOTS, counted into the census, with its two columns placed inside ONE block — the
+   single speller of the layout the struct describes, because there are three construction sites (a freeze, a
+   sibling's arm, and the cold tier's rebuild) and a layout written three times is a layout that disagrees with
+   its own free the first time one of them changes. The caller fills `k` and `e`, and sets `below`, `base` and
+   `refcount` — the three things that differ between the three sites and nothing else does. */
+static DecSeg *dec_seg_alloc(int n) {
+    DecSeg *s;
+
+    DCHECK(n > 0, "a decision segment was allocated with no slots — the chain never freezes an empty head, so a "
+                  "zero-length segment is one this file did not build and every flow standing on it would "
+                  "replay its path one decision short");
+    s = reclaim_malloc(sizeof *s);
+    CHECK(s, "decide: OOM allocating a decision segment");
+    s->k = reclaim_malloc((size_t)n * DEC_SLOT_BYTES);
+    CHECK(s->k, "decide: OOM allocating a decision segment's slots");
+    /* `e` LIVES INSIDE `k`'s BLOCK, after the whole uint32 column — so `k` carries malloc's alignment and `e`
+       needs none. dec_seg_unref frees `s->k` and nothing else; there is no second owner here. */
+    s->e = (signed char *)(s->k + n);
+    s->n = n;
+    s->park_id = -1;   /* unnamed: no park document has written this segment (see the struct) */
+    g_dec_seg_live++; g_dec_seg_entries_live += n;
+    g_dec_seg_bytes_live += (long)sizeof *s + (long)((size_t)n * DEC_SLOT_BYTES);
+    return s;
 }
 
 /* FREEZE the head into a shared immutable segment and hand the caller ONE reference on it, on top of the
@@ -161,32 +266,26 @@ static DecSeg *dec_freeze(void) {
         if (g_dec_base) g_dec_base->refcount++;
         return g_dec_base;
     }
-    s = reclaim_malloc(sizeof *s);
-    CHECK(s, "decide: OOM freezing the decision vector into a shared segment");
-    s->e = reclaim_malloc((size_t)g_dec_n);
-    CHECK(s->e, "decide: OOM freezing the decision vector's entries");
+    s = dec_seg_alloc(g_dec_n);
     memcpy(s->e, g_dec, (size_t)g_dec_n);
-    s->n = g_dec_n; s->below = g_dec_below; s->base = g_dec_base; s->refcount = 2;   /* running flow + caller */
-    s->park_id = -1;   /* unnamed: no park document has written this segment (see the struct) */
-    g_dec_seg_live++; g_dec_seg_entries_live += s->n;
-    g_dec_seg_bytes_live += (long)sizeof *s + s->n;
+    memcpy(s->k, g_dec_k, (size_t)g_dec_n * sizeof *g_dec_k);
+    s->below = g_dec_below; s->base = g_dec_base; s->refcount = 2;   /* running flow + caller */
     g_dec_base = s; g_dec_below = s->below + s->n; g_dec_n = 0;
     return s;
 }
 
 /* ONE MORE DECISION over `base`, as its own segment — the sibling's arm at the branch. It takes the caller's
-   reference on `base` (the fork's freeze produced exactly one to give). */
-static DecSeg *dec_seg_arm(DecSeg *base, int arm) {
-    DecSeg *s = reclaim_malloc(sizeof *s);
-    CHECK(s, "decide: OOM recording a sibling's arm");
-    s->e = reclaim_malloc(1);
-    CHECK(s->e, "decide: OOM recording a sibling's arm");
+   reference on `base` (the fork's freeze produced exactly one to give).
+   `asked` IS THE PARENT'S OWN QUESTION, not a second one: a fork is two arms of ONE branch, so the sibling's
+   slot answers the identical predicate and carries the identical key. That is what makes the sibling's replay
+   of its one recorded slot checkable at all — it re-executes the branch it was forked over and the key it
+   computes there must be the key recorded here. */
+static DecSeg *dec_seg_arm(DecSeg *base, int arm, uint32_t asked) {
+    DecSeg *s = dec_seg_alloc(1);
     s->e[0] = (signed char)arm;
-    s->n = 1; s->below = base ? base->below + base->n : 0;
+    s->k[0] = asked;
+    s->below = base ? base->below + base->n : 0;
     s->base = base; s->refcount = 1;   /* the fork blob's, and nobody else's until the sibling resumes */
-    s->park_id = -1;   /* unnamed: no park document has written this segment (see the struct) */
-    g_dec_seg_live++; g_dec_seg_entries_live += 1;
-    g_dec_seg_bytes_live += (long)sizeof *s + 1;
     return s;
 }
 
@@ -223,7 +322,9 @@ void decide_free(void) {
     int i;
 
     dec_clear();
-    free(g_dec); g_dec = NULL; g_dec_cap = 0;
+    free(g_dec); g_dec = NULL;
+    free(g_dec_k); g_dec_k = NULL;
+    g_dec_cap = 0;   /* ONE capacity for both head buffers — dec_ensure grows them together or not at all */
     for (i = 0; i < DECIDE_FORK_KEYS; i++) { free(g_fork_keys[i].key); g_fork_keys[i].key = NULL; g_fork_keys[i].n = 0; }
     g_fork_other = g_fork_total = 0;
     DCHECK(g_dec_seg_live == 0,
@@ -339,17 +440,26 @@ int decide_seg_arms(const void *seg, const signed char **arms) {
     return s->n;
 }
 
-void *decide_seg_new(void *base, const signed char *arms, int n) {
+const uint32_t *decide_seg_keys(const void *seg) {
+    const DecSeg *s = seg;
+    DCHECK(s != NULL, "the cold tier asked which questions a segment's arms answer, for a segment that does "
+                      "not exist");
+    return s->k;
+}
+
+void *decide_seg_new(void *base, const signed char *arms, const uint32_t *keys, int n) {
     DecSeg *b = base, *s;
 
     DCHECK(n > 0, "a decision segment was rebuilt with no arms — every flow standing on it would replay its "
                   "path one decision short, and every branch after that would read the next flow's answer");
-    s = reclaim_malloc(sizeof *s);
-    CHECK(s, "decide: OOM rebuilding a parked decision segment");
-    s->e = reclaim_malloc((size_t)n);
-    CHECK(s->e, "decide: OOM rebuilding a parked decision segment's arms");
+    DCHECK(keys != NULL,
+           "a decision segment was rebuilt from a park document that recorded arms but not the questions they "
+           "answer — a replay over it could not tell that it had left the recorded path, which is the whole "
+           "reason the column crosses the park boundary. The document predates the key column; it is residue "
+           "from a writer that could not have written one, not a document to read arms out of");
+    s = dec_seg_alloc(n);
     memcpy(s->e, arms, (size_t)n);
-    s->n = n;
+    memcpy(s->k, keys, (size_t)n * sizeof *keys);
     s->below = b ? b->below + b->n : 0;
     s->base = b;
     /* ONE reference for the base link, exactly as a freeze transfers one, and ONE for the rebuilder — which is
@@ -360,10 +470,8 @@ void *decide_seg_new(void *base, const signed char *arms, int n) {
     /* A REBUILT SEGMENT IS UNNAMED, and that is not merely bookkeeping: the ordinal a resume reads belongs to
        the document it is READING, and the id here is the name in the document this session will WRITE. A
        resumed flow that is parked again is written out under a fresh ordinal beside every other flow of this
-       session, which is the only thing that keeps one park document's ordinals dense in one namespace. */
-    s->park_id = -1;
-    g_dec_seg_live++; g_dec_seg_entries_live += s->n;
-    g_dec_seg_bytes_live += (long)sizeof *s + s->n;
+       session, which is the only thing that keeps one park document's ordinals dense in one namespace.
+       dec_seg_alloc set it; stated here because this is the site a reader checks it at. */
     return s;
 }
 
@@ -410,13 +518,13 @@ void decide_blob_stats(const void *blob, long *entries, long *bytes) {
 }
 void decide_live_stats(long *entries, long *bytes) {
     if (entries) *entries = dec_total();
-    if (bytes) *bytes = g_dec_cap;
+    if (bytes) *bytes = (long)((size_t)g_dec_cap * DEC_SLOT_BYTES);   /* both head buffers; one capacity governs them */
 }
 
 /* The sibling's hot decision state at a fork: replay the parent's path so far, then take `arm` at this branch
    (cursor). c = cursor so on resume the sibling re-executes the OP_if and replays exactly this arm — never
-   re-forks, never re-runs the prefix. */
-static void *decide_fork_blob(int cursor, int arm) {
+   re-forks, never re-runs the prefix. `asked` is the branch's own question, which both arms answer. */
+static void *decide_fork_blob(int cursor, int arm, uint32_t asked) {
     DecideBlob *b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM fork blob");
     /* A FORK IS ALWAYS AT THE END, and that is what makes the freeze the sibling's whole prefix rather than a
        prefix of it. decide_arm reaches the forking branch only when the cursor has caught up with the vector
@@ -426,7 +534,7 @@ static void *decide_fork_blob(int cursor, int arm) {
     DCHECK(cursor == dec_total(),
            "a fork was prepared at a cursor that is not the end of the decision vector — the sibling would "
            "inherit decisions taken after the branch it is being forked at");
-    b->seg = dec_seg_arm(dec_freeze(), arm);   /* the sibling's arm over the shared prefix; O(1) */
+    b->seg = dec_seg_arm(dec_freeze(), arm, asked);   /* the sibling's arm over the shared prefix; O(1) */
     b->c = cursor;
     return b;
 }
@@ -434,7 +542,24 @@ static void *decide_fork_blob(int cursor, int arm) {
 /* THE OTHER FORK'S BLOB — see decide.h. No arm, because no question was asked: the sibling's path IS its
    parent's and it diverges over a value that arrived, not over a predicate. The freeze is the same one the
    branch fork performs and for the same reason (one shared immutable prefix, O(1)); the cursor is the parent's
-   own, which may be mid-replay. */
+   own, which may be mid-replay.
+ *
+ * AND THAT LAST CLAUSE IS WHY THIS SITE IS NOT EXEMPT FROM decide_arm's KEY ASSERT, WHICH IT WILL TRIP.
+ * The arms below the cursor are what the parent already replayed and agree by construction; the arms ABOVE it
+ * are the ones a mid-replay parent has still to consume, and they were recorded by a run in which the peer
+ * answered ONE way. This mints N-1 siblings holding N-1 DIFFERENT answers to that read, and every one of them
+ * goes on to consume those same arms. At most one of the N can be the timeline that recorded them, so the
+ * others replay another timeline's decisions the moment their different answer changes which question the
+ * program asks next.
+ *
+ * THAT IS A DEFECT AND NOT A FALSE POSITIVE, and this file already says so one screen up, in decide.h's own
+ * words: "WHAT IT CANNOT CARRY IS THE ANSWER, and that is the honest limit of a decision vector… Recording
+ * that mapping is the N-way outcome slot solver_outcome's own DCHECK already names." The key column does not
+ * create that limit; it is the first thing in the engine that can SEE it. Narrowing the assert to let this
+ * site through would put the limit back under the floorboards and would be the silent fallback §C-stack names
+ * — every narrowing condition is a case quietly handed to the broken path. So the assert stands unnarrowed,
+ * this site trips it, and the trip is the work queue: an arm forked over a peer's answer needs a slot that
+ * records WHICH answer, which is the same N-way slot solver_outcome's n == 2 DCHECK is already waiting for. */
 void *decide_fork_same_path(void) {
     DecideBlob *b;
 
@@ -512,7 +637,12 @@ int decide_value_arm(JSValueConst cond)
    BYTECODE BRANCH is one, and a NATIVE OPERATION whose completion depends on the same unknown is the other.
    They share this because they are the same decision — the same vector slot, the same constraint, the same
    replay on a resume — and the only difference is what the interpreter has to do about the arm afterwards. */
+/* EVERY SLOT IS WRITTEN AND READ WITH THE QUESTION IT ANSWERS — see the DecSeg struct for why the column
+   exists and dec_key_hash for what the name is. The check lives HERE and only here because this is the one
+   place a recorded slot is CONSUMED, and an identity that is not compared where it is consumed is a field
+   nobody will notice is wrong. */
 static int decide_arm(const char *key, int *forked) {
+    uint32_t asked = dec_key_hash(key);
     int arm;
     *forked = 0;
     if (key && (arm = concolic_branch_decided(key)) >= 0) {
@@ -537,14 +667,30 @@ static int decide_arm(const char *key, int *forked) {
            flag the original decided for free, and every decision after the first repeat would be some other
            predicate's answer. */
     } else if (g_c < dec_total()) {      /* REPLAY: this run is re-reaching a recorded decision — take that arm */
-        arm = dec_at(g_c) ? 1 : 0;
+        uint32_t recorded;
+        arm = dec_at(g_c, &recorded) ? 1 : 0;
+        /* THE SLOT MUST ANSWER THE QUESTION NOW BEING ASKED. Until this line the replay was POSITIONAL: it
+           took slot g_c whatever the branch was, so a re-run that asked one question more, one fewer, or the
+           same ones in another order consumed the next predicate's arm here and every predicate's arm after
+           it — a real arm, in range, past every assert on this path, all of which are RANGE asserts. A clean
+           resume and a scrambled one emitted byte-identical findings, which is why nothing has ever reported
+           this. */
+        DCHECK(recorded == asked,
+               "a replayed decision slot was recorded for a DIFFERENT question than the branch now consuming "
+               "it. This flow has left the path its decision vector describes, so this branch is taking an arm "
+               "another predicate decided and every branch after it will read the next one's. A replay against "
+               "TODAY's code and TODAY's replies is allowed to diverge — Time-travel-resume requires the "
+               "re-derivation that causes it — so this is not corruption; what does not exist yet is the "
+               "mechanism that lets a replay NOTICE it has left the recorded path and stop consuming it. "
+               "Build that at this seam. Do not widen this check: the arm it would let through is another "
+               "flow's, and the divergence it would hide is the one cross-session resume is judged by");
         g_c++;
     } else {
         /* NEW decision -> FRAME-SNAPSHOT FORK: prepare the FALSE sibling's hot state (its decision vector +
            the current constraint), and signal the interpreter (0x100 bit) to CLONE this frame at the branch. The
            sibling resumes AT the branch and replays FALSE — it does NOT re-run from the start. This flow takes
            TRUE. No re-run vector, no fallback. */
-        void *dblob = decide_fork_blob(g_c, 0);
+        void *dblob = decide_fork_blob(g_c, 0, asked);
         fork_key_count(key ? key : "(no source identity)");
         /* THE SIBLING'S SNAPSHOT DOES NOT PRE-RECORD ITS ARM, and that deletion is what makes the order above
            one rule instead of two. It used to write FALSE into the constraint, take the snapshot, then
@@ -558,7 +704,7 @@ static int decide_arm(const char *key, int *forked) {
         void *pblob = concolic_pins_suspend();
         if (key) concolic_constrain_branch(key, 1);   /* THIS flow's arm, into the head above the shared freeze */
         engine_prepare_fork(dblob, pblob);
-        dec_append(1);                   /* this flow: TRUE arm, onto the head the freeze above just emptied */
+        dec_append(1, asked);            /* this flow: TRUE arm, onto the head the freeze above just emptied */
         g_c++;
         arm = 1;
         *forked = 1;
