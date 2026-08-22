@@ -842,14 +842,39 @@ async function loadRequestLog() {
     allTabsData = null;
     return;
   }
+  let logs;
   try {
-    allTabsData = await chrome.runtime.sendMessage({
+    logs = await chrome.runtime.sendMessage({
       type: "GET_ALL_LOGS",
       filter,
     });
-  } catch (_) {
+  } catch (e) {
+    // An invariant abort travels ON through here (check.js RETHROW_FATAL): every legitimate catch in this
+    // view is also a place the assertions below could become the plausible "no logs for this scope" state,
+    // which is the one thing a broken reply must not be able to say. A sendMessage rejection IS that state —
+    // the background is not answering — so it keeps the null.
+    RETHROW_FATAL(e);
     allTabsData = null;
+    return;
   }
+  /* THE LOG SLICES, ASSERTED AT THE ONE PLACE THEY ARRIVE. lib/popup-handlers.js's GET_ALL_LOGS builds every
+     tab bucket as `{ meta, requestLog: [] }` before it pushes the first entry, so a bucket without an array
+     is that handler broken — and the readers (replayRequest below, renderResponsePanel) walk
+     `data.requestLog` straight, so what a `|| []` would have produced is a tab whose traffic reads as "this
+     tab made no requests": a measurement about a producer that did not produce, indistinguishable from a tab
+     the user simply had not touched. It is asserted HERE, on arrival, rather than re-asked at each `.find()`
+     — one arrival, one contract — and `allTabsData` is not assigned until it has passed, so a reply that is
+     not a bucket map can never be mistaken for an empty one. */
+  DCHECK(logs && typeof logs === "object",
+         "GET_ALL_LOGS answered with something that is not a bucket map — lib/popup-handlers.js sends a " +
+         "plain object keyed by tabId and answers this command unconditionally, so anything else is that " +
+         "command not reaching the background at all");
+  for (const _tid of Object.keys(logs))
+    DCHECK(Array.isArray(logs[_tid].requestLog),
+           "tab " + _tid + " came back from GET_ALL_LOGS without a requestLog array — the handler creates " +
+           "the bucket with an empty one and only then pushes, so a missing array is that projection broken " +
+           "and this view would report the tab as having made no requests at all");
+  allTabsData = logs;
 }
 
 async function populateTabFilter() {
@@ -1219,27 +1244,71 @@ function onSendEndpointSelected() {
     const pathTemplate = selectedOpt.dataset.path;
     const validMethod = selectedOpt.dataset.method;
     const discoveryId = selectedOpt.dataset.discoveryId; // Use data-discoveryId
-    const svcData = tabData?.discoveryDocs?.[svc];
-    const doc = svcData?.doc;
+    /* THE SERVICE THE OPTION WAS BUILT FROM, UNDEFAULTED. `tabData?.discoveryDocs?.[svc]` stood here and
+       could not fire: lib/popup-send.js's renderMethodDropdown mints this option only while iterating
+       `tabData.discoveryDocs`, and only for an entry whose `status === "found"` AND whose `.doc` is truthy —
+       so reaching this line means all three were there when the dropdown was painted. lib/serialize.js
+       writes `discoveryDocs` unconditionally beside endpoints/probeResults/requestLog, so an absent one is
+       that projection broken, and what the optional chain produced then was `doc === undefined` feeding the
+       address ladder below — a send whose target was invented rather than read. */
+    DCHECK(tabData && tabData.discoveryDocs && typeof tabData.discoveryDocs === "object",
+           "the send panel is offering a discovery method while tabData carries no discoveryDocs — " +
+           "serializeTabData (lib/serialize.js) writes that map on every GET_STATE it answers, and the " +
+           "option being offered at all means renderMethodDropdown just read it");
+    const svcData = tabData.discoveryDocs[svc];
+    DCHECK(svcData && svcData.status === "found" && svcData.doc,
+           "the send panel is offering a method of service \"" + svc + "\" whose discovery entry is gone or " +
+           "carries no doc — renderMethodDropdown builds a virtual option only from an entry that had both, " +
+           "so this is the store dropping a document between render and selection");
+    const doc = svcData.doc;
 
-    // baseUrl resolution from doc
-    let baseUrl = doc?.baseUrl || doc?.rootUrl;
-    if (!baseUrl && doc?.rootUrl) {
-      baseUrl = doc.rootUrl + (doc.servicePath || "");
-    }
-    // Fallback
-    if (!baseUrl) {
-      console.warn("No baseUrl found for service", svc, svcData);
-      // Try to construct from service name if possible, or leave empty
-      baseUrl = "";
+    /* WHERE THE SERVICE LIVES, PER THE DOCUMENT'S OWN VOCABULARY. Google API Discovery's `RestDescription`
+       (discovery:v1, fetched from the live meta-document) describes `baseUrl` as "[DEPRECATED] The base URL
+       for REST requests", `rootUrl` as "The root URL under which all API services live" and `servicePath` as
+       "The base path for all REST requests" — and on drive/v3, calendar/v3 and sheets/v4 alike
+       `rootUrl + servicePath === baseUrl` exactly. So the live spelling is the JOIN, and the deprecated field
+       is the shortcut.
+       `let baseUrl = doc.baseUrl || doc.rootUrl;` stood on the line above the join and made the join DEAD:
+       falling past it required `doc.rootUrl` to be falsy, which is the one condition under which the join
+       cannot run either. A document that had dropped the deprecated field — which is what a service does when
+       it follows the deprecation — therefore addressed its API at the bare rootUrl with the servicePath
+       SILENTLY DISCARDED: `https://www.googleapis.com/` for a method of drive/v3, a URL that is well-formed,
+       plausible, and not the endpoint. */
+    DCHECK(doc.servicePath === undefined || typeof doc.servicePath === "string",
+           "service \"" + svc + "\" published a non-string servicePath — RestDescription types it as a " +
+           "string and it is joined onto rootUrl here, so anything else corrupts every method's address");
+    // An ABSENT servicePath is a positive statement — this service lives directly under its root (sheets/v4
+    // publishes it as ""), not a hole to fill.
+    const baseUrl = doc.baseUrl
+      ? doc.baseUrl
+      : (doc.rootUrl ? doc.rootUrl + (doc.servicePath === undefined ? "" : doc.servicePath) : null);
+
+    /* NO ADDRESS IS A STATEMENT ABOUT THE SERVICE, NEVER AN EMPTY STRING. `baseUrl = ""` stood here behind a
+       console.warn, and `"" + pathTemplate` is a PATH-RELATIVE URL: resolved against this popup, every such
+       send went to the extension's own chrome-extension:// origin and reported back as though the service had
+       answered. Both address fields are the published document's, so their absence is not a broken producer
+       of ours to DCHECK — it is a service that did not say where it lives, and the panel says so and offers
+       nothing to send. */
+    if (baseUrl === null) {
+      currentRequestUrl = "";
+      currentRequestMethod = validMethod;
+      currentSchema = null;
+      setSendPanelVisible(false);
+      document.getElementById("send-form-fields").style.display = "block";
+      document.getElementById("send-form-fields").innerHTML =
+        '<div class="hint">' + esc(svc) + " published no rootUrl or baseUrl, so its methods have no " +
+        "address to send to.</div>";
+      renderChainInfo(null);
+      return;
     }
 
     // Fix double slashes just in case
-    if (baseUrl.endsWith("/") && pathTemplate.startsWith("/")) {
-      baseUrl = baseUrl.slice(0, -1);
+    let base = baseUrl;
+    if (base.endsWith("/") && pathTemplate.startsWith("/")) {
+      base = base.slice(0, -1);
     }
 
-    currentRequestUrl = baseUrl + pathTemplate;
+    currentRequestUrl = base + pathTemplate;
     currentRequestMethod = validMethod;
 
     select.dataset.svc = svc;
