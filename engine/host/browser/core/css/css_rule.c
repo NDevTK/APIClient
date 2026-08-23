@@ -20,6 +20,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/css/css_at_rule_prelude.h"
+#include "core/css/css_nesting.h"
 #include "core/css/css_page.h"
 #include "core/css/css_property_syntax.h"
 #include "core/css/css_syntax_match.h"
@@ -1088,6 +1089,31 @@ static uint16_t enclosing_rule_type(JSValueConst parent_rule)
     return r ? r->type : (uint16_t)0;
 }
 
+/* THE NEAREST ANCESTOR STYLE RULE of a rule written inside `parent_rule`, or JS_NULL when there is none — which
+   is CSS Nesting §4 "Nesting Selector: the & selector"'s "the parent rule" and therefore the one thing that
+   decides whether a qualified rule here is a NESTED style rule at all. BORROWED: the record owns it.
+   IT IS A WALK AND NOT A LOOK AT THE IMMEDIATE PARENT, and §3.3 "Nesting Other At-Rules" is why: a nested group
+   rule's block is parsed as `<block-contents>`, in which "Style rules are nested style rules, with their
+   nesting selector taking its definition from the NEAREST ANCESTOR STYLE RULE". So in
+   `.a { @media print { .b { } } }` the rule `.b` is nested and its `&` is `.a`, two levels up, with an
+   `@media` in between that is not a style rule and has no selector of its own to be relative to.
+   THERE IS NO DEPTH BOUND AND THERE MAY NOT BE ONE: §3.3 nests group rules inside style rules inside group
+   rules without limit, and the walk is over the chain the parse already built. */
+static JSValueConst rule_nesting_parent(JSValueConst parent_rule)
+{
+    JSValueConst cur = parent_rule;
+
+    while (!JS_IsNull(cur)) {
+        CssRuleData *r = rule_of(cur);
+
+        DCHECK(r != NULL, "a rule's enclosing chain holds something that is not a CSS rule");
+        if (!r) return JS_NULL;
+        if (r->type == RULE_TYPE_STYLE) return cur;
+        cur = r->parent_rule;
+    }
+    return JS_NULL;
+}
+
 static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst parent_rule)
 {
     uint16_t enclosing = enclosing_rule_type(parent_rule);
@@ -1118,6 +1144,32 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        at-rule no specification defines, which CSS Syntax drops — so it is dropped here rather than reaching
        the crash below, which would name a capability that is already built. */
     if (pr->at_name && css_page_margin_at_rule(pr->at_name)) return JS_UNDEFINED;
+    /* A QUALIFIED RULE INSIDE A STYLE RULE IS CSS NESTING §3's NESTED STYLE RULE, and it differs from the one
+       below in exactly the way §3.1 "Syntax" says it does: "A nested style rule accepts a
+       <relative-selector-list> as its prelude (rather than just a <selector-list>)". This engine's selector
+       parser implements neither the nesting selector nor a relative selector list, so BOTH extra shapes reach
+       here as a prelude it refused — `&:hover` and `> .baz` arrive exactly as `!!!` does — and telling them
+       apart is what §3.1's shape test is for. Getting it wrong in the other direction is what a
+       drop-everything-refused rule DID: every `&`-written nested rule vanished from `cssRules` and out of the
+       cascade with it, which is the silent version of the page's styles simply being wrong.
+       WHAT IS STORED IS §6 "CSSOM"'s ABSOLUTIZED FORM — "When serializing a relative selector in a nested style
+       rule, the selector must be absolutized, with the implied nesting selector inserted" — so `.bar` nested
+       inside `.foo` has a `selectorText` of `& .bar`, and every later reader (the cascade above all) has ONE
+       shape to resolve instead of three. Its VALIDITY is not decided here: §3.1's "An invalid nested style rule
+       is ignored, along with its contents" is discharged by the cascade, which parses the RESOLVED text and
+       emits nothing for a rule that is not a selector list — the same parse that decides validity for every
+       other selector in the sheet. */
+    if (!pr->at_name && !JS_IsNull(rule_nesting_parent(parent_rule))) {
+        size_t plen = strlen(pr->prelude);
+        char *absolutized;
+        JSValue out;
+
+        if (!pr->prelude_is_selectors && !css_nesting_is_relative(pr->prelude, plen)) return JS_UNDEFINED;
+        absolutized = css_nesting_absolutize(pr->prelude, plen);
+        out = style_rule_new(b->ctx, b->sheet, parent_rule, absolutized, pr->block ? pr->block : "");
+        free(absolutized);
+        return out;
+    }
     /* AND ITS MIRROR: outside a `@keyframes` a qualified rule whose prelude is not a selector list is an
        invalid STYLE rule, which CSS Syntax drops. `0%, 100% { }` at a sheet's top level is that, and so is
        `!!! { }` — the context is what makes the first one a rule elsewhere and nothing makes the second one
@@ -2453,6 +2505,33 @@ static void *css_rule_selector_probe(void *ud, void *parent, const CssomRule *pr
     return NULL;
 }
 
+/* CSS Syntax's PARSE A GROUP OF SELECTORS over a span of text: the CANONICAL SERIALIZATION lexbor produced for
+   it, or NULL when the text is not a selector list at all. OWNED: the caller frees.
+   THE GROUP OF SELECTORS IS PARSED BY PARSING A RULE WITH AN EMPTY BODY, because that is the one entry the
+   agent's parser exposes and because it answers exactly the question §6.4.3 asks: a value lexbor accepts as a
+   selector list comes back as one style rule whose serialization is the canonical form the getter must then
+   return, and a value it rejects produces no style rule at all.
+   IT IS ONE FUNCTION BECAUSE TWO CALLERS ASK THE SAME QUESTION FOR OPPOSITE REASONS. §6.4.3's setter must not
+   STORE a value the parser rejected; the author cascade must not EMIT one — the flattened sheet is re-parsed
+   and core/css/css_style_declaration.c asserts the emission against that parse AT EVERY INDEX, so a rule whose
+   text comes back as a different kind of rule shifts every rule after it into a neighbour's cascade layer. */
+static char *selector_list_reserialize(const char *sel, size_t len)
+{
+    char *reserialized = NULL, *probe;
+    unsigned n;
+
+    DCHECK(sel != NULL, "a group of selectors was parsed from no text at all");
+    probe = malloc(len + 4);
+    CHECK(probe != NULL, "cssom: OOM parsing a selector list");
+    memcpy(probe, sel, len);
+    memcpy(probe + len, "{}", 3);
+    n = cssom_parse_rules(probe, len + 2, css_rule_selector_probe, &reserialized);
+    free(probe);
+    if (n == 1 && reserialized) return reserialized;
+    free(reserialized);
+    return NULL;
+}
+
 /* §6.4.3's setter: "Run the parse a group of selectors algorithm on the given value. If the algorithm returns a
    non-null value replace the associated selector list with the returned value. Otherwise, if the algorithm
    returns a null value, DO NOTHING." An invalid selector is silently ignored — not a throw, and not a stored
@@ -2461,30 +2540,31 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
 {
     CssRuleData *r = rule_here_typed(ctx, this_val, RULE_TYPE_STYLE, "CSSStyleRule");
     const char *v;
-    char *reserialized = NULL;
-    unsigned n;
+    char *reserialized;
 
     (void)magic;
     if (!r) return JS_EXCEPTION;
     v = JS_ToCString(ctx, val);   /* a real string by now: the declaration converted it */
     if (!v) return JS_EXCEPTION;
-    /* THE GROUP OF SELECTORS IS PARSED BY PARSING A RULE WITH AN EMPTY BODY, because that is the one entry the
-       agent's parser exposes and because it answers exactly the question §6.4.3 asks: a value lexbor accepts as
-       a selector list comes back as one style rule whose serialization is the canonical form the getter must
-       then return, and a value it rejects produces no style rule at all. */
-    {
-        char *probe;
-        size_t vlen = strlen(v);
-
-        probe = malloc(vlen + 4);
-        CHECK(probe != NULL, "cssom: OOM parsing a selector list");
-        memcpy(probe, v, vlen);
-        memcpy(probe + vlen, "{}", 3);
-        n = cssom_parse_rules(probe, vlen + 2, css_rule_selector_probe, &reserialized);
-        free(probe);
-    }
+    reserialized = selector_list_reserialize(v, strlen(v));
     JS_FreeCString(ctx, v);
-    if (n == 1 && reserialized) {
+    if (reserialized) {
+        /* A NESTED RULE'S SELECTOR STAYS ABSOLUTIZED THROUGH A WRITE, because that is what every reader of it
+           is entitled to assume: CSS Nesting §6 "CSSOM" absolutizes what a nested rule serializes, and
+           core/css/css_nesting.h's resolve asserts the same premise from the other side, so storing a bare
+           `.bar` here would leave a nested rule whose text names no parent at all.
+           WHAT IS NOT BUILT IS THE RELATIVE HALF OF THIS SETTER, and it is named rather than approximated:
+           §6.4.3's algorithm is "parse a group of selectors", which for a nested rule is a
+           `<relative-selector-list>`, and the parser above implements neither the nesting selector nor a
+           leading combinator — so `nested.selectorText = '&:hover'` takes §6.4.3's OWN null branch ("do
+           nothing") where a browser accepts it. The capability to build is a relative-selector-list parse;
+           until it exists this write is refused rather than stored unparsed. */
+        if (!JS_IsNull(rule_nesting_parent(r->parent_rule))) {
+            char *absolutized = css_nesting_absolutize(reserialized, strlen(reserialized));
+
+            free(reserialized);
+            reserialized = absolutized;
+        }
         JS_FreeValue(ctx, r->selector_text);
         r->selector_text = JS_NewString(ctx, reserialized);
     }
@@ -2942,14 +3022,27 @@ static void cascade_emit_mark(CascadeEmit *e, const CssLayerNode *layer)
     e->layer[e->n++] = layer;
 }
 
-static bool cascade_emit(JSContext *ctx, JSValueConst list, CascadeEmit *e, CssLayerNode *cur);
+/* WHAT `&` NAMES WHERE THE WALK CURRENTLY IS — CSS Nesting §4's "the elements matched by the parent rule", as
+   the nearest ancestor style rule's selector list IN THE FORM THE WALK EMITTED IT. `sel` is NULL at a sheet's
+   top level, which is the positive statement that no rule here is nested and none of them resolves anything.
+   IT CARRIES THE EMITTED FORM AND NOT THE STORED ONE, which is what makes arbitrary depth fall out of one
+   level's rule: an inner rule of `.a { .b { .c { } } }` resolves against `:is(.a) .b`, so it comes out as
+   `:is(:is(.a) .b) .c` — whose specificity, by Selectors 4 §15 "Calculating a selector's specificity", is the
+   (0,3,0) the flattened `.a .b .c` has. Resolving against the STORED `& .b` would leave an unresolved nesting
+   selector in the sheet the matcher parses. */
+typedef struct { const char *sel; size_t len; } CascadeNest;
+
+static bool cascade_emit(JSContext *ctx, JSValueConst list, CascadeEmit *e, CssLayerNode *cur,
+                         const CascadeNest *nest);
 
 /* One rule's contribution to the text the selector matcher re-parses, and to §6.4.3's layer order. A STYLE rule
-   contributes itself, in the layer it is nested in; a CONDITIONAL GROUP rule contributes its children when its
-   condition holds and nothing when it does not, which is what `@media` MEANS and is the whole reason the
-   cascade cannot simply read a sheet's top level. `cur` is the cascade layer this rule sits in — §6.4.3's
-   implicit outer layer at a sheet's top level, and the layer a `@layer` block declares inside it. */
-static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, CssLayerNode *cur)
+   contributes itself, in the layer it is nested in, FOLLOWED BY ITS OWN NESTED RULES; a CONDITIONAL GROUP rule
+   contributes its children when its condition holds and nothing when it does not, which is what `@media` MEANS
+   and is the whole reason the cascade cannot simply read a sheet's top level. `cur` is the cascade layer this
+   rule sits in — §6.4.3's implicit outer layer at a sheet's top level, and the layer a `@layer` block declares
+   inside it. `nest` is what a nested rule's `&` resolves to; see above. */
+static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, CssLayerNode *cur,
+                             const CascadeNest *nest)
 {
     CssRuleData *r = rule_of(rule);
     size_t sl = 0, bl = 0;
@@ -2973,7 +3066,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
            element-sensitive conditional (`@container`, `@scope`), which this build has no rule type for. */
         if (!applies) return true;
         kids = rule_child_rules(ctx, rule);
-        ok = cascade_emit(ctx, kids, e, cur);
+        ok = cascade_emit(ctx, kids, e, cur, nest);
         JS_FreeValue(ctx, kids);
         return ok;
     }
@@ -2990,7 +3083,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
 
         if (!rule_supports_matches(ctx, r)) return true;
         kids = rule_child_rules(ctx, rule);
-        ok = cascade_emit(ctx, kids, e, cur);
+        ok = cascade_emit(ctx, kids, e, cur, nest);
         JS_FreeValue(ctx, kids);
         return ok;
     }
@@ -3104,20 +3197,11 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         node = css_layer_order_declare(e->order, cur, n ? names[0] : NULL);
         serialized_free(names, n);
         kids = rule_child_rules(ctx, rule);
-        ok = cascade_emit(ctx, kids, e, node);
+        ok = cascade_emit(ctx, kids, e, node, nest);
         JS_FreeValue(ctx, kids);
         return ok;
     }
     DCHECK(r->type == RULE_TYPE_STYLE, "the author cascade met a rule type it has no arm for");
-    /* CSS NESTING IS NOT FLATTENED, and must not be: a nested style rule's selector is RELATIVE to its parent's
-       (`&`, and the implicit descendant a bare compound selector carries), so lifting it to the top level of
-       the re-parsed text would make it match elements the page never selected. The resolution is CSS Nesting's
-       own — build it, over the parent's selector list, rather than letting the rule style the wrong subtree. */
-    DCHECK(array_len(ctx, r->child_rules) == 0,
-           "a §6.4.3 style rule has NESTED rules and the author cascade has no CSS Nesting: a nested rule's "
-           "selector is relative to its parent's, so it cannot be flattened into the sheet's top level. Build "
-           "css-nesting-1 §2's nest-containing resolution (the nested selector becomes `:is(parent) sel`) and "
-           "emit the RESOLVED selector here");
     sel = rule_text_copy(ctx, r->selector_text, &sl);
     /* A rule with NO selector text cannot be serialized into a sheet at all, and there is no partial answer
        worth giving: an empty prelude would make lexbor drop the rule and every index after it would name a
@@ -3129,24 +3213,69 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
            "`selectorText =`, in css_rule.c — go through cssom_parse_rules and store only what lexbor "
            "accepted, so an empty one means the string conversion itself failed");
     if (!sel) return false;
+    /* CSS NESTING IS RESOLVED, NEVER FLATTENED. A nested rule's stored selector is CSS Nesting §6 "CSSOM"'s
+       absolutized `<relative-selector-list>`, so it always names its parent with a nesting selector; §4
+       "Nesting Selector: the & selector" desugars that "by replacing it with the parent style rule's selector,
+       wrapped in an :is() selector". Concatenating the parent's text instead would match the same elements and
+       CASCADE DIFFERENTLY — §4's own worked example is exactly that — because Selectors 4 §15 "Calculating a
+       selector's specificity" gives `:is()` the specificity of its most specific argument rather than of the
+       one that matched.
+       THE RESOLVED TEXT IS PARSED BEFORE IT IS EMITTED, and what goes into the sheet is what that parse
+       serialized. Two things ride on it. §3.1 "Syntax": "An invalid nested style rule is ignored, along with
+       its contents, but does not invalidate its parent rule" — a rule whose resolved selector is not a selector
+       list contributes nothing and takes its children with it, which is the `return true` below. And the
+       emission's per-index round trip: core/css/css_style_declaration.c reads each emitted rule's cascade layer
+       BY POSITION in the re-parse, so a rule that came back as a different kind of rule would shift every rule
+       after it into a neighbour's layer. Emitting the parse's own serialization makes that impossible rather
+       than merely unlikely. */
+    if (nest) {
+        char *desugared = css_nesting_resolve(sel, sl, nest->sel, nest->len);
+        char *canonical = selector_list_reserialize(desugared, strlen(desugared));
+
+        free(desugared);
+        free(sel);
+        if (!canonical) return true;
+        sel = canonical;
+        sl = strlen(canonical);
+    }
     block = rule_text_copy(ctx, r->block_text, &bl);
     rbuf_add_n(&e->out, sel, sl);
     rbuf_add(&e->out, "{");
     if (block) rbuf_add_n(&e->out, block, bl);
     rbuf_add(&e->out, "}");
-    free(sel);
     free(block);
     cascade_emit_mark(e, cur);
-    return true;
+    /* AND THEN ITS OWN NESTED RULES, AFTER IT, which §3.4 "Mixing Nesting Rules and Declarations" requires
+       rather than merely permits: "For the purpose of determining the Order Of Appearance, nested style rules
+       and nested group rules are considered to come after their parent rule." So the parent's declarations go
+       in first and the children follow in document order, and CSS Cascade §6.1's Order of Appearance — which
+       the emission's own position IS — comes out right for `article { color: blue; & { color: red } }`.
+       They resolve against THIS rule's emitted selector, and the recursion is the rule tree's own depth: CSS
+       Nesting places no limit on it and neither does this walk. */
+    if (array_len(ctx, r->child_rules) == 0) { free(sel); return true; }
+    {
+        JSValue kids = rule_child_rules(ctx, rule);
+        CascadeNest inner = { sel, sl };
+        bool ok = cascade_emit(ctx, kids, e, cur, &inner);
+
+        JS_FreeValue(ctx, kids);
+        free(sel);
+        return ok;
+    }
 }
 
-static bool cascade_emit(JSContext *ctx, JSValueConst list, CascadeEmit *e, CssLayerNode *cur)
+static bool cascade_emit(JSContext *ctx, JSValueConst list, CascadeEmit *e, CssLayerNode *cur,
+                         const CascadeNest *nest)
 {
     uint32_t n = array_len(ctx, list), i;
 
+    DCHECK(!nest || (nest->sel != NULL && nest->len > 0),
+           "the author cascade descended into a nested rule list with an EMPTY parent selector to resolve `&` "
+           "against. §4's nesting selector is \"the elements matched by the parent rule\", and the style arm "
+           "above emits nothing at all for a rule whose selector list it could not read");
     for (i = 0; i < n; i++) {
         JSValue rule = JS_GetPropertyUint32(ctx, list, i);
-        bool ok = cascade_emit_one(ctx, rule, e, cur);
+        bool ok = cascade_emit_one(ctx, rule, e, cur, nest);
 
         JS_FreeValue(ctx, rule);
         if (!ok) return false;
@@ -3176,7 +3305,7 @@ bool css_rule_cascade_sheet(JSContext *ctx, JSValueConst list, CssLayerOrder *or
            "criterion sorts by — a walk with nowhere to put them would answer every layer's rules as if they "
            "were unlayered, which inverts the cascade for the whole sheet");
     e.order = order;
-    if (!cascade_emit(ctx, list, &e, css_layer_order_root(order))) {
+    if (!cascade_emit(ctx, list, &e, css_layer_order_root(order), NULL)) {
         free(e.out.s);
         free(e.layer);
         return false;

@@ -172,6 +172,21 @@ void css_rule_build_sheet(JSContext *ctx, JSValueConst list, JSValueConst parent
  * sheet's `@namespace` rules, which go in verbatim because the selectors are written against the prefixes they
  * bind.
  *
+ * A NESTED STYLE RULE IS RESOLVED ON THE WAY OUT, NEVER FLATTENED. CSS Nesting §3 "Nesting Style Rules" makes
+ * a nested rule's prelude a `<relative-selector-list>` relative to its parent's, so lifting its stored text to
+ * the sheet's top level would style a subtree the page never selected. §4 "Nesting Selector: the & selector"
+ * gives the resolution — the nesting selector "replaced ... with the parent style rule's selector, wrapped in
+ * an :is() selector" — and the `:is()` is load-bearing rather than cosmetic: Selectors 4 §15 "Calculating a
+ * selector's specificity" gives it the specificity of its most specific argument, which IS §4's specificity
+ * rule for `&`, so a concatenation would match identically and CASCADE differently. The walk carries the
+ * PARENT'S EMITTED selector down, so depth needs no special case: `.a { .b { .c { } } }` comes out as three
+ * rules ending in `:is(:is(.a) .b) .c`. §3.4 "Mixing Nesting Rules and Declarations" fixes their order —
+ * "nested style rules and nested group rules are considered to come after their parent rule" — which is the
+ * emission's own order, and CSS Cascade §6.1's Order of Appearance is that position.
+ * A RESOLVED SELECTOR IS PARSED BEFORE IT IS EMITTED and what goes in is the parse's own serialization, which
+ * is what discharges §3.1 "Syntax"'s "An invalid nested style rule is ignored, along with its contents" and
+ * what keeps the per-index correspondence below true by construction rather than by hope.
+ *
  * IT IS TEXT AND A LAYER PER RULE, NOT TEXT ALONE, because CSS Cascade §6.1 puts Layers ABOVE Specificity and
  * a flat text cannot say which layer a rule was in. Flattening `@layer a { #x { color: red } }` beside
  * `p { color: blue }` produces a sheet that resolves to RED on a `<p id=x>` where the standard resolves BLUE,

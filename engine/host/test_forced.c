@@ -320,6 +320,54 @@ static const char *HTML =
     "@property --pmiss { syntax: \"<percentage>\"; inherits: false; initial-value: 0 }"
     "</style>"
     "</head><body><div id=cs1 style=\"margin-top: 4px\"></div><h1 id=dh>doch</h1>"
+    /* ---- CSS Nesting Module Level 1 §3 "Nesting Style Rules" .. §6 "CSSOM" — ONE CONTIGUOUS BLOCK -------
+       The sheet, the tree it selects and the three claims about it. A style rule with a nested rule in it used
+       to ABORT the author cascade outright — the `@WHY` there said so in as many words — so the first claim is
+       that a document holding one resolves at all.
+       THE PARENT IS A SELECTOR LIST WHOSE MEMBERS DISAGREE ABOUT SPECIFICITY, which is the design of the
+       fixture rather than decoration. §4 "Nesting Selector: the & selector": "The specificity of the nesting
+       selector is equal to the largest specificity among the complex selectors in the parent style rule's
+       selector list (identical to the behavior of :is())". The host matches through `.nstcls` and NEVER
+       through `#nstid`, so `& .nstkid` carries (1,1,0) while a FLATTENED `.nstcls .nstkid` would carry
+       (0,2,0) — and `.nstwrap .nstkid` is (0,2,0) written LATER, so it wins on CSS Cascade §6.1's Order of
+       Appearance under the flattening and loses under the standard. §4's own worked example is this shape
+       ("The text will be blue, rather than red"); a build that concatenates the parent instead of wrapping it
+       in `:is()` answers `none` for `nstkid` here and is otherwise indistinguishable.
+       ALL THREE §3.1 "Syntax" PRELUDE SHAPES ARE PRESENT, because all three reach this engine differently: the
+       implied descendant (`.nstkid`, which the selector parser ACCEPTS and which is nevertheless relative),
+       the non-relative nest-containing compound (`&.nstself`) and the leading-combinator relative selector
+       (`> .nstchild`), the last two of which the selector parser refuses exactly as it refuses `!!!`. §6
+       "CSSOM" requires all three to serialize ABSOLUTIZED, which is the second claim.
+       The third is §3.3 "Nesting Other At-Rules" — a nested group rule, whose style rules are "nested style
+       rules, with their nesting selector taking its definition from the nearest ancestor style rule" — and it
+       is a SEPARATE endpoint because it is a separate capability: it fails on its own if the nested `@media`
+       never becomes a rule, and reading that in the same token as the cascade would hide which broke. */
+    "<style id=nstsheet>"
+    "#nstid, .nstcls { color: rgb(9, 9, 9);"
+    "  .nstkid { display: block }"
+    "  &.nstself { display: inline-block }"
+    "  > .nstchild { display: flex }"
+    "  .nstdeep { .nstdeeper { display: table } }"
+    "  @media all { .nstmedia { display: grid } }"
+    "}"
+    ".nstwrap .nstkid { display: list-item }"
+    "</style>"
+    "<div class=nstwrap><div id=nsthost class=\"nstcls nstself\">"
+    "<span id=nstkid class=nstkid></span><span id=nstchild class=nstchild></span>"
+    "<span id=nstmedia class=nstmedia></span>"
+    "<span class=nstdeep><span id=nstdeeper class=nstdeeper></span></span>"
+    "</div></div>"
+    "<script>var nsh = document.getElementById('nstsheet').sheet;"
+    "var nsr = nsh.cssRules[0]; var nsc = nsr.cssRules;"
+    "var nsel = nsc.length + '|' + nsc[0].selectorText + '|' + nsc[1].selectorText + '|' +"
+    " nsc[2].selectorText + '|' + nsc[3].selectorText + '|' + nsc[3].cssRules[0].selectorText;"
+    "fetch('/api/cssnestsel?v=' + (nsel === '5|& .nstkid|&.nstself|& > .nstchild|& .nstdeep|& .nstdeeper'"
+    " ? 'NESTSELOK' : 'NESTSELBAD:' + nsel));"
+    "var nsd = function(i){ return getComputedStyle(document.getElementById(i)).display; };"
+    "var nsv = nsd('nstkid') + '|' + nsd('nsthost') + '|' + nsd('nstchild') + '|' + nsd('nstdeeper');"
+    "fetch('/api/cssnest?v=' + (nsv === 'block|inline-block|flex|table' ? 'NESTOK' : 'NESTBAD:' + nsv));"
+    "fetch('/api/cssnestmedia?v=' + (nsd('nstmedia') === 'grid' ? 'NESTMEDIAOK' : 'NESTMEDIABAD:'"
+    " + nsd('nstmedia')));</script>"
     "<script>var cfg = { admin: state.admin };"
     "var delObj = { k: 'keepVAL' };"   /* a shared BASELINE object; a forked flow will DELETE its k -> must revert per-flow */
     "var rx = { _f: 'base' };"   /* a reactive-framework style object: `flag` is an ACCESSOR backed by _f (Vue does exactly this) */
@@ -4732,6 +4780,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int cssprop_tt = strstr(js, "CSSPROPOK") != NULL;
     int csspropText_tt = strstr(js, "CSSTEXTOK") != NULL;
 
+    /* CSS NESTING'S THREE CLAIMS, as the tokens the page's own comparisons emitted — the same arrangement the
+       two rows above have and for the same reason: §6 "CSSOM"'s absolutized `selectorText`, §4's `:is()`
+       specificity carried through the resolved cascade, and §3.3's nested group rule are three capabilities,
+       and one boolean over them would say only that one of three unrelated things is wrong. The failing
+       spelling of each carries the value that answered instead, so a red row names what to fix. */
+    int cssnestsel_tt = strstr(js, "NESTSELOK") != NULL;
+    int cssnest_tt = strstr(js, "NESTOK") != NULL;
+    int cssnestmedia_tt = strstr(js, "NESTMEDIAOK") != NULL;
+
     /* TWO ROWS BECAUSE THESE ARE TWO INDEPENDENT CLAIMS, and one boolean over both is not a measurement of
        either — the same reason `deepest` and `completed` are two numbers a few hundred lines up. This was ONE
        row, it has read 0 for as long as it has existed, and a 0 said only "one of two unrelated things is
@@ -5262,6 +5319,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE },
         { "cssprop", cssprop_tt, "/api/cssprop?", SESS_EXPLORE },
         { "cssprop-text", csspropText_tt, "/api/csspropText", SESS_EXPLORE },
+        { "css-nesting-selectortext", cssnestsel_tt, "/api/cssnestsel", SESS_EXPLORE },
+        { "css-nesting-cascade", cssnest_tt, "/api/cssnest?", SESS_EXPLORE },
+        { "css-nesting-group-rule", cssnestmedia_tt, "/api/cssnestmedia", SESS_EXPLORE },
         { "s-eval", s_eval, "state.code", SESS_EXPLORE },
         { "s-evalc", s_evalc, "state.note", SESS_EXPLORE },
         { "s-html", s_html, "state.html", SESS_EXPLORE },
