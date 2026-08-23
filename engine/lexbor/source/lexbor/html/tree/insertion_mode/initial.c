@@ -213,8 +213,11 @@ lxb_html_tree_insertion_mode_initial_doctype(lxb_html_tree_t *tree,
     lxb_html_tree_insertion_mode_initial_doctype_ckeck(tree, doc_type,
                                                        token, is_html);
 
-    lxb_dom_node_insert_child_wo_events(&tree->document->dom_document.node,
-                                        lxb_dom_interface_node(doc_type));
+    /* 13.2.6.4.1 'The "initial" insertion mode' -- "Append a DocumentType node to the Document node", which
+       is DOM 4.2.3's append and runs its insertion steps. It was a raw `_wo_events` child insert, so the
+       doctype reached the tree without any of them and without any embedder seeing the write. */
+    lxb_html_tree_dom()->insert_child(tree, &tree->document->dom_document.node,
+                                      lxb_dom_interface_node(doc_type));
 
     lxb_dom_document_attach_doctype(&tree->document->dom_document, doc_type);
 

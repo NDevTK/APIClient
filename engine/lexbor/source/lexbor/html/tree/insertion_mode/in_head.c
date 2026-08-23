@@ -269,7 +269,8 @@ lxb_html_tree_insertion_mode_in_head_script(lxb_html_tree_t *tree,
         return lxb_html_tree_process_abort(tree);
     }
 
-    lxb_html_tree_insert_node(ap_node, lxb_dom_interface_node(element), ipos);
+    lxb_html_tree_insert_node(tree, ap_node, lxb_dom_interface_node(element),
+                              ipos);
 
     /*
      * Need for tokenizer state Script

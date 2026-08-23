@@ -154,7 +154,7 @@ lxb_html_tree_insertion_mode_before_html_html(lxb_html_tree_t *tree,
         return status;
     }
 
-    lxb_html_tree_insert_node(lxb_dom_interface_node(tree->document),
+    lxb_html_tree_insert_node(tree, lxb_dom_interface_node(tree->document),
                               node_html,
                               LXB_HTML_TREE_INSERTION_POSITION_CHILD);
 

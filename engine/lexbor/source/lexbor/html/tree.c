@@ -36,6 +36,88 @@ const lxb_tag_data_t *
 lxb_tag_append_lower(lexbor_hash_t *hash,
                      const lxb_char_t *name, size_t length);
 
+/*
+ * HTML 13.2.6 "Tree construction"'s DOM writes -- the default table. See lxb_html_tree_dom_cb_t in tree.h for
+ * why these are the PUBLIC mutators (DOM 4.2.3 "Mutation algorithms"' append/insert/remove, which the spec
+ * steps these sites implement name by those words) rather than the `_wo_events` primitives they used to be.
+ */
+static void
+lxb_html_tree_dom_default_insert_child(lxb_html_tree_t *tree, lxb_dom_node_t *to,
+                                       lxb_dom_node_t *node)
+{
+    (void) tree;
+
+    lxb_dom_node_insert_child(to, node);
+}
+
+static void
+lxb_html_tree_dom_default_insert_before(lxb_html_tree_t *tree, lxb_dom_node_t *to,
+                                        lxb_dom_node_t *node)
+{
+    (void) tree;
+
+    lxb_dom_node_insert_before(to, node);
+}
+
+static void
+lxb_html_tree_dom_default_remove(lxb_html_tree_t *tree, lxb_dom_node_t *node)
+{
+    (void) tree;
+
+    lxb_dom_node_remove(node);
+}
+
+/*
+ * 13.2.6.1 "Creating and inserting nodes"' "insert a character" step 3 -- "append data to that Text node's
+ * data". The empty-node arm is lexbor's own: a Text node whose storage has never been allocated is initialised
+ * at the appended length rather than appended into.
+ */
+static lxb_status_t
+lxb_html_tree_dom_default_append_data(lxb_html_tree_t *tree,
+                                      lxb_dom_character_data_t *chrs,
+                                      const lxb_char_t *data, size_t len)
+{
+    lexbor_mraw_t *text = tree->document->dom_document.text;
+
+    if (chrs->data.data == NULL) {
+        if (lexbor_str_init(&chrs->data, text, len) == NULL) {
+            return LXB_STATUS_ERROR_MEMORY_ALLOCATION;
+        }
+    }
+
+    if (lexbor_str_append(&chrs->data, text, data, len) == NULL) {
+        return LXB_STATUS_ERROR_MEMORY_ALLOCATION;
+    }
+
+    return LXB_STATUS_OK;
+}
+
+static const lxb_html_tree_dom_cb_t lxb_html_tree_dom_default = {
+    lxb_html_tree_dom_default_insert_child,
+    lxb_html_tree_dom_default_insert_before,
+    lxb_html_tree_dom_default_remove,
+    lxb_html_tree_dom_default_append_data
+};
+
+static const lxb_html_tree_dom_cb_t *lxb_html_tree_dom_cb = &lxb_html_tree_dom_default;
+
+const lxb_html_tree_dom_cb_t *
+lxb_html_tree_dom(void)
+{
+    return lxb_html_tree_dom_cb;
+}
+
+/*
+ * There is no revert-to-default arm and no NULL guard: a NULL table faults at the first tree-construction
+ * write, which is the origin. An arm that silently restored lexbor's own writes would leave an embedder that
+ * cleared the table parsing with its capture gone and nothing to say so.
+ */
+void
+lxb_html_tree_dom_set(const lxb_html_tree_dom_cb_t *cb)
+{
+    lxb_html_tree_dom_cb = cb;
+}
+
 static lxb_html_token_t *
 lxb_html_tree_token_callback(lxb_html_tokenizer_t *tkz,
                              lxb_html_token_t *token, void *ctx);
@@ -410,7 +492,7 @@ lxb_html_tree_insert_foreign_element(lxb_html_tree_t *tree,
     }
 
     if (only_add_stack == false) {
-        lxb_html_tree_insert_node(pos, lxb_dom_interface_node(element), ipos);
+        lxb_html_tree_insert_node(tree, pos, lxb_dom_interface_node(element), ipos);
     }
 
     status = lxb_html_tree_open_elements_push(tree,
@@ -699,7 +781,7 @@ lxb_html_tree_insert_character_for_data(lxb_html_tree_t *tree,
                                         lexbor_str_t *str,
                                         lxb_dom_node_t **ret_node)
 {
-    const lxb_char_t *data;
+    lxb_status_t status;
     lxb_dom_node_t *pos;
     lxb_dom_character_data_t *chrs = NULL;
     lxb_html_tree_insertion_position_t ipos;
@@ -741,19 +823,18 @@ lxb_html_tree_insert_character_for_data(lxb_html_tree_t *tree,
     }
 
     if (chrs != NULL) {
-        /* This is error. This can not happen, but... */
-        if (chrs->data.data == NULL) {
-            data = lexbor_str_init(&chrs->data, tree->document->dom_document.text,
-                                   str->length);
-            if (data == NULL) {
-                return LXB_STATUS_ERROR_MEMORY_ALLOCATION;
-            }
-        }
-
-        data = lexbor_str_append(&chrs->data, tree->document->dom_document.text,
-                                 str->data, str->length);
-        if (data == NULL) {
-            return LXB_STATUS_ERROR_MEMORY_ALLOCATION;
+        /*
+         * 13.2.6.1 "Creating and inserting nodes"' "insert a character" step 3 -- "If there is a Text node
+         * immediately before insertionLocation, then append data to that Text node's data". This was a
+         * `lexbor_str_append` straight into the node's own storage, which is not a mutator call, so it had no
+         * interception point of any kind: an embedder holding per-flow undo state over this document could not
+         * see the write that produces most of a page's text. It goes through the table now, like every other
+         * write tree construction makes.
+         */
+        status = lxb_html_tree_dom()->append_data(tree, chrs, str->data,
+                                                  str->length);
+        if (status != LXB_STATUS_OK) {
+            return status;
         }
 
         goto destroy_str;
@@ -771,7 +852,7 @@ lxb_html_tree_insert_character_for_data(lxb_html_tree_t *tree,
         *ret_node = text;
     }
 
-    lxb_html_tree_insert_node(pos, text, ipos);
+    lxb_html_tree_insert_node(tree, pos, text, ipos);
 
     return LXB_STATUS_OK;
 
@@ -812,7 +893,7 @@ lxb_html_tree_insert_comment(lxb_html_tree_t *tree,
         return NULL;
     }
 
-    lxb_html_tree_insert_node(pos, node, ipos);
+    lxb_html_tree_insert_node(tree, pos, node, ipos);
 
     return comment;
 }
@@ -1365,6 +1446,12 @@ lxb_html_tree_adoption_agency_algorithm(lxb_html_tree_t *tree,
     short outer_loop;
     lxb_html_element_t *element;
     lxb_dom_node_t *node, *marker, **oel_list, **afe_list;
+    /* 13.2.6.4.7 'The "in body" insertion mode's adoption agency algorithm REPARENTS nodes that are already in
+       the tree -- "Append lastNode to node", "remove lastNode", "Take all of the child nodes of furthestBlock
+       and append them", "Append that new element to furthestBlock". Every one of those is DOM 4.2.3's own
+       append/remove, so they go through the table like the rest of tree construction rather than through the
+       `_wo_events` primitives, which ran no insertion or removing steps and were invisible to any embedder. */
+    const lxb_html_tree_dom_cb_t *dom = lxb_html_tree_dom();
 
     lxb_tag_id_t subject = token->tag_id;
 
@@ -1563,19 +1650,21 @@ lxb_html_tree_adoption_agency_algorithm(lxb_html_tree_t *tree,
                 lexbor_assert(bookmark < tree->active_formatting->length);
             }
 
-            /* State 14.9 */
+            /* State 14.9 -- "Append lastNode to node", DOM 4.2.3's append, whose remove half the standard
+               performs implicitly by appending a node that has a parent. */
             if (last->parent != NULL) {
-                lxb_dom_node_remove_wo_events(last);
+                dom->remove(tree, last);
             }
 
-            lxb_dom_node_insert_child_wo_events(node, last);
+            dom->insert_child(tree, node, last);
 
             /* State 14.10 */
             last = node;
         }
 
+        /* "If lastNode's parent is non-null, then remove lastNode" -- DOM 4.2.3's remove. */
         if (last->parent != NULL) {
-            lxb_dom_node_remove_wo_events(last);
+            dom->remove(tree, last);
         }
 
         /* State 15 */
@@ -1589,7 +1678,7 @@ lxb_html_tree_adoption_agency_algorithm(lxb_html_tree_t *tree,
             return false;
         }
 
-        lxb_html_tree_insert_node(pos, last, ipos);
+        lxb_html_tree_insert_node(tree, pos, last, ipos);
 
         /* State 16 */
         lxb_html_token_t fake_token = {0};
@@ -1612,16 +1701,17 @@ lxb_html_tree_adoption_agency_algorithm(lxb_html_tree_t *tree,
         while (node != NULL) {
             next = node->next;
 
-            lxb_dom_node_remove_wo_events(node);
-            lxb_dom_node_insert_child_wo_events(lxb_dom_interface_node(element),
-                                                node);
+            /* "Take all of the child nodes of furthestBlock and append them to the element created in the
+               last step" -- DOM 4.2.3's append, once per child. */
+            dom->remove(tree, node);
+            dom->insert_child(tree, lxb_dom_interface_node(element), node);
             node = next;
         }
 
         node = lxb_dom_interface_node(element);
 
-        /* State 18 */
-        lxb_dom_node_insert_child_wo_events(furthest_block, node);
+        /* State 18 -- "Append that new element to furthestBlock". */
+        dom->insert_child(tree, furthest_block, node);
 
         /* State 19 */
         lxb_html_tree_active_formatting_remove(tree, formatting_index);

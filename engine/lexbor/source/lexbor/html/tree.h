@@ -13,6 +13,7 @@ extern "C" {
 
 #include "lexbor/dom/interfaces/node.h"
 #include "lexbor/dom/interfaces/attr.h"
+#include "lexbor/dom/interfaces/character_data.h"
 
 #include "lexbor/html/base.h"
 #include "lexbor/html/node.h"
@@ -70,6 +71,53 @@ typedef enum {
     LXB_HTML_TREE_INSERTION_POSITION_BEFORE = 0x01
 }
 lxb_html_tree_insertion_position_t;
+
+/*
+ * HTML 13.2.6 "Tree construction" -- ITS DOM WRITES, AS ONE INTERPOSABLE INTERFACE.
+ *
+ * Tree construction reached the DOM through the `_wo_events` primitives at eight sites and, for the character
+ * merge of 13.2.6.1 "Creating and inserting nodes", through `lexbor_str_append` into a Text node's own
+ * `char_data.data` -- which is not a mutator call at all and so has no interception point in any version. An
+ * embedder that keeps per-flow undo state over this document cannot see any of it, and neither can the
+ * document's own `mutation` table, which those sites opt out of by construction.
+ *
+ * THE `_wo_events` USE IS ALSO A SPEC DEVIATION ON ITS OWN, INDEPENDENTLY OF ANY EMBEDDER. 13.2.6.4.7 'The "in
+ * body" insertion mode's adoption agency algorithm says "Append lastNode to node", "If lastNode's parent is
+ * non-null, then remove lastNode", "Insert lastNode at adjustedInsertionLocation", "Take all of the child
+ * nodes of furthestBlock and append them to the element created in the last step" and "Append that new element
+ * to furthestBlock" -- every one of those is DOM 4.2.3 "Mutation algorithms"' append/insert/remove, which runs
+ * the insertion and removing steps. 13.2.6.4.1 'The "initial" insertion mode' appends the DocumentType to the
+ * Document the same way, and 13.2.6.1's foster-parented insert is an ordinary insert at a position. So the
+ * DEFAULT implementation below is the public mutator, and the interface is what an embedder replaces.
+ *
+ * `append_data` IS SEPARATE FROM `insert_child` BECAUSE THE STANDARD MAKES IT SEPARATE. 13.2.6.1's "insert a
+ * character" step 3 says "If there is a Text node immediately before insertionLocation, then append data to
+ * that Text node's data" -- and "data" there links DOM's CharacterData `data` concept, NOT 4.10 "Interface
+ * CharacterData"'s "replace data" algorithm. So the merge queues no "characterData" mutation record (that is
+ * replace data's step 4) and adjusts no live range: it is a direct write of the node's data, and an interface
+ * that routed it through a replace would be a fidelity bug in both directions.
+ *
+ * ONE POINTER, NEVER A CHOICE AT THE WRITE SITE. There is no NULL branch and no per-site test: the pointer
+ * starts at lexbor's own table and an embedder swaps it whole. A site that could pick between two
+ * implementations is a site that silently keeps the old one for whatever it fails to recognise.
+ */
+typedef struct {
+    void (*insert_child)(lxb_html_tree_t *tree, lxb_dom_node_t *to,
+                         lxb_dom_node_t *node);
+    void (*insert_before)(lxb_html_tree_t *tree, lxb_dom_node_t *to,
+                          lxb_dom_node_t *node);
+    void (*remove)(lxb_html_tree_t *tree, lxb_dom_node_t *node);
+    lxb_status_t (*append_data)(lxb_html_tree_t *tree,
+                                lxb_dom_character_data_t *chrs,
+                                const lxb_char_t *data, size_t len);
+}
+lxb_html_tree_dom_cb_t;
+
+LXB_API const lxb_html_tree_dom_cb_t *
+lxb_html_tree_dom(void);
+
+LXB_API void
+lxb_html_tree_dom_set(const lxb_html_tree_dom_cb_t *cb);
 
 
 LXB_API lxb_html_tree_t *
@@ -312,16 +360,25 @@ lxb_html_tree_insert_html_element(lxb_html_tree_t *tree,
                                                 false);
 }
 
+/*
+ * 13.2.6.1 "Creating and inserting nodes" -- "insert `node` at the adjusted insertion location", whose two
+ * positions are the two arms below. `tree` is taken because the write belongs to a PARSE and an interposing
+ * embedder has to know which one: the tree is what names the document being built into, and every other
+ * `lxb_html_tree_*` entry takes it for the same reason.
+ */
 lxb_inline void
-lxb_html_tree_insert_node(lxb_dom_node_t *to, lxb_dom_node_t *node,
+lxb_html_tree_insert_node(lxb_html_tree_t *tree, lxb_dom_node_t *to,
+                          lxb_dom_node_t *node,
                           lxb_html_tree_insertion_position_t ipos)
 {
+    const lxb_html_tree_dom_cb_t *dom = lxb_html_tree_dom();
+
     if (ipos == LXB_HTML_TREE_INSERTION_POSITION_BEFORE) {
-        lxb_dom_node_insert_before_wo_events(to, node);
+        dom->insert_before(tree, to, node);
         return;
     }
 
-    lxb_dom_node_insert_child(to, node);
+    dom->insert_child(tree, to, node);
 }
 
 /* TODO: if we not need to save parse errors?! */
