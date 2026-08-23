@@ -6436,6 +6436,15 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                    "to it is ever captured) or has its every field recorded as a CREATION in that flow's head, "
                    "which the next context switch deletes: the record arrives at its delivery empty");
             int filled = g_provider ? g_provider(ctx) : 0;
+            /* AND THE PROVIDER IS ITS OWN SEGMENT, which is the split the slice-entry boundary's own report
+               asked for. That boundary watches the WHOLE of the host's time as one region, and the host's time
+               has two halves that fail in different places: the PROVIDER, which builds JS values (a reply
+               record, a peer's answer, a cross-agent operation's text), and everything else this loop does
+               between two steps — the census lines, the progress emission, the cold-tier preview — which
+               reads. A completion standing here belongs to the first; one that reaches slice-entry with this
+               silent belongs to the second, and there is no third half. `detail` is what the payment filled,
+               so a leak on a payment that answered nothing reads differently from one that answered records. */
+            ENGINE_NO_STRAY(ctx, "host-provider: the host's reply/answer/operation payment", filled);
             /* AND THE PAYMENT WAS COMPLETE, asserted at the seam instead of inferred from a census line six
                minutes later. This provider answers out of its OWN tables — a reply record it builds, a peer's
                answer it stands in for — so unlike the extension's it has no asynchronous half and nothing it

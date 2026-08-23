@@ -3388,14 +3388,24 @@ static int hostreq_answer_all(JSContext *ctx)
                     "<!doctype html><html><head></head><body>"
                     "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>";
                 v = JS_NewObject(ctx);
-                /* AS BYTES: §2.2.5's body is a byte sequence, and a Document is parsed from one. */
-                JS_SetPropertyStr(ctx, v, "body",
-                                  JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC, sizeof DOC - 1));
+                /* AS BYTES: §2.2.5's body is a byte sequence, and a Document is parsed from one.
+                   AND AS OWN DEFINES, for the reason core/fetch/fetch.c's fetch_reply_new states in full at
+                   its own writes: this record is built by the zone standing in for the trusted host, IN THE
+                   HOST'S OWN TIME between two scheduler slices, on an object whose prototype is the PAGE'S
+                   `Object.prototype`. `JS_SetPropertyStr` is [[Set]] — ECMA-262 §10.1.9 "[[Set]] ( propertyKey,
+                   value, receiver )", which delegates to §10.1.9.2 "OrdinarySetWithOwnDescriptor ( obj,
+                   propertyKey, value, receiver, ownDesc )", whose first step is "If ownDesc is undefined, then
+                   Let parent be ? obj.[[GetPrototypeOf]]()" — so an accessor the page put on that chain would
+                   be CALLED here, where no flow is running and a park may be outstanding, and a frozen
+                   prototype would make the write refuse by throwing into a region that has no owner for it. */
+                JS_DefinePropertyValueStr(ctx, v, "body",
+                                          JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC, sizeof DOC - 1),
+                                          JS_PROP_C_W_E);
                 /* THE RESPONSE'S HEADER LIST, as the field lines §7.4 step 14's answer carries — EMPTY here,
                    which is a response that carried no headers and is the statement this fixture can honestly
                    make: it serves these bytes out of a string literal. It was `csp: null`, one narrowed
                    field, which is the shape that kept §7.1.3's opener policy out of a navigated Document. */
-                JS_SetPropertyStr(ctx, v, "headers", JS_NewString(ctx, ""));
+                JS_DefinePropertyValueStr(ctx, v, "headers", JS_NewString(ctx, ""), JS_PROP_C_W_E);
             } else {
                 v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));
             }
