@@ -102,12 +102,30 @@ static DomRectBox *dr_this(JSContext *ctx, JSValueConst this_val)
     return b;
 }
 
+/* THE COLLECTOR'S TWO ENTRIES REACH THE RECORD FROM THE OBJECT AND READ NO STATIC OF THIS FILE — see
+   core/agent_state.h's note on what a release owes a finalizer. dom_rect_free is a row on core/platform.h's
+   release column and gives BOTH class ids back to 0, and platform_agent_free runs BEFORE the collection that
+   finalizes the page's object graph, so these two run with g_ro_class and g_rect_class already zero. Asking
+   JS_GetOpaque for class 0 answers NULL for every rectangle a page still held, and the two halves fail
+   differently: the finalizer would leak the box and never subtract its four references, while the MARK is
+   worse — an unmarked child keeps the internal reference gc_decref exists to subtract, so gc_scan reads it as
+   rooted from outside the heap and the object is never collected at all.
+   The id is not read because it is not needed: the collector dispatched here THROUGH the class, and §3 and §4
+   keep the same record, which is why one pair of entries serves both. JS_GetAnyOpaque and never dr_box, for
+   the reason every other component's mark reaches past its accessor: a capture during collection would dup
+   values on an object being torn down. */
 static void dr_finalizer(JSRuntime *rt, JSValue val)
 {
-    DomRectBox *b = JS_GetOpaque(val, g_ro_class);
+    JSClassID id = 0;
+    DomRectBox *b = JS_GetAnyOpaque(val, &id);
 
-    if (!b) b = JS_GetOpaque(val, g_rect_class);
-    if (!b) return;
+    (void)id;
+    /* NOT `if (!b) return;`. dr_alloc is the one mint, and it places the record on the object with nothing
+       between JS_NewObjectProtoClass and JS_SetOpaque that can fail or allocate — so there is no half-built
+       rectangle for either of these entries to meet, and a NULL here means an object wearing one of §3's
+       classes was built somewhere that is not this file. */
+    DCHECK(b != NULL, "a DOMRect was finalized with no internal member variables — dr_alloc attaches the "
+                      "record before the object can reach anything that would free it");
     JS_FreeValueRT(rt, b->x);
     JS_FreeValueRT(rt, b->y);
     JS_FreeValueRT(rt, b->width);
@@ -117,12 +135,12 @@ static void dr_finalizer(JSRuntime *rt, JSValue val)
 
 static void dr_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    /* JS_GetOpaque and never dr_box: a capture during collection would dup values on an object being torn
-       down — the same reason every other component's mark reaches past its accessor. */
-    DomRectBox *b = JS_GetOpaque(val, g_ro_class);
+    JSClassID id = 0;
+    DomRectBox *b = JS_GetAnyOpaque(val, &id);
 
-    if (!b) b = JS_GetOpaque(val, g_rect_class);
-    if (!b) return;
+    (void)id;
+    DCHECK(b != NULL, "a DOMRect was marked with no internal member variables — dr_alloc attaches the record "
+                      "before the object can reach a collection");
     JS_MarkValue(rt, b->x, mark_func);
     JS_MarkValue(rt, b->y, mark_func);
     JS_MarkValue(rt, b->width, mark_func);
@@ -461,7 +479,10 @@ void dom_rect_free(void)
     /* The prototypes are the REALMS' — released with their contexts — and the pool entries are the agent's.
        THE TWO CLASS IDS COME BACK TOO, and they are the reason this release is not just a tidy-up: the init
        above consulted g_ro_class to decide whether it had anything to do, so leaving it set made a second
-       agent's DOMRect a pair of classes registered in a runtime that no longer exists. */
+       agent's DOMRect a pair of classes registered in a runtime that no longer exists.
+       AND THE COLLECTOR RUNS AFTER THIS, which is why dr_finalizer and dr_gc_mark read neither of them: a
+       rectangle a page still held is finalized in a collection this release has already happened before, so a
+       class id is exactly the wrong way to reach its record. See core/agent_state.h. */
     g_ro_class = g_rect_class = 0;
     g_id_ctor_ro = g_id_ctor_rect = g_id_from_ro = g_id_from_rect = g_id_tojson = -1;
     g_id_set[0] = g_id_set[1] = g_id_set[2] = g_id_set[3] = -1;

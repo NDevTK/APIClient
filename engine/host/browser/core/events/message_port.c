@@ -139,7 +139,22 @@ bool message_port_is(JSValueConst v)
  * enumeration half of it; the disentangle half is not built here, because a disentangle is a WRITE and a write
  * belongs to the flow that made it. A list of borrowed pointers is agent-global and cannot tell whose port it
  * is looking at, so destroying a document while any port of its realm is live STOPS at the DCHECK in
- * document_lifecycle.c rather than reaching into a sibling flow's timeline. */
+ * document_lifecycle.c rather than reaching into a sibling flow's timeline.
+ *
+ * ITS LIFETIME IS THE PORTS', NOT THE AGENT'S, AND THAT IS WHY IT IS NOT ON core/platform.h's RELEASE COLUMN.
+ * message_port_free used to free this table and assert it was empty, and both were wrong at that instant for
+ * the same reason: the release column runs BEFORE the collection that finalizes the page's object graph, so a
+ * page holding a live port — React's scheduler holds one on every page it runs on — reached the assert with a
+ * table that is legitimately full, and then port_untrack reached its DFAIL with the storage already freed.
+ * Each of the three faults masked the next. So the table is allocated by the first port and released by the
+ * LAST one, which is the only statement of its lifetime that is true at every instant; the emptiness the
+ * release used to claim is asserted in message_port_init instead — see there for why that is the moment it
+ * holds, and for what asserts it in a host that only ever declares one agent.
+ * IT IS DELIBERATELY NOT A LINK INSIDE PortData. That would make untrack O(1) and read no static at all, and
+ * it would put agent-global list pointers inside a record the COW delta captures BY BYTES (cow.c's
+ * COW_STATE_HOST_REC memcpys the whole struct): a context switch would restore this port's prev/next to what
+ * they were when the flow first reached it, splicing freed ports back into the live list. A row OUTSIDE the
+ * record is what keeps the two lifetimes apart. */
 static PortData **g_ports;
 static int        g_ports_n, g_ports_cap;
 
@@ -158,12 +173,21 @@ static void port_track(PortData *d)
     g_ports[g_ports_n++] = d;
 }
 
+/* Called from port_finalizer, which runs in a collection that may be LATER THAN THE AGENT'S RELEASE — so this
+   reads no slot that release resets, and the table it walks is one nothing else frees. */
 static void port_untrack(const PortData *d)
 {
     int i;
 
     for (i = 0; i < g_ports_n; i++)
-        if (g_ports[i] == d) { g_ports[i] = g_ports[--g_ports_n]; return; }
+        if (g_ports[i] == d) {
+            g_ports[i] = g_ports[--g_ports_n];
+            /* THE LAST PORT TAKES THE TABLE WITH IT. Not a cache eviction and not a shrink policy: the table's
+               whole content is the live ports, so an empty one is a table with no reason to exist, and freeing
+               it here is what leaves the next agent's message_port_init the pre-init state it asserts. */
+            if (g_ports_n == 0) { free(g_ports); g_ports = NULL; g_ports_cap = 0; }
+            return;
+        }
     DFAIL("a MessagePort was destroyed that was never recorded as live — the two sites are port_new and this "
           "finalizer, so a port that reaches here unrecorded was built somewhere else");
 }
@@ -177,10 +201,27 @@ int message_port_count_in_realm(JSContext *realm)
     return n;
 }
 
+/* THE FOUR COLLECTOR ENTRIES BELOW REACH THEIR RECORD FROM THE OBJECT AND READ NO STATIC OF THIS FILE — see
+   core/agent_state.h on what a release owes a finalizer. message_port_free is a row on core/platform.h's
+   release column and gives g_port_class and g_chan_class back to 0, and platform_agent_free runs BEFORE the
+   collection that finalizes the page's object graph, so every one of these four ran with both ids already
+   zero for a page that still held a port. JS_GetOpaque(val, 0) answers NULL for such an object, and the two
+   halves fail differently: the finalizers would leak the record and never subtract its references, while the
+   MARKS are worse — an unmarked child keeps the internal reference gc_decref exists to subtract, so gc_scan
+   reads it as rooted from outside the heap and it is never collected at all. JS_GetAnyOpaque asks the OBJECT,
+   which is the question the collector already answered by dispatching here: each of these two classes names
+   its own pair of entries, so the id is a fact none of them has to look up and none of them may. */
 static void port_finalizer(JSRuntime *rt, JSValue val)
 {
-    PortData *d = JS_GetOpaque(val, g_port_class);
-    if (!d) return;
+    JSClassID id = 0;
+    PortData *d = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    /* NOT `if (!d) return;`. port_new attaches the record with nothing between JS_NewObjectProtoClass and
+       JS_SetOpaque that allocates on the JS heap or returns, so a MessagePort with no record has never
+       existed and a NULL here is an object of this class built somewhere that is not this file. */
+    DCHECK(d != NULL, "a MessagePort was finalized with no record — port_new attaches one before the object "
+                      "can reach a collection or an entanglement");
     port_untrack(d);
     JS_FreeValueRT(rt, d->entangled);
     JS_FreeValueRT(rt, d->queue);
@@ -192,8 +233,12 @@ static void port_finalizer(JSRuntime *rt, JSValue val)
    page still holds through `chan.port1`. */
 static void chan_finalizer(JSRuntime *rt, JSValue val)
 {
-    ChanData *d = JS_GetOpaque(val, g_chan_class);
-    if (!d) return;
+    JSClassID id = 0;
+    ChanData *d = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(d != NULL, "a MessageChannel was finalized with no record — §9.4.2's constructor attaches one, with "
+                      "both slots undefined, BEFORE it mints the pair that fills them");
     JS_FreeValueRT(rt, d->port1);
     JS_FreeValueRT(rt, d->port2);
     free(d);
@@ -201,16 +246,27 @@ static void chan_finalizer(JSRuntime *rt, JSValue val)
 
 static void chan_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    ChanData *d = JS_GetOpaque(val, g_chan_class);
-    if (!d) return;
+    JSClassID id = 0;
+    ChanData *d = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    /* Reachable only if the record could be attached late — §9.4.2's constructor mints two MessagePorts, and
+       minting a JS object is where a collection can begin. It attaches the record first for exactly that
+       reason, so this holds and the mark below always has two slots to read. */
+    DCHECK(d != NULL, "a MessageChannel was marked with no record — §9.4.2's constructor attaches one before "
+                      "it mints the ports, which is the step that can start a collection");
     JS_MarkValue(rt, d->port1, mark_func);
     JS_MarkValue(rt, d->port2, mark_func);
 }
 
 static void port_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
-    PortData *d = JS_GetOpaque(val, g_port_class);
-    if (!d) return;
+    JSClassID id = 0;
+    PortData *d = JS_GetAnyOpaque(val, &id);
+
+    (void)id;
+    DCHECK(d != NULL, "a MessagePort was marked with no record — port_new attaches one before the object can "
+                      "reach a collection");
     /* THE PAIR IS A CYCLE: each port holds the other. Without this, an entangled pair is unreachable to the
        collector and every MessageChannel a page makes is a leak the runtime's own walk reports. */
     JS_MarkValue(rt, d->entangled, mark_func);
@@ -666,6 +722,7 @@ static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     JSValue obj, p1, p2;
+    ChanData *d;
 
     (void)st; (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -679,17 +736,24 @@ static int js_chan_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         JS_FreeValue(ctx, proto);
     }
     if (JS_IsException(obj)) return -1;
+    /* THE RECORD IS COMPLETE BEFORE THE FIRST STEP THAT CAN ALLOCATE — the same ownership rule §C-stack states
+       for a step state, and here it is the COLLECTOR that reads the half-built object rather than an unwind.
+       "Set this's port 1 to a new MessagePort" mints a JS object, which is where a collection can begin, and
+       chan_gc_mark would then be handed a channel whose opaque was still NULL; the same object reaches
+       chan_finalizer on the failure path below. A calloc'd block is not a block of JS_UNDEFINEDs, so the two
+       slots are written before the record is attached. */
+    d = calloc(1, sizeof *d);
+    CHECK(d != NULL, "message port: OOM building a MessageChannel");
+    d->port1 = d->port2 = JS_UNDEFINED;
+    JS_SetOpaque(obj, d);
     p1 = message_port_pair(ctx, &p2);
     if (JS_IsException(p1)) { JS_FreeValue(ctx, obj); return -1; }
-    /* §9.4.2 steps 1-2: "Set this's port 1 to a new MessagePort", the same for port 2. The channel OWNS both
-       from here; chan_finalizer releases them and §3.7.6's two accessors on the prototype read them. */
-    {
-        ChanData *d = calloc(1, sizeof *d);
-        CHECK(d != NULL, "message port: OOM building a MessageChannel");
-        d->port1 = p1;
-        d->port2 = p2;
-        JS_SetOpaque(obj, d);
-    }
+    /* §9.4.2 steps 1-2: "Set this's port 1 to a new MessagePort in this's relevant realm", the same for port 2.
+       The channel OWNS both from here; chan_finalizer releases them and §3.7.6's two accessors on the prototype
+       read them. `d` survives the mint above because `obj` is held on this stack, so nothing can collect the
+       object the record hangs off. */
+    d->port1 = p1;
+    d->port2 = p2;
     *presult = obj;
     return 0;
 }
@@ -711,6 +775,19 @@ void message_port_init(JSContext *ctx)
        row — so the test could never be true, and what it could do was hand a second agent the class ids, the
        pool entries and the delivery callee a dead runtime issued. See core/agent_state.h. */
     DCHECK(g_mp_rt == NULL, "message_port_init ran twice — §9.4.4's classes are declared once per AGENT");
+    /* AND EVERY PORT OF THE PREVIOUS AGENT HAS BEEN COLLECTED, WHICH IS ASSERTED HERE BECAUSE HERE IS WHERE IT
+       IS TRUE. message_port_free used to claim it, and could not: a page legitimately holds live ports when the
+       release column runs, and the collection that finalizes them is the previous runtime's JS_FreeRuntime —
+       which is over by the time a second agent reaches this line. So an entry surviving to here is a PortData
+       whose finalizer never ran, which is the fact the old assert was reaching for.
+       IN A HOST THAT DECLARES ONE AGENT PER PROCESS this line never runs, and the invariant is not therefore
+       unchecked: a MessagePort that is never finalized is a GC object still live, which is exactly what
+       JS_FreeRuntime's own `list_empty(&rt->gc_obj_list)` DCHECK fires on, with the [gcleak] census naming the
+       class. That check is at the right instant in EVERY host, which is more than the released one managed. */
+    DCHECK(g_ports == NULL && g_ports_n == 0 && g_ports_cap == 0,
+           "MessagePorts of a previous agent are still recorded as live — the last port frees this table, so a "
+           "surviving entry is a PortData whose finalizer never ran and whose queue, entanglement and realm "
+           "leaked with it");
     g_mp_rt = rt;
     JS_NewClassID(rt, &g_port_class);
     JS_NewClass(rt, g_port_class, &pd);
@@ -745,7 +822,12 @@ void message_port_init(JSContext *ctx)
     agent_state_id("message_port", &g_id_post, "§9.4.4's postMessage declaration");
     agent_state_id("message_port", &g_id_start, "§9.4.4's start declaration");
     agent_state_id("message_port", &g_id_close, "§9.4.4's close declaration");
-    agent_state_ptr("message_port", &g_ports, "the live-port table §7.5.10 step 4 counts");
+    /* THE LIVE-PORT TABLE IS NOT DECLARED HERE, and that is the point rather than an omission. Every slot on
+       this registry is asserted back at its pre-init value at the END of the release column, and this one is
+       legitimately non-empty at that instant — a page holding a MessagePort has not done anything wrong, and
+       the finalizer that empties the table has not run yet. Declaring it made platform_agent_free abort on a
+       correct program. Its pre-init state is asserted at the top of this function instead, which is the moment
+       it is true; see there. */
 }
 
 /* §9.4.4's AND §9.4.2's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. `postMessage` is the member that makes
@@ -818,14 +900,17 @@ void message_port_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_deliver_fn);
     g_deliver_fn = JS_UNDEFINED;   /* the prototypes are the REALMS' — released with their contexts */
     g_mp_rt = NULL;
+    /* THE TWO CLASS IDS COME BACK — core/agent_state.h requires it, so a second agent's init cannot read a
+       handle this runtime issued — and the four collector entries above therefore read neither of them: the
+       collection that finalizes a port runs AFTER this call, so a class id is the one thing that cannot
+       identify one by then. */
     g_port_class = g_chan_class = 0;
     g_id_post = g_id_start = g_id_close = -1;
     g_chan_ctor_stepid = g_deliver_stepid = -1;
-    /* THE LIST GOES WITH THE AGENT, and it must be EMPTY by the time it does: every entry names a PortData the
-       collector has not finalized, so a non-empty list here is a port the runtime teardown is about to leak. */
-    DCHECK(g_ports_n == 0, "MessagePorts were still live when the agent released its port machinery — each one "
-                           "is a PortData whose finalizer never ran");
-    free(g_ports);
-    g_ports = NULL;
-    g_ports_n = g_ports_cap = 0;
+    /* THE LIVE-PORT TABLE IS NOT TOUCHED HERE. It was freed here, under an assert that it was already empty,
+       and both were false at this instant: the ports of a page that still holds one — React's scheduler holds
+       one on every page it runs on — are finalized by the collection this call runs BEFORE, so the assert
+       fired first and, with it removed, port_untrack then reached its DFAIL with the storage freed underneath
+       it. Neither is deleted: the emptiness is asserted in message_port_init, where it holds, and the storage
+       is released by the last port to be finalized. See the table's own comment. */
 }

@@ -1,8 +1,8 @@
 /* CSSOM §6.4's CSS RULES — §6.4.2 CSSRule, §6.4.5 CSSGroupingRule, §6.4.3 CSSStyleRule, §6.4.4 CSSImportRule,
  * §6.4.7 CSSPageRule, §6.4.8 CSSMarginRule and §6.4.9 CSSNamespaceRule, plus CSS Conditional §7.2's
- * CSSConditionRule and §7.3's CSSMediaRule (the `@media` half of the same object), CSS Fonts §12.1's
- * CSSFontFaceRule, CSS Animations §6.2/§6.3's CSSKeyframeRule and CSSKeyframesRule, and CSS Cascade §8.1/§8.2's
- * CSSLayerBlockRule and CSSLayerStatementRule.
+ * CSSConditionRule, §7.3's CSSMediaRule and §7.4's CSSSupportsRule (the `@media` and `@supports` halves of the
+ * same object), CSS Fonts §12.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's CSSKeyframeRule and
+ * CSSKeyframesRule, and CSS Cascade §8.1/§8.2's CSSLayerBlockRule and CSSLayerStatementRule.
  *
  * `CSSImportRule.styleSheet` IS ABSENT, AND IT IS THE ONE MEMBER OF THESE INTERFACES THAT IS. §6.4.4 defines it
  * as "the associated CSS style sheet, if any, or null otherwise" and its own note gives the case that produces
@@ -111,8 +111,8 @@
 void css_rule_init(JSContext *ctx);
 /* Every §6.4 and §7.x rule prototype for ONE realm — declared into core/realm.h's list. */
 void css_rule_install_proto(JSContext *ctx);
-/* `CSSRule`, `CSSGroupingRule`, `CSSStyleRule`, `CSSConditionRule`, `CSSMediaRule`, `CSSImportRule`,
-   `CSSNamespaceRule`, `CSSFontFaceRule`, `CSSPageRule`, `CSSMarginRule`, `CSSKeyframeRule`,
+/* `CSSRule`, `CSSGroupingRule`, `CSSStyleRule`, `CSSConditionRule`, `CSSMediaRule`, `CSSSupportsRule`,
+   `CSSImportRule`, `CSSNamespaceRule`, `CSSFontFaceRule`, `CSSPageRule`, `CSSMarginRule`, `CSSKeyframeRule`,
    `CSSKeyframesRule`, `CSSLayerBlockRule` and `CSSLayerStatementRule` as globals. */
 void css_rule_install(JSContext *ctx, JSValueConst global);
 void css_rule_free(JSRuntime *rt);

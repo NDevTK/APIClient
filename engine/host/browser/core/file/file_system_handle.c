@@ -66,13 +66,27 @@ static int g_id_resolve = -1;
 
 /* ---- the locator -------------------------------------------------------------------------------------- */
 
+/* THE LOCATOR IS REACHED FROM THE OBJECT AND THIS ENTRY READS NO STATIC OF THIS FILE — see core/agent_state.h
+   on what a release owes a finalizer. fs_handle_free is a row on core/platform.h's release column and gives
+   g_handle_class back to 0, and platform_agent_free runs BEFORE the collection that finalizes the page's
+   object graph, so a handle a page still held at teardown reached here with the class id already zero and
+   JS_GetOpaque(val, 0) answered NULL for it: the whole locator — its path array, every component string and
+   its root — leaked, and it leaked SILENTLY, because a malloc'd block is invisible to both of
+   JS_FreeRuntime's censuses. JS_GetAnyOpaque asks the object, which is the question the collector answered by
+   dispatching here; the id is not read because only g_handle_class names this function, so a handle is the
+   only thing that can arrive. */
 static void fsh_finalizer(JSRuntime *rt, JSValue val)
 {
-    FsLocator *l = JS_GetOpaque(val, g_handle_class);
+    JSClassID id = 0;
+    FsLocator *l = JS_GetAnyOpaque(val, &id);
     int i;
 
-    (void)rt;
-    if (!l) return;
+    (void)rt; (void)id;
+    /* NOT `if (!l) return;`. fs_handle_new is the one mint and it builds the record COMPLETE before attaching
+       it, with nothing between JS_NewObjectProtoClass and JS_SetOpaque that allocates on the JS heap or
+       returns — so there is no half-built handle for a collection to meet. */
+    DCHECK(l != NULL, "a FileSystemHandle was finalized with no locator — §2.2 says a handle IS associated "
+                      "with one, and fs_handle_new attaches it before the object can reach a collection");
     for (i = 0; i < l->npath; i++) free(l->path[i]);
     free(l->path);
     free(l->root);
@@ -889,7 +903,9 @@ void fs_handle_free(void)
 {
     /* The prototypes and the interface objects are the REALMS' — each is released with its context; a handle's
        locator is released by the finalizer. What the agent holds is three class ids in a runtime that is going
-       away with them. */
+       away with them.
+       THE FINALIZER RUNS AFTER THIS, which is why it reads none of the three: a handle a page still held is
+       finalized in a collection this release has already happened before. See core/agent_state.h. */
     g_id_is_same_entry = g_id_get_file = g_id_create_writable = -1;
     g_id_get_file_handle = g_id_get_directory_handle = g_id_remove_entry = g_id_resolve = -1;
     g_dir_iter_handle = -1;

@@ -309,16 +309,20 @@ const INTERFACES = {
      interfaces this map is still silent about, which is the audit lying by omission rather than by direction,
      and it is not this change's to decide. */
   StyleSheetList:       "core/css/style_sheet_list.c",
-  /* CSSOM §6.4 and CSS Conditional §7.2/§7.3. FIVE interfaces, ONE component: CSSRule, CSSGroupingRule and
+  /* CSSOM §6.4 and CSS Conditional §7.2/§7.3/§7.4. SIX interfaces, ONE component: CSSRule, CSSGroupingRule and
      CSSConditionRule are abstract bases nothing instantiates, so their members live on their own prototypes
-     and the two concrete ones CHAIN through them — every row names the one component, because reporting an
+     and the three concrete ones CHAIN through them — every row names the one component, because reporting an
      inherited member absent from the interface that really has it would be the audit lying by direction.
-     What is EXPECTED to report missing is on CSSRule: nothing. */
+     What is EXPECTED to report missing is on CSSRule: nothing. CSSMediaRule and CSSSupportsRule are SIBLINGS
+     under CSSConditionRule and each declares a `matches` of its own — §7.3's conjoins "in a stylesheet
+     attached to a document" and §7.4's is the feature query alone — so two accessors answer one name and the
+     audit sees both because each is installed on its own interface's prototype. */
   CSSRule:              "core/css/css_rule.c",
   CSSGroupingRule:      "core/css/css_rule.c",
   CSSStyleRule:         "core/css/css_rule.c",
   CSSConditionRule:     "core/css/css_rule.c",
   CSSMediaRule:         "core/css/css_rule.c",
+  CSSSupportsRule:      "core/css/css_rule.c",
   /* §6.4.4, §6.4.9 and CSS Fonts §12.1's rule, same component and the same reason. CSSImportRule is EXPECTED
      to report `styleSheet` missing, and that is the audit doing its job rather than a row to silence: this
      engine fetches no CSS subresource, so the member has no answer that is not indistinguishable from the
@@ -496,7 +500,14 @@ for (const spec of Object.values(all)) {
        Skipping the type meant DOM's NodeFilter was in webref with seventeen members and in this index with
        none, so node_filter.c's sixteen constants were diffed against an empty member list and the row read
        COMPLETE against nothing — the audit minting the false complete it exists to remove. */
-    if ((n.type === "interface" || n.type === "interface mixin" || n.type === "callback interface") && n.name) {
+    /* A NAMESPACE IS COLLECTED TOO, and its absence was the same false-complete one level up. Web IDL §3.13
+       gives a namespace a real object on the global whose properties are its operations and attributes —
+       `console.log`, `CSS.supports` — and skipping the type meant the whole definition kind was invisible to
+       this index: a component installing on one would be diffed against an EMPTY member list, so twenty
+       operations would read COMPLETE against nothing at all. It carries no inheritance and no mixins, so the
+       flattening below is a no-op for it; what it needs is to EXIST here. */
+    if ((n.type === "interface" || n.type === "interface mixin" || n.type === "callback interface" ||
+         n.type === "namespace") && n.name) {
       if (n.inheritance) inheritanceOf.set(n.name, n.inheritance);
       const prev = byName.get(n.name);
       if (prev) prev.members.push(...n.members);

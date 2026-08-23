@@ -1170,6 +1170,16 @@ static const char *HTML =
     "(async function(){ function h(f){ return f ? 'acADMIN' : 'acPUBLIC'; } fetch('/api/asynccall?w=' + h(cfg.admin)); })();"   /* ASYNC body calls a HELPER whose concolic branch forks DEEP (chain base->async->helper): the async frame is a CALLER, not the deepest — exercises clone_deep_flow's async-as-caller buffer sourcing (tramp_buf_base/tramp_live_sf) -> both acADMIN and acPUBLIC */
     "(async function(){ throw 'asyncThrew'; })().catch(function(e){ fetch('/api/caught?e=' + e); });"   /* async THROW -> rejected promise -> .catch reaction fires */
     "(async function(){ var s=0; for(var i=0;i<2000;i++){ s=s+1; } fetch('/api/asyncloop?s='+s); })();"   /* async body with a LOOP -> preempt may fire inside the async tramp frame */
+    /* ORPHAN-INVOKE — the headline capability, and the ONE statement in this document that nothing in it calls.
+       It asks two things at once because they are the two halves of the mechanism and either alone would pass
+       while the other was broken: that the function RUNS at all (`/api/orphan/report`), and that its PARAMETER
+       is unknown external input rather than `undefined` — so the equality gate FORKS and the arm behind it is
+       explored (`/api/orphan/admin-only`), which is the whole of "learn the logged-in surface while logged
+       out" reduced to one line. A driven orphan that received `undefined` would emit the first and never the
+       second, and a run in which orphan-invoke does not exist emits neither: a page holding only this function
+       measured ZERO endpoints against one flow, which is what this row exists to keep from happening again. */
+    "function orphanNeverCalled(role){ fetch('/api/orphan/report');"
+    " if (role === 'admin') { fetch('/api/orphan/admin-only'); } }"
     "(async function(){ var c = await (await fetch('/api/config')).json(); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, then §6.4.3 json() over the host's bytes — the parsed body's field flows into a later endpoint as a concrete example */
     /* §6.4 clone(), which is how a caching or interceptor layer is written: copy the reply, read the copy, and
        still hand the original on. Both halves of the spec are asserted because both are the reason it exists —
@@ -3611,6 +3621,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* ASYNC LOOP + PREEMPT: an async body with a loop is preempted mid-iteration; the deep-preempt stashes and
        rebuilds the whole TrampFrame chain (incl. async_data), so it resumes correctly. s=0+..+24=300. */
     int async_preempt = (strstr(js, "\"/api/asyncloop\"") && strstr(js, "\"2000\""));
+    /* ORPHAN-INVOKE, IN TWO ROWS BECAUSE IT IS TWO CLAIMS. The first is that a function nothing in the document
+       calls was RUN — with no driving there is no request at all, which is what a page holding only such a
+       function measured. The second is that its parameter arrived as unknown external input: `role === 'admin'`
+       is an equality over it, so a value the engine had invented (`undefined`, or any concrete pick) decides
+       the branch and the arm behind it is never explored, while an unknown FORKS and both arms run. A single
+       row could not tell "the orphan ran" from "the orphan ran with a fabricated argument". */
+    int orphan_driven = strstr(js, "\"/api/orphan/report\"") != NULL;
+    int orphan_gate   = strstr(js, "\"/api/orphan/admin-only\"") != NULL;
     /* FETCH-AWAIT-RESULT: `await fetch('/api/config')` delivered the reply and §6.4.3 json() parsed it,
        whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
        API-value learning, through the Response the shipped fetch component actually hands back. */
@@ -4170,6 +4188,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "asynccall", asynccall_tt, "/api/asynccall", SESS_EXPLORE },
         { "throw", async_throw, "/api/caught", SESS_EXPLORE },
         { "preempt", async_preempt, "/api/asyncloop", SESS_EXPLORE },
+        { "orphan", orphan_driven, "orphanNeverCalled", SESS_EXPLORE },
+        { "orphan-gate", orphan_gate, "orphanNeverCalled", SESS_EXPLORE },
         { "fetch", fetch_await, "/api/config", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE },

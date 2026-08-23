@@ -119,6 +119,18 @@ typedef struct Flow {
     int cand_fired;        /* this flow's X9 marker executed */
     int cand_verifying;    /* this flow is a candidate run: the sink takes the concrete arg */
 
+    /* IS THIS FLOW A DRIVEN ORPHAN — a flow whose frame is a CALL of a function the page defined and nothing
+       ever called (engine.c's engine_orphan_fork). It is not a different KIND of flow in any way the scheduler
+       can see: same assembly as an answer-fork arm, same delta, same world, same rank, same preemption, and its
+       branches fork ordinary siblings. It carries exactly one consequence, and the field exists to state it:
+       ITS WORK IS NOT IN ITS RECIPE. Every other flow's recipe is (decision vector, reward) and a resume
+       re-runs the DOCUMENT under it, which reproduces the flow — but re-running the document is precisely what
+       never calls this function, so a resumed orphan flow would be a document replay wearing an orphan's rank
+       and the drive would be silently gone. cold.c refuses to write one rather than write a lie, and names
+       what the recipe still needs. Inherited by a fork, because an arm of an orphan drive is the same drive
+       continued and is no more replayable than its parent. */
+    int orphan;
+
     /* HAS THIS FLOW'S RECIPE BEEN WRITTEN TO THE PARK DOCUMENT? A paged flow is not a dropped one — that is the
        whole claim the cold tier makes — and it is a fact about THIS FLOW rather than about the session. It used
        to be asked of the engine (`engine_frontier_paged`), which is true only of the whole-frontier park: a

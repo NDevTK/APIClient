@@ -96,6 +96,13 @@ typedef enum {
        what the IDL states. */
     IDL_STRING_UNLESS_CALLABLE,
     IDL_BOOLEAN,          /* ToBoolean. The conversion runs nothing; the READ that precedes it is the page's */
+    /* `object?` — §3.2.16's object type with §3.2.20's nullable wrapper. undefined and null become the IDL
+       value null; an Object crosses as itself; ANYTHING ELSE IS A TypeError, which is the whole content of the
+       type and the reason it cannot be IDL_ANY with a test in the body. The Console Standard §1.1.10's
+       `dir(optional any item, optional object? options)` is what declares one: `console.dir(x, 5)` throws in
+       every browser, and a body reading `5.foo` instead would answer undefined and print a table nobody asked
+       for. Nothing here reads a member, so no page code runs. */
+    IDL_OBJECT_NULLABLE,
     /* A `boolean` DICTIONARY MEMBER WITH NO DEFAULT — and the difference from IDL_BOOLEAN is the whole reason
        it exists. §3.2.17 does not set an absent member at all, so "does not exist" and "exists and is false"
        are two states a dictionary can be in, and DOM §4.3.1's `observe` branches on which: `observe(t,
@@ -304,6 +311,12 @@ typedef enum {
        the reader would have to invent the zero — which is precisely the consumer-side default that cannot be
        told apart from a measurement. Declared, the conversion places it and the reader asserts it is there. */
     IDL_DEFAULT_ZERO,
+    /* `= false`. The Console Standard §1.1.1's `assert(optional boolean condition = false, any... data)` writes
+       it, and it is a row here for the same reason IDL_DEFAULT_ZERO is: ToBoolean(undefined) is false, so a
+       member that let the absence stand would be indistinguishable from one whose default was declared — until
+       the day the position's type changes and the two stop agreeing. Declared, the conversion PLACES a real
+       `false` and a body reading argv[0] is reading the IDL's value rather than inventing it. */
+    IDL_DEFAULT_FALSE,
 } IdlDictDefault;
 
 struct IdlDictDecl;
@@ -548,6 +561,16 @@ void idl_iface_narrow(bool (*is)(JSValueConst v));
    idl_optional_from do; `values` must outlive the declaration, so every caller passes a static. */
 void idl_enum_values(const char *const *values);
 
+/* DECLARE THAT THIS MEMBER'S TAIL IS VARIADIC — `T... name`, so the LAST declared type applies to every
+   argument from that position on and the member takes as many as the page passed.
+   IT IS SET AFTER THE DECLARATION, naming the member the LAST one made, exactly as idl_optional_from,
+   idl_arg_default, idl_iface_brand and idl_enum_values do. It existed only as a parameter of
+   `idl_method_id_ext`, which builds a PLAIN-BODY member — so a member that is BOTH a step machine and variadic
+   could not be declared at all, and the Console Standard's namespace is nine of them (`log(any... data)` and
+   its eight siblings reach §2.2's Formatter, which calls the page's `toString`). A flag that composes with
+   every declaration form is the same answer this file already gave for the brand and the enumeration list. */
+void idl_variadic(void);
+
 int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
                        const IdlDictMember *members, int nmembers,
                        const IdlStepDecl *decl, int magic);
@@ -690,6 +713,17 @@ int64_t idl_step_total(long *count);
 /* §3.7.3's @@toStringTag on an interface PROTOTYPE object: the interface's identifier, non-writable,
    non-enumerable, configurable. Every interface prototype has one, so every interface calls this. */
 void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface);
+
+/* §3.13.1's CLASS STRING ON A NAMESPACE OBJECT: "The class string of a namespace object is the namespace's
+   identifier" — so `Object.prototype.toString.call(console)` is "[object console]", with §3.2's same
+   non-writable, non-enumerable, configurable descriptor.
+   IT IS DELIBERATELY NOT idl_interface_tag. A namespace object is not an interface prototype object: it holds
+   the namespace's operations DIRECTLY (§3.13.1 steps 2-4) rather than being the prototype of anything, and the
+   §3.7.3 tag is what engine/idl_installed.mjs reads to decide which INTERFACE a file's installs belong to.
+   Tagging a namespace with the interface form would file twenty operations under an interface no IDL defines;
+   this states which NAMESPACE they belong to, which is a different fact the auditor reads separately —
+   exactly the reason idl_async_iterator_tag is its own statement too. */
+void idl_namespace_tag(JSContext *ctx, JSValueConst ns, const char *identifier);
 
 /* §3.7.10.2's class string on an ASYNCHRONOUS ITERATOR PROTOTYPE OBJECT: the interface's identifier
    concatenated with " AsyncIterator". It is deliberately NOT idl_interface_tag — that object is not an

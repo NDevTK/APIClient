@@ -595,6 +595,27 @@ void cold_park_flow(Flow *f)
        zone asks again. So: retract a STARTED operation as well — its program's partial work is exactly what a
        replay throws away for every other program (cold.h), and its completion has not been sent — or state why
        a half-run peer program is different from every other suspended frame this tier regenerates. */
+    /* AND A DRIVEN ORPHAN, WHOSE WORK IS NOT IN ITS RECIPE. Every recipe this tier writes is (decision vector,
+       reward) and a resume re-runs the DOCUMENT under it — which reproduces every other flow exactly, and
+       reproduces this one not at all: the whole point of an orphan drive is that re-running the document is
+       what never calls this function. Written as a PARK_KIND_FLOW it would come back next session as a document
+       replay carrying an orphan's rank, and the drive would be gone with nothing anywhere to say so — the
+       silent drop §scheduler's razor forbids, wearing a plausible flow.
+       WHAT THE RECIPE STILL NEEDS is a locator for the FUNCTION, and a positional one will not do: collection
+       order is a fact about one heap at one instant. The old implementation had the right shape for it and
+       nothing else of it survives — a hash of the function's own SOURCE TEXT (`JS_OrphanHash`, deleted with the
+       rest at 1dd6bbe4), which is stable across sessions because the same bundle compiles the same bytes. So:
+       add an 'o' record kind carrying that hash beside the decision vector, have the resumed flow re-run the
+       document as it already does, and at the point flow_step takes orphans have it drive the one whose hash
+       matches rather than taking a fresh one — or say what makes a call frame different from every other
+       suspended frame this tier regenerates from a replay. */
+    DCHECK(!f->orphan,
+           "a DRIVEN ORPHAN was written to the park document — its recipe is a decision vector and a resume "
+           "re-runs the document under it, which is exactly the run that never calls this function, so it "
+           "would come back as an ordinary document replay wearing this flow's rank and the drive would be "
+           "silently gone. Give the recipe a locator for the function itself — a hash of its SOURCE TEXT, "
+           "which is stable across sessions where a collection index is not — and have the resumed flow drive "
+           "the orphan that matches instead of taking a fresh one");
     DCHECK(!flow_owes_answer(f),
            "a flow holding a STARTED cross-agent operation was parked — its program is mid-run with the zone's "
            "rendezvous token on the row, and the token may not be written into the recipe (it is the zone's "

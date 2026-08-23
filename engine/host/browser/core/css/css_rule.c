@@ -25,6 +25,7 @@
 #include "core/css/css_rule_list.h"
 #include "core/css/css_serialize.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/css_supports.h"
 #include "core/css/media_list.h"
 #include "core/css/media_query.h"
 #include "core/idl_args.h"
@@ -46,6 +47,11 @@
 enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE_FONT_FACE = 5,
        RULE_TYPE_PAGE = 6, RULE_TYPE_KEYFRAMES = 7, RULE_TYPE_KEYFRAME = 8, RULE_TYPE_MARGIN = 9,
        RULE_TYPE_NAMESPACE = 10,
+       /* CSS Conditional §7.1 "Extensions to the CSSRule interface" — `const unsigned short SUPPORTS_RULE =
+          12`, the number that standard adds to the list CSSOM calls frozen. 11 (CSS Counter Styles 3 §9.1's)
+          and 14 (CSS Fonts 4 §12.2's) are DECLARED as constants below and have no interface behind them, which
+          is why they are not here: this enum is the interfaces, and CR_CONSTS is the historical table. */
+       RULE_TYPE_SUPPORTS = 12,
        /* At and above this, §6.4.2's `type` answers 0 — the interfaces its frozen table does not name. */
        RULE_TYPE_UNNUMBERED = 0x100,
        RULE_TYPE_LAYER_BLOCK = RULE_TYPE_UNNUMBERED, RULE_TYPE_LAYER_STATEMENT };
@@ -79,7 +85,7 @@ enum { ZONE_LEAD = 0, ZONE_IMPORT, ZONE_NAMESPACE, ZONE_BODY, ZONE_N };
 static uint32_t rule_legacy_type(uint16_t type)
 {
     if (type >= RULE_TYPE_UNNUMBERED) return 0;
-    DCHECK(type >= RULE_TYPE_STYLE && type <= RULE_TYPE_NAMESPACE,
+    DCHECK(type >= RULE_TYPE_STYLE && type <= RULE_TYPE_SUPPORTS,
            "a CSS rule's interface discriminator is neither one of §6.4.2's table numbers nor above the end of "
            "the table — the enum above is the one place both halves are declared, so a value between them "
            "means a row was added without deciding which half it is in");
@@ -112,7 +118,15 @@ typedef struct CssRuleData {
     JSValue media;
     /* §6.4.4's three remaining texts, each JS_NULL on a rule that is not an `@import` — and `layer_name` and
        `supports_text` are JS_NULL on one that declares no layer and no supports condition, which is the
-       attribute's own null and not an absence this record has to distinguish from it. (OWNED) */
+       attribute's own null and not an absence this record has to distinguish from it. (OWNED)
+       `supports_text` IS ALSO CSS Conditional §7.4's CONDITION, and that is one fact under two attribute
+       names rather than two facts sharing a slot — the test `at_name` and `keyframes_name` failed one field
+       up and this one passes. §6.4.4's `supportsText` is "the <supports-condition> declared in the at-rule"
+       and §7.4's `conditionText` is the `<supports-condition>` an `@supports` rule's prelude IS: the same
+       grammar (core/css/css_supports.h parses ONE production for both), the same evaluation, the same
+       normalization rule (§7.4's "token stream simplifications are allowed ... logical simplifications are
+       not" is what an `@import`'s raw span already is), and both readonly. The two rule types are disjoint,
+       so no rule ever needs to answer both. */
     JSValue href;
     JSValue layer_name;
     JSValue supports_text;
@@ -155,9 +169,9 @@ static JSClassID g_rule_class;
    slot array, freed with the context. Three of them are abstract (nothing is an instance of CSSRule,
    CSSGroupingRule or CSSConditionRule) and the rest are concrete; all are held the same way because a rule is
    built with an EXPLICIT prototype chosen from its type, so the class's own proto slot decides nothing. */
-enum { PROTO_RULE = 0, PROTO_GROUPING, PROTO_STYLE, PROTO_CONDITION, PROTO_MEDIA, PROTO_IMPORT,
-       PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_PAGE, PROTO_MARGIN, PROTO_KEYFRAMES, PROTO_KEYFRAME,
-       PROTO_LAYER_BLOCK, PROTO_LAYER_STATEMENT, PROTO_N };
+enum { PROTO_RULE = 0, PROTO_GROUPING, PROTO_STYLE, PROTO_CONDITION, PROTO_MEDIA, PROTO_SUPPORTS,
+       PROTO_IMPORT, PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_PAGE, PROTO_MARGIN, PROTO_KEYFRAMES,
+       PROTO_KEYFRAME, PROTO_LAYER_BLOCK, PROTO_LAYER_STATEMENT, PROTO_N };
 static int g_proto_slot[PROTO_N];
 static int g_id_set_selector = -1, g_id_set_page_selector = -1, g_id_set_key_text = -1,
            g_id_set_keyframes_name = -1, g_id_set_css_text = -1, g_id_insert_rule = -1, g_id_delete_rule = -1,
@@ -316,8 +330,8 @@ static void rules_remove_at(JSContext *ctx, JSValueConst list, uint32_t i)
    `<keyframe-block>`'s. */
 static bool rule_type_has_child_rules(uint16_t type)
 {
-    return type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_PAGE ||
-           type == RULE_TYPE_KEYFRAMES || type == RULE_TYPE_LAYER_BLOCK;
+    return type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_SUPPORTS ||
+           type == RULE_TYPE_PAGE || type == RULE_TYPE_KEYFRAMES || type == RULE_TYPE_LAYER_BLOCK;
 }
 
 /* IS THIS RULE TYPE A §6.4.5 GROUPING RULE — "an at-rule that CONTAINS OTHER RULES nested inside itself", plus
@@ -337,8 +351,8 @@ static bool rule_type_has_child_rules(uint16_t type)
    §7.2's `conditionText` is not on it and this predicate is not that one. */
 static bool rule_type_is_grouping(uint16_t type)
 {
-    bool grouping = type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_PAGE ||
-                    type == RULE_TYPE_LAYER_BLOCK;
+    bool grouping = type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_SUPPORTS ||
+                    type == RULE_TYPE_PAGE || type == RULE_TYPE_LAYER_BLOCK;
 
     DCHECK(!grouping || rule_type_has_child_rules(type),
            "a rule type is a §6.4.5 grouping rule and yet holds no child rules — CSSGroupingRule is DEFINED as "
@@ -456,6 +470,67 @@ static JSValue media_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, J
     r = JS_GetOpaque(obj, g_rule_class);
     JS_FreeValue(ctx, r->media);
     r->media = media_list_new(ctx, prelude);
+    return obj;
+}
+
+/* IS THIS RULE'S FEATURE QUERY TRUE — CSS Conditional §6, over the condition the rule stores. Read by §7.4's
+   `matches` and by the author cascade, which are the same question asked for two purposes.
+   IT IS RECOMPUTED RATHER THAN CACHED, and that is the `@media` arm's own arrangement one function down: a
+   media rule builds its `MediaQuerySet` from stored text at every evaluation too. A cached boolean would be a
+   17th field on a record whose every field is an obligation at the clone, the finalizer, the gc_mark and the
+   COW layout — for a value that is a pure function of a string this record already holds and that therefore
+   cannot disagree with itself however often it is derived. */
+static bool rule_supports_matches(JSContext *ctx, CssRuleData *r)
+{
+    const char *text;
+    bool matched = false, valid;
+
+    DCHECK(r->type == RULE_TYPE_SUPPORTS,
+           "a rule that is not an `@supports` was asked whether its feature query holds");
+    DCHECK(JS_IsString(r->supports_text),
+           "an `@supports` rule holds no condition text — its prelude IS a `<supports-condition>`, and a rule "
+           "whose prelude did not parse as one is never built (CSS Conditional §6: processors must ignore "
+           "such a rule, including all of its contents)");
+    text = JS_ToCString(ctx, r->supports_text);
+    if (!text) return false;
+    valid = css_supports_condition(text, strlen(text), &matched);
+    JS_FreeCString(ctx, text);
+    DCHECK(valid,
+           "an `@supports` rule's STORED condition no longer parses as a `<supports-condition>` — the builder "
+           "refuses a prelude that does not, and nothing may write this field afterwards (§7.2's "
+           "`conditionText` is readonly), so the two readings of one text have disagreed");
+    return valid && matched;
+}
+
+/* A CSS Conditional §7.4 CSSSupportsRule over the `@supports` rule's own prelude, which IS the
+   `<supports-condition>` §6 defines. JS_UNDEFINED — the builder's drop — when that prelude matches no
+   production of the grammar, which is §6's own disposal: "Any @supports rule that does not parse according to
+   the grammar above ... is invalid. Style sheets must not use such a rule and processors must ignore such a
+   rule (including all of its contents)."
+   THE PRELUDE IS STORED AS WRITTEN, unlike `@media`'s, and §7.4 is why: `conditionText` "must return the
+   condition that was specified, WITHOUT ANY LOGICAL SIMPLIFICATIONS, so that the returned condition will
+   evaluate to the same result as the specified condition in any conformant implementation ... including
+   implementations that implement future extensions allowed by the <general-enclosed> extensibility
+   mechanism". A round trip through this engine's parse would drop precisely what `<general-enclosed>` exists
+   to carry — the constructs THIS build does not understand and a future one will — so there is nothing to
+   canonicalise it through. §7.3's is the opposite instruction ("must return the value of media.mediaText"),
+   which is why the two conditional rules store their conditions differently. */
+static JSValue supports_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
+                                 const char *prelude)
+{
+    JSValue obj;
+    CssRuleData *r;
+    bool matched = false;
+
+    DCHECK(prelude != NULL, "a CSSSupportsRule was built with no prelude — `@supports {}` has an EMPTY "
+                            "condition, which matches no production of §6's grammar and is a DROP, and the "
+                            "absence of one is a parse that never reported the prelude at all");
+    if (!css_supports_condition(prelude, strlen(prelude), &matched)) return JS_UNDEFINED;
+    obj = rule_new(ctx, PROTO_SUPPORTS, RULE_TYPE_SUPPORTS, parent_style_sheet, parent_rule);
+    if (JS_IsException(obj)) return obj;
+    r = JS_GetOpaque(obj, g_rule_class);
+    JS_FreeValue(ctx, r->supports_text);
+    r->supports_text = JS_NewString(ctx, prelude);
     return obj;
 }
 
@@ -868,6 +943,18 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
                "block-less `@media` here means the parse kept a rule it should have discarded");
         return media_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude);
     }
+    /* CSS Conditional §6 makes `@supports` a BLOCK at-rule (`@supports <supports-condition> { <rule-list> }`),
+       so `@supports (display:flex);` is an at-rule whose grammar failed and CSS Syntax drops it — the same
+       shape `@font-face;` and `@page;` have, and dropped here for the same reason: lexbor parses an at-rule it
+       does not know as `_CUSTOM`, which accepts both, so this is malformed author CSS and not an engine
+       invariant. The CONDITION can drop it too, and that is the second half of the same sentence — see
+       supports_rule_new, which is where §6's "processors must ignore such a rule" lives.
+       ITS BODY IS A RULE LIST AND NOTHING ELSE (§6's `<rule-list>`), so the declarations the parse reports for
+       it are not read — the same sentence `@keyframes` and `@layer` get, and for the same reason: a
+       declaration written where §6 admits only rules would be CSSOM's CSSNestedDeclarations, a rule interface
+       this build does not have and whose absence the parse walk already records. */
+    if (strcmp(pr->at_name, "supports") == 0)
+        return pr->has_block ? supports_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude) : JS_UNDEFINED;
     /* CSS Cascade §2 makes `@import` a STATEMENT at-rule terminated by a semicolon, so `@import url(x) {}` is
        an at-rule whose grammar failed and CSS Syntax DROPS it. It is dropped HERE and not asserted against,
        because the shape reaches this file from the PAGE: lexbor parses an at-rule it does not know as
@@ -977,14 +1064,14 @@ static void rule_unbuilt_fail(const char *name)
     "CSSOM §6.4 has no interface built for the at-rule `@%s`, so a stylesheet containing one cannot be "        \
     "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "            \
     "CSSMarginRule, §6.4.9's CSSNamespaceRule, CSS Conditional §7.2's CSSConditionRule, §7.3's "                \
-    "CSSMediaRule, CSS Fonts §12.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's CSSKeyframeRule "              \
-    "and CSSKeyframesRule, and CSS Cascade §8.1/§8.2's CSSLayerBlockRule and CSSLayerStatementRule "            \
-    "are built; what remains is CSS Conditional §7.4's CSSSupportsRule (whose condition needs CSS.supports "    \
-    "to evaluate), CSS Cascade 6 §4.1's CSSScopeRule, CSS Contain's CSSContainerRule, CSS Counter Styles 3 "    \
-    "§9.2's CSSCounterStyleRule and CSS Fonts 4 §12.2's CSSFontFeatureValuesRule — the last two have their "    \
-    "§6.4.2 TYPE NUMBER declared (11 and 14) and no interface behind it, which is what puts them on this "      \
-    "list rather than off it. Build the one this names and mint it in rule_from_parse — do NOT skip the "       \
-    "rule, because every index after it would then name a different rule than the page's"
+    "CSSMediaRule, §7.4's CSSSupportsRule, CSS Fonts §12.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's "      \
+    "CSSKeyframeRule and CSSKeyframesRule, and CSS Cascade §8.1/§8.2's CSSLayerBlockRule and "                  \
+    "CSSLayerStatementRule are built; what remains is CSS Cascade 6 §4.1's CSSScopeRule, CSS Contain's "        \
+    "CSSContainerRule, CSS Counter Styles 3 §9.2's CSSCounterStyleRule and CSS Fonts 4 §12.2's "                \
+    "CSSFontFeatureValuesRule — the last two have their §6.4.2 TYPE NUMBER declared (11 and 14) and no "        \
+    "interface behind it, which is what puts them on this list rather than off it. Build the one this names "   \
+    "and mint it in rule_from_parse — do NOT skip the rule, because every index after it would then name a "    \
+    "different rule than the page's"
 
     char msg[sizeof RULE_UNBUILT_FMT + sizeof ((RuleBuild *)0)->unbuilt];
 
@@ -1562,6 +1649,28 @@ static bool rule_layer_names(JSContext *ctx, CssRuleData *r, char ***pv, unsigne
    THE SPACE IS INSIDE THE CONDITIONAL, which is the whole of why `@layer {}` reads back as "@layer {\n}" and
    not as "@layer  {\n}" — the `?` in the grammar means there is no separator to write for a rule that declares
    no name, which is the identical reason §6.4.7's `@page {}` has one space and not two. */
+/* CSS Conditional §7.4's arm, DERIVED the same way CSS Cascade §8.1's below it is and from the same place:
+   CSSOM §6.4's serialize-a-CSS-rule states no arm for CSSSupportsRule at all — its list runs CSSStyleRule,
+   CSSImportRule, CSSMediaRule, CSSFontFaceRule, CSSPageRule, CSSNamespaceRule, CSSKeyframesRule,
+   CSSKeyframeRule and stops — so the shape comes from the one arm it DOES state for a conditional group rule,
+   §7.3's, with step 1's prefix replaced. The prefix is the at-keyword, a SPACE and the condition: `@supports`'s
+   `<supports-condition>` is not an optional production (`@supports {}` matches no arm of §6's grammar and is
+   dropped before it can be serialized), so the space is unconditional exactly as `@media`'s is. */
+static bool supports_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+{
+    RBuf prefix = { NULL, 0, 0 };
+    const char *text = JS_ToCString(ctx, r->supports_text);
+    bool ok;
+
+    if (!text) return false;
+    rbuf_add(&prefix, "@supports ");
+    rbuf_add(&prefix, text);
+    JS_FreeCString(ctx, text);
+    ok = group_rules_serialize(ctx, rule, prefix.s, prefix.len, out);
+    free(prefix.s);
+    return ok;
+}
+
 static bool layer_block_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
 {
     RBuf prefix = { NULL, 0, 0 };
@@ -1747,6 +1856,7 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
     if (!r) return false;
     switch (r->type) {
     case RULE_TYPE_MEDIA:     return media_rule_serialize(ctx, r, rule, out);
+    case RULE_TYPE_SUPPORTS:  return supports_rule_serialize(ctx, r, rule, out);
     case RULE_TYPE_IMPORT:    return import_rule_serialize(ctx, r, out);
     case RULE_TYPE_NAMESPACE: return namespace_rule_serialize(ctx, r, out);
     case RULE_TYPE_FONT_FACE: return decl_body_rule_serialize(ctx, r, "font-face", out);
@@ -1765,7 +1875,8 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
 /* ---- the members ------------------------------------------------------------------------------------------ */
 
 enum { CR_PARENT_RULE = 0, CR_PARENT_STYLE_SHEET, CR_TYPE, CR_CSS_TEXT, CR_SELECTOR_TEXT, CR_CONDITION_TEXT,
-       CR_MEDIA, CR_MATCHES, CR_CSS_RULES, CR_HREF, CR_IMPORT_MEDIA, CR_LAYER_NAME, CR_SUPPORTS_TEXT,
+       CR_MEDIA, CR_MATCHES, CR_SUPPORTS_MATCHES, CR_CSS_RULES, CR_HREF, CR_IMPORT_MEDIA, CR_LAYER_NAME,
+       CR_SUPPORTS_TEXT,
        CR_NAMESPACE_URI, CR_PREFIX, CR_PAGE_SELECTOR_TEXT, CR_MARGIN_NAME, CR_KEY_TEXT, CR_KEYFRAMES_NAME,
        CR_KEYFRAMES_CSS_RULES, CR_KEYFRAMES_LENGTH, CR_LAYER_BLOCK_NAME, CR_LAYER_NAME_LIST };
 
@@ -1818,15 +1929,27 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     case CR_SELECTOR_TEXT:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_STYLE, "CSSStyleRule");
         return r ? JS_DupValue(ctx, r->selector_text) : JS_EXCEPTION;
-    /* CSS Conditional §7.3's CSSMediaRule-specific definition of the attribute §7.2 declares: "the
-       conditionText attribute, on getting, must return the value of media.mediaText on the rule". So it is not
-       a second copy of the condition — it is ONE read of the MediaList, which is where the condition lives. */
+    /* CSS Conditional §7.2's `conditionText`, WHICH EACH DERIVED INTERFACE REDEFINES — §7.2 says so outright
+       ("Since what this condition does varies between the derived interfaces of CSSConditionRule, those
+       derived interfaces may specify different behavior for this attribute") and then both of them do, so this
+       is one member with two definitions and not one definition with two receivers.
+       §7.3's, for a `@media`: "must return the value of media.mediaText on the rule" — not a second copy of
+       the condition but ONE read of the MediaList, which is where a media rule's condition lives.
+       §7.4's, for a `@supports`: "must return the condition that was specified, without any logical
+       simplifications" — the stored prelude, for the reason supports_rule_new gives.
+       The BRAND is CSSConditionRule's, so a `@supports` reaching `CSSMediaRule.prototype.conditionText` is the
+       same TypeError a style rule gets: both conditional types answer here and nothing else does. */
     case CR_CONDITION_TEXT: {
         char *text;
         JSValue out;
 
-        r = rule_here_typed(ctx, this_val, RULE_TYPE_MEDIA, "CSSConditionRule");
-        if (!r) return JS_EXCEPTION;
+        r = rule_of(this_val);
+        if (!r || (r->type != RULE_TYPE_MEDIA && r->type != RULE_TYPE_SUPPORTS)) {
+            JS_ThrowTypeError(ctx, "a CSSConditionRule member was reached on something that is not a "
+                                   "CSSConditionRule");
+            return JS_EXCEPTION;
+        }
+        if (r->type == RULE_TYPE_SUPPORTS) return JS_DupValue(ctx, r->supports_text);
         text = media_list_text(ctx, r->media);
         if (!text) return JS_EXCEPTION;
         out = JS_NewString(ctx, text);
@@ -1856,6 +1979,18 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
         media_query_free(set);
         return out;
     }
+    /* CSS Conditional §7.4's `matches`: "The matches attribute returns the evaluation of the CSS feature query
+       represented in conditionText." That is the WHOLE definition, and the difference from §7.3's one member
+       up is the whole reason this is a second magic rather than a second receiver on that one: §7.3 conjoins
+       "the rule is in a stylesheet attached to a document" and §7.4 states no such conjunct, so a `@supports`
+       rule removed from its sheet still answers its condition.
+       AND IT IS CONCRETE WHERE §7.3's IS CONCOLIC. A media query asks about an environment this headless
+       engine does not have, so its answer forks the alternate-viewport world; a feature query asks whether
+       THIS user agent accepts a declaration, which is a fact about the program doing the asking. Answering it
+       symbolically would fork a world that cannot exist — see core/css/css_supports.h. */
+    case CR_SUPPORTS_MATCHES:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_SUPPORTS, "CSSSupportsRule");
+        return r ? JS_NewBool(ctx, rule_supports_matches(ctx, r)) : JS_EXCEPTION;
     /* §6.4.4: "The href attribute must return the URL specified by the @import at-rule" — the SPECIFIED one,
        which the spec's own note distinguishes from the resolved one ("to get the resolved URL use the href
        attribute of the associated CSS style sheet"). */
@@ -2514,6 +2649,23 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         JS_FreeValue(ctx, kids);
         return ok;
     }
+    /* CSS Conditional §6's `@supports`, the OTHER conditional group rule, and §2's sentence covers both
+       identically: "when the condition is true, CSS processors must apply the rules inside the group rule as
+       though they were at the group rule's location; when the condition is false, CSS processors must not
+       apply any of rules inside the group rule."
+       §6.4.3's layer sentence lands on the first arm here too — a feature query is global to the document, so
+       a false condition means the children, layers included, are simply not walked. It is not the
+       element-sensitive conditional that sentence's second arm is about. */
+    if (r->type == RULE_TYPE_SUPPORTS) {
+        JSValue kids;
+        bool ok;
+
+        if (!rule_supports_matches(ctx, r)) return true;
+        kids = rule_child_rules(ctx, rule);
+        ok = cascade_emit(ctx, kids, e, cur);
+        JS_FreeValue(ctx, kids);
+        return ok;
+    }
     /* AN `@namespace` IS EMITTED, and it is the one non-style rule that must be: it declares a prefix the
        SELECTORS below are written against, so a sheet whose `@namespace svg url(...)` were dropped would hand
        lexbor `svg|a { … }` with no `svg` bound — an invalid selector, which the parse then drops, which
@@ -2756,6 +2908,7 @@ void css_rule_init(JSContext *ctx)
     g_proto_slot[PROTO_STYLE] = realm_value_declare(ctx, "CSSOM §6.4.3 CSSStyleRule.prototype");
     g_proto_slot[PROTO_CONDITION] = realm_value_declare(ctx, "CSS Conditional §7.2 CSSConditionRule.prototype");
     g_proto_slot[PROTO_MEDIA] = realm_value_declare(ctx, "CSS Conditional §7.3 CSSMediaRule.prototype");
+    g_proto_slot[PROTO_SUPPORTS] = realm_value_declare(ctx, "CSS Conditional §7.4 CSSSupportsRule.prototype");
     g_proto_slot[PROTO_IMPORT] = realm_value_declare(ctx, "CSSOM §6.4.4 CSSImportRule.prototype");
     g_proto_slot[PROTO_NAMESPACE] = realm_value_declare(ctx, "CSSOM §6.4.9 CSSNamespaceRule.prototype");
     g_proto_slot[PROTO_FONT_FACE] = realm_value_declare(ctx, "CSS Fonts §12.1 CSSFontFaceRule.prototype");
@@ -2795,7 +2948,7 @@ void css_rule_init(JSContext *ctx)
 
 void css_rule_install_proto(JSContext *ctx)
 {
-    JSValue base, grouping, style, condition, media, import_rule, ns, font_face, page, margin;
+    JSValue base, grouping, style, condition, media, supports, import_rule, ns, font_face, page, margin;
     JSValue keyframes, keyframe, layer_block, layer_statement;
 
     DCHECK(g_rule_class != 0, "a realm asked for the rule prototypes before the interfaces existed");
@@ -2842,6 +2995,17 @@ void css_rule_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, media, "CSSMediaRule");
     idl_install_accessor(ctx, media, "media", js_rule_get, CR_MEDIA, media_list_put_forwards_setter());
     idl_install_accessor(ctx, media, "matches", js_rule_get, CR_MATCHES, -1);
+
+    /* CSS Conditional §7.4's CSSSupportsRule.prototype — `interface CSSSupportsRule : CSSConditionRule`, so
+       it chains off `condition` beside CSSMediaRule and NOT off it. `matches` is the ONE member §7.4 declares;
+       `conditionText` is §7.2's, inherited from the prototype above and redefined for this interface by the
+       spec's own text rather than by a second accessor here (installing one would put two definitions of one
+       attribute on one chain, which is exactly what §7.2's "derived interfaces may specify different
+       behavior" does NOT mean). */
+    supports = JS_NewObjectProto(ctx, condition);
+    CHECK(!JS_IsException(supports), "CSSSupportsRule.prototype could not be allocated");
+    idl_interface_tag(ctx, supports, "CSSSupportsRule");
+    idl_install_accessor(ctx, supports, "matches", js_rule_get, CR_SUPPORTS_MATCHES, -1);
 
     /* §6.4.4's CSSImportRule.prototype. It derives from CSSRule and NOT from CSSGroupingRule — an `@import`
        contains no rules — which is why `cssRules`, `insertRule` and `deleteRule` are unreachable on one and
@@ -2966,6 +3130,7 @@ void css_rule_install_proto(JSContext *ctx)
     realm_value_set(ctx, g_proto_slot[PROTO_STYLE], style);
     realm_value_set(ctx, g_proto_slot[PROTO_CONDITION], condition);
     realm_value_set(ctx, g_proto_slot[PROTO_MEDIA], media);
+    realm_value_set(ctx, g_proto_slot[PROTO_SUPPORTS], supports);
 }
 
 void css_rule_install(JSContext *ctx, JSValueConst global)
@@ -2982,6 +3147,9 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
         { "CSSStyleRule",      PROTO_STYLE,      1 },
         { "CSSConditionRule",  PROTO_CONDITION,  1 },
         { "CSSMediaRule",      PROTO_MEDIA,      3 },
+        /* CSS Conditional §7.4: `interface CSSSupportsRule : CSSConditionRule` — index 3, the SAME parent
+           CSSMediaRule has, because the two conditional at-rules are siblings and not a chain. */
+        { "CSSSupportsRule",   PROTO_SUPPORTS,   3 },
         /* Each of the three derives from CSSRule directly — none of them contains rules. */
         { "CSSImportRule",     PROTO_IMPORT,     0 },
         { "CSSNamespaceRule",  PROTO_NAMESPACE,  0 },

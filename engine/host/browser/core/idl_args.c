@@ -559,6 +559,7 @@ static JSValue idl_default_of(JSContext *ctx, IdlDictDefault kind, const char *s
 {
     if (kind == IDL_DEFAULT_NULL) return JS_NULL;
     if (kind == IDL_DEFAULT_ZERO) return JS_NewInt32(ctx, 0);
+    if (kind == IDL_DEFAULT_FALSE) return JS_NewBool(ctx, 0);
     DCHECK(kind == IDL_DEFAULT_STRING && str != NULL,
            "a declaration named a default this machine has no value for — the forms are the ones the "
            "platform's IDL writes, and a new one is an arm here rather than a string that means something else");
@@ -1371,11 +1372,33 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            is optional (a required one was already a TypeError above) and takes §3.6's absent path, so it
            reaches the body as the `undefined` it would have anyway; what changes is only that the dictionary
            behind them exists. A VARIADIC member may not declare one at all, which the conversion asserts. */
+        /* …AND SO IS A POSITION WITH A DECLARED DEFAULT, for exactly the same reason and by §3.6's own step
+           14.2: "if the argument is optional and it has a default value, set the value to that default" runs
+           for EVERY declared argument, not only for the ones the page reached — so a member the page stopped
+           short of still receives the IDL's value at every defaulted position behind it.
+           IT WAS THE DICTIONARY CLAUSE ALONE, AND THE ONE EXISTING USER WAS SAVED BY ACCIDENT. IndexedDB
+           §4.4's `transaction(storeNames, optional IDBTransactionMode mode = "readonly", optional
+           IDBTransactionOptions options = {})` declares a default at position 1, and `db.transaction(["s"])`
+           reached the body with argv[1] undefined — except that position 2 is a dictionary, so the clause
+           above extended the count past 1 and the default was placed anyway. The body's own DCHECK
+           ("§3.6 step 14.2 places one whether or not the page passed one") states the rule this now keeps: a
+           member whose defaulted position has no dictionary behind it — Console §1.4.1's
+           `time(optional DOMString label = "default")` — would have reached its body with nothing there. */
         if (!m->variadic) {
             for (r = s->n; r < m->nargs; r++)
                 if (idl_type_is_dictionary(m->types[r]))
                     s->n = r + 1;
         }
+        /* THE DEFAULT CLAUSE APPLIES TO A VARIADIC MEMBER TOO, and that is not symmetry for its own sake — a
+           variadic member's DECLARED positions are the ones BEFORE the tail, and §3.6 step 14.2 reads a default
+           for each of them exactly as it does for a member with no tail. Console §1.4.2's
+           `timeLog(optional DOMString label = "default", any... data)` is one: `console.timeLog()` passes
+           nothing, so the count above is 0, and without this the body would be handed an EMPTY argument vector
+           for a member whose IDL guarantees a label at position 0. The dictionary clause stays where it is
+           because a variadic member may not declare one at all — the conversion asserts that a few lines on. */
+        for (r = s->n; r < idl_declared_positions(m); r++)
+            if (m->arg_dflts && m->arg_dflts[r].kind != IDL_DEFAULT_NONE)
+                s->n = r + 1;
         s->result = JS_UNDEFINED;
         s->dict_v = JS_UNDEFINED;
         s->conv = m->variadic ? JS_NewArray(ctx) : JS_UNDEFINED;
@@ -2034,6 +2057,20 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             *slot = JS_IsUndefined(a) ? JS_UNDEFINED : JS_NewBool(ctx, JS_ToBool(ctx, a));
             goto placed;
         }
+        if (t == IDL_OBJECT_NULLABLE) {
+            /* §3.2.16 `object`: "If Type(V) is not Object, then throw a TypeError." §3.2.20's nullable wrapper
+               puts null and undefined ahead of that as the IDL value null. Nothing is READ, so no page code
+               runs — which is why the refusal is the TYPE's and not a body's. */
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            if (JS_IsUndefined(a) || JS_IsNull(a)) { *slot = JS_NULL; goto placed; }
+            if (!JS_IsObject(a)) {
+                JS_ThrowTypeError(ctx, "argument %d is not an object", s->i + 1);
+                return JS_STEP_ABRUPT;
+            }
+            *slot = JS_DupValue(ctx, a);
+            goto placed;
+        }
         if (idl_is_numeric(t)) {
             double num;   /* see the dictionary member's arm: a local, because a park writes nothing */
 
@@ -2266,10 +2303,10 @@ int idl_method_id_ext(JSContext *ctx, const IdlArgType *types, int nargs, bool v
 {
     int id = idl_method_id_dict(ctx, types, nargs, NULL, 0, body, magic);
 
-    DCHECK(!variadic || nargs >= 1,
-           "a variadic member declared no argument types — the LAST one is the tail's type, which is what `T...` "
-           "states, so there is always at least one");
-    idl_member(g_n - 1)->variadic = variadic;
+    /* ONE STATEMENT OF THE TAIL. It was written here as a field store and again nowhere else, which was fine
+       while this was the only declaration form that could carry one; a step machine could not be variadic at
+       all until idl_variadic existed, and two ways to say the same thing is how the two come to disagree. */
+    if (variadic) idl_variadic();
     idl_member(g_n - 1)->iface = iface;
     return id;
 }
@@ -2513,6 +2550,24 @@ void idl_arg_default(int index, IdlDictDefault dflt, const char *dflt_str)
     m->arg_dflts[index].str  = dflt_str;
 }
 
+/* See idl_args.h. Same "names the last declaration" rule as idl_optional_from, and it must be stated BEFORE
+   idl_optional_from and idl_arg_default: both of those measure positions against `idl_declared_positions`,
+   which a variadic tail shortens by one, so a member that said it afterwards would have had its optional
+   index and its defaults checked against a list one longer than the one it declares. */
+void idl_variadic(void)
+{
+    IdlMember *m;
+
+    DCHECK(g_n > 0, "a variadic tail was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    m = idl_member(g_n - 1);
+    DCHECK(m->nargs >= 1,
+           "a variadic member declared no argument types — the LAST one is the tail's type, which is what `T...` "
+           "states, so there is always at least one");
+    DCHECK(!m->variadic, "a member declared its variadic tail twice");
+    m->variadic = true;
+}
+
 /* See idl_args.h. Same "names the last declaration" rule as idl_optional_from. */
 void idl_iface_brand(JSClassID iface)
 {
@@ -2589,6 +2644,19 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
     DCHECK(JS_IsObject(proto), "an interface's @@toStringTag was installed on something that is not an object");
     JS_DefinePropertyValue(ctx, (JSValue)proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
                            JS_NewString(ctx, iface), JS_PROP_CONFIGURABLE);
+}
+
+/* See idl_args.h. §3.13.1's class string on a NAMESPACE object — the same §3.2 descriptor as an interface
+   prototype's tag, said through its own function because the object it is said about is a different kind and
+   the auditor that reads these statements must be able to tell them apart. */
+void idl_namespace_tag(JSContext *ctx, JSValueConst ns, const char *identifier)
+{
+    DCHECK(JS_IsObject(ns), "a §3.13.1 class string was installed on something that is not an object");
+    DCHECK(identifier != NULL && *identifier,
+           "a namespace object was tagged with no identifier — §3.13.1 makes the class string the NAMESPACE's "
+           "identifier, so there is nothing to write");
+    JS_DefinePropertyValue(ctx, (JSValue)ns, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
+                           JS_NewString(ctx, identifier), JS_PROP_CONFIGURABLE);
 }
 
 /* §3.7.10.2's ASYNCHRONOUS ITERATOR PROTOTYPE OBJECT is NOT an interface prototype object, and what it carries

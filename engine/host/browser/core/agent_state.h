@@ -35,7 +35,32 @@
  * IT IS TWO-SIDED FROM core/platform.c, WHICH IS WHERE THE FORCING LIVES. A row with a release that declares
  * no agent state is a release column nothing can check, and a row with NO release that declares agent state is
  * a component holding what nobody frees — the exact shape of every leak that file's comments record. Both are
- * asserted the moment the declaration pass ends, so neither can be reached by adding a component. */
+ * asserted the moment the declaration pass ends, so neither can be reached by adding a component.
+ *
+ * AND WHAT THIS COSTS: A FINALIZER AND A gc_mark RUN AFTER THE RELEASE COLUMN, SO NEITHER MAY READ A SLOT
+ * DECLARED HERE. This is the obligation the zeroing above creates, and it is stated here because here is where
+ * it is created. The collection that finalizes the PAGE'S object graph is not the release: a document's
+ * objects are held by their realm, the realm is released with the runtime, and platform_agent_free runs before
+ * both — so every host's teardown is `platform_agent_free()` … `JS_RunGC` … `JS_FreeRuntime` in that order, and
+ * this fork's JS_FreeRuntime has no sweep of survivors at all (it collects, then ASSERTS `gc_obj_list` empty).
+ * A component's finalizer therefore runs with its own class id already back at 0, and `JS_GetOpaque(val, 0)`
+ * answers NULL for every object of it. FOUR components were reached that way and each failed differently:
+ *   - core/geometry/dom_rect.c leaked the box and its four owned values for any page holding a
+ *     `getBoundingClientRect()` result — and its gc_mark was worse than the finalizer, because an unmarked
+ *     child keeps the internal reference gc_decref subtracts, so gc_scan reads it as rooted from OUTSIDE the
+ *     heap and it is never collected at all. Silent.
+ *   - core/file/file_system_handle.c leaked an FsLocator, its path array and its root string per live handle —
+ *     silent in dev AND release, because a malloc'd block appears in neither of JS_FreeRuntime's censuses.
+ *   - core/frame/remote_object.c already read the opaque correctly and then DCHECKed the live object's class
+ *     against the two ids its release had zeroed: a guaranteed FALSE `@WHY` for any live reference. THAT is
+ *     why the rule is "reads NO static its own release resets" and not "use JS_GetAnyOpaque".
+ *   - core/events/message_port.c stacked three, each masking the next, and aborted on any React page.
+ * SO: reach the record with JS_GetAnyOpaque — the collector dispatched to that function THROUGH the class, so
+ * the id is a fact it already has and must not look up — and give anything else the finalizer touches a
+ * lifetime that outlives the column (message_port.c's live-port table is released by the LAST port; the
+ * remote-navigable rows in core/frame/window_proxy.c are emptied so the later scan finds nothing). A slot whose
+ * value is legitimately non-pre-init at the release is NOT agent state in this header's sense and must not be
+ * declared: assert its pre-init value at the next `_init`, which is the moment it is true. */
 #ifndef ENGINE_HOST_BROWSER_CORE_AGENT_STATE_H
 #define ENGINE_HOST_BROWSER_CORE_AGENT_STATE_H
 

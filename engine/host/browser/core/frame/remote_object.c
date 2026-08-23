@@ -1111,13 +1111,24 @@ static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t session, uint32_t
     return proxy;
 }
 
+/* THE CLASS THIS RAN FOR IS NOT ASKED, AND THE ASSERT THAT ASKED IT WAS GUARANTEED TO FIRE. It compared `id`
+   against g_ref_class and g_ref_fn_class, both of which remote_object_free sets to 0 — and that release runs
+   BEFORE the collection which finalizes the page's object graph, so ANY reference a peer's document still held
+   at teardown reached this line with two zeroes to compare against and aborted on a `@WHY` about a defect that
+   was not there. Reading the opaque with JS_GetAnyOpaque was already right; the assert beside it was the whole
+   bug, which is why the rule is "a finalizer reads NO static its own release resets" and not "use
+   JS_GetAnyOpaque" (see core/agent_state.h). Nothing is lost by dropping it: the collector dispatches a
+   finalizer THROUGH the class whose JSClassDef names it, so the two reference classes are the only callers
+   there are, and the record is the same for both. */
 static void ref_finalizer(JSRuntime *rt, JSValue val)
 {
     JSClassID id = 0;
     RefData *r = JS_GetAnyOpaque(val, &id);
-    (void)rt;
-    DCHECK(id == g_ref_class || id == g_ref_fn_class,
-           "the cross-agent reference finalizer ran on an object of another class");
+    (void)rt; (void)id;
+    /* ref_mint attaches the identity with nothing between JS_NewObjectClass and JS_SetOpaque that allocates on
+       the JS heap or returns, so a reference target with no identity has never existed. */
+    DCHECK(r != NULL, "a cross-agent reference's target was finalized with no (doc, session, id) — ref_mint "
+                      "attaches one before the target can reach a proxy or a collection");
     free(r);
 }
 
@@ -1191,6 +1202,9 @@ void remote_object_free(JSContext *ctx)
     g_wk_n = 0;
     JS_FreeValue(ctx, g_refs);
     g_refs = JS_UNDEFINED;
+    /* THE TWO CLASS IDS COME BACK, and ref_finalizer therefore reads neither: the collection that finalizes a
+       reference target runs AFTER this call, so a class id is the one thing that cannot identify one by then.
+       See core/agent_state.h. */
     g_ref_class = g_ref_fn_class = 0;
     for (k = 0; k < REF_OP_N; k++) g_ref_stepid[k] = -1;
 }

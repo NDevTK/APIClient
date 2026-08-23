@@ -802,6 +802,14 @@ const TABLE_FORMS = [
    truth that could disagree in silence. */
 const IFACE_SEEDS = [
   { fn: "idl_interface_tag",  obj: 1, iface: 2 },
+  /* §3.13.1's CLASS STRING ON A NAMESPACE OBJECT is the same KIND of statement seen from the other side, which
+     is why it seeds the same table. An interface's members are installed on the object the §3.7.3 tag names —
+     its interface prototype object — and a NAMESPACE's members are installed on the object the §3.13.1 tag
+     names, the namespace object itself; §3.13.1 steps 2-4 put the attributes, the operations and the constants
+     directly on it. So "properties installed on the tagged object are this definition's members" is true of
+     both, and the two differ only in what the tagged object IS — which is exactly why the C says it with two
+     functions instead of one, so a reader of either side can tell which kind it is looking at. */
+  { fn: "idl_namespace_tag",  obj: 1, iface: 2 },
 ];
 const IFACE_OBJECT = { fn: "idl_interface_object", iface: 1, obj: 2 };
 /* §3.11.1's LEGACY CALLBACK INTERFACE OBJECT, which is a SEED and not a link. A callback interface has no

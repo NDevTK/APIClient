@@ -13,6 +13,7 @@
 #include "solver/world.h"   /* the routed record's world vector: whose timeline a delivery belongs to */
 #include "core/dom/document.h"   /* which DOCUMENT a parked program belongs to: the realm it is compiled in */
 #include "core/url/url.h"        /* §4.4's API base URL: what a joined document's own `<script src>` resolves against */
+#include "core/html/html_script.h"   /* …and §4.12.1.1's encoding-parse of `src` against it, stated once there */
 #include "core/loader/script_fetch.h"   /* HTML §8.1.4.2: where a fetched body becomes a script's source text */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent OPERATION: what performs it */
@@ -247,6 +248,20 @@ static JSContext *g_sess_ctx;
 static uint32_t g_sess_doc;
 static char **g_sess_bodies;
 static char **g_sess_srcs;
+/* …AND THE ADDRESS EACH EXTERNAL ROW'S `src` ACTUALLY NAMES. HTML §4.12.1.1 "Processing model": "Let url be the
+   result of encoding-parsing a URL given src, relative to el's node document" — the row above holds the RAW
+   ATTRIBUTE, which is a string in the markup and not an address at all, and until this array existed nothing in
+   the session path resolved it. Two things read the answer and both were wrong without it: the flow's fetch park
+   (a relative `src` handed to the host is resolved against whatever base the host happens to have — in the
+   extension, the offscreen document's own chrome-extension: URL) and the MODULE compile, where the URL is the
+   module map KEY and the base every nested specifier resolves against, so two `<script type=module src>` in one
+   document named by that document's address are ONE module and the second evaluates nothing.
+   THIS ARRAY IS THE ENGINE'S OWN, unlike the three borrowed columns beside it: the host's inventory carries what
+   the markup said and the resolution is this layer's answer about it. One entry per row, NULL for an inline row
+   (nothing to resolve) and NULL for a `src` that does not parse, which is §4.12.1.1's own next step — "if url is
+   failure … fire an event named error at el, and return", so that element runs no script. Allocated in
+   engine_sched_begin and freed in engine_session_close, which is the one place a session ends. */
+static char **g_sess_urls;
 /* …AND WHICH OF §8.1.3.3'S TWO ALGORITHMS EACH ENTRY IS. It travels with the sequence rather than being asked
    of the body because the body cannot answer: `await` at the top level parses in a module and is a SyntaxError
    in a classic script, so a scheduler that guessed would report the page's own module as a broken program.
@@ -2022,6 +2037,13 @@ static int engine_reclaim_set(int v);
  * parent's so a peer can materialize the arm's segment by forking the asker's. What differs is exactly the
  * decision state, which is why it is a PARAMETER here rather than read from a static: a branch has an arm to
  * record and an answer fork has none, and that is the whole of the difference between them.
+ *
+ * AND IT FORKS OVER CODE THE PAGE NEVER RAN — the third caller (engine_orphan_fork), which is where `clone`
+ * stops being a clone and the parameter's name stops being the whole truth. What a sibling needs is a FRAME TO
+ * RESUME, and a branch arm's happens to be a snapshot of its parent's while a driven orphan's is a fresh call
+ * of a function nothing has called (JS_FlowNewCall). Every line below is identical for the two, which is the
+ * statement worth making: an orphan drive is not a kind of flow this scheduler can distinguish — same delta
+ * fork, same DOM segment, same child world, same inherited queues and register, same rank.
  * `dec_blob` and `pin_blob` are CONSUMED — they become the sibling's. */
 static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
                                      void *dec_blob, void *pin_blob) {
@@ -2117,6 +2139,11 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
         sib->cand_sink = parent->cand_sink;   /* solve.c's static table text; not owned, so not copied */
         sib->cand_fired = parent->cand_fired;
     }
+    /* AND SO DOES BEING A DRIVEN ORPHAN, which is the same sentence about the third thing a flow can be: an arm
+       of an orphan drive is that drive continued, so it is no more reproducible from a decision vector than its
+       parent is and the cold tier must refuse it for the same reason. A sibling that lost the mark would be
+       written out as an ordinary flow and come back next session as a document replay that calls nothing. */
+    sib->orphan = parent->orphan;
     /* A FIELD ADDED TO THE CANDIDATE IDENTITY IS AN OBLIGATION HERE, and this is what says so — the same shape
        as the queued job's realm below, and for the same reason: the three fields are copied out one by one
        precisely so a fourth is visible, which is exactly how these three came to be missing. */
@@ -2370,6 +2397,143 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
    byte-identical — shared state can differ between the run and the re-run). A concolic branch inside an async
    body on the tramp chain now DFAILs in the engine (see branch_arm_fork) until the sound async-frame snapshot
    is built; there is no re-run fallback to hide that gap. */
+
+/* ORPHAN-INVOKE — the flows that make a page's UNCALLED code run, which is the whole of "learn the logged-in
+ * API surface while logged out". An SPA ships one bundle to everybody, so the admin handler, the billing route
+ * and the lazy chunk's export are all in the bytes a logged-out visitor receives; nothing calls them, so a
+ * sniffer sees nothing and a solver that only follows what the page does sees nothing either.
+ *
+ * IT IS NOT A PHASE AND NOT A DRIVER. Each orphan becomes one ORDINARY FLOW, assembled by the same
+ * engine_sibling_assemble an answer-fork arm uses — same delta fork, same DOM segment, same child world, same
+ * inherited queues, same WFQ rank — differing in exactly one thing: the frame it resumes is a CALL of the
+ * orphan rather than a clone of its parent's. So it is preemptible at every opcode, its branches fork siblings
+ * like any other flow's, it is ranked and starved and paged by the one policy, and nothing anywhere loops over
+ * orphans.
+ *
+ * WHEN. Here, at the ONE point where "nothing called this function" is a fact rather than a guess: the parent
+ * has no program left, no job, no timer, no rendering opportunity and no reply outstanding, so everything it
+ * was ever going to call, it has called. Taking them earlier — at a program's completion, say — would drive a
+ * function the NEXT program was about to call, with unknowns in place of the arguments the page had for it.
+ * Taking them later is what a phase would be.
+ *
+ * WITH WHAT ARGUMENTS. An orphan's parameters are unknown external input and are minted exactly as any other
+ * unknown is (concolic_new): domain-carrying, example-free, so a gate inside the body FORKS both arms instead
+ * of collapsing on a fabricated value. EACH ARGUMENT GETS ITS OWN SOURCE IDENTITY, and that is not decoration:
+ * the per-flow constraint tracker is keyed by source, so `function(a,b){ if (a=='x' && b=='y') sink(); }` with
+ * one shared identity records ==x and ==y against the SAME source, which is a contradiction, which PRUNES the
+ * arm that reaches the sink. The receiver is one more unknown for the same reason — a method driven with
+ * `undefined` throws on its first `this.field` in strict code and explores nothing.
+ * HOW MANY is the callee's OWN declared formal parameter count, which is the page's statement of how many
+ * unknowns its caller supplies; the old implementation passed a fixed eight to everything.
+ *
+ * WHAT STOPS IT RE-DRIVING FOREVER is that a body is TAKEN once (JS_OrphanTake consumes the bit that defines
+ * it) and that the flow it becomes is ranked like everything else: an orphan that emits nothing accumulates
+ * service, sinks below the productive and the unrun, and is paged to the cold tier. No seen-set, no counter,
+ * no cap — the old implementation had all three (a 4096-entry buffer compared by pointer) and the cap silently
+ * truncated the surface it existed to find.
+ *
+ * Returns how many flows it seeded; 0 means there was nothing to take, which is what lets the caller finish. */
+typedef struct {
+    JSValue *fn;   /* the taken function objects (owned refs) */
+    int     *argc; /* each one's declared formal parameter count */
+    int      n, cap;
+} OrphanTake;
+
+/* THE VISITOR, AND IT ONLY RECORDS. JS_OrphanTake calls it from inside the walk of the runtime's object list,
+   so creating a GC object here would insert into the list being iterated; the dup below is a refcount bump and
+   the growth uses the HOST allocator, which the runtime does not count. JS_OrphanTake asserts exactly that. */
+static void engine_orphan_record(JSContext *ctx, JSValueConst fn, int arg_count, void *opaque) {
+    OrphanTake *t = (OrphanTake *)opaque;
+
+    if (t->n == t->cap) {
+        int nc = t->cap ? t->cap * 2 : 16;
+        JSValue *nf = (JSValue *)realloc(t->fn, (size_t)nc * sizeof(JSValue));
+        int *na = (int *)realloc(t->argc, (size_t)nc * sizeof(int));
+        CHECK(nf && na, "engine: OOM recording the orphans taken off the heap — the bit that made each one an "
+                        "orphan has already been consumed, so a dropped entry is a function that can never be "
+                        "driven again in this session");
+        t->fn = nf; t->argc = na; t->cap = nc;
+    }
+    t->fn[t->n] = JS_DupValue(ctx, fn);
+    t->argc[t->n] = arg_count;
+    t->n++;
+}
+
+/* HOW MANY ORPHANS THIS DOCUMENT HAS DRIVEN, which is also each one's NAME. The source identity of an orphan's
+   k'th argument must be unique across the session — two orphans sharing one identity would have their gate
+   tokens accumulated into one another's constraint, which is the aliasing the per-argument identity above
+   exists to prevent, one level up. An ordinal is the only thing available that is unique: a function's `name`
+   is empty for half of a minified bundle and duplicated across the rest. Reported in the result document so a
+   run can say how much of the page's code was reached by nothing but this. */
+static long g_orphans_driven;
+/* AND THE GENERATION AT WHICH THIS DOCUMENT LAST WALKED THE HEAP. Creating a function object is the only event
+   that can add to the orphan set (JS_OrphanGen), so a walk at an unchanged generation can only find what the
+   previous one already took — and the walk is O(live objects) while a frontier has one finishing flow after
+   another asking. Not a memo about any orphan: it is the answer to "has anything happened", and being wrong in
+   the only direction it can be wrong (a 2^32 wrap) costs one redundant walk. */
+static uint32_t g_orphan_gen_seen;
+static int      g_orphan_gen_valid;
+
+static int engine_orphan_fork(JSContext *ctx, Flow *f) {
+    OrphanTake t = { NULL, NULL, 0, 0 };
+    uint32_t gen = JS_OrphanGen(JS_GetRuntime(ctx));
+    int i;
+
+    if (g_orphan_gen_valid && gen == g_orphan_gen_seen) return 0;
+    g_orphan_gen_seen = gen; g_orphan_gen_valid = 1;
+    JS_OrphanTake(ctx, engine_orphan_record, &t);
+    if (t.n == 0) { free(t.fn); free(t.argc); return 0; }
+
+    DCHECK(flow_running() == f,
+           "orphans were taken while another flow was switched in — the arms below fork THIS flow's delta, DOM "
+           "head and decision state, so they would be assembled out of a stranger's timeline and called the "
+           "discovering flow's");
+    DCHECK(f->frame == NULL,
+           "a flow took orphans with a suspended frame still live — the take happens where the flow has nothing "
+           "left to run, which is the only point at which 'nothing called this function' is a fact, and a live "
+           "frame means the flow was still going to call something");
+
+    for (i = 0; i < t.n; i++) {
+        long ord = g_orphans_driven++;
+        int argc = t.argc[i], k;
+        JSValue *args = NULL, self;
+        JSValue *base;
+        Flow *sib;
+        char id[64];
+
+        if (argc > 0) {
+            args = (JSValue *)malloc((size_t)argc * sizeof(JSValue));
+            CHECK(args, "engine: OOM minting a driven orphan's arguments");
+        }
+        for (k = 0; k < argc; k++) {
+            snprintf(id, sizeof id, "{orphan%ld.arg%d}", ord, k);
+            args[k] = concolic_new(ctx, id, id, JS_UNDEFINED);
+        }
+        snprintf(id, sizeof id, "{orphan%ld.this}", ord);
+        self = concolic_new(ctx, id, id, JS_UNDEFINED);
+
+        base = JS_FlowNewCall(ctx, t.fn[i], self, argc, (JSValueConst *)args);
+        CHECK(base != NULL, "engine: a driven orphan's call frame could not be allocated — the bit that made "
+                            "this function an orphan is already consumed, so there is no second chance at it");
+        sib = engine_sibling_assemble(ctx, f, base, decide_fork_same_path(), concolic_pins_suspend());
+        sib->orphan = 1;
+        /* AND THE FUNCTION IT RE-DRIVES, which is what flow.h says `fn` IS and what nothing had put there:
+           every flow_add in this engine passed JS_UNDEFINED, so the field's comment described a flow kind that
+           did not exist. It is the handle the park's missing 'o' record needs to name this drive (cold.c), and
+           it is what makes a walk of the frontier able to say which functions are being driven at all. The
+           assembly dup'd the PARENT's (undefined), so that reference is given back here. */
+        JS_FreeValue(ctx, sib->fn);
+        sib->fn = JS_DupValue(ctx, t.fn[i]);
+
+        /* JS_FlowNewCall dup'd the receiver and every argument into the frame; the mints are ours to release. */
+        JS_FreeValue(ctx, self);
+        for (k = 0; k < argc; k++) JS_FreeValue(ctx, args[k]);
+        free(args);
+        JS_FreeValue(ctx, t.fn[i]);
+    }
+    free(t.fn); free(t.argc);
+    return t.n;
+}
 
 
 /* `doc` IS WHICH DOCUMENT'S PROGRAM THIS IS, and it is a parameter at every entry rather than a fact the
@@ -3111,11 +3275,25 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                        bundle before the bundle is a different program. The text is the DOCUMENT's, not the
                        flow's: every flow runs the same bytes, so the reply fills the shared slot and every
                        waiting flow proceeds. */
+                    /* AND IT WAITS ON THE ADDRESS §4.12.1.1 RESOLVED, never on the raw attribute. `src` is
+                       markup — `"app.js"`, `"/assets/x.js"` — and the host is a different zone with a different
+                       base, so handing it the attribute asks it to guess: in the extension it would resolve
+                       against the offscreen document's own chrome-extension: URL and fetch nothing the page
+                       names. The reply seam is keyed on the string this line emits, so it is also the address
+                       engine_provide matches and the one the module compile names the record by. */
+                    const char *ext_url = g_sess_urls[f->script_i];
+                    /* §4.12.1.1's OWN NEXT STEP for the failure case: "If url is failure, then queue an element
+                       task on the DOM manipulation task source given el to fire an event named error at el, and
+                       return." So the element runs NO script and the sequence moves past it — this is the
+                       standard's branch, not a skip past a broken invariant (the row is intact; the markup names
+                       nothing parseable). What is still owed is that error event, which needs a task on this
+                       document rather than anything here. */
+                    if (!ext_url) { f->script_i++; return 0; }
                     /* A reply that has already arrived is delivered FIRST — this branch returns before the
                        drain below, so parking without checking would leave the flow owed forever on a URL the
                        host had already answered. */
                     if (flow_pending_ready(f)) { flow_drain_pending(ctx, f); return 0; }
-                    engine_pending_docscript(ctx, g_sess_srcs[f->script_i], f->script_i);
+                    engine_pending_docscript(ctx, ext_url, f->script_i);
                     return FLOW_STEP_OWED;
                 }
             }
@@ -3192,6 +3370,14 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                report hook — and what it means then is this half's answer, the same thing a script that threw
                means: a capability the page needed. Notifying clears the list, so the next pass finds none. */
             else if ((g_step_unit = "unhandled-rejection-notify", unhandled_rejection_notify(ctx))) return 0;
+            /* AND THE CODE THE PAGE SHIPPED AND NEVER RAN. Everything above this line is work the page ARRANGED
+               — a program, a job, a lifecycle event, a timer, a frame — and it is all done, which makes this
+               the first instant at which "nothing called this function" is a fact about this timeline rather
+               than a guess about a run that has not finished. Each such function becomes one ordinary flow of
+               this frontier (engine_orphan_fork); the seeding is progress like any other step, so the
+               scheduler re-ranks before any of them runs, and this flow asks again next time and finishes when
+               there is nothing left to take. */
+            else if (engine_orphan_fork(ctx, f)) { g_step_unit = "drive-orphans"; return 0; }
             else {
                 /* A FLOW MAY NOT FINISH HOLDING WORK. Every branch above claims to have offered its queue a
                    turn, so reaching here with a job still on it means one of them returned first and the job
@@ -3231,14 +3417,31 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                not the session's, and there is no upper limit on those (a same-origin agent cluster holds a
                realm per document). */
             JSContext *prog_ctx = doc_realm(flow_dyn_doc(f, n));
-            /* THE PROGRAM'S NAME IS ITS DOCUMENT'S ADDRESS, which is HTML §4.12.1's "let base URL be el's node
-               document's document base URL" for an inline script and is what a relative `import('./chunk.js')`
-               resolves against — the moat's whole lazy-chunk surface. This used to be NULL under a comment
-               saying the document URL was something "this host does not model yet", and that claim had stopped
-               being true: document_base_url is in a header this file already includes, and it is the ONE
-               component that owns what a document's address is. A name that is not the document's is also not a
-               name two documents can differ by, and the compile above is explicitly per-document. */
+            /* AN INLINE PROGRAM'S NAME IS ITS DOCUMENT'S ADDRESS, which is HTML §4.12.1.1's "let base URL be el's
+               node document's document base URL" for a script with no `src`, and is what a relative
+               `import('./chunk.js')` inside it resolves against — the moat's whole lazy-chunk surface. This used
+               to be NULL under a comment saying the document URL was something "this host does not model yet",
+               and that claim had stopped being true: document_base_url is in a header this file already
+               includes, and it is the ONE component that owns what a document's address is. A name that is not
+               the document's is also not a name two documents can differ by, and the compile above is explicitly
+               per-document. */
             const char *prog_name = document_base_url(prog_ctx);
+            /* …AND AN EXTERNAL ONE'S NAME IS ITS OWN ADDRESS, which is a different question with a different
+               answer and was being given this one. §4.12.1.1 hands its resolved `url` to §8.1.4.2, and both
+               algorithms there — "fetch a classic script" and "fetch an external module script graph" — create a
+               script whose BASE URL is that url rather than the document's. It decides answers in both of
+               §8.1.3.3's entries: a nested `import('./chunk.js')` inside a bundle served from `/assets/app.js`
+               is `/assets/chunk.js` and not `/chunk.js`, and for a MODULE the name is additionally the module
+               map KEY — so two `<script type=module src>` in one document, named by the address they share,
+               are ONE module, and the second one's graph finds the first one's record and evaluates nothing.
+               A modern app with several module entry points therefore loses all but one of them. */
+            if (f->script_i < n && g_sess_srcs[f->script_i]) {
+                DCHECK(g_sess_urls[f->script_i] != NULL,
+                       "an EXTERNAL document script reached the compile with no resolved address — §4.12.1.1's "
+                       "failure branch runs no script at all, so the wait above steps the sequence past such a "
+                       "row and only a row whose `src` encoding-parsed can arrive here with a body");
+                prog_name = g_sess_urls[f->script_i];
+            }
             /* A MODULE IS A DIFFERENT ALGORITHM, NOT A FLAG — §8.1.3.3 has two entries and this is where they
                part. A CLASSIC script is a program: JS_FlowNew wraps it in a preemptible frame the scheduler
                resumes, and it completes with a VALUE. A MODULE is a graph: it is linked and evaluated, its body
@@ -3251,18 +3454,9 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             int started;   /* did the program START? — a classic gets a frame, a module has already evaluated */
             if (stype == SCRIPT_TYPE_MODULE) {
                 JSValue ev;
-                /* AN EXTERNAL MODULE'S NAME IS ITS OWN URL, NOT ITS DOCUMENT'S, and unlike a classic script's
-                   name that difference decides answers: the name is the module map KEY and the base every
-                   nested specifier resolves against, so two `<script type=module src>` in one document keyed by
-                   the document's address are ONE module — the second one's graph would find the first one's
-                   record and evaluate nothing. The URL to key it by is §4.12.1's "encoding-parsing a URL given
-                   src, relative to el's node document", which is core/url's `url_parse` against the document's
-                   record; the sequence carries `src` as the raw ATTRIBUTE and nothing has resolved it. */
-                DCHECK(!(f->script_i < n && g_sess_srcs[f->script_i]),
-                       "an EXTERNAL module script reached the compile with only its document's address to be "
-                       "named by — its own URL is its module map key and its import resolution base, so build "
-                       "§4.12.1's encoding-parse of the src attribute against the document (core/url's "
-                       "url_parse with the document's record as base) and carry the resolved URL here");
+                /* `prog_name` IS THIS MODULE'S RECORD IDENTITY — see the name above. JS_FlowEvalModule asserts
+                   it is non-empty for the same reason: it keys the module map, it is `import.meta.url`, and it
+                   is the base the loader registers each fetched dependency under. */
                 ev = JS_FlowEvalModule(prog_ctx, body, strlen(body), prog_name, 0);
                 started = !JS_IsException(ev);
                 if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.3.3 step 6 */
@@ -3360,6 +3554,14 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             /* A <script>'s completion value is not observable to the page (only an eval API surfaces one), so it is
                taken and released here — never DISCARDED by the engine, which would hide a live value from the host. */
             JSValue cv = JS_UNDEFINED;
+            /* IS THE FRAME ABOUT TO RUN A PROGRAM OR A CALL — asked of the FRAME, before it can complete and be
+               freed, because the two completions mean different things below and nothing else can tell them
+               apart. A driven orphan's flow runs its call and then goes on to run whatever that call queued
+               (a lazy chunk it loaded is an ordinary program of this flow's sequence), so `f->orphan` says what
+               the FLOW is and this says what THIS completion is. The position in the sequence cannot answer it:
+               a row queued by the running call moves the cursor back inside the sequence while the call frame
+               is still live. */
+            int is_call = JS_FlowIsCall((JSValue *)f->frame);
             g_step_unit = "resume-program";
             int r = JS_FlowResume(ctx, (JSValue *)f->frame, &cv);
             /* A CROSS-AGENT OPERATION'S COMPLETION IS AN ANSWER, AND IT IS ASKED FIRST because the two readings
@@ -3368,6 +3570,19 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                the peer would resume with `undefined` where the spec propagates a throw. */
             if (r == 0 && flow_dyn_kind(f, n) == DYN_CROSS_AGENT_OP)
                 flow_answer_perform(ctx, f, n, cv);
+            /* A DRIVEN ORPHAN THAT THREW IS THE EXPLORATION SURFACE AND NOT A PAGE ERROR — the one completion
+               here that is nobody's defect. The page never called this function; this engine did, with unknown
+               input in place of every argument and the receiver, so `this.config.url` throwing a TypeError is
+               what forced execution ON UNKNOWN INPUT looks like when it works. CLAUDE.md names it in the list
+               of things that are deliberately not a `@WHY` ("a forced-exec flow THROWING on opaque/attacker
+               input"), and recording it as the page's would report a document error per uncalled function —
+               attributing to the bundle a throw that only this engine's invocation could produce. The throw is
+               CONSUMED rather than left live, which is the half that is not optional: the next thing to ask the
+               context anything would find it. */
+            else if (JS_IsException(cv) && f->orphan && is_call) {
+                JSValue e = JS_GetException(ctx);
+                JS_FreeValue(ctx, e);
+            }
             /* A SCRIPT THAT THREW names a capability the page needed and this engine does not have. Ending the
                flow there is intentional; losing WHICH capability was not. */
             else if (JS_IsException(cv)) {
@@ -3405,13 +3620,17 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                 f->frame = NULL; f->script_i++;
                 return 0;
             }
+            /* THE PROGRAM RAN TO ITS END — the ONE event that moves this document's completed depth, recorded
+               here because this is the only line in the engine at which a program's own completion is the fact
+               in hand. The three other sites that advance `script_i` are not completions and must not be
+               counted as ones: a module has evaluated to a PROMISE rather than a value, a detached base has
+               handed its continuation to an awaited promise, and a compile failure never started. See
+               g_completed.
+               A DRIVEN ORPHAN'S CALL IS A FOURTH, and the first one that is not a program at all: its frame
+               holds no row of the sequence, so its cursor is one PAST the last program and counting it would
+               report this document as having run a program it does not have. */
+            if (!is_call && f->script_i > g_completed) g_completed = f->script_i;
         }
-        /* THE PROGRAM RAN TO ITS END — the ONE event that moves this document's completed depth, recorded here
-           because this is the only line in the engine at which a program's own completion is the fact in hand.
-           The three other sites that advance `script_i` are not completions and must not be counted as ones: a
-           module has evaluated to a PROMISE rather than a value, a detached base has handed its continuation to
-           an awaited promise, and a compile failure never started. See g_completed. */
-        if (f->script_i > g_completed) g_completed = f->script_i;
         JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; f->script_i++;   /* this script done -> next */
         return 0;
     }
@@ -3620,6 +3839,16 @@ static void engine_session_close(void) {
     /* g_dom_capture is NOT cleared here any more: it is the flow stamp's twin and the SLICE owns both, so a
        second copy of the clear in this function would be a second place that has to agree with the bracket. It
        is off the instant this slice returns, which is also the instant this session's last flow stopped. */
+    /* AND THE ONE THING IN THE SESSION THIS ENGINE ALLOCATED RATHER THAN BORROWED. bodies/srcs/types are the
+       HOST's table and are freed by whoever built them (doc_scripts_free); g_sess_urls is §4.12.1.1's answer
+       ABOUT that table, computed here, so it is given back here — at the one point a session ends, which is the
+       same argument this function's own comment makes about the hooks. The count is g_sess_n, which nothing
+       clears: it is written once, at engine_sched_begin, and this is the line that consumes it. */
+    if (g_sess_urls) {
+        for (int i = 0; i < g_sess_n; i++) free(g_sess_urls[i]);
+        free(g_sess_urls);
+        g_sess_urls = NULL;
+    }
     g_sess_live = 0;
 }
 
@@ -3792,6 +4021,36 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     DCHECK(doc_realm(g_sess_doc) == ctx,
            "a session was opened with a realm that is not the root document's — the session's scripts are that "
            "document's programs, so they would be compiled in one realm and belong to another");
+    /* HTML §4.12.1.1 "Processing model": "Let url be the result of encoding-parsing a URL given src, relative to
+       el's node document." RESOLVED ONCE, HERE, because the standard computes this url ONCE per element and then
+       uses that one value for both of the things this engine asks it for — §8.1.4.2's fetch of the script and,
+       for a module, the record's [[HostDefined]] identity. Two call sites deriving an address separately is two
+       addresses for one script: the host would be asked for one and the module map keyed by the other.
+       AND IT IS THE DOCUMENT'S REALM THAT ANSWERS, not `ctx` incidentally: the assert above has just established
+       that they are the same realm, which is what makes reading the base here the same read the compile makes.
+       The whole sequence belongs to g_sess_doc — every other document's scripts arrive through
+       engine_join_document, which resolves against ITS realm. */
+    DCHECK(g_sess_urls == NULL,
+           "a session opened while the previous session's resolved script addresses were still allocated — this "
+           "array is the ENGINE's, so the assignment below would leak every string in it; engine_session_close "
+           "is the one place it is given back and it is the one place a session ends");
+    g_sess_urls = n ? (char **)calloc((size_t)n, sizeof(char *)) : NULL;
+    CHECK(n == 0 || g_sess_urls != NULL,
+          "engine: OOM resolving the session document's script addresses — a row left unresolved is a program "
+          "the frontier can never fetch and never name, so the document's own bundle would silently not run");
+    for (int i = 0; i < n; i++) {
+        /* EXACTLY ONE OF THE TWO, asserted at the row rather than at the read. document_exec_scripts states that
+           an entry is inline (a body) or external (an address) and never both or neither; a row that is neither
+           parks the flow on nothing for the rest of the session, and a row that is both would have its inline
+           text run under an address it did not come from. An external row's BODY is filled later by the reply
+           drain, which is why this holds only here, at the moment the borrow is taken. */
+        DCHECK((bodies[i] != NULL) != (srcs[i] != NULL),
+               "a row of the session document's script sequence is neither an inline body nor an external "
+               "address, or is both — document_exec_scripts states exactly one of the two for every executable "
+               "entry, and the compile below picks which of §8.1.3.3's algorithms runs it from that");
+        if (!srcs[i]) continue;   /* an inline script has no src to encoding-parse */
+        g_sess_urls[i] = script_src_absolute(ctx, srcs[i], strlen(srcs[i]));
+    }
     g_parked = 0;
     /* WHAT A SALE LEFT BEHIND IS THE INSTANCE'S TOO, AND A ZERO HERE WOULD FORGET IT RATHER THAN RESET IT.
        These three were assigned 0 at this line. Every host opens exactly ONE session per instance (main.c,
@@ -3931,22 +4190,13 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
             /* §4.4's API BASE URL IS THE JOINED DOCUMENT'S, not the session document's: `<script src=app.js>`
                in a document at `/app/child.html` is `/app/app.js`, and resolving it against the document the
                session happens to be rooted at is how a joined document's own bundle comes to be fetched from
-               another document's directory. */
-            UrlRecord base, rec;
-            const char *base_url = document_base_url(cctx);
-            bool have_base;
-            char *abs_url = NULL;
+               another document's directory. Which is why `cctx` — the joined document's realm — is what
+               §4.12.1.1's encoding-parse is asked of. */
+            char *abs_url = script_src_absolute(cctx, srcs[i], strlen(srcs[i]));
 
-            url_record_init(&base);
-            have_base = base_url && url_parse(&base, base_url, strlen(base_url), NULL);
-            url_record_init(&rec);
-            if (url_parse(&rec, srcs[i], strlen(srcs[i]), have_base ? &base : NULL))
-                abs_url = url_serialize(&rec, false);
-            url_record_free(&rec);
-            url_record_free(&base);
-            /* §4.12.1's OWN BRANCH for a `src` that does not parse — "return" — so the element runs no script.
-               It is the standard's answer and not a skip: what is still owed is the error event it fires at
-               the element, which needs a task on this document rather than anything here. */
+            /* §4.12.1.1's OWN NEXT STEP for a `src` that does not parse — "fire an event named error at el, and
+               return" — so the element runs no script. It is the standard's answer and not a skip: what is
+               still owed is that error event, which needs a task on this document rather than anything here. */
             if (!abs_url) continue;
             /* AT ITS POSITION, holding only its address until the reply fills it — see DYN_SCRIPT_SRC. */
             engine_queue_into(f, doc, abs_url, DYN_SCRIPT_SRC, NULL, DYN_POS_APPEND);
@@ -4801,6 +5051,13 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                 /* AND `completed` BESIDE `deepest`, because one number was carrying two facts and the readings
                    of it disagreed — see g_completed. `deepest` is the highest program STARTED; this is the
                    highest program this document has ever run to its END. */
+                /* AND `orphans` BESIDE THE THREE OF THEM, because they are all coverage facts about the
+                   DOCUMENT and this is the one that says how much of its code was reached by nothing but
+                   forced invocation. `deepest`/`completed` measure the sequence the page arranged; this counts
+                   the functions the page shipped and never called, each of which became a flow of this
+                   frontier. A page with a large bundle and a zero here is one whose uncalled surface is not
+                   being reached at all, which is the headline capability failing silently — see
+                   engine_orphan_fork. */
                 /* AND `hostAnswersLate`/`pagedReqs` BESIDE THEM, because a REFUSAL nobody can see is a drop.
                    The first counts the answers that arrived after this session closed and were refused rather
                    than written onto a flow that can never run again; the second is how many synchronous
@@ -4808,7 +5065,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                    engine_host_answer's remaining abort needs in order to tell which door the asking flow left
                    by, and neither decides anything. */
                 printf("@COLD {\"flows\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
-                       "\"finished\":%ld,\"deepest\":%d,\"completed\":%d,"
+                       "\"finished\":%ld,\"deepest\":%d,\"completed\":%d,\"orphans\":%ld,"
                        "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersLate\":%ld,\"pagedReqs\":%ld,"
                        "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                        "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
@@ -4817,7 +5074,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                        "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                        "\"sharedKiB\":%ld,\"stepMachines\":%d}\n",
                        c.flows, c.framed, c.blocked, flow_host_owed_count(),
-                       g_finished, g_deepest, g_completed, g_host_asked, g_host_answered,
+                       g_finished, g_deepest, g_completed, g_orphans_driven, g_host_asked, g_host_answered,
                        g_host_answers_late, g_paged_reqs,
                        c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                        c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
@@ -5027,6 +5284,13 @@ void solver_agent_free(JSContext *ctx)
            "released — core/dom/document.c claimed it at document_init and gives it back at "
            "document_agent_free, which is a row on core/platform.h's release column and therefore runs first");
     flow_registry_free(ctx);
+    /* THE ORPHAN COUNTER AND THE GENERATION IT LAST WALKED AT, given back with the frontier they describe. The
+       ordinal names an argument's source identity ({orphan7.arg0}) and the generation is a fact about ONE
+       runtime's heap, so an agent that started a second session on top of the first would mint identities that
+       collide with the previous session's constraints and would skip a walk over a heap that is not the one it
+       walked. Both are single words: the release is what makes them a session's rather than a process's. */
+    g_orphans_driven = 0;
+    g_orphan_gen_seen = 0; g_orphan_gen_valid = 0;
     attr_shadow_free(ctx);
     solve_free();
     endpoint_free();

@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "core/agent_state.h"
+#include "core/console/console.h"
 #include "core/css/media_query_list.h"
 #include "core/dom/abort.h"
 #include "core/dom/document.h"
@@ -106,6 +107,7 @@ typedef struct {
 
 /* ---- the agent half ------------------------------------------------------------------------------------- */
 
+static void d_console(JSContext *c, const PlatformAgent *a) { (void)a; console_init(c); }
 static void d_url(JSContext *c, const PlatformAgent *a) { (void)a; url_init(c); }
 static void d_usp(JSContext *c, const PlatformAgent *a) { (void)a; usp_init(c); }
 static void d_form_data(JSContext *c, const PlatformAgent *a) { (void)a; form_data_init(c); }
@@ -185,6 +187,7 @@ static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; mod
 
 /* ---- the agent half, undone ----------------------------------------------------------------------------- */
 
+static void r_console(JSRuntime *rt) { (void)rt; console_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
 static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
 static void r_navigate_event_fire(JSRuntime *rt) { (void)rt; navigate_event_fire_free(); }
@@ -402,6 +405,12 @@ static const PlatformComponent PLATFORM[] = {
        record is built in the DECLARE pass, which runs to the end before the first realm's intrinsics begin —
        so a row this early is not a row that reads a half-built agent. */
     { "hr_time",             d_hr_time,             NULL,        r_hr_time },
+    /* CONSOLE §1, WHICH DEPENDS ON EXACTLY ONE ROW AND IS DEPENDED ON BY NONE. §1.4's timer table reads
+       HR-TIME §4's current high resolution time, so it follows `hr_time`; nothing else in this list
+       touches the console namespace, and every row after it may CALL one — which is the argument for
+       putting it second rather than late. The namespace object goes on the global through a realm
+       intrinsic, so a child navigable gets its own count map, group stack and timer table. */
+    { "console",             d_console,             NULL,        r_console },
     { "url",                 d_url,                 i_url },
     { "url_search_params",   d_usp,                 i_usp },
     { "form_data",           d_form_data,           i_form_data },
@@ -601,6 +610,7 @@ static const int PLATFORM_N = (int)(sizeof PLATFORM / sizeof PLATFORM[0]);
  * them HERE is deliberate: this is the point at which the realm is finished, and whether the intrinsic list
  * and this list agree is precisely the question. */
 static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
+    { "console",               "console" },
     { "window",                "window" },
     { "onload",                "event_target" },
     { "document",              "document" },
