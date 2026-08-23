@@ -915,13 +915,28 @@ function metaScripts(file) {
    Everything a test FETCHES already goes through the real server; a META script is the one input the driver
    hands over itself, so it is the one that has to be fetched here. Memoized: the same helper is named by many
    files and substitution is the server's work, not this loop's. */
+/* AND A SERVER THAT WILL NOT SERVE ONE IS A THIRD ANSWER, NEVER THE BYTES ON DISK. This line was
+   `if (!r.ok) return dep;`, excused by "the missing-dep report below names it" — and that claim is FALSE for
+   the only case that arises: the report below is `existsSync`, the file IS checked out, so it passed, and the
+   driver handed the runner THE TEMPLATE. That is not a degraded result, it is the exact defect the paragraph
+   above this function exists to have fixed, re-created silently on the failure path — `get_host_info()` reading
+   back `http://{{hosts[alt][]}}`, which is not a URL.
+   MEASURED, NOT SUSPECTED: `service-workers/service-worker/resources/test-helpers.sub.js` answers HTTP 500,
+   because wptserve's `sub` pipe raised IndexError on `{{ports[wss][0]}}` against a config that declared no
+   `wss` — engine/wptserve.py now declares it, and this branch is what kept that invisible while ten collected
+   runs named the helper. A FALLBACK IS WHY THE ROOT SURVIVED, so it goes with the root fix rather than after
+   it: with nothing to fall back to, the next scheme the config forgets is an ABORT naming the file and its
+   status instead of a family of tests quietly measuring a template.
+   The failure is MEMOIZED like the success — the same helper is named by many files, and re-fetching a 500 per
+   file made one server fault look like many. */
 const g_subbed = new Map();
+const g_unserved = new Map();
 async function substituted(dep) {
   if (!/\.sub\.[a-z]+$/.test(dep)) return dep;
   if (g_subbed.has(dep)) return g_subbed.get(dep);
   const path = "/" + relative(WPT, dep).split(sep).join("/");
   const r = await fetch("http://" + serverAddr + path);
-  if (!r.ok) return dep;   /* the corpus server does not serve it; the missing-dep report below names it */
+  if (!r.ok) { g_unserved.set(path, r.status); g_subbed.set(dep, null); return null; }
   const out = join(dirname(bin), relative(WPT, dep).split(sep).join("__"));
   writeFileSync(out, await r.text());
   g_subbed.set(dep, out);
@@ -965,6 +980,20 @@ for (const { file: f, kind, variant } of runs) {
       continue;
     }
     const deps = (await Promise.all(meta.map(substituted)));
+    /* ASKED BEFORE `existsSync`, AND NOT ONLY BECAUSE A NULL WOULD THROW THERE. The two are different
+       diagnoses and must not read alike: a META script the sparse checkout does not have is fixed by widening
+       WPT_PATHS, and one the SERVER would not serve is on disk already and is fixed in engine/wptserve.py.
+       Reporting the second as the first would send the reader to add a directory that is present. */
+    const unserved = deps.map((d, i) => (d === null ? meta[i] : null)).filter(Boolean)
+                         .map((d) => "/" + relative(WPT, d).split(sep).join("/"));
+    if (unserved.length) {
+      aborted++; area.aborted++;
+      failures.push(`  ABORT  ${rel}\n         a .sub META script the corpus server would not serve: ` +
+                    unserved.map((p) => `${p} (HTTP ${g_unserved.get(p)})`).join(", ") +
+                    "\n         it is a TEMPLATE, so its bytes on disk are not the file this test is written " +
+                    "against — see the wptserve log named above for the traceback");
+      continue;
+    }
     const missing = deps.filter((d) => !existsSync(d));
     if (missing.length) {
       /* A META script the sparse checkout does not have is a GATE defect, not a test result: the file would run

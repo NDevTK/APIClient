@@ -34,15 +34,23 @@ if port == 0:
     port = _s.getsockname()[1]
     _s.close()
 
-# THE CORPUS IS WRITTEN AGAINST FOUR PORTS, not one. common/get-host-info.sub.js — which most cross-origin
+# THE CORPUS IS WRITTEN AGAINST SIX PORTS, not one. common/get-host-info.sub.js — which most cross-origin
 # tests in html/browsers name in their META block — substitutes ports[http][0], ports[http][1], ports[https][0]
 # and ports[https][1]. A config declaring ONE http port does not merely give a wrong answer for the others:
 # wptserve's `sub` pipe indexes the list and raises IndexError, so the SERVER answers 500 for the helper
 # itself. Every test that merely imports it then runs with `get_host_info()` undefined or with literal
 # `{{hosts[alt][]}}` text in its origins, which is why cross-origin `window.open` reported "the URL to open is
 # not a URL" and every test built on one timed out. One missing port in a config silenced a family of tests.
+#
+# AND `ws`/`wss` ARE THE SAME SENTENCE ONE SCHEME ALONG, which stood unfixed because a fallback in
+# engine/wpt.mjs was hiding it: service-workers/service-worker/resources/test-helpers.sub.js substitutes
+# `{{ports[wss][0]}}`, this config declared no such scheme, `_get_ports` therefore emitted no list for it, and
+# `value[field]` raised the identical IndexError — measured, HTTP 500 on the helper itself. tools/serve/
+# serve.py's own default config declares `"ws": ["auto"], "wss": ["auto"]`, which is what the corpus is written
+# against, so they are declared here too. A SCHEME MISSING FROM THIS DICT IS NOT A FEATURE THIS SERVER LACKS —
+# it is a 500 on every shared helper that names it, which reports nothing about any test that imports one.
 _extra = []
-for _ in range(3):
+for _ in range(5):
     _s = socket.socket()
     _s.bind(("127.0.0.1", 0))
     _extra.append(_s.getsockname()[1])
@@ -56,6 +64,18 @@ from wptserve import server, handlers, stash, routes as default_routes, config a
 # The routes tools/serve/serve.py builds for a plain HTTP virtual host, in its order: the rewrites and special
 # paths it declares, then the python-script handler for `.py`, then the file handler for everything else.
 routes = default_routes.routes
+
+# THE REWRITES, WHICH THIS FILE'S OWN DOCSTRING CLAIMED IT APPLIED AND DID NOT. `WebTestHttpd` takes them as a
+# constructor argument — tools/serve/serve.py passes `rewrites=rewrites` to every server it starts — and the
+# two constructions below passed nothing, so `/resources/WebIDLParser.js` answered 404 while the file it names
+# answered 200. MEASURED, and it is not a hypothetical path: `dom/observable/tentative/idlharness.html` loads
+# it with a `<script src>`, so that collected run was reported as "a <script src> the corpus does not serve" —
+# a diagnosis that is false about the corpus and sends the reader to widen WPT_PATHS for a file that is
+# present. (A `// META: script=` naming it is resolved on DISK by engine/wpt.mjs's own one-entry table, which
+# is why the `.any.js` idlharness files were unaffected and this stayed invisible.)
+# IMPORTED, NEVER RETYPED, for the reason every other line here defers to the corpus's own tools: a table
+# copied into this file is a second authority free to drift from the one the corpus is written against.
+from serve.serve import rewrites  # noqa: E402
 
 # THE HOST NAMES THE CORPUS IS WRITTEN AGAINST. A `.sub.html` is a TEMPLATE: wptserve's `sub` pipe replaces
 # `{{host}}`, `{{hosts[alt][]}}` and `{{ports[http][0]}}` with the names and ports the run is using, which is
@@ -79,7 +99,15 @@ _cfg = wptconfig.ConfigBuilder(_Log(),
                                # shared helper 500, which reports nothing for every test that imports it,
                                # including the ones that never touch https. Serving them needs TLS and a
                                # certificate, which is the next thing to build here.
-                               ports={"http": [port, _extra[0]], "https": [_extra[1], _extra[2]]},
+                               # `ws`/`wss` ARE DECLARED AND NOT SERVED, for the reason the https pair above is
+                               # and with the same trade read the same way: a declared-but-unserved port makes
+                               # a test that actually OPENS a WebSocket fail to connect — one honest failure in
+                               # the test that reaches for it — while leaving the scheme out of this dict makes
+                               # the shared helper 500 and reports nothing for every test that merely imports
+                               # it, including the ones that never open a socket. Serving them needs
+                               # tools/serve's pywebsocket handlers, which is the next thing to build here.
+                               ports={"http": [port, _extra[0]], "https": [_extra[1], _extra[2]],
+                                      "ws": [_extra[3]], "wss": [_extra[4]]},
                                # THE HTTPS PORTS ONLY SURVIVE THE CONFIG IF SSL IS CONFIGURED. ConfigBuilder
                                # PRUNES a scheme it has no certificate for, so `ports={"https": [...]}` alone
                                # left the list empty and `{{ports[https][0]}}` raised IndexError exactly as a
@@ -110,12 +138,14 @@ _stash_port.close()
 
 with stash.StashServer(_stash_addr, authkey=str(uuid.uuid4())), _cfg as cfg:
     httpd = server.WebTestHttpd(host="127.0.0.1", port=port, doc_root=root, routes=routes,
+                                rewrites=rewrites,
                                 config=cfg, use_ssl=False, key_file=None, certificate=None)
     httpd.start()
     # THE SECOND HTTP PORT ANSWERS TOO. `{{ports[http][1]}}` is how the corpus names "same host, different
     # origin"; a port the config declares and nothing listens on would hand those tests an address that
     # answers nothing — the same defect the reservation above exists to avoid, one index along.
     httpd2 = server.WebTestHttpd(host="127.0.0.1", port=_extra[0], doc_root=root, routes=routes,
+                                 rewrites=rewrites,
                                  config=cfg, use_ssl=False, key_file=None, certificate=None)
     httpd2.start()
     sys.stdout.write("READY %d\n" % httpd.port)
