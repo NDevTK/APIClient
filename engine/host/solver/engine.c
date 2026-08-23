@@ -5681,6 +5681,48 @@ static int engine_sched_slice(void) {
             int prev_reclaim = engine_reclaim_set(1);
             int r = flow_step(ctx, cur);
             engine_reclaim_set(prev_reclaim);
+            /* A STEP TAKES THE COMPLETION OF WHATEVER IT RAN, AND THIS IS THE ONE LINE THAT CAN SAY WHICH STEP
+             * DID NOT. `rt->current_exception` is per-RUNTIME while a completion is per-EVALUATION (ECMA-262
+             * §6.2.4 The Completion Record Specification Type; §5.2.4.3 Shorthands for Unwrapping Completion
+             * Records — "?" propagates an abrupt completion TO THE CALLER), so a throw a step leaves standing is
+             * delivered to whatever the scheduler runs next, and under an interleaving host that is another
+             * flow's timeline. The engine already refuses to start a flow over one (JS_FlowResume's entry
+             * DCHECK) — but the engine can only say the completion belongs to somebody else, because by then
+             * the step that produced it has returned and nothing in the runtime records which step that was.
+             *
+             * THE HOST IS THE PARTY WITH THE OBLIGATION, so the assert belongs here: flow_step has one caller
+             * and a dozen arms, `g_step_unit` names the arm that just ran, and the two together turn "some
+             * earlier step" into "the `<unit>` arm". The pair also BISECTS, which is the reason both stand: if
+             * this one fires, an ARM of flow_step leaked; if only the engine's does, the leak is in the
+             * scheduler's own work BETWEEN steps, and there is no third place for it to be.
+             *
+             * The throw is TAKEN to describe it, which is sound because DFAIL does not return — the state after
+             * this line is an abort, so nothing observes the empty slot. */
+#if APICLIENT_DEV
+            if (JS_HasException(ctx)) {
+                JSValue le = JS_GetException(ctx);
+                char et[320], why[900];
+
+                result_error_text(ctx, le, et, sizeof et);
+                /* THE PARK STATE IS PRINTED BESIDE THE UNIT because it is the one thing that tells two of the
+                   four doors apart. `JS_CallAsFlow` reports 0 for a settle that PARKED as well as for one that
+                   COMPLETED — its own contract says "0 = done, -1 = it threw" and has no third answer — so a
+                   drain arm that ran page code which suspended looks, from the host, exactly like one that ran
+                   it to the end. A park standing here says the delivery is suspended and the completion is not
+                   this arm's to have taken; no park says the arm finished and dropped it. */
+                snprintf(why, sizeof why,
+                         "a flow step returned with a completion still live in the runtime — the `%s` arm ran "
+                         "page code and did not take the throw it produced, so the next flow the scheduler "
+                         "resumes would receive a completion §6.2.4 says belongs to this one. Take it where it "
+                         "is produced: a program's through JS_FlowResume's `pres`, a job's at the job, a parked "
+                         "continuation's through JS_ResumeParkedFlow's `pres`, a delivery's at JS_CallAsFlow. "
+                         "step=%d parked=%d step_result=%d. The throw was: %s",
+                         g_step_unit, cur->script_i, JS_HasParkedFlow(JS_GetRuntime(ctx)) ? 1 : 0, r,
+                         *et ? et : "(a throw this engine could not describe)");
+                JS_FreeValue(ctx, le);
+                DFAIL(why);
+            }
+#endif
             /* HTML §8.1.7.3's END OF A MICROTASK CHECKPOINT. The flow has run a unit of work — a script, a
                microtask, a task — and if it holds no microtask the queue has drained, which is the moment
                HTML runs the steps other standards register there. It is asked HERE rather than inside
