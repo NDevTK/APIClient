@@ -4993,6 +4993,28 @@ static int fixture_have_answers(void) {
     /* A SAMPLE, so a 0 row is INCOMPLETE and not a failure — this hook's whole question is whether every row is
        1 YET, and the run continues when the answer is no. */
     ok = probes_report(js, false);
+    /* …AND THE @S SEARCHES THEMSELVES, BECAUSE THIS IS THE ONLY PLACE THEY CAN BE OBSERVED AT ALL. The probe
+       row says whether a sink FIRED and nothing about how far the search that is trying to got — that is what
+       the parked entry's own numbers are for (solve.h: tried, turns, reached, survived/survivedOf, escaped,
+       payloads), and every one of them was being composed here, 1382 times in one run, and freed unread.
+       THE COMPLETION PRINT CANNOT SUBSTITUTE FOR IT: `@RESULT` runs after run_scheduler returns, and a run
+       whose frontier does not drain is killed by build.mjs's backstop before it gets there — so on exactly the
+       runs where the @S half is stuck, the document exists 1382 times and is printed zero times.
+       A TIME SERIES AND NOT A SNAPSHOT, which is the fact the reader needs and a final print could not give
+       even if it ran: `tried` going 1 -> 2 on a derived class IS the context probe arriving and its derivation
+       returning a breakout, and `tried` sitting at 1 for the whole run is that probe never arriving. Those are
+       the two states a `reached:0` row cannot distinguish, and they take opposite work.
+       IT IS THE SHIPPED WRITER'S OWN BYTES (solve_json_array, which is what result.c embeds), never a
+       re-derivation out of `js` — §Testing: measure what the shipped path writes, or the number is a property
+       of the instrument. */
+    {
+        char *sj = solve_json_array(g_probe_ctx);
+        CHECK(sj, "the fixture could not render the @S search array — the parked entries are the only statement "
+                  "this run makes about a security search that has not solved, and a sample without them "
+                  "reports the @S half as silent when it is merely unprinted");
+        printf("@S %s\n", sj);
+        free(sj);
+    }
     free(js);
     return ok;
 }
