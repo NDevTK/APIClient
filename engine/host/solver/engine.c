@@ -4155,6 +4155,64 @@ static int flow_checkpoint_due(const Flow *f) {
    set by the branch that is about to run, so a step with no seam names itself. */
 static const char *g_step_unit = "(none)";
 
+/* NO COMPLETION CROSSES A SCHEDULER BOUNDARY — ONE STATEMENT, ASKED AT EVERY BOUNDARY THERE IS.
+ *
+ * `rt->current_exception` is per-RUNTIME while a completion is per-EVALUATION (ECMA-262 §6.2.4 The Completion
+ * Record Specification Type; §5.2.4.3 Shorthands for Unwrapping Completion Records — "?" propagates an abrupt
+ * completion TO THE CALLER, never to whatever runs next). Under an interleaving host those are different
+ * timelines, so a throw left standing anywhere the scheduler passes is delivered to a flow that did not produce
+ * it. The engine refuses to START a flow over one (JS_FlowResume's entry DCHECK) — but that is the VICTIM's
+ * end: by the time it fires, whatever produced the completion has returned and nothing records what it was.
+ *
+ * SO THE BOUNDARIES ARE ASKED, AND THEY PARTITION THE WHOLE OF THE SCHEDULER'S OWN TIME. There are exactly
+ * four, and between them there is no unwatched region left:
+ *   slice-entry  — the HOST's own time between two slices (a fetch reply parsed into a record, a delivery
+ *                  routed, a synchronous answer written) plus, on the first slice, everything the session
+ *                  setup did before any flow existed;
+ *   pre-step     — the scheduler's own pick: solve_seed_candidates, flow_next_to_run, the context switch
+ *                  (flow_switch_out/in, the COW and DOM delta swap, decide/pins resume) and solve_flow_begin;
+ *   post-step    — the arm flow_step just ran (this one has fired for nobody, which is what established that
+ *                  every arm in flow_step takes its own completion);
+ *   slice-exit   — the scheduler's tail after the step: HTML §8.1.7.3's end-of-checkpoint hook, the aging
+ *                  charge, and flow_finish.
+ * Whichever one fires NAMES the segment, and the four together are a checked contract rather than a probe:
+ * they say, permanently, that the scheduler's own time never carries a page's completion.
+ *
+ * The throw is TAKEN to describe it, which is sound because DFAIL does not return — the state after that call
+ * is an abort, so nothing observes the emptied slot. Compiled out entirely in release. */
+#if APICLIENT_DEV
+static void engine_no_stray_completion(JSContext *ctx, const char *where, int detail)
+{
+    JSValue le;
+    char et[320], why[900];
+
+    if (ctx == NULL || !JS_HasException(ctx))
+        return;
+    le = JS_GetException(ctx);
+    result_error_text(ctx, le, et, sizeof et);
+    /* THE PARK STATE IS PRINTED BESIDE THE UNIT because it separates two readings of one segment that are
+       otherwise identical from outside. `JS_CallAsFlow` answers 0 for a settle that PARKED as well as for one
+       that COMPLETED — its own contract is "0 = done, -1 = it threw" and has no third answer — so a delivery
+       that ran page code which suspended looks exactly like one that ran it to the end. A park standing here
+       says the work is suspended and the completion was never this segment's to take; no park says the segment
+       finished and dropped it. */
+    snprintf(why, sizeof why,
+             "a completion was still live in the runtime at a SCHEDULER BOUNDARY — at `%s`, after the `%s` "
+             "step unit. The exception slot is per-RUNTIME and a completion is per-EVALUATION (§6.2.4), so the "
+             "next flow resumed would receive a throw §5.2.4.3 says belongs to whoever asked for the "
+             "evaluation that produced it. Take it where it is produced: a program's through JS_FlowResume's "
+             "`pres`, a job's at the job, a parked continuation's through JS_ResumeParkedFlow's `pres`, a "
+             "delivery's at JS_CallAsFlow. parked=%d detail=%d. The throw was: %s",
+             where, g_step_unit, JS_HasParkedFlow(JS_GetRuntime(ctx)) ? 1 : 0, detail,
+             *et ? et : "(a throw this engine could not describe)");
+    JS_FreeValue(ctx, le);
+    DFAIL(why);
+}
+#define ENGINE_NO_STRAY(ctx, where, detail) engine_no_stray_completion((ctx), (where), (detail))
+#else
+#define ENGINE_NO_STRAY(ctx, where, detail) ((void)0)
+#endif
+
 /* DECLARED ABOVE THE ONE FUNCTION THAT WRITES THEM, because flow_step is where a program is compiled and
    where a flow is finished — the two events these count. The commentary on what each MEANS stays with the
    accessors that publish them; this is the definition, and it has to precede its first use. */
@@ -5679,50 +5737,16 @@ static int engine_sched_slice(void) {
                rather than at one hand-picked call site. Restored rather than cleared, because the step can
                reach this loop again through a nested driver. */
             int prev_reclaim = engine_reclaim_set(1);
+            /* THE SCHEDULER'S OWN PICK IS BEHIND THIS LINE — solve_seed_candidates, flow_next_to_run, the
+               context switch and solve_flow_begin have all run, and the flow is switched in but has not
+               executed an instruction. `detail` is the switch count, which says whether this iteration
+               performed one: a stray completion with the count unchanged is the seeding or the pick, and one
+               with it just incremented is the swap. */
+            ENGINE_NO_STRAY(ctx, "pre-step: the scheduler's pick, the context switch and the delta swap",
+                            g_switches);
             int r = flow_step(ctx, cur);
             engine_reclaim_set(prev_reclaim);
-            /* A STEP TAKES THE COMPLETION OF WHATEVER IT RAN, AND THIS IS THE ONE LINE THAT CAN SAY WHICH STEP
-             * DID NOT. `rt->current_exception` is per-RUNTIME while a completion is per-EVALUATION (ECMA-262
-             * §6.2.4 The Completion Record Specification Type; §5.2.4.3 Shorthands for Unwrapping Completion
-             * Records — "?" propagates an abrupt completion TO THE CALLER), so a throw a step leaves standing is
-             * delivered to whatever the scheduler runs next, and under an interleaving host that is another
-             * flow's timeline. The engine already refuses to start a flow over one (JS_FlowResume's entry
-             * DCHECK) — but the engine can only say the completion belongs to somebody else, because by then
-             * the step that produced it has returned and nothing in the runtime records which step that was.
-             *
-             * THE HOST IS THE PARTY WITH THE OBLIGATION, so the assert belongs here: flow_step has one caller
-             * and a dozen arms, `g_step_unit` names the arm that just ran, and the two together turn "some
-             * earlier step" into "the `<unit>` arm". The pair also BISECTS, which is the reason both stand: if
-             * this one fires, an ARM of flow_step leaked; if only the engine's does, the leak is in the
-             * scheduler's own work BETWEEN steps, and there is no third place for it to be.
-             *
-             * The throw is TAKEN to describe it, which is sound because DFAIL does not return — the state after
-             * this line is an abort, so nothing observes the empty slot. */
-#if APICLIENT_DEV
-            if (JS_HasException(ctx)) {
-                JSValue le = JS_GetException(ctx);
-                char et[320], why[900];
-
-                result_error_text(ctx, le, et, sizeof et);
-                /* THE PARK STATE IS PRINTED BESIDE THE UNIT because it is the one thing that tells two of the
-                   four doors apart. `JS_CallAsFlow` reports 0 for a settle that PARKED as well as for one that
-                   COMPLETED — its own contract says "0 = done, -1 = it threw" and has no third answer — so a
-                   drain arm that ran page code which suspended looks, from the host, exactly like one that ran
-                   it to the end. A park standing here says the delivery is suspended and the completion is not
-                   this arm's to have taken; no park says the arm finished and dropped it. */
-                snprintf(why, sizeof why,
-                         "a flow step returned with a completion still live in the runtime — the `%s` arm ran "
-                         "page code and did not take the throw it produced, so the next flow the scheduler "
-                         "resumes would receive a completion §6.2.4 says belongs to this one. Take it where it "
-                         "is produced: a program's through JS_FlowResume's `pres`, a job's at the job, a parked "
-                         "continuation's through JS_ResumeParkedFlow's `pres`, a delivery's at JS_CallAsFlow. "
-                         "step=%d parked=%d step_result=%d. The throw was: %s",
-                         g_step_unit, cur->script_i, JS_HasParkedFlow(JS_GetRuntime(ctx)) ? 1 : 0, r,
-                         *et ? et : "(a throw this engine could not describe)");
-                JS_FreeValue(ctx, le);
-                DFAIL(why);
-            }
-#endif
+            ENGINE_NO_STRAY(ctx, "post-step: the arm flow_step just ran", r);
             /* HTML §8.1.7.3's END OF A MICROTASK CHECKPOINT. The flow has run a unit of work — a script, a
                microtask, a task — and if it holds no microtask the queue has drained, which is the moment
                HTML runs the steps other standards register there. It is asked HERE rather than inside
@@ -6152,7 +6176,21 @@ int engine_sched_step(void) {
     JS_SetFlowGen(g_slice_flow_gen);
     g_dom_capture = 1;
     cow_set_current(g_slice_delta);
+    /* THE HOST'S OWN TIME IS BEHIND THIS LINE, and on the first slice so is everything the session setup did
+       before any flow existed — the two cases the other three boundaries cannot see. Between two slices the
+       host parses a fetch reply into a record, routes a delivery and writes a synchronous answer, all of which
+       build JS values; a throw any of them leaves standing belongs to no flow at all, and the slice below would
+       hand it to whichever flow it resumes first. `detail` is the session's live flag, which distinguishes
+       "before the session was opened" from "between two of its slices". */
+    ENGINE_NO_STRAY(g_sess_ctx, "slice-entry: the host's own time between slices (and the session setup before "
+                                "the first one)", g_sess_live);
     r = engine_sched_slice();
+    /* …AND THE SCHEDULER'S TAIL, which is the fourth segment: HTML §8.1.7.3's end-of-checkpoint hook, the aging
+       charge and flow_finish all run after the post-step boundary inside the loop, so this is the only line
+       that watches them. Asked BEFORE the marks below are put back, so what it reports is the state the slice
+       actually ended in. */
+    ENGINE_NO_STRAY(g_sess_ctx, "slice-exit: the scheduler's tail after the last step "
+                                "(§8.1.7.3's end-of-checkpoint hook, the aging charge, flow_finish)", r);
     g_slice_flow_gen = JS_FlowGen();   /* the forks this slice took moved it; carry them, never restart */
     JS_SetFlowGen(0);                  /* the host's own time is baseline: what it creates is shared by construction */
     g_dom_capture = 0;
