@@ -2269,8 +2269,13 @@ static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc
     return r;
 }
 
-/* §4.2.7 ChildNode — on Element, CharacterData and DocumentFragment, which is why it is a table the interfaces
-   that DECLARE it ask for rather than members on Node.prototype: `document.remove()` is not a thing. */
+/* DOM §4.2.8 Mixin ChildNode — `Element includes ChildNode`, `CharacterData includes ChildNode` and
+   `DocumentType includes ChildNode`, which is why it is a table the interfaces that DECLARE it ask for rather
+   than members on Node.prototype: `document.remove()` is not a thing.
+   THE NUMBER AND THE INTERFACE LIST WERE BOTH WRONG HERE — "§4.2.7" is Mixin NonDocumentTypeChildNode (built
+   below), and the third includer is DocumentType, not DocumentFragment (a fragment has no parent to be
+   removed from). document_type.c really does install this table, so the comment was describing a program
+   nobody wrote; the title beside the number is what makes the next reader able to see that. */
 /* `undefined before((Node or DOMString)... nodes)` and the three beside it — the union and the variadic tail
    are both DECLARED, so every argument is a Node or a real string by the time the body runs. */
 static const IdlArgType MIXIN_NODES[1] = { IDL_STRING_UNLESS_IFACE };
@@ -2279,8 +2284,10 @@ static const NodeMixinMember CHILD_NODE_MIXIN[] = {
     { "remove", 0, 0 }, { "before", 1, 1 }, { "after", 1, 2 }, { "replaceWith", 1, 3 },
 };
 
-/* §4.2.8 ParentNode's insertion half — on Element, Document and DocumentFragment. querySelector and children
-   are the same mixin and already live on the interfaces that declare them. */
+/* DOM §4.2.6 Mixin ParentNode, its insertion half — `Document includes ParentNode`, `DocumentFragment
+   includes ParentNode`, `Element includes ParentNode`. querySelector and children are the same mixin and
+   already live on the interfaces that declare them. (The number read "§4.2.8", which is Mixin ChildNode:
+   this file cited two different sections for ParentNode and neither reader could tell which was the typo.) */
 static const NodeMixinMember PARENT_NODE_MIXIN[] = {
     { "append", 1, 4 }, { "prepend", 1, 5 }, { "replaceChildren", 0, 6 },
 };
@@ -2379,6 +2386,52 @@ static const JSCFunctionListEntry js_parent_node_reads[] = {
     JS_CGETSET_MAGIC_DEF("lastElementChild", js_node_element_children, NULL, 2),
     JS_CGETSET_MAGIC_DEF("childElementCount", js_node_element_children, NULL, 3),
 };
+
+/* DOM §4.2.7 Mixin NonDocumentTypeChildNode — the sibling half of the tree walk, and the ONE §4.2 mixin this
+   engine had none of. Its two getters "return the first preceding/following sibling that is an element;
+   otherwise null", so they are the same walk as §4.2.6's firstElementChild in the other direction, over a tree
+   this engine already holds: no layout, no device, no unknown.
+   IT IS THE SILENT KIND OF GAP, which is why it is built rather than left on a list. An absent ATTRIBUTE is
+   `undefined` — JS_GetPropertyInternal's absent hook fires only for the global object, so a miss on an element
+   is a plain undefined with nothing to say so — and real code reads these two through `?.` and `=== null`,
+   both of which swallow it: `n.nextElementSibling?.nextElementSibling` yields undefined and the feature behind
+   it returns early, and `a = t.nextElementSibling; if (a === null) throw` does NOT throw on undefined and then
+   treats it as an element. Neither leaves an error for the frontier to learn from; the flow simply explores
+   less than the page can do.
+   NOT on DocumentType, which is the whole reason this is a separate mixin from §4.2.8's ChildNode beside it —
+   §4.2.7's own note: "Web compatibility prevents the previousElementSibling and nextElementSibling attributes
+   from being exposed on doctypes (and therefore on ChildNode)."
+   magic 0 = previousElementSibling, 1 = nextElementSibling. */
+static JSValue js_node_element_sibling(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val), *c;
+
+    if (!n) return JS_NULL;
+    /* `Element includes NonDocumentTypeChildNode` and `CharacterData includes NonDocumentTypeChildNode` are
+       the whole of §4.2.7's includes, so a receiver that is neither is a prototype this mixin was installed on
+       and the spec does not put it on — a doctype answering `nextElementSibling` is the exact compatibility
+       break the section exists to prevent, and it would be invisible without this. */
+    DCHECK(n->type == LXB_DOM_NODE_TYPE_ELEMENT || node_is_chardata(n),
+           "§4.2.7's element-sibling getter ran on a node that is neither an Element nor a CharacterData — "
+           "the mixin has been installed on a prototype §4.2.7 does not include (DocumentType is the one the "
+           "section names by hand)");
+    for (c = magic ? n->next : n->prev; c; c = magic ? c->next : c->prev)
+        if (c->type == LXB_DOM_NODE_TYPE_ELEMENT)
+            return node_wrap(ctx, c);
+    return JS_NULL;
+}
+
+static const JSCFunctionListEntry js_non_doctype_child_reads[] = {
+    JS_CGETSET_MAGIC_DEF("previousElementSibling", js_node_element_sibling, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("nextElementSibling", js_node_element_sibling, NULL, 1),
+};
+
+void node_install_non_doctype_child_mixin(JSContext *ctx, JSValueConst proto)
+{
+    JS_SetPropertyFunctionList(ctx, proto, js_non_doctype_child_reads,
+                               (int)(sizeof(js_non_doctype_child_reads) /
+                                     sizeof(js_non_doctype_child_reads[0])));
+}
 
 /* §4.2.4 THE NonElementParentNode MIXIN — getElementById, and nothing else is in it.
    IT WAS TWO IMPLEMENTATIONS, and the second one's comment argued that it had to be: "same algorithm, different
@@ -3157,9 +3210,15 @@ void node_install_protos(JSContext *ctx)
         for (k = 0; k < 5; k++)
             idl_install_method(ctx, cd, CD_NAMES[k], CD_ARGC[k], g_id_cd[k]);
     }
-    /* §4.10: `CharacterData includes ChildNode` — `textNode.remove()` is real, and a page that tears down
-       text with it had nothing. ParentNode is NOT included: character data has no children. */
+    /* DOM §4.2.8 Mixin ChildNode: `CharacterData includes ChildNode` — `textNode.remove()` is real, and a page
+       that tears down text with it had nothing. ParentNode is NOT included: character data has no children.
+       (This cited "§4.10", which is Interface CharacterData and states no `includes` at all — every one of
+       them is written in the MIXIN's own section, which is why the number moves and the title does not.) */
     node_install_child_mixin(ctx, cd);
+    /* DOM §4.2.7 Mixin NonDocumentTypeChildNode: `CharacterData includes NonDocumentTypeChildNode` — a Text
+       node's `nextElementSibling` is real, which is how a page walks off a text node to the element after it,
+       and how lit-html finds a part's node from a marker comment. */
+    node_install_non_doctype_child_mixin(ctx, cd);
     {
         JSValue text_proto = JS_NewObjectProto(ctx, cd);
         JSValue comment_proto = JS_NewObjectProto(ctx, cd);

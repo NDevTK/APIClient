@@ -2527,6 +2527,8 @@ void element_install_proto(JSContext *ctx)
     dom_token_list_install_element(ctx, proto);   /* §4.9's [SameObject] classList */
     node_install_child_mixin(ctx, proto);    /* remove / before / after / replaceWith */
     node_install_parent_mixin(ctx, proto);   /* append / prepend / replaceChildren */
+    /* DOM §4.2.7: `Element includes NonDocumentTypeChildNode` — previousElementSibling / nextElementSibling. */
+    node_install_non_doctype_child_mixin(ctx, proto);
     idl_install_accessor_step(ctx, proto, "innerHTML", g_id_inner_get, g_id_inner_set);
     idl_install_accessor_step(ctx, proto, "outerHTML", g_id_outer_get, g_id_outer_set);
     /* §8.5's three partial-interface markup members. `setHTML` is the SAFE one — "set and filter HTML given

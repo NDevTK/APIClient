@@ -62,9 +62,16 @@ JSClassID node_class_id(void);
    chokepoint already gives time-travel capture. `inserted` is 1 for a node that entered a document and 0 for
    one that is about to leave it; the callee walks the SUBTREE, because inserting a subtree connects every
    element in it. */
-/* §4.2.7 ChildNode and §4.2.8 ParentNode — the convenience mixins, installed on the interfaces whose IDL
-   INCLUDES them. Not on Node.prototype: `document.remove()` is not a member of anything. */
+/* DOM §4.2.8 Mixin ChildNode and §4.2.6 Mixin ParentNode — the convenience mixins, installed on the interfaces
+   whose IDL INCLUDES them. Not on Node.prototype: `document.remove()` is not a member of anything.
+   (These read "§4.2.7 ChildNode and §4.2.8 ParentNode"; §4.2.7 is Mixin NonDocumentTypeChildNode and §4.2.8 is
+   Mixin ChildNode, so both numbers named the wrong section and the title is what keeps that visible.) */
 void node_install_child_mixin(JSContext *ctx, JSValueConst proto);
+/* DOM §4.2.7 Mixin NonDocumentTypeChildNode — previousElementSibling / nextElementSibling, on the two
+   interfaces §4.2.7 includes: `Element includes NonDocumentTypeChildNode` and `CharacterData includes
+   NonDocumentTypeChildNode`. Deliberately NOT beside ChildNode above: §4.2.7's note keeps these two members
+   off doctypes, which is the only reason the standard splits the mixin in two. */
+void node_install_non_doctype_child_mixin(JSContext *ctx, JSValueConst proto);
 /* §4.2.4 NonElementParentNode — getElementById, on Document and DocumentFragment. One implementation over its
    RECEIVER, for the reason ParentNode's members are: a mixin is what the IDL says these are. */
 void node_install_nonelement_parent_mixin(JSContext *ctx, JSValueConst proto);
