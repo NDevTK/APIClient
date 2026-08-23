@@ -438,14 +438,42 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "setTimeout requires a handler");
 
-    /* `timeout` is a Web IDL `long`, ALREADY converted by the declaration — so this reads a number and runs
-       none of the page's code. 8.6: a negative or non-finite timeout is clamped to 0. */
-    if (argc >= 2) {
-        DCHECK(JS_VALUE_GET_TAG(argv[1]) == JS_TAG_INT || JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(argv[1])),
-               "setTimeout's `timeout` reached the body unconverted — the IDL declaration is what converts it");
-        JS_ToFloat64(ctx, &delay, argv[1]);
-    }
-    if (!(delay >= 0))
+    /* `timeout` is a Web IDL `long`, so §3.2.4.5's ConvertToInt(V, 32, "signed") already ran in the
+       declaration — UNLESS the page passed unknown external input, which crosses an IDL boundary as itself so
+       that opacity survives the coercion. The tag test that stood here asserted the first case and fired on
+       the second: `setTimeout(f, timeout * n)` with an unknown `n` is a page's ordinary arithmetic, and
+       §Offensive names a forced-exec flow meeting opaque input as the exploration surface rather than a
+       broken invariant. idl_number_of answers both — the converted Number for a real value, and for an
+       unknown the SAME §3.2.4.5 conversion run on that value's own EXAMPLE.
+       THE EXAMPLE IS THE ORDERING KEY, AND THAT IS ALL IT IS. HTML §8.7 Timers orders one invocation against
+       another in `run steps after a timeout`: "Wait until any invocations of this algorithm that had the same
+       global and orderingIdentifier, that started before this one, and whose milliseconds is less than or
+       equal to this one's, have completed" — a comparison the ENGINE makes, never one the page wrote. This
+       component realises it as (now + timeout, insertion order) on the virtual clock, so what it needs from
+       the value is one number. Answering that from the example is the modelled-value rule: the value stays
+       unknown for control flow, and nothing downstream reads this delay, so there is no fork here to delete. */
+    if (argc >= 2 && !idl_number_of(ctx, IDL_LONG, argv[1], &delay))
+        DFAIL("setTimeout's `timeout` is unknown external input carrying NO EXAMPLE, and HTML §8.7 Timers "
+              "makes the order a function of it: `run steps after a timeout` waits for every earlier "
+              "invocation on this global \"whose milliseconds is less than or equal to this one's\", so with "
+              "no number this entry has no place in the map's order — and picking one INVENTS a value the "
+              "code never computed, which §Solver forbids exactly as it forbids inventing 6 for `x > 5`. "
+              "WHAT TO BUILD IS THE ORDERING FORK, and every seam it needs already exists: TE_WHEN holds the "
+              "unknown rather than a double, timer_earliest_in asks solver_outcome (solver/decide.h) over the "
+              "two entries it is comparing instead of `when < *pwhen`, and event_loop_advance_to takes a "
+              "moment no arm has decided yet. §8.7 step 4 (\"If timeout is less than 0, then set timeout to "
+              "0\") is then a fork over the same value whose TRUE arm is a concrete 0 the SPEC computed, so "
+              "one arm of every such call runs with nothing invented at all.");
+
+    /* §3.2.4.5's own postcondition, which is what the tag test was reaching for and could not state:
+       ConvertToInt takes the integer part modulo 2**32 and folds it into range, so a `long` is ALWAYS an
+       integer in [-2147483648, 2147483647] — NaN and the infinities became +0 inside the conversion. */
+    DCHECK(delay >= -2147483648.0 && delay <= 2147483647.0 && delay == (double)(int32_t)delay,
+           "§3.2.4.5's `long` conversion answered something that is not a long — its result is the integer "
+           "part taken modulo 2**32 and folded into range, so a value outside it, or one with a fraction, "
+           "means this position was never converted by anything");
+    /* §8.7 step 4: "If timeout is less than 0, then set timeout to 0." */
+    if (delay < 0)
         delay = 0;
 
     /* THE STRING FORM IS A SCRIPT — compiled and run in global scope, which is the sink `setTimeout(str)` is
@@ -548,17 +576,23 @@ void timer_cancel(JSContext *ctx, int key)
 
 static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    int32_t id = 0;
+    double id = 0;
 
     (void)this_val; (void)magic;
-    /* `handle` is a Web IDL `long`, converted by the declaration. */
     if (argc < 1)
-        return JS_UNDEFINED;   /* 8.6: clearing a handle that names nothing does nothing */
-    DCHECK(JS_VALUE_GET_TAG(argv[0]) == JS_TAG_INT || JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(argv[0])),
-           "clearTimeout's `handle` reached the body unconverted");
-    if (JS_ToInt32(ctx, &id, argv[0]) < 0)
-        return JS_UNDEFINED;
-    timer_clear(ctx, (uint32_t)id);
+        return JS_UNDEFINED;   /* §8.7: clearing a handle that names nothing does nothing */
+    /* `handle` is a Web IDL `long`, converted by the declaration — or unknown external input crossing as
+       itself, whose number is that same §3.2.4.5 conversion run on its example. The tag test that stood here
+       asserted against attacker input for the same reason `setTimeout`'s did, and in the same member pair. */
+    if (!idl_number_of(ctx, IDL_LONG, argv[0], &id))
+        DFAIL("clearTimeout was given a `handle` that is unknown external input carrying NO EXAMPLE, so it "
+              "names no particular entry of §8.7's map of active timers. It cannot clear nothing — a handle "
+              "the domain permits is one some arm does clear — and it cannot clear every entry, which is "
+              "every arm at once. WHAT TO BUILD is the fork over WHICH entry the handle names: solver_outcome "
+              "over the value with one completion per live entry plus the one that names none. It is the same "
+              "fork §8.7's ORDERING needs in js_set_timer above and is built with it, because both are the "
+              "one question of what an unknown integer denotes among this global's timers.");
+    timer_clear(ctx, (uint32_t)(int32_t)id);
     return JS_UNDEFINED;
 }
 
@@ -576,9 +610,15 @@ static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int arg
 /* HTML 8.6's own IDL, declared rather than approximated:
      long setTimeout(TimerHandler handler, optional long timeout = 0, any... arguments)
      undefined clearTimeout(optional long handle = 0)
-   `handler` is a (DOMString or Function) union and `timeout` is a long, so BOTH can run the page's code — a
-   toString on the non-callable arm, a valueOf on the delay — and neither is a string. The `any...` tail is
-   simply not listed: a position the IDL does not name is passed through as it is.
+   `handler` is a (DOMString or Function or TrustedScript) union and `timeout` is a long, so BOTH can run the
+   page's code — a toString on the non-callable arm, a valueOf on the delay — and neither is a string.
+   THE `any...` TAIL IS NOT DECLARED, AND IT IS THEREFORE DROPPED — this said the opposite ("a position the
+   IDL does not name is passed through as it is") and that is measurably false: a NON-variadic member's
+   argument count is min(passed, declared) (idl_args.c), so this body can never see a third position and
+   `setTimeout(f, 0, x)` invokes f with no arguments where §8.7 step 9's task invokes it "given arguments".
+   Declaring it is not one call to idl_variadic: a variadic member repeats its LAST declared type for the
+   tail, which here is IDL_LONG and would coerce every extra argument to a number, so the type list grows a
+   third IDL_ANY entry and the member is declared through idl_method_id_ext with nargs 3 and variadic true.
    DECLARED ONCE PER AGENT, installed per realm: a declaration builds a pool entry and a member has ONE, and
    `idl_optional_from` names the member the LAST declaration made — so it belongs beside it, here. */
 void timer_init(JSContext *ctx)
@@ -587,14 +627,22 @@ void timer_init(JSContext *ctx)
     static const IdlArgType CLEAR_TIMER[1] = { IDL_LONG };
 
     DCHECK(!g_ready, "timer_init ran twice — §8.6's members are declared once per agent");
+    /* THE `= 0` ABOVE IS PART OF THE DECLARATION, and it was written in the comment and not in the code.
+       §3.6 step 14.2 gives an optional argument whose IDL writes `= …` THAT value, while a position with no
+       declared default is ABSENT — so all four members reached their bodies with an undefined where the IDL
+       guarantees a number, and each body would have had to invent the 0 its declaration owes it. */
     g_id_set_timeout = idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 0);
-    idl_optional_from(1);   /* 8.6: `setTimeout(handler, optional timeout, ...arguments)` */
+    idl_optional_from(1);
+    idl_arg_default(1, IDL_DEFAULT_ZERO, NULL);
     g_id_set_interval = idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 1);
-    idl_optional_from(1);   /* 8.6: `setInterval(handler, optional timeout, ...arguments)` */
+    idl_optional_from(1);
+    idl_arg_default(1, IDL_DEFAULT_ZERO, NULL);
     g_id_clear_timeout = idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0);
-    idl_optional_from(0);   /* 8.6: `clearTimeout(optional long id = 0)` */
+    idl_optional_from(0);
+    idl_arg_default(0, IDL_DEFAULT_ZERO, NULL);
     g_id_clear_interval = idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0);
-    idl_optional_from(0);   /* 8.6: `clearInterval(optional long id = 0)` */
+    idl_optional_from(0);
+    idl_arg_default(0, IDL_DEFAULT_ZERO, NULL);
     g_atom_map = JS_NewAtom(ctx, "activeTimers");
     g_atom_next = JS_NewAtom(ctx, "timerIdentifier");
     CHECK(g_atom_map != JS_ATOM_NULL && g_atom_next != JS_ATOM_NULL,

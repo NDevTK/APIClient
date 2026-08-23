@@ -166,6 +166,54 @@ static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
     return JS_NewInt64(ctx, idl_integer_of(t, x));
 }
 
+/* THE NUMBER A CONVERTED NUMERIC ARGUMENT DENOTES — see the contract in idl_args.h. */
+int idl_number_of(JSContext *ctx, IdlArgType t, JSValueConst v, double *out)
+{
+    JSValue ex, conv;
+    double x = 0;
+    int r;
+
+    DCHECK(idl_is_numeric(t),
+           "idl_number_of was asked what a NON-NUMERIC IDL type denotes — the only conversion it runs is "
+           "§3.2's ToNumber-and-width, so a type without one has no number for it to answer with");
+    if (!concolic_is(v)) {
+        DCHECK(JS_IsNumber(v),
+               "a numeric IDL argument reached its body neither a Number nor unknown external input. An "
+               "`undefined` here is §3.6 step 14.2 NOT DECLARED: an optional argument whose IDL writes `= …` "
+               "holds that value, and a position that never called idl_arg_default arrives ABSENT instead — "
+               "declare the default beside idl_optional_from rather than reading the absence in the body");
+        r = JS_ToFloat64(ctx, out, v);
+        DCHECK(r >= 0, "ToNumber of an already-converted numeric argument threw — the declaration's conversion "
+                       "produced this value, so nothing here can still run the page's code");
+        return 1;
+    }
+    ex = concolic_example(ctx, v);
+    if (JS_IsUndefined(ex)) {
+        JS_FreeValue(ctx, ex);
+        return 0;
+    }
+    DCHECK(!JS_IsObject(ex) && !JS_IsSymbol(ex),
+           "an unknown numeric argument carries an OBJECT or a Symbol as its example, and §3.2's conversion "
+           "begins with ToNumber — which on an object runs the page's own valueOf and therefore has to PARK, "
+           "and on a Symbol throws. Building that means routing this conversion through the request machine "
+           "in this file instead of answering it from C here");
+    r = JS_ToFloat64(ctx, &x, ex);
+    DCHECK(r >= 0, "ToNumber of an unknown's own example threw, and an example is a concrete primitive the "
+                   "solver learned — so this is the example being a value ToNumber refuses, not the page's");
+    JS_FreeValue(ctx, ex);
+    conv = idl_num_of(ctx, t, x);
+    DCHECK(!JS_IsException(conv),
+           "§3.2's conversion of an unknown's EXAMPLE threw: `double` refuses a non-finite value (§3.2.7) and "
+           "[EnforceRange] refuses one outside its range. That is one example landing on the throw arm while "
+           "the unknown's DOMAIN still permits the success arm, so deciding the completion from it would "
+           "decide it for every value the source can take. BOTH arms must run — ask solver_outcome over the "
+           "value with two completions here, exactly as JSON.parse forks its SyntaxError arm");
+    r = JS_ToFloat64(ctx, out, conv);
+    DCHECK(r >= 0, "the converted example is not a number — idl_num_of places a Number for every numeric type");
+    JS_FreeValue(ctx, conv);
+    return 1;
+}
+
 /* §3.2.18's ENUMERATION check, over the string ToString produced. Returns -1 with a TypeError live. */
 static int idl_enum_check(JSContext *ctx, JSValueConst v, const char *const *values, const char *member)
 {

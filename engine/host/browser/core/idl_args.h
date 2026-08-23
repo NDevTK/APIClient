@@ -418,6 +418,24 @@ int  idl_method_id(JSContext *ctx, const IdlArgType *types, int nargs, IdlBody b
    in the component that needed it, that is a modulo somebody has to remember. */
 int64_t idl_integer_of(IdlArgType t, double x);
 
+/* THE NUMBER A CONVERTED NUMERIC ARGUMENT DENOTES, for a body that needs a real one — the numeric twin of
+   concolic_name_cstr, and it exists for the same reason that one does.
+   A BODY MAY NOT CALL JS_ToFloat64 ON ITS OWN ARGUMENT. §3.2's conversion is a BOUNDARY, and unknown external
+   input crosses a boundary AS ITSELF (see the pass-through in the conversion loop) so that opacity survives
+   the coercion — so a numeric position reaches its body either as the Number the declaration produced or as
+   the unknown, and JS_ToFloat64 on the second owes C a real number it cannot have. Every body that wrote
+   `JS_ToFloat64(ctx, &d, argv[i])` under a comment saying "already converted by the declaration" therefore
+   ABORTS on `f(x * n)` with an unknown operand, which is a page's ordinary arithmetic and not a broken
+   invariant.
+   FOR AN UNKNOWN IT ANSWERS THE REAL CONVERSION RUN ON THAT VALUE'S OWN EXAMPLE — §3.2.4.5's
+   ConvertToInt(V, 32, "signed") over the concrete the code actually computed, through the one copy of that
+   arithmetic above, never a rule predicting what it would have produced. The value itself stays unknown: this
+   is the modelled NUMBER an engine algorithm needs, not a collapse of the value to it.
+   RETURNS 0 WHEN THE UNKNOWN CARRIES NO EXAMPLE YET, which is a POSITIVE statement rather than a hole to
+   default: there is no number to fall back to, choosing one would INVENT a value the code never computed, and
+   what that absence means differs per member — so the CALLER answers it. */
+int idl_number_of(JSContext *ctx, IdlArgType t, JSValueConst v, double *out);
+
 /* §3.2.4.8's `unsigned long long`, as the MAGNITUDE rather than as the int64_t bit pattern the modulo leaves —
    the half of that type's range above 2**63 is exactly the half a page reaches by writing a negative, and an
    int64_t cannot express it. Public for the same reason idl_integer_of is: a conversion performed outside this
