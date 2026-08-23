@@ -132,28 +132,49 @@
  * through it costs nothing and keeps the record made of JS values. JS_UNDEFINED for a park no element caused.
  * SHARE, because it belongs to the record for the reason `doc` does: an arm forked while the load is in flight
  * is loading the same script for the same element. */
+/* AND THE FOURTH COLUMN IS THE FIELD'S "NOTHING YET", WHICH IS WHY THIS TABLE IS FOUR COLUMNS AND NOT THREE.
+ * Three of the four things a field obliges were already derived from this list — the id, the interned name, and
+ * what the fork does with it — and the fourth, its value at the push, was a SEPARATE hand-written sequence of
+ * `pend_put` calls in pending.c. A list beside a list is a list that goes out of step, and this one did: the
+ * `scriptEl` field above was added to this table, to the copy and to the census, and NEVER to the push — so
+ * every record ever pushed carried one field fewer than PENDING_FIELDS names, for many commits, and the assert
+ * written to catch exactly that (pend_entry_copy's own-property count) said nothing because the only paths that
+ * COPY a record are the two forks, and until a peer's second answer could be delivered at all neither of them
+ * ran on a record of the affected kinds. A latent hole plus an unreachable check reads exactly like a healthy
+ * subsystem.
+ * SO THE DEFAULT IS DECLARED HERE, WITH THE FIELD, and pending_push expands this list instead of restating it.
+ * The expressions are evaluated in pending_push's scope — `kind` is its argument and `pend_ctx()` is the
+ * session's context — which is the one place this column is ever expanded with a value; that coupling is the
+ * price of there being no second list, and it is stated rather than left to be discovered. Each default is a
+ * POSITIVE statement of "nothing yet" (§Architecture: a consumer never defaults a producer's field, so the
+ * producer states the absence), never a hole a reader fills in. */
 #define PENDING_FIELDS(X)                    \
-    X(RESOLVE,    "resolve",   PEND_SHARE)   \
-    X(VALUE,      "value",     PEND_SHARE)   \
-    X(COMPLETION, "completion",PEND_SHARE)   \
-    X(ANSWER_WORLD, "answerWorld", PEND_SHARE) \
-    X(EXTRA,      "extra",     PEND_STRUCT)  \
-    X(ANSWER_FIXED, "answerFixed", PEND_SHARE) \
-    X(URL,        "url",       PEND_SHARE)   \
-    X(HAVE_VALUE, "haveValue", PEND_SHARE)   \
-    X(KIND,       "kind",      PEND_SHARE)   \
-    X(SCRIPT_I,   "scriptI",   PEND_SHARE)   \
-    X(SCRIPT_TYPE, "scriptType", PEND_SHARE) \
-    X(REQ,        "req",       PEND_SHARE)   \
-    X(OP,         "op",        PEND_SHARE)   \
-    X(METHOD,     "method",    PEND_SHARE)   \
-    X(HEADERS,    "headers",   PEND_STRUCT)  \
-    X(BODY,       "body",      PEND_SHARE)   \
-    X(DOC,        "doc",       PEND_SHARE)  \
-    X(SCRIPT_EL,  "scriptEl",  PEND_SHARE)
+    X(RESOLVE,    "resolve",   PEND_SHARE,  JS_UNDEFINED)                              \
+    X(VALUE,      "value",     PEND_SHARE,  JS_UNDEFINED)                              \
+    /* no answer yet, so no completion type and no answering timeline */               \
+    X(COMPLETION, "completion",PEND_SHARE,  JS_UNDEFINED)                              \
+    X(ANSWER_WORLD, "answerWorld", PEND_SHARE, JS_NULL)                                \
+    /* …and no SECOND answer, which is the common case and stays a tag test */         \
+    X(EXTRA,      "extra",     PEND_STRUCT, JS_NULL)                                   \
+    /* this flow ISSUED the request, so it is the one that forks an arm per answer */  \
+    X(ANSWER_FIXED, "answerFixed", PEND_SHARE, JS_FALSE)                               \
+    X(URL,        "url",       PEND_SHARE,  JS_NULL)                                   \
+    X(HAVE_VALUE, "haveValue", PEND_SHARE,  JS_FALSE)                                  \
+    X(KIND,       "kind",      PEND_SHARE,  JS_NewInt32(pend_ctx(), kind))             \
+    X(SCRIPT_I,   "scriptI",   PEND_SHARE,  JS_NewInt32(pend_ctx(), -1))               \
+    /* §4.12.1.1's NULL type: a park owing a PROGRAM with no type crashes at the drain */ \
+    X(SCRIPT_TYPE, "scriptType", PEND_SHARE, JS_NewInt32(pend_ctx(), SCRIPT_TYPE_NONE))  \
+    X(REQ,        "req",       PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
+    X(OP,         "op",        PEND_SHARE,  JS_NULL)                                   \
+    X(METHOD,     "method",    PEND_SHARE,  JS_NULL)                                   \
+    X(HEADERS,    "headers",   PEND_STRUCT, JS_NULL)                                   \
+    X(BODY,       "body",      PEND_SHARE,  JS_NULL)                                   \
+    /* 0 is "this park's reply is not a program", which is every kind but the injected <script src> */ \
+    X(DOC,        "doc",       PEND_SHARE,  JS_NewInt32(pend_ctx(), 0))                \
+    X(SCRIPT_EL,  "scriptEl",  PEND_SHARE,  JS_UNDEFINED)
 
 enum {
-#define PEND_ENUM(id, name, copy) PEND_##id,
+#define PEND_ENUM(id, name, copy, dflt) PEND_##id,
     PENDING_FIELDS(PEND_ENUM)
 #undef PEND_ENUM
     PEND_FIELD_COUNT

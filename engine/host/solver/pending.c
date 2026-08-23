@@ -18,7 +18,7 @@ static int    g_atoms_ready;
 
 /* WHAT THE FORK DOES WITH EACH FIELD, from the one list in pending.h. */
 static const int PEND_COPY_MODE[PEND_FIELD_COUNT] = {
-#define PEND_COPY(id, name, copy) copy,
+#define PEND_COPY(id, name, copy, dflt) copy,
     PENDING_FIELDS(PEND_COPY)
 #undef PEND_COPY
 };
@@ -34,7 +34,7 @@ JSContext *pending_ctx(void)
 static void pend_atoms(void)
 {
     static const char *const NAMES[PEND_FIELD_COUNT] = {
-#define PEND_NAME(id, name, copy) name,
+#define PEND_NAME(id, name, copy, dflt) name,
         PENDING_FIELDS(PEND_NAME)
 #undef PEND_NAME
     };
@@ -232,6 +232,12 @@ static void pend_put(JSValueConst obj, int field, JSValue v)
     (void)r;
 }
 
+/* THE OWN-PROPERTY COUNT, DECLARED HERE AND DEFINED BESIDE THE CLONE THAT WAS ITS FIRST READER. It is the one
+   thing this file asserts about a record's SHAPE, and it is asked at both ends of a record's life — where it is
+   built and where it is copied — so it is declared before the first of them rather than moved to sit above it.
+   Side-effect-free (it enumerates and frees the enumeration), which is what lets a DCHECK's condition call it. */
+static int pend_own_count(JSValueConst e);
+
 JSValue pending_push(JSValue *reg, int kind)
 {
     JSValue e;
@@ -247,35 +253,30 @@ JSValue pending_push(JSValue *reg, int kind)
         *reg = JS_NewArray(pend_ctx());
         CHECK(!JS_IsException(*reg), "engine: OOM allocating a flow's pending register");
     }
-    /* EVERY FIELD, ALWAYS — the fork counts them, so a record short of one is a record the fork cannot check.
-       The defaults are each field's "nothing yet": no address, no answer, no rendezvous. */
-    pend_put(e, PEND_RESOLVE, JS_UNDEFINED);
-    pend_put(e, PEND_VALUE, JS_UNDEFINED);
-    pend_put(e, PEND_COMPLETION, JS_UNDEFINED);   /* no answer yet, so no completion type */
-    /* …and no answering TIMELINE, which is also what a zone-computed answer has: JS_NULL is the positive
-       statement "nobody's flow produced this", never a hole a reader fills in. */
-    pend_put(e, PEND_ANSWER_WORLD, JS_NULL);
-    pend_put(e, PEND_EXTRA, JS_NULL);             /* …and no SECOND answer, which is the common case */
-    /* THIS FLOW ISSUED THE REQUEST, so it is the one that forks an arm per further answer — an arm's own entry
-       is the only place this is true of, and flow_answer_fork sets it there. */
-    pend_put(e, PEND_ANSWER_FIXED, JS_FALSE);
-    pend_put(e, PEND_URL, JS_NULL);
-    pend_put(e, PEND_HAVE_VALUE, JS_FALSE);
-    pend_put(e, PEND_KIND, JS_NewInt32(pend_ctx(), kind));
-    pend_put(e, PEND_SCRIPT_I, JS_NewInt32(pend_ctx(), -1));
-    /* WHICH OF HTML §8.1.4.4 "Calling scripts"'s TWO ALGORITHMS THE REPLY WILL BE RUN WITH — §4.12.1.1's
-       null type is the default because it is this field's "nothing yet" and NOT a hole a reader fills in:
-       `script_type_executes` answers false for it, so a park that owes a PROGRAM and never wrote its
-       element's type crashes at the drain instead of quietly evaluating a module as a classic script. */
-    pend_put(e, PEND_SCRIPT_TYPE, JS_NewInt32(pend_ctx(), SCRIPT_TYPE_NONE));
-    pend_put(e, PEND_REQ, JS_NewInt64(pend_ctx(), 0));
-    pend_put(e, PEND_OP, JS_NULL);
-    pend_put(e, PEND_METHOD, JS_NULL);
-    pend_put(e, PEND_HEADERS, JS_NULL);
-    pend_put(e, PEND_BODY, JS_NULL);
-    /* WHICH DOCUMENT THE REPLY IS FOR — 0 is "this park's reply is not a program", which is every kind but the
-       injected <script src> that names one. */
-    pend_put(e, PEND_DOC, JS_NewInt32(pend_ctx(), 0));
+    /* EVERY FIELD, ALWAYS, AND FROM THE ONE LIST — the fork counts them, so a record short of one is a record
+       the fork cannot check. This was a hand-written sequence of `pend_put` calls in this file, which is a
+       second list beside PENDING_FIELDS, and it went out of step exactly as a second list does: `scriptEl` was
+       added to the table, to the copy and to the census and never here, so every record ever pushed carried
+       one field fewer than PEND_FIELD_COUNT for many commits. The check written for that is pend_entry_copy's
+       own-property count, and it could not see it — a record is only COPIED at a fork, and the fork that
+       reaches an answered synchronous request needs a peer's SECOND answer to be deliverable, which nothing
+       could do until the answers began naming their timelines. A latent hole plus an unreachable check reads
+       exactly like a healthy subsystem, which is why the default now lives in the table with the field and this
+       loop cannot be short of one. */
+#define PEND_DEFAULT(id, name, copy, dflt) pend_put(e, PEND_##id, dflt);
+    PENDING_FIELDS(PEND_DEFAULT)
+#undef PEND_DEFAULT
+    /* AND THE RECORD ASSERTS ITS OWN COMPLETENESS WHERE IT IS BORN. pend_entry_copy already makes this claim
+       at the clone, and its message names all three sites — "every field is an obligation at the push, at this
+       copy and at the free, and this is the copy's half". This is the PUSH's half, and the two are not
+       redundant: the clone's fires in whichever subsystem happens to fork first, arbitrarily far from the
+       record's construction, while this one names the constructor. A record can still fail it — a path that
+       builds an entry by hand, or a field written onto one from outside this file — and the expansion above is
+       what makes the ordinary way of failing it impossible. */
+    DCHECK(pend_own_count(e) == PEND_FIELD_COUNT,
+           "a pending record was born carrying a number of fields PENDING_FIELDS does not name — every field is "
+           "an obligation at the push, at the clone and at the census, and a record short of one hands the arm "
+           "that reads it `undefined`, which is a real value belonging to the request");
     JS_SetPropertyUint32(pend_ctx(), *reg, (uint32_t)pend_len(*reg), JS_DupValue(pend_ctx(), e));
     cow_engine_write_end();
     return e;
@@ -634,7 +635,8 @@ long pending_bytes(JSValueConst reg)
             if (f == PEND_BODY) {
                 size_t bl = 0;
                 /* NO BODY IS A POSITIVE STATEMENT AND IS READ AS ONE — never as a hole a NULL return fills.
-                 * A record is BORN with `PEND_BODY` = JS_NULL (pending_new above) and only a request that
+                 * A record is BORN with `PEND_BODY` = JS_NULL (pending_push above, from PENDING_FIELDS' own
+                 * default column) and only a request that
                  * actually carries bytes ever replaces it (engine.c's pending_set_bytes), so on a frontier of
                  * fetch replies almost every record's body field is JS_NULL by design.
                  * `JS_GetArrayBuffer` THROWS on anything that is not an ArrayBuffer — "ArrayBuffer object
