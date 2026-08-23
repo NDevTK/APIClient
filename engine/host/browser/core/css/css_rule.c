@@ -21,6 +21,7 @@
 #include "quickjs.h"
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_page.h"
+#include "core/css/css_property_syntax.h"
 #include "core/css/css_rule.h"
 #include "core/css/css_rule_list.h"
 #include "core/css/css_serialize.h"
@@ -54,7 +55,11 @@ enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE
        RULE_TYPE_SUPPORTS = 12,
        /* At and above this, §6.4.2's `type` answers 0 — the interfaces its frozen table does not name. */
        RULE_TYPE_UNNUMBERED = 0x100,
-       RULE_TYPE_LAYER_BLOCK = RULE_TYPE_UNNUMBERED, RULE_TYPE_LAYER_STATEMENT };
+       RULE_TYPE_LAYER_BLOCK = RULE_TYPE_UNNUMBERED, RULE_TYPE_LAYER_STATEMENT,
+       /* CSS Properties and Values API 1 §6.1's CSSPropertyRule — also numberless, and for the same reason the
+          two above it are: §6.4.2's table is frozen and that standard adds no `partial interface CSSRule` to
+          it, so `propertyRule.type` is 0. */
+       RULE_TYPE_PROPERTY };
 
 /* WHERE A RULE MAY SIT IN A STYLE SHEET. A sheet's rules are a PROLOGUE followed by a body, and three standards
    write that prologue between them:
@@ -161,6 +166,34 @@ typedef struct CssRuleData {
        holds at most one entry and §8.1's `name` is that entry, or the empty string for §6.4.2.1's anonymous
        layer; a statement rule's holds one or more. Two fields could disagree about which. (OWNED) */
     JSValue layer_names;
+    /* CSS Properties and Values API 1 §3's `<custom-property-name>#` prelude — the names the `@property`
+       at-rule declares, as an Array. JS_NULL on every rule that is not an `@property`.
+       IT IS A LIST WHERE §6.1 HAS ONE `name`, and that is the spec's own unfinished edge rather than a shape
+       chosen here: §3's prelude carries a `#` multiplier and §3 says "a valid @property rule represents a
+       custom property registration for EACH <custom-property-name> in the rule's prelude", while §6.1 declares
+       one `readonly attribute CSSOMString name` and attaches the note "the CSSOM for multi-name @property rules
+       has not been resolved on by the CSSWG [w3c/csswg-drafts Issue #14227]". So the RULE is what the prelude
+       says and the ATTRIBUTE is what §6.1 says, and the getter is where the two meet — see its own crash. It is
+       a field of its own and not `layer_names` beside it, because those are two different facts under one
+       word: a `<layer-name>` is a dotted cascade-layer path that is serialized and case-preserved, and a
+       `<custom-property-name>` is a `<dashed-ident>` that identifies a property. (OWNED) */
+    JSValue property_names;
+    /* §3.1's `syntax` descriptor, as the `<string>`'s own value — §3.1's INITIAL `"*"` when the rule declares
+       none, and also when it declares one that is not a valid syntax string, which is that section's own
+       sentence ("the descriptor is invalid and must be ignored") and not a fallback. JS_NULL on every rule that
+       is not an `@property`. (OWNED) */
+    JSValue property_syntax;
+    /* §3.2's `inherits` descriptor — JS_TRUE or JS_FALSE, §3.2's INITIAL being `true`. JS_NULL on every rule
+       that is not an `@property`, which is why it is a JSValue and not a C bool: a bool has no third state, and
+       "this rule declares no inherit flag because it is not an @property" is a different fact from either
+       flag. (OWNED) */
+    JSValue property_inherits;
+    /* §3.3's `initial-value` descriptor, as the `<declaration-value>` text it was declared with. JS_NULL is
+       §3.3's INITIAL — the guaranteed-invalid value — which §6.1 answers as the null of its nullable
+       `initialValue`, so on an `@property` this field's null IS the attribute's null; on any other rule it is
+       "not an `@property`", and the getter's brand check is what decides which question was asked. That is the
+       same doubling §6.4.4's `layerName` and `supportsText` carry, for the same reason. (OWNED) */
+    JSValue property_initial_value;
     uint16_t type;
 } CssRuleData;
 
@@ -171,7 +204,7 @@ static JSClassID g_rule_class;
    built with an EXPLICIT prototype chosen from its type, so the class's own proto slot decides nothing. */
 enum { PROTO_RULE = 0, PROTO_GROUPING, PROTO_STYLE, PROTO_CONDITION, PROTO_MEDIA, PROTO_SUPPORTS,
        PROTO_IMPORT, PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_PAGE, PROTO_MARGIN, PROTO_KEYFRAMES,
-       PROTO_KEYFRAME, PROTO_LAYER_BLOCK, PROTO_LAYER_STATEMENT, PROTO_N };
+       PROTO_KEYFRAME, PROTO_LAYER_BLOCK, PROTO_LAYER_STATEMENT, PROTO_PROPERTY, PROTO_N };
 static int g_proto_slot[PROTO_N];
 static int g_id_set_selector = -1, g_id_set_page_selector = -1, g_id_set_key_text = -1,
            g_id_set_keyframes_name = -1, g_id_set_css_text = -1, g_id_insert_rule = -1, g_id_delete_rule = -1,
@@ -194,6 +227,10 @@ static const uint16_t RULE_VALS[] = {
     (uint16_t)offsetof(CssRuleData, at_name),
     (uint16_t)offsetof(CssRuleData, keyframes_name),
     (uint16_t)offsetof(CssRuleData, layer_names),
+    (uint16_t)offsetof(CssRuleData, property_names),
+    (uint16_t)offsetof(CssRuleData, property_syntax),
+    (uint16_t)offsetof(CssRuleData, property_inherits),
+    (uint16_t)offsetof(CssRuleData, property_initial_value),
 };
 static const CowRecord RULE_REC = { sizeof(CssRuleData), RULE_VALS,
                                     (int)(sizeof(RULE_VALS) / sizeof(RULE_VALS[0])) };
@@ -261,6 +298,10 @@ static void rule_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, r->at_name);
     JS_FreeValueRT(rt, r->keyframes_name);
     JS_FreeValueRT(rt, r->layer_names);
+    JS_FreeValueRT(rt, r->property_names);
+    JS_FreeValueRT(rt, r->property_syntax);
+    JS_FreeValueRT(rt, r->property_inherits);
+    JS_FreeValueRT(rt, r->property_initial_value);
     free(r);
 }
 
@@ -285,6 +326,10 @@ static void rule_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
     JS_MarkValue(rt, r->at_name, mark_func);
     JS_MarkValue(rt, r->keyframes_name, mark_func);
     JS_MarkValue(rt, r->layer_names, mark_func);
+    JS_MarkValue(rt, r->property_names, mark_func);
+    JS_MarkValue(rt, r->property_syntax, mark_func);
+    JS_MarkValue(rt, r->property_inherits, mark_func);
+    JS_MarkValue(rt, r->property_initial_value, mark_func);
 }
 
 /* ---- §6.4's CSS RULE LIST, as INFRA's list operations over an Array ---------------------------------------- */
@@ -429,6 +474,10 @@ static JSValue rule_new(JSContext *ctx, int proto_slot, uint16_t type, JSValueCo
     r->at_name = JS_NULL;
     r->keyframes_name = JS_NULL;
     r->layer_names = JS_NULL;
+    r->property_names = JS_NULL;
+    r->property_syntax = JS_NULL;
+    r->property_inherits = JS_NULL;
+    r->property_initial_value = JS_NULL;
     JS_SetOpaque(obj, r);
     return obj;
 }
@@ -826,6 +875,124 @@ static JSValue layer_statement_rule_new(JSContext *ctx, JSValueConst parent_styl
     return obj;
 }
 
+/* THE `<custom-property-name>`s AN `@property` AT-RULE DECLARES, as the Array the record holds. It is an Array
+   for the reason every other collection on this record is one — it has to park to the IDB cold tier and fork per
+   flow, which a malloc'd list of pointers cannot (css_rule.h). It is NOT frozen the way CSS Cascade §8.2's
+   `nameList` is: the freeze there is Web IDL §2.13.35's, which belongs to a `FrozenArray<T>` VALUE a page holds,
+   and §6.1 hands no list to a page at all. */
+static JSValue property_names_array(JSContext *ctx, const CssPropertyNames *names)
+{
+    JSValue a = JS_NewArray(ctx);
+    unsigned i;
+
+    CHECK(!JS_IsException(a), "cssom: an `@property` rule's custom property name list could not be allocated");
+    DCHECK(names->n >= 1,
+           "an `@property` rule's parsed prelude carries NO name — §3's `<custom-property-name>#` has no "
+           "zero-length arm, so its parse answers false rather than handing back an empty list");
+    for (i = 0; i < names->n; i++) {
+        DCHECK(names->v[i] != NULL && names->v[i][0] == '-' && names->v[i][1] == '-',
+               "an `@property` rule's parsed prelude holds something that is not a `<custom-property-name>` — "
+               "CSS Variables §2 makes one a `<dashed-ident>`, and the one parser refuses anything else");
+        JS_SetPropertyUint32(ctx, a, i, JS_NewString(ctx, names->v[i]));
+    }
+    return a;
+}
+
+/* A CSS Properties and Values API 1 §6.1 CSSPropertyRule over the `@property` at-rule's prelude and its
+ * descriptor body.
+ *
+ * IT IS NOT A DECLARATION-BLOCK RULE, and §6.1's IDL is what says so: `interface CSSPropertyRule : CSSRule` with
+ * four readonly attributes and NO `style`. So the body's declarations are not STORED as this rule's block the
+ * way an `@font-face`'s are — there would be no member to read them back through, and `rule_block_context` would
+ * have had to answer a question §6.1 never asks. They are read ONCE, here, into the three fields the three
+ * descriptor attributes answer from, which is also what makes §6.1's serialization a walk over those fields
+ * rather than over a declaration block whose order the author chose (the spec's arm emits `syntax`, `inherits`
+ * and then `initial-value` whatever order they were written in, which `@property --valid-reverse` is exactly
+ * the case for).
+ *
+ * EVERY DESCRIPTOR IS OPTIONAL AND EVERY ONE HAS AN INITIAL, which is §3's own sentence — "while the
+ * <custom-property-name> is required, all of the descriptors are optional; when omitted, it matches the
+ * behavior of an unregistered custom property" — with §3.1's `Initial: "*"`, §3.2's `Initial: true` and §3.3's
+ * `Initial: the guaranteed-invalid value`. A descriptor whose VALUE does not match its own grammar is IGNORED
+ * and takes that initial, and an unknown descriptor is ignored too: §3 says both, and adds the half that
+ * matters most here — "unknown descriptors are invalid and ignored, BUT DO NOT INVALIDATE the @property rule".
+ * So nothing in this body can drop the rule, and the only thing that can is the prelude. */
+static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
+                                 const char *prelude, const char *block_text)
+{
+    CssPropertyNames names = { NULL, 0 };
+    JSValue obj;
+    CssRuleData *r;
+    size_t bl;
+    char *declared, *syntax = NULL;
+    bool inherits = true, universal = true;
+
+    DCHECK(prelude != NULL && block_text != NULL,
+           "a CSSPropertyRule was built without both of the texts it IS — `@property --x {}` declares NOTHING, "
+           "which is the empty string, and a prelude that is absent rather than empty is a parse that never "
+           "reported one");
+    if (!css_prelude_property_names(prelude, strlen(prelude), &names)) return JS_UNDEFINED;
+    obj = rule_new(ctx, PROTO_PROPERTY, RULE_TYPE_PROPERTY, parent_style_sheet, parent_rule);
+    if (JS_IsException(obj)) { css_property_names_free(&names); return obj; }
+    r = JS_GetOpaque(obj, g_rule_class);
+    JS_FreeValue(ctx, r->property_names);
+    r->property_names = property_names_array(ctx, &names);
+    css_property_names_free(&names);
+    bl = strlen(block_text);
+
+    /* §3.1 "The syntax Descriptor". Two things can leave the initial `"*"` standing and they are two different
+       sentences of the same section: a body that declares no `syntax` at all, and a `syntax` whose value is not
+       a single `<string>` or whose string is not a syntax string ("if it returns failure when consume a syntax
+       definition is called on it, the descriptor is invalid and must be ignored"). The stored value is the
+       string EXACTLY AS SPECIFIED — §6.1's own word — so ` <color># ` keeps its spaces, and §5.4.2's step 1 is
+       what strips them for the validity question alone. */
+    declared = cssom_declared_value(block_text, bl, "syntax");
+    if (declared) {
+        syntax = css_property_descriptor_syntax(declared, strlen(declared));
+        free(declared);
+    }
+    if (syntax && !css_property_syntax_definition(syntax, strlen(syntax), &universal)) {
+        free(syntax);
+        syntax = NULL;
+        universal = true;   /* the descriptor is ignored, so §3.1's initial `"*"` — the universal one — stands */
+    }
+    DCHECK(universal || syntax != NULL,
+           "an `@property` rule holds a NON-universal syntax definition with no syntax string behind it — the "
+           "only definition this rule can have without one is §3.1's initial `\"*\"`, which IS §5.4.1's "
+           "universal syntax definition");
+    JS_FreeValue(ctx, r->property_syntax);
+    r->property_syntax = JS_NewString(ctx, syntax ? syntax : "*");
+    free(syntax);
+
+    /* §3.2 "The inherits Descriptor" — `Value: true | false`, `Initial: true`. A value that is neither leaves
+       the initial standing, by §3's ignore rule. */
+    declared = cssom_declared_value(block_text, bl, "inherits");
+    if (declared) {
+        css_property_descriptor_inherits(declared, strlen(declared), &inherits);
+        free(declared);
+    }
+    JS_FreeValue(ctx, r->property_inherits);
+    r->property_inherits = JS_NewBool(ctx, inherits);
+
+    /* §3.3 "The initial-value Descriptor" — `Value: <declaration-value>?`, `Initial: the guaranteed-invalid
+       value`, which §6.1 answers as its nullable `initialValue`'s NULL.
+       §3.3's REMAINING CONDITION IS A VALUE PARSE AND THIS BUILD HAS NO PARSER FOR IT: "if specified, the value
+       of the initial-value descriptor must successfully parse according to the rule's syntax descriptor, or
+       else the descriptor is invalid and ignored", and §4.1 spells out that "according to" is two different
+       parses — "<declaration-value>? if syntax definition is the universal syntax definition, and according to
+       syntax definition otherwise". The UNIVERSAL arm is decided by construction: lexbor parsed this body as
+       declarations, so a value that reached this line already IS a `<declaration-value>`. The OTHER arm needs
+       §5's second half — matching a value against the syntax components §5.4.3 produces, which needs the
+       grammars of §5.1's fifteen types — and until that component exists a value declared under a non-universal
+       syntax is stored as declared. That is the one place a CSSPropertyRule can answer something a browser
+       does not, and it is why css_property_syntax.h keeps the components rather than calling itself finished. */
+    declared = cssom_declared_value(block_text, bl, "initial-value");
+    JS_FreeValue(ctx, r->property_initial_value);
+    r->property_initial_value = declared ? JS_NewString(ctx, declared) : JS_NULL;
+    free(declared);
+    return obj;
+}
+
 static void rule_orphan(JSContext *ctx, JSValueConst rule)
 {
     /* THE BRAND IS ASSERTED, NOT THROWN: this is an algorithm §6.4 invokes on a rule it already holds, never a
@@ -1004,6 +1171,17 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        written where §6.4.4.1 admits only rules is invalid in that context and CSS Syntax drops it; inside a
        NESTED `@layer` it would be CSSOM's CSSNestedDeclarations, a rule interface this build does not have and
        whose absence the parse walk already records. */
+    /* CSS Properties and Values API 1 §3 makes `@property` a BLOCK at-rule (`@property <custom-property-name>#
+       { <declaration-list> }`), so `@property --x;` is an at-rule whose grammar failed and CSS Syntax drops it
+       — the same shape `@font-face;` and `@page;` have, and dropped here for the same reason.
+       ITS BODY IS DECLARATIONS AND NOTHING ELSE, so `pr->block` is read and no child rule of it can be one: a
+       rule written inside a `<declaration-list>` is invalid in that context, which is the sentence `@font-face`
+       and a `<keyframe-block>` already get and which `rule_built` applies from the other side through
+       `rule_type_has_child_rules`. */
+    if (strcmp(pr->at_name, "property") == 0)
+        return pr->has_block ? property_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude,
+                                                 pr->block ? pr->block : "")
+                             : JS_UNDEFINED;
     if (strcmp(pr->at_name, "layer") == 0)
         return pr->has_block ? layer_block_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude)
                              : layer_statement_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude);
@@ -1058,14 +1236,14 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
    silently deleted by the one call that was supposed to deliver it. `sizeof` the literal is what it will
    actually be, and `unbuilt` bounds the name at 64, so the sum is a size that cannot go stale when the next
    interface is struck off the list.
-   AND A LIST OF WHAT REMAINS IS A CLAIM, WHICH THIS ONE GOT WRONG IN THE DIRECTION THAT COSTS MOST. It named
-   four interfaces and omitted `@property` — and `@property` is the one that fires, because a single
-   `@property --x { … }` in a shipping site's stylesheet aborts that instance at stage `create` with ZERO flows
-   run, so the whole document is lost before any of it executes. A reader standing at that abort was told to go
-   and build one of four things, none of them the one in front of them: the stale-`DFAIL` failure mode with a
-   spec behind it — authoritative, wrong, and followed. A name goes on this list because a standard defines an
-   interface for it, never because somebody remembered it, so each one carries the section number AND TITLE it
-   was read from and the next name added is read from the spec before it is written here. */
+   AND A LIST OF WHAT REMAINS IS A CLAIM, WHICH THIS ONE HAS ALREADY GOT WRONG IN THE DIRECTION THAT COSTS
+   MOST. It once named four interfaces and omitted the one that fires: a single `@property --x { … }` in a
+   shipping site's stylesheet aborted that instance at stage `create` with ZERO flows run, so the whole document
+   was lost before any of it executed, and the reader standing at that abort was told to go and build one of
+   four things, none of them the one in front of them. That is the stale-`DFAIL` failure mode with a spec behind
+   it — authoritative, wrong, and followed. A name goes on this list because a standard defines an interface for
+   it, never because somebody remembered it; each one carries the section number AND TITLE it was read from; and
+   a name comes OFF it in the same diff that builds the interface, which is the half that keeps it honest. */
 static void rule_unbuilt_fail(const char *name)
 {
 #define RULE_UNBUILT_FMT                                                                                       \
@@ -1073,23 +1251,15 @@ static void rule_unbuilt_fail(const char *name)
     "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "            \
     "CSSMarginRule, §6.4.9's CSSNamespaceRule, CSS Conditional §7.2's CSSConditionRule, §7.3's "                \
     "CSSMediaRule, §7.4's CSSSupportsRule, CSS Fonts §12.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's "      \
-    "CSSKeyframeRule and CSSKeyframesRule, and CSS Cascade §8.1/§8.2's CSSLayerBlockRule and "                  \
-    "CSSLayerStatementRule are built; what remains is CSS Properties and Values API 1 §3 `The @property "       \
-    "Rule` / §6.1 `The CSSPropertyRule Interface`, CSS Cascade 6 §4.1's CSSScopeRule, CSS Contain's "           \
-    "CSSContainerRule, CSS Counter Styles 3 §9.2's CSSCounterStyleRule and CSS Fonts 4 §12.2's "                \
-    "CSSFontFeatureValuesRule — the last two have their §6.4.2 TYPE NUMBER declared (11 and 14) and no "        \
-    "interface behind it, which is what puts them on this list rather than off it, while CSSPropertyRule has "  \
-    "no number at all (§6.4.2's table is frozen, so its `type` is 0, like the two CSSLayer* rules above it). "  \
-    "CSSPropertyRule is FIRST because `@property` is the one on this list that shipping documents actually "    \
-    "carry — an author registers a custom property to animate it, so it appears in ordinary site CSS rather "   \
-    "than in a stylesheet written to exercise a corner. §6.1's IDL is four readonly attributes over `CSSRule` " \
-    "and no `style` — `name`, `syntax`, "                                                                      \
-    "`inherits`, `initialValue` — so it is NOT a declaration-block rule and must not be minted as one; its "    \
-    "prelude is §3's `<custom-property-name>#` and its body supplies §3.1's `syntax` (initial \"*\"), §3.2's "  \
-    "`inherits` (initial true) and §3.3's `initial-value` (initial the guaranteed-invalid value, i.e. a null "  \
-    "`initialValue`), with every descriptor OPTIONAL and an unknown one ignored without invalidating the "      \
-    "rule. Build the one this names and mint it in rule_from_parse — do NOT skip the rule, because every "      \
-    "index after it would then name a different rule than the page's"
+    "CSSKeyframeRule and CSSKeyframesRule, CSS Cascade §8.1/§8.2's CSSLayerBlockRule and "                      \
+    "CSSLayerStatementRule, and CSS Properties and Values API 1 §6.1's CSSPropertyRule are built; what "        \
+    "remains is CSS Cascade 6 §4.1's CSSScopeRule, CSS Contain's CSSContainerRule, CSS Counter Styles 3 "       \
+    "§9.2's CSSCounterStyleRule and CSS Fonts 4 §12.2's CSSFontFeatureValuesRule — the last two have their "    \
+    "§6.4.2 TYPE NUMBER declared (11 and 14) and no interface behind it, which is what puts them on this list " \
+    "rather than off it, while the other two have no number at all (§6.4.2's table is frozen, so their `type` " \
+    "is 0, like the CSSLayer* and CSSProperty rules above them). Build the one this names and mint it in "      \
+    "rule_from_parse — do NOT skip the rule, because every index after it would then name a different rule "    \
+    "than the page's"
 
     char msg[sizeof RULE_UNBUILT_FMT + sizeof ((RuleBuild *)0)->unbuilt];
 
@@ -1730,6 +1900,92 @@ static bool layer_statement_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf 
     return true;
 }
 
+/* CSS Properties and Values API 1 §6.1's `name` — "the custom property name associated with the @property
+ * rule" — read out of the LIST §3's prelude declares. It is ONE reader because §6.1's `name` attribute and
+ * §6.1's serialization arm ask the identical question, and because that question has an unresolved answer for
+ * one shape of rule, which must therefore be stated once. OWNED (a string). */
+static JSValue property_rule_name(JSContext *ctx, CssRuleData *r)
+{
+    DCHECK(JS_IsArray(r->property_names),
+           "an `@property` rule's custom property name list is not an Array — the one creator builds one before "
+           "the rule is handed to anybody, and nothing replaces it");
+    DCHECK(array_len(ctx, r->property_names) == 1,
+           "an `@property` rule declares SEVERAL custom property names and §6.1 gives the interface ONE `name`. "
+           "That is not a gap in this build: §3 admits the list ('a valid @property rule represents a custom "
+           "property registration for EACH <custom-property-name> in the rule's prelude') and §6.1 carries the "
+           "CSSWG's own note that 'the CSSOM for multi-name @property rules has not been resolved on' "
+           "(w3c/csswg-drafts issue #14227). So the rule is VALID and the ATTRIBUTE has no defined answer — "
+           "there is nothing to invent, and picking the first name would be a value indistinguishable from a "
+           "computed one. Build whatever that resolution says, HERE, which is the one place both `name` and "
+           "§6.1's serialization read");
+    return JS_GetPropertyUint32(ctx, r->property_names, 0);
+}
+
+/* CSS Properties and Values API 1 §6.1's OWN SERIALIZATION ARM, which that section states in full — unlike
+ * §6.4.7's and §6.4.8's, which had to be derived. Its pieces, in order: `"@property"` and a SPACE; serialize an
+ * identifier on the rule's name and a SPACE; the string `"{ "`; `"syntax:"` and a SPACE; serialize a string on
+ * the rule's syntax, a SEMICOLON and a SPACE; `"inherits:"` and a SPACE; `"true"` or `"false"` by the
+ * attribute's value, a SEMICOLON and a SPACE; then, IF the initial-value is present, `"initial-value:"`,
+ * serialize a CSS value on it, a SEMICOLON and a SPACE; then a RIGHT CURLY BRACKET.
+ *
+ * THE ONE PLACE THIS DIVERGES FROM THE STEP AS WRITTEN IS THE SPACE AFTER `initial-value:`. That step names the
+ * string `"initial-value:"` and stops, where its two siblings four and six each name the descriptor name AND
+ * "a single SPACE (U+0020)" — and the platform emits the space: css/css-properties-values-api/
+ * at-property-cssom.html pins `@property --valid { syntax: "<color> | none"; inherits: false; initial-value:
+ * red; }` byte for byte, so the omission is an editorial slip in one step of one arm rather than a difference
+ * anybody implements. The three descriptors are emitted in the SECTION'S order and never the author's, which is
+ * what that same test's `--valid-reverse` reads back from a rule written initial-value first.
+ *
+ * `serialize a CSS value` OVER A TOKEN STREAM IS THE STREAM. §3.3 types the descriptor `<declaration-value>?`,
+ * which has no parsed form to re-serialize from — the value is whatever tokens the author wrote — so what is
+ * emitted is what was declared, which is also what makes `initial-value: red, blue` come back with its comma. */
+static bool property_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
+{
+    JSValue name_val = property_rule_name(ctx, r);
+    size_t nl = 0, sl = 0, il = 0;
+    char *name = rule_text_copy(ctx, name_val, &nl);
+    char *syntax, *initial, *piece;
+
+    JS_FreeValue(ctx, name_val);
+    DCHECK(name != NULL,
+           "an `@property` rule has no name. §3's `<custom-property-name>#` has no arm without one and the one "
+           "creator refuses a prelude that lacks one, so a null here means the string conversion itself failed");
+    if (!name) return false;
+    syntax = rule_text_copy(ctx, r->property_syntax, &sl);
+    DCHECK(syntax != NULL,
+           "an `@property` rule has no syntax. §3.1's descriptor is OPTIONAL and its INITIAL is `\"*\"`, which "
+           "the creator stores for a rule that declares none — so the field is a string on every `@property` "
+           "rule there is and a null here is the conversion failing");
+    if (!syntax) { free(name); return false; }
+    DCHECK(JS_IsBool(r->property_inherits),
+           "an `@property` rule's inherit flag is not a boolean — §3.2's descriptor is OPTIONAL with the INITIAL "
+           "`true`, so the creator stores one of the two on every rule and there is no third state to reach");
+    rbuf_add(out, "@property ");
+    piece = css_serialize_identifier(name, nl);
+    rbuf_add(out, piece);
+    free(piece);
+    free(name);
+    rbuf_add(out, " { syntax: ");
+    piece = css_serialize_string(syntax, sl);
+    rbuf_add(out, piece);
+    free(piece);
+    free(syntax);
+    rbuf_add(out, "; inherits: ");
+    rbuf_add(out, JS_ToBool(ctx, r->property_inherits) ? "true" : "false");
+    rbuf_add(out, "; ");
+    /* "If the rule's initial-value is present" — §3.3's initial is the guaranteed-invalid value, which is this
+       field's JS_NULL and is exactly the absence this step tests. */
+    initial = rule_text_copy(ctx, r->property_initial_value, &il);
+    if (initial) {
+        rbuf_add(out, "initial-value: ");
+        rbuf_add(out, initial);
+        rbuf_add(out, "; ");
+        free(initial);
+    }
+    rbuf_add(out, "}");
+    return true;
+}
+
 /* One of the record's texts as a C string, or NULL when the field is JS_NULL — which for §6.4.4's `layerName`
    and `supportsText` is the attribute's own null and therefore a piece the serialization omits. */
 static char *rule_opt_text(JSContext *ctx, JSValueConst v)
@@ -1884,6 +2140,7 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
     case RULE_TYPE_KEYFRAME:  return keyframe_rule_serialize(ctx, r, out);
     case RULE_TYPE_LAYER_BLOCK:     return layer_block_rule_serialize(ctx, r, rule, out);
     case RULE_TYPE_LAYER_STATEMENT: return layer_statement_rule_serialize(ctx, r, out);
+    case RULE_TYPE_PROPERTY:        return property_rule_serialize(ctx, r, out);
     default:
         DCHECK(r->type == RULE_TYPE_STYLE, "§6.4's serialize a CSS rule met a rule type it has no arm for");
         return style_rule_serialize(ctx, r, rule, out);
@@ -1896,7 +2153,8 @@ enum { CR_PARENT_RULE = 0, CR_PARENT_STYLE_SHEET, CR_TYPE, CR_CSS_TEXT, CR_SELEC
        CR_MEDIA, CR_MATCHES, CR_SUPPORTS_MATCHES, CR_CSS_RULES, CR_HREF, CR_IMPORT_MEDIA, CR_LAYER_NAME,
        CR_SUPPORTS_TEXT,
        CR_NAMESPACE_URI, CR_PREFIX, CR_PAGE_SELECTOR_TEXT, CR_MARGIN_NAME, CR_KEY_TEXT, CR_KEYFRAMES_NAME,
-       CR_KEYFRAMES_CSS_RULES, CR_KEYFRAMES_LENGTH, CR_LAYER_BLOCK_NAME, CR_LAYER_NAME_LIST };
+       CR_KEYFRAMES_CSS_RULES, CR_KEYFRAMES_LENGTH, CR_LAYER_BLOCK_NAME, CR_LAYER_NAME_LIST,
+       CR_PROPERTY_NAME, CR_PROPERTY_SYNTAX, CR_PROPERTY_INHERITS, CR_PROPERTY_INITIAL_VALUE };
 
 /* §6.4.5's `[SameObject] cssRules` and CSS Animations §6.3.2's, which are one read of one Array. The
    collection is remembered on the record because both are [SameObject], and it SHARES the very Array the
@@ -2105,6 +2363,36 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     case CR_LAYER_NAME_LIST:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_LAYER_STATEMENT, "CSSLayerStatementRule");
         return r ? JS_DupValue(ctx, r->layer_names) : JS_EXCEPTION;
+    /* CSS Properties and Values API 1 §6.1: "name, of type CSSOMString, readonly — The custom property name
+       associated with the @property rule." UNSERIALIZED, which is the difference from `cssText`: §6.1's own
+       serialization arm performs serialize-an-identifier on this value, so what the attribute returns is the
+       name itself (`--tab\ttab` for a rule written `--tab\9 tab`) and the escaping belongs to the other reader.
+       It is the same split CSS Animations §6.3.2's `name` has and for the same reason. */
+    case CR_PROPERTY_NAME:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_PROPERTY, "CSSPropertyRule");
+        return r ? property_rule_name(ctx, r) : JS_EXCEPTION;
+    /* §6.1: "syntax, of type CSSOMString, readonly — The syntax associated with the @property, EXACTLY AS
+       SPECIFIED." So it is the `<string>`'s own value with nothing trimmed — `" <color># "` reads back with its
+       spaces — and it is §3.1's initial `"*"` for a rule that declares no syntax or declares one §5.4.2 refuses,
+       which is that section's "the descriptor is invalid and must be ignored" and not a stand-in. */
+    case CR_PROPERTY_SYNTAX:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_PROPERTY, "CSSPropertyRule");
+        return r ? JS_DupValue(ctx, r->property_syntax) : JS_EXCEPTION;
+    /* §6.1: "inherits, of type boolean, readonly — The inherits descriptor associated with the @property
+       rule." §3.2's initial is `true`, which the creator stores for a rule that declares none. */
+    case CR_PROPERTY_INHERITS:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_PROPERTY, "CSSPropertyRule");
+        if (!r) return JS_EXCEPTION;
+        DCHECK(JS_IsBool(r->property_inherits),
+               "§6.1 types `inherits` a boolean and the record holds something else — §3.2's descriptor is "
+               "optional with an INITIAL, so every `@property` rule carries one of the two flags");
+        return JS_DupValue(ctx, r->property_inherits);
+    /* §6.1: "initialValue, of type CSSOMString, readonly, nullable — The initial value associated with the
+       @property rule, WHICH MAY NOT BE PRESENT." The null is §3.3's own initial (the guaranteed-invalid value)
+       and is therefore a real answer rather than an absence this getter has to invent. */
+    case CR_PROPERTY_INITIAL_VALUE:
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_PROPERTY, "CSSPropertyRule");
+        return r ? JS_DupValue(ctx, r->property_initial_value) : JS_EXCEPTION;
     /* §6.4.5: "The cssRules attribute must return a CSSRuleList object for the child CSS rules." [SameObject],
        so the collection is remembered on the record — and it shares the very Array the children live in, which
        is what its liveness IS. */
@@ -2749,6 +3037,12 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        ANIMATION that names it (§4.1's `animation-name`), which is a step after the cascade rather than a rule
        in it — CSS Cascade §6.1 puts animations in an origin of their own, above every author declaration. */
     if (r->type == RULE_TYPE_KEYFRAMES) return true;
+    /* NOR DOES AN `@property`, and for a FIFTH: CSS Properties and Values API 1 §3 makes it "a custom property
+       REGISTRATION directly in a stylesheet", whose body declares §3.1's, §3.2's and §3.3's descriptors and no
+       property of any element. It has no selector, so it matches nothing and cannot; what it changes is how a
+       custom property's value is PARSED at computed-value time (§2.2 through §2.4), which is a step below the
+       cascade and reads the registration rather than this rule list. */
+    if (r->type == RULE_TYPE_PROPERTY) return true;
     /* A §6.4.4.2 `@layer` STATEMENT CONTRIBUTES ONLY TO THE ORDER, which is the whole of what the at-rule is
        for: it is "declaring a named layer WITHOUT ASSIGNING ANY RULES" (CSS Cascade §6.4.1), so there is
        nothing inside it for a selector to match and nothing to emit. What it decides is where those layers sit
@@ -2938,6 +3232,8 @@ void css_rule_init(JSContext *ctx)
         realm_value_declare(ctx, "CSS Cascade §8.1 CSSLayerBlockRule.prototype");
     g_proto_slot[PROTO_LAYER_STATEMENT] =
         realm_value_declare(ctx, "CSS Cascade §8.2 CSSLayerStatementRule.prototype");
+    g_proto_slot[PROTO_PROPERTY] =
+        realm_value_declare(ctx, "CSS Properties and Values API 1 §6.1 CSSPropertyRule.prototype");
     g_id_set_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_selector, 0);
     g_id_set_page_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_page_selector, 0);
     g_id_set_key_text = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_key_text, 0);
@@ -2967,7 +3263,7 @@ void css_rule_init(JSContext *ctx)
 void css_rule_install_proto(JSContext *ctx)
 {
     JSValue base, grouping, style, condition, media, supports, import_rule, ns, font_face, page, margin;
-    JSValue keyframes, keyframe, layer_block, layer_statement;
+    JSValue keyframes, keyframe, layer_block, layer_statement, property_rule;
 
     DCHECK(g_rule_class != 0, "a realm asked for the rule prototypes before the interfaces existed");
 
@@ -3133,7 +3429,22 @@ void css_rule_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, layer_statement, "CSSLayerStatementRule");
     idl_install_accessor(ctx, layer_statement, "nameList", js_rule_get, CR_LAYER_NAME_LIST, -1);
 
+    /* CSS Properties and Values API 1 §6.1's CSSPropertyRule.prototype — from CSSRule directly, because §6.1
+       declares `interface CSSPropertyRule : CSSRule` and an `@property` body is §3's `<declaration-list>` with
+       no rule in it. ITS FOUR MEMBERS ARE THE WHOLE INTERFACE, and the one that is NOT there is the point:
+       §6.1's IDL has no `style`, so an `@property` rule's descriptors are not reachable as a §6.6 declaration
+       block and the three that exist are read through attributes of their own. `initialValue` is the only
+       nullable one, which is §3.3's initial showing through. */
+    property_rule = JS_NewObjectProto(ctx, base);
+    CHECK(!JS_IsException(property_rule), "CSSPropertyRule.prototype could not be allocated");
+    idl_interface_tag(ctx, property_rule, "CSSPropertyRule");
+    idl_install_accessor(ctx, property_rule, "name", js_rule_get, CR_PROPERTY_NAME, -1);
+    idl_install_accessor(ctx, property_rule, "syntax", js_rule_get, CR_PROPERTY_SYNTAX, -1);
+    idl_install_accessor(ctx, property_rule, "inherits", js_rule_get, CR_PROPERTY_INHERITS, -1);
+    idl_install_accessor(ctx, property_rule, "initialValue", js_rule_get, CR_PROPERTY_INITIAL_VALUE, -1);
+
     /* Each into the realm's own slot, which asserts on its own that this install ran once in this realm. */
+    realm_value_set(ctx, g_proto_slot[PROTO_PROPERTY], property_rule);
     realm_value_set(ctx, g_proto_slot[PROTO_KEYFRAMES], keyframes);
     realm_value_set(ctx, g_proto_slot[PROTO_KEYFRAME], keyframe);
     realm_value_set(ctx, g_proto_slot[PROTO_LAYER_BLOCK], layer_block);
@@ -3185,6 +3496,9 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
            statement at-rule has no block and so contains nothing. */
         { "CSSLayerBlockRule",     PROTO_LAYER_BLOCK,     1 },
         { "CSSLayerStatementRule", PROTO_LAYER_STATEMENT, 0 },
+        /* CSS Properties and Values API 1 §6.1 declares `interface CSSPropertyRule : CSSRule` — index 0 —
+           because an `@property` contains no rules and has no declaration block a page can reach. */
+        { "CSSPropertyRule",       PROTO_PROPERTY,        0 },
     };
     JSValue iface[sizeof(IFACES) / sizeof(IFACES[0])];
     unsigned i, n = sizeof(IFACES) / sizeof(IFACES[0]);

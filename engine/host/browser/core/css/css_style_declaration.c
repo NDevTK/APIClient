@@ -564,6 +564,13 @@ static char *cssd_value_in_block(const char *text, size_t len, const char *name,
     return out;
 }
 
+char *cssom_declared_value(const char *text, size_t len, const char *name)
+{
+    DCHECK(g_ready, "a declaration block was read before cssom_init built the parser it goes through");
+    DCHECK(name != NULL, "a declaration block was asked what it declares for nothing");
+    return cssd_value_in_block(text, len, name, NULL);
+}
+
 /* §6.6.1's GET PROPERTY VALUE over a block's text, including the step that is only reachable now that the
    longhand->shorthand direction exists: "if property is a shorthand property ... for each longhand property
    longhand that property maps to, in canonical order ... if declaration is null, then return the empty string

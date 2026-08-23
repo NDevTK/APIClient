@@ -63,6 +63,16 @@ bool css_wide_keyword(const char *v)
     return false;
 }
 
+bool css_custom_ident_excluded(const char *name)
+{
+    DCHECK(name != NULL, "CSS Values §4.2's `<custom-ident>` exclusion was asked about a NULL name");
+    /* `default` is BESIDE the CSS-wide keywords rather than in them: §4.2 states it in a sentence of its own
+       ("The default keyword is reserved and is also not a valid <custom-ident>") and it is not a CSS-wide
+       keyword anywhere in the cascade, so adding a row to the table above would make `x: default` a defaulting
+       declaration on every property. */
+    return css_wide_keyword(name) || css_def_keyword_is(name, "default");
+}
+
 CssRollback css_rollback_keyword(const char *v)
 {
     unsigned i;

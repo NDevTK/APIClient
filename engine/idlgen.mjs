@@ -365,6 +365,10 @@ const INTERFACES = {
      `nameList`, so it is expected to report nothing either. */
   CSSLayerBlockRule:    "core/css/css_rule.c",
   CSSLayerStatementRule: "core/css/css_rule.c",
+  /* CSS Properties and Values API 1 §6.1, same component again. It inherits CSSRule and declares four readonly
+     attributes and NO `style`, so its row is expected to report NOTHING missing — and a `style` appearing in
+     this row's MISSING list would mean the spec grew one, not that this build lost one. */
+  CSSPropertyRule:      "core/css/css_rule.c",
   /* CSS Fonts §12.1's and CSSOM §6.4.7's descriptor blocks. Their file is the DECLARATION-BLOCK component and
      not the rule's: the descriptor attributes are installed beside §6.6.1's per-property ones, over the same
      record. Both rows are expected to report nothing missing — each interface's members are exactly its own

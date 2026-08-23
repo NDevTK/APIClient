@@ -80,6 +80,20 @@ typedef enum {
  * agree without any of them asking the question for itself. */
 char *cssom_serialize_declarations(const char *text, size_t len, CssomBlockContext context);
 
+/* WHAT A BLOCK'S TEXT DECLARES FOR ONE NAME, as the declaration wrote it — the ONE declaration §6.6.1's "exactly
+ * one CSS declaration whose property name is a case-sensitive match of property must exist in declarations"
+ * guarantees is there, out of the ONE builder every other reader of a block goes through. OWNED; NULL when the
+ * block declares that name nowhere, which is a real answer and not a failure.
+ *
+ * IT EXISTS FOR AT-RULE BODIES THAT DECLARE DESCRIPTORS RATHER THAN PROPERTIES. A descriptor is not a CSS
+ * property — nothing outside its at-rule accepts `syntax` or `inherits` — so it maps to no longhand, has no
+ * shorthand, and is answered here exactly as it was declared; what the DESCRIPTOR'S OWN GRAMMAR then makes of
+ * that text belongs to the at-rule (core/css/css_at_rule_prelude.h), because this component knows only that a
+ * declaration block declared something. §6.6.1's `getPropertyValue` is NOT this entry and must not become it:
+ * that one runs the shorthand-assembly steps on top, which for a descriptor would be a question with no
+ * meaning. */
+char *cssom_declared_value(const char *text, size_t len, const char *name);
+
 /* §6.4.3's `style`: a CSSStyleProperties whose DECLARATIONS are `rule`'s — computed flag unset, readonly flag
    unset, parent CSS rule the rule, owner node null. Every read and every write goes back through the rule's own
    record, so two flows disagree about `rule.style.color` exactly as they disagree about an inline style.

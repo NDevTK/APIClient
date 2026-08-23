@@ -63,6 +63,18 @@ bool css_property_inherited(const char *name);
    disagree about `revert-rule`, and one of them did. */
 bool css_wide_keyword(const char *value);
 
+/* Is `name` A KEYWORD NO `<custom-ident>` MAY SPELL — CSS Values 4 §4.2 "Unprefixed Author-defined Identifiers:
+   the <custom-ident> type": "The CSS-wide keywords are not valid <custom-ident>s. The default keyword is
+   reserved and is also not a valid <custom-ident>. ... Excluded keywords are excluded in all ASCII case
+   permutations."
+   IT IS THE FLOOR AND NOT ANY ONE GRAMMAR'S WHOLE REFUSAL, which is the same sentence's next clause:
+   "specifications using <custom-ident> must specify clearly what other keywords are excluded". CSS Animations
+   §3 adds `none` to a `<keyframes-name>` and CSS Properties and Values API 1 §5.4.3 adds nothing to a syntax
+   component's name, so each caller asks this and then states its OWN additions beside it. It lives here rather
+   than in either caller because both would otherwise carry a copy of §4.2's set, and two copies disagree about
+   `revert-rule` — which has already happened once to the set above. */
+bool css_custom_ident_excluded(const char *name);
+
 /* WHICH OF §7.3's THREE CASCADE-DEPENDENT KEYWORDS a value is, if it is one. §7.3's own opening sentence names
  * them as a set and says what makes them different from the other three: "The keywords revert, revert-layer,
  * and revert-rule are CASCADE-DEPENDENT keywords; some contexts may restrict their use while allowing the other

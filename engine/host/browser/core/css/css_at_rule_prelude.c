@@ -1,6 +1,7 @@
-/* CSS Cascade §2's, CSS Namespaces §2's, CSS Paged Media §4.3's and CSS Animations §3's rule preludes. See
- * css_at_rule_prelude.h for why this is a component, why it tokenizes with lexbor's own tokenizer, which
- * spans stay raw source, and why a `<keyframe-block>`'s prelude is one of these. */
+/* CSS Cascade §2's, CSS Namespaces §2's, CSS Paged Media §4.3's, CSS Animations §3's and CSS Properties and
+ * Values API 1 §3's at-rule grammars. See css_at_rule_prelude.h for why this is a component, why it tokenizes
+ * with lexbor's own tokenizer, which spans stay raw source, why a `<keyframe-block>`'s prelude is one of these,
+ * and why `@property`'s DESCRIPTORS are here beside its prelude. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -421,12 +422,12 @@ static bool pre_keyword_is(const char *v, const char *lower)
 bool css_prelude_keyframes_name_excluded(const char *name)
 {
     DCHECK(name != NULL, "a `<keyframes-name>` exclusion was asked about with no name");
-    /* CSS Cascade §7.3's FIVE ARE READ FROM THE ONE PLACE THAT HOLDS THEM, never restated: a second copy here
-       could disagree about `revert-layer`, and core/css/css_defaulting.h's test already folds ASCII case.
-       `default` is beside them rather than in them because CSS Values §4.2 states it in a sentence of its own
-       ("The default keyword is reserved and is also not a valid <custom-ident>") and it is not a CSS-wide
-       keyword anywhere else in the cascade; `none` is CSS Animations §3's own addition to the list. */
-    return css_wide_keyword(name) || pre_keyword_is(name, "default") || pre_keyword_is(name, "none");
+    /* CSS Values §4.2's `<custom-ident>` set is READ FROM THE ONE PLACE THAT HOLDS IT (core/css/css_defaulting.h)
+       and never restated: a second copy here could disagree about `revert-layer`, and that test already folds
+       ASCII case as §4.2 requires. `none` is CSS Animations §3's own addition on top of it — the clause §4.2
+       reserves for a specification using the production ("must specify clearly what other keywords are
+       excluded"), which is why it is spelled here and the rest is not. */
+    return css_custom_ident_excluded(name) || pre_keyword_is(name, "none");
 }
 
 char *css_prelude_keyframes_name(const char *prelude, size_t len)
@@ -527,13 +528,21 @@ fail:
  * See css_at_rule_prelude.h for why one entry serves both `@layer` grammars, why an empty list is an answer
  * rather than a failure, where the whitespace is significant, and why each name crosses serialized. */
 
+/* ONE NAME JOINING A LIST OF THEM. The growth is shared by the two at-rules that declare a `#`-multiplied list
+   of names (`@layer`'s `<layer-name>#` and `@property`'s `<custom-property-name>#`), which is why it takes the
+   two fields rather than either list type — the lists are two different FACTS and this is one allocation. */
+static void pre_names_push(char ***pv, unsigned *pn, char *one)   /* CONSUMES one */
+{
+    char **grown = realloc(*pv, (size_t)(*pn + 1) * sizeof(*grown));
+
+    CHECK(grown != NULL, "cssom: OOM collecting an at-rule's declared names");
+    *pv = grown;
+    (*pv)[(*pn)++] = one;
+}
+
 static void pre_layer_names_push(CssLayerNames *out, char *one)   /* CONSUMES one */
 {
-    char **grown = realloc(out->v, (size_t)(out->n + 1) * sizeof(*grown));
-
-    CHECK(grown != NULL, "cssom: OOM collecting an `@layer` at-rule's layer names");
-    out->v = grown;
-    out->v[out->n++] = one;
+    pre_names_push(&out->v, &out->n, one);
 }
 
 void css_layer_names_free(CssLayerNames *p)
@@ -650,4 +659,112 @@ void css_layer_name_segments(const char *name, CssLayerNames *out)
         start = ++i;
     }
     *out = got;
+}
+
+/* ---- CSS Properties and Values API 1 §3's `@property` — its prelude AND its descriptors --------------------
+ *
+ * See css_at_rule_prelude.h for why one at-rule's grammar stays in one file even when half of it is a body,
+ * what a `<custom-property-name>` is, and why a name crosses unescaped and case-sensitive. */
+
+void css_property_names_free(CssPropertyNames *p)
+{
+    unsigned i;
+
+    DCHECK(p != NULL, "an `@property` at-rule's custom property names were freed through no list");
+    for (i = 0; i < p->n; i++) free(p->v[i]);
+    free(p->v);
+    p->v = NULL;
+    p->n = 0;
+}
+
+bool css_prelude_property_names(const char *prelude, size_t len, CssPropertyNames *out)
+{
+    Prelude p = { NULL, NULL, 0 };
+    CssPropertyNames got = { NULL, 0 };
+    lxb_css_syntax_token_t *t;
+
+    DCHECK(out != NULL, "§3's prelude was parsed with nowhere to report the custom property names it declares");
+    if (!pre_open(&p, prelude, len)) return false;
+    for (;;) {
+        char *one;
+
+        /* A `<dashed-ident>` IS AN IDENT TOKEN and there is no other shape it can arrive in: CSS Syntax §4.3.9
+           starts an ident sequence on a U+002D followed by another U+002D, so `--foo` tokenizes whole. */
+        t = pre_peek_ws(&p);
+        if (!t || t->type != LXB_CSS_SYNTAX_TOKEN_IDENT) goto fail;
+        one = pre_token_string(t);
+        /* CSS Variables §2's two restrictions, and both are on the token's VALUE rather than on its spelling:
+           the name must start with two dashes, and `--` alone is "reserved for future use by CSS" and is not a
+           custom property name. `\2d\2d x` is therefore `--x` and is accepted, which is the same reading that
+           makes `@layer \69 nherit` refused. */
+        if (one[0] != '-' || one[1] != '-' || one[2] == '\0') { free(one); goto fail; }
+        pre_take(&p);
+        pre_names_push(&got.v, &got.n, one);
+        t = pre_peek_ws(&p);
+        if (!t) goto fail;
+        if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) break;
+        /* The `#` multiplier, whose commas may carry whitespace. A TRAILING comma reaches the top of the loop
+           with the EOF token in front of it and is refused there, so `@property --a, { }` is not a rule. */
+        if (t->type != LXB_CSS_SYNTAX_TOKEN_COMMA) goto fail;
+        pre_take(&p);
+    }
+    DCHECK(got.n >= 1, "an `@property` prelude matched `<custom-property-name>#` with no name in it — the `#` "
+                       "multiplier has no zero-length arm and the loop above cannot leave without pushing one");
+    pre_close(&p);
+    *out = got;
+    return true;
+
+fail:
+    css_property_names_free(&got);
+    pre_close(&p);
+    return false;
+}
+
+char *css_property_descriptor_syntax(const char *value, size_t len)
+{
+    Prelude p = { NULL, NULL, 0 };
+    lxb_css_syntax_token_t *t;
+    char *out = NULL;
+
+    if (!pre_open(&p, value, len)) return NULL;
+    t = pre_peek_ws(&p);
+    if (!t || t->type != LXB_CSS_SYNTAX_TOKEN_STRING) goto fail;
+    /* The token's own string, which the tokenizer has already unescaped — the whole reason this file tokenizes
+       rather than scanning for quotes. */
+    out = pre_token_string(t);
+    pre_take(&p);
+    /* `Value: <string>` is ONE value, so a descriptor with anything after it does not match §3.1's grammar. */
+    t = pre_peek_ws(&p);
+    if (!t || t->type != LXB_CSS_SYNTAX_TOKEN__EOF) goto fail;
+    pre_close(&p);
+    return out;
+
+fail:
+    free(out);
+    pre_close(&p);
+    return NULL;
+}
+
+bool css_property_descriptor_inherits(const char *value, size_t len, bool *pinherits)
+{
+    Prelude p = { NULL, NULL, 0 };
+    lxb_css_syntax_token_t *t;
+    bool got = false, ok = false;
+
+    DCHECK(pinherits != NULL, "§3.2's `inherits` descriptor was read with nowhere to report the flag it sets");
+    if (!pre_open(&p, value, len)) return false;
+    t = pre_peek_ws(&p);
+    if (!t || t->type != LXB_CSS_SYNTAX_TOKEN_IDENT) goto done;
+    if (pre_name_is(t, "true")) got = true;
+    else if (pre_name_is(t, "false")) got = false;
+    else goto done;
+    pre_take(&p);
+    t = pre_peek_ws(&p);
+    if (!t || t->type != LXB_CSS_SYNTAX_TOKEN__EOF) goto done;
+    ok = true;
+
+done:
+    pre_close(&p);
+    if (ok) *pinherits = got;
+    return ok;
 }

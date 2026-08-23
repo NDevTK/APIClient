@@ -1,6 +1,8 @@
-/* AN AT-RULE'S PRELUDE, sliced into the parts its own grammar names — CSS Cascade §2's `@import`, CSS
- * Namespaces §2's `@namespace`, CSS Paged Media §4.3's `@page`, CSS Animations §3's `@keyframes` and CSS
- * Cascade §6.4.4's `@layer`.
+/* AN AT-RULE'S OWN GRAMMAR, sliced into the parts it names — CSS Cascade §2's `@import`, CSS Namespaces §2's
+ * `@namespace`, CSS Paged Media §4.3's `@page`, CSS Animations §3's `@keyframes`, CSS Cascade §6.4.4's `@layer`
+ * and CSS Properties and Values API 1 §3's `@property`. That is almost always the PRELUDE, because a body is
+ * either rules or declarations and lexbor parses both; §3's `@property` is the one at-rule whose body is
+ * neither, and its section at the bottom says why its descriptors are read here too.
  *
  * A `<keyframe-block>`'s PRELUDE IS IN HERE TOO, AND IT IS NOT A CATEGORY SLIP. §3 defines `@keyframes` as
  * `@keyframes <keyframes-name> { <qualified-rule-list> }` and then defines `<keyframe-block> =
@@ -208,5 +210,60 @@ void css_layer_names_free(CssLayerNames *p);
    that convention could disagree about `a\.b`, and one of them would be wrong about which cascade layer a rule
    is in. OWNED through `css_layer_names_free`. */
 void css_layer_name_segments(const char *name, CssLayerNames *out);
+
+/* ---- CSS Properties and Values API 1 §3 "The @property Rule" ------------------------------------------------
+ *
+ * ITS DESCRIPTORS ARE IN HERE BESIDE ITS PRELUDE, AND THAT IS THE `<keyframe-block>` DECISION AGAIN. §3 gives
+ * the at-rule as `@property <custom-property-name># { <declaration-list> }` and then defines that declaration
+ * list's three descriptors — §3.1's `syntax`, §3.2's `inherits`, §3.3's `initial-value` — in the same section,
+ * and they exist NOWHERE ELSE: `syntax: "<length>"` written anywhere but inside an `@property` is a declaration
+ * of a property no specification defines. So this is ONE at-rule's grammar, and splitting the prelude from the
+ * body would put it in two files for the sake of a word in this file's title.
+ * They arrive here as TEXT lexbor kept no parsed form of, which is this component's whole reason for existing:
+ * an unknown property name becomes CSS Syntax's custom declaration and its value survives as the raw token
+ * stream, so the grammar that turns `"<length>"` into the six-character syntax `<length>` has to be somewhere,
+ * and it either MATCHES the descriptor's own grammar or the descriptor is invalid and ignored (§3: "unknown
+ * descriptors are invalid and ignored, but do not invalidate the @property rule" — and §3.1's and §3.2's own
+ * sentences say the same of a descriptor whose VALUE does not match).
+ *
+ * CSS Variables 1 §2 "Defining Custom Properties: the --* family of properties" is what a `<custom-property-name>`
+ * is: "the <custom-property-name> production ... it's defined as any <dashed-ident> (a valid identifier that
+ * starts with two dashes), except -- itself, which is reserved for future use by CSS", where CSS Values 4 §4.3
+ * "Prefixed Author-defined Identifiers: the <dashed-ident> type" makes a `<dashed-ident>` "a <custom-ident>,
+ * with all the case-sensitivity that implies, with the additional restriction that it must start with two
+ * dashes". FULLY CASE-SENSITIVE, so a name crosses exactly as it was written — and UNESCAPED, because a token's
+ * value is what identifies a custom property (`var(--fo\6f)` reads `--foo`), which is also why the SERIALIZATION
+ * back to `@property --foo` is CSSOM §2.1's serialize-an-identifier at the rule and not a copy of the source.
+ *
+ * THE `#` MULTIPLIER IS §3's AND HAS NO ZERO-LENGTH ARM, so `@property { }` is an at-rule whose grammar failed
+ * and CSS Syntax drops it — `n` is one or more on every true answer, and a rule with several names is a rule
+ * §3 calls valid ("a valid @property rule represents a custom property registration for each
+ * <custom-property-name> in the rule's prelude"). What §6.1's CSSOM makes of several is not this file's
+ * question and is not settled anywhere: see core/css/css_rule.h.
+ *
+ * Answers false when the prelude is not a `<custom-property-name>#`, in which case NOTHING is allocated. */
+typedef struct {
+    char   **v;   /* each `<custom-property-name>`, unescaped and verbatim. OWNED. */
+    unsigned n;   /* how many — never zero on a true answer */
+} CssPropertyNames;
+
+bool css_prelude_property_names(const char *prelude, size_t len, CssPropertyNames *out);
+void css_property_names_free(CssPropertyNames *p);
+
+/* §3.1's `syntax` descriptor — `Value: <string>`, so the descriptor's declared value must be ONE `<string>` and
+ * nothing else, and what it denotes is that string's own VALUE: `syntax: "I\\ dent|none"` declares the syntax
+ * `I\ dent|none`, one backslash. §6.1's `syntax` is "the syntax associated with the @property, EXACTLY AS
+ * SPECIFIED", which is why nothing here trims it — `" <color># "` is the syntax ` <color># `, spaces included,
+ * and §5.4.2's own step 1 is what strips them when the string is PARSED rather than when it is read back.
+ *
+ * OWNED. NULL when the declared value is not a single `<string>`, which is a descriptor whose grammar failed —
+ * §3's "unknown descriptors are invalid and ignored, but do not invalidate the @property rule" is the rule the
+ * caller then applies, so a NULL here is the descriptor's ABSENCE and never the rule's. */
+char *css_property_descriptor_syntax(const char *value, size_t len);
+
+/* §3.2's `inherits` descriptor — `Value: true | false`, two CSS keywords and therefore ASCII case-insensitive,
+ * so `inherits: TRUE` is the true arm. Answers false when the declared value is neither, which is again a
+ * descriptor that is ignored rather than a rule that is invalid; `*pinherits` is written only on true. */
+bool css_property_descriptor_inherits(const char *value, size_t len, bool *pinherits);
 
 #endif
