@@ -23,19 +23,29 @@
  *   which it is used" and `rem` is "the computed value of the em unit on the root element" — a COMPUTED
  *   `font-size` and nothing else. The other ten are FONT METRICS: an x-height, a cap-height, the advance
  *   measure of the "0" and "水" glyphs, and a computed `line-height` with `normal` resolved from the first
- *   available font — each with an `r`-prefixed twin measured on the root element. Neither exists here, and
- *   they CRASH SEPARATELY because they name different missing components: `font-size` is not among the
- *   properties css_computed_value.c models, and its `Computed value:` line is the one that cannot be the
- *   as-specified arm (css-fonts-4 §2.5 gives it `an absolute length` and a `Percentages:` line of "refer to
- *   parent element's font size", so a percentage, an `em`, `larger`/`smaller` and §2.5.1's eight
- *   `<absolute-size>` keywords each resolve against the value one node up); the metrics are a font record no
- *   component in this engine keeps. CSS Cascade §7's inheritance step is built and is what would carry the
- *   first chain a node at a time. media_query.c resolves `em` against the INITIAL font size and is right to,
- *   and §6.1.1 says so itself — "when used outside the context of an element (such as in media queries), the
- *   font-relative lengths units refer to the metrics corresponding to the initial values of the font and
- *   line-height properties" — so the initial value is the spec's own answer THERE and is NOT a stand-in for
- *   the missing chain. On an ELEMENT it would be one, which is why this file crashes instead of borrowing
- *   that number.
+ *   available font — each with an `r`-prefixed twin measured on the root element. THE TWO GROUPS PART COMPANY
+ *   HERE, which is why they were always two tables and two crashes.
+ *   THE FIRST TWO RESOLVE. css_computed_value.c derives css-fonts-4 §2.5's computed `font-size` — an absolute
+ *   length, out of §2.5.1's keyword table, a percentage of the parent's, `larger`/`smaller`, or a length this
+ *   file absolutizes — and CSS Cascade §7.2's inheritance carries it one node at a time to a base case that is
+ *   core/css/font_size_functions.h's picked default. WHICH font-size is the WALK, so this file does not
+ *   perform it: `CssFontMetrics` below is the pair of questions and the caller holding the tree answers them,
+ *   lazily, so a `margin: 0` neither walks to the root nor fails for want of a font it does not use. The one
+ *   case that is easy to get wrong is stated in §6.1.1 in so many words — inside a FONT-AFFECTING property on
+ *   the element the unit refers to, "the font-relative lengths resolve against the computed metrics of the
+ *   PARENT element—or against the computed metrics corresponding to the initial values of the font and
+ *   line-height properties, if the element has no parent" — so `div{font-size:1.2em}` is 1.2 x the INHERITED
+ *   size and `html{font-size:2rem}` is 2 x the INITIAL one rather than a definition of itself, and that is a
+ *   property of the ANSWERS the caller supplies rather than of the arithmetic here.
+ *   THE OTHER TEN STILL CRASH, and they name a component that is still absent rather than the one that is now
+ *   built: five real font metrics of a first available font, of which this engine keeps no record. Three of
+ *   them (`ex`, `ch`, `ic`) have a NORMATIVE fallback in §6.1.1 stated in `em`s and are therefore buildable
+ *   the moment this paragraph's first half is, which the crash itself says.
+ *   media_query.c resolves `em` against the INITIAL font size and is right to, and §6.1.1 says so itself —
+ *   "when used outside the context of an element (such as in media queries), the font-relative lengths units
+ *   refer to the metrics corresponding to the initial values of the font and line-height properties" — so the
+ *   initial value is the spec's own answer THERE rather than a stand-in for a walk. It reads that number from
+ *   font_size_functions.h now, because ONE fact answered from two places is this header's opening complaint.
  *
  *   A VIEWPORT-PERCENTAGE unit RESOLVES, against the rectangle core/frame/viewport.h models. §6.1.2's own first
  *   sentence is the whole rule — "the viewport-percentage lengths are relative to the size of the INITIAL
@@ -108,6 +118,13 @@ typedef enum {
        it reaches a length as well as a member: a `border: 1px solid` is one device pixel at every ratio, so it
        is 1 CSS pixel at 1x and two thirds of one at 1.5x. */
     CSS_ENV_DEVICE_PIXEL_RATIO,
+    /* css-fonts-4 §2.5 (Font size: the font-size property)'s `Initial: medium` — the number this user agent
+       picks for `medium`, which §2.5.1's table makes the reference every `<absolute-size>` keyword is a ratio
+       of and CSS Cascade §7.2 makes the root element's inherited value. core/css/font_size_functions.h owns
+       the number and says why it passes core/frame/viewport.h's PICKED-rather-than-DERIVED test: nothing in
+       this model determines it, the spec calls it the reader's own preference, and a `rem`-sized layout puts
+       its entire responsive ladder behind it. */
+    CSS_ENV_DEFAULT_FONT_SIZE,
     CSS_ENV_FACT_COUNT
 } CssEnvFact;
 
@@ -210,6 +227,29 @@ typedef struct {
     char          keyword[CSS_LENGTH_KEYWORD_MAX];/* CSS_LENGTH_KEYWORD only */
 } CssLength;
 
+/* WHICH FONT SIZE A §6.1.1 FONT-RELATIVE UNIT RESOLVES AGAINST, AS A QUESTION THIS COMPONENT ASKS RATHER THAN
+   ANSWERS. `em` is "the computed value of the font-size property of the element on which it is used" and `rem`
+   is "the computed value of the em unit on the root element", and BOTH of those are CSS Cascade §7.2's
+   inheritance walk — a walk over the flattened element tree, which is core/css/css_computed_value.c's and not
+   this file's. Threading an element and a tree through here to answer it would put the cascade inside the unit
+   table; handing the two ANSWERS in would be worse still, for the reason below. */
+typedef enum {
+    CSS_FONT_METRIC_EM = 0,   /* §6.1.1's `em` — the element the unit is used on */
+    CSS_FONT_METRIC_REM       /* §6.1.1's `rem` — the root element */
+} CssFontMetric;
+
+/* IT IS ASKED LAZILY, AND THAT IS THE POINT OF THE INDIRECTION RATHER THAN AN OPTIMISATION. Resolving both
+   sides EAGERLY for every length would walk to the root of the tree to absolutize `margin: 0` — and, worse,
+   would CRASH it: the base case of both chains is the default font size, which needs a realm to key its
+   environment fact on (core/css/font_size_functions.h), and a `margin: 0` in a document no navigable presents
+   has an answer CSS computes with no font and no viewport at all. A value that needs no font must not pay for
+   one, and must not fail for want of one. So the pair is a CALLBACK invoked at most once, only on the arm that
+   found the unit. */
+typedef struct {
+    CssPx (*resolve)(void *ctx, CssFontMetric which);
+    void  *ctx;
+} CssFontMetrics;
+
 /* CLASSIFY AND ABSOLUTIZE a length-valued property's value, as the cascade serialized it — CSS 2.1 §4.3.2's
    computed value for a `<length>`, which is why this is the step core/css/css_computed_value.c performs and
    the only caller it has. A dimension in a unit this engine cannot absolutize CRASHES here rather than being
@@ -218,9 +258,12 @@ typedef struct {
    `realm` IS THE REALM THE VIEWPORT IS ANSWERED PER — the ELEMENT's document's active realm, never the running
    one, because an iframe's ICB is 300 CSS pixels wide and its parent's is 1280. It may be NULL for a document
    no navigable presents; only a viewport-percentage unit needs it, and that is the arm that crashes.
+   `font` ANSWERS §6.1.1's TWO FONT-SIZE-RELATIVE UNITS and is required — every caller here holds an element,
+   and the one question this file cannot answer for itself is which element's computed `font-size` a unit means
+   (see above). It is consulted only when an `em` or a `rem` is actually present.
    A UNITLESS ZERO is a `<length>` (CSS Values §6 permits the unit to be omitted for zero, and it is how
    lexbor serializes every box-model property's initial value). */
-CssLength css_length_parse(JSContext *realm, const char *value);
+CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *value);
 
 /* IS THIS TEXT A `<length>` AT ALL — CSS Values §6's production, answered WITHOUT crashing and WITHOUT a realm,
    which is a different question from the one above and exists for a different caller. `css_length_parse` is for

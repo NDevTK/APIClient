@@ -10,6 +10,7 @@
 #include "core/css/css_font_shorthand.h"
 #include "core/css/css_length.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/font_size_functions.h"
 
 /* §2.7's Set Explicitly group in the canonical order of its grammar, then its Reset Implicitly group. The two
    halves are ONE array because css_shorthand.c's table row is one list and the split is an index into it. */
@@ -108,12 +109,12 @@ static const char *const FONT_WIDTH_CSS3[] = {
 };
 
 /* css-fonts-4 §2.5 "Font size: the font-size property": `<absolute-size> | <relative-size> |
-   <length-percentage [0,∞]> | math`. §2.5's own listing gives `<absolute-size>` as
-   `[ xx-small | x-small | small | medium | large | x-large | xx-large | xxx-large ]` and `<relative-size>` as
-   `[ larger | smaller ]`. */
-static const char *const FONT_ABSOLUTE_SIZE[] = {
-    "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large",
-};
+   <length-percentage [0,∞]> | math`. §2.5's own listing gives `<relative-size>` as `[ larger | smaller ]`.
+   `<absolute-size>`'s EIGHT KEYWORDS ARE NOT LISTED HERE, deliberately: §2.5 defines each of them as "an entry
+   in a table of font sizes computed and kept by the user agent" and §2.5.1 is that table, so the names and the
+   scaling factors are ONE list — core/css/font_size_functions.h's — and the copy this file used to hold was a
+   second answer to the question "is `x-large` one of them" sitting beside the only one that also knows what it
+   computes to. */
 static const char *const FONT_RELATIVE_SIZE[] = { "larger", "smaller" };
 
 /* css-fonts-4 §2.1.3 "Syntax of <system-font-family-name>": `caption | icon | menu | message-box |
@@ -202,7 +203,7 @@ static bool font_length_percentage_nonneg(const char *w, size_t len)
 /* §2.5's `<'font-size'>`. */
 static bool font_size_valid(const char *w, size_t len)
 {
-    if (font_keyword(FONT_ABSOLUTE_SIZE, FONT_N(FONT_ABSOLUTE_SIZE), w, len)) return true;
+    if (css_absolute_size_keyword(w, len)) return true;
     if (font_keyword(FONT_RELATIVE_SIZE, FONT_N(FONT_RELATIVE_SIZE), w, len)) return true;
     if (font_word_is(w, len, "math")) return true;
     return font_length_percentage_nonneg(w, len);

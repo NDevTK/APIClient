@@ -15,6 +15,7 @@
 #include "core/css/css_property_applies.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/font_size_functions.h"
 #include "core/dom/document.h"
 #include "core/dom/shadow_root.h"
 #include "core/frame/viewport.h"
@@ -268,23 +269,6 @@ static JSContext *css_cv_realm(lxb_dom_element_t *el)
     return document_active_realm_of(lxb_dom_interface_node(n->owner_document));
 }
 
-/* ONE `Computed value:` LINE, WRITTEN THE SAME WAY IN TEN PROPERTY DEFINITIONS. CSS 2.1 §8.3 and §8.4 give the
-   margins and the paddings "the percentage as specified or THE ABSOLUTE LENGTH"; §10.2 and §10.5 give `width`
-   and `height` "the percentage or 'auto' as specified or the absolute length"; css-sizing says the same for the
-   four min/max limits. So the whole rule is: ABSOLUTIZE a length and leave everything else alone — a percentage
-   cannot be resolved here because it refers to the containing block, which is a USED value and belongs to
-   core/layout/used_value.h, and `auto` is a keyword no cascade step turns into a number.
-   THE ABSOLUTIZATION IS WHERE THE FONT AND THE VIEWPORT ENTER, and core/css/css_length.h is the one component
-   that knows it: `50vw` becomes a number out of §10.1's initial containing block and carries that rectangle's
-   environment fact the whole way to the page, and `2em` crashes naming the computed `font-size` it needs. */
-static CssLength computed_length(JSContext *realm, char *spec)
-{
-    CssLength len = css_length_parse(realm, spec);
-
-    free(spec);
-    return len;
-}
-
 /* A computed value that IS an absolute length, with every other arm's field left in the one state a reader of
    the wrong arm would have to be reading by mistake. */
 static CssLength css_cv_px(CssPx px)
@@ -293,6 +277,132 @@ static CssLength css_cv_px(CssPx px)
 
     out.px = px;
     return out;
+}
+
+/* ---- css-values-4 §6.1.1's `em` and `rem`, ANSWERED FROM THE TREE ------------------------------------------ */
+
+/* WHICH ELEMENT'S COMPUTED `font-size` A FONT-RELATIVE UNIT MEANS, which is the half css_length.h cannot answer
+   for itself: both units are defined as a computed `font-size`, and a computed `font-size` is CSS Cascade §7.2's
+   inheritance walk over the flattened element tree. `affecting` is css-values-4 §6.1.1's font-affecting rule
+   pre-decided from the PROPERTY, because the property is a fact about the declaration this length came out of
+   and not about the element the walk reaches. */
+typedef struct {
+    lxb_dom_element_t *el;
+    bool               affecting;
+} CssCvFontCtx;
+
+/* THE PARENT'S COMPUTED `font-size`, which is FOUR spec sentences and one walk. CSS Cascade §7.2 Inheritance
+   makes it the inherited value; css-fonts-4 §2.5's `Percentages:` line makes it what a percentage font size
+   refers to; §2.5's `<relative-size>` makes it what `larger` and `smaller` are relative to; and css-values-4
+   §6.1.1's font-affecting rule makes it what an `em` inside a font-affecting property resolves against. Asking
+   it four ways would be four chances to disagree about the base case, which all four state identically:
+   §7.2's "for the root element, which has no parent element, the inherited value is the initial value of the
+   property" and §6.1.1's "the computed metrics corresponding to the initial values of the font and line-height
+   properties, if the element has no parent" are the same number, and §2.5's `Initial:` line names it. */
+static CssPx css_cv_parent_font_size(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *parent = css_cv_parent_element(el);
+    CssLength len;
+
+    if (parent == NULL) return css_default_font_size(css_cv_realm(el));
+    len = css_computed_length(parent, "font-size");
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+           "a parent element's computed `font-size` came back as something other than an ABSOLUTE LENGTH. "
+           "css-fonts-4 §2.5 (Font size: the font-size property) states its `Computed value:` line as `an "
+           "absolute length` and admits nothing else past the computed value — a percentage refers to the "
+           "parent's size and is resolved there, and every keyword is a table entry or a ratio — so this is "
+           "the entry below having left an arm unresolved");
+    return len.px;
+}
+
+/* THE ROOT ELEMENT of this element's document — DOM §4.5's document element, which is what CSS calls the root
+   element and what §6.1.1's `rem` is measured on. NULL is a real answer and the spec states its arm: "when
+   specified in a document with no root element, the root font-relative lengths are resolved assuming the
+   initial values of the font and line-height properties." */
+static lxb_dom_node_t *css_cv_root_element(lxb_dom_element_t *el)
+{
+    const lxb_dom_node_t *n = lxb_dom_interface_node(el);
+
+    if (n->owner_document == NULL) return NULL;
+    return document_document_element_of(lxb_dom_interface_node(n->owner_document));
+}
+
+static CssPx css_cv_font_metric(void *p, CssFontMetric which)
+{
+    CssCvFontCtx *f = p;
+    lxb_dom_node_t *root;
+    CssLength len;
+
+    DCHECK(f != NULL && f->el != NULL,
+           "css-values-4 §6.1.1's font-metric callback was invoked with no element — the pair is handed to "
+           "css_length_parse by the entries below and by nothing else, so an absent element is a metrics "
+           "struct assembled field-by-field past them");
+    /* §6.1.1: `em` is "equal to the computed value of the font-size property of the element on which it is
+       used" — EXCEPT that "when used in the value of any font-affecting property on the element they refer to,
+       the font-relative lengths resolve against the computed metrics of the parent element—or against the
+       computed metrics corresponding to the initial values of the font and line-height properties, if the
+       element has no parent". `font-size` IS a font-affecting property and the element it refers to is the one
+       it is declared on, so `div { font-size: 1.2em }` is 1.2 times the INHERITED size. That is not a nicety:
+       resolving it against the element's own computed `font-size` would make this walk a definition of itself
+       and it would not terminate. */
+    if (which == CSS_FONT_METRIC_EM) {
+        if (f->affecting) return css_cv_parent_font_size(f->el);
+        len = css_computed_length(f->el, "font-size");
+        DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+               "an element's own computed `font-size` came back as something other than an ABSOLUTE LENGTH, "
+               "which css-fonts-4 §2.5's `Computed value:` line admits nothing else than");
+        return len.px;
+    }
+    DCHECK(which == CSS_FONT_METRIC_REM,
+           "css_length.h's font-metric enumeration named a metric this component answers no arm for — the two "
+           "are one list and have come apart, and the other ten of css-values-4 §6.1.1's units are a FONT "
+           "RECORD that crashes in css_length.c rather than a third value here");
+    root = css_cv_root_element(f->el);
+    /* §6.1.1: `rem` is "equal to the computed value of the em unit on the root element". The element it REFERS
+       TO is therefore the root, so the font-affecting clause above bites only when the declaration is on the
+       root itself — `html { font-size: 2rem }` is 2 x the INITIAL font size (the root has no parent element),
+       while `div { font-size: 2rem }` is 2 x the root's own computed size and `html { margin: 2rem }` is too,
+       because a margin is not a font-affecting property. */
+    if (root == NULL || (f->affecting && root == lxb_dom_interface_node(f->el)))
+        return css_default_font_size(css_cv_realm(f->el));
+    len = css_computed_length(lxb_dom_interface_element(root), "font-size");
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+           "the ROOT element's computed `font-size` came back as something other than an ABSOLUTE LENGTH, "
+           "which css-fonts-4 §2.5's `Computed value:` line admits nothing else than");
+    return len.px;
+}
+
+/* THE PAIR, BOUND TO ONE ELEMENT AND ONE PROPERTY. `slot` is the caller's own storage and must outlive the
+   parse: the metrics are consulted DURING it and only on the arm that found an `em` or a `rem`. */
+static CssFontMetrics css_cv_font_metrics(CssCvFontCtx *slot, lxb_dom_element_t *el, const char *name)
+{
+    CssFontMetrics m;
+
+    slot->el = el;
+    slot->affecting = css_font_affecting_property(name);
+    m.resolve = css_cv_font_metric;
+    m.ctx = slot;
+    return m;
+}
+
+/* ONE `Computed value:` LINE, WRITTEN THE SAME WAY IN TEN PROPERTY DEFINITIONS. CSS 2.1 §8.3 and §8.4 give the
+   margins and the paddings "the percentage as specified or THE ABSOLUTE LENGTH"; §10.2 and §10.5 give `width`
+   and `height` "the percentage or 'auto' as specified or the absolute length"; css-sizing says the same for the
+   four min/max limits. So the whole rule is: ABSOLUTIZE a length and leave everything else alone — a percentage
+   cannot be resolved here because it refers to the containing block, which is a USED value and belongs to
+   core/layout/used_value.h, and `auto` is a keyword no cascade step turns into a number.
+   THE ABSOLUTIZATION IS WHERE THE FONT AND THE VIEWPORT ENTER, and core/css/css_length.h is the one component
+   that knows it: `50vw` becomes a number out of §10.1's initial containing block and carries that rectangle's
+   environment fact the whole way to the page, and `2em` becomes one out of the computed `font-size` the
+   metrics above walk to, carrying the reader's own default font size the same way. */
+static CssLength computed_length(lxb_dom_element_t *el, const char *name, char *spec)
+{
+    CssCvFontCtx slot;
+    CssFontMetrics font = css_cv_font_metrics(&slot, el, name);
+    CssLength len = css_length_parse(css_cv_realm(el), &font, spec);
+
+    free(spec);
+    return len;
 }
 
 /* ---- CSS Backgrounds §3.2 and §3.3's BORDER LONGHANDS ----------------------------------------------------- */
@@ -383,7 +493,7 @@ static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, 
         free(spec);
         return css_cv_px(css_length_snap_line_width(css_cv_realm(el), css_px(CSS_LINE_WIDTH[i].px)));
     }
-    len = computed_length(css_cv_realm(el), spec);
+    len = computed_length(el, name, spec);
     DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
            "a `border-*-width` cascaded to a value that is neither one of §3.3's three keywords nor a length. "
            "`<line-width> = <length [0,∞]> | thin | medium | thick` admits nothing else — no percentage and no "
@@ -413,12 +523,99 @@ static bool css_models_length(const char *name)
     return false;
 }
 
+/* ---- css-fonts-4 §2.5 "Font size: the font-size property" ------------------------------------------------- */
+
+/* §2.5's `Computed value:` LINE IS `an absolute length` WITH NO SECOND ARM, which is what makes this property
+ * different in kind from every other length above and is the whole reason it needed its own rule. The ten
+ * box-model lengths say "the percentage AS SPECIFIED or the absolute length" because their percentage refers to
+ * the containing block, which no cascade step knows; §2.5's `Percentages:` line says "refer to PARENT ELEMENT'S
+ * FONT SIZE", which the cascade knows exactly, so the percentage resolves HERE and never survives to the
+ * computed value. Neither does a keyword: §2.5.1's eight `<absolute-size>` entries are the user agent's own
+ * table of font sizes (core/css/font_size_functions.h) and §2.5's two `<relative-size>` keywords are a ratio of
+ * the parent's number. So EVERY arm ends in an absolute length, and the assert below is that sentence.
+ *
+ * IT IS ALSO THE BASE OF css-values-4 §6.1.1's `em` AND `rem`, and the recursion through `computed_length`
+ * terminates for a reason worth naming: `font-size` is a FONT-AFFECTING property, so an `em` inside it resolves
+ * against the PARENT (the metrics above), and the walk therefore always moves one node up the flattened tree
+ * and stops at the root with §7.2's initial value. Answering that predicate false would make it a definition of
+ * itself, which is why this asserts it rather than assuming it. */
+static CssLength computed_font_size(lxb_dom_element_t *el, char *spec)
+{
+    CssLength len;
+
+    DCHECK(css_font_affecting_property("font-size"),
+           "css-values-4 §6.1.1's font-affecting predicate no longer answers TRUE for `font-size`, so an `em` "
+           "in a font-size declaration would resolve against the ELEMENT'S OWN computed font-size — the value "
+           "being computed. §6.1.1 states the rule the other way ('when used in the value of any "
+           "font-affecting property on the element they refer to, the font-relative lengths resolve against "
+           "the computed metrics of the parent element'), and the difference here is not a wrong number but an "
+           "unbounded walk: restore the row in core/css/font_size_functions.c");
+    if (css_absolute_size_keyword(spec, strlen(spec))) {
+        CssPx px = css_absolute_size_px(css_cv_realm(el), spec);
+
+        free(spec);
+        return css_cv_px(px);
+    }
+    /* §2.5's `<relative-size>`: "interpreted relative to the computed font-size of the parent element". The
+       PARENT's, on an element with no parent element too — §7.2's initial value is what the metrics answer
+       there, so `html { font-size: larger }` is a ratio of `medium` rather than of itself. */
+    if (css_cv_kw_is(spec, "larger") || css_cv_kw_is(spec, "smaller")) {
+        bool larger = css_cv_kw_is(spec, "larger");
+        CssPx px = css_relative_size_px(css_cv_parent_font_size(el), larger);
+
+        free(spec);
+        return css_cv_px(px);
+    }
+    if (css_cv_kw_is(spec, "math")) {
+        free(spec);
+        DFAIL("css-fonts-4 §2.5 (Font size: the font-size property)'s `math` value reached the computed value: "
+              "\"special mathematical scaling rules must be applied when determining the computed value of the "
+              "font-size property\". Those rules are MathML Core §4.5 (The math-depth property), which states "
+              "the whole procedure — the computed value is the INHERITED font-size times a scale factor "
+              "derived from the inherited and computed `math-depth`, from `math-style`, and from the inherited "
+              "first available font's OpenType MATH table (`scriptPercentScaleDown` and "
+              "`scriptScriptPercentScaleDown`, with a fallback constant of 0.71 per level otherwise). THREE "
+              "things are missing and they are not one absence: `math-depth` is a property with its own "
+              "computed-value rule (`auto-add | add(<integer>) | <integer>`, resolved against the INHERITED "
+              "value and against `math-style`), `math-style` is a `Computed value: specified keyword` line "
+              "that is one row of css_computed_models' as-specified arm plus one of css_shorthand_complete_for "
+              "— and lexbor's property registry carries NEITHER, so §6's cascade answers nothing for either "
+              "and §7.1 has no initial value to fall to. The MATH table is the FONT RECORD css_length.c's "
+              "font-metric crash names. BUILD the two properties first: with no OpenType MATH table §4.5's "
+              "procedure still answers, out of its own 0.71 constant");
+        return css_cv_px(css_px(0.0));
+    }
+    len = computed_length(el, "font-size", spec);
+    /* §2.5's `Percentages: refer to parent element's font size` — resolved HERE, because that is a value the
+       cascade has and not a containing block a layout would have to produce. A percentage of the parent is
+       what makes `em` and `%` two spellings of one thing on this property, which §2.5's own example set says
+       (`em { font-size: 150% }` beside `em { font-size: 1.5em }`). */
+    if (len.kind == CSS_LENGTH_PERCENTAGE)
+        return css_cv_px(css_px_scale(css_cv_parent_font_size(el), len.pct / 100.0));
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+           "a `font-size` cascaded to a value that is neither one of css-fonts-4 §2.5's keywords nor a "
+           "`<length-percentage>`. §2.5's `Value:` line is `<absolute-size> | <relative-size> | "
+           "<length-percentage [0,∞]> | math` and admits nothing else — no `auto`, no `normal`, no bare "
+           "`<number>` — so this is a declaration that reached the cascade without its grammar, which lexbor's "
+           "own `font-size` state machine and core/css/css_font_shorthand.c's `<'font-size'>` both refuse");
+    DCHECK(len.px.px >= 0.0,
+           "a NEGATIVE `font-size` reached the computed value. css-fonts-4 §2.5 states the range in the "
+           "property's `Value:` line — `<length-percentage [0,∞]>` — and twice again in words ('negative "
+           "lengths are invalid', 'negative percentages are invalid'), so the declaration should have been "
+           "DROPPED by the grammar that admitted it rather than absolutized here");
+    return len;
+}
+
 /* ---- the computed value ----------------------------------------------------------------------------------- */
 
 bool css_computed_models_length(const char *name)
 {
     DCHECK(name != NULL, "the computed-value model question was asked about a NULL property name");
-    return css_models_length(name) || css_border_side_of(name, "width") >= 0;
+    /* `font-size` IS length-valued and is deliberately NOT in the list above: css-fonts-4 §2.5's computed
+       value is `an absolute length` with no percentage arm and no keyword arm, which is a DIFFERENT rule from
+       the one every member of that list shares, and folding it in would hand it to `computed_length` whole. */
+    return css_models_length(name) || css_border_side_of(name, "width") >= 0 ||
+           strcmp(name, "font-size") == 0;
 }
 
 bool css_computed_models(const char *name)
@@ -468,9 +665,11 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
     case CSS_DEFAULTING_INHERITED: {
         /* §7.3.2: "the property's specified and computed values are the inherited value" — and the inherited
            value is a `CssLength` that has ALREADY been absolutized against the environment it derives from, so
-           it is taken WHOLE rather than serialized and re-parsed. Every one of these properties' computed-value
-           lines is "the percentage as specified or the absolute length", which is the identity over a value
-           that is already one of those; the exception is a border width, whose rule reads THIS element's own
+           it is taken WHOLE rather than serialized and re-parsed. The box-model lengths' computed-value line is
+           "the percentage as specified or the absolute length", which is the identity over a value that is
+           already one of those, and css-fonts-4 §2.5's is `an absolute length`, which is the identity over one
+           too — an inherited `font-size` is a NUMBER and §2.5's keyword and percentage arms were resolved one
+           node up, where their base was. The exception is a border width, whose rule reads THIS element's own
            `border-*-style` and is therefore re-applied. */
         lxb_dom_element_t *parent = css_cv_parent_element(el);
 
@@ -496,7 +695,8 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
            "them is in lexbor's registry with an initial value, or in css_style_declaration.c's table of the "
            "eight border longhands the registry does not carry");
     if (side >= 0) return computed_border_width(el, name, cascaded);
-    return computed_length(css_cv_realm(el), cascaded);
+    if (strcmp(name, "font-size") == 0) return computed_font_size(el, cascaded);
+    return computed_length(el, name, cascaded);
 }
 
 char *css_computed_value(lxb_dom_element_t *el, const char *name)
@@ -697,10 +897,17 @@ static JSValue css_resolved_shorthand(JSContext *ctx, lxb_dom_element_t *el, con
            out of it here would drop the fork instead. */
         DCHECK(JS_IsString(parts[i]),
                "a shorthand's longhand resolved to a value carrying a DOMAIN rather than a plain string, and "
-               "§6.7.2's serialize-a-CSS-value over a list has no way to combine four of those into one. BUILD "
-               "the combination in core/css/css_length.h's terms — css_px_combine is the shape: the result "
-               "carries every operand's environment fact — and let this step produce a concolic string rather "
-               "than a concrete one");
+               "§6.7.2's serialize-a-CSS-value over a list has no way to combine four of those into one. THE "
+               "SHORTHAND THAT REACHES THIS FIRST IS `font`, and it reaches it for almost every element rather "
+               "than for a declared few: css-fonts-4 §2.5's computed `font-size` is a function of "
+               "CSS_ENV_DEFAULT_FONT_SIZE whenever it was not declared in an absolute unit, and `medium` — the "
+               "initial value, and therefore the root element's inherited one — IS that fact. A "
+               "`border-*-width` only carried a domain when a border was actually declared, which is why this "
+               "assert stood so long without firing. BUILD the combination in core/css/css_length.h's terms — "
+               "css_px_combine is the shape: the result carries every operand's environment fact — and let "
+               "this step produce a concolic string rather than a concrete one. The join is over the FACT SETS "
+               "and not over the strings, so what this step needs is each part's `CssPx` beside its "
+               "serialization; reading a set back out of a finished JSValue is the wrong direction");
         values[i] = JS_ToCString(ctx, parts[i]);
         if (!values[i]) { all = false; break; }
         converted = i + 1;
@@ -838,9 +1045,19 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
         free(v);
         DFAIL("CSSOM §9 makes `line-height`'s resolved value the USED value whenever the computed value is not "
               "`normal` — the absolute length a LAYOUT laid the line boxes out with, which for a number or a "
-              "percentage is that factor times the used font size. This engine has no font size chain and no "
-              "line boxes. BUILD the font-size cascade (the computed value of a `<number>` line-height is the "
-              "number itself; the used value is the number times the element's computed font-size)");
+              "percentage is that factor times the used font size. THE FONT SIZE CHAIN IS NO LONGER THE "
+              "BLOCKER: css-fonts-4 §2.5's computed `font-size` is derived above and `css_computed_length(el, "
+              "\"font-size\")` answers the absolute length this factor multiplies. What is missing is "
+              "`line-height` itself as a modelled computed value — css-inline-3 §5.1 (Line Spacing: the "
+              "line-height property) gives it a `Value:` of `normal | <number [0,∞]> | <length-percentage "
+              "[0,∞]>`, a `Computed value:` of 'the specified keyword, a number, or a computed <length> "
+              "value', and a `Percentages:` line of 'computed relative to 1em' — so a percentage becomes a "
+              "LENGTH at computed-value time out of the same font size, which is a THIRD shape beside this "
+              "file's two and needs its own arm rather than a row of css_models_length. BUILD it beside "
+              "`font-size`: it is an inherited property whose shorthand set css_shorthand_complete_for already "
+              "records, and past it the only thing left between the computed value and §9's used one is "
+              "css-fonts-4 §2.5's own note that the used font size 'can differ from its computed value due to "
+              "font-size-adjust'");
         break;
     }
     case CSS_RESOLVED_TRANSFORM: {

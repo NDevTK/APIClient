@@ -8,6 +8,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/css/css_dimension.h"
+#include "core/css/font_size_functions.h"
 #include "core/css/media_query.h"
 #include "core/dom/document.h"
 #include "core/frame/screen.h"
@@ -209,6 +210,7 @@ typedef struct {
     double width, height;      /* the viewport, in CSS pixels */
     double dev_width, dev_height;
     double dppx;
+    double font_size;          /* css-values-4 §6.1.1's "initial values of the font ... properties" */
     int    color_bits;
 } MqEnv;
 
@@ -230,6 +232,14 @@ static void mq_env(JSContext *ctx, MqEnv *e)
        the defect CLAUDE.md names — and the copy that is not maintained is the one that goes on being wrong. */
     e->dev_width = screen_width() / e->dppx;
     e->dev_height = screen_height() / e->dppx;
+    /* css-values-4 §6.1.1 (Font-relative Lengths: the em, rem, ex, rex, cap, rcap, ch, rch, ic, ric, lh, rlh
+       units): "when used OUTSIDE THE CONTEXT OF AN ELEMENT (such as in media queries), the font-relative
+       lengths units refer to the metrics corresponding to the INITIAL VALUES of the font and line-height
+       properties." So a media query's `em` is the initial `font-size` — css-fonts-4 §2.5's `medium` — and this
+       file held its own literal 16 for it, which is the same fact answered from two places exactly as the
+       1920/1080 two lines up was. core/css/font_size_functions.h picks the number; what is read here is its
+       EXAMPLE, for the reason stated above this function: the comparison below is a C `if`. */
+    e->font_size = css_default_font_size(ctx).px;
     /* §4.5: `color` is the bits per COLOUR COMPONENT of the output device. screen.c owns the depth. */
     e->color_bits = screen_color_depth() / 3;
 }
@@ -850,12 +860,14 @@ MediaQuerySet *media_query_parse_one(const char *text)
 
 /* ---- evaluation — MQ4 §3 and §4 ------------------------------------------------------------------------------ */
 
-/* A `<length>` in CSS pixels. §4: font-relative units resolve against the INITIAL value of `font-size`, because
-   a media query is evaluated before any element exists to have one; viewport units resolve against the
-   viewport, which is what this whole file is about. An unknown unit cannot reach here — value_ok admitted the
-   dimension and this is the same list, which is what the DFAIL states. */
-#define MQ_INITIAL_FONT_SIZE 16.0
-
+/* A `<length>` in CSS pixels. css-values-4 §6.1.1's own last clause is why the font-relative units resolve
+   against the INITIAL value of `font-size` here and NOT against a computed one: a media query is evaluated
+   outside the context of an element, so there is no element whose `font-size` an `em` could be. `ex` and `ch`
+   are half of it by §6.1.1's two normative fallbacks — an undeterminable x-height "must be assumed" to be
+   0.5em, and an undeterminable "0" glyph "must be assumed to be 0.5em wide by 1em tall" — which apply here
+   because there is no font to measure either from. Viewport units resolve against the viewport, which is what
+   this whole file is about. An unknown unit cannot reach here — value_ok admitted the dimension and this is
+   the same list, which is what the DFAIL states. */
 static double length_px(const MqValue *v, const MqEnv *e, bool *ok)
 {
     const char *u = v->unit;
@@ -863,9 +875,9 @@ static double length_px(const MqValue *v, const MqEnv *e, bool *ok)
     *ok = true;
     if (v->kind == MV_NUMBER) return v->a;          /* a unitless zero */
     if (!strcmp(u, "px")) return v->a;
-    if (!strcmp(u, "em") || !strcmp(u, "rem")) return v->a * MQ_INITIAL_FONT_SIZE;
-    if (!strcmp(u, "ex")) return v->a * MQ_INITIAL_FONT_SIZE * 0.5;
-    if (!strcmp(u, "ch")) return v->a * MQ_INITIAL_FONT_SIZE * 0.5;
+    if (!strcmp(u, "em") || !strcmp(u, "rem")) return v->a * e->font_size;
+    if (!strcmp(u, "ex")) return v->a * e->font_size * 0.5;
+    if (!strcmp(u, "ch")) return v->a * e->font_size * 0.5;
     if (!strcmp(u, "cm")) return v->a * 96.0 / 2.54;
     if (!strcmp(u, "mm")) return v->a * 96.0 / 25.4;
     if (!strcmp(u, "q"))  return v->a * 96.0 / 101.6;

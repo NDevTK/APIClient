@@ -710,6 +710,47 @@ static const char *HTML =
     "jw.style.setProperty('border-left-style', 'solid');"
     "jw.style.setProperty('border-left-width', '1px');"
     "fetch('/api/cssjoint?w=' + getComputedStyle(jw).width);"
+    /* ---- css-fonts-4 §2.5's computed `font-size` and css-values-4 §6.1.1's `em`/`rem` --------------------
+       EVERY VALUE COMPARED HERE IS ROOTED IN A DECLARED ABSOLUTE FONT SIZE, deliberately: an undeclared one is
+       §2.5's `medium`, which IS the CSS_ENV_DEFAULT_FONT_SIZE fact, so its computed value is a CONCOLIC and a
+       `===` against it would fork rather than decide — the same reason /api/cssjoint one probe up emits
+       instead of comparing. Every arithmetic below is exact in binary64 (20 x 1.2 is 24.0, not 23.999…), so a
+       serialization that round-trips is the only thing the equality depends on.
+       §2.5's `Percentages:` line is "refer to parent element's font size" and §2.5's `<relative-size>` is
+       "relative to the computed font-size of the parent element", so `150%` and `larger` are both a ratio of
+       the PARENT's 20px — and so is a `1.5em` INSIDE `font-size`, which is the case §6.1.1's font-affecting
+       rule decides and the one an implementation gets wrong by resolving against the element's own size. The
+       same `2em` in a `margin-top` is NOT font-affecting and resolves against the element's OWN 20px, which is
+       what makes the pair a test rather than two spellings of one number. */
+    "var fsp = document.createElement('div'); document.body.appendChild(fsp);"
+    "fsp.style.setProperty('font-size', '20px'); fsp.style.setProperty('margin-top', '2em');"
+    "var fse = document.createElement('div'); fsp.appendChild(fse);"
+    "fse.style.setProperty('font-size', '1.5em');"
+    "var fsq = document.createElement('div'); fsp.appendChild(fsq);"
+    "fsq.style.setProperty('font-size', '150%');"
+    "var fsl = document.createElement('div'); fsp.appendChild(fsl);"
+    "fsl.style.setProperty('font-size', 'larger');"
+    "fetch('/api/fontsize?v=' + (getComputedStyle(fsp).fontSize === '20px' &&"
+    " getComputedStyle(fse).fontSize === '30px' && getComputedStyle(fsq).fontSize === '30px' &&"
+    " getComputedStyle(fsl).fontSize === '24px' && getComputedStyle(fsp).marginTop === '40px'"
+    " ? 'isfs' : 'wrong'));"
+    /* §6.1.1's `rem` is "the computed value of the em unit on the ROOT element", so the root's own font size is
+       declared here for the same reason the parent's is above — an undeclared root font size is the default
+       fact and the answer would carry its domain. */
+    "document.documentElement.style.setProperty('font-size', '10px');"
+    "var fsr = document.createElement('div'); document.body.appendChild(fsr);"
+    "fsr.style.setProperty('margin-top', '2rem');"
+    "fetch('/api/fontrem?v=' + (getComputedStyle(fsr).marginTop === '20px' ? 'isrem' : 'wrong'));"
+    /* AND THE SELF-REFERENTIAL PAIR, LAST because it changes the root's font size out from under the probe
+       above. §6.1.1: inside a font-affecting property on the element the unit REFERS TO, the base is the
+       parent's metrics "or … the computed metrics corresponding to the initial values of the font and
+       line-height properties, if the element has no parent" — so `html { font-size: 2rem }` is twice the
+       INITIAL font size and not twice itself, and the root has no parent element. There is no token to compare
+       against (the base is the default-font-size fact), and what this asserts is that the walk TERMINATED at
+       all: resolving either unit against the element's own computed font-size here is not a wrong number, it
+       is a definition of itself. */
+    "document.documentElement.style.setProperty('font-size', '2rem');"
+    "fetch('/api/fontroot?s=' + getComputedStyle(document.documentElement).fontSize);"
     /* element.style WRITES go through setAttribute's chokepoint, so an inline style time-travels like every
        other DOM write — and [SameObject] means the page gets the same declaration back each read. */
     "cs.style.color = 'red'; cs.style.setProperty('padding-left', '2px');"
@@ -5051,6 +5092,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "\"/api/cascade\"",    "isspec"  },   /* specificity beats document order — the cascade, not a list */
         { "\"/api/cssinline\"",  "isinline"},   /* inline layers over the author cascade */
         { "\"/api/cssua\"",      "isua"    },   /* the UA default, and the initial value below it */
+        /* css-fonts-4 §2.5's computed font-size, and css-values-4 §6.1.1's two font-size-relative units. The
+           `larger`, the `150%` and the `1.5em` INSIDE font-size are all a ratio of the PARENT's size, while
+           the `2em` in a margin is a ratio of the element's OWN — §6.1.1's font-affecting rule is the whole of
+           the difference. /api/fontroot has no token: its base is CSS_ENV_DEFAULT_FONT_SIZE, so what it proves
+           is that a `rem` on the root resolved against the INITIAL size instead of recursing into itself. */
+        { "\"/api/fontsize\"",   "isfs"    },
+        { "\"/api/fontrem\"",    "isrem"   },
         { "\"/api/cssset\"",     "isset"   },   /* writes land in the style attribute, [SameObject] holds */
         { "\"/api/cssdel\"",     "isdel"   },
         { "\"/api/cssro\"",      "isro"    },   /* a computed declaration throws rather than silently ignoring */

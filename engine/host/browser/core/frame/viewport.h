@@ -24,7 +24,17 @@
  *     size (`outerWidth`/`outerHeight` — a UA can present the same viewport inside more or less chrome, which
  *     is exactly what makes `outerHeight - innerHeight` a question with two answers, and it is its own source
  *     for the reason screen.c gives for `availHeight` beside `height`); and `devicePixelRatio`, where `> 1` is
- *     the retina gate a bundle puts different assets and a different image host behind.
+ *     the retina gate a bundle puts different assets and a different image host behind. AND THE READER'S
+ *     DEFAULT FONT SIZE, which is not a member of this component and is a fact by this component's test:
+ *     css-fonts-4 §2.5 (Font size: the font-size property) leaves what `medium` computes to entirely free —
+ *     an `<absolute-size>` keyword "refers to an entry in a table of font sizes COMPUTED AND KEPT BY THE USER
+ *     AGENT", and §2.5.1 (Absolute Size Keyword Mapping Table), which is that table, adds that "the user agent
+ *     may fine-tune these values for different fonts or different types of display devices" — so nothing in
+ *     the model derives it, and a `rem`-sized layout hangs its whole responsive ladder off the one number
+ *     `parseFloat(getComputedStyle(document.documentElement).fontSize)` reports.
+ *     core/css/font_size_functions.h picks it and owns the arithmetic; the row for it is in the seam below,
+ *     because that seam's contract is WHICH facts exist and what each is called rather than where any of them
+ *     is measured.
  *   - DERIVED, so CONCRETE: `scrollX`/`scrollY`, whose domain is a single point — with no layout the scrolling
  *     area IS the ICB, so the origin is the only valid scroll position, and forking it would run a page's
  *     scrolled code in a document that cannot scroll. It is also the half of this file that acquires a WRITER

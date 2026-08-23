@@ -124,6 +124,13 @@ static const struct { const char *member; bool presented; } VIEWPORT_FACT[CSS_EN
     [CSS_ENV_ICB_WIDTH]          = { "initialContainingBlock.width",  true  },
     [CSS_ENV_ICB_HEIGHT]         = { "initialContainingBlock.height", true  },
     [CSS_ENV_DEVICE_PIXEL_RATIO] = { "devicePixelRatio",              false },
+    /* THE NUMBER IS NOT THIS FILE'S — core/css/font_size_functions.h picks css-fonts-4 §2.5's `medium` and says
+       why it passes this component's PICKED-rather-than-DERIVED test — and that is what this seam is FOR: its
+       contract is WHICH facts a length may be a function of and what each is called, never where the value
+       came from. `presented` is FALSE for the same reason it is false one row up: the reader's own default
+       text size is a preference the user agent has whether or not this document is on a screen, while the
+       INITIAL CONTAINING BLOCK is a rectangle a navigable presents and stops existing when it does not. */
+    [CSS_ENV_DEFAULT_FONT_SIZE]  = { "defaultFontSize",               false },
 };
 
 /* THE SOURCE KEY, SPELLED ONCE — the document is part of it for media_query_list.c's reason (viewport.h), and
