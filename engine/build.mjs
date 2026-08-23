@@ -15,7 +15,7 @@
  * harness once the browser target is wired.
  */
 import { spawnSync, spawn } from "node:child_process";
-import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync, readFileSync, rmSync, openSync, closeSync } from "node:fs";
+import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync, readFileSync, rmSync, openSync, closeSync, symlinkSync } from "node:fs";
 import { dirname, join, resolve, relative, sep } from "node:path";
 import { cpus } from "node:os";
 import { createHash } from "node:crypto";
@@ -198,14 +198,26 @@ function hungCause(out) {
    half a hang is diagnosed from. So the child writes to a FILE, its path is announced BEFORE the run so it is
    tailable while it runs, and the whole file is written to this process's stdout afterwards, in order, so a
    transcript of this build still contains the run in full. */
+/* THE PATH CARRIES THE RUN'S IDENTITY, because the checkout is shared and two builds are ordinary. The path
+   used to be fixed per LABEL, so two concurrent builds opened the same file "w" and both children wrote into
+   it -- and then each parent read the mixture back as its own `captured` and derived its own verdict from
+   bytes the other run produced. That is not a garbled log, it is a measurement about no single run: an agent
+   found `switches` going 8252 -> 8513 -> 11693 -> 9426 in one file, two independent series for one search
+   interleaved, and the numbers were unanswerable. A stable name is kept as a SYMLINK so `— live at` stays
+   tailable and so the last run of a label is still findable by hand; the bytes this parent reads are only
+   ever the ones its own child wrote. */
 function runChild(label, prog, args, hint) {
-  const log = join(OUT, "run-" + label.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "") + ".log");
+  const slug = label.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const log = join(OUT, `run-${slug}.${process.pid}.log`);
+  const stable = join(OUT, `run-${slug}.log`);
   mkdirSync(OUT, { recursive: true });
   console.log(`[build] ${label} — live at ${log}`);
   const fd = openSync(log, "w");
   let t;
   try { t = spawnSync(prog, args, { stdio: ["inherit", fd, fd], shell: false, timeout: RUN_BACKSTOP_MS }); }
   finally { closeSync(fd); }
+  /* Best-effort convenience only: a failure here must never change the verdict below. */
+  try { rmSync(stable, { force: true }); symlinkSync(log, stable); } catch { /* not fatal */ }
   t.captured = readFileSync(log, "utf8");
   process.stdout.write(t.captured);
   return runOutcome(label, t, hint);
