@@ -9,6 +9,7 @@
 #include "core/html/trusted_types.h"
 #include "core/dom/document.h"
 #include "solver/concolic.h"
+#include "solver/decide.h"
 #include "solver/endpoint.h"
 #include "solver/engine.h"
 #include "solver/flow.h"
@@ -114,6 +115,32 @@ typedef struct {
        remaining question. Report-only: the WFQ credit stays on the search-level ratchet, worth at most one
        rung, so adding this changes no ordering. */
     int *surv_pl; int svcap;
+    /* THE SEARCH'S RE-INJECTION POINT — the decision state the CONTEXT PROBE stood on when it reached this
+       sink, held so that every breakout derived from that probe REPLAYS that path instead of searching for it
+       again from nothing.
+       WHY THIS IS THE WHOLE OF THE DERIVED-CLASS GAP. A single-context sink states its vectors at DETECTION, so
+       its candidates are seeded when the frontier is small and one of them fires. A derived sink cannot: its
+       breakouts do not exist until the probe has ARRIVED, which is the end of a full traversal, so they are
+       seeded as families of one at the moment the frontier is at its largest — and a fresh flow's whole
+       advantage is its optimism bonus, 1/(1+n), which outranks a saturated frontier for about twelve quanta
+       and then ties with everything. Twelve quanta against a traversal the probe needed hundreds of turns for,
+       and the traversal is not even the hard part: the flow must also find, among a fork tree as deep as the
+       document's gate sequence, the one arm that reaches the sink. Measured: two derived searches reported
+       `survivedBy:[16,0]` and `[16,0]` — the probe's bytes at a sink, the breakout's nowhere at all.
+       A FLOW IS `replay(baseline, decision vector)` (flow.h), which is why this is a blob and not a frame: the
+       cold tier already rebuilds a parked CANDIDATE from nothing but its vector, so a candidate flow standing
+       on a vector it did not itself run is not a new capability, it is the one cold_resume performs every time
+       it brings one back. decide_fork_same_path is the capture — it exists for a sibling minted at a point
+       that took no arm, freezes the running head, and hands back a blob at the parent's CURRENT cursor, which
+       is exactly what a probe standing at its sink is.
+       IT IS SOUND UNDER A DIFFERENT PAYLOAD because the substituted source is CONCRETE during a candidate run:
+       branches on it are decided by running the real predicate on the real value, never from the vector, so a
+       breakout whose bytes take a different arm takes it. The vector only replays the arms the payload does
+       not decide, which is the definition of "the same world, different attacker bytes".
+       IT IS A CEILING AND IT IS RELEASED. The blob holds a reference on the frozen segment for the life of the
+       search, so the whole prefix under it stays alive; record_sink drops it the moment the search fires and
+       solve_free drops what is left. */
+    void *reinject;
 } Cand;
 static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
 
@@ -403,6 +430,7 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        observation compare against a maximum nothing ever achieved and the rung never pays at all. */
     e->surv_run = 0; e->surv_len = 0;
     e->surv_pl = NULL; e->svcap = 0;
+    e->reinject = NULL;
     e->escaped = 0;
     e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0;
     *created = 1;
@@ -486,7 +514,7 @@ static void record_sink(int cls, const char *source, const char *poc) {
        straight through a NULL `twin`. A guard whose removal turns a dev-mode abort into a production segfault
        is a universal invariant (check.h: data integrity, must not PROCEED), not a should-never-happen; the two
        allocations on the next line already carry CHECK for the same reason. */
-    const Cand *twin = search_of(source, cls);
+    Cand *twin = search_of(source, cls);
     CHECK(twin != NULL, "an @S finding was recorded for a sink that was never detected as pending");
     /* AND IT HAS ONE, WHICH IS A STATEMENT ABOUT THE SEARCH AND NOT A HOPE ABOUT THIS FINDING. Both doors into
        g_pending state the root — detection reads it off the value, a cold resume takes it out of the park
@@ -523,6 +551,12 @@ static void record_sink(int cls, const char *source, const char *poc) {
        against exploring flows whose reward is unbounded. The flow that just proved an exploit is the last one
        a WFQ should be aging out. */
     flow_credit_emit(1.0);
+    /* AND THE SEARCH'S RE-INJECTION POINT IS GIVEN BACK, because this is the moment it stops being useful and
+       starts being a ceiling. The blob pins the frozen decision segment the probe reached this sink on, and
+       every segment below it, for as long as the search holds it; a solved search seeds no further candidates,
+       so from here it is a prefix of the fork tree kept alive by nothing but a pointer nobody will read. It is
+       cleared as well as freed so solve_free cannot release it twice. */
+    if (twin->reinject) { decide_blob_free(twin->reinject); twin->reinject = NULL; }
 }
 
 /* DETECTION — the tail all three sink classes share, because they ask the value the same two questions and
@@ -548,7 +582,20 @@ static void detect_sink(JSValueConst arg, int cls) {
    the sink is what the page's OWN code built around the attacker's bytes: its concatenations, its filter, its
    re-encoding, all of them run. The class's own parser reads the state each surviving occurrence sits in and
    constructs that state's minimal escape; every escape joins THIS sink's search and the next drain seeds it. */
-static void queue_derived(void *user, const char *breakout) { push_breakout((Cand *)user, breakout); }
+static void queue_derived(void *user, const char *breakout) {
+    Cand *e = (Cand *)user;
+
+    /* THE ONE SITE, BY CONSTRUCTION. Both derived classes emit every breakout through this callback, so
+       capturing here cannot be added to one class and forgotten in the other — which is what two call sites
+       beside the two derive_* functions would have been. It runs while the PROBE is still the running flow,
+       standing at its own sink, which is the state being captured.
+       ONCE PER SEARCH: the first breakout takes it and every later one — this probe's second occurrence, or a
+       probe that re-reaches the sink on another arm — finds it already held. A second capture would leak the
+       first blob's segment reference and would replace a path that reached the sink with another that also
+       did, which is not an improvement to trade a leak for. */
+    if (!e->reinject) e->reinject = decide_fork_same_path();
+    push_breakout(e, breakout);
+}
 
 /* THE SEARCH THE RUNNING CANDIDATE BELONGS TO — asked by BOTH halves of a verifying run, the context probe
    that DERIVES and the breakout that FIRES, because both are the same question. These assertions are about the
@@ -1028,6 +1075,24 @@ int solve_seed_candidates(JSContext *ctx) {
             f->cand_payload = strdup(e->pl[e->seeded]);
             f->cand_sink    = sink_name(e->sink);
             CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
+            /* …AND ON THE PATH THE PROBE ALREADY PROVED REACHES THIS SINK, when the search has one. The flow
+               still re-runs the document from the baseline — the payload enters at the source read and there
+               is no earlier point to start from — but it CONSUMES the probe's recorded arms at each branch it
+               re-reaches instead of forking over them, so it walks the one arm that arrives rather than
+               searching a tree as deep as the document's gate sequence for it. `decide_blob_new` takes its own
+               reference on the frozen segment and replays at cursor 0, forking normally the moment the cursor
+               runs past what the probe knew — which is where this candidate's own exploration begins.
+               A SEARCH WITH NO RE-INJECTION POINT IS NOT A FALLBACK, it is the other algorithm: a
+               single-context class has no probe, so there is no path to replay and its written-down vectors
+               are seeded at DETECTION, when this problem does not arise. Delete the derivation and that class
+               still needs this branch; delete the vectors and a derived class still needs the replay. */
+            if (e->reinject) {
+                DCHECK(f->dec_blob == NULL,
+                       "a freshly added flow already carries decision state — the re-injection blob below "
+                       "would overwrite it and drop that segment's reference, and the flow would replay a path "
+                       "that is not the one it was given");
+                f->dec_blob = decide_blob_new((void *)decide_blob_seg(e->reinject));
+            }
             added++;
             g_cands_seeded++;
             e->tried++;
@@ -1201,6 +1266,28 @@ char *solve_json_array(JSContext *ctx) {
            no separate `stored` boolean: "is it stored" is not a second fact beside the mechanism, it IS the
            mechanism (a `plant` delivery is two-stage and every other one is a single load), and two fields for
            one fact is precisely the drift that made five names on this record mean nothing. */
+        /* WHAT THE SOLVE COST, because success is the one event that destroys the record of it. A search that
+           fires stops emitting the parked shape — `solved()` skips it below — so `tried`, `turns`, `survived`
+           and `escaped` all vanish at the instant they become a fact about a REAL exploit rather than about a
+           search in progress. A reader then cannot tell a PoC that fell out of the first written-down vector
+           from one that took forty candidate runs and a derivation, which is the difference between a sink
+           anyone would have found and a sink only this tool finds.
+           IT IS THE COUNT AND NOT A FLAG, and one number rather than four: `tried` is the whole search's cost
+           in document re-runs, which is what the other three are each a component of, and the parked shape
+           already states all four for every search that has not solved. A fired entry needs the total, not the
+           breakdown of a question that is now answered.
+           ABSENT IS IMPOSSIBLE HERE, which is what makes it a positive statement: record_sink CHECKs that a
+           finding's twin is on the pending list, so a fired entry always has a search behind it to ask. */
+        {
+            const Cand *tw = search_of(g_sinks[i].source, g_sinks[i].cls);
+            char t[32];
+            CHECK(tw != NULL,
+                  "solve: a fire-verified @S finding is being emitted with no search behind it — record_sink "
+                  "asserts the twin at the moment the PoC is stored, so an absent one here means the pending "
+                  "list was rewritten under a finding and the report is about to state a cost it cannot read");
+            json_buf_puts(&b, ",\"searched\":");
+            snprintf(t, sizeof t, "%d", tw->tried); json_buf_puts(&b, t);
+        }
         emit_delivery(&b, g_sinks[i].root);
         json_buf_puts(&b, "}");
     }
@@ -1312,6 +1399,9 @@ void solve_free(void) {
         for (int c = 0; c < g_pending[i].npl; c++) free(g_pending[i].pl[c]);
         free(g_pending[i].pl);
         free(g_pending[i].surv_pl);   /* grown with `pl` (push_breakout), so freed beside it */
+        /* THE SEGMENT REFERENCE THE SEARCH STILL HOLDS — a search that never solved still has its probe's
+           re-injection blob, and the frozen chain under it is freed only when the last reference goes. */
+        if (g_pending[i].reinject) decide_blob_free(g_pending[i].reinject);
         free(g_pending[i].src);
         free(g_pending[i].root);
     }

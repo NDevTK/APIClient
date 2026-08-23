@@ -36,9 +36,15 @@
    beside it. A run and not a count of matching characters: the escape a breakout is made of is a SEQUENCE, so
    twelve of its bytes scattered through the output are worth nothing and four of them adjacent are worth
    something, and a per-character tally cannot tell those apart. */
+/* A RUN IS AT LEAST TWO BYTES, OR IT IS NOTHING — the boundary of the sentence above and not a threshold on
+   top of it. One character of a payload carries no positional information: every byte a constructed escape is
+   made of occurs in ordinary markup and ordinary source on its own, so a run of 1 is exactly the per-character
+   tally this field exists not to be. TWO is the only non-arbitrary floor, because it is the shortest length at
+   which "contiguous" constrains anything; any larger value would be a tuning knob. A candidate shorter than
+   two bytes is reported as itself, since for it the distinction does not arise. */
 typedef struct {
     int len;      /* the candidate's own byte length — the denominator, so `run` is readable without it */
-    int run;      /* the longest contiguous run of the candidate present in the output, 0 when none is */
+    int run;      /* the longest contiguous run of the candidate present in the output; 0, or 2 and up */
     int at;       /* where that run starts IN THE CANDIDATE (which segment lived), or -1 when run == 0 */
     int out_at;   /* where it landed IN THE OUTPUT (where it survived to), or -1 when run == 0 */
 } FilterObs;

@@ -355,6 +355,15 @@ function renderSecurityPanel() {
       "an @S record reached the popup without sink/source/poc — solve_json_array emits all three for a fired "
       + "sink, so a card is about to claim a working PoC it cannot show (sink=" + item.sink + " source="
       + item.source + ")");
+    // AND WHAT THE SOLVE COST, asserted rather than defaulted for the reason every other field here is: a
+    // fired record always has a search behind it (solve.c CHECKs the twin at the moment the PoC is stored), so
+    // an absent `searched` is this relay broken and not a cheap solve. It is the only progress number that
+    // survives success — the parked shape's four all disappear the instant a search fires.
+    DCHECK(typeof item.searched === "number" && item.searched > 0,
+      "a fire-verified @S record reached the popup without its search cost — solve_json_array writes "
+      + "`searched` on every fired entry and a PoC exists only because at least one candidate ran, so a "
+      + "missing or zero count is the relay rather than a solve that cost nothing (sink=" + item.sink
+      + " searched=" + JSON.stringify(item.searched) + ")");
     DCHECK(_FIRES_ON[item.firesOn],
       "an @S record reached the popup with a firesOn this view has no sentence for (" + JSON.stringify(item.firesOn)
       + ") — the token vocabulary is solve.h's, one per sink class, and a PoC whose firing semantics cannot be "
@@ -394,6 +403,12 @@ function renderSecurityPanel() {
       + ' · ' + policyClause
       + ' · ' + esc(_deliverySentence(item))
       + (encClause ? ' · ' + encClause : "")
+      // THE COST, because a reader deciding how much to trust a finding wants to know whether the tool found
+      // it or stumbled on it. One candidate run is the first written-down vector firing; a larger number is a
+      // context probe, a derivation and that many re-runs of the page — which is the work no other tool does.
+      + ' · ' + esc(item.searched === 1
+          ? 'solved on the first candidate run'
+          : 'solved after ' + item.searched + ' candidate runs of the real page')
       + '</div>';
 
     // ENGINE AGREEMENT verify: run the engine's EXACT poc against the REAL page in a sandboxed attacker

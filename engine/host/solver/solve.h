@@ -94,7 +94,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
 /* EVERY DETECTED SINK as a JSON ARRAY (caller frees). Two entry shapes, because a sink is in one of two states
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
-                      [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
+                      ,"searched":N[,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,"survived":S,
                       "survivedOf":L,"escaped":E[,"fires":F],"payloads":[..],"survivedBy":[..]
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
@@ -171,6 +171,13 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
 
    THE FIRED ENTRY IS §S(d)'s REPRODUCTION ENVELOPE, and every field of it is a POSITIVE statement whose ABSENCE
    is equally positive — never a gap to be read as a default:
+     `searched`     how many candidate runs the search took to fire — the one progress number that survives
+                    success. A search that fires stops emitting the parked shape, so `tried`/`turns`/
+                    `survived`/`escaped` all vanish at the moment they stop being about a search in progress
+                    and start being the cost of a REAL exploit; without this a reader cannot tell a PoC that
+                    fell out of the first written-down vector from one that took a probe, a derivation and
+                    forty re-runs. ALWAYS present — every finding has a search behind it (record_sink asserts
+                    the twin), so absence here would be a third state rather than a fact.
      `firesOn`      what makes the PoC RUN, off the sink's own fire oracle: "sink-evaluates" (the sink executes
                     the string where it stands), "parse-insert" (an auto-firing handler in markup, at insertion,
                     no interaction), "navigation" (a `javascript:` URL, when the navigation happens). ALWAYS
