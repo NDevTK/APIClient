@@ -94,10 +94,11 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
 /* EVERY DETECTED SINK as a JSON ARRAY (caller frees). Two entry shapes, because a sink is in one of two states
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
-                      ,"searched":N[,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
+                      ,"searched":N[,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."]
+                      [,"deliveryPrefix":"#"]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,"survived":S,
                       "survivedOf":L,"escaped":E[,"fires":F],"payloads":[..],"survivedBy":[..]
-                      [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
+                      [,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
    own declaration. There is deliberately no "verified":false — the entry states what was searched, never that
@@ -112,8 +113,9 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    `reached` COUNTS BREAKOUTS AND NOT CONTEXT PROBES, and the distinction is the whole value of the field: a
    probe carries an inert locator and cannot fire by construction, so counting its arrival makes `reached:1`
    mean either "the probe got here and the breakout has not run" or "the breakout got here and failed" — the
-   two readings the field exists to separate. A derived class's probe arrival is already stated by `tried >= 2`
-   (its breakouts exist only because the probe returned them), so nothing is lost and nothing is stated twice.
+   two readings the field exists to separate. A derived class's probe arrival is already stated by `payloads`
+   holding more entries than the probes it opened with (its breakouts exist only because a probe returned
+   them), so nothing is lost and nothing is stated twice.
    `turns` IS THE THIRD, AND IT IS WHAT MAKES `reached:0` READABLE AT ALL. Seeded, arrived and SCHEDULED are
    three different facts: `tried:2,reached:0,turns:0` is a search the WFQ has never once given the thread to,
    and `tried:2,reached:0,turns:900` is one whose flows have run and have not got as far as the sink. The first
@@ -159,8 +161,10 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    `survived` and to no column here, because there is no row of this session's for it.
    `payloads` IS THE ONE FIELD THAT IS NOT A COUNT, and the search's most common state is the one
    that needs it: a breakout that ARRIVED and did not fire is a question about the BYTES, and no quantity
-   answers it. Entry 0 of a derived class is its inert context probe — it is one of the runs `tried` counts, so
-   omitting it would make the list disagree with the count, and it is told apart by carrying no marker.
+   answers it. The LEADING entries of a derived class are its probes — the inert context probe, and beside it
+   the delivery probe where the source declares a percent-encode set for that probe to measure — and each is
+   one of the runs `tried` counts, so omitting them would make the list disagree with the count; they are told
+   apart by carrying no marker.
    `fires` SEPARATES A SOLVER FAILURE FROM A SCHEDULING ONE, because ARRIVING at a sink is not reaching an
    EXECUTABLE position. A markup breakout becomes a program only if the real parse put its marker in an
    auto-firing handler and a URL one only if the delivered address survived as a `javascript:` URL, so
@@ -187,6 +191,20 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
      `trustedTypes` the CSP sink GROUP required at this sink, present only when the document requires one — the
                     assignment throws before the markup is parsed. Absent = no requirement applies, which
                     covers both "the document requires none" and "the standard makes this no TT sink".
+     `sourceDelivers` THE MEASURED HALF OF `sourceEncodes`, and the two are different facts that a reader has
+                    to be able to hold against each other. `sourceEncodes` is the DECLARATION — what the
+                    component that owns the source states the browser percent-encodes on the way in — and it
+                    is a PRIOR, not an outcome: a page that runs `decodeURIComponent` over its own fragment
+                    receives the `<` the browser encoded, and this engine already fires a markup PoC through
+                    exactly that round trip. This field is the subset of those bytes a RUN observed arriving at
+                    a sink, taken off a delivery probe seeded beside the context probe (solve.c), and it is
+                    what every derived escape is constructed under. An empty value beside a full declaration is
+                    the strongest thing a parked markup search can say — the source's own transform is the
+                    whole of the failure and no re-derivation reaches past it. ABSENT is TWO facts and both are
+                    positive: the source declares no percent-encode set (nothing is in question), or no
+                    delivery probe of this search has reached a sink yet (no measurement was taken). It is
+                    never emitted from the permissive initial table, which would report "all of them arrive"
+                    for a question nobody has asked.
      `delivery`     HOW an attacker puts bytes in this source, from the source's own declaration in the
                     component that owns it: "address" (the victim's own URL, at `deliveryPrefix`), "plant"
                     (§S(b)'s TWO-STAGE plant-then-load — there is no separate `stored` flag because being

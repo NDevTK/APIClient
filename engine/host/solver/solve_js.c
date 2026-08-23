@@ -527,7 +527,11 @@ static Hole scan(Scan *z) {
     return h;
 }
 
-static void emit_one(SolveJsEmit emit, void *user, int *n, const char *fmt, ...) {
+/* AN ESCAPE THE SOURCE CANNOT CARRY IS NOT EMITTED — the same gate solve_html.c states at its own emitter,
+   and the one place this file decides it. Declining is not a swallowed condition: the candidate would
+   re-run the whole document to arrive percent-encoded at its own sink, which is a search state solve.h
+   already reports (`survivedBy` against `sourceEncodes`) and never a fire. */
+static int emit_one(SolveJsEmit emit, void *user, int *n, const SolveDelivered *d, const char *fmt, ...) {
     char b[256];
     va_list ap;
     int k;
@@ -536,8 +540,10 @@ static void emit_one(SolveJsEmit emit, void *user, int *n, const char *fmt, ...)
     k = vsnprintf(b, sizeof b, fmt, ap);
     va_end(ap);
     CHECK(k > 0 && (size_t)k < sizeof b, "solve_js: a constructed breakout did not fit its buffer");
+    if (!solve_delivered_ok(d, b)) return 0;
     emit(user, b);
     (*n)++;
+    return 1;
 }
 
 /* THE ESCAPE IS THE STATE'S OWN EXIT. Nothing below is chosen; each is the byte sequence §12 defines as leaving
@@ -552,7 +558,7 @@ static void emit_one(SolveJsEmit emit, void *user, int *n, const char *fmt, ...)
        discards precisely the orphaned terminator and nothing else.
      - §12.4 also makes MultiLineComment non-nesting, so the page's own terminator, still ahead in the source,
        would be an offending token: the exit re-opens a MultiLineComment and that same terminator closes it. */
-static int construct(Hole h, SolveJsEmit emit, void *user) {
+static int construct(Hole h, const SolveDelivered *d, SolveJsEmit emit, void *user) {
     const char *escape = NULL;
     int n = 0;
 
@@ -665,18 +671,19 @@ static int construct(Hole h, SolveJsEmit emit, void *user) {
            "a pending escape sequence was reported for a §12 state that has no backslash production — only "
            "12.9.4's string characters, 12.9.6's template characters and 12.9.5's body and class admit one, so "
            "a comment or a bare source position claiming one means a scanner set the bit on the wrong hole");
-    emit_one(emit, user, &n, "%s%s", h.esc ? "n" : "", escape);
+    emit_one(emit, user, &n, d, "%s%s", h.esc ? "n" : "", escape);
     return n;
 }
 
-int solve_js_breakouts(const char *output, SolveJsEmit emit, void *user) {
+int solve_js_breakouts(const char *output, const SolveDelivered *d, SolveJsEmit emit, void *user) {
     size_t loclen = sizeof SOLVE_JS_LOCATOR - 1, olen;
     const char *p;
     int n = 0;
 
-    DCHECK(output != NULL && emit != NULL,
-           "the JS breakout derivation was asked for the context of nothing, or with nowhere to put what it "
-           "derives");
+    DCHECK(output != NULL && emit != NULL && d != NULL,
+           "the JS breakout derivation was asked for the context of nothing, with nowhere to put what it "
+           "derives, or with no statement of which bytes this source can carry — the constraint is half the "
+           "solve (see solve_js.h), so a derivation without one constructs escapes that cannot arrive");
     DCHECK(strstr(output, SOLVE_JS_LOCATOR) != NULL,
            "the JS breakout derivation was handed an eval sink's argument that does not carry the context "
            "locator — the probe candidate substitutes it AT THE SOURCE, so an argument without it is a call the "
@@ -698,7 +705,7 @@ int solve_js_breakouts(const char *output, SolveJsEmit emit, void *user) {
                "string, a comment or an escape would change the very scan it is measuring");
         h = scan(&z);
         free(z.tpl);
-        n += construct(h, emit, user);
+        n += construct(h, d, emit, user);
     }
     return n;
 }

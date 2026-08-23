@@ -970,6 +970,25 @@ static const char *HTML =
     "eval(\"'\" + location.hash + \"'\");"
     "var lhHost = document.createElement('div'); document.body.appendChild(lhHost);"
     "lhHost.innerHTML = location.hash;"
+    /* AND THE SAME SOURCE INTO AN ATTRIBUTE-VALUE HOLE, which is the statement that §@S's three observations
+       are solved JOINTLY rather than one at a time. The write above puts the attacker's bytes in §13.2.5.1's
+       data state, whose ONLY exit is `<` — the fragment percent-encode set (URL §1.3 "Percent-encoded bytes")
+       holds it, so that search is unsolvable through this source and the entry above says so. This one puts
+       them in §13.2.5.37 "Attribute value (single-quoted) state", which is left by the apostrophe the fragment
+       set does NOT hold, into §13.2.5.39 "After attribute value (quoted) state", which is left by whitespace
+       AND by U+002F SOLIDUS — and no percent-encode set holds the solidus. So an escape EXISTS here that needs
+       no `<`, no `>` and no space, and a derivation that reads only the sink's parse context constructs the
+       one spelling the source cannot carry, reports it as an escape that merely did not fire, and misses a
+       real raw-fragment XSS. The two writes together are the only arrangement that tells "the source transform
+       is applied" apart from "the derivation stopped at the first spelling": the first must NOT fire and the
+       second MUST.
+       IT IS A DERIVED SOURCE IDENTITY ON PURPOSE. `location.hash.slice(1)` composes `{location.hash}.slice()`
+       (concolic.h states that derivation byte for byte), so this is its OWN search with its own probes — the
+       negative half above keeps its parked entry instead of being absorbed into a search that fires. The ROOT
+       is still `location.hash`, which is what carries the percent-encode set through the derivation, so the
+       constraint this search is solved under is the same one. */
+    "var lhAttr = document.createElement('div'); document.body.appendChild(lhAttr);"
+    "lhAttr.innerHTML = \"<img alt='\" + location.hash.slice(1) + \"'>\";"
     /* THE OUTCOME FORK AT A C BUILTIN. `JSON.parse` of unknown text has two feasible completions — 25.5.1
        step 8's value and step 2's SyntaxError — and a builtin that picks one has DELETED the arm the `catch`
        and everything behind it lives on. BOTH endpoints below must appear in ONE run: two flows, one
@@ -4440,6 +4459,29 @@ static int s_stage(const char *js, const char *sink, const char *src) {
  * a payload can only satisfy it from the `poc` of the (sink, source) record it belongs to. It is a PREFIX
  * match on the payload because a class with several vectors may fire any of them, and prefixing is what lets
  * the row name the vector without claiming which one. */
+/* A FIELD OF ONE @S RECORD, NEVER A SUBSTRING OF THE DOCUMENT — the rule s_poc states, applied to a field that
+ * is not the record's first. `sourceEncodes` and `sourceDelivers` sit at the TAIL of an entry, past a variable
+ * number of counts, so no single anchored pattern reaches them from the record's head; a loose `strstr` over the
+ * whole array reaches them from ANY record, which is exactly how the URL row came to be satisfied out of a
+ * different search's candidate list. The record's own bounds are what makes the answer a measurement: an entry
+ * runs from its `{"sink":` to the next one. */
+static int s_field(const char *js, const char *sink, const char *src, const char *needle) {
+    char pat[192];
+    const char *e, *end, *p;
+    size_t nl = strlen(needle), span;
+    int k = snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\"", sink, src);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat,
+          "an @S field row's record pattern did not fit its buffer — a truncated pattern matches a PREFIX of "
+          "the record key, so the row would read a field out of some other sink's entry");
+    if (!(e = strstr(js, pat))) return 0;
+    end = strstr(e + 1, ",{\"sink\":");
+    span = end ? (size_t)(end - e) : strlen(e);
+    if (span < nl) return 0;
+    for (p = e; p + nl <= e + span; p++) if (!memcmp(p, needle, nl)) return 1;
+    return 0;
+}
+
 static int s_poc(const char *js, const char *sink, const char *src, const char *poc) {
     char pat[384];
     int k = snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\",\"poc\":\"%s", sink, src, poc);
@@ -5100,8 +5142,29 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        defeated it. Asserting only "no PoC" would also pass if the sink were never detected, which is the false
        negative this half exists to catch; asserting the parked entry says the sink WAS reached and searched. */
     int s_park = strstr(ss, "\"sink\":\"innerHTML\",\"source\":\"" LOCATION_HASH_SRC "\",\"search\":\"parked\"")
-              && strstr(ss, "\"sourceEncodes\":\" \\\"<>`\"")
+              && s_field(ss, "innerHTML", LOCATION_HASH_SRC, "\"sourceEncodes\":\" \\\"<>`\"")
               && !strstr(ss, "\"source\":\"" LOCATION_HASH_SRC "\",\"poc\":\"<");
+    /* AND THE MEASURED HALF OF THAT CONSTRAINT, which is what makes the negative a MEASUREMENT rather than an
+       absence. `sourceEncodes` is the DECLARATION — what location.c states the browser percent-encodes — and a
+       page that ran `decodeURIComponent` over its own fragment would receive every one of those bytes anyway,
+       so the declaration alone cannot say why nothing fired. `sourceDelivers` is the subset a delivery probe
+       of THIS search observed arriving at the sink, and empty is the strongest thing a parked markup search
+       can say: not one of the five reaches the write, so §13.2.5.1's only exit is unreachable through this
+       source and no re-derivation gets past it. Read inside the record, because the pair is a fact about THIS
+       search and both fields are emitted for every entry that has a declaration. */
+    int s_nodeliver = s_field(ss, "innerHTML", LOCATION_HASH_SRC, "\"sourceDelivers\":\"\"");
+    /* THE POSITIVE HALF OF THE SAME MECHANISM. The attribute-value write of the same root is a REAL raw-hash
+       XSS, and the escape is built entirely out of bytes the fragment set does not hold: the apostrophe leaves
+       §13.2.5.37, the solidus is §13.2.5.39's second exit into §13.2.5.40 "Self-closing start tag state" whose
+       "Anything else" reconsumes in §13.2.5.32 "Before attribute name state", the injected `src` is the
+       resource an `onerror` needs to FAIL (the img carries none, so §13.2.5.33's duplicate-attribute rule does
+       not discard ours), and the filler attribute absorbs the template's own closing quote. Every value is
+       quoted because the solidus is not an exit from §13.2.5.38 "Attribute value (unquoted) state" — it is
+       appended there — so an unquoted value would swallow the rest of the escape. A payload table could not
+       have held this: it is a function of the source's measured byte set AND the element the hole is in. */
+    int s_attr  = s_poc(ss, "innerHTML", "{" LOCATION_HASH_SRC "}.slice()",
+                        "'/src='x'/onerror='X9()'/x9pad='");
+    int s_attrd = s_field(ss, "innerHTML", "{" LOCATION_HASH_SRC "}.slice()", "\"sourceDelivers\":\"\"");
     /* THE STAGES BEHIND EACH OF THOSE ROWS. The rows above assert the PAYLOAD TEXT, which only a real
        derivation followed by a real fire can produce, and nothing here relaxes them — these say WHERE a run
        that has not got there yet has got to. `-derived` is `reached >= 1` on a search whose candidate count
@@ -5115,6 +5178,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int st_url   = s_stage(ss, "location",  "{state}.next");
     int st_loc   = s_stage(ss, "eval",      LOCATION_HASH_SRC);
     int st_lpark = s_stage(ss, "innerHTML", LOCATION_HASH_SRC);
+    int st_attr  = s_stage(ss, "innerHTML", "{" LOCATION_HASH_SRC "}.slice()");
 
     /* …AND THE TWO SETS ARE HELD AGAINST EACH OTHER, WHICH IS WHAT WOULD HAVE CAUGHT THE FALSE GREEN THE DAY
        IT APPEARED. A verdict row and its stage row are computed from the SAME bytes about the SAME record, so
@@ -5137,6 +5201,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                                             "smoke line, satisfied out of a parked search's own candidate list");
     DCHECK(!s_loc   || st_loc   == S_FIRED, "the @S fragment-source verdict is green for a record whose own "
                                             "stage says it carries no PoC");
+    DCHECK(!s_attr  || st_attr  == S_FIRED, "the @S attribute-value verdict is green for a record whose own "
+                                            "stage says it carries no PoC");
+    /* AND THE TWO HALVES OF THE ONE SOURCE CANNOT BOTH BE THE SAME VERDICT, which is what makes this pair a
+       measurement of the DERIVATION rather than of the transform. Both writes are fed from `location.hash`
+       and both are markup sinks; the only thing that differs is the §13.2.5 state the bytes land in and
+       therefore which spellings of an exit the source can carry. A build that fires BOTH has stopped applying
+       the source's transform (the data state's only exit is `<`); a build that fires NEITHER has a derivation
+       that stops at the first spelling, which is the defect this fixture was added for. */
+    DCHECK(!(st_lpark == S_FIRED),
+           "the markup sink fed the RAW fragment produced a fire-verified PoC — §13.2.5.1's data state is left "
+           "only through `<`, which the fragment percent-encode set holds, so a PoC there means a candidate "
+           "was delivered without the source's own transform being applied to it");
 
     /* THE PROBES, DECLARED ONCE. This was a 46-term conjunction and a separate printf listing 43 of them, which
        is two hand-maintained lists of the same thing — so a probe could be computed and joined to NEITHER, and
@@ -5328,6 +5404,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "s-url", s_url, "state.next", SESS_EXPLORE },
         { "s-loc", s_loc, "location.hash", SESS_EXPLORE },
         { "s-park", s_park, "location.hash", SESS_EXPLORE },
+        /* THE MEASURED CONSTRAINT BEHIND THE NEGATIVE, and the POSITIVE it is the counterpart of. */
+        { "s-park-nodeliver", s_nodeliver, "location.hash", SESS_EXPLORE },
+        { "s-attr", s_attr, "location.hash", SESS_EXPLORE },
+        { "s-attr-nodeliver", s_attrd, "location.hash", SESS_EXPLORE },
         /* THE STAGES, so a 0 above names one. Each row carries its parent's key, so selection is unchanged. */
         { "s-eval-seen", st_eval >= S_SEEN, "state.code", SESS_EXPLORE },
         { "s-eval-ran", st_eval >= S_RAN, "state.code", SESS_EXPLORE },
@@ -5347,10 +5427,21 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         /* AND THE NEGATIVE HALF'S MISSING PREMISE. `s-park` asserts the markup sink fed from `location.hash`
            produces NO PoC and is still REPORTED — but "the sink was reached and the search genuinely failed"
            was never actually asserted, because the only evidence the entry carried was `tried`, which is
-           raised at SEED time. This is that premise: a candidate of that search DELIVERED its bytes to the
-           write and the fragment encode set defeated it. Without it, `s-park` also passes over a search whose
-           candidates never ran. */
-        { "s-park-atsink", st_lpark >= S_ARRIVED, "location.hash", SESS_EXPLORE },
+           raised at SEED time. This is that premise: candidates of that search actually EXECUTED.
+           IT IS `S_RAN` AND NOT `S_ARRIVED`, AND THE CHANGE IS THE MEASUREMENT ARRIVING RATHER THAN A ROW
+           BEING WEAKENED. `reached` counts a BREAKOUT'S bytes arriving, and once the derivation is solved
+           JOINTLY there is no breakout for this state to deliver: §13.2.5.1 is left only through `<`, the
+           delivery probe OBSERVES that `<` does not reach the write, and the derivation therefore constructs
+           nothing rather than spending a document re-run to arrive as `%3C`. Asserting an arrival would be
+           asserting that the engine still builds the candidate it has just proved cannot work — and it would
+           be schedule-dependent besides, since whether one is built at all now depends on which of the two
+           probes the WFQ runs first. What replaces it as the statement of a genuine failure is
+           `s-park-nodeliver`, which is the observation itself. */
+        { "s-park-ran", st_lpark >= S_RAN, "location.hash", SESS_EXPLORE },
+        /* AND THE POSITIVE SEARCH'S OWN STAGES, so a 0 on `s-attr` names one. */
+        { "s-attr-seen", st_attr >= S_SEEN, "location.hash", SESS_EXPLORE },
+        { "s-attr-ran", st_attr >= S_RAN, "location.hash", SESS_EXPLORE },
+        { "s-attr-atsink", st_attr >= S_ARRIVED, "location.hash", SESS_EXPLORE },
         /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
            what tells the two apart, because they run the SAME document and one is about what a park WROTE while

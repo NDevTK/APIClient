@@ -56,4 +56,37 @@ typedef struct {
    the real HTML parser. `cand` is bounded by the buffer a constructed breakout is built in, not by the page. */
 void solve_filter_survival(const char *out, const char *cand, FilterObs *o);
 
+/* WHICH BYTES OF A CANDIDATE REACH A SINK AS THEMSELVES — the OTHER half of §@S's "solved JOINTLY", and the
+ * half a derivation was constructing without.
+ *
+ * §@S(1) is the sink's parse context and §@S(2) is "per-flow CHARACTER/SEGMENT PROVENANCE through the real
+ * filter — which bytes survive to which positions and in what form (dropped/escaped/case-folded/re-encoded/
+ * moved/split), observed per re-execution […] so breakout bytes are placed where they survive in the surviving
+ * form". A derivation that reads only the first constructs escapes out of bytes that cannot arrive: the
+ * fragment percent-encode set (URL §1.3 "Percent-encoded bytes") holds SPACE, `"`, `<`, `>` and `` ` ``, so
+ * `'><svg onload=X9()>` is unsatisfiable through `location.hash` BY CONSTRUCTION and the search reported it as
+ * an escape that merely did not fire. This table is what a derivation asks instead, and every §13.2.5 / §12
+ * exit that has ALTERNATIVE spellings is then chosen by it rather than written down once.
+ *
+ * IT IS OBSERVED, NEVER ASSUMED, WHICH IS WHY IT IS A TABLE AND NOT THE DECLARED PERCENT-ENCODE SET. A page
+ * that runs `decodeURIComponent` over its own fragment receives `<` even though the browser encoded it, so the
+ * declaration is a PRIOR and not a fact: taking it as the constraint would decline the one markup breakout this
+ * engine already fires. What the declaration decides is WHICH BYTES ARE WORTH MEASURING (solve.c builds its
+ * delivery probe out of exactly that set); what the run decides is the answer.
+ *
+ * SOUND-ONLY, IN THE SAME DIRECTION §Solver-half prunes branches: every byte starts DELIVERABLE and is cleared
+ * only by an observation that the byte did not arrive, so a source whose probe has not come back yet keeps
+ * every arm. An over-tight table declines an escape that would have fired; an over-loose one merely spends a
+ * document re-run. */
+typedef struct { unsigned char ok[256]; } SolveDelivered;
+
+/* EVERYTHING DELIVERS, UNTIL A RUN SAYS OTHERWISE — the initial state of a search's table. */
+void solve_delivered_all(SolveDelivered *d);
+/* Does this one byte reach the sink as itself? Used where a derivation CHOOSES between two spellings of one
+   §13.2.5 / §12 exit transition. */
+int  solve_delivered_byte(const SolveDelivered *d, char c);
+/* …and the same question about a whole constructed escape — the gate every emitted breakout passes, and the
+   two-sided assert the seeder re-states about what it was handed. */
+int  solve_delivered_ok(const SolveDelivered *d, const char *s);
+
 #endif

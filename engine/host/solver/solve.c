@@ -108,6 +108,12 @@ typedef struct {
        (cold.c parks `cand_payload` as bytes for exactly this reason), so a recipe parked this session must
        still mean the same thing to a build whose tables have changed. */
     char **pl; int npl, plcap, seeded;
+    /* HOW MANY OF `pl`'s LEADING ENTRIES ARE PROBES rather than escapes — one fact rather than an arithmetic
+       the readers of `npl` each restated. A derived class opens with an inert CONTEXT probe and, where the
+       source declares a percent-encode set, a DELIVERY probe beside it; a single-context class opens with its
+       written-down vectors and has none. `npl > nprobe` is then exactly "this search has constructed an
+       escape", which `npl > 1` only approximated and stopped meaning the moment a second probe existed. */
+    int nprobe;
     /* THE PER-CANDIDATE HALF OF THE SURVIVAL PAIR, parallel to `pl` (see push_breakout). `surv_run`/`surv_len`
        is the search's BEST and saturates at a full-length run the moment any one candidate lands intact — the
        ratchet's own consequence — so it cannot say whether the run it is reporting was the inert probe's or a
@@ -115,6 +121,37 @@ typedef struct {
        remaining question. Report-only: the WFQ credit stays on the search-level ratchet, worth at most one
        rung, so adding this changes no ordering. */
     int *surv_pl; int svcap;
+    /* WHICH BYTES OF A CANDIDATE ACTUALLY REACH THIS SINK, and the witness a changed answer is re-derived from
+       — §@S's SECOND observation, which the derivation was being run without.
+       §@S requires the three observations to be solved JOINTLY: the sink's parse context, the per-flow
+       character provenance, and the path's value domain. solve_html.c had the first and constructed
+       `'><svg onload=X9()>` out of it; the fragment percent-encode set (URL §1.3 "Percent-encoded bytes")
+       holds SPACE, `<` and `>`, so those bytes arrive as `%20%3C%3E` and that escape is unsatisfiable BY
+       CONSTRUCTION. The search could not say so — it reported an escape that merely did not fire, beside a
+       `survivedBy` that measured the gap and fed nothing.
+       IT IS MEASURED AND NOT READ OFF THE DECLARATION, which is the whole reason it is a table on the search
+       rather than a call to concolic_source_encodes at the derivation. A page that runs `decodeURIComponent`
+       over its own fragment receives the `<` the browser encoded, and this engine already FIRES a markup PoC
+       through exactly that round trip; taking the declaration as the constraint would decline it. What the
+       declaration decides is which bytes are worth ASKING about — the delivery probe is built out of exactly
+       that set — and what the run decides is the answer.
+       THE WITNESS IS WHAT MAKES A CHANGED ANSWER A MUTATION RATHER THAN A NEW PROBE. It is the string the
+       context probe's own run handed this sink, so re-deriving from it under the tightened table is §@S's
+       "a near-miss is mutated toward the gap using byte-provenance" performed on the observation already
+       taken: no second probe, no retry counter, and what it constructs joins THIS search so the next drain
+       seeds it as an ordinary flow of the one frontier.
+       THE WITNESSES ARE A LIST FOR THE REASON `pl` IS. A page writes one source into a sink as often as it
+       likes — a loop over innerHTML, a template rendered per row — and each write is its OWN string with its
+       own contexts, all of them this one search's. Keeping the latest would make a re-derivation answer for
+       whichever write happened last, which is the single-slot defect `reached` and `survivedBy` were each
+       split out of. Deduped by text, because two writes of the same template produce the same witness and
+       re-deriving it twice can only produce breakouts push_breakout already holds. */
+    /* AND WHETHER THE TABLE IS A MEASUREMENT YET, which is not the same question as what it holds. It starts
+       permissive, so "every byte arrives" and "no delivery probe has run" have the same contents and opposite
+       meanings — the defaulted-field defect exactly: a permissive table read as an observation would report a
+       page that decodes its own fragment for one that has never been asked. The report emits the measured set
+       only when this says there IS one, and its absence is the positive statement that none was taken. */
+    SolveDelivered deliv; int deliv_seen; char **wit; int nwit, witcap;
     /* THE SEARCH'S RE-INJECTION POINT — the decision state the DETECTING flow stood on when the attacker value
        reached this sink, held so that EVERY candidate of this search REPLAYS that path instead of searching for
        it again from nothing. One capture, at add_pending; queue_derived asserts it rather than taking a second.
@@ -299,6 +336,48 @@ static const SinkClass SINKS[] = {
    — after the page's own filters, concatenations and re-encodings, which is the observation §@S(2) requires
    and which no static shape of the expression can make. It is a candidate flow like every other: it re-runs
    the page, so it costs what a breakout costs and it counts as one in `tried`. */
+/* THE DELIVERY PROBE'S TOKEN — the second inert locator, and it measures a different thing from the first.
+   The CONTEXT probe (below) answers "which §13.2.5 / §12 state are the attacker's bytes in"; this one answers
+   §@S(2)'s other half, "which BYTES arrive at all", and the two cannot be one probe: the context locator is
+   ASCII alphanumeric precisely so it cannot change the parse it measures, and a probe carrying `<` would
+   change that parse into a different document.
+   IT IS THIS FILE'S AND NOT A CLASS'S, because byte provenance has no language in it — solve_filter.c makes
+   the same argument about the rung it owns. So one token serves every sink class and the observation is taken
+   at the class-independent point (filter_survived), where a candidate's bytes are measured wherever they
+   surface rather than only at the sink of their own class. */
+#define SOLVE_BYTES_LOCATOR "apiclientbytes"
+
+/* ONE TOKEN PER BYTE, WITH THE BYTE BEHIND IT, so the answer is per-byte and exact rather than an alignment
+   guess over a mangled string: the character immediately after `apiclientbytesK` in the sink's output either
+   IS the K'th byte of the set or it is not, and every way of not being it — percent-encoded (`%3C`), dropped,
+   entity-escaped, moved — is the same answer for a fitness (solve_filter.h states why).
+   THE SET IS THE SOURCE'S OWN DECLARATION, asked of the ONE registry (concolic.c) rather than copied: what the
+   browser percent-encodes on the way in is exactly the list of bytes whose arrival is in question, and a byte
+   no component transforms needs no probe to say it survives. Caller frees. */
+static char *bytes_probe(const char *encodes) {
+    size_t tl = sizeof SOLVE_BYTES_LOCATOR - 1, n, i, o = 0;
+    char *s;
+
+    DCHECK(encodes != NULL && *encodes,
+           "the @S byte-delivery probe was built for a source that declares no percent-encode set — there is "
+           "then no byte whose arrival is in question, and the probe would be a document re-run measuring "
+           "nothing");
+    n = strlen(encodes);
+    DCHECK(n <= 10,
+           "a source declared more percent-encoded bytes than the delivery probe can index — each byte is "
+           "addressed by ONE decimal digit appended to the token, which is what makes the observation exact "
+           "rather than an alignment guess, so an eleventh byte would be read back as the first");
+    s = malloc(n * (tl + 2) + 1);
+    CHECK(s != NULL, "solve: OOM building the @S byte-delivery probe");
+    for (i = 0; i < n; i++) {
+        memcpy(s + o, SOLVE_BYTES_LOCATOR, tl); o += tl;
+        s[o++] = (char)('0' + (int)i);
+        s[o++] = encodes[i];
+    }
+    s[o] = 0;
+    return s;
+}
+
 static const char *derive_probe(int derive) {
     switch (derive) {
     case SINK_DERIVE_HTML: return SOLVE_HTML_LOCATOR;
@@ -367,6 +446,17 @@ void solve_init(JSContext *ctx) {
     DCHECK(!strstr(SOLVE_JS_LOCATOR, SOLVE_HTML_LOCATOR) && !strstr(SOLVE_HTML_LOCATOR, SOLVE_JS_LOCATOR),
            "the @S markup and JS context locators are not distinct — one contains the other, so the substring "
            "test that routes a probe's output to its own derivation answers for both");
+    /* AND THE DELIVERY PROBE IS A THIRD, measuring a different question at the same sinks. Its token is what
+       tells a byte-provenance run apart from a context run and from a breakout, so a token either of the
+       other two contains would make one class's probe derive a context out of a string built to carry `<`. */
+    DCHECK(!strstr(SOLVE_BYTES_LOCATOR, SOLVE_HTML_LOCATOR) && !strstr(SOLVE_HTML_LOCATOR, SOLVE_BYTES_LOCATOR) &&
+           !strstr(SOLVE_BYTES_LOCATOR, SOLVE_JS_LOCATOR)   && !strstr(SOLVE_JS_LOCATOR, SOLVE_BYTES_LOCATOR),
+           "the @S byte-delivery locator is not distinct from a context locator — one contains the other, so a "
+           "probe built to carry the bytes a source encodes would be routed into a context derivation and the "
+           "state it reported would be a state of the probe rather than of the page");
+    DCHECK(!strstr(SOLVE_BYTES_LOCATOR, "X9"),
+           "the @S byte-delivery locator carries the fire marker's own bytes — the probe is inert by "
+           "construction and a marker in it would be recorded as a breakout arriving at its sink");
     /* THE JS-CONTEXT SINK'S OWN SEAM. The other two classes are reached from the browser component that
        performs them — a markup sink from the innerHTML setter, a URL sink from the navigation — because the
        host owns those operations. `eval` and the Function constructor are ECMAScript intrinsics that this host
@@ -432,9 +522,16 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        observation compare against a maximum nothing ever achieved and the rung never pays at all. */
     e->surv_run = 0; e->surv_len = 0;
     e->surv_pl = NULL; e->svcap = 0;
+    /* EVERYTHING DELIVERS UNTIL A RUN SAYS OTHERWISE — the sound-only direction (solve_filter.h): a search
+       whose delivery probe has not come back keeps every arm, exactly as a branch whose domain permits both
+       outcomes keeps both. The array is realloc'd and never zeroed, so an omission here would read a
+       constraint out of whatever the allocator held and decline escapes at random. */
+    solve_delivered_all(&e->deliv);
+    e->deliv_seen = 0;
+    e->wit = NULL; e->nwit = e->witcap = 0;
     e->reinject = NULL;
     e->escaped = 0;
-    e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0;
+    e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0; e->nprobe = 0;
     *created = 1;
     flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
     return e;
@@ -523,7 +620,27 @@ static void add_pending(const char *src, const char *root, int sink) {
     e->reinject = decide_freeze_path();
     sc = sink_class(sink);
     if (sc->vectors) { for (int c = 0; sc->vectors[c]; c++) push_breakout(e, sc->vectors[c]); }
-    else             push_breakout(e, derive_probe(sc->derive));
+    else {
+        /* THE PROBES ARE THE LEADING ENTRIES AND THE COUNT IS TAKEN HERE, at the one moment nothing else has
+           been pushed — see `nprobe`. */
+        push_breakout(e, derive_probe(sc->derive));
+        /* AND THE DELIVERY PROBE BESIDE IT, for the class that DERIVES and only for it. That is routing and
+           not an exception: the table it fills is read by a derivation choosing between two spellings of one
+           exit transition, so a class whose breakouts are WRITTEN DOWN has nothing to read it, and a probe for
+           one would be a document re-run whose answer no construction consults.
+           IT IS SKIPPED WHERE THE SOURCE DECLARES NOTHING, which is a fact and not an omission: server-injected
+           page state (`window.__FLAGS`) is written by the attacker directly, no component percent-encodes it,
+           and there is no byte whose arrival is in question. */
+        {
+            const char *enc = concolic_source_encodes(root);
+            if (enc && *enc) {
+                char *bp = bytes_probe(enc);
+                push_breakout(e, bp);
+                free(bp);
+            }
+        }
+        e->nprobe = e->npl;
+    }
     DCHECK(e->npl > 0 && e->reinject != NULL,
            "a search was opened with no candidate to run or with no path to run it on — the class states one of "
            "the two breakout sources (solve_init asserts the exclusive or) and this call is the one moment a "
@@ -653,6 +770,16 @@ static void queue_derived(void *user, const char *breakout) {
            "moment the sink is detected, so a search reaching a derivation without one was opened by some other "
            "door, and this breakout would be seeded to re-search the document's whole gate tree for an arm the "
            "detection and the probe have each already taken");
+    /* THE TWO-SIDED HALF OF THE CONSTRAINT. The derivation is handed this search's table and constructs within
+       it (solve_html.c / solve_js.c decline at their own emitters), so a breakout arriving here carrying a
+       byte the table says does not deliver is a derivation that read the constraint and ignored it — and what
+       it costs is a whole document re-run whose only possible outcome is the candidate arriving percent-encoded
+       at its own sink. Asserted rather than filtered here, because a filter at this end would let the two
+       sides disagree silently and leave the derivation constructing escapes nobody ever sees declined. */
+    DCHECK(solve_delivered_ok(&e->deliv, breakout),
+           "a derived @S breakout carries a byte this search has OBSERVED does not reach its sink — the "
+           "derivation is given the same table and emits nothing outside it, so this escape was constructed "
+           "past the constraint and would spend a document re-run to arrive transformed");
     push_breakout(e, breakout);
 }
 
@@ -670,6 +797,101 @@ static void queue_derived(void *user, const char *breakout) {
    class has its own search over that very write, with its own derived breakouts.
    It was an abort because only the probe half could reach it. The firing half can, so the answer is the
    partition rather than the crash — the same shape as `concolic_is(arg)` above it. */
+/* DERIVE THIS SEARCH'S BREAKOUTS FROM THE WITNESS IT ALREADY HAS — §12 for the eval sink, §13.2.5 for the
+   markup one, the SAME observation read by the parser that owns the sink's language, under the SAME
+   constraint table.
+   ONE ENTRY AND TWO CALLERS, WHICH IS THE POINT. The first caller is the context probe arriving: the witness
+   is stored and this runs on it. The second is a DELIVERY OBSERVATION CHANGING the table, and it runs on the
+   witness already stored — that is §@S's "a near-miss is mutated toward the gap using byte-provenance",
+   performed by re-deriving rather than by a mutation table, so every escape it produces is still the state's
+   own exit transition and no payload is invented. There is no retry counter and no second search: what comes
+   back joins this search's list (push_breakout dedups by text), the next drain seeds it as an ordinary flow of
+   the one frontier, and a tightened table that yields no new spelling pushes nothing at all — the search then
+   starves in the WFQ rather than being stopped by anything.
+   ROUTED ON THE CLASS'S OWN DERIVATION COLUMN, the same column add_pending picks the probe from, so a class
+   that reaches here with neither parser CRASHES rather than silently deriving nothing. */
+/* THE STRING A CONTEXT PROBE'S RUN HANDED THIS SINK, KEPT SO THE DERIVATION CAN BE RE-RUN ON IT. Deduped by
+   text: a page that renders the same template twice hands the same witness twice, and re-deriving it can only
+   produce breakouts the search already holds. */
+static void learn_witness(Cand *e, const char *out) {
+    DCHECK(e != NULL && out != NULL && *out,
+           "a sink search was handed a context witness with no bytes in it — the witness is what a state is "
+           "read off, and an empty one would derive a context for a write that never happened");
+    for (int i = 0; i < e->nwit; i++) if (!strcmp(e->wit[i], out)) return;
+    if (e->nwit >= e->witcap) {
+        e->witcap = e->witcap ? e->witcap * 2 : 4;
+        e->wit = realloc(e->wit, (size_t)e->witcap * sizeof(char *));
+        CHECK(e->wit, "solve: OOM recording a sink search's context witness");
+    }
+    e->wit[e->nwit] = strdup(out);
+    CHECK(e->wit[e->nwit], "solve: OOM recording a sink search's context witness");
+    e->nwit++;
+}
+
+static void derive_from_witness(Cand *e) {
+    int derive;
+
+    DCHECK(e != NULL && e->nwit > 0,
+           "a derivation was asked to run on a search that holds no witness — the witness is the string the "
+           "context probe's own run handed this sink, so without one there is no observation to read a state "
+           "off and the re-derivation would be a static shape of the expression");
+    derive = sink_class(e->sink)->derive;
+    if (derive != SINK_DERIVE_HTML && derive != SINK_DERIVE_JS)
+        DFAIL("a sink class stored a context witness and declares no derivation to read it with — a class "
+              "whose breakouts are written down never stores one, so this is a class whose derivation column "
+              "was set without a parser being routed for it");
+    for (int i = 0; i < e->nwit; i++) {
+        if (derive == SINK_DERIVE_HTML) solve_html_breakouts(e->wit[i], &e->deliv, queue_derived, e);
+        else                            solve_js_breakouts(e->wit[i], &e->deliv, queue_derived, e);
+    }
+}
+
+/* WHICH OF THE BYTES THIS SOURCE'S COMPONENT PERCENT-ENCODES ACTUALLY REACHED THE SINK — §@S(2)'s
+   character-provenance observation, taken off the delivery probe's own run.
+   THE ANSWER IS PER BYTE AND IT IS READ, NOT INFERRED. The probe wrote `apiclientbytesK` immediately in front
+   of the K'th byte of the declared set, so the character after that token in the string a REAL re-execution
+   handed a REAL sink is either that byte or it is not, and no alignment has to be guessed through whatever the
+   page did to the rest. Every way of not being it is one answer: `%3C` because the browser encoded it and the
+   page did not decode, nothing because a filter dropped it, `&lt;` because the page escaped it. §@S(2) lists
+   those forms for the MUTATION's benefit, and solve_filter.h states the reason they collapse here — a byte the
+   page re-encoded cannot break a sink out of its context, so for a constraint it is exactly "did not arrive".
+   A TOKEN THAT DID NOT ARRIVE SAYS NOTHING, and that is the sound-only direction: a page that truncated the
+   probe before token K has told us nothing about byte K, and clearing it on that evidence would decline an
+   escape that would have fired. Uncertainty keeps the arm.
+   AND A CHANGE IS WHAT DRIVES THE MUTATION. The table narrows monotonically, so it either narrowed — in which
+   case the derivation is re-run on the witness and whatever spelling the tightened constraint permits joins
+   the search — or it did not, in which case nothing happens at all. */
+static void observe_delivery(Cand *e, const char *out) {
+    const char *enc;
+    size_t tl = sizeof SOLVE_BYTES_LOCATOR - 1, n, i;
+    char tok[sizeof SOLVE_BYTES_LOCATOR + 1];
+    int changed = 0;
+
+    DCHECK(e != NULL && out != NULL, "a byte-delivery observation was taken for no search, or off no string");
+    enc = concolic_source_encodes(e->root);
+    DCHECK(enc != NULL && *enc,
+           "a delivery probe reached a sink for a search whose source declares no percent-encode set — the "
+           "probe is BUILT out of that set (add_pending), so a search running one without a declaration was "
+           "seeded a payload nothing in this file constructs");
+    n = strlen(enc);
+    memcpy(tok, SOLVE_BYTES_LOCATOR, tl);
+    for (i = 0; i < n; i++) {
+        unsigned char b = (unsigned char)enc[i];
+        const char *p;
+
+        tok[tl] = (char)('0' + (int)i); tok[tl + 1] = 0;
+        if (!(p = strstr(out, tok))) continue;          /* this token never arrived: says nothing about the byte */
+        /* THE PROBE'S OWN TOKEN GOT HERE, so whatever stands behind it is an OBSERVATION of that byte — which
+           is the fact `deliv_seen` states and which the permissive initial table cannot. */
+        e->deliv_seen = 1;
+        if ((unsigned char)p[tl + 1] == b) continue;    /* delivered as itself */
+        if (!e->deliv.ok[b]) continue;                  /* already observed, and the table only narrows */
+        e->deliv.ok[b] = 0;
+        changed = 1;
+    }
+    if (changed && e->nwit > 0) derive_from_witness(e);
+}
+
 /* A BREAKOUT OF THIS SEARCH JUST ARRIVED AT ITS OWN SINK — the ONE place `reached` moves, so the three sink
    classes cannot come to disagree about what the number counts, which is exactly how it came to count the
    context probe in two of them and not in the third.
@@ -679,10 +901,10 @@ static void queue_derived(void *user, const char *breakout) {
    probe, so it is exempt BY CONSTRUCTION rather than by an exception written into the condition. */
 static void breakout_arrived(Cand *e) {
     DCHECK(e != NULL, "a breakout arrived at no search — the caller resolved one before reading the bytes");
-    DCHECK(sink_class(e->sink)->derive == SINK_DERIVE_NONE || e->npl > 1,
-           "a derived-context sink recorded a BREAKOUT arriving while its search holds nothing but its own "
-           "context probe — a breakout of such a class exists only because the probe run returned one, so "
-           "these bytes were not built by this search");
+    DCHECK(e->npl > e->nprobe,
+           "a sink recorded a BREAKOUT arriving while its search holds nothing but its own probes — a derived "
+           "class's breakout exists only because a probe run returned one, and a single-context class's "
+           "vectors are not probes at all (nprobe is 0 for it), so these bytes were not built by this search");
     /* §@S's SECOND FITNESS RUNG, PAID INTO THE WFQ — "the search is DISTANCE-DIRECTED (a fitness of
        {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)". flow_weight reads `val`
        and nothing else, and a candidate flow records no endpoints by design (endpoint_suppress), so until this
@@ -731,6 +953,14 @@ static void filter_survived(const char *out) {
           "solve: a candidate flow's bytes reached a sink for a search this session has no entry for — the "
           "candidate exists only because detection opened one and a cold-resumed one re-registers before it "
           "runs an opcode, so an absent entry is a search dropped under a live flow");
+
+    /* AND THE DELIVERY PROBE IS READ HERE, at the same class-independent point and for the same reason this
+       function already gives about its own rung: the observation is about the RUNNING FLOW'S OWN bytes, so it
+       is true wherever they surface and belongs before the class partition rather than inside one sink. The
+       token is the partition — a probe built out of the source's percent-encode set carries it and nothing
+       else does, exactly as the context locator partitions the derivation from the breakout. */
+    if (!strncmp(f->cand_payload, SOLVE_BYTES_LOCATOR, sizeof SOLVE_BYTES_LOCATOR - 1))
+        observe_delivery(e, out);
 
     solve_filter_survival(out, f->cand_payload, &o);
     DCHECK(o.len > 0, "a candidate flow carries an empty payload — see solve_filter.c's own assert");
@@ -808,10 +1038,6 @@ static Cand *candidate_search(int sink) {
     return e;
 }
 
-/* §12 for the eval sink, §13.2.5 for the markup one — the SAME observation read by the parser that owns the
-   sink's language. */
-static void derive_js_context(Cand *e, const char *code)   { solve_js_breakouts(code, queue_derived, e); }
-static void derive_html_context(Cand *e, const char *html) { solve_html_breakouts(html, queue_derived, e); }
 
 void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {                          /* candidate run: the arg is the injected+wrapped CONCRETE code */
@@ -851,7 +1077,7 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
                20.2.1.1.1 CreateDynamicFunction CREATES a function without CALLING it, so `new Function(payload)`
                fired here and fires nothing in a browser. Re-execution is the oracle §@S asks for, and the
                engine's own evaluation IS the re-execution. */
-            if (strstr(code, SOLVE_JS_LOCATOR))  derive_js_context(e, code);
+            if (strstr(code, SOLVE_JS_LOCATOR))  { learn_witness(e, code); derive_from_witness(e); }
             else if (strstr(code, "X9")) {
                 const char *m;
                 breakout_arrived(e);
@@ -1022,7 +1248,7 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
                concolic", which is also true of every literal the page writes. So each candidate flow built a
                whole document and parsed EVERY innerHTML in the page — the fixture's own markup, once per
                candidate — and the cost is the page's markup times the number of breakouts tried. */
-            if (strstr(html, SOLVE_HTML_LOCATOR)) derive_html_context(e, html);
+            if (strstr(html, SOLVE_HTML_LOCATOR)) { learn_witness(e, html); derive_from_witness(e); }
             else if (strstr(html, "X9"))          { breakout_arrived(e); html_fire(e, html); }
             JS_FreeCString(ctx, html);
         }
@@ -1277,7 +1503,29 @@ static int solved(int cls, const char *src) {
    learned its root is a record this session cannot answer for, and rendering the two the same way is exactly
    the lie this change removes. The assert below is now an INVARIANT rather than a work item: both doors into
    g_pending state the root, so a NULL naming neither of them is a third door. */
-static void emit_delivery(JsonBuf *b, const char *root) {
+/* WHICH OF THE DECLARED BYTES A RUN ACTUALLY SAW ARRIVE — the MEASURED half of the constraint, beside the
+   DECLARED one. `sourceEncodes` says what the browser does on the way in; this says what the page's own code
+   left of it, and the two are different facts whose difference IS the finding: equal sets mean the page decodes
+   its own fragment and every §13.2.5 escape is on the table, an empty set beside a full declaration means the
+   search's whole failure is the source's transform and no re-derivation can help.
+   ANSWERS NULL WHERE THERE IS NOTHING TO SAY, and both silences are positive: a source that declares no
+   percent-encode set has no byte in question, and a search whose delivery probe has not run has taken no
+   measurement — which is why the permissive initial table is never emitted as one. */
+static const char *cand_delivers(const Cand *e, char *buf, size_t n) {
+    const char *enc = e->root ? concolic_source_encodes(e->root) : NULL;
+    size_t o = 0, i;
+
+    if (!e->deliv_seen || !enc || !*enc) return NULL;
+    CHECK(strlen(enc) < n,
+          "solve: a source's percent-encode set does not fit the buffer the measured half is written into — "
+          "the measured set is a SUBSET of the declaration, so a declaration that does not fit means the "
+          "report is about to state a truncated constraint as the whole of one");
+    for (i = 0; enc[i]; i++) if (e->deliv.ok[(unsigned char)enc[i]]) buf[o++] = enc[i];
+    buf[o] = 0;
+    return buf;
+}
+
+static void emit_delivery(JsonBuf *b, const char *root, const char *delivers) {
     const char *enc, *kind = NULL;
     char prefix = 0;
 
@@ -1291,6 +1539,15 @@ static void emit_delivery(JsonBuf *b, const char *root) {
     enc = concolic_source_encodes(root);
 
     if (enc) { json_buf_puts(b, ",\"sourceEncodes\":"); json_buf_str(b, enc); }
+    /* IMMEDIATELY AFTER THE DECLARATION IT IS A SUBSET OF, because the pair is one statement and a reader has
+       to be able to hold the two against each other. */
+    if (delivers) {
+        DCHECK(enc != NULL,
+               "a measured delivery set is being emitted for a source that declares no percent-encode set — "
+               "the measured set is the subset of the DECLARED one a run saw arrive, so a measurement with no "
+               "declaration behind it is a subset of nothing");
+        json_buf_puts(b, ",\"sourceDelivers\":"); json_buf_str(b, delivers);
+    }
     if (concolic_source_delivery(root, &kind, &prefix) && kind) {
         json_buf_puts(b, ",\"delivery\":"); json_buf_str(b, kind);
         if (prefix) {
@@ -1374,15 +1631,18 @@ char *solve_json_array(JSContext *ctx) {
            finding's twin is on the pending list, so a fired entry always has a search behind it to ask. */
         {
             const Cand *tw = search_of(g_sinks[i].source, g_sinks[i].cls);
-            char t[32];
+            char t[32], dv[64];
             CHECK(tw != NULL,
                   "solve: a fire-verified @S finding is being emitted with no search behind it — record_sink "
                   "asserts the twin at the moment the PoC is stored, so an absent one here means the pending "
                   "list was rewritten under a finding and the report is about to state a cost it cannot read");
             json_buf_puts(&b, ",\"searched\":");
             snprintf(t, sizeof t, "%d", tw->tried); json_buf_puts(&b, t);
+            /* AND THE MEASURED CONSTRAINT THE PoC WAS BUILT UNDER, from the same search. On a FIRED entry it
+               is what says which bytes the exploit is allowed to contain, so a reader reproducing it by hand
+               knows which of them the browser would have eaten — a fact the payload alone does not carry. */
+            emit_delivery(&b, g_sinks[i].root, cand_delivers(tw, dv, sizeof dv));
         }
-        emit_delivery(&b, g_sinks[i].root);
         json_buf_puts(&b, "}");
     }
     for (int i = 0; i < g_pending_n; i++) {
@@ -1473,7 +1733,10 @@ char *solve_json_array(JSContext *ctx) {
            vector to state and no PoC to reproduce, so `firesOn`/`cspBlocks`/`trustedTypes` would be claims
            about a PoC that does not exist. What it does carry is the whole source declaration — the bytes a
            candidate must survive AND how the attacker would have to reach the victim if one ever fires. */
-        emit_delivery(&b, g_pending[i].root);
+        {
+            char dv[64];
+            emit_delivery(&b, g_pending[i].root, cand_delivers(&g_pending[i], dv, sizeof dv));
+        }
         json_buf_puts(&b, "}");
     }
     json_buf_puts(&b, "]");
@@ -1493,6 +1756,10 @@ void solve_free(void) {
         for (int c = 0; c < g_pending[i].npl; c++) free(g_pending[i].pl[c]);
         free(g_pending[i].pl);
         free(g_pending[i].surv_pl);   /* grown with `pl` (push_breakout), so freed beside it */
+        /* THE CONTEXT WITNESSES — one owned copy per distinct sink write, kept for the re-derivation a changed
+           delivery observation performs, so they live exactly as long as the search does. */
+        for (int c = 0; c < g_pending[i].nwit; c++) free(g_pending[i].wit[c]);
+        free(g_pending[i].wit);
         /* THE SEGMENT REFERENCE THE SEARCH STILL HOLDS — a search that never solved still has its probe's
            re-injection blob, and the frozen chain under it is freed only when the last reference goes. */
         if (g_pending[i].reinject) decide_blob_free(g_pending[i].reinject);

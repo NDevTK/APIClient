@@ -42,6 +42,7 @@
 #define ENGINE_HOST_SOLVER_SOLVE_JS_H
 
 #include <stddef.h>
+#include "solver/solve_filter.h"   /* the DELIVERABILITY half of §@S's joint solve — see that header */
 
 /* THE LOCATOR the eval sink's context probe injects at the source. ASCII alphanumeric and nothing else, which
    is the whole of its design: it opens no §12 state (it is not a quote, a backtick, a slash or a backslash), so
@@ -67,7 +68,13 @@ typedef void (*SolveJsEmit)(void *user, const char *breakout);
    the others left in place — and leaving them in place changes nothing, because an alphanumeric run is an
    IdentifierName in source and an ordinary character everywhere else. solve_html.c must rename them only
    because its `locate` walks a tree and returns the FIRST match. */
-int solve_js_breakouts(const char *output, SolveJsEmit emit, void *user);
+/* `d` IS THE OTHER HALF OF THE SOLVE, and §12 gives this class no second spelling to choose between — a
+   §12.9.4 SingleStringCharacters hole is left by exactly one code point. So the constraint here does not
+   pick an escape, it DECIDES WHETHER THE ONE ESCAPE EXISTS AT ALL: the special-query percent-encode set
+   (URL §1.3 "Percent-encoded bytes") holds U+0027 APOSTROPHE, so `';X9()//` is unsatisfiable through
+   `location.search` and emitting it spends a whole document re-run to arrive as `%27`. Zero is then the
+   honest answer and the search is parked, exactly as it is for §13.2.5.5 PLAINTEXT. */
+int solve_js_breakouts(const char *output, const SolveDelivered *d, SolveJsEmit emit, void *user);
 
 /* IS THE HOLE AT `at` AN EXECUTABLE POSITION? — §@S's CONTEXT-ESCAPED fitness rung, which is the SAME scan
  * answering the SAME question from the other side.

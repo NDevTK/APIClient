@@ -30,6 +30,7 @@
 #define ENGINE_HOST_SOLVER_SOLVE_HTML_H
 
 #include <stddef.h>
+#include "solver/solve_filter.h"   /* the DELIVERABILITY half of §@S's joint solve — see that header */
 
 /* THE LOCATOR the context probe injects at the source. ASCII alphanumeric and nothing else, which is the whole
    of its design: it is inert in EVERY §13.2.5 state (it starts no tag, closes no quote, ends no comment), so
@@ -55,7 +56,18 @@ typedef void (*SolveHtmlEmit)(void *user, const char *breakout);
 /* DERIVE every HTML-context breakout for `output` — the concrete string a probe run handed the sink, holding
    SOLVE_HTML_LOCATOR wherever the attacker's bytes survived to. Calls `emit` once per constructed breakout and
    returns how many. ZERO is a real answer and not a failure: §13.2.5.5's PLAINTEXT state has no exit at all, so
-   a sink that writes into one has no HTML breakout to construct and its search is honestly parked. */
-int solve_html_breakouts(const char *output, SolveHtmlEmit emit, void *user);
+   a sink that writes into one has no HTML breakout to construct and its search is honestly parked.
+   `d` IS THE OTHER HALF OF THE SOLVE AND IT IS NOT ADVICE — §@S requires the three observations to be solved
+   JOINTLY, so an exit transition is chosen from among the spellings §13.2.5 gives it BY which of them this
+   source can actually carry, and nothing is emitted that it cannot. §13.2.5.39 "After attribute value (quoted)
+   state" is the worked example: it leaves on whitespace AND on U+002F SOLIDUS, no percent-encode set in URL
+   §1.3 "Percent-encoded bytes" contains the solidus, and every set contains SPACE — so the second spelling is
+   the one a fragment- or query-carried payload has, and with only the first written down the whole family was
+   reported as an escape that did not fire.
+   THE SAME CALL IS THE MUTATION STEP. The table is a MEASUREMENT (solve_filter.h), so it changes when a run
+   observes a byte failing to arrive; re-calling this on the SAME witness under the changed table is §@S's
+   "a near-miss is mutated toward the gap using byte-provenance", and it needs no second search and no retry
+   count — what it constructs joins the one search and the next drain seeds it. */
+int solve_html_breakouts(const char *output, const SolveDelivered *d, SolveHtmlEmit emit, void *user);
 
 #endif

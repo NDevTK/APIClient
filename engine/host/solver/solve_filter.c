@@ -86,3 +86,34 @@ void solve_filter_survival(const char *out, const char *cand, FilterObs *o) {
            "fitness the WFQ reads is computed from this number and the mutation reads these offsets, so a run "
            "that is not there orders the search by a measurement of nothing");
 }
+
+/* THE DELIVERABILITY TABLE — see the header for why it is observed rather than read off the declaration. */
+
+void solve_delivered_all(SolveDelivered *d)
+{
+    DCHECK(d != NULL, "a search's byte-deliverability table was initialised through nothing — the table is the "
+                      "constraint every derived escape is constructed under, and an uninitialised one is read "
+                      "out of whatever the pending array's realloc last held");
+    memset(d->ok, 1, sizeof d->ok);
+}
+
+int solve_delivered_byte(const SolveDelivered *d, char c)
+{
+    DCHECK(d != NULL, "the byte-deliverability table was asked about a byte with no table — a derivation "
+                      "choosing between two spellings of one exit transition would then choose from nothing");
+    return d->ok[(unsigned char)c] != 0;
+}
+
+/* EVERY BYTE, INCLUDING THE ONES A DERIVATION DID NOT CHOOSE. An escape is a SEQUENCE and it fires or it does
+   not: one byte the source cannot carry defeats the whole of it, so the question is asked about the finished
+   string rather than about the exit transition alone. */
+int solve_delivered_ok(const SolveDelivered *d, const char *s)
+{
+    const unsigned char *p;
+
+    DCHECK(d != NULL && s != NULL,
+           "a constructed escape was checked for deliverability with no table or no escape — the check is what "
+           "stops a breakout being seeded for a whole document re-run it cannot survive");
+    for (p = (const unsigned char *)s; *p; p++) if (!d->ok[*p]) return 0;
+    return 1;
+}
