@@ -8,6 +8,7 @@
 #include "check.h"
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_font_shorthand.h"
 #include "core/css/css_length.h"
 #include "core/css/css_shorthand.h"
 
@@ -319,6 +320,11 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
        nothing here reads — sets no longhand through this path, which is what css_shorthand_complete_for is for:
        it is the assertion that the caller's longhand is one whose shorthands are all in this function. */
 
+    /* ---- css-fonts-4 §2.7's `font` ------------------------------------------------------------------------
+       The whole grammar — including CSS Cascade §7.3's keywords, which for this shorthand reach the RESET-ONLY
+       group as well and so cannot be answered here — belongs to the component that owns §2.7. */
+    if (strcmp(shorthand, "font") == 0) return css_font_shorthand_component(value, longhand);
+
     /* ---- css-backgrounds-3 §3.2, §3.3 and §3.4's BORDER SHORTHANDS ---------------------------------------- */
     /* §3.4's reset of `border-image`, ahead of the side/part split because these five longhands carry the side
        nowhere in their names. A CSS-wide keyword is the whole value and is handed on the same way the triple's
@@ -477,8 +483,13 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
  * canvas go through — so it is ASKED, the row expands like every other, and the flag is deleted.
  *
  * WHAT IS DELIBERATELY NOT IN THE TABLE AT ALL: every CSS shorthand this engine has no grammar for — `flex`,
- * `flex-flow`, `text-decoration`, `background`, `font`. css_shorthand_is_shorthand answers FALSE for each, and
- * the block serialization then emits their longhands separately, which is what it does today. */
+ * `flex-flow`, `text-decoration`, `background`. css_shorthand_is_shorthand answers FALSE for each, and the
+ * block serialization then emits their longhands separately, which is what it does today.
+ *
+ * AND ONE ROW'S GRAMMAR IS NOT HERE. css-fonts-4 §2.7's `font` is a positional SEQUENCE with an unordered
+ * optional prefix, an infix `/` and a trailing comma-list, over six component grammars nothing else in this
+ * engine has — a different shape from the four kinds above, which are each arithmetic over ONE component
+ * grammar. core/css/css_font_shorthand.h owns §2.7 and this table owns the row; CSS_SH_FONT is the seam. */
 
 /* HOW A SHORTHAND'S VALUE IS PUT BACK TOGETHER — CSSOM §6.7.2's "serialize a CSS value ... with a list", which
    is "serialize a CSS value from a hypothetical declaration of the property shorthand with its value
@@ -489,7 +500,8 @@ typedef enum {
     CSS_SH_FOUR_SIDE,   /* CSS 2.1 §8.3's rotation reversed: top/right/bottom/left with the tail dropped */
     CSS_SH_TWO_AXIS,    /* css-overflow §3.1's `{1,2}`: the second omitted when it equals the first */
     CSS_SH_TRIPLE,      /* css-backgrounds-3 §3.4's `||`, each term omitted when it is that longhand's initial */
-    CSS_SH_BORDER       /* §3.4's `border`: one triple common to all four sides, over an untouched border-image */
+    CSS_SH_BORDER,      /* §3.4's `border`: one triple common to all four sides, over an untouched border-image */
+    CSS_SH_FONT         /* css-fonts-4 §2.7's `font`, whose grammar is core/css/css_font_shorthand.h's */
 } CssShKind;
 
 typedef struct {
@@ -544,6 +556,12 @@ static const CssShorthandRow SHORTHANDS[] = {
     { "border-style",  LH_BORDER_STYLE,   4, CSS_SH_FOUR_SIDE, "solid" },
     { "border-top",    LH_BORDER_TOP,     3, CSS_SH_TRIPLE,    "1px solid red" },
     { "border-width",  LH_BORDER_WIDTH,   4, CSS_SH_FOUR_SIDE, "1px" },
+    /* §2.7's own longhand list, taken from the component that owns the grammar so the ORDER the serialization
+       reads positionally and the order the expansion writes are ONE statement in ONE file. The fixture is the
+       shortest value §2.7's grammar admits — its `<'font-size'>` and `<'font-family'>#` are both required and
+       everything else is optional — so the round trip exercises all nineteen longhands (the seven set, and the
+       twelve reset to their initial values) without depending on how any one component canonicalizes. */
+    { "font",          CSS_FONT_SHORTHAND_LONGHANDS, CSS_FONT_SHORTHAND_N, CSS_SH_FONT, "12px sans-serif" },
     { "margin",        LH_MARGIN,         4, CSS_SH_FOUR_SIDE, "1px 2px 3px 4px" },
     { "overflow",      LH_OVERFLOW,       2, CSS_SH_TWO_AXIS,  "hidden auto" },
     { "padding",       LH_PADDING,        4, CSS_SH_FOUR_SIDE, "1px 2px" },
@@ -843,6 +861,7 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
     case CSS_SH_FOUR_SIDE: return css_sh_four_side_value(values);
     case CSS_SH_TWO_AXIS:  return css_sh_two_axis_value(values);
     case CSS_SH_TRIPLE:    return css_sh_triple_value(values[0], values[1], values[2]);
+    case CSS_SH_FONT:      return css_font_shorthand_value(values);
     default:
         DCHECK(row->kind == CSS_SH_BORDER,
                "a shorthand row carries a value-serialization kind this switch does not implement");
@@ -965,9 +984,23 @@ bool css_shorthand_complete_for(const char *longhand)
        answer decides whether a `margin: 0` two lines up was read or ignored.
        `white-space` is a LONGHAND here on CSS 2.1 §16.6's statement of it, and no shorthand in this table sets
        it; css-text-4's decomposition into `white-space-collapse`/`text-wrap-mode` names two properties lexbor's
-       registry does not carry, so there is no expansion for this file to take apart. */
+       registry does not carry, so there is no expansion for this file to take apart.
+
+       THE FONT LONGHANDS, and the SEVEN that are deliberately absent. css-fonts-4 §2.7's `font` is the only
+       shorthand in CSS that sets `font-size`, `line-height`, `font-family`, `font-style`, `font-weight` or
+       `font-stretch` — §2.3.1 makes `font-width` a legacy name ALIAS of that last one rather than a second
+       property — and it is the only one that resets `font-feature-settings`, `font-kerning`,
+       `font-language-override`, `font-optical-sizing`, `font-size-adjust` or `font-variation-settings`. It is
+       in the table above, so those twelve are complete.
+       `font-variant-caps` AND THE SIX OTHER `font-variant-*` LONGHANDS ARE NOT, and the reason is one row this
+       table does not have: css-fonts-4 §6.11's `font-variant` is a second shorthand that sets every one of
+       them, and it is not here. Recording them would assert a completeness that is false in the direction that
+       matters — a `font-variant: small-caps` two lines above a `font-variant-caps` read would be invisible. */
     static const char *const RECORDED[] = {
         "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color", "white-space",
+        "font-size", "line-height", "font-family", "font-style", "font-weight", "font-stretch",
+        "font-feature-settings", "font-kerning", "font-language-override", "font-optical-sizing",
+        "font-size-adjust", "font-variation-settings",
         "margin-top", "margin-right", "margin-bottom", "margin-left",
         "padding-top", "padding-right", "padding-bottom", "padding-left",
         "width", "height", "min-width", "max-width", "min-height", "max-height",

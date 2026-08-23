@@ -1517,6 +1517,36 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
     { "border-bottom-width", "medium" }, { "border-left-width", "medium" },
     { "border-top-style", "none" }, { "border-right-style", "none" },
     { "border-bottom-style", "none" }, { "border-left-style", "none" },
+    /* css-fonts-4 §2.7's RESET IMPLICITLY group, plus the `font-variant-caps` its `<font-variant-css2>` term
+       sets. Lexbor's registry carries six font properties (`font-family`, `font-size`, `font-stretch`,
+       `font-style`, `font-weight`) and `line-height`, and none of these — yet §2.7 states that "all
+       subproperties of the font property in the Set Explicitly and Reset Implicitly groups are FIRST RESET to
+       their initial values", so a `font` declaration cannot be expanded without them and answering NULL would
+       make the whole declaration invalid. Each value is that property's own `Initial:` line, and each is cited
+       by section NUMBER and TITLE because the numbers are not adjacent and are not guessable:
+         §2.6  Relative sizing: the font-size-adjust property                          -> none
+         §6.3  Kerning: the font-kerning property                                      -> auto
+         §6.4  Ligatures: the font-variant-ligatures property                          -> normal
+         §6.5  Subscript and superscript forms: the font-variant-position property     -> normal
+         §6.6  Capitalization: the font-variant-caps property                          -> normal
+         §6.7  Numerical formatting: the font-variant-numeric property                 -> normal
+         §6.8  Alternates and swashes: the font-variant-alternates property            -> normal
+         §6.10 East Asian text rendering: the font-variant-east-asian property         -> normal
+         §6.12 Low-level font feature settings control: the font-feature-settings property   -> normal
+         §6.13 Font language override: the font-language-override property             -> normal
+         §8.1  Optical sizing control: the font-optical-sizing property                -> auto
+         §8.2  Low-level font variation settings control: the font-variation-settings property -> normal
+         §9.3  Selecting the text presentation style: The font-variant-emoji property  -> normal
+       TWO OF THE THIRTEEN ARE `auto` AND ELEVEN ARE NOT, which is the only thing about this table a reader has
+       to get right: §6.3's `font-kerning` and §8.1's `font-optical-sizing` are the two, and every other row is
+       its property's own stated word (§2.6's `none`, and `normal` for the rest). */
+    { "font-feature-settings", "normal" }, { "font-kerning", "auto" },
+    { "font-language-override", "normal" }, { "font-optical-sizing", "auto" },
+    { "font-size-adjust", "none" }, { "font-variant-alternates", "normal" },
+    { "font-variant-caps", "normal" }, { "font-variant-east-asian", "normal" },
+    { "font-variant-emoji", "normal" }, { "font-variant-ligatures", "normal" },
+    { "font-variant-numeric", "normal" }, { "font-variant-position", "normal" },
+    { "font-variation-settings", "normal" },
 };
 
 /* THE INITIAL VALUES LEXBOR'S REGISTRY GETS WRONG, each with the answer it gives today so the row EXPIRES.

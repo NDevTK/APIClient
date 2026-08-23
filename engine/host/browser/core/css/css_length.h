@@ -17,14 +17,25 @@
  * 2.1 §4.3.2 makes a relative length's computed value the absolute length it resolves to, so the resolution
  * happens once, before any used value is asked for — and each family resolves against a different thing:
  *
- *   A FONT-RELATIVE unit (`em`, `ex`, `ch`, `rem`, `cap`, `ic`, `lh`, `rlh`) resolves against a COMPUTED FONT
- *   SIZE, and no element has one: `font-size` is not among the properties css_computed_value.c models, and its
- *   `Computed value:` line is the one that cannot be the as-specified arm (a percentage, an `em` and the
- *   `larger`/`smaller` keywords each resolve against the PARENT's computed value). CSS Cascade §7's inheritance
- *   step is built and is what would carry that chain a node at a time. It CRASHES by name. media_query.c resolves `em` against the INITIAL font size and is right to:
- *   Media Queries §4 evaluates a query before any element exists to have a font size, so the initial value is
- *   the spec's own answer there and is NOT a stand-in for the missing chain. On an ELEMENT it would be one,
- *   which is why this file crashes instead of borrowing that number.
+ *   A FONT-RELATIVE unit is TWELVE units and TWO DIFFERENT QUESTIONS, which css-values-4 §6.1.1's own section
+ *   title enumerates and its own definitions split: "Font-relative Lengths: the em, rem, ex, rex, cap, rcap,
+ *   ch, rch, ic, ric, lh, rlh units". `em` is "the computed value of the font-size property of the element on
+ *   which it is used" and `rem` is "the computed value of the em unit on the root element" — a COMPUTED
+ *   `font-size` and nothing else. The other ten are FONT METRICS: an x-height, a cap-height, the advance
+ *   measure of the "0" and "水" glyphs, and a computed `line-height` with `normal` resolved from the first
+ *   available font — each with an `r`-prefixed twin measured on the root element. Neither exists here, and
+ *   they CRASH SEPARATELY because they name different missing components: `font-size` is not among the
+ *   properties css_computed_value.c models, and its `Computed value:` line is the one that cannot be the
+ *   as-specified arm (css-fonts-4 §2.5 gives it `an absolute length` and a `Percentages:` line of "refer to
+ *   parent element's font size", so a percentage, an `em`, `larger`/`smaller` and §2.5.1's eight
+ *   `<absolute-size>` keywords each resolve against the value one node up); the metrics are a font record no
+ *   component in this engine keeps. CSS Cascade §7's inheritance step is built and is what would carry the
+ *   first chain a node at a time. media_query.c resolves `em` against the INITIAL font size and is right to,
+ *   and §6.1.1 says so itself — "when used outside the context of an element (such as in media queries), the
+ *   font-relative lengths units refer to the metrics corresponding to the initial values of the font and
+ *   line-height properties" — so the initial value is the spec's own answer THERE and is NOT a stand-in for
+ *   the missing chain. On an ELEMENT it would be one, which is why this file crashes instead of borrowing
+ *   that number.
  *
  *   A VIEWPORT-PERCENTAGE unit RESOLVES, against the rectangle core/frame/viewport.h models. §6.1.2's own first
  *   sentence is the whole rule — "the viewport-percentage lengths are relative to the size of the INITIAL

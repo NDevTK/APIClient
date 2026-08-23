@@ -65,11 +65,12 @@ void css_shorthand_init(void);
 
 /* ---- CSSOM §6.6's LONGHAND <-> SHORTHAND directions, which its declaration-block serialization walks ------- */
 
-/* The widest longhand list in the table (css-backgrounds-3's `border`: four widths, four styles, four colors
-   and the five `border-image` longhands it also resets), and the most shorthands any one longhand maps to
-   (`border-top-width` maps to `border`, `border-width` and `border-top`). Both are ASSERTED against the table
-   by css_shorthand_init, so a row that outgrows one crashes rather than writing past a caller's array. */
-#define CSS_SHORTHAND_MAX_LONGHANDS 17
+/* The widest longhand list in the table (css-fonts-4 §2.7's `font`: its seven Set Explicitly sub-properties
+   and the twelve it Resets Implicitly — see core/css/css_font_shorthand.h), and the most shorthands any one
+   longhand maps to (`border-top-width` maps to `border`, `border-width` and `border-top`). Both are ASSERTED
+   against the table by css_shorthand_init, so a row that outgrows one crashes rather than writing past a
+   caller's array. */
+#define CSS_SHORTHAND_MAX_LONGHANDS 19
 #define CSS_SHORTHAND_MAX_OF 3
 
 /* THE LONGHANDS `shorthand` SETS, in the CANONICAL ORDER of its own property definition table. NULL, with

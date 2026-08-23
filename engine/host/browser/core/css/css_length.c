@@ -122,10 +122,28 @@ static const struct { const char *unit; double px; } CSS_ABSOLUTE[] = {
     { "pc", 16.0 },
 };
 
-/* §6.1.1's FONT-RELATIVE units, listed so the crash can name the ONE component whose absence covers all of
-   them — a computed `font-size`, which is a length-valued property css_computed_value.c does not yet model. */
-static const char *const CSS_FONT_RELATIVE[] = {
-    "em", "ex", "ch", "rem", "cap", "ic", "lh", "rlh",
+/* css-values-4 §6.1.1's FONT-RELATIVE units — ALL TWELVE, which its own section TITLE enumerates:
+   "Font-relative Lengths: the em, rem, ex, rex, cap, rcap, ch, rch, ic, ric, lh, rlh units". §6.1.1 splits
+   them into the LOCAL font-relative lengths, which "refer to the font metrics ... of the element on which they
+   are used", and the ROOT font-relative lengths, which refer to the root element's — and every local one has
+   an `r`-prefixed root twin, which is what makes the list twelve and not eight.
+   FOUR OF THEM WERE MISSING AND THE COST WAS A WRONG CRASH, not a missing one: `rex`, `rcap`, `rch` and `ric`
+   fell past this table and past css_len_is_viewport into `css_length_parse`'s last DFAIL, which says the unit
+   is "a DIMENSION in a unit CSS Values §6 does not define as a length at all — an angle, a time, a frequency
+   or a resolution". §6.1.1 defines all four as lengths, so that message sent the reader to look for a caller
+   asking the wrong component when what is missing is a font metric. A crash that names the wrong absence is
+   the stale-`DFAIL` failure with the coordinates still correct.
+   THE TWELVE ARE TWO GROUPS AND THEY NAME TWO DIFFERENT MISSING COMPONENTS, which is why they are two tables
+   and two crashes. §6.1.1 defines `em` as "the computed value of the font-size property of the element on
+   which it is used" and `rem` as "the computed value of the em unit on the root element" — both are a computed
+   `font-size` and nothing else. The other ten are FONT METRICS: an x-height (`ex`/`rex`), a cap-height
+   (`cap`/`rcap`), the advance measure of the "0" glyph (`ch`/`rch`) and of the "水" glyph (`ic`/`ric`), and a
+   computed `line-height` with `normal` resolved "by using only the metrics of the first available font"
+   (`lh`/`rlh`). Reporting all twelve as one absence made the second group's message name a component that is
+   not what they need. */
+static const char *const CSS_FONT_SIZE_RELATIVE[] = { "em", "rem" };
+static const char *const CSS_FONT_METRIC_RELATIVE[] = {
+    "ex", "rex", "cap", "rcap", "ch", "rch", "ic", "ric", "lh", "rlh",
 };
 
 /* §6.1.2.2's VIEWPORT-PERCENTAGE units, in their DEFAULT spelling — the `v*` family, which §6.1.2.1 defines
@@ -343,21 +361,53 @@ CssLength css_length_parse(JSContext *realm, const char *value)
         out.px = css_px(num * CSS_ABSOLUTE[i].px);
         return out;
     }
-    if (css_len_in(CSS_FONT_RELATIVE, CSS_LEN_N(CSS_FONT_RELATIVE), unit)) {
-        DFAIL("a FONT-RELATIVE length (`em`, `ex`, `ch`, `rem`, …) reached CSS Values §6.1.1's absolutization. "
-              "Each of them resolves against the element's own COMPUTED `font-size` (`rem` against the root "
-              "element's), and no element in this engine has a computed `font-size` for one to resolve "
-              "against. THE CASCADE'S INHERITANCE STEP IS NO LONGER THE BLOCKER — CSS Cascade §7 is built "
-              "(core/css/css_defaulting.h), it knows `font-size` is an inherited property, and it takes the "
-              "parent's computed value for every property css_computed_value.c models. `font-size` is not one "
-              "of them, and it is the one whose `Computed value:` line cannot be the as-specified arm: "
-              "css-fonts-4 makes it an ABSOLUTE LENGTH derived from the parent's, so a percentage, `em`, "
-              "`larger`, `smaller` and the seven `<absolute-size>` keywords each resolve against the value one "
-              "node up. BUILD `font-size` as a length-valued row of css_computed_models — the chain then IS "
-              "§7.2's, one node at a time, with `css_computed_length` carrying it. media_query.c resolves `em` "
-              "against the INITIAL font size and is right to: Media Queries §4 evaluates a query before any "
-              "element exists to have one, so there the initial value IS the spec's answer, and borrowing that "
-              "number here would make it a stand-in for the chain");
+    if (css_len_in(CSS_FONT_SIZE_RELATIVE, CSS_LEN_N(CSS_FONT_SIZE_RELATIVE), unit)) {
+        DFAIL("an `em` or a `rem` reached css-values-4 §6.1.1's absolutization (Font-relative Lengths: the em, "
+              "rem, ex, rex, cap, rcap, ch, rch, ic, ric, lh, rlh units). §6.1.1 makes `em` \"the computed "
+              "value of the font-size property of the element on which it is used\" and `rem` \"the computed "
+              "value of the em unit on the root element\", and no element in this engine has a computed "
+              "`font-size` for either to resolve against. THE CASCADE'S INHERITANCE STEP IS NOT THE BLOCKER — "
+              "CSS Cascade §7 is built (core/css/css_defaulting.h), it knows `font-size` is an inherited "
+              "property, and it takes the parent's computed value for every property css_computed_value.c "
+              "models. `font-size` is not one of them, and it is the one whose `Computed value:` line cannot "
+              "be the as-specified arm: css-fonts-4 §2.5 (Font size: the font-size property) states it as `an "
+              "absolute length` over a `Value:` of `<absolute-size> | <relative-size> | "
+              "<length-percentage [0,∞]> | math` and a `Percentages:` line of `refer to parent element's font "
+              "size` — so a percentage, an `em`, `larger`, `smaller` and each of §2.5.1's EIGHT "
+              "`<absolute-size>` keywords (Absolute Size Keyword Mapping Table: xx-small through xxx-large, "
+              "medium the reference value at a scaling factor of 1) resolve against a value one node up. BUILD "
+              "`font-size` as a length-valued row of css_computed_models — the chain then IS §7.2's, one node "
+              "at a time, with `css_computed_length` carrying it. THE ONE CASE THAT IS EASY TO GET WRONG IS "
+              "IN §6.1.1 IN SO MANY WORDS: inside a FONT-AFFECTING PROPERTY on the element the unit refers to, "
+              "\"the font-relative lengths resolve against the computed metrics of the PARENT element—or "
+              "against the computed metrics corresponding to the initial values of the font and line-height "
+              "properties, if the element has no parent\", so `div{font-size:1.2em}` is 1.2 x the INHERITED "
+              "size and `html{font-size:2rem}` is 2 x the INITIAL one rather than a definition of itself. "
+              "media_query.c resolves `em` against the INITIAL font size and is right to: §6.1.1's own last "
+              "clause says that outside the context of an element the font-relative lengths refer to the "
+              "metrics of those initial values, so there the initial value IS the spec's answer, and borrowing "
+              "that number here would make it a stand-in for the chain");
+        return out;
+    }
+    if (css_len_in(CSS_FONT_METRIC_RELATIVE, CSS_LEN_N(CSS_FONT_METRIC_RELATIVE), unit)) {
+        DFAIL("a length in one of css-values-4 §6.1.1's FONT-METRIC units (`ex`, `rex`, `cap`, `rcap`, `ch`, "
+              "`rch`, `ic`, `ric`, `lh`, `rlh`) reached absolutization. These are NOT a computed `font-size` "
+              "and must not be built out of one as though they were: §6.1.1 defines `ex` as \"the used "
+              "x-height of the first available font\", `cap` as \"the used cap-height\", `ch` as \"the used "
+              "advance measure of the '0' (ZERO, U+0030) glyph\", `ic` as the same for the \"'水' (CJK water "
+              "ideograph, U+6C34) glyph\", and `lh` as the computed `line-height` \"converting normal to an "
+              "absolute length by using only the metrics of the first available font\" — five real font "
+              "metrics, of which this engine has none, plus the `r`-prefixed twin of each measured on the root "
+              "element. THREE OF THEM HAVE A NORMATIVE FALLBACK AND TWO DO NOT, which is the order to build "
+              "them in: §6.1.1 says an x-height that is impossible to determine \"must be assumed\" to be "
+              "0.5em, and a '0' glyph likewise \"must be assumed to be 0.5em wide by 1em tall\" (so `ch` falls "
+              "back to 0.5em, and to 1em when typeset upright, which is `writing-mode` and `text-orientation` "
+              "— both inherited and neither modelled), while an undeterminable cap-height falls back to \"the "
+              "font's ascent\", which is itself a metric and not a fallback. So `ex`, `ch` and `ic` become "
+              "buildable the moment `em` does, and `cap`, `lh` and `rlh` need core/frame's font records to "
+              "exist first. BUILD the computed `font-size` (the `em` crash above names it) before any of "
+              "this, and a FONT RECORD — ascent, x-height, cap-height and the two advance measures of the "
+              "first available font — for the rest");
         return out;
     }
     if (css_len_is_viewport(unit)) {
@@ -397,7 +447,8 @@ static bool css_len_unit_known(const char *unit)
 
     for (i = 0; i < CSS_LEN_N(CSS_ABSOLUTE); i++)
         if (strcmp(CSS_ABSOLUTE[i].unit, unit) == 0) return true;
-    return css_len_in(CSS_FONT_RELATIVE, CSS_LEN_N(CSS_FONT_RELATIVE), unit) ||
+    return css_len_in(CSS_FONT_SIZE_RELATIVE, CSS_LEN_N(CSS_FONT_SIZE_RELATIVE), unit) ||
+           css_len_in(CSS_FONT_METRIC_RELATIVE, CSS_LEN_N(CSS_FONT_METRIC_RELATIVE), unit) ||
            css_len_is_viewport(unit) || css_len_is_viewport_variant(unit);
 }
 
