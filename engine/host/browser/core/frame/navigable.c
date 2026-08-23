@@ -20,6 +20,7 @@
 #include "core/html/html_parse.h"    /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src`, stated once for its three callers */
 #include "core/loader/document_scripts.h"  /* §4.12.1's script inventory: what a parsed Document's programs ARE */
+#include "core/loader/document_load_type.h"  /* §7.4.5's dispatch: WHICH document a response loads as */
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
 #include "core/url/url.h"
 #include "core/encoding/encoding.h"   /* §6's UTF-8 decode, which §7.4.2.3.2 step 3 runs on a percent-decoding */
@@ -194,11 +195,56 @@ static bool child_in_this_agent(const Origin *child_origin)
    for here: fetching is a suspend, this runs inside a property read that cannot suspend, and the one caller
    that can suspend does the asking (js_nav_load_step).
    NO BYTES IS NOT AN ERROR. `about:blank` served none, and neither did an address whose fetch failed — a
-   browser showing an error page still has a navigable, with a document, in the tree. */
-static lxb_html_document_t *child_document(const char *body, size_t body_len)
+   browser showing an error page still has a navigable, with a document, in the tree.
+
+   AND WHICH PARSE IT IS, IS §7.4.5's TO DECIDE AND NOT THIS FUNCTION'S. "Let type be the computed type of
+   navigationParams's response" — an HTML MIME type loads an HTML document (§7.5.2) and an XML MIME type loads
+   an XML document (§7.5.3), and this function used to run the HTML parser over BOTH. That is not a missing
+   feature wearing a wrong answer, it is a wrong answer with nothing to say so: `/common/dummy.xml` is the
+   twenty-nine bytes `<foo>Dummy XML document</foo>\n`, the HTML parser synthesises `<html><head></head><body>`
+   around it and puts the trailing newline — XML §2.1's `Misc` AFTER the document element, which is not in the
+   DOM at all — inside that `<body>`, so `documentElement.textContent` answered `"Dummy XML document\n"` for a
+   document containing no such string. No crash, no log, and a tree real enough that every read after it looked
+   like a measurement.
+   `content_type` IS THE RESPONSE'S `Content-Type` VALUE, and NULL means THERE WAS NO RESPONSE — §7.4's initial
+   about:blank, or an address whose fetch failed. Those are HTML documents by §7.4 and not by a default: the
+   `EMPTY` skeleton below is the tree §7.4 gives them, and there is no type to compute because there is no
+   response to compute one from. A response that HAS no `Content-Type` is a different fact and reaches
+   document_load_type_of, which does not call it HTML. */
+static lxb_html_document_t *child_document(const char *body, size_t body_len, const char *content_type)
 {
     static const char EMPTY[] = "<!doctype html><html><head></head><body></body></html>";
-    lxb_html_document_t *dom = dom_document_create();
+    lxb_html_document_t *dom;
+    DocumentLoadType load;
+
+    /* §7.4.5's dispatch, asked BEFORE anything is allocated: a type this engine has no loader for must crash
+       naming the loader to build, and doing that after a document exists would leak it. */
+    if (body) {
+        load = document_load_type_of(content_type);
+        /* THE ARMS THIS ENGINE HAS NOT BUILT CRASH BY NAME, one §7.5 subsection each. CLAUDE.md §Offensive
+           programming: a capability that does not exist is honestly ABSENT and the crash is what names it —
+           and the alternative here is not "no XML support", it is the silent wrong tree described above.
+           §7.5.3 IS THE ONE WITH ITS DEPENDENCIES ALREADY IN THE TREE: core/xml/xml_name.c owns XML §2.3 [5]
+           `Name` and Namespaces in XML §3 [4] `NCName` / §4 [7] `QName`, and core/xml/xml_ns.c owns §6's scope
+           stack, declaration and expansion (xml_ns_push / xml_ns_declare / xml_ns_expand) with every §3 and §5
+           namespace constraint as a returned error — a scope stack is a thing only a parser drives, which is
+           what those two were built for. What is missing is the GRAMMAR between them: XML §2.8 [22] `prolog`,
+           [39] `element` with
+           [40] `STag` / [42] `ETag` / [44] `EmptyElemTag`, [43] `content`, §2.5 [15] `Comment`, §2.6 [16] `PI`,
+           §2.7 [18] `CDSect`, §4.1 [66] `CharRef` / [68] `EntityRef` with §4.6's five predefined entities,
+           §3.3.3 attribute-value normalization and §2.11 end-of-line handling — producing a Lexbor tree through
+           element_create_ns (core/dom/element.h, which does NOT case-fold, unlike lexbor's own entry) and
+           dom_attr_write (core/dom/attr_list.h), and reporting well-formedness errors for §8.5.1's
+           `parsererror`. lexbor 2.7.0 ships no `xml` module (its modules are core css dom encoding engine html
+           ns ports punycode selectors style tag unicode url utils), so CLAUDE.md's bind-before-build order has
+           nothing at the "existing Lexbor module" rung and this is a faithful spec port.
+           core/html/domparser.c's XML arm of HTML §8.5.1 `parseFromString`, and core/xhr/xml_http_request.c's
+           XML arm of XHR's "set a document response", stand at this same wall and say so at their own sites —
+           checked before this comment claimed it. ONE component serves all three; when it lands, every one of
+           those sites is deleted along with the prose that agreed with them. */
+        if (load != DOC_LOAD_HTML) DFAIL(document_load_type_section(load));
+    }
+    dom = dom_document_create();
 
     /* WHAT ACTUALLY FILLED THE HEAP WHEN THIS FIRES IS NOT DOCUMENTS — see the realm list in navigable_realm.
        The message says so, because a `@WHY` is read at the site and "OOM" alone sends the reader here. It names
@@ -361,8 +407,8 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
    `<meta>` policies alone. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
-                           const char *csp, const char *csp_self_origin, const char *about_base_url,
-                           SandboxFlags sandbox_flags)
+                           const char *content_type, const char *csp, const char *csp_self_origin,
+                           const char *about_base_url, SandboxFlags sandbox_flags)
 {
     lxb_html_document_t *dom;
     JSContext *cctx;
@@ -382,7 +428,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "a same-origin child navigable was reached in an agent whose host declared no realm builder — a "
            "same-origin document is a second REALM in this heap, and only the host knows which platform "
            "surface a document of this build has; declare it with navigable_set_realm_builder");
-    dom = child_document(body, body_len);
+    dom = child_document(body, body_len, content_type);
     /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
        principal — and because the identity it would have to carry is this agent's, asserted above. */
     /* §7.1.5 STATES A CONSEQUENCE OF THE FLAG SET THIS AGENT CANNOT HONOUR, AND IT IS ASSERTED RATHER THAN
@@ -529,6 +575,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        traversable's fetch, which is the only place §7.4.5 obtains one. See below. */
     OpenerPolicy response_coop;
     char *resp_csp = NULL;   /* owned by header_list_get and freed with free(), NOT a JS_ToCString */
+    char *resp_ctype = NULL; /* §7.4.5's type is computed from this; same ownership as resp_csp above */
     bool inherited = false;
     /* §7.1.3.2's `swapGroup`, once its arm has RUN — so the whole of the load below it is skipped. It is not a
        second copy of the predicate's answer: a load that swapped has no Document to create in this heap and no
@@ -599,6 +646,18 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            policy LIST, which policy_container.c splits apart again. The zone that used to extract this read
            one map entry and could not express two `Content-Security-Policy` headers at all. */
         resp_csp = header_list_get(&response_headers, "content-security-policy");
+        /* §7.4.5's "the COMPUTED TYPE of navigationParams's response", which decides WHICH document this load
+           builds — §7.5.2's HTML, §7.5.3's XML, §7.5.4's text. Read from the SAME header list as the policy
+           above, because that list is the response's own field lines and the type is a fact about the response.
+           NULL WHEN THE RESPONSE CARRIED NO `Content-Type`, and that is passed through as NULL rather than
+           substituted: Fetch §2.2.3's "extract a MIME type" fails on it, §7.4.5 matches none of its arms, and
+           the honest answer is the "Otherwise" arm. Substituting `text/html` here — the shape this code had
+           before there was any dispatch at all — is what made an XML response an HTML document.
+           WHAT IS STILL OWED IS SNIFFING: mimesniff §5.1 "interpreting the resource metadata" is what turns an
+           absent or generic `Content-Type` into a computed type by reading the bytes, and this engine does not
+           run it, so a response with no type reaches the crash rather than being guessed at. That is the same
+           shape as the decoding gap noted below — a named component to build, not a silent default. */
+        resp_ctype = header_list_get(&response_headers, "content-type");
         /* THE RESPONSE'S BYTES, WHICH IS WHAT A DOCUMENT IS PARSED FROM. This was `JS_ToCStringLen` over a
            field the trusted zone had built with Fetch §5.2's `text()` — a UTF-8 decode run before HTML could
            run its own — so a document served in any other encoding reached lexbor already replaced with U+FFFD
@@ -737,8 +796,9 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         } else {
             doc = window_proxy_doc(proxy);   /* §7.4 minted and adopted it when it created the navigable */
         }
-        cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, (const char *)body, body_len, csp,
-                               inherited ? self_origin : origin_serialized(origin), about_base, final_flags);
+        cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, (const char *)body, body_len, resp_ctype,
+                               csp, inherited ? self_origin : origin_serialized(origin), about_base,
+                               final_flags);
         /* §7.5.1's OPENER POLICY ROW for the Document this navigation creates — "opener policy …
            navigationParams's cross-origin opener policy", which is §7.4.5's responseCOOP above. It moves with
            the rest of the binding because a navigation is what replaces a navigable's active document. */
@@ -749,6 +809,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     JS_FreeCString(ctx, about_base);
     if (inherited) JS_FreeCString(ctx, csp);
     free(resp_csp);
+    free(resp_ctype);
     JS_FreeCString(ctx, field_lines);
     /* NO `JS_FreeCString(ctx, body)`: `body` points INTO `bodyv`'s own buffer and owns nothing, so its whole
        lifetime is that value's — which is why the release below must stay AFTER navigable_realm. */

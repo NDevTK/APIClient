@@ -378,6 +378,34 @@ bool mime_type_is_json(const MimeType *m)
     return !strcmp(m->subtype, "json") && (!strcmp(m->type, "text") || !strcmp(m->type, "application"));
 }
 
+/* §4.6 "MIME type groups": "A JavaScript MIME type is any MIME type whose essence is one of the following" —
+   the sixteen legacy spellings, ENUMERATED because the group is a LIST and not a pattern: `text/jscript` and
+   `text/livescript` share no shape with `application/ecmascript`, so a rule that tried to summarise them would
+   be a different set wearing this one's name.
+   ITS CALLER IS HTML §7.4.5's "load a document" (core/loader/document_load_type.c), which routes a JavaScript
+   response to §7.5.4's text document rather than rendering it — which is what this header's first paragraph
+   asks for: a group arrives with the algorithm that first needs it. It was deleted when the last of its
+   previous callers went, and it comes back with one, not on the chance that something will want it.
+   THIS IS THE GROUP, NOT §4.6's "JavaScript MIME type ESSENCE MATCH" beside it: that one is ASCII
+   case-INSENSITIVE and exists for `<script type>`, whereas the parser has already lowercased an essence that
+   reaches here, so a second case-folding pass here would be answering a question nobody asked. */
+bool mime_type_is_javascript(const MimeType *m)
+{
+    static const char *const APP[] = { "ecmascript", "javascript", "x-ecmascript", "x-javascript", NULL };
+    static const char *const TEXT[] = { "ecmascript", "javascript", "javascript1.0", "javascript1.1",
+                                        "javascript1.2", "javascript1.3", "javascript1.4", "javascript1.5",
+                                        "jscript", "livescript", "x-ecmascript", "x-javascript", NULL };
+    const char *const *l;
+    int i;
+
+    if (!m->type || !m->subtype) return false;
+    if (!strcmp(m->type, "application")) l = APP;
+    else if (!strcmp(m->type, "text"))   l = TEXT;
+    else return false;
+    for (i = 0; l[i]; i++) if (!strcmp(m->subtype, l[i])) return true;
+    return false;
+}
+
 bool mime_type_is_image(const MimeType *m)
 {
     return m->type && !strcmp(m->type, "image");

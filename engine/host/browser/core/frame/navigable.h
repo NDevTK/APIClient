@@ -161,10 +161,18 @@ void navigable_set_realm_builder(RealmBuilder b);
    a parameter and not a read off anything, for the reason `csp_self_origin` beside it is: whose base URL it is
    belongs to the OPERATION (the creator's for a create, the initiator's for a navigation) and never to the
    navigable being filled. */
+/* `content_type` is the RESPONSE's `Content-Type` value, which HTML §7.4.5's "load a document" computes its
+   type from and which therefore decides WHICH parse this Document gets (§7.5.2's HTML, §7.5.3's XML, …). It
+   rides beside `body`/`body_len` because it is a fact about the same response and about nothing else — the
+   navigable cannot answer it, and a builder that guessed it made every XML response an HTML document with no
+   crash and no log. NULL means THERE WAS NO RESPONSE: §7.2's initial `about:blank`, or an address whose fetch
+   failed. That is not "type unknown" — those Documents are HTML by §7.4 — and it is a different fact from a
+   response that carried no `Content-Type` header, which has bytes and no type and does not reach the HTML
+   arm. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
-                           const char *csp, const char *csp_self_origin, const char *about_base_url,
-                           SandboxFlags sandbox_flags);
+                           const char *content_type, const char *csp, const char *csp_self_origin,
+                           const char *about_base_url, SandboxFlags sandbox_flags);
 
 /* THE AGENT'S HALF: §7.4's `open` member, declared once. */
 void navigable_init(JSContext *ctx);
