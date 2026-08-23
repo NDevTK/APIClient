@@ -2898,14 +2898,14 @@ static void tf_job_run_all(JSContext *ctx, Flow *f)
  * also answers correctly. The runtime's step census is what says it: a flow suspended inside a
  * continuation-holding builtin leaves that builtin's state allocated, so a non-zero JS_StepMachineCount at a
  * suspension of a program whose ONLY builtin is this sort is the merge having rested mid-walk. */
-static int tf_sort_preempt_always(int kind) { (void)kind; return 1; }
-static int tf_sort_preempt_never(int kind)  { (void)kind; return 0; }
-static const JSFlowControlHooks TF_SORT_FORCE   = { .preempt = tf_sort_preempt_always };
-static const JSFlowControlHooks TF_SORT_DECLINE = { .preempt = tf_sort_preempt_never };
+static int tf_diff_preempt_always(int kind) { (void)kind; return 1; }
+static int tf_diff_preempt_never(int kind)  { (void)kind; return 0; }
+static const JSFlowControlHooks TF_DIFF_FORCE   = { .preempt = tf_diff_preempt_always };
+static const JSFlowControlHooks TF_DIFF_DECLINE = { .preempt = tf_diff_preempt_never };
 /* what this fixture puts back: no policy at all, which is what the runtime held before it ran. A hook that
    merely answers "no" is not the same state — it is a policy, and the next thing to install one would be
    replacing a decision rather than making the first. */
-static const JSFlowControlHooks TF_SORT_NONE    = { 0 };
+static const JSFlowControlHooks TF_DIFF_NONE    = { 0 };
 
 /* The values are a permutation of 0..n-1 (337 is prime, so it is coprime with 300), so every element has a
    DISTINCT decimal string and the order 23.1.3.30.2 steps 5-10 put them in is unique — the answer does not
@@ -2924,9 +2924,12 @@ static const char *TF_SORT_SRC =
     "   h = (h * 31 + a[i]) % 1000003; }"
     " return ok ? h : -1; })()";
 
-/* Run TF_SORT_SRC to completion under `hooks`, reporting how many times it suspended and the largest step
-   census seen at a suspension. */
-static int32_t tf_sort_run(JSContext *ctx, const JSFlowControlHooks *hooks, int *psusp, int *pmach)
+/* Run a self-checking program to completion under `hooks`, reporting how many times it suspended and the
+   largest step census seen at a suspension. Parameterised by the SOURCE because the differential is one
+   procedure — the same program under two schedules — and a second copy of it per machine under test is the
+   pair of walks that drifts. */
+static int32_t tf_step_diff_run(JSContext *ctx, const char *src, const char *name,
+                                const JSFlowControlHooks *hooks, int *psusp, int *pmach)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
     JSValue *flow;
@@ -2935,17 +2938,17 @@ static int32_t tf_sort_run(JSContext *ctx, const JSFlowControlHooks *hooks, int 
     int susp = 0, mach = 0, r;
 
     JS_SetFlowControlHooks(hooks);
-    flow = JS_FlowNew(ctx, TF_SORT_SRC, strlen(TF_SORT_SRC), "sort-merge", 0);
-    CHECK(flow != NULL, "the sort fixture could not create a flow");
+    flow = JS_FlowNew(ctx, src, strlen(src), name, 0);
+    CHECK(flow != NULL, "a step differential fixture could not create a flow");
     for (;;) {
         r = JS_FlowResume(ctx, flow, &res);
-        CHECK(r != JS_FLOW_DETACHED, "the sort fixture's flow detached — it holds no top-level await");
+        CHECK(r != JS_FLOW_DETACHED, "a step differential fixture's flow detached — it holds no top-level await");
         if (r == 0)
             break;
         susp++;
         if (JS_StepMachineCount(rt) > mach) mach = JS_StepMachineCount(rt);
     }
-    CHECK(!JS_IsException(res), "the sort fixture's program threw");
+    CHECK(!JS_IsException(res), "a step differential fixture's program threw");
     JS_ToInt32(ctx, &got, res);
     JS_FreeValue(ctx, res);
     JS_FlowFree(ctx, flow);
@@ -2958,7 +2961,7 @@ static void sort_merge_selftest(JSContext *ctx)
     int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
     int32_t h_off, h_on;
 
-    h_off = tf_sort_run(ctx, &TF_SORT_DECLINE, &susp_off, &mach_off);
+    h_off = tf_step_diff_run(ctx, TF_SORT_SRC, "sort-merge", &TF_DIFF_DECLINE, &susp_off, &mach_off);
     CHECK(h_off >= 0,
           "23.1.3.30 with no comparator sorted 300 distinct values into an order that is not strictly "
           "ascending by 23.1.3.30.2 steps 5-10, or lost one — the merge is wrong before any schedule is "
@@ -2967,7 +2970,7 @@ static void sort_merge_selftest(JSContext *ctx)
           "the flow parked with the policy DECLINING every offer — a yield the policy refuses must re-enter "
           "the machine, not park it, or the offer is a bound wearing a question mark");
 
-    h_on = tf_sort_run(ctx, &TF_SORT_FORCE, &susp_on, &mach_on);
+    h_on = tf_step_diff_run(ctx, TF_SORT_SRC, "sort-merge", &TF_DIFF_FORCE, &susp_on, &mach_on);
     CHECK(h_on == h_off,
           "the SAME sort of the SAME array answered differently under two schedules — a resume dropped, "
           "duplicated or reordered a merge placement, which is the cap §scheduler's razor names: a yield you "
@@ -2979,7 +2982,68 @@ static void sort_merge_selftest(JSContext *ctx)
           "overtake and the cooperative quantum cannot expire inside");
     CHECK(susp_on > susp_off,
           "forcing every yield produced no more suspensions than declining every one");
-    JS_SetFlowControlHooks(&TF_SORT_NONE);
+    JS_SetFlowControlHooks(&TF_DIFF_NONE);
+}
+
+/* ===== A KEYED WALK THE SCHEDULER CAN BE ASKED INSIDE =====
+ *
+ * The sort above is one machine that declared its own rest points. THIS is the shape that declared none and
+ * needed none declared: ECMAScript §23.1.3.2 Array.prototype.concat ( ...items ) walks its source with KEYED
+ * REQUESTS — step 5.2.4.2's `exists is ? HasProperty(item, propertyKey)`, step 5.2.4.3.1's `subElement is ?
+ * Get(item, propertyKey)`, step 5.2.4.3.2's `Perform ? CreateDataPropertyOrThrow(array, ! ToString(𝔽(nextIndex)),
+ * subElement)` — and every one of those returns a request to the driver rather than resolving in place. On a
+ * plain array the driver ANSWERS each one itself: no accessor, no trap, nothing user-written runs. So the
+ * machine round-tripped the driver three times per element and the scheduler was never once asked, which is a
+ * span the length of the receiver that RAM pressure cannot page and a higher-value flow cannot overtake.
+ *
+ * THE MACHINE IS NOT TOUCHED BY THE FIX AND THAT IS THE POINT — the offer is made where every re-entry
+ * converges (do_step_step), so a walk built out of requests becomes parkable without declaring anything. This
+ * fixture is what says so: it is written against a machine that returns JS_STEP_YIELD nowhere, and before the
+ * offer moved there it could not park inside one however hard the policy pushed.
+ *
+ * The program checks its own answer for the reason the sort's does: concat's result is a KNOWN permutation
+ * (0..2n-1 in order), so a resume that dropped, duplicated or reordered one element fails the positional test,
+ * and the checksum pins which. -1 is "concat was wrong", a different failure from "the two schedules disagree".
+ * `concat` is the program's ONLY builtin call, which is what makes a live step machine at a suspension
+ * attributable to it — the loops and the comparison are operators the interpreter runs itself. */
+static const char *TF_CONCAT_SRC =
+    "(function(){ var n = 200, x = [], y = [], i, h = 0, ok = 1, a;"
+    " for (i = 0; i < n; i++) x[i] = i;"
+    " for (i = 0; i < n; i++) y[i] = n + i;"
+    " a = x.concat(y);"
+    " if (a.length !== 2 * n) ok = 0;"
+    " for (i = 0; i < 2 * n; i++) {"
+    "   if (a[i] !== i) ok = 0;"
+    "   h = (h * 31 + a[i]) % 1000003; }"
+    " return ok ? h : -1; })()";
+
+static void concat_keyed_selftest(JSContext *ctx)
+{
+    int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
+    int32_t h_off, h_on;
+
+    h_off = tf_step_diff_run(ctx, TF_CONCAT_SRC, "concat-keyed", &TF_DIFF_DECLINE, &susp_off, &mach_off);
+    CHECK(h_off >= 0,
+          "§23.1.3.2 Array.prototype.concat of two dense 200-element arrays did not produce 0..399 in order — "
+          "concat is wrong before any schedule is involved, so nothing below this line would mean anything");
+    CHECK(susp_off == 0,
+          "the flow parked with the policy DECLINING every offer — an offer the policy refuses must re-enter "
+          "the machine, not park it, or the offer is a bound wearing a question mark");
+
+    h_on = tf_step_diff_run(ctx, TF_CONCAT_SRC, "concat-keyed", &TF_DIFF_FORCE, &susp_on, &mach_on);
+    CHECK(h_on == h_off,
+          "the SAME concat of the SAME arrays answered differently under two schedules — a resume dropped, "
+          "duplicated or reordered an element, or delivered a keyed request's answer to the wrong call site, "
+          "which is the cap §scheduler's razor names: a yield you cannot prove is lossless is a cap");
+    CHECK(mach_on > 0,
+          "the flow never suspended INSIDE a step machine, and §23.1.3.2's walk is the only builtin this "
+          "program runs — so its per-element HasProperty/Get/CreateDataPropertyOrThrow still round-trips the "
+          "driver with the scheduler never asked. That is un-parkable for the length of the receiver, and the "
+          "machine declares no yield of its own, so nothing but the driver's own convergence point can offer "
+          "the rest point");
+    CHECK(susp_on > susp_off,
+          "forcing every offer produced no more suspensions than declining every one");
+    JS_SetFlowControlHooks(&TF_DIFF_NONE);
 }
 
 static void flow_job_selftest(JSContext *ctx)
@@ -5558,6 +5622,7 @@ int main(int argc, char **argv) {
     world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
     flow_job_selftest(ctx);         /* §8.1.7's two queues, §7.5.10 step 7, and the fork's copy-on-nothing */
     sort_merge_selftest(ctx);       /* 23.1.3.30.1 step 4 rests per element, and both schedules agree */
+    concat_keyed_selftest(ctx);     /* §23.1.3.2's keyed walk rests per request, declaring no yield of its own */
     endpoint_init();
     solve_init(ctx);
 
